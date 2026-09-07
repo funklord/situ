@@ -169,11 +169,14 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   carried `WALK_DEPTH_MAX` since it was written; this is that mechanism
   reaching the compiler, not a new one.
 
-  **Implemented, in all four backends.** A struct that names itself and
-  declares `[depth = N]` is accepted, laid out, mapped and generated: each
-  extent carries a depth and the run's span passes it on, so the recursion
-  is bounded by the schema rather than by the message's own length. Measured
-  identical across C, C++, Rust and Python (26.283).
+  **Implemented, in all four backends**, for a struct that names itself and
+  for a cycle of them. Each extent carries a depth and the run's span passes
+  it on, so the recursion is bounded by the schema rather than by the
+  message's own length. Measured identical across C, C++, Rust and Python
+  (26.283) -- and across all three shapes a recursion takes, which took
+  another pass: `[depth]` shipped exercised on a counted run alone, and the
+  `while` run and the record run are separate emitters that had never been
+  compiled (26.288).
 
   **`validate` refuses a too-deep message in all four**, under two verdicts:
   past the format's `[depth]` it is malformed and gets a constraint error,
@@ -189,7 +192,15 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   and eight in Python (26.287). Both run shapes are walked, counted and
   `while`, and a message past the ceiling is `cannot-say` in both rather
   than a verdict -- the reader's refusal is not a judgement on the bytes.
-  Mutual recursion stays refused, as the record leaves it.
+
+  **Mutual cycles are described** (26.288, amending 0054). Every struct in
+  a cycle declares the same `[depth]`, which counts nested structs rather
+  than turns; a cycle that disagrees, or that states `[limit]` on some of
+  its structs and not the rest, is refused. All six descriptions stop on
+  the same message, which they did not before: the walkers counted structs
+  where the generated code counts edges, and no test spanned the two
+  layers. A cycle through a variant arm is refused for now -- it emitted a
+  C header that does not compile, so the refusal narrows nothing.
 
   Still open, and openmlx4's finding rather than a design gap: a format
   that ends its list with a sentinel and declares no maximum has a `limit`
@@ -23289,6 +23300,123 @@ the differ's probe vocabulary rather than the walk: a new line in the
 walker's output is a new question asked of the four backends, and adding
 one to close a cosmetic gap would put a false disagreement in front of
 whoever ran it next. Recorded rather than done.
+
+### 26.288 The cycle is the unit, and six descriptions disagreed by one
+
+0054 left mutual recursion open and its own reasoning had already covered
+it: "nothing above needs it to be single, and the bound applies to a
+strongly connected component rather than to a struct". What was open was
+the diagnostic -- naming one struct of a two-struct cycle sends a reader
+to whichever happened to be listed first.
+
+**The answer is that the cycle is the unit of everything.** Every struct
+in a cycle declares `[depth]` and they all declare the same one, so the
+number is unambiguous wherever a walk enters, the fact is in front of
+whoever reads either struct, and the diagnostic names them all. A cycle
+whose members disagree is refused, and so is one stating `[limit]` on
+some of its structs and not the rest -- both are two numbers for one
+question, which 17.0 makes an error rather than a preference.
+
+**`depth` counts nested structs, not turns of the cycle.** `[depth = 8]`
+over `expr <-> item` admits eight nested structs, four of each. That is
+what bounds the stack, which is what the number is for, and it is what
+every walk already counts.
+
+**The shared decision had a private copy, and only one of them learned.**
+`traverse.is_recursive` exists because "every backend needs it for the
+same two reasons and each would otherwise answer it privately" -- and the
+C backend had answered it privately, in a `_recursive` written before the
+shared one and never retired. The copies agreed for every schema in the
+corpus and came apart the moment the shared one learned about cycles: to
+three backends `item` was recursive and to C it was not, so C emitted a
+call to a `_span_at` it never defined.
+
+**The first version of the shared one was wrong in a way that flattered
+it.** It asked whether any ENTRY's type was this struct's own name, and
+`entries` is flattened -- so `expr` holding `item items[n]` carries
+`expr.items[].body` typed `expr`, and `expr` answered True while `item`
+answered False. One struct of a two-struct cycle recursive is not a state
+anything downstream can be right about. **Nor is `own_members` the
+answer**, which was the second version: it drops a variant's arms, and an
+arm is a real member -- `case 1: node kid` is how a tagged tree is
+written. The rule is the local name: this frame's members, arms included,
+nothing under a `[]`.
+
+**The counter restarted every turn of the cycle.** `item.body` is a plain
+nested `expr`, so the chain runs extent -> span -> extent -> the nested
+member's helper -> extent, and that helper called the depth-resetting
+entry point. All four backends. A self-cycle never reaches that branch --
+its recursion is always through a run -- so the case existed only where
+the bound was newly permitted, and `[depth]` bought a mutual pair nothing
+at all.
+
+**Two of the three run shapes had never been compiled.** `[depth]`
+shipped exercised on the counted run, and the `while` run and the record
+run are separate emitters: both called a `_span_at` nothing defined, in C
+and in Python, so `struct node [depth] { u8 more; node kids[] while
+(...); }` emitted a header that does not build and a module that raises
+`AttributeError` on its own extent. Neither the corpus nor the suite
+recurses through either construct. The three run emitters now share
+`_span_entries`, because three answers to one question is how they came
+apart.
+
+**And the nesting probe was looking through a window the bound had
+closed.** It navigated by `_at` and `_view` accessors, whose sub-views are
+sized by the extent -- and the extent is the thing being judged. In a
+self-cycle that is invisible: one restart per level has a whole `[depth]`
+of headroom, which is enough to see one past the bound, and one past is
+all the probe needs. In a mutual cycle a turn costs two levels and the
+truncation compounds, so `nesting` saturated exactly AT the bound and
+`validate` returned OK for a message twice as deep as the format allows.
+It takes `limit - at` now, and a zero extent stops the walk after that
+element has been probed -- an element the bound refused is an element the
+probe has already reported on.
+
+**C++ needed the classes out of order, which is not a thing C++ does.**
+`_struct_order` puts a struct before the structs that contain it, and a
+cycle has no such order; a member body defined inside a class needs every
+OTHER class it names to be complete. So the cycle's classes are declared
+before any is defined, and the bodies that name a later peer move below
+the last of them -- ordinary C++, and what a hand-written header would
+do. C needs only a prototype and Rust and Python need nothing, which is
+why this was the backend that could not simply be told the new answer.
+
+**The off-by-one is the one worth carrying.** With all four backends
+agreeing, the walkers still refused one level early -- for EVERY recursive
+schema, not just the mutual one. `[depth = N]` counts edges: the root is
+zero, `nesting` is zero for a message holding one struct, and the
+generated `validate` refuses `nesting > N`. The walkers compared
+`depth >= N`.
+
+    [depth = 8], counted    generated   walker (before)   walker (now)
+    9 structs               accepts     REFUSES           accepts
+    10 structs              refuses     refuses           refuses
+
+Nothing had ever put the two layers side by side. `test_walker_c.py`
+holds the walkers to each other and `test_recursion.py` holds the four
+backends to each other, so each pair was internally consistent and the
+seam between them was unwatched. **A differential is only as wide as the
+layers it spans**, which is the same sentence as 26.287's "only as wide as
+its corpus", one axis over. There is a test across the seam now, and it
+compares the last message each layer ACCEPTS rather than the extent past
+the bound: a generated extent truncates and a walker refuses, and both are
+right for their own design (26.284).
+
+**What is refused, and why it is a narrowing of nothing.** A cycle
+through a variant arm. Such a schema passed `check_no_recursive_types`
+and emitted a C header that does not compile, so nothing working relied
+on it. The cause is worth recording because it is this file's favourite
+shape: `_variant_is_measurable` refuses a variant whose `size_max_bits`
+is None, which was written for an `opaque` default consuming the rest --
+and a recursive arm has no maximum for an entirely different reason. Two
+causes, one signal. Separating them is what that case needs and it is not
+this change.
+
+**Also not covered:** `has_computable_extent` needed a `seen` set before
+any of this could run at all -- it guarded `element is struct` and
+recursed until Python's own limit on a mutual pair, which is the
+"non-terminating" section 2 meant, met in a function the solver's own
+guard does not cover.
 
 ## 27. Questions, and how they were settled
 

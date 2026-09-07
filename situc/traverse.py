@@ -1032,7 +1032,8 @@ def container_bits(placement: Placement, widths: tuple[int, ...]) -> int | None:
 
 
 def has_computable_extent(structs: dict[str, ResolvedStruct],
-		struct: ResolvedStruct) -> bool:
+		struct: ResolvedStruct,
+		seen: frozenset[str] = frozenset()) -> bool:
 	"""Whether one instance of `struct` can be measured from its own bytes.
 
 	A fact about the layout rather than about any target, and both the C
@@ -1055,6 +1056,15 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 	wrong cost the DNS example its point: a compressed name is a run of labels
 	and a label is a variant on its top two bits, so refusing variants refused
 	the run, and the schema described a name nothing could walk.
+
+	**A struct already on the path is measurable by assumption**, which is
+	what `seen` carries and what `element is struct` had been doing for the
+	direct case alone. It is not an optimisation: without it a mutual cycle
+	recurses until Python's own limit stops it, which is exactly the
+	"non-terminating" section 2 meant -- met here rather than in the solver,
+	which had its own guard and terminated fine. The assumption is the same
+	one `[depth]` licenses: the recursion has to be able to stop in the data,
+	so an element of the cycle measures whatever the cycle measures.
 	"""
 	for placement in own_members(struct):
 		if placement.is_fixed_size:
@@ -1065,17 +1075,18 @@ def has_computable_extent(structs: dict[str, ResolvedStruct],
 			return False		# the extent is the codec's expansion, not a length
 
 		if placement.kind == "variant":
-			if not _variant_is_measurable(structs, struct, placement):
+			if not _variant_is_measurable(structs, struct, placement, seen):
 				return False
 			continue
 
 		element = structs.get(placement.type_name or "")
-		if element is None or element is struct:
+		if element is None or element is struct or element.name in seen:
 			continue		# a scalar run, sized by a field or a delimiter
 
 		# A run or a nested struct is only as measurable as its element.
 		if not element.layout.is_fixed_size \
-				and not has_computable_extent(structs, element):
+				and not has_computable_extent(structs, element,
+				                              seen | {struct.name}):
 			return False
 	return True
 
@@ -1105,7 +1116,8 @@ def arm_members(struct: ResolvedStruct,
 
 
 def _variant_is_measurable(structs: dict[str, ResolvedStruct],
-		struct: ResolvedStruct, variant: Placement) -> bool:
+		struct: ResolvedStruct, variant: Placement,
+		seen: frozenset[str] = frozenset()) -> bool:
 	"""Every arm measurable, and none of them unbounded.
 
 	An `opaque` default consumes whatever is left, so a variant carrying one
@@ -1125,8 +1137,10 @@ def _variant_is_measurable(structs: dict[str, ResolvedStruct],
 			return False
 
 		element = structs.get(member.type_name or "")
-		if element is not None and not element.layout.is_fixed_size \
-				and not has_computable_extent(structs, element):
+		if element is not None and element.name not in seen \
+				and not element.layout.is_fixed_size \
+				and not has_computable_extent(structs, element,
+				                              seen | {struct.name}):
 			return False
 	return True
 
@@ -1399,7 +1413,7 @@ def bit_extractor(scalar: ScalarType, placement: Placement) -> str:
 
 
 def is_recursive(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
-	"""Whether this struct names itself (0054).
+	"""Whether this struct can contain itself (0054).
 
 	One decision, four spellings. Every backend needs it for the same two
 	reasons and each would otherwise answer it privately: a self-referencing
@@ -1407,12 +1421,81 @@ def is_recursive(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
 	the pair may need forward declaration, and the recursion needs a depth or
 	a hostile message nests as deep as its own bytes allow.
 
-	Direct self-reference only, which is what `check_no_recursive_types`
-	permits -- a mutual cycle is still refused and 0054 leaves it open.
+	**Reachability, not direct self-reference.** `[depth]` bounds a cycle
+	rather than a struct, so `expr -> item -> expr` makes both recursive and
+	both need everything above. The first version asked whether any entry's
+	type was this struct's own name, which is direct self-reference with a
+	bug on top: `entries` is flattened, so `expr` holding `item items[n]`
+	carries `expr.items[].body` typed `expr` and answered **True** while
+	`item` answered False. One struct of a two-struct cycle was recursive,
+	which is not a state anything downstream can be right about -- the packer
+	wrote a depth row for one shape and the walker's ceiling was this build's
+	default for the other.
+
+	`own_members` rather than `entries` for the same reason: the flattened
+	view answers about a struct's contents, and this asks about its
+	references.
 	"""
-	struct = structs.get(name)
-	return struct is not None and any(
-		entry.placement.type_name == name for entry in struct.entries)
+	if name not in structs:
+		return False
+	return name in _reaches(structs, name)
+
+
+def recursion_cycle(structs: dict[str, "ResolvedStruct"],
+		name: str) -> list[str]:
+	"""The structs `name` is mutually recursive with, itself included, in
+	schema order.
+
+	The strongly connected component: everything `name` reaches that reaches
+	`name` back. That is the unit `[depth]` applies to, so it is also the
+	unit a diagnostic has to name -- 0054 left the mutual case open partly
+	because "naming one struct in a two-struct cycle sends the reader to
+	whichever happened to be listed first", and the answer is to name them
+	all.
+
+	Empty for a struct that is not recursive at all.
+	"""
+	if not is_recursive(structs, name):
+		return []
+	return [other for other in structs
+	        if other == name
+	        or (other in _reaches(structs, name)
+	            and name in _reaches(structs, other))]
+
+
+def _reaches(structs: dict[str, "ResolvedStruct"],
+		name: str) -> frozenset[str]:
+	"""Every struct reachable from `name` through struct-typed members.
+
+	**A struct's own frame, which is not `own_members` and not `entries`.**
+	`entries` is flattened, so `expr` holding `item items[n]` carries
+	`expr.items[].body` -- a member of the ELEMENT, arriving under this
+	struct's name, which is what made the first version of `is_recursive`
+	answer True for `expr` and False for `item`. `own_members` drops that
+	and drops a variant's arms with it, and an arm is a real member of this
+	struct: `case 1: node kid` is how a tagged tree is written, and losing
+	it would turn a schema that emits a header refusing to compile into one
+	that emits no bound at all.
+
+	So the rule is the local name: a member of this frame, arm members
+	included, and nothing under a `[]` -- because past a bracket the name
+	belongs to the element rather than to this struct.
+	"""
+	found: set[str]  = set()
+	queue: list[str] = [name]
+	while queue:
+		here   = queue.pop()
+		struct = structs.get(here)
+		if struct is None:
+			continue
+		for entry in struct.entries:
+			if "[" in local_name(struct, entry.placement):
+				continue
+			target = entry.placement.type_name or ""
+			if target in structs and target not in found:
+				found.add(target)
+				queue.append(target)
+	return frozenset(found)
 
 
 def declared_depth(schema: "ast.Schema", name: str) -> int:

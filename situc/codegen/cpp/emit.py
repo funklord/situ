@@ -65,7 +65,7 @@ from situc.traverse import (
 	element_bytes, is_counted_run, matched_values, obligation,
 	pad_alignment,
 	preceding_parts,
-	obligations, own_entries, own_members,
+	obligations, own_entries, own_members, recursion_cycle,
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -161,14 +161,21 @@ class Emitter:
 			"",
 			*self._codec_prototypes(),
 			f"namespace {self.namespace} {{",
+			*self._cycle_declarations(),
 		]
 
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 
-		for name in self._struct_order():
-			lines.extend(self._struct(self.resolved.structs[name]))
+		order    = self._struct_order()
+		deferred: list[str] = []
+		for name in order:
+			body, out_of_line = self._defer_across_cycle(
+				name, order, self._struct(self.resolved.structs[name]))
+			lines.extend(body)
+			deferred.extend(out_of_line)
 
+		lines.extend(deferred)
 		lines.extend(["", f"}}  /* namespace {self.namespace} */", "",
 		              f"#endif /* {guard} */"])
 		# Twice, because this backend documents two levels. A member sits at
@@ -185,8 +192,110 @@ class Emitter:
 		sidesteps by handing out offsets rather than types. Declaration order in
 		the schema is not required to respect containment, so it is sorted here
 		rather than demanded of the author.
+
+		**A cycle has no such order**, which is this backend's whole
+		difficulty with mutual recursion and is why `_defer_across_cycle`
+		exists: whichever of `expr` and `item` is emitted first names the
+		other, and no sorting fixes that. C needs only a prototype, and Rust
+		and Python need nothing at all.
 		"""
 		return containment_order(self.resolved.structs, sorted(self.structs))
+
+	def _cycle_declarations(self) -> list[str]:
+		"""Forward declarations for the classes of every cycle.
+
+		A body moved out of the class covers the definitions; a
+		DECLARATION still names the peer in its parameter list --
+		`err body(::situ::expr &out) const noexcept;` -- and a reference
+		parameter needs the name to exist even where it needs no size. So
+		the cycle's classes are declared before any of them is defined,
+		which is what a hand-written header does and what C's prototypes
+		do one language over.
+		"""
+		named = sorted({peer
+		                for name in self.structs
+		                for peer in recursion_cycle(self.resolved.structs,
+		                                            name)})
+		if not named:
+			return []
+		return ["", "/* Declared before any is defined: these name each",
+		        " * other, so no definition order puts both first. */",
+		        *[f"class {c_name(peer)};" for peer in named]]
+
+	def _defer_across_cycle(self, name: str, order: list[str],
+			lines: list[str]) -> tuple[list[str], list[str]]:
+		"""Move member bodies that name a later peer out of the class.
+
+		A member function body defined inside a class needs every OTHER
+		class it names to be complete already, and in a cycle one of them
+		cannot be. So the body moves below the last class of the cycle and
+		a declaration stays behind -- which is ordinary C++ and is what a
+		hand-written header would do.
+
+		Returns (what stays, what goes after every class). Only a struct in
+		a cycle with a peer emitted later has anything to move, so every
+		other schema's output is unchanged, byte for byte.
+
+		The shape it parses is this emitter's own and is asserted rather
+		than assumed: a member definition is a line at one tab, followed by
+		a line that is exactly one tab and `{`, ending at one tab and `}`.
+		Anything else is left alone.
+		"""
+		peers = [peer for peer in recursion_cycle(self.resolved.structs, name)
+		         if peer != name and order.index(peer) > order.index(name)]
+		if not peers:
+			return lines, []
+
+		spelled = {f"::{self.namespace}::{c_name(peer)}" for peer in peers}
+		holder  = c_name(name)
+		kept: list[str]  = []
+		moved: list[str] = []
+		i = 0
+		while i < len(lines):
+			line = lines[i]
+			if not (line.startswith("\t") and not line.startswith("\t\t")
+					and i + 1 < len(lines) and lines[i + 1] == "\t{"):
+				kept.append(line)
+				i += 1
+				continue
+
+			close = i + 2
+			while close < len(lines) and lines[close] != "\t}":
+				close += 1
+			if close == len(lines):
+				kept.append(line)		# not a shape this understands
+				i += 1
+				continue
+
+			block = lines[i:close + 1]
+			if not any(peer in one for one in block for peer in spelled):
+				kept.extend(block)
+				i = close + 1
+				continue
+
+			kept.append(line.rstrip() + ";")
+			moved.extend(["", self._out_of_line(line, holder),
+			              *(one[1:] for one in block[1:])])
+			i = close + 1
+		return kept, moved
+
+	@staticmethod
+	def _out_of_line(signature: str, holder: str) -> str:
+		"""`\tT f(...) const noexcept` -> `inline T holder::f(...) const noexcept`.
+
+		`inline` because a definition inside a class body is implicitly
+		inline and one outside it is not -- and this header is included
+		more than once by construction, so without it the second
+		translation unit is a duplicate symbol at link time rather than an
+		error anybody sees while generating.
+		"""
+		text = signature.strip()
+		head = ""
+		if text.startswith("[[nodiscard]] "):
+			head, text = "[[nodiscard]] ", text[len("[[nodiscard]] "):]
+		open_paren = text.index("(")
+		start      = text.rindex(" ", 0, open_paren) + 1
+		return f"{head}inline {text[:start]}{holder}::{text[start:]}"
 
 	# -- enums ---------------------------------------------------------
 
@@ -1535,7 +1644,15 @@ class Emitter:
 		cap  = ("" if placement.repeat_cap is None
 		        else f" && n < {placement.repeat_cap}u")
 
-		def walk_from(base: str) -> list[str]:
+		# The `_at` form takes a depth and has to spend it, or the parameter
+		# is unused -- which `-Wunused-parameter` says out loud and which
+		# means the run restarts the counter one level down (26.112). The
+		# counted run's emitter threaded it and this one declared it.
+		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+
+		def walk_from(base: str, depth: str | None = None) -> list[str]:
+			step = ("element.extent()" if depth is None
+			        else f"element.extent_at({depth} + 1)")
 			return [
 			f"\t\tstd::uint32_t at = {base};",
 			"\t\tstd::uint32_t n  = 0;",
@@ -1547,14 +1664,14 @@ class Emitter:
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
-			"\t\t\tconst std::uint32_t size = element.extent();",
+			f"\t\t\tconst std::uint32_t size = {step};",
 			"\t\t\tif (size == 0u || at + size > raw_.limit) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			]
 
 		walk  = walk_from(start)
-		from_ = walk_from("start")
+		from_ = walk_from("start", "depth" if deep else None)
 		tail = [
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
@@ -2534,7 +2651,11 @@ class Emitter:
 				and placement.sized_by is None):
 			if not has_computable_extent(self.resolved.structs, inner):
 				return None		# and so nothing after it can be placed
-			return f"{bare_name(local_name(struct, placement))}_extent()"
+			name = bare_name(local_name(struct, placement))
+			if depth is None or not is_recursive(self.resolved.structs,
+			                                     placement.type_name or ""):
+				return f"{name}_extent()"
+			return f"{name}_extent_at({depth})"
 
 		if placement.kind in ("coded", "sealed"):
 			return self._region_length(struct, placement)
@@ -4873,14 +4994,33 @@ class Emitter:
 					"\t * extent this backend can compute, so nothing can say"
 					" where it ends. */",
 				]
+			# A member typed as something that can contain this struct
+			# carries the depth on, as a run's span does. Only a mutual
+			# cycle reaches this: a self-cycle recurses through a run.
+			deep = is_recursive(self.resolved.structs,
+			                    placement.type_name or "")
 			return [
 				"",
 				f"\t/* {placement.path}. No one size, so its extent is read from",
 				"\t * the bytes -- and so is where the member after it starts. */",
+				*([] if not deep else [
+					f"\t[[nodiscard]] std::uint32_t {name}_extent_at"
+					"(std::uint32_t depth) const noexcept",
+					"\t{",
+					f"\t\treturn {nested}(situ_view_t{{ raw_.base"
+					f" + ({start}),",
+					f"\t\t\traw_.limit - ({start}), raw().generation }})"
+					".extent_at(depth + 1);",
+					"\t}",
+				]),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
 				"\t{",
-				f"\t\treturn {nested}(situ_view_t{{ raw_.base + ({start}),",
-				f"\t\t\traw_.limit - ({start}), raw().generation }}).extent();",
+				*([f"\t\treturn {name}_extent_at(0);"] if deep else [
+					f"\t\treturn {nested}(situ_view_t{{ raw_.base"
+					f" + ({start}),",
+					f"\t\t\traw_.limit - ({start}), raw().generation }})"
+					".extent();",
+				]),
 				"\t}",
 				*self._nested_accessor(name, nested, f"({start})",
 				                       f"{name}_extent()"),
@@ -5822,22 +5962,63 @@ class Emitter:
 			"\t\t\treturn depth;",
 			"\t\t}",
 		]
-		for entry in struct.entries:
-			placement = entry.placement
-			if placement.type_name != struct.name:
+		# The cycle, `own_members` rather than the flattened `entries`, and
+		# navigation by FRAME rather than through accessors whose sub-views
+		# are sized by the bounded extent. See the C backend's probe: all
+		# three faults were the same in all four backends, because all four
+		# were written from the same first draft.
+		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
+		for placement in own_members(struct):
+			target = placement.type_name or ""
+			if target not in cycle:
 				continue
 			name  = bare_name(local_name(struct, placement))
-			inner = f"::{self.namespace}::{c_name(struct.name)}"
+			inner = f"::{self.namespace}::{c_name(target)}"
+			start = self._offset_expression(struct, placement)
+			if start is None:
+				continue
+
+			if classify(struct, placement, self.structs) is Member.NESTED:
+				lines.extend([
+					"\t\t{",
+					f"\t\t\tconst std::uint32_t at = {start};",
+					"",
+					"\t\t\tif (at < raw_.limit) {",
+					f"\t\t\t\tconst {inner} element(situ_view_t{{",
+					"\t\t\t\t\traw_.base + at, raw_.limit - at,",
+					"\t\t\t\t\traw().generation });",
+					"\t\t\t\tconst std::uint32_t found ="
+					" element.nesting_at(depth + 1);",
+					"",
+					"\t\t\t\tif (found > deepest) {",
+					"\t\t\t\t\tdeepest = found;",
+					"\t\t\t\t}",
+					"\t\t\t}",
+					"\t\t}",
+				])
+				continue
+
 			lines.extend([
-				f"\t\tfor (std::uint32_t i = 0; i < {name}_count(); i++) {{",
-				f"\t\t\t{inner} element;",
-				f"\t\t\tif ({name}_at(i, element) != ::situ::rt::err::ok) {{",
-				"\t\t\t\tbreak;",
-				"\t\t\t}",
-				"\t\t\tconst std::uint32_t found ="
+				"\t\t{",
+				f"\t\t\tstd::uint32_t at = {start};",
+				f"\t\t\tconst std::uint32_t n = {name}_count();",
+				"",
+				"\t\t\tfor (std::uint32_t i = 0; i < n"
+				" && at < raw_.limit; i++) {",
+				f"\t\t\t\tconst {inner} element(situ_view_t{{",
+				"\t\t\t\t\traw_.base + at, raw_.limit - at,",
+				"\t\t\t\t\traw().generation });",
+				"\t\t\t\tconst std::uint32_t found ="
 				" element.nesting_at(depth + 1);",
-				"\t\t\tif (found > deepest) {",
-				"\t\t\t\tdeepest = found;",
+				"\t\t\t\tconst std::uint32_t size = element.extent();",
+				"",
+				"\t\t\t\tif (found > deepest) {",
+				"\t\t\t\t\tdeepest = found;",
+				"\t\t\t\t}",
+				"\t\t\t\tif (size == 0u || size > raw_.limit - at) {",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+				"\t\t\t\tat = at + size;",
 				"\t\t\t}",
 				"\t\t}",
 			])

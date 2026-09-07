@@ -59,7 +59,7 @@ from situc.traverse import (
 	element_bytes, is_counted_run, matched_values, obligation,
 	pad_alignment,
 	preceding_parts,
-	obligations, own_entries, own_members,
+	obligations, own_entries, own_members, recursion_cycle,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -2440,12 +2440,28 @@ class Emitter:
 						"\t// extent this backend can compute, so nothing"
 						" can say where it ends.",
 					]
+				# A member typed as something that can contain this
+				# struct carries the depth on, exactly as a run's span
+				# does -- the case only a mutual cycle reaches, since a
+				# self-cycle recurses through a run.
+				deep = is_recursive(self.resolved.structs,
+				                    placement.type_name or "")
 				return [
 					"",
 					f"\t/// How many bytes {placement.path} occupies here, read",
 					"\t/// from its own contents.",
+					*([] if not deep else [
+						f"\tpub fn {_ident(f'{base}_extent_at')}"
+						"(&self, depth: usize) -> usize {",
+						f"\t\t{nested} {{ bytes: &self.bytes[({at})..] }}"
+						".extent_at(depth + 1)",
+						"\t}",
+						"",
+					]),
 					f"\tpub fn {_ident(f'{base}_extent')}(&self) -> usize {{",
-					f"\t\t{nested} {{ bytes: &self.bytes[({at})..] }}.extent()",
+					(f"\t\tself.{_ident(f'{base}_extent_at')}(0)" if deep else
+					 f"\t\t{nested} {{ bytes: &self.bytes[({at})..] }}"
+					 ".extent()"),
 					"\t}",
 					"",
 					f"\t/// {placement.path}, sized from its own contents.",
@@ -4817,8 +4833,11 @@ class Emitter:
 				and placement.sized_by is None):
 			if not has_computable_extent(self.resolved.structs, inner):
 				return None		# and so nothing after it can be placed
-			name = _ident(c_name(local_name(struct, placement)) + "_extent")
-			return f"self.{name}()"
+			base = c_name(local_name(struct, placement))
+			if depth is None or not is_recursive(self.resolved.structs,
+			                                     placement.type_name or ""):
+				return f"self.{_ident(base + '_extent')}()"
+			return f"self.{_ident(base + '_extent_at')}({depth})"
 		if placement.kind in ("coded", "sealed"):
 			return self._region_length(struct, placement)
 
@@ -5959,20 +5978,54 @@ class Emitter:
 			"\t\t\treturn depth;",
 			"\t\t}",
 		]
-		for entry in struct.entries:
-			placement = entry.placement
-			if placement.type_name != struct.name:
+		# The cycle, and `own_members` rather than the flattened `entries`;
+		# and it navigates by FRAME rather than through the accessors, whose
+		# sub-views are sized by the bounded extent -- a window the bound has
+		# already closed. See the C backend's probe for both.
+		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
+		for placement in own_members(struct):
+			target = placement.type_name or ""
+			if target not in cycle:
 				continue
-			base = c_name(local_name(struct, placement))
+			base  = c_name(local_name(struct, placement))
+			inner = _pascal(target)
+			at    = self._offset_expression(struct, placement)
+			if at is None:
+				continue
+
+			if classify(struct, placement, self.structs) is Member.NESTED:
+				lines.extend([
+					f"\t\tlet at = {at};",
+					"\t\tif at < self.bytes.len() {",
+					f"\t\t\tlet element = {inner} "
+					"{ bytes: &self.bytes[at..] };",
+					"\t\t\tlet found = element.nesting_at(depth + 1);",
+					"\t\t\tif found > deepest {",
+					"\t\t\t\tdeepest = found;",
+					"\t\t\t}",
+					"\t\t}",
+				])
+				continue
+
 			lines.extend([
-				f"\t\tfor i in 0..self.{_ident(base + '_count')}() {{",
-				f"\t\t\tlet element = match self.{_ident(base)}(i) {{",
-				"\t\t\t\tOk(one) => one,",
-				"\t\t\t\tErr(_)  => break,",
-				"\t\t\t};",
-				"\t\t\tlet found = element.nesting_at(depth + 1);",
-				"\t\t\tif found > deepest {",
-				"\t\t\t\tdeepest = found;",
+				"\t\t{",
+				f"\t\t\tlet mut at = {at};",
+				"",
+				f"\t\t\tfor _ in 0..self.{_ident(base + '_count')}() {{",
+				"\t\t\t\tif at >= self.bytes.len() {",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+				f"\t\t\t\tlet element = {inner} "
+				"{ bytes: &self.bytes[at..] };",
+				"\t\t\t\tlet found = element.nesting_at(depth + 1);",
+				"\t\t\t\tif found > deepest {",
+				"\t\t\t\t\tdeepest = found;",
+				"\t\t\t\t}",
+				"\t\t\t\tlet size = element.extent();",
+				"\t\t\t\tif size == 0 || size > self.bytes.len() - at {",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+				"\t\t\t\tat += size;",
 				"\t\t\t}",
 				"\t\t}",
 			])

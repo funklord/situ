@@ -1074,7 +1074,14 @@ def struct_extent(view: View, depth: int = 0) -> int:
 	values indistinguishable from right ones, which is the fault this
 	walker's own notes record twice.
 	"""
-	if depth >= _ceiling(view.image, view.struct):
+	# `>` and not `>=`, because `depth` counts EDGES: the root is 0, which
+	# is what the four backends' `nesting` counts and what `[depth = N]`
+	# states -- their `validate` refuses `nesting > N`. Compared with `>=`
+	# this walker followed N structs where they follow N + 1, so the six
+	# descriptions disagreed by one about every recursive schema. Found by
+	# comparing a mutual pair against the generated code; the direct case
+	# had it too and nothing had put the two side by side.
+	if depth > _ceiling(view.image, view.struct):
 		raise TooDeep(
 			"nested deeper than this walker follows: the schema's `[limit]` "
 			"where it states one, and this build's ceiling otherwise")

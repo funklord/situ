@@ -1489,7 +1489,7 @@ def _recursive_image(shape: str, limit: int) -> bytes:
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 @pytest.mark.parametrize("shape", sorted(_RUNS))
-@pytest.mark.parametrize("levels", [1, 4, 8, 9])
+@pytest.mark.parametrize("levels", [1, 4, 9, 10])
 def test_they_agree_about_a_run_of_a_recursive_struct(
 		tmp_path: Path, shape: str, levels: int) -> None:
 	"""Both run shapes, on both sides of the ceiling, in both walkers.
@@ -1509,10 +1509,11 @@ def test_they_agree_about_a_run_of_a_recursive_struct(
 	refused deep messages and both refused them by name; they simply refused
 	different messages, which is invisible to either one alone.
 
-	`levels` straddles the ceiling deliberately: 8 is the last message a
-	`[limit = 8]` schema admits and 9 is the first it does not, so a walker
-	that stops early and one that stops late are both caught, and a walker
-	that never stops is caught by the second of them.
+	`levels` straddles the ceiling deliberately: nine structs is the last
+	message a `[limit = 8]` schema admits -- the bound counts edges and the
+	root is zero -- and ten is the first it does not, so a walker that stops
+	early and one that stops late are both caught, and a walker that never
+	stops is caught by the second of them.
 	"""
 	blob    = _recursive_image(shape, 8)
 	message = _nest(levels)
@@ -1547,7 +1548,7 @@ def test_the_schema_moves_both_walkers_together(
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 @pytest.mark.parametrize("shape", sorted(_RUNS))
 @pytest.mark.parametrize(("levels", "expected"),
-                         [(3, "0"), (8, "0"), (9, "cannot-say")])
+                         [(3, "0"), (9, "0"), (10, "cannot-say")])
 def test_a_message_past_the_ceiling_is_unanswerable_in_both(
 		tmp_path: Path, shape: str, levels: int, expected: str) -> None:
 	"""`validate` has two channels, and the ceiling belongs to the other one.
@@ -1567,6 +1568,13 @@ def test_a_message_past_the_ceiling_is_unanswerable_in_both(
 
 	The expected values are pinned rather than only compared, because two
 	walkers agreeing on OK for a message neither followed is agreement.
+
+	Nine and ten rather than eight and nine: `[limit = 8]` counts EDGES, so
+	nine structs is the deepest message inside it. The pair moved when the
+	walkers were held to the generated code for the first time and turned
+	out to have been refusing one level early -- for every recursive schema,
+	not only a mutual one (26.288). This test was pinning the walkers'
+	answer to each other, which they had agreed on and which was wrong.
 	"""
 	blob    = _recursive_image(shape, 8)
 	message = _nest(levels)

@@ -38,8 +38,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from collections.abc import Callable
+
 from situc.parser import parse, parse_text
-from situc.resolve import resolve
+from situc.resolve import ResolvedSchema, resolve
 
 PREAMBLE = "target buffer;\nendian big;\n"
 
@@ -64,7 +66,7 @@ def _verify(schema: Path, vectors: Path) -> str:
 	return verify_mod.render(found, str(schema), str(vectors))
 
 
-def layout(body: str):
+def layout(body: str) -> ResolvedSchema:
 	schema = parse_text(PREAMBLE + body)
 	return resolve(schema, solve(schema))
 
@@ -92,16 +94,62 @@ def test_recursion_without_a_depth_is_still_refused() -> None:
 	assert "contains itself" in rendered
 
 
-def test_a_mutual_cycle_is_still_refused() -> None:
-	"""0054 leaves it open deliberately. Nothing in the mechanism needs the
-	recursion to be single -- the bound applies to a strongly connected
-	component as readily as to a struct -- but the diagnostic wants thought,
-	since naming one struct of a two-struct cycle sends a reader to whichever
-	happened to be listed first. Pinned so that permitting it is a decision
-	rather than a side effect."""
-	with pytest.raises(SituError):
-		layout("struct a [depth = 8] { u8 k; b inner; }\n"
-		       "struct b [depth = 8] { u8 k; a inner; }\n")
+MUTUAL = ("struct expr [depth = 8] {{\n"
+          "\tu8    kind;\n"
+          "\tu16   n;\n"
+          "\titem  items[n];\n"
+          "}}\n"
+          "\n"
+          "struct item{item_attrs} {{\n"
+          "\tu8    tag;\n"
+          "\texpr  body;\n"
+          "}}\n")
+
+
+def test_a_mutual_cycle_is_described() -> None:
+	"""0054 left this open and its own reasoning had already covered it:
+	nothing in the mechanism needs the recursion to be single, and the bound
+	applies to a strongly connected component rather than to a struct. What
+	it left open was the diagnostic -- naming one struct of a two-struct
+	cycle sends a reader to whichever happened to be listed first -- and the
+	answer is to require the bound of every struct in the cycle and to name
+	them all."""
+	resolved = layout(MUTUAL.format(item_attrs=" [depth = 8]"))
+	assert {"expr", "item"} <= set(resolved.structs)
+
+
+@pytest.mark.parametrize(("body", "why"), [
+	# No bound at all on one member of the cycle.
+	(MUTUAL.format(item_attrs=""), "recursive through"),
+	# Two numbers for one cycle: a walk entering at either end would
+	# spend a different one, which is the ambiguity 17.0 makes an error.
+	(MUTUAL.format(item_attrs=" [depth = 4]"), "disagrees"),
+	# `[limit]` on some of the cycle and not the rest, which is the same
+	# ambiguity wearing the other attribute.
+	(MUTUAL.replace("struct expr [depth = 8]",
+	                "struct expr [depth = 8, limit = 4]")
+	        .format(item_attrs=" [depth = 8]"), "some of its structs"),
+	# Through a variant arm, which situ does not render: the extent of a
+	# variant is the arm its discriminant selects, and an arm that IS the
+	# recursion has no maximum, so `_variant_is_measurable` refuses it and
+	# the C backend used to emit a header declaring an extent it never
+	# defined. Refused by name rather than emitted broken.
+	("struct node [depth = 8] {\n"
+	 "\tu8   tag;\n"
+	 "\tvariant body switch (tag) {\n"
+	 "\t\tcase 1:  node kid;\n"
+	 "\t\tdefault: u8 pad;\n"
+	 "\t}\n"
+	 "}\n", "variant arm"),
+])
+def test_a_cycle_states_one_bound_for_all_of_it(body: str, why: str) -> None:
+	"""`depth` bounds the cycle, not a struct of it.
+
+	Each of these is a schema that would generate code, and each would
+	generate code that is wrong in a way nothing downstream could see.
+	"""
+	with pytest.raises(SituError, match=why):
+		layout(body)
 
 
 @pytest.mark.parametrize(("attrs", "why"), [
@@ -407,12 +455,17 @@ def test_the_extent_is_capped_by_the_format_and_not_by_the_build() -> None:
 
 
 def _packed(body: str) -> bytes:
-	"""The runtime image for a schema, as `situc pack` writes it."""
+	"""The runtime image for a schema, as `situc pack` writes it.
+
+	With its metadata tail, so a struct can be found by name: a mutual pair
+	is two shapes and which one the packer wrote first is not something a
+	test should be pinning.
+	"""
 	from situc import pack as pack_mod
 
 	schema   = parse_text(PREAMBLE + body)
 	resolved = resolve(schema, solve(schema))
-	blob, _coverage = pack_mod.pack(schema, resolved)
+	blob, _coverage = pack_mod.pack(schema, resolved, metadata=True)
 	return blob
 
 
@@ -506,8 +559,329 @@ def test_the_python_walker_follows_the_schema_not_its_own_ceiling(
 	# conservative pair -- walks 6, refuses 12 -- passes for a walker that
 	# stops anywhere between, which is what let the C walker spend two
 	# levels per level of struct without this file noticing.
-	ok = struct_extent(acquire(image, _chain(limit), 0))
-	assert ok == limit, (limit, ok)
+	#
+	# `limit + 1` structs, because `[depth = N]` counts EDGES and the root
+	# is zero -- the four backends' `validate` refuses `nesting > N`, and
+	# `nesting` is 0 for a message that holds one struct. The walkers
+	# compared `depth >= N` and followed one level fewer than the generated
+	# code did, for every recursive schema, until a mutual pair put the six
+	# descriptions side by side (26.288).
+	ok = struct_extent(acquire(image, _chain(limit + 1), 0))
+	assert ok == limit + 1, (limit, ok)
 
 	with pytest.raises(TooDeep):
-		struct_extent(acquire(image, _chain(limit + 1), 0))
+		struct_extent(acquire(image, _chain(limit + 2), 0))
+
+
+#: The three shapes a recursive type takes, the message that nests one `k`
+#: deep in each, and the top-level struct. Held together because every
+#: recursion test below wants all three and each was written for one:
+#: `[depth]` shipped exercised on the counted run alone, so the `while` run
+#: emitted a `_span_at` nothing defined and the record run the same, in two
+#: backends each -- neither found by the suite, because no schema in it or
+#: in the corpus recurses through those two constructs.
+SHAPES: dict[str, tuple[str, Callable[[int], bytes], str]] = {
+	"counted": (
+		"struct node [depth = 8] {\n\tu8 kind;\n\tu16 n;\n"
+		"\tnode kids[n];\n}\n",
+		lambda k: bytes(b"".join(bytes([0, 0, 1]) for _ in range(k))
+		                + bytes([0, 0, 0])),
+		"node"),
+	"while": (
+		"struct node [depth = 8] {\n\tu8 more;\n"
+		"\tnode kids[] while (more != 0);\n}\n",
+		lambda k: bytes([1] * k + [0]),
+		"node"),
+	"mutual": (
+		"struct expr [depth = 8] {\n\tu8 kind;\n\tu16 n;\n"
+		"\titem items[n];\n}\n"
+		"struct item [depth = 8] {\n\tu8 tag;\n\texpr body;\n}\n",
+		lambda k: bytes(b"".join(bytes([0, 0, 1, 0]) for _ in range(k))
+		                + bytes([0, 0, 0])),
+		"expr"),
+}
+
+#: What each shape answers at `k` turns, as (extent, nesting, valid).
+#:
+#: A turn of a mutual cycle is TWO structs, so `[depth = 8]` admits four
+#: turns where the other two admit eight levels -- which is the whole of
+#: what "depth counts nested structs, not turns of the cycle" means, stated
+#: as numbers rather than as prose.
+EXPECTED = {
+	"counted": {8: (27, 8, True), 9: (27, 9, False)},
+	"while":   {8: (9,  8, True), 9: (10, 9, False)},
+	"mutual":  {4: (19, 8, True), 5: (19, 10, False)},
+}
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_the_generated_python_bounds_every_recursive_shape(
+		tmp_path: Path, shape: str) -> None:
+	"""Run rather than read, and all three shapes rather than the one.
+
+	Python is the backend that needs no toolchain, so this is the arm of the
+	agreement that runs everywhere. `test_the_four_agree_about_a_mutual_cycle`
+	is the same table in C, C++ and Rust.
+
+	The numbers are pinned, not merely compared between shapes: two
+	descriptions agreeing on a bound neither of them applies is agreement.
+	"""
+	import importlib.util
+	import sys as _sys
+
+	body, build, top = SHAPES[shape]
+	from situc.codegen.python import generate as gen_py
+
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.py").write_text(gen_py(schema, resolved, "unit").module,
+	                                  encoding="ascii")
+
+	root = Path(__file__).resolve().parents[2] / "runtime" / "python"
+	_sys.path.insert(0, str(root))
+	try:
+		spec = importlib.util.spec_from_file_location(
+			f"unit_{shape}", tmp_path / "unit.py")
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+	finally:
+		_sys.path.remove(str(root))
+
+	held = getattr(module, top)
+	for k, (extent, nesting, valid) in EXPECTED[shape].items():
+		data = build(k)
+		one  = held(module.Message(bytearray(data)), 0, len(data))
+		assert one._extent == extent, (shape, k, one._extent)
+		assert one.nesting == nesting, (shape, k, one.nesting)
+		if valid:
+			one.validate()
+		else:
+			with pytest.raises(Exception):
+				one.validate()
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_the_four_agree_about_every_recursive_shape(
+		tmp_path: Path, shape: str) -> None:
+	"""C, C++ and Rust against the same table Python is held to.
+
+	This is what found everything. Each backend was self-consistent and each
+	looked right alone; the counted run was the only shape anybody had
+	compiled, and the mutual cycle was the only case where a turn costs two
+	levels -- which is what made the `nesting` probe's dependence on the
+	bounded extent visible at all. Skipped per toolchain rather than
+	altogether, because a machine with only one compiler still checks that
+	one against Python.
+	"""
+	from situc.cli import main
+
+	body, build, top = SHAPES[shape]
+	schema = tmp_path / "r.situ"
+	schema.write_text(PREAMBLE + body, encoding="ascii")
+
+	rows = "\n".join(
+		f"\t\t{{ {k}u, {len(build(k))}u, {e}u, {n}u, {int(v)} }},"
+		for k, (e, n, v) in EXPECTED[shape].items())
+
+	ran = 0
+	if shutil.which("gcc") is not None:
+		_run_c(tmp_path, schema, top, rows, build, shape)
+		ran += 1
+	if shutil.which("g++") is not None:
+		_run_cpp(tmp_path, schema, top, rows, build, shape)
+		ran += 1
+	if shutil.which("rustc") is not None:
+		_run_rust(tmp_path, schema, top, build, shape)
+		ran += 1
+	if ran == 0:
+		pytest.skip("no C, C++ or Rust toolchain")
+
+
+#: The driver each compiled backend runs, as a table of cases it checks
+#: itself. Written once per language rather than once per shape: the shapes
+#: differ in their bytes and not in the questions asked of them.
+def _cases(build: Callable[[int], bytes], shape: str) -> str:
+	"""The messages, as C array initialisers -- bytes and length per case."""
+	return ",\n".join(
+		"\t{ " + ", ".join(f"0x{byte:02x}" for byte in build(k)) + " }"
+		for k in EXPECTED[shape])
+
+
+def _run_c(tmp_path: Path, schema: Path, top: str, rows: str,
+		build: Callable[[int], bytes], shape: str) -> None:
+	from situc.cli import main
+
+	out = tmp_path / "c"
+	out.mkdir(exist_ok=True)
+	assert main(["build", str(schema), "--target", "c", "--out", str(out)]) == 0
+
+	(out / "main.c").write_text(f'''#include <stdio.h>
+#include "r.h"
+static const uint8_t cases[][64] = {{
+{_cases(build, shape)}
+}};
+static const uint32_t want[][5] = {{
+{rows}
+}};
+int main(void)
+{{
+	unsigned i;
+	for (i = 0; i < sizeof want / sizeof want[0]; i++) {{
+		uint8_t     buf[64];
+		situ_msg_t  msg;
+		situ_view_t view;
+		unsigned    b;
+
+		for (b = 0; b < want[i][1]; b++) {{ buf[b] = cases[i][b]; }}
+		situ_msg_init(&msg, buf, want[i][1]);
+		if (situ_{top}_view(&msg, 0u, want[i][1], &view) != SITU_OK) {{
+			return 1;
+		}}
+		printf("%u %u %d\\n", situ_{top}_extent(view),
+		       situ_{top}_nesting(view),
+		       situ_{top}_validate(view) == SITU_OK);
+	}}
+	return 0;
+}}
+''', encoding="ascii")
+
+	runtime = Path(__file__).resolve().parents[2] / "runtime" / "c"
+	built = subprocess.run(
+		["gcc", "-std=c11", "-Os", "-Wall", "-Wextra", "-Werror",
+		 "-Wconversion", "-Wsign-conversion", f"-I{runtime}", f"-I{out}",
+		 str(out / "main.c"), str(out / "r.c"), str(runtime / "situ.c"),
+		 "-o", str(out / "r")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	_compare(subprocess.run([str(out / "r")], capture_output=True, text=True),
+	         shape, "c")
+
+
+def _run_cpp(tmp_path: Path, schema: Path, top: str, rows: str,
+		build: Callable[[int], bytes], shape: str) -> None:
+	from situc.cli import main
+
+	out = tmp_path / "cpp"
+	out.mkdir(exist_ok=True)
+	assert main(["build", str(schema), "--target", "cpp",
+	             "--out", str(out)]) == 0
+
+	(out / "main.cpp").write_text(f'''#include <cstdio>
+#include "r.hpp"
+static const std::uint8_t cases[][64] = {{
+{_cases(build, shape)}
+}};
+static const std::uint32_t want[][5] = {{
+{rows}
+}};
+int main()
+{{
+	for (unsigned i = 0; i < sizeof want / sizeof want[0]; i++) {{
+		std::uint8_t buf[64];
+		for (unsigned b = 0; b < want[i][1]; b++) {{ buf[b] = cases[i][b]; }}
+
+		situ_msg_t msg;
+		situ_msg_init(&msg, buf, want[i][1]);
+		situ_view_t view;
+		situ_view_at(&msg, 0u, want[i][1], &view);
+		const ::situ::{top} one(view);
+		std::printf("%u %u %d\\n", one.extent(), one.nesting(),
+		            one.validate() == ::situ::rt::err::ok);
+	}}
+	return 0;
+}}
+''', encoding="ascii")
+
+	root  = Path(__file__).resolve().parents[2] / "runtime"
+	built = subprocess.run(
+		["g++", "-std=c++17", "-Os", "-Wall", "-Wextra", "-Werror",
+		 f"-I{root / 'c'}", f"-I{root / 'cpp'}", f"-I{out}",
+		 str(out / "main.cpp"), str(root / "c" / "situ.c"),
+		 "-o", str(out / "r")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	_compare(subprocess.run([str(out / "r")], capture_output=True,
+	                        text=True), shape, "cpp")
+
+
+def _run_rust(tmp_path: Path, schema: Path, top: str,
+		build: Callable[[int], bytes], shape: str) -> None:
+	from situc.cli import main
+
+	out = tmp_path / "rust"
+	out.mkdir(exist_ok=True)
+	assert main(["build", str(schema), "--target", "rust",
+	             "--out", str(out)]) == 0
+
+	root = Path(__file__).resolve().parents[2] / "runtime" / "rust"
+	(out / "situ_rt.rs").write_text(
+		(root / "situ_rt.rs").read_text(encoding="utf-8"), encoding="utf-8")
+	pascal = top[:1].upper() + top[1:]
+	cases  = ",\n".join(
+		"\tvec![" + ", ".join(str(byte) for byte in build(k)) + "]"
+		for k in EXPECTED[shape])
+	(out / "main.rs").write_text(f'''mod situ_rt;
+mod r;
+fn main() {{
+    let cases: Vec<Vec<u8>> = vec![
+{cases}
+    ];
+    for d in cases {{
+        let one = r::{pascal}::new(&d).unwrap();
+        println!("{{}} {{}} {{}}", one.extent(), one.nesting(),
+                 if one.validate().is_ok() {{ 1 }} else {{ 0 }});
+    }}
+}}
+''', encoding="ascii")
+
+	built = subprocess.run(
+		["rustc", "--edition", "2021", "-O", "-o", str(out / "r"),
+		 str(out / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	_compare(subprocess.run([str(out / "r")], capture_output=True, text=True),
+	         shape, "rust")
+
+
+def _compare(ran: "subprocess.CompletedProcess[str]", shape: str,
+		language: str) -> None:
+	"""One backend's table against the pinned one."""
+	assert ran.returncode == 0, ran.stderr
+	rows = [tuple(int(n) for n in line.split())
+	        for line in ran.stdout.split("\n") if line]
+	want = [(e, n, int(v)) for e, n, v in EXPECTED[shape].values()]
+	assert rows == want, f"{language} {shape}: {rows} != {want}"
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_the_walkers_stop_where_the_generated_code_does(shape: str) -> None:
+	"""The sixth and seventh descriptions, against the same table.
+
+	Nothing compared these two layers. `test_walker_c.py` holds the walkers
+	to each other and this file holds the four backends to each other, so a
+	walker and a backend could disagree about the same schema for as long as
+	each stayed self-consistent -- and they did, by one, for every recursive
+	schema: the walkers refused at `depth >= N` where the generated code
+	admits `nesting == N`, the root counting zero in both.
+
+	What is compared is the LAST MESSAGE EACH ACCEPTS, not the extent past
+	the bound: a generated extent truncates and returns a number, a walker
+	refuses by name, and both are right for their own design (26.284). Where
+	they must agree is on which messages are inside the format.
+	"""
+	from walker.image import load
+	from walker.walk import TooDeep, acquire, struct_extent
+
+	body, build, top = SHAPES[shape]
+	image = load(_packed(body))
+	names = [image.struct_name(i) for i in range(len(image.structs))]
+
+	for k, (extent, _nesting, valid) in EXPECTED[shape].items():
+		view = acquire(image, build(k), names.index(top))
+		if valid:
+			assert struct_extent(view) == extent, (shape, k)
+		else:
+			with pytest.raises(TooDeep):
+				struct_extent(view)
+

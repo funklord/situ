@@ -59,7 +59,7 @@ from situc.traverse import (
 	element_bytes, is_counted_run, matched_values, obligation,
 	pad_alignment,
 	preceding_parts,
-	obligations, own_entries, own_members,
+	obligations, own_entries, own_members, recursion_cycle,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -2946,16 +2946,34 @@ class Emitter:
 					"\t# extent this backend can compute, so nothing can say"
 					" where it ends.",
 				]
+			# A member typed as something that can contain this struct: the
+			# helper carries the depth on, exactly as a run's span does.
+			# Without it the cycle's counter reset here and `[depth]` bought
+			# nothing for a mutual pair -- the case a self-cycle never
+			# reaches, because its recursion is always through a run.
+			deep = is_recursive(self.resolved.structs,
+			                    placement.type_name or "")
 			return [
+				*([] if not deep else [
+					"",
+					f"\tdef {name}_extent_at(self, depth: int) -> int:",
+					f'\t\t"""How many bytes {placement.path} occupies here,',
+					'\t\tat this depth in the recursion."""',
+					f"\t\tstart = self._at + ({start})",
+					f"\t\treturn {nested}(self._msg, start,",
+					f"\t\t\tself._len - ({start}))._extent_at(depth + 1)",
+				]),
 				"", "\t@property",
 				f"\tdef {name}_extent(self) -> int:",
 				f'\t\t"""How many bytes {placement.path} occupies here.',
 				"",
 				"\t\tRead from the bytes: the member has no one size, and",
 				'\t\tneither does the offset of whatever follows it."""',
-				f"\t\tstart = self._at + ({start})",
-				f"\t\treturn {nested}(self._msg, start,",
-				f"\t\t\tself._len - ({start}))._extent",
+				*([f"\t\treturn self.{name}_extent_at(0)"] if deep else [
+					f"\t\tstart = self._at + ({start})",
+					f"\t\treturn {nested}(self._msg, start,",
+					f"\t\t\tself._len - ({start}))._extent",
+				]),
 				"",
 				"\t@property",
 				f"\tdef {name}(self) -> {nested}:",
@@ -3639,9 +3657,19 @@ class Emitter:
 		cap  = ("" if placement.repeat_cap is None
 		        else f" and len(starts) <= {placement.repeat_cap}")
 
+		# A `while` run of a recursive element carries the depth, exactly as
+		# the counted run's span does. It did not: `_extent_at` called
+		# `{name}_span_at` and this emitter defined only `_span`, so
+		# `struct node [depth] { u8 more; node kids[] while (...); }`
+		# generated a module that raised AttributeError on its own extent.
+		# The counted form was the one the corpus and the suite exercised.
+		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+		step = ("element._extent_at(depth + 1)" if deep else "element._extent")
+
 		return [
 			"",
-			f"\tdef _{name}_walk_from(self, start: int) -> list[int]:",
+			f"\tdef _{name}_walk_from(self, start: int"
+			+ (", depth: int = 0" if deep else "") + ") -> list[int]:",
 			f'\t\t"""Where each `{placement.type_name}` starts, and where the'
 			" run ends,",
 			"\t\tfrom a base the caller already knows.",
@@ -3658,7 +3686,7 @@ class Emitter:
 			"",
 			f"\t\twhile at < self._len{cap}:",
 			f"\t\t\telement = {inner}(self._msg, self._at + at, self._len - at)",
-			"\t\t\tsize    = element._extent",
+			f"\t\t\tsize    = {step}",
 			"\t\t\tif size == 0 or at + size > self._len:",
 			"\t\t\t\tbreak",
 			"\t\t\tstarts.append(at)",
@@ -3686,6 +3714,12 @@ class Emitter:
 			"\t@property",
 			f"\tdef {name}_span(self) -> int:",
 			f"\t\treturn self.{name}_span_from({start})",
+			*([] if not deep else [
+				"",
+				f"\tdef {name}_span_at(self, depth: int) -> int:",
+				f"\t\treturn self._{name}_walk_from({start}, depth)[-1]"
+				f" - ({start})",
+			]),
 			"",
 			f"\tdef {name}(self, index: int) -> {inner}:",
 			f"\t\tstarts = self._{name}_walk()",
@@ -4122,20 +4156,53 @@ class Emitter:
 			f"\t\tif depth > {cap}:",
 			"\t\t\treturn depth",
 		]
-		for entry in struct.entries:
-			placement = entry.placement
-			if placement.type_name != struct.name:
+		# The cycle, not this struct, and `own_members` rather than the
+		# flattened `entries` -- see the C backend's probe, which had both
+		# faults and the same two consequences.
+		#
+		# And it navigates by FRAME: an element view sized by the extent is
+		# a window the bound has already closed, so the probe could not see
+		# past the thing it exists to see past. Invisible in a self-cycle,
+		# where one restart per level has a whole `[depth]` of headroom;
+		# fatal in a mutual one, where a turn costs two levels and the
+		# truncation compounds until `nesting` saturates AT the bound.
+		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
+		for placement in own_members(struct):
+			target = placement.type_name or ""
+			if target not in cycle:
 				continue
-			name = py_name(local_name(struct, placement)).replace(".", "_")
+			name  = py_name(local_name(struct, placement)).replace(".", "_")
+			inner = py_name(target)
+			start = self._offset_expression(struct, placement)
+			if start is None:
+				continue
+
+			if classify(struct, placement, self.structs) is Member.NESTED:
+				lines.extend([
+					f"\t\tstart = {start}",
+					"\t\tif start < self._len:",
+					f"\t\t\telement = {inner}(self._msg, self._at + start,",
+					"\t\t\t\tself._len - start)",
+					"\t\t\tfound = element.nesting_at(depth + 1)",
+					"\t\t\tif found > deepest:",
+					"\t\t\t\tdeepest = found",
+				])
+				continue
+
 			lines.extend([
-				f"\t\tfor i in range(self.{name}_count):",
-				"\t\t\ttry:",
-				f"\t\t\t\telement = self.{name}(i)",
-				"\t\t\texcept Exception:",
+				f"\t\tat = {start}",
+				f"\t\tfor _ in range(self.{name}_count):",
+				"\t\t\tif at >= self._len:",
 				"\t\t\t\tbreak",
+				f"\t\t\telement = {inner}(self._msg, self._at + at,",
+				"\t\t\t\tself._len - at)",
 				"\t\t\tfound = element.nesting_at(depth + 1)",
 				"\t\t\tif found > deepest:",
 				"\t\t\t\tdeepest = found",
+				"\t\t\tsize = element._extent",
+				"\t\t\tif size == 0 or size > self._len - at:",
+				"\t\t\t\tbreak",
+				"\t\t\tat += size",
 			])
 		lines.extend(["\t\treturn deepest",
 		              "",
@@ -4477,7 +4544,11 @@ class Emitter:
 				and placement.sized_by is None):
 			if not has_computable_extent(self.resolved.structs, inner):
 				return None		# and so nothing after it can be placed
-			return f"self.{py_name(local_name(struct, placement))}_extent"
+			name = py_name(local_name(struct, placement))
+			if depth is None or not is_recursive(self.resolved.structs,
+			                                     placement.type_name or ""):
+				return f"self.{name}_extent"
+			return f"self.{name}_extent_at({depth})"
 
 		if placement.kind in ("coded", "sealed"):
 			return self._region_length(struct, placement)

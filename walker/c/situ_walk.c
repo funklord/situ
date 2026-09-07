@@ -801,9 +801,15 @@ static situ_walk_err struct_extent(const situ_walk_image *image,
 	if (shape >= image->struct_count) {
 		return SITU_WALK_BOUNDS;
 	}
-	if (depth >= depth_ceiling(image, shape)) {
+	if (depth > depth_ceiling(image, shape)) {
 		/* The schema's number where it has one, this build's otherwise --
-		 * and refused by name rather than answered short. */
+		 * and refused by name rather than answered short.
+		 *
+		 * `>` and not `>=`: `depth` counts EDGES, the root being 0, which
+		 * is what the generated `nesting` counts and what `[depth = N]`
+		 * states -- the four backends' `validate` refuses `nesting > N`.
+		 * With `>=` this walker followed N structs where they follow
+		 * N + 1. */
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -909,7 +915,7 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 	/* The ELEMENT's ceiling, because that is what the walk descends into --
 	 * a `while` run of a recursive struct is bounded by what that struct
 	 * declares, not by what the struct holding the run declares. */
-	if (depth >= depth_ceiling(image, held.type_struct)) {
+	if (depth > depth_ceiling(image, held.type_struct)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 

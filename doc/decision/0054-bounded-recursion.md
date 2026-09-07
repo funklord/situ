@@ -147,13 +147,26 @@ format's own bound was safe here.
 
 ## What is deliberately left open
 
-Whether the recursion may be **mutual** -- `a` containing `b` containing `a`.
-Nothing above needs it to be single, and the cycle detector in
-`wellformed.py` already finds mutual cycles, so the bound applies to a
-strongly connected component rather than to a struct. It is left open because
-no consumer has asked and because the diagnostic for a mutual cycle wants
-thought: naming one struct in a two-struct cycle sends the reader to whichever
-happened to be listed first.
+~~Whether the recursion may be **mutual** -- `a` containing `b` containing
+`a`.~~ **Amended 2026-09-07 (26.288): mutual cycles are described.** The
+reasoning above needed no changing -- the bound applies to a strongly
+connected component rather than to a struct -- and the open question was the
+diagnostic. Its answer is that the cycle is the unit: **every struct in a
+cycle declares `[depth]` and they all declare the same one**, so the number
+is unambiguous wherever a walk enters, the fact is in front of whoever is
+reading either struct, and a diagnostic names them all rather than whichever
+was listed first. `depth` counts nested structs, not turns of the cycle:
+`[depth = 8]` over `expr <-> item` admits eight nested structs, four of
+each.
+
+**A cycle through a variant arm is refused for now**, which is a narrowing
+of what was permitted rather than of what worked: such a schema passed
+`check_no_recursive_types` and emitted a C header that does not compile,
+declaring an extent it never defined, because `_variant_is_measurable`
+refuses a variant with no maximum and a recursive arm has none. The two
+causes of "no maximum" -- an `opaque` default that consumes the rest, and a
+recursion whose maximum has no closed form -- share one signal, and
+separating them is what that case needs. Refused by name until then.
 
 Whether `limit` belongs in the schema at all, rather than as a build flag.
 The argument for the schema is that it is then in the artifact `map --check`

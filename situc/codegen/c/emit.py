@@ -47,8 +47,8 @@ from situc.traverse import (
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
-	is_own_member,
-	local_name, offset_plan,
+	is_own_member, is_recursive,
+	local_name, offset_plan, own_members, recursion_cycle,
 	readable_names,
 	region_extent,
 	decode_counts_bits, decodes_here,
@@ -2836,6 +2836,14 @@ class Emitter:
 		return (self._recursive(placement.type_name or "")
 		        and (placement.array_count is not None
 		             or placement.sized_by is not None
+		             # A `while` run declares neither a count nor a driving
+		             # field, so the three tests above miss it and a run was
+		             # routed to the single-nested-struct path: `validate`
+		             # called a `_view` helper a run does not have, and the
+		             # generated source did not compile. The recursive
+		             # `while` run was never built, which is why the corpus
+		             # could not say so.
+		             or placement.repeat_while is not None
 		             or data_sized(placement)))
 
 	def _base_expression(self, struct: ResolvedStruct, placement: Placement,
@@ -2918,24 +2926,41 @@ class Emitter:
 		           for entry in other.entries)
 
 	def _is_nested_member(self, placement: Placement) -> bool:
+		"""One nested struct, not a run of them.
+
+		A `while` run declares neither a count nor a driving field, so it
+		answered True here until the nesting probe asked the question for
+		its own sake: `node kids[] while (more != 0)` was rendered as a
+		single nested `node` and probed with a `_view` accessor that does
+		not exist for a run. The two other callers `or` this with the run
+		tests, so the looseness was inert until something needed the
+		distinction rather than the union.
+		"""
 		return (placement.kind == "field"
 		        and placement.delimiter is None
 		        and placement.array_count is None
 		        and placement.sized_by is None
+		        and placement.size_expr is None
+		        and placement.repeat_while is None
 		        and placement.type_name in self.structs)
 
 	def _recursive(self, name: str) -> bool:
-		"""Whether this struct names itself (0054).
+		"""Whether this struct can contain itself (0054).
 
 		Its extent calls its own run's span and that span calls the extent
 		back, so two things follow that no other struct needs: the pair has
 		to be forward-declared, since no emission order puts both above the
 		other; and the recursion has to carry a depth, or a hostile message
 		nests as deep as its own length allows.
+
+		`traverse` owns the decision and the other three backends were
+		already asking it; this one had its own copy, written before the
+		shared one existed and never retired. The copies then disagreed the
+		moment the shared one learned about mutual cycles -- so `item` in an
+		`expr -> item -> expr` pair was recursive to three backends and not
+		to this one, which emitted a call to a `_span_at` it never defined.
 		"""
-		struct = self.resolved.structs.get(name)
-		return struct is not None and any(
-			entry.placement.type_name == name for entry in struct.entries)
+		return is_recursive(self.resolved.structs, name)
 
 	def _depth_limit(self, name: str) -> int:
 		"""How deep this build follows the recursion before answering zero.
@@ -2969,6 +2994,24 @@ class Emitter:
 		depth, and the reason `validate` otherwise leaves array elements to
 		the caller does not reach it: this reads no element's *values*, only
 		how far the structure goes.
+
+		**And it navigates by frame, not through the accessors.** A sub-view
+		from `_at` or `_view` is sized by the element's extent, and the
+		extent is bounded -- so the probe was looking through a window the
+		bound had already closed, and could not see past the thing it exists
+		to see past. In the direct case that was invisible: one restart per
+		level with a whole `[depth]` of headroom is enough to reach one past
+		the bound, which is all the probe needs. In a mutual cycle a turn
+		costs two levels and the truncation compounds, so `nesting`
+		saturated exactly AT the bound and `validate` returned OK for a
+		message twice as deep as the format allows.
+
+		Taking `view.limit - at` instead makes the descent independent of
+		the quantity being judged. The extent is still used to step to the
+		next sibling, and a zero there stops the walk -- after that element
+		has been probed, which is the case that matters: an element whose
+		extent the bound refused is an element the probe has already
+		reported on.
 		"""
 		if not self._recursive(struct.name):
 			return []
@@ -3000,29 +3043,81 @@ class Emitter:
 			" \"too deep\" */",
 			"\t}",
 		]
-		for entry in struct.entries:
-			placement = entry.placement
-			if placement.type_name != struct.name:
+		# The cycle, not this struct. `expr -> item -> expr` descends into
+		# `item`, so the probe calls the PEER's `_nesting_at` and the two
+		# bounce -- which is what makes the count a count of nested structs
+		# rather than of turns. Keyed on `own_members` and on the cycle,
+		# where this read `entries` and `type_name == struct.name`: that is
+		# direct self-reference over a FLATTENED list, so it matched
+		# `expr.items[].body` -- a member of the element -- and generated a
+		# walk over an accessor spelled for a member `expr` does not have.
+		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
+		for placement in own_members(struct):
+			target = placement.type_name or ""
+			if target not in cycle:
 				continue
 			local = c_name(self._local(struct, placement))
-			at    = ident(self.prefix, struct.name, local, "at")
-			count = self._count_expression(struct, placement)
+			peer  = ident(self.prefix, target, "nesting")
+
+			base = self._base_expression(struct, placement, gated=False)
+
+			if self._is_nested_member(placement):
+				# One of them, not a run: `item.body` is a single `expr`.
+				lines.extend([
+					"\t{",
+					"\t\tsitu_view_t element;",
+					"",
+					f"\t\tif (situ_view_sub(view, {base},"
+					f" situ_remaining_u32(view.limit, {base}), &element)",
+					"\t\t\t\t== SITU_OK) {",
+					f"\t\t\tconst uint32_t found = {peer}_at(element,"
+					" depth + 1u);",
+					"",
+					"\t\t\tif (found > deepest) {",
+					"\t\t\t\tdeepest = found;",
+					"\t\t\t}",
+					"\t\t}",
+					"\t}",
+				])
+				continue
+
+			element = self.resolved.structs[placement.type_name]
+			step    = self._element_extent_call(element)
+			if step is None:
+				continue
+			# The emitted `_count`, not `_count_expression`. The latter
+			# renders the length field a COUNTED run reads and answers a
+			# literal `0u` for a `while` run, which has no such field -- so
+			# the loop never ran, the probe returned `depth`, and `validate`
+			# could not refuse a too-deep message through a `while` run at
+			# all. The accessor answers for every run shape because it is
+			# the same function the run's own walk uses.
+			count = ident(self.prefix, struct.name, local, "count")
 			lines.extend([
 				"\t{",
+				f"\t\tuint32_t at = {base};",
 				"\t\tuint32_t i;",
-				f"\t\tconst uint32_t n = {count or '0u'};",
+				f"\t\tconst uint32_t n = {count}(view);",
 				"",
-				"\t\tfor (i = 0u; i < n; i++) {",
+				"\t\tfor (i = 0u; i < n && at < view.limit; i++) {",
 				"\t\t\tsitu_view_t element;",
 				"\t\t\tuint32_t    found;",
+				"\t\t\tuint32_t    size;",
 				"",
-				f"\t\t\tif ({at}(view, i, &element) != SITU_OK) {{",
+				"\t\t\tif (situ_view_sub(view, at, view.limit - at,"
+				" &element)",
+				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
-				f"\t\t\tfound = {name}_at(element, depth + 1u);",
+				f"\t\t\tfound = {peer}_at(element, depth + 1u);",
 				"\t\t\tif (found > deepest) {",
 				"\t\t\t\tdeepest = found;",
 				"\t\t\t}",
+				f"\t\t\tsize = {step};",
+				"\t\t\tif (size == 0u || size > view.limit - at) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tat = at + size;",
 				"\t\t}",
 				"\t}",
 			])
@@ -3102,22 +3197,48 @@ class Emitter:
 		"""
 		if not self._recursive(struct.name):
 			return []
-		name  = ident(self.prefix, struct.name, "extent")
 		limit = self._depth_limit(struct.name)
-		return [
+		# The whole cycle, not this struct. `expr`'s run accessors call
+		# `situ_item_extent`, and `item` is emitted after `expr`, so
+		# declaring only `expr`'s pair leaves the header refusing to compile
+		# on an implicit declaration -- the same failure a self-cycle has
+		# without any prototype at all, one struct further round.
+		#
+		# Repeated where more than one struct of the cycle emits them, which
+		# C permits for a declaration and which is cheaper than deciding
+		# which member of the cycle is allowed to speak: that decision would
+		# have to agree with the emission order, and the emission order is
+		# not this function's to know.
+		cycle = recursion_cycle(self.resolved.structs, struct.name)
+		lines = [
 			"",
-			f"/* `{struct.name}` names itself, so its extent and the span of",
-			" * the run holding it call each other. No emission order puts",
-			" * both above the other, which is what these are for.",
+			f"/* `{struct.name}` can contain itself"
+			+ ("" if len(cycle) == 1
+			   else f" through {' -> '.join(cycle)}") + ", so its extent",
+			" * and the span of the run holding it call each other. No",
+			" * emission order puts both above the other, which is what",
+			" * these are for.",
 			" *",
 			f" * The `_at` form carries the depth, bounded by {limit} rather",
 			" * than by the message's own length: a hostile message would",
 			" * otherwise nest as deep as its bytes allow, and 20.1 promises",
 			" * generated code has a bounded stack. */",
-			f"static inline uint32_t {name}(situ_view_t view);",
-			f"static inline uint32_t {name}_at(situ_view_t view,"
-			" uint32_t depth);",
 		]
+		for peer in cycle:
+			name = ident(self.prefix, peer, "extent")
+			deep = ident(self.prefix, peer, "nesting")
+			lines.extend([
+				f"static inline uint32_t {name}(situ_view_t view);",
+				f"static inline uint32_t {name}_at(situ_view_t view,"
+				" uint32_t depth);",
+				# The nesting probe bounces round the cycle the same way and
+				# needs the same declarations. It declared itself and only
+				# itself, which is all a self-cycle needs and one short of
+				# what a mutual one does.
+				f"static inline uint32_t {deep}_at(situ_view_t view,"
+				" uint32_t depth);",
+			])
+		return lines
 
 	def _struct_extent(self, struct: ResolvedStruct) -> list[str]:
 		"""How many bytes one instance of a variable struct occupies.
@@ -3763,8 +3884,19 @@ class Emitter:
 		at    = ident(self.prefix, struct.name, local, "at")
 		span  = ident(self.prefix, struct.name, local, "span")
 
+		# A `while` run of a recursive element: the span carries the depth,
+		# exactly as the counted run's does. It did not, and only the counted
+		# form was ever compiled -- `extent_at` called `_span_at` and nothing
+		# defined one, so `struct node [depth] { u8 more; node kids[] while
+		# (...); }` emitted a header that does not build. The two run shapes
+		# are separate emitters and the fix had been written for one of them.
+		deep    = self._recursive(element.name)
+		deeper  = (f"{ident(self.prefix, element.name, 'extent')}"
+		           "_at(element, depth + 1u)")
+
 		walk  = self._walk_prologue(base, cap, extent)
-		from_ = self._walk_prologue("start", cap, extent)
+		from_ = self._walk_prologue("start", cap,
+		                            deeper if deep else extent)
 
 		return [
 			f"/* `{placement.name}` is a run of `{placement.type_name}` ending"
@@ -3805,8 +3937,9 @@ class Emitter:
 			"",
 			"/* The walk, from a base the caller already knows: the same",
 			" * helper every delimited member has, for the same reason. */",
-			f"static inline uint32_t {span}_from(situ_view_t view,"
-			" uint32_t start)",
+			f"static inline uint32_t {span}_from"
+			+ ("_at(situ_view_t view, uint32_t start, uint32_t depth)" if deep
+			   else "(situ_view_t view, uint32_t start)"),
 			"{",
 			*from_,
 			"\t\tat = at + size;",
@@ -3818,10 +3951,41 @@ class Emitter:
 			"\t(void)n;",
 			"\treturn at - start;",
 			"}",
+			*self._span_entries(span, base, deep),
+		]
+
+	def _span_entries(self, span: str, base: str, deep: bool) -> list[str]:
+		"""The entry points over a run's `_from` walk.
+
+		Four where the element is recursive and two where it is not: the
+		`_at` forms carry the counter and the plain ones start it at zero,
+		for a caller who has no business knowing it exists. Shared because
+		the three run emitters had grown their own answers to this and only
+		one of them had the recursive half.
+		"""
+		if not deep:
+			return ["",
+			        f"static inline uint32_t {span}(situ_view_t view)",
+			        "{",
+			        f"\treturn {span}_from(view, {base});",
+			        "}"]
+		return [
+			"",
+			f"static inline uint32_t {span}_from"
+			"(situ_view_t view, uint32_t start)",
+			"{",
+			f"\treturn {span}_from_at(view, start, 0u);",
+			"}",
+			"",
+			f"static inline uint32_t {span}_at"
+			"(situ_view_t view, uint32_t depth)",
+			"{",
+			f"\treturn {span}_from_at(view, {base}, depth);",
+			"}",
 			"",
 			f"static inline uint32_t {span}(situ_view_t view)",
 			"{",
-			f"\treturn {span}_from(view, {base});",
+			f"\treturn {span}_from_at(view, {base}, 0u);",
 			"}",
 		]
 
@@ -4027,8 +4191,16 @@ class Emitter:
 		at    = ident(self.prefix, struct.name, local, "at")
 		span  = ident(self.prefix, struct.name, local, "span")
 
+		# The third run shape, and the third place this had to be said. A
+		# record run of a recursive element carries the depth like the other
+		# two -- and like the `while` run, it had never been compiled.
+		deep   = not fixed and self._recursive(element.name)
+		deeper = (f"{ident(self.prefix, element.name, 'extent')}"
+		          "_at(element, depth + 1u)")
+
 		walk = self._record_prologue(base, delim, sym, extent)
-		from_ = self._record_prologue("start", delim, sym, extent)
+		from_ = self._record_prologue("start", delim, sym,
+		                              deeper if deep else extent)
 
 		return [
 			f"/* `{placement.name}` is a run of `{element.name}`, ending where",
@@ -4066,8 +4238,9 @@ class Emitter:
 			" * accumulates offsets has `at` in hand, and the plain `_span`",
 			" * re-resolves the base by rescanning every member before this",
 			" * one. This was the last member kind without the helper. */",
-			f"static inline uint32_t {span}_from(situ_view_t view,"
-			" uint32_t start)",
+			f"static inline uint32_t {span}_from"
+			+ ("_at(situ_view_t view, uint32_t start, uint32_t depth)" if deep
+			   else "(situ_view_t view, uint32_t start)"),
 			"{",
 			*from_,
 			"\t\tat = at + size;",
@@ -4083,11 +4256,7 @@ class Emitter:
 			"\t}",
 			"\treturn at - start;",
 			"}",
-			"",
-			f"static inline uint32_t {span}(situ_view_t view)",
-			"{",
-			f"\treturn {span}_from(view, {base});",
-			"}",
+			*self._span_entries(span, base, deep),
 		]
 
 	def _unwalkable_run(self, struct: ResolvedStruct,
@@ -5335,7 +5504,17 @@ class Emitter:
 				and placement.delimiter is None):
 			assert self._struct_extent(nested), "_has_length checks this first"
 			local = c_name(self._local(struct, placement))
-			return f"{ident(self.prefix, struct.name, local, 'extent')}({held})"
+			site  = ident(self.prefix, struct.name, local, "extent")
+			# The same rule as the span above, and the case that made a
+			# mutual cycle unbounded: `item.body` is a plain nested `expr`,
+			# so the chain runs extent -> span -> extent -> THIS -> extent,
+			# and calling the plain form here started the counter again
+			# every turn of the cycle. A self-cycle never reaches this
+			# branch -- its recursion is always through a run -- which is
+			# why it went unseen while the direct case worked.
+			if depth is None or not self._recursive(nested.name):
+				return f"{site}({held})"
+			return f"{site}_at({held}, {depth})"
 
 		if placement.kind == "variant":
 			chain = self._variant_length(struct, placement, held)
@@ -5811,38 +5990,8 @@ class Emitter:
 				"}",
 			])
 			span_name = ident(self.prefix, struct.name, local, "span")
-			if not self._recursive(nested or ""):
-				lines.extend([
-					"",
-					f"static inline uint32_t {span_name}(situ_view_t view)",
-					"{",
-					f"\treturn {span_name}_from(view, {base});",
-					"}",
-				])
-				return lines
-			# The element names itself, so the walk descends and the depth
-			# travels with it. Four entry points rather than two: the `_at`
-			# forms carry the counter, and the plain ones start it at zero
-			# for a caller who has no business knowing it exists.
-			lines.extend([
-				"",
-				f"static inline uint32_t {span_name}_from"
-				"(situ_view_t view, uint32_t start)",
-				"{",
-				f"\treturn {span_name}_from_at(view, start, 0u);",
-				"}",
-				"",
-				f"static inline uint32_t {span_name}_at"
-				"(situ_view_t view, uint32_t depth)",
-				"{",
-				f"\treturn {span_name}_from_at(view, {base}, depth);",
-				"}",
-				"",
-				f"static inline uint32_t {span_name}(situ_view_t view)",
-				"{",
-				f"\treturn {span_name}_from_at(view, {base}, 0u);",
-				"}",
-			])
+			lines.extend(self._span_entries(
+				span_name, base, self._recursive(nested or "")))
 			return lines
 
 		lines.extend([
@@ -5881,12 +6030,22 @@ class Emitter:
 			extent = ident(self.prefix, nested, "extent")
 			site   = ident(self.prefix, struct.name,
 			               c_name(self._local(struct, placement)), "extent")
+			# A nested member of a type that can contain this one: the
+			# helper carries the depth on, exactly as a run's span does.
+			# Without it the cycle's counter reset here and `[depth]` bought
+			# nothing at all for a mutual pair.
+			deep   = self._recursive(nested or "")
+			taken  = "(situ_view_t view, uint32_t depth)" if deep \
+			         else "(situ_view_t view)"
+			passed = f"{extent}_at(whole, depth + 1u)" if deep \
+			         else f"{extent}(whole)"
 			return [
 				f"/* How many bytes `{placement.name}` occupies here. The",
 				" * member after it starts at the end of this, and that was a",
 				f" * constant zero until `{nested}` stopped having one size --",
 				" * so the next member was placed on top of this one. */",
-				f"static inline uint32_t {site}(situ_view_t view)",
+				f"static inline uint32_t {site}"
+				+ ("_at" if deep else "") + taken,
 				"{",
 				"\tsitu_view_t whole;",
 				"",
@@ -5895,8 +6054,15 @@ class Emitter:
 				" != SITU_OK) {",
 				"\t\treturn 0u;",
 				"\t}",
-				f"\treturn {extent}(whole);",
+				f"\treturn {passed};",
 				"}",
+			] + ([
+				"",
+				f"static inline uint32_t {site}(situ_view_t view)",
+				"{",
+				f"\treturn {site}_at(view, 0u);",
+				"}",
+			] if deep else []) + [
 				"",
 				f"/* `{placement.name}` has no one size, so its extent is read",
 				" * from the bytes. The sub-view is taken twice: once over what",

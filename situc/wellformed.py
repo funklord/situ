@@ -3259,11 +3259,36 @@ def check_no_recursive_types(schema: ast.Schema) -> None:
 	not is refused as before -- with the remedy attached, because a format
 	whose nesting is unbounded is one whose worst case nobody has considered.
 
-	**Direct self-reference only.** A mutual cycle is still refused, which
-	0054 leaves open deliberately: nothing in the mechanism needs the
-	recursion to be single, and the diagnostic is what wants thought, since
-	naming one struct of a two-struct cycle sends the reader to whichever
-	happened to be listed first.
+	**A cycle of any length**, which 0054 left open and which its own
+	reasoning already covered: "nothing above needs it to be single, and the
+	cycle detector already finds mutual cycles, so the bound applies to a
+	strongly connected component rather than to a struct". What it left open
+	was the diagnostic, on the grounds that naming one struct of a
+	two-struct cycle sends the reader to whichever happened to be listed
+	first. The answer is to name them all, and to require the bound of them
+	all -- which is also what makes the number unambiguous wherever a walk
+	enters the cycle.
+
+	**Every struct in the cycle declares `[depth]`, and they agree.** Not
+	one of them: `expr -> item -> expr` is entered at either, and a reader
+	starting from `item` gets `item`'s number. Two numbers for one cycle is
+	an ambiguity, and 17.0 makes an ambiguity an error rather than a
+	preference. Requiring it of every member also puts the fact in front of
+	whoever is reading either struct, which "at least one of them declares
+	it" does not.
+
+	**`depth` counts nested structs, not turns of the cycle.** `[depth = 8]`
+	on `expr <-> item` admits eight nested structs -- four of each -- and
+	not eight `expr`s. That is what bounds the stack, which is what the
+	number is for, and it is what every walk already counts.
+
+	**A cycle through a variant arm is refused for now**, and that is a
+	narrowing of what this function used to permit rather than of what
+	worked: such a schema passed here and emitted a C header that does not
+	compile, declaring `situ_node_extent` and defining nothing, because
+	`_variant_is_measurable` refuses a variant with no maximum and a
+	recursive arm has none. Refused by name is what this compiler does with
+	a construct it cannot render.
 	"""
 	structs = {decl.name: decl for decl in schema.structs()}
 
@@ -3271,17 +3296,83 @@ def check_no_recursive_types(schema: ast.Schema) -> None:
 		cycle = _find_cycle(name, structs, [])
 		if cycle is None:
 			continue
-		if len(cycle) == 2 and _declared_depth(structs[name]) is not None:
-			continue	# bounded, and the bound is the whole permission
-		raise _recursion_error(cycle, structs)
+		_check_cycle(cycle, structs)
+
+
+def _check_cycle(cycle: list[str], structs: Structs) -> None:
+	"""What a cycle has to say about itself before it is describable."""
+	members = cycle[:-1]
+
+	through = _arm_edge(cycle, structs)
+	if through is not None:
+		raise error(
+			f"`{through[0]}` reaches `{through[1]}` through a variant arm",
+			structs[through[0]].span,
+			label = "declared here",
+			notes = [f"cycle: {' -> '.join(cycle)}",
+			         "a recursive type is bounded by `[depth]`, and the "
+			         "extent of a variant is the arm its discriminant "
+			         "selects -- which situ does not yet compute for an arm "
+			         "that is the recursion",
+			         "move the recursive member out of the variant, or "
+			         "carry it as a run whose count the discriminant "
+			         "decides"],
+		)
+
+	undeclared = [name for name in members
+	              if _declared_depth(structs[name]) is None]
+	if undeclared:
+		raise _recursion_error(cycle, structs, undeclared)
+
+	for attr in ("depth", "limit"):
+		stated = {name: _declared_attr(structs[name], attr)
+		          for name in members}
+		values = {value for value in stated.values() if value is not None}
+		if len(values) > 1:
+			shown = ", ".join(f"`{name}` says {stated[name]}"
+			                  for name in members
+			                  if stated[name] is not None)
+			raise error(
+				f"the cycle disagrees about `[{attr}]`",
+				structs[members[0]].span,
+				label = "declared here",
+				notes = [f"cycle: {' -> '.join(cycle)}",
+				         f"{shown}",
+				         f"`{attr}` bounds the cycle rather than one struct "
+				         "of it, so a walk entering at either end would "
+				         "spend a different number",
+				         "state the same one on every struct in the cycle"],
+			)
+		if attr == "limit" and values and len(stated) != len(
+				[v for v in stated.values() if v is not None]):
+			missing = [name for name in members if stated[name] is None]
+			raise error(
+				"the cycle states `[limit]` on some of its structs",
+				structs[missing[0]].span,
+				label = "no `[limit]` here",
+				notes = [f"cycle: {' -> '.join(cycle)}",
+				         f"`{missing[0]}` does not state one, so a walk "
+				         "entering there would follow the format's own "
+				         "`[depth]` and a walk entering elsewhere would not",
+				         "state it on every struct in the cycle, or on none"],
+			)
+
+
+def _arm_edge(cycle: list[str], structs: Structs) -> tuple[str, str] | None:
+	"""The first edge of `cycle` that passes through a variant arm."""
+	for here, there in zip(cycle, cycle[1:]):
+		decl = structs.get(here)
+		if decl is None:
+			continue
+		if there in _referenced_structs(decl.members, structs, in_arm=True) \
+				and there not in _referenced_structs(decl.members, structs):
+			return here, there
+	return None
 
 
 def _declared_depth(decl: ast.StructDecl) -> int | None:
 	"""The `[depth = N]` a struct declares, or None."""
-	for attr in decl.attrs:
-		if attr.name == "depth" and isinstance(attr.value, ast.IntLiteral):
-			return attr.value.value
-	return None
+	return _declared_attr(decl, "depth")
 
 
 def check_depth_bounds(schema: ast.Schema) -> None:
@@ -3347,7 +3438,11 @@ def _find_cycle(name: str, structs: Structs, path: list[str]) -> list[str] | Non
 	if decl is None:
 		return None
 
-	for referenced in _referenced_structs(decl.members, structs):
+	# Every edge, arms included: a cycle that exists only through a variant
+	# is still a cycle, and `_check_cycle` is where it is refused. Finding it
+	# with the narrow set instead would leave it undetected, which is worse
+	# than either answer -- an unbounded recursion nothing had objected to.
+	for referenced in _referenced_structs(decl.members, structs, in_arm=True):
 		found = _find_cycle(referenced, structs, path + [name])
 		if found is not None:
 			return found
@@ -3355,17 +3450,48 @@ def _find_cycle(name: str, structs: Structs, path: list[str]) -> list[str] | Non
 	return None
 
 
-def _referenced_structs(members: tuple[ast.Member, ...], structs: Structs) -> list[str]:
+def _referenced_structs(members: tuple[ast.Member, ...], structs: Structs,
+		in_arm: bool = False) -> list[str]:
+	"""The structs these members name.
+
+	`in_arm` selects which half: False for the ones reachable without
+	entering a variant, True for the ones reachable at all. The difference
+	is what `_arm_edge` reads, and the two are asked separately rather than
+	returned together because the caller wants set membership rather than a
+	provenance per name -- a struct named both inside and outside a variant
+	is named outside it, and only an edge that exists *only* through an arm
+	is the one this build cannot render.
+	"""
 	names: list[str] = []
 	for member in members:
 		if isinstance(member, ast.Field) and member.type_ref.name in structs:
 			names.append(member.type_ref.name)
-		names.extend(_referenced_structs(nested(member), structs))
+		if isinstance(member, ast.Variant) and not in_arm:
+			continue
+		names.extend(_referenced_structs(nested(member), structs, in_arm))
 	return names
 
 
-def _recursion_error(cycle: list[str], structs: Structs) -> SituError:
-	decl  = structs[cycle[0]]
+def _declared_attr(decl: ast.StructDecl, name: str) -> int | None:
+	"""An integer attribute a struct declares, or None."""
+	for attr in decl.attrs:
+		if attr.name == name and isinstance(attr.value, ast.IntLiteral):
+			return attr.value.value
+	return None
+
+
+def _recursion_error(cycle: list[str], structs: Structs,
+		undeclared: list[str]) -> SituError:
+	"""A cycle with no bound, naming every struct that owes one.
+
+	The diagnostic names the whole cycle rather than its first struct, which
+	is what 0054 said had to be settled before the mutual case could be
+	allowed: "naming one struct in a two-struct cycle sends the reader to
+	whichever happened to be listed first". Pointing at the ones actually
+	missing the attribute answers it -- for a self-cycle that is the one
+	struct, and the sentence reads as it always did.
+	"""
+	decl  = structs[undeclared[0]]
 	chain = " -> ".join(cycle)
 
 	if len(cycle) == 2:
@@ -3373,6 +3499,7 @@ def _recursion_error(cycle: list[str], structs: Structs) -> SituError:
 	else:
 		summary = f"struct `{cycle[0]}` is recursive through {chain}"
 
+	remedy = ", ".join(f"`struct {name} [depth = N]`" for name in undeclared)
 	return error(
 		summary,
 		decl.span,
@@ -3382,9 +3509,12 @@ def _recursion_error(cycle: list[str], structs: Structs) -> SituError:
 			"recursion needs a bound: size and capability computation do "
 			"not terminate without one, and a walker has no stack depth to "
 			"budget for",
-			"say how deep the format allows it to go -- "
-			f"`struct {cycle[0]} [depth = N]`" if len(cycle) == 2 else
-			"a mutual cycle is not describable yet: `[depth]` bounds a "
-			"struct that names itself, and 0054 leaves the mutual case open",
-		],
+			"say how deep the format allows it to go -- " + remedy,
+		] + ([] if len(cycle) == 2 else [
+			"`depth` bounds the cycle rather than one struct of it, so "
+			"every struct in it states the same one -- a walk entering at "
+			"either end must spend the same number",
+			"it counts nested structs, not turns of the cycle: "
+			f"`[depth = 8]` over {chain} admits eight nested structs",
+		]),
 	)
