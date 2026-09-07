@@ -30,6 +30,7 @@ ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
+DEPTHS = 21
 RELATIONS, RELATION_MUSTS = 18, 19
 PINNED_RUNS = 20
 
@@ -232,6 +233,11 @@ class Image:
 	#: whether such a field is *wrong* cannot be asked until this says
 	#: whether it is *there*.
 	versions: dict[int, int]		= field(default_factory=dict)
+	#: Per recursive struct, `(depth, limit)`: what the format allows and
+	#: what the schema asks a reader to spend (0054). Absent for a struct
+	#: that does not name itself, which is nearly all of them -- so an
+	#: absent entry means "no recursion here", not "unbounded".
+	depths: dict[int, tuple[int, int]]	= field(default_factory=dict)
 	#: variant placement index -> (discriminant, [(case, selected, flags)])
 	arms: dict[int, tuple[int, list[tuple[int, int, int]]]] = \
 		field(default_factory=dict)
@@ -385,6 +391,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			enum_id, value, _pad = _struct.unpack_from(
 				"<IqI", blob, at + i * stride)
 			image.enum_values.setdefault(enum_id, set()).add(value)
+
+	if DEPTHS in found:
+		at, records, stride = found[DEPTHS]
+		for i in range(records):
+			shape, depth, limit = _struct.unpack_from(
+				"<III", blob, at + i * stride)
+			image.depths[shape] = (depth, limit)
 
 	if VERSIONS in found:
 		at, records, stride = found[VERSIONS]

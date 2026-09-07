@@ -65,6 +65,7 @@ enum image_section_tag : u32 {
 	relations    = 18,
 	relation_musts = 19,
 	pinned_runs  = 20,     // the bytes a `[must_eq]` on a byte run pins
+	depths       = 21,     // how deep a recursive struct may nest (0054)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -177,6 +178,28 @@ struct image_struct {
 struct image_version {
 	u32  shape;                       // index into the struct table
 	u32  placement;                   // the member holding the version
+}
+
+// How deep a recursive struct may nest, and how deep this reader will follow
+// (0054). Two numbers because they answer different questions: `depth` is the
+// format's own limit, so a message past it is malformed, and `limit` is what
+// the schema told a reader to spend, so a message past that is well formed
+// and refused anyway.
+//
+// A side table for the same reason `image_version` is one: almost no struct
+// names itself, and `image_struct` is 16 bytes for four u32s with none spare.
+// It also means a walker built before this section existed skips it by tag
+// and keeps working -- which is what `stride` on `image_section` is for.
+//
+// **A walker reading this replaces its own compiled-in ceiling with the
+// schema's**, which is the point. Before it, `WALK_DEPTH_MAX` was a number
+// chosen for the corpus and compared against nothing the schema declared: a
+// schema saying 32 and a walker allowing 8 disagreed silently, and the walk
+// simply stopped early.
+struct image_depth {
+	u32  shape;                       // index into the struct table
+	u32  depth;                       // the format's own limit
+	u32  limit;                       // what this schema asks a reader to spend
 }
 
 // One placement: where the bytes are, how many there are, and how to compute

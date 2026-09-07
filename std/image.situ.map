@@ -45,6 +45,11 @@ struct image_delimiter size=32 repr=ValueConverted atomic=NonAtomic
   image_delimiter.length                 offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   image_delimiter.octets                 offset=AbsoluteStatic(0x11) size=Fixed(15) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct image_depth size=12 repr=ValueConverted
+  image_depth.shape                      offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_depth.depth                      offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_depth.limit                      offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
 struct image_enum_value size=16 repr=ValueConverted atomic=NonAtomic
   image_enum_value.enum_id               offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_enum_value.value                 offset=AbsoluteStatic(0x04) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic

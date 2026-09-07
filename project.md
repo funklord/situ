@@ -182,10 +182,16 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   *length* may not be capped by `[limit]` at all -- a cap on a length can
   only truncate.
 
-  Mutual recursion stays refused, as the record leaves it. Still open: the
-  walkers' `WALK_DEPTH_MAX` is compared against nothing the schema
-  declares, which needs the depth in the packed image and is a format
-  change.
+  **Both walkers read the schema's depth** from a side table in the packed
+  image, at every site rather than one (26.286). Mutual recursion stays
+  refused, as the record leaves it.
+
+  Still open, and openmlx4's finding rather than a design gap: a format
+  that ends its list with a sentinel and declares no maximum has a `limit`
+  and no `depth`, and `[limit]` alone is refused. That was definitional
+  until `depth` acquired a behavioural meaning; their `[depth = 64]` now
+  claims a 65-section FS2 image is malformed, which is false and blames the
+  image rather than the reader.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -23112,6 +23118,59 @@ second probe checks the build succeeded and the file exists before
 comparing. That is the same shape as the import satisfying a substring
 in 26.284, in somebody else's tree and caught before it cost anybody
 anything.
+
+### 26.286 The walker's ceiling was a number nobody had compared
+
+`WALK_DEPTH_MAX` was 8, chosen because "the deepest nesting in this
+repository's corpus is three", and compared against nothing a schema
+declared. A schema saying `[depth = 32]` met a walker allowing 8 and the
+walk stopped early -- in silence, because a walk that stops is
+indistinguishable from a structure that ended.
+
+Both walkers read the schema's number now. Demonstrated by changing the
+schema and watching the walker change with it, which is the only thing
+that distinguishes "the schema decides" from "some fixed number decides":
+
+    limit=2   1 level ok   4 refused   6 refused   12 refused
+    limit=8   1 level ok   4 ok        6 ok        12 refused
+
+**A side table, tag 21, for `image_version`'s reason** -- almost no
+struct names itself and `image_struct` is 16 bytes for four u32s with
+none spare. Widening the record would move every stride in the format for
+a fact that applies to one struct in a corpus of forty. And a walker
+built before the section existed skips it by tag and keeps working, which
+is what `stride` on `image_section` has always been for.
+
+**Two numbers, and the walker takes the smaller.** `depth` is the
+format's and `limit` is the schema's request; this build will not spend
+more than `WALK_DEPTH_MAX` whatever a schema asks, because the arena
+belongs to the program and not to the schema. So the ceiling is a
+ceiling now rather than the answer.
+
+**Four sites, and three of them were the 26.112 shape waiting to
+happen.** `struct_extent` was the obvious one; `validate_deep`, the arm
+walk and the `while` walk each had their own `depth >= WALK_DEPTH_MAX`.
+Routing one and leaving three would have been a bound with three public
+entry points that restart it -- which is the fault this file already
+records against this walker, from the last time.
+
+**The Python walker had no bound at all.** Python's own recursion limit
+was the only thing stopping a hostile message, and a `RecursionError` is
+a traceback where a refusal belongs: it names no struct, carries no
+verdict, and reads as a crash in the walker rather than a judgement about
+the bytes.
+
+**What this does not cover, measured rather than assumed.** Neither
+walker can walk a *counted* run of a recursive struct -- `situ_walk_size_
+bits` answers `UNSUPPORTED` for `node children[count]`. That is not the
+depth work: the walker at HEAD refuses it identically, and the branch
+that handles a nested variable struct is gated on `size_code == NONE`,
+which a counted run is not. So the depth ceiling is demonstrated through
+a `while` run, and the counted case is a separate gap with its own cause.
+
+**And the committed contracts caught the format change**, which is what
+they are for: `std/image.situ.map` and `.wire` went stale the moment the
+section was added, and the suite said so before anything shipped.
 
 ## 27. Questions, and how they were settled
 

@@ -71,6 +71,7 @@ ENCODING_CODE: dict[str, int] = {
 	"ascii": 0, "utf8": 1, "utf16le": 2, "utf16be": 3,
 }
 VERSION_BYTES		= 8
+DEPTH_BYTES		= 12
 RELATION_BYTES		= 24
 RELATION_MUST_BYTES	= 8
 
@@ -93,6 +94,7 @@ SECTION_MARKERS		= 14
 SECTION_CONSTRAINTS	= 15
 SECTION_ENUM_VALUES	= 16
 SECTION_VERSIONS	= 17
+SECTION_DEPTHS		= 21
 SECTION_RELATIONS	= 18
 SECTION_RELATION_MUSTS	= 19
 SECTION_PINNED_RUNS	= 20
@@ -1474,6 +1476,25 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if carries is not None:
 			versions_blob += _struct.pack("<II", shape, carries)
 
+	# How deep a recursive struct may nest, and how deep the schema asks a
+	# reader to follow it (0054). Two numbers because they answer different
+	# questions -- past `depth` a message is malformed, past `limit` it is
+	# well formed and refused anyway -- and a side table because almost no
+	# struct names itself.
+	#
+	# Without this a walker compares its own compiled-in ceiling against
+	# nothing: `WALK_DEPTH_MAX` was chosen for this corpus, and a schema
+	# declaring 32 against a walker allowing 8 disagreed in silence, the walk
+	# simply stopping early.
+	depths_blob = bytearray()
+	for shape, (name, _rstruct) in enumerate(order):
+		if not traverse.is_recursive(resolved.structs, name):
+			continue
+		depths_blob += _struct.pack(
+			"<III", shape,
+			traverse.declared_depth(schema, name),
+			traverse.depth_limit(schema, name))
+
 	# -- cross-message relations (26.95) --------------------------------
 	#
 	# Emitted after every other program so that appending to `program.code`
@@ -1567,6 +1588,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
 			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),
 			(SECTION_VERSIONS, versions_blob, VERSION_BYTES),
+			(SECTION_DEPTHS, depths_blob, DEPTH_BYTES),
 			(SECTION_RELATIONS, relations_blob, RELATION_BYTES),
 			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES),
 			(SECTION_PINNED_RUNS, pinned_blob, PINNED_BYTES)):

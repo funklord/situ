@@ -110,6 +110,19 @@ typedef struct {
 	const uint8_t *versions;
 	uint32_t       version_count;
 	uint32_t       version_stride;
+
+	/* One row per struct that names itself: the depth the format allows and
+	 * the depth the schema asks a reader to spend (0054). Keyed by shape.
+	 *
+	 * What this replaces is a number chosen for a corpus. `WALK_DEPTH_MAX`
+	 * bounded the walk and was compared against nothing the schema
+	 * declared, so a schema saying 32 met a walker allowing 8 and the walk
+	 * stopped early in silence. It is a ceiling now rather than the answer:
+	 * the schema's number is used where it is lower, and where it is higher
+	 * the walker refuses by name instead of quietly measuring short. */
+	const uint8_t *depths;
+	uint32_t       depth_count;
+	uint32_t       depth_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */

@@ -130,7 +130,7 @@ def offset_bits(view: View, index: int) -> int:
 	raise Refused(f"placement {index} is not a member of this struct")
 
 
-def size_bits(view: View, index: int) -> int:
+def size_bits(view: View, index: int, depth: int = 0) -> int:
 	"""How many bits a member occupies.
 
 	A delimited member's is the scan's answer plus the delimiter itself: the
@@ -152,7 +152,7 @@ def size_bits(view: View, index: int) -> int:
 		# through to the record's `size_bits` gave the *minimum* -- one
 		# element -- so a struct holding one measured a byte where it held
 		# two, and dnsname's `qname` sub-view came back the wrong length.
-		return _while_walk(view, index)[1] * BITS_PER_BYTE
+		return _while_walk(view, index, depth)[1] * BITS_PER_BYTE
 	if index in view.image.arms:
 		return _variant_bits(view, index)
 	if index in view.image.varints:
@@ -236,7 +236,11 @@ def size_bits(view: View, index: int) -> int:
 				inner = View(view.image, view.buffer, placement.type_struct,
 				             at, view.limit)
 				try:
-					size = struct_extent(inner)
+					# The depth travels with the descent. Without
+					# it the counter restarts here and bounds
+					# nothing, which is a bound with a public entry
+					# point that restarts it (26.112).
+					size = struct_extent(inner, depth + 1)
 				except Refused:
 					break
 				# The two bounds every generated walk carries: a zero-extent
@@ -293,7 +297,7 @@ def size_bits(view: View, index: int) -> int:
 		inner = View(view.image, view.buffer, placement.type_struct,
 		             view.at + offset_bits(view, index) // BITS_PER_BYTE,
 		             view.limit)
-		return struct_extent(inner) * BITS_PER_BYTE
+		return struct_extent(inner, depth + 1) * BITS_PER_BYTE
 
 	if placement.size_bits == NONE:
 		raise Refused(f"placement {index} has no size this image carries")
@@ -938,7 +942,8 @@ def while_count(view: View, index: int) -> int:
 	return _while_walk(view, index)[0]
 
 
-def _while_walk(view: View, index: int) -> tuple[int, int]:
+def _while_walk(view: View, index: int,
+		depth: int = 0) -> tuple[int, int]:
 	"""How many elements a `while` run holds.
 
 	The predicate is asked about the element *just parsed*, which is the
@@ -964,7 +969,15 @@ def _while_walk(view: View, index: int) -> tuple[int, int]:
 	while count < cap and at < view.limit:
 		sub = View(view.image, view.buffer, element, at, view.limit)
 		try:
-			extent = struct_extent(sub)
+			# The depth travels with the descent, or the counter restarts
+			# one level down and bounds nothing (26.112).
+			extent = struct_extent(sub, depth + 1)
+		except Unplaceable:
+			# The ceiling, which is a refusal about the walk rather than
+			# about this element. Breaking here would call a too-deep
+			# message a short run, which is the answer this walker's own
+			# notes say not to give.
+			raise
 		except Refused:
 			break
 		# The element has to *be there* before it counts. netlink's first
@@ -989,13 +1002,47 @@ def _while_walk(view: View, index: int) -> tuple[int, int]:
 	return count, at - start
 
 
-def struct_extent(view: View) -> int:
+#: How deep this walker follows a recursive type where the schema says
+#: nothing. The C walker's `WALK_DEPTH_MAX` and for the same reason: a
+#: number this program chooses, because the stack is this program's.
+#:
+#: Where the schema *does* say -- `[depth]` and `[limit]`, carried in the
+#: image since 0054 -- the smaller of the two wins. Before that this walker
+#: had no bound at all, and Python's own recursion limit was the only thing
+#: stopping a hostile message. A `RecursionError` is a traceback where a
+#: refusal belongs, and it names no struct.
+WALK_DEPTH_MAX = 8
+
+
+def _ceiling(image: Image, shape: int) -> int:
+	"""What this walker will follow for `shape`.
+
+	A struct with no row declares no recursion and keeps this build's own
+	number. Where a row exists the schema's `limit` applies, capped by this
+	build's -- the arena is this program's and not the schema's.
+	"""
+	declared = image.depths.get(shape)
+	if declared is None:
+		return WALK_DEPTH_MAX
+	return min(declared[1], WALK_DEPTH_MAX)
+
+
+def struct_extent(view: View, depth: int = 0) -> int:
 	"""How many bytes one instance of a struct occupies, from its own bytes.
 
 	A fixed struct answers from the image. Anything else is the sum of what
 	its members turn out to be, which is what makes a run of them walkable
 	rather than indexable -- and is the cost `access = Sequential` records.
+
+	`depth` counts the descent. Reaching the ceiling is a refusal by name
+	rather than a short answer: a limit folded into a length produces wrong
+	values indistinguishable from right ones, which is the fault this
+	walker's own notes record twice.
 	"""
+	if depth >= _ceiling(view.image, view.struct):
+		raise Unplaceable(
+			"nested deeper than this walker follows: the schema's `[limit]` "
+			"where it states one, and this build's ceiling otherwise")
 	shape = view.shape
 	if shape.fixed:
 		return (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
@@ -1003,7 +1050,7 @@ def struct_extent(view: View) -> int:
 	for member in view.image.members(shape):
 		if view.image.placements[member].located_code != NONE:
 			continue
-		total += size_bits(view, member)
+		total += size_bits(view, member, depth)
 	# Zero is an answer, not a refusal. A `name` whose first label does not
 	# fit holds no labels and is zero bytes long, and C makes a zero-length
 	# sub-view of it -- `ok=1 extent=0`. The guard against a zero extent

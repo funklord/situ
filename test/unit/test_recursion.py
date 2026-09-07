@@ -404,3 +404,69 @@ def test_the_extent_is_capped_by_the_format_and_not_by_the_build() -> None:
 
 	assert "depth >= 33u" in header, "the extent must reach one past the depth"
 	assert "depth >= 8u" not in header, "a length may not be capped by `[limit]`"
+
+
+def _packed(body: str) -> bytes:
+	"""The runtime image for a schema, as `situc pack` writes it."""
+	from situc import pack as pack_mod
+
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	blob, _coverage = pack_mod.pack(schema, resolved)
+	return blob
+
+
+WHILE_NODE = ("struct node [depth = 32, limit = {limit}] {{\n"
+              "\tu8    more;\n"
+              "\tnode  kids[] while (more != 0);\n"
+              "}}\n")
+
+
+def test_the_image_carries_the_declared_depth() -> None:
+	"""A side table, keyed by shape, for the reason `image_version` is one:
+	almost no struct names itself and `image_struct` is 16 bytes with none
+	spare. A new section rather than a wider record, so a walker built
+	before it skips it by tag -- which is what `stride` on `image_section`
+	has always been for."""
+	from walker.image import load
+
+	image = load(_packed(WHILE_NODE.format(limit=5)))
+	assert image.depths, "no depth table in the image"
+	shape, (declared, limit) = next(iter(image.depths.items()))
+	assert (declared, limit) == (32, 5), image.depths
+
+
+@pytest.mark.parametrize(("limit", "walks", "refuses"),
+                         [(2, 1, 4), (8, 6, 12)])
+def test_the_python_walker_follows_the_schema_not_its_own_ceiling(
+		limit: int, walks: int, refuses: int) -> None:
+	"""The point of the whole exercise.
+
+	`WALK_DEPTH_MAX` was a number chosen for this corpus and compared
+	against nothing the schema declared, so a schema saying 32 met a walker
+	allowing 8 and the walk stopped early in silence. The schema's `[limit]`
+	decides now, capped by the build's own ceiling -- the arena is this
+	program's, not the schema's.
+
+	Parametrised on two limits rather than asserted once, because a single
+	limit cannot tell "the schema decides" from "some fixed number decides".
+	What makes this a test is that raising the schema's number raises what
+	the walker follows.
+
+	Before this the Python walker had no bound at all: Python's recursion
+	limit was the only thing stopping a hostile message, and a
+	`RecursionError` is a traceback where a refusal belongs.
+	"""
+	from walker.image import load
+	from walker.walk import Refused, acquire, struct_extent
+
+	image = load(_packed(WHILE_NODE.format(limit=limit)))
+
+	def chain(levels: int) -> bytes:
+		return bytes(1 if i + 1 < levels else 0 for i in range(levels))
+
+	ok = struct_extent(acquire(image, chain(walks), 0))
+	assert ok == walks, (limit, walks, ok)
+
+	with pytest.raises(Refused):
+		struct_extent(acquire(image, chain(refuses), 0))

@@ -14,6 +14,7 @@
 #define TAG_CONSTRAINTS 15u
 #define TAG_ENUM_VALUES 16u
 #define TAG_VERSIONS   17u
+#define TAG_DEPTHS     21u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -33,6 +34,7 @@
 #define MARKER_READS    16u	/* `<IqI`: placement, i64 sentinel, pad */
 #define REGION_READS    13u	/* `<IIIB3x`: placement, owner, codec, flags */
 #define VERSION_READS    8u	/* `<II`: shape, version-field placement */
+#define DEPTH_READS     12u	/* `<III`: shape, depth, limit */
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -185,6 +187,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->regions       = image + offset;
 			out->region_count  = items;
 			out->region_stride = stride;
+		} else if (kind == TAG_DEPTHS) {
+			if (stride < DEPTH_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->depths       = image + offset;
+			out->depth_count  = items;
+			out->depth_stride = stride;
 		} else if (kind == TAG_VERSIONS) {
 			if (stride < VERSION_READS) {
 				return SITU_WALK_MALFORMED;
@@ -527,6 +536,35 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
  * few frames. Refused by name when it is reached, never guessed at. */
 #define WALK_DEPTH_MAX 8u
 
+/* The depth the schema declares for `shape`, or WALK_DEPTH_MAX where it
+ * declares none.
+ *
+ * A struct that does not name itself has no row here and keeps the build's
+ * own ceiling, which is what bounded every walk before 0054 and is still
+ * right for a struct whose nesting is the schema's static shape.
+ *
+ * Where a row exists, `limit` is what the schema asks a reader to spend --
+ * and this build will not spend more than WALK_DEPTH_MAX whatever a schema
+ * says, because the arena is this program's and not the schema's. The
+ * smaller of the two wins, and reaching it is `SITU_WALK_UNSUPPORTED`
+ * rather than a short measurement: a limit folded into an answer produces
+ * wrong values indistinguishable from right ones (26.113). */
+static uint32_t depth_ceiling(const situ_walk_image *image, uint32_t shape)
+{
+	uint32_t i;
+
+	for (i = 0u; i < image->depth_count; i++) {
+		const uint8_t *row = image->depths + (size_t)i * image->depth_stride;
+
+		if (u32_at(row) == shape) {
+			const uint32_t limit = u32_at(row + 8);
+
+			return limit < WALK_DEPTH_MAX ? limit : WALK_DEPTH_MAX;
+		}
+	}
+	return WALK_DEPTH_MAX;
+}
+
 static situ_walk_err size_bits_deep(const situ_walk_image *image,
                                     const uint8_t *message, uint32_t len,
                                     uint32_t shape, uint32_t index,
@@ -677,7 +715,11 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
 	if (rows == NULL || count == 0u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-	if (depth >= WALK_DEPTH_MAX) {
+	/* The enclosing shape's ceiling: an arm belongs to it, and asking the
+	 * build's number here while `struct_extent` asked the schema's would be
+	 * two bounds on one walk -- which is how a bound acquires a public entry
+	 * point that restarts it (26.112). */
+	if (depth >= depth_ceiling(image, shape)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -756,11 +798,13 @@ static situ_walk_err struct_extent(const situ_walk_image *image,
                                    uint32_t shape, uint32_t depth,
                                    uint32_t *out)
 {
-	if (depth >= WALK_DEPTH_MAX) {
-		return SITU_WALK_UNSUPPORTED;
-	}
 	if (shape >= image->struct_count) {
 		return SITU_WALK_BOUNDS;
+	}
+	if (depth >= depth_ceiling(image, shape)) {
+		/* The schema's number where it has one, this build's otherwise --
+		 * and refused by name rather than answered short. */
+		return SITU_WALK_UNSUPPORTED;
 	}
 
 	const uint8_t *entry = image->structs + shape * image->struct_stride;
@@ -842,7 +886,10 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 	                || held.type_struct == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;	/* not a `while` run */
 	}
-	if (depth >= WALK_DEPTH_MAX) {
+	/* The ELEMENT's ceiling, because that is what the walk descends into --
+	 * a `while` run of a recursive struct is bounded by what that struct
+	 * declares, not by what the struct holding the run declares. */
+	if (depth >= depth_ceiling(image, held.type_struct)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -1762,7 +1809,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 	if (shape >= image->struct_count) {
 		return SITU_WALK_BOUNDS;
 	}
-	if (depth >= WALK_DEPTH_MAX) {
+	if (depth >= depth_ceiling(image, shape)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
