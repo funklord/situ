@@ -175,12 +175,17 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   is bounded by the schema rather than by the message's own length. Measured
   identical across C, C++, Rust and Python (26.283).
 
-  Mutual recursion stays refused, as the record leaves it. What is still
-  open is the honest refusal: at the limit an extent answers zero, because
-  it returns a length and has no error channel, so `validate` is where a
-  message past `[depth]` or `[limit]` should be refused by name -- and the
-  walkers' `WALK_DEPTH_MAX` is still compared against nothing the schema
-  declares.
+  **`validate` refuses a too-deep message in all four**, under two verdicts:
+  past the format's `[depth]` it is malformed and gets a constraint error,
+  past this build's `[limit]` it is well formed and refused anyway under
+  `SITU_ERR_DEPTH` (26.284). The extent could not host that refusal, and a
+  *length* may not be capped by `[limit]` at all -- a cap on a length can
+  only truncate.
+
+  Mutual recursion stays refused, as the record leaves it. Still open: the
+  walkers' `WALK_DEPTH_MAX` is compared against nothing the schema
+  declares, which needs the depth in the packed image and is a format
+  change.
 - **Not a parser combinator library.** The schema is declarative and the layout
   solver is a compiler pass, not a runtime interpreter. That is a statement
   about `situc` rather than about everything that may read its output: a packed
@@ -4287,7 +4292,7 @@ Principles:
   by inspecting generated code for constant offsets.
 - **Errors are return codes**, never `errno`, never longjmp. A single
   `situ_err_t` enum with distinct codes per failure class: bounds, constraint,
-  version, tag, stage, stale, truncated, checksum.
+  version, tag, stage, stale, truncated, checksum, depth.
   `test_the_failure_classes_match_the_runtimes`
   holds this list to `runtime/c/situ.h` and holds the other three runtimes to
   it as well -- a class C can report and Rust cannot is a condition a Rust
@@ -22990,6 +22995,66 @@ a restriction to relax around the edges: 9.6's "discriminant strictly
 before the variant in layout order" is a statement about a world where
 order exists, and text has no order to state. That is the design work,
 and it is not this entry's.
+
+### 26.284 Where a depth refusal can live, and where it cannot
+
+`validate` refuses a too-deep message in all four descriptions, under two
+verdicts. Built and run in each, with `[depth = 32, limit = 8]`:
+
+    levels   nesting   C     C++    Rust    Python
+         8         7   ok     ok      ok        ok
+         9         8   ok     ok      ok        ok
+        32        10   9      9      Depth  DepthError
+        33        10   9      9      Depth  DepthError
+
+and with `[depth = 32]` alone, 40 levels is `SITU_ERR_CONSTRAINT` --
+malformed, as a thirteenth month is.
+
+**The extent could not host this, and finding out why took two wrong
+attempts.** At its cap `extent_at` returns zero, and zero is what an
+absent run returns too, so a message nesting too far measures *short* and
+validates clean. That is 26.113 exactly -- a limit folded into an answer
+producing wrong values indistinguishable from right ones -- and it is why
+the count is a second function rather than a flag on the first.
+
+**And a length may not be capped by `[limit]` at all.** The first version
+did, which is what the attribute's own stated purpose seems to ask for:
+this build declines to spend the stack, so bound the walk. Measured, a
+33-level message then reported a nesting of 8 and validated clean --
+because the view a caller gets for an element is *sized by the extent*,
+so capping it makes the offending bytes invisible rather than refusing
+them. **A cap on a length can only truncate.** The extent caps at the
+format's `[depth]`, `[limit]` lives in `validate`, and the separation is
+not a nicety: the two attributes differ in what they may be used for, not
+only in what they mean.
+
+**Plus one, because "at" and "past" must be distinguishable.** Capped at
+the depth exactly, the level that violates it cannot be measured and so
+cannot be refused. The extent reaches 33 for a declared 32.
+
+**What `[limit]` costs, said rather than hidden.** Where it is below
+`[depth]`, this build refuses a too-deep message *without determining
+whether it is also malformed* -- finding that out means walking to the
+format's depth, which is exactly the frames the limit exists to save. The
+generated comment says so, because a reader comparing two receivers'
+logs would otherwise think one of them wrong.
+
+**A third vacuous assertion in one day, same mechanism.** The Python
+check for `DepthError` passed with the refusal deleted, because the
+generated module imports the name whenever the schema has a recursive
+type -- the import satisfied the substring. `bcd_valid` did this twice
+already (26.274). The test asserts `raise DepthError(` now, and each
+backend's exact refusal line rather than a name that might merely be in
+scope. **A substring test over generated code is satisfied by anything
+that mentions the thing, and an import is a mention.**
+
+**Four population assertions fired across this work and every one was
+right.** C++'s affix set, on `span_at` and `span_from_at`. The
+make-target guard, on a section quoting another project. And section
+20.2's failure-class list against all four runtimes, which caught `depth`
+being added to the enum and not to the prose -- a class C can report and
+Rust cannot being a condition a Rust consumer has no way to express, in
+that test's own words.
 
 ## 27. Questions, and how they were settled
 

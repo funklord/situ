@@ -1387,6 +1387,25 @@ def is_recursive(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
 		entry.placement.type_name == name for entry in struct.entries)
 
 
+def declared_depth(schema: "ast.Schema", name: str) -> int:
+	"""The format's own `[depth]`, which is what makes a message malformed
+	rather than merely more than this build will follow.
+
+	Distinct from `depth_limit`, and the distinction decides where a cap may
+	be used. A *length* may only be capped by this one: the view a caller
+	gets for an element is sized by the extent, so capping the extent at a
+	smaller `[limit]` does not refuse a deep message, it makes the offending
+	bytes invisible. A *refusal* may use either, and `[limit]` is a refusal.
+	"""
+	for decl in schema.structs():
+		if decl.name != name:
+			continue
+		for attr in decl.attrs:
+			if attr.name == "depth" and isinstance(attr.value, ast.IntLiteral):
+				return attr.value.value
+	return depth_limit(schema, name)
+
+
 def depth_limit(schema: "ast.Schema", name: str) -> int:
 	"""How deep a build follows a recursion before it stops measuring.
 

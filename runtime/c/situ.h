@@ -43,7 +43,22 @@ typedef enum situ_err {
 	 * SITU_ERR_TAG, which means a cryptographic gate refused: a CRC
 	 * mismatch says the message is corrupt or truncated, and a receiver
 	 * that logs the two the same way reports a disk error as an attack. */
-	SITU_ERR_CHECKSUM   = 8
+	SITU_ERR_CHECKSUM   = 8,
+	/* A recursive type nested deeper than THIS BUILD will follow (0054).
+	 *
+	 * Separate from SITU_ERR_CONSTRAINT on purpose, and the separation is
+	 * why `[limit]` is a second attribute rather than a smaller `[depth]`.
+	 * A message deeper than the format's own `[depth]` is malformed and
+	 * gets CONSTRAINT, as a thirteenth month does. One deeper than
+	 * `[limit]` is *well formed* and refused anyway, because this build
+	 * declines to spend the stack -- a statement about the reader, not
+	 * about the bytes.
+	 *
+	 * A receiver logging the two alike would report its own configuration
+	 * as an attack and go hunting a malformed sender that does not exist.
+	 * That is the argument SITU_ERR_TRUNCATED already carries against
+	 * SITU_ERR_BOUNDS. */
+	SITU_ERR_DEPTH      = 9
 } situ_err_t;
 
 /* A message: the caller's buffer plus the generation counter that detects

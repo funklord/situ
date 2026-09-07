@@ -40,7 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	depth_limit, is_recursive,
+	declared_depth, depth_limit, is_recursive,
 	codec_entry_point, decode_counts_bits,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
@@ -225,6 +225,12 @@ class Emitter:
 			  if self._tlv_items() else []),
 			"from situ_runtime import (",
 			"\tBoundsError, ChecksumError, ConstraintError, Gate, Message,",
+			# Only where a recursive type can raise it, so a module that
+			# cannot is not importing a name it never uses -- which the
+			# linter would call out and a reader would puzzle over.
+			*(["\tDepthError,"] if any(
+				is_recursive(self.resolved.structs, name)
+				for name in self.resolved.structs) else []),
 			"\tTruncatedError,",
 			"\tVersionError, View,",
 			"\tacquire,",
@@ -4072,7 +4078,15 @@ class Emitter:
 		# by the schema rather than by the message's own length. Python's
 		# own recursion limit would otherwise be the only thing stopping a
 		# hostile message, and a RecursionError is not a verdict on bytes.
-		limit = depth_limit(self.schema, struct.name)
+		# One ABOVE the format's `[depth]`, and the format's rather than this
+		# build's `[limit]`. The view a caller gets for an element is sized
+		# by this, so a smaller cap does not refuse a deep message -- it
+		# makes the offending bytes invisible, every walk over them comes
+		# back short, and `validate` sees a conforming message. "At the
+		# limit" and "past the limit" have to be distinguishable, or a cap on
+		# a length can only truncate. `[limit]` is a refusal, and refusals
+		# belong in `validate`.
+		limit = declared_depth(self.schema, struct.name) + 1
 		deep  = self._extent_expression(struct, depth="depth")
 		return ["",
 		        "\tdef _extent_at(self, depth: int) -> int:",
@@ -4084,6 +4098,79 @@ class Emitter:
 		        "\t@property",
 		        "\tdef _extent(self) -> int:",
 		        "\t\treturn self._extent_at(0)"]
+
+	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
+		"""The depth counter `validate` reads.
+
+		The extent cannot answer it: at its cap it returns zero, which is
+		also what an absent run returns, so a message nesting too far
+		measures short and validates clean. See the C backend.
+
+		Python's own recursion limit would otherwise be the only thing
+		stopping a hostile message, and a `RecursionError` is not a verdict
+		on bytes -- it is a traceback where a refusal belongs.
+		"""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return []
+		cap = min(depth_limit(self.schema, struct.name),
+		          declared_depth(self.schema, struct.name)) + 1
+		lines = [
+			"",
+			"\tdef nesting_at(self, depth: int) -> int:",
+			f'\t\t"""How deep this `{struct.name}` nests, capped at {cap}."""',
+			"\t\tdeepest = depth",
+			f"\t\tif depth > {cap}:",
+			"\t\t\treturn depth",
+		]
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				continue
+			name = py_name(local_name(struct, placement)).replace(".", "_")
+			lines.extend([
+				f"\t\tfor i in range(self.{name}_count):",
+				"\t\t\ttry:",
+				f"\t\t\t\telement = self.{name}(i)",
+				"\t\t\texcept Exception:",
+				"\t\t\t\tbreak",
+				"\t\t\tfound = element.nesting_at(depth + 1)",
+				"\t\t\tif found > deepest:",
+				"\t\t\t\tdeepest = found",
+			])
+		lines.extend(["\t\treturn deepest",
+		              "",
+		              "\t@property",
+		              "\tdef nesting(self) -> int:",
+		              "\t\treturn self.nesting_at(0)"])
+		return lines
+
+	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""The two depth verdicts, which are different verdicts (0054)."""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return []
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
+		if limit < declared:
+			return [
+				f"\t\t# This build follows only {limit} (`[limit]`) where"
+				f" the format allows",
+				f"\t\t# {declared}. A refusal by the reader, not a verdict"
+				" on the bytes --",
+				"\t\t# and not also judged against the format's depth,"
+				" since finding",
+				"\t\t# that out costs the frames the limit saves.",
+				f"\t\tif self.nesting > {limit}:",
+				f'\t\t\traise DepthError("{struct.name} nests deeper than'
+				f' this build follows")',
+			]
+		return [
+			f"\t\t# `{struct.name}` nests at most {declared} deep, so past"
+			" it the message",
+			"\t\t# is malformed as a thirteenth month is.",
+			f"\t\tif self.nesting > {declared}:",
+			f'\t\t\traise ConstraintError("{struct.name} nests deeper than'
+			f' the format allows")',
+		]
 
 	def _offset_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
@@ -4501,13 +4588,15 @@ class Emitter:
 			checks.extend(self._check(struct, entry))
 
 		lines = [
+			*self._nesting_probe(struct),
 			"", "\tdef validate(self) -> None:",
 			'\t\t"""Every constraint the schema declares, on parse.',
 			"",
 			"\t\tRaises ConstraintError rather than returning a code: a Python",
 			'\t\tcaller drops a return value far too easily."""',
+			*self._depth_checks(struct),
 		]
-		if not checks:
+		if not checks and not self._depth_checks(struct):
 			lines.append("\t\t# Nothing in this struct is constrained.")
 			lines.append("\t\treturn")
 		lines.extend(checks)

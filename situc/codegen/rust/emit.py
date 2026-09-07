@@ -42,7 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	codec_entry_point, depth_limit, is_recursive,
+	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
@@ -4281,7 +4281,15 @@ class Emitter:
 		# own length. Zero at the limit stops the walk rather than refusing,
 		# because this returns a length and has no error channel -- the
 		# refusal belongs in `validate`, and this is a stack backstop.
-		limit = depth_limit(self.schema, struct.name)
+		# One ABOVE the format's `[depth]`, and the format's rather than this
+		# build's `[limit]`. The view a caller gets for an element is sized
+		# by this, so a smaller cap does not refuse a deep message -- it
+		# makes the offending bytes invisible, every walk over them comes
+		# back short, and `validate` sees a conforming message. "At the
+		# limit" and "past the limit" have to be distinguishable, or a cap on
+		# a length can only truncate. `[limit]` is a refusal, and refusals
+		# belong in `validate`.
+		limit = declared_depth(self.schema, struct.name) + 1
 		deep  = self._extent_expression(struct, depth="depth")
 		return [*head,
 		        "\tpub fn extent_at(&self, depth: usize) -> usize {",
@@ -5919,13 +5927,88 @@ class Emitter:
 			else:
 				checks.extend(mine)
 
+		depth = self._depth_checks(struct)
 		return [
+			*self._nesting_probe(struct),
 			"",
 			"\t/// Every constraint the schema declares, on parse.",
 			"\tpub fn validate(&self) -> Result<()> {",
-			*(checks or ["\t\t// Nothing in this struct is constrained."]),
+			*depth,
+			*(checks or ([] if depth else
+			             ["\t\t// Nothing in this struct is constrained."])),
 			"\t\tOk(())",
 			"\t}",
+		]
+
+	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
+		"""The depth counter `validate` reads. The extent cannot answer it:
+		at its cap it returns zero, which is also what an absent run
+		returns, so a message that nests too far measures short and
+		validates clean. See the C backend."""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return []
+		cap = min(depth_limit(self.schema, struct.name),
+		          declared_depth(self.schema, struct.name)) + 1
+		lines = [
+			"",
+			f"\t/// How deep this `{struct.name}` nests, capped at {cap}.",
+			"\tpub fn nesting_at(&self, depth: usize) -> usize {",
+			"\t\tlet mut deepest = depth;",
+			"",
+			f"\t\tif depth > {cap} {{",
+			"\t\t\treturn depth;",
+			"\t\t}",
+		]
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				continue
+			base = c_name(local_name(struct, placement))
+			lines.extend([
+				f"\t\tfor i in 0..self.{_ident(base + '_count')}() {{",
+				f"\t\t\tlet element = match self.{_ident(base)}(i) {{",
+				"\t\t\t\tOk(one) => one,",
+				"\t\t\t\tErr(_)  => break,",
+				"\t\t\t};",
+				"\t\t\tlet found = element.nesting_at(depth + 1);",
+				"\t\t\tif found > deepest {",
+				"\t\t\t\tdeepest = found;",
+				"\t\t\t}",
+				"\t\t}",
+			])
+		lines.extend(["\t\tdeepest", "\t}",
+		              "",
+		              "\tpub fn nesting(&self) -> usize {",
+		              "\t\tself.nesting_at(0)", "\t}"])
+		return lines
+
+	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""The two depth verdicts, which are different verdicts (0054)."""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return []
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
+		if limit < declared:
+			return [
+				f"\t\t// This build follows only {limit} (`[limit]`) where"
+				f" the format allows",
+				f"\t\t// {declared}. A refusal by the reader rather than a"
+				" verdict on the",
+				"\t\t// bytes, and such a message is not also judged"
+				" against the format's",
+				"\t\t// depth: finding that out costs the frames the limit"
+				" saves.",
+				f"\t\tif self.nesting() > {limit} {{",
+				"\t\t\treturn Err(Error::Depth);",
+				"\t\t}",
+			]
+		return [
+			f"\t\t// `{struct.name}` nests at most {declared} deep, so past"
+			" it the message",
+			"\t\t// is malformed as a thirteenth month is.",
+			f"\t\tif self.nesting() > {declared} {{",
+			"\t\t\treturn Err(Error::Constraint);",
+			"\t\t}",
 		]
 
 	def _reserved_checks(self, struct: ResolvedStruct,

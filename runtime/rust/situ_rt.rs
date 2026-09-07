@@ -46,6 +46,13 @@ pub enum Error {
 	/// which means a cryptographic gate refused: this says the message is
 	/// corrupt or truncated.
 	Checksum,
+	/// A recursive type nested deeper than THIS BUILD will follow (0054).
+	///
+	/// Separate from `Constraint`: a message deeper than the format's own
+	/// `[depth]` is malformed, one deeper than `[limit]` is well formed and
+	/// refused anyway. A receiver logging them alike reports its own
+	/// configuration as an attack.
+	Depth,
 }
 
 impl Error {
@@ -65,6 +72,7 @@ impl Error {
 			5 => Error::Stage,
 			7 => Error::Truncated,
 			8 => Error::Checksum,
+			9 => Error::Depth,
 			_ => Error::Constraint,
 		}
 	}

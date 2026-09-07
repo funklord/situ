@@ -72,6 +72,11 @@ const char *situ_err_str(situ_err_t err)
 	case SITU_ERR_STALE:		return "stale view";
 	case SITU_ERR_TRUNCATED:	return "incomplete: more bytes needed";
 	case SITU_ERR_CHECKSUM:		return "checksum mismatch";
+	/* Worded as the reader's decision rather than the message's fault,
+	 * because that is the whole distinction from SITU_ERR_CONSTRAINT: a
+	 * log line saying "malformed" would send somebody after a sender that
+	 * is behaving correctly (0054). */
+	case SITU_ERR_DEPTH:		return "nested deeper than this build follows";
 	}
 	return "unknown error";
 }

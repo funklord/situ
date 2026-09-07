@@ -45,7 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	depth_limit, is_recursive,
+	declared_depth, depth_limit, is_recursive,
 	codec_entry_point,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
@@ -2134,7 +2134,15 @@ class Emitter:
 		# returns a length and has no error channel. The refusal belongs in
 		# `validate`; this is a stack backstop, safe for the reason a text
 		# number's `_value` is safe -- a validated frame never reaches it.
-		limit = depth_limit(self.schema, struct.name)
+		# One ABOVE the format's `[depth]`, and the format's rather than this
+		# build's `[limit]`. The view a caller gets for an element is sized
+		# by this, so a smaller cap does not refuse a deep message -- it
+		# makes the offending bytes invisible, every walk over them comes
+		# back short, and `validate` sees a conforming message. "At the
+		# limit" and "past the limit" have to be distinguishable, or a cap on
+		# a length can only truncate. `[limit]` is a refusal, and refusals
+		# belong in `validate`.
+		limit = declared_depth(self.schema, struct.name) + 1
 		deep  = self._extent_terms(struct, depth="depth")
 		return [*head,
 		        "\t[[nodiscard]] std::uint32_t extent_at(std::uint32_t depth)"
@@ -5795,6 +5803,80 @@ class Emitter:
 
 	# -- validation ----------------------------------------------------
 
+	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
+		"""The depth counter `validate` reads. See the C backend for why the
+		extent cannot answer this."""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return []
+		cap = min(depth_limit(self.schema, struct.name),
+		          declared_depth(self.schema, struct.name)) + 1
+		lines = [
+			"",
+			f"\t/* How deep this `{struct.name}` nests, capped at {cap}. */",
+			"\t[[nodiscard]] std::uint32_t nesting_at(std::uint32_t depth)"
+			" const noexcept",
+			"\t{",
+			"\t\tstd::uint32_t deepest = depth;",
+			"",
+			f"\t\tif (depth > {cap}u) {{",
+			"\t\t\treturn depth;",
+			"\t\t}",
+		]
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				continue
+			name  = bare_name(local_name(struct, placement))
+			inner = f"::{self.namespace}::{c_name(struct.name)}"
+			lines.extend([
+				f"\t\tfor (std::uint32_t i = 0; i < {name}_count(); i++) {{",
+				f"\t\t\t{inner} element;",
+				f"\t\t\tif ({name}_at(i, element) != ::situ::rt::err::ok) {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tconst std::uint32_t found ="
+				" element.nesting_at(depth + 1);",
+				"\t\t\tif (found > deepest) {",
+				"\t\t\t\tdeepest = found;",
+				"\t\t\t}",
+				"\t\t}",
+			])
+		lines.extend(["\t\treturn deepest;", "\t}",
+		              "",
+		              "\t[[nodiscard]] std::uint32_t nesting() const noexcept",
+		              "\t{", "\t\treturn nesting_at(0);", "\t}"])
+		return lines
+
+	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""The two depth verdicts, which are different verdicts (0054)."""
+		if not is_recursive(self.resolved.structs, struct.name):
+			return []
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
+		if limit < declared:
+			return [
+				f"\t\t/* This build follows only {limit} (`[limit]`) where"
+				f" the format",
+				f"\t\t * allows {declared}. A refusal by the reader, not a"
+				" verdict on",
+				"\t\t * the bytes -- and such a message is not also judged"
+				" against",
+				"\t\t * the format's depth, since finding that out costs"
+				" the frames",
+				"\t\t * the limit exists to save. */",
+				f"\t\tif (nesting() > {limit}u) {{",
+				"\t\t\treturn ::situ::rt::err::depth;",
+				"\t\t}",
+			]
+		return [
+			f"\t\t/* `{struct.name}` nests at most {declared} deep, so"
+			" past it the",
+			"\t\t * message is malformed as a thirteenth month is. */",
+			f"\t\tif (nesting() > {declared}u) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
+
 	def _validate(self, struct: ResolvedStruct) -> list[str]:
 		checks: list[str] = []
 
@@ -5802,10 +5884,12 @@ class Emitter:
 			checks.extend(self._check(struct, entry))
 
 		lines = [
+			*self._nesting_probe(struct),
 			"",
 			"\t/* Every constraint the schema declares, on parse. */",
 			"\t[[nodiscard]] ::situ::rt::err validate() const noexcept",
 			"\t{",
+			*self._depth_checks(struct),
 		]
 		if not checks:
 			lines.append("\t\t/* Nothing in this struct is constrained. */")

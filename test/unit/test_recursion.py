@@ -273,9 +273,13 @@ int main(void)
 	# Inside the declared 32, the extent is the whole chain.
 	for used, extent in rows[:3]:
 		assert extent == used, rows
-	# Past it, the extent stops at the bound: 32 levels of three bytes.
+	# Past it, the extent stops -- at 33 levels of three bytes rather than
+	# 32, because it reaches one level past the declared depth so that a
+	# message which nests too far is still measurable and can therefore be
+	# refused. Capped at 32 exactly, the offending level is invisible and
+	# `validate` sees a conforming message.
 	used, extent = rows[3]
-	assert used == 192 and extent == 96, rows
+	assert used == 192 and extent == 99, rows
 
 
 def test_every_backend_carries_the_depth_into_its_walk() -> None:
@@ -309,9 +313,94 @@ def test_every_backend_carries_the_depth_into_its_walk() -> None:
 		"rust":   gen_rs(schema, resolved, "unit").module,
 	}
 	for name, text in built.items():
-		assert "depth >= 32" in text or "depth >= 32u" in text, name
+		# 33: one past the declared depth, so "at" and "past" differ.
+		assert "depth >= 33" in text or "depth >= 33u" in text, name
 		# The descent passes the counter on rather than starting a new one.
 		assert "depth + 1" in text, name
 		# And the entry point starts it at zero, so a caller never sees it.
 		assert "_at(0" in text or "_at(view, 0u)" in text \
 			or "extent_at(0)" in text, name
+
+
+def test_every_backend_refuses_a_message_that_nests_too_deep() -> None:
+	"""`validate` is where the refusal lives, and the extent cannot host it.
+
+	At its cap an extent returns zero, and zero is what an absent run
+	returns too -- so a message nesting too far measures short and validates
+	clean. That is 26.113's "wrong values indistinguishable from right ones"
+	with a limit folded into a length, and it is why the two questions are
+	answered by two functions.
+
+	The two verdicts are different verdicts. Past the format's own `[depth]`
+	a message is malformed, as a thirteenth month is. Past this build's
+	`[limit]` it is well formed and refused anyway -- a statement about the
+	reader, which is why it is not a constraint error.
+	"""
+	from situc.codegen.c import generate as gen_c
+	from situc.codegen.cpp import generate as gen_cpp
+	from situc.codegen.python import generate as gen_py
+	from situc.codegen.rust import generate as gen_rs
+
+	def built(body: str) -> dict[str, str]:
+		schema   = parse_text(PREAMBLE + body)
+		resolved = resolve(schema, solve(schema))
+		return {
+			"c":      gen_c(schema, resolved, "unit").source,
+			"cpp":    gen_cpp(schema, resolved, "unit").header,
+			"python": gen_py(schema, resolved, "unit").module,
+			"rust":   gen_rs(schema, resolved, "unit").module,
+		}
+
+	# `[depth]` alone: past it the message is malformed.
+	refused = {
+		"c":      "return SITU_ERR_CONSTRAINT;",
+		"cpp":    "return ::situ::rt::err::constraint;",
+		"rust":   "return Err(Error::Constraint);",
+		"python": "raise ConstraintError(",
+	}
+	for name, text in built(NODE).items():
+		assert "nesting" in text, name
+		assert refused[name] in text, name
+
+	# `[limit]` below it: past the limit this build refuses, under its own
+	# class, and does not go on to judge the format's depth.
+	capped = NODE.replace("[depth = 32]", "[depth = 32, limit = 8]")
+	# **The raise, not the name.** Python's generated module imports
+	# `DepthError` whenever the schema has a recursive type at all, so a
+	# substring test for the bare name is satisfied by the import and passes
+	# with the check deleted -- which it did, and which is the third time in
+	# one day an import line has made an assertion vacuous (26.274 has the
+	# first two).
+	raised = {
+		"c":      "return SITU_ERR_DEPTH;",
+		"cpp":    "return ::situ::rt::err::depth;",
+		"rust":   "return Err(Error::Depth);",
+		"python": "raise DepthError(",
+	}
+	for name, text in built(capped).items():
+		assert raised[name] in text, name
+
+
+def test_the_extent_is_capped_by_the_format_and_not_by_the_build() -> None:
+	"""A cap on a length can only truncate, so it may not be the smaller
+	number.
+
+	The view a caller gets for an element is sized by the extent. Capped at
+	this build's `[limit]`, the bytes of a too-deep level become invisible:
+	every walk over them comes back short and `validate` sees a conforming
+	message rather than refusing one. Measured while building this -- with
+	the extent capped at the limit, a 33-level message reported a nesting of
+	8 and validated clean.
+
+	So the extent caps at the format's `[depth]`, plus one, because "at the
+	limit" and "past the limit" have to be distinguishable by something.
+	"""
+	from situc.codegen.c import generate as gen_c
+
+	schema   = parse_text(PREAMBLE
+	                      + NODE.replace("[depth = 32]", "[depth = 32, limit = 8]"))
+	resolved = resolve(schema, solve(schema))
+	header   = gen_c(schema, resolved, "unit").header
+
+	assert "depth >= 33u" in header, "the extent must reach one past the depth"
+	assert "depth >= 8u" not in header, "a length may not be capped by `[limit]`"

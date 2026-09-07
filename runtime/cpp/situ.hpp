@@ -54,6 +54,11 @@ enum class err : int {
 	 * receiver treat normal progress as hostile. */
 	truncated  = SITU_ERR_TRUNCATED,
 	checksum   = SITU_ERR_CHECKSUM,
+	/* A recursive type nested deeper than this build will follow (0054).
+	 * Separate from `constraint`: past the format's own `[depth]` a message
+	 * is malformed, past `[limit]` it is well formed and refused anyway --
+	 * a statement about the reader rather than about the bytes. */
+	depth      = SITU_ERR_DEPTH
 };
 
 constexpr bool ok(err e) noexcept { return e == err::ok; }

@@ -338,6 +338,7 @@ class Emitter:
 		# constants -- where a reader would look for it -- put every call
 		# ahead of its declaration.
 		lines.extend(self._struct_extent(struct))
+		lines.extend(self._nesting_probe(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._offsets(struct))
 
@@ -2952,6 +2953,143 @@ class Emitter:
 					found[attr.name] = attr.value.value
 		return found.get("limit", found.get("depth", 1))
 
+	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
+		"""How deep this message actually nests, for `validate` to judge.
+
+		`extent_at` cannot answer it: at the limit it returns zero, and zero
+		is also what an absent run returns, so a message that nests too deep
+		measures short and validates clean. That is 26.113's "wrong values
+		indistinguishable from right ones" with the limit folded into a
+		length, and it is why the refusal cannot live in the extent.
+
+		So this walks and counts instead, capped one above the format's own
+		`[depth]` so it terminates on any input. It is O(message) and only
+		for a recursive type -- a cost the schema asked for by declaring a
+		depth, and the reason `validate` otherwise leaves array elements to
+		the caller does not reach it: this reads no element's *values*, only
+		how far the structure goes.
+		"""
+		if not self._recursive(struct.name):
+			return []
+
+		name  = ident(self.prefix, struct.name, "nesting")
+		# One above whichever bound this build enforces. Where `[limit]` is
+		# below `[depth]` that is the limit, and the consequence is worth
+		# stating rather than hiding: **this build then refuses a too-deep
+		# message without determining whether it is also malformed**, because
+		# finding that out costs exactly the frames `[limit]` exists to save.
+		cap   = min(self._depth_limit(struct.name),
+		            self._declared_depth(struct.name)) + 1
+		lines = [
+			"",
+			f"/* How deep this `{struct.name}` nests, capped at {cap + 1}.",
+			" *",
+			" * Capped so it terminates on any input, and one ABOVE the",
+			" * declared depth so that `= cap` is distinguishable from `at",
+			" * the limit` -- a probe that saturated at the limit could not",
+			" * tell a conforming message from a violating one. */",
+			f"static inline uint32_t {name}_at(situ_view_t view,"
+			" uint32_t depth);",
+			f"static inline uint32_t {name}_at(situ_view_t view, uint32_t depth)",
+			"{",
+			f"\tuint32_t deepest = depth;",
+			"",
+			f"\tif (depth > {cap}u) {{",
+			f"\t\treturn depth;\t/* capped: past here the answer is"
+			" \"too deep\" */",
+			"\t}",
+		]
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.type_name != struct.name:
+				continue
+			local = c_name(self._local(struct, placement))
+			at    = ident(self.prefix, struct.name, local, "at")
+			count = self._count_expression(struct, placement)
+			lines.extend([
+				"\t{",
+				"\t\tuint32_t i;",
+				f"\t\tconst uint32_t n = {count or '0u'};",
+				"",
+				"\t\tfor (i = 0u; i < n; i++) {",
+				"\t\t\tsitu_view_t element;",
+				"\t\t\tuint32_t    found;",
+				"",
+				f"\t\t\tif ({at}(view, i, &element) != SITU_OK) {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				f"\t\t\tfound = {name}_at(element, depth + 1u);",
+				"\t\t\tif (found > deepest) {",
+				"\t\t\t\tdeepest = found;",
+				"\t\t\t}",
+				"\t\t}",
+				"\t}",
+			])
+		lines.extend(["\treturn deepest;", "}",
+		              "",
+		              f"static inline uint32_t {name}(situ_view_t view)",
+		              "{",
+		              f"\treturn {name}_at(view, 0u);",
+		              "}"])
+		return lines
+
+	def _declared_depth(self, name: str) -> int:
+		"""The format's own `[depth]`, which is what makes a message
+		malformed rather than merely more than this build will follow."""
+		for decl in self.schema.structs():
+			if decl.name != name:
+				continue
+			for attr in decl.attrs:
+				if attr.name == "depth" \
+						and isinstance(attr.value, ast.IntLiteral):
+					return attr.value.value
+		return self._depth_limit(name)
+
+	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""`validate`'s two depth verdicts, which are different verdicts.
+
+		Past the format's own `[depth]` the message is malformed and gets
+		`SITU_ERR_CONSTRAINT`, exactly as a thirteenth month does. Past this
+		build's `[limit]` it is well formed and refused anyway, and gets
+		`SITU_ERR_DEPTH` -- a statement about the reader rather than about
+		the bytes. A receiver that logged them alike would report its own
+		configuration as an attack (0054).
+		"""
+		if not self._recursive(struct.name):
+			return []
+		declared = self._declared_depth(struct.name)
+		limit    = self._depth_limit(struct.name)
+		name     = ident(self.prefix, struct.name, "nesting")
+		if limit < declared:
+			return [
+				f"\t/* This build follows `{struct.name}` only {limit} deep"
+				f" (`[limit]`), where",
+				f"\t * the format allows {declared} (`[depth]`). Past the"
+				" limit the message",
+				"\t * is refused as more than this reader will spend --"
+				" which is a",
+				"\t * statement about the reader, not about the bytes, and"
+				" is why this",
+				"\t * is not SITU_ERR_CONSTRAINT.",
+				"\t *",
+				"\t * Such a message is NOT also judged against the format's"
+				" own depth:",
+				"\t * finding that out means walking to it, which costs"
+				" exactly the",
+				"\t * frames the limit exists to save. */",
+				f"\tif ({name}(view) > {limit}u) {{",
+				"\t\treturn SITU_ERR_DEPTH;",
+				"\t}",
+			]
+		return [
+			f"\t/* `{struct.name}` nests at most {declared} deep"
+			" (`[depth]`), so a message",
+			"\t * past it is malformed in the way a thirteenth month is. */",
+			f"\tif ({name}(view) > {declared}u) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
 	def _recursive_prototypes(self, struct: ResolvedStruct) -> list[str]:
 		"""Forward declarations for a struct that names itself.
 
@@ -3037,7 +3175,19 @@ class Emitter:
 		# text number's `_value` is safe: a validated frame never reaches it,
 		# and an unvalidated one reads short, which is the bargain every
 		# accessor here makes with the bounds check it did not do.
-		limit = self._depth_limit(struct.name)
+		# **The format's `[depth]`, not this build's `[limit]`.** The view a
+		# caller gets for an element is sized by this, so capping here at the
+		# smaller number does not refuse a deep message -- it makes the bytes
+		# past the cap invisible, and every walk over them silently short.
+		# `limit` is a refusal and refusals belong in `validate`; a cap on a
+		# length can only truncate.
+		# One ABOVE the format's depth, so that a message which nests too far
+		# is still *measurable* and can therefore be refused. Capped at the
+		# depth itself, the bytes of the offending level are invisible: every
+		# walk over them comes back short and `validate` sees a conforming
+		# message. "At the limit" and "past the limit" have to be
+		# distinguishable, or the limit can only truncate.
+		limit = self._declared_depth(struct.name) + 1
 		deep  = [self._length_expression(struct, placement, depth="depth")
 		         for placement in variable]
 		lines = [*head,
@@ -6550,6 +6700,12 @@ class Emitter:
 		an id that means "did not happen" and "has no name" at once.
 		"""
 		groups = []
+		depth = self._depth_checks(struct)
+		if depth:
+			# Its own group, named for the struct rather than a member: the
+			# nesting is a property of the whole thing, and 0051's "which
+			# field refused" has no field to name here.
+			groups.append(("", depth))
 		for entry in struct.entries:
 			lines = self._checks_for(struct, entry)
 			if not any(_REFUSES.match(one) for one in lines):

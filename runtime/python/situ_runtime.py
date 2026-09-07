@@ -114,6 +114,17 @@ class VersionError(SituError):
 	"""
 
 
+class DepthError(SituError):
+	"""A recursive type nested deeper than this build will follow (0054).
+
+	Its own class rather than a `ConstraintError`, and that is why `[limit]`
+	is a second attribute rather than a smaller `[depth]`: a message deeper
+	than the format's own `[depth]` is malformed, one deeper than `[limit]`
+	is well formed and refused anyway. A receiver logging them alike reports
+	its own configuration as an attack.
+	"""
+
+
 class StageError(SituError):
 	"""A region's stage gate has not been passed (section 12.1).
 
