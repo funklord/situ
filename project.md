@@ -24123,6 +24123,76 @@ own and must keep both. A fix that closed the leak by making an imported
 `endian` invisible would pass the first and fail the second, which is why
 the second is written down.
 
+### 26.296 The packer resolved a character against the wrong file
+
+`expr.py` folds a `CharLiteral` by reading `expr.code`, and says why in the
+same breath: **resolved at the literal, where the encodings that disagreed
+can be named, and by the time an expression is folded there is nothing left
+to decide.** The packer did not read it. `Program.character` called
+`character_value` again, against its own copy of the encodings -- looked up
+as the FIRST `encoding` directive in the schema, which after an `import` is
+not the file the literal was written in.
+
+The section sign separates the two, and it is the pair 26.290 already
+recorded for exactly this purpose: 0xA7 in ISO-8859-1 and 0xFD in
+ISO-8859-5, one byte in both, so nothing is refused and only the number
+differs.
+
+    root declares iso8859_1, importing one that declares iso8859_5
+      sep == the section sign     compiler 0xA7     image 0xFD
+
+**Four compiled backends compare against one byte and the walker against
+another** -- a disagreement in the input to the tool that exists to find
+disagreements, which is the one place a differential cannot help.
+
+The fix is `return expr.code`, and what it removes is the second
+description: `Program` no longer needs to know the encodings, so the lookup
+goes with it. One fact, one place, and the compiler and the image cannot
+part company about a character because only one of them decides.
+
+**The corpus could not have shown it.** A single-file schema has one
+`encoding`, so the packer's copy and the literal's are the same thing and
+the two agree by coincidence. Verified rather than argued: the packed image
+of every corpus schema is byte-identical before and after, digest
+`11d91f29`.
+
+**And one consumer of `target` had been missed, by me, in the fix one entry
+back.** 26.295 says "every consumer" and the grep behind it read `situc/*.py`
+-- `situc/codegen/c/mmio.py` is not in that glob. `is_mmio` took the first
+`target` in the merged list and decides whether the C backend emits volatile
+reads and access-width rules, so an imported `target mmio` would have
+brought them to a schema that never asked.
+
+`check_imported_directives` refuses a disagreeing import, so the two cannot
+differ today and the old spelling could not actually be wrong any more. It
+reads the root's regardless: **a rule that is right because another check
+happens to hold is one that breaks silently when the other is relaxed**, and
+nothing in the file said it was leaning on anything.
+
+The lesson is about the claim rather than the code. "Every consumer" is a
+population claim, and it was made from a search whose scope was chosen
+before the answer was known -- `evidence.md`'s own warning, in the sentence
+that asserted the sweep was complete.
+
+**What the corpus exercises, since every bug found today lived where it does
+not reach.** Counted over all 39 schemas:
+
+    0 schemas   import
+    1 schema    [depth] [quoted] bit_order-lsb hex indexed invariant
+                pad_to register relation strictness target-file target-mmio
+
+`import` is the only construct with no schema at all, and it has now
+produced three defects in two entries. The single-schema constructs are
+where to look next, and the reason is mechanical rather than a hunch: the
+four-way differential and the walker comparison both run over the corpus, so
+a construct with one schema is compared in exactly one shape.
+
+One recorded gap was re-measured while the census was being taken and is
+closed: 26.224's "`walk.py` never mentions `bit_order`" -- it reads it now,
+at two sites. And the census's own first draft called `tlv` unexercised,
+which was the probe rather than the tree: the syntax is `tlv fields (...)`
+and `example/protobuf` uses it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

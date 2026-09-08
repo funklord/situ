@@ -15,6 +15,7 @@ import pytest
 from situc import ast
 from situc.diagnostics import SituError
 from situc.layout import solve
+from situc.pack import Program
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
 from situc.imports import library_root
@@ -347,6 +348,55 @@ def test_the_signature_publishes_this_file_s_directives(
 
 	assert "endian big" in rendered
 	assert "endian little" not in rendered
+
+
+def test_a_character_means_what_its_own_file_says(tmp_path: Path) -> None:
+	"""The packed image and the generated code have to agree about a byte.
+
+	A `CharLiteral` is resolved where it is written, against the encodings
+	in scope THERE -- `expr.py` reads `expr.code` and says so. The packer
+	re-derived it instead, from the first `encoding` directive in the merged
+	list, which after an `import` is not the file the literal was written
+	in.
+
+	The section sign separates them: 0xA7 in ISO-8859-1 and 0xFD in
+	ISO-8859-5, one byte in both, so nothing refuses and only the number
+	differs. Four compiled backends compared against one byte and the walker
+	against another -- a disagreement in the input to the tool that exists
+	to find disagreements."""
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian big;\nencoding iso8859_5;\n"
+	      "struct lib { u8 x; }\n")
+	# Written directly rather than through `write`, which is ASCII: the
+	# whole point of this schema is a byte that is not.
+	app = tmp_path / "app.situ"
+	app.write_text("target buffer;\nendian big;\nencoding iso8859_1;\n"
+	               'import "lib.situ";\n'
+	               "struct item { u8 sep; }\n"
+	               "struct app { item entries[] while (sep == '\xa7'); }\n",
+	               encoding="latin-1")
+
+	schema = parse(Source(str(app), app.read_text(encoding="latin-1")))
+	found  = [decl for decl in _every_node(schema)
+	          if isinstance(decl, ast.CharLiteral)]
+	assert len(found) == 1
+
+	# What the compiler folds it to, and what the image records: one fact,
+	# so one number.
+	assert found[0].code == 0xA7
+	assert Program().character(found[0]) == 0xA7
+
+
+def _every_node(node: object):
+	"""Every `ast.Node` under this one, so a literal can be found wherever a
+	construct happens to keep it."""
+	if isinstance(node, ast.Node):
+		yield node
+	for name in getattr(node, "__dataclass_fields__", ()):
+		held = getattr(node, name)
+		for one in (held if isinstance(held, (list, tuple)) else [held]):
+			if isinstance(one, ast.Node):
+				yield from _every_node(one)
 
 
 def test_the_corpus_is_partitioned() -> None:

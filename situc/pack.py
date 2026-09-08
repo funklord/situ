@@ -242,31 +242,31 @@ RelationResolver = Callable[[str], "tuple[int, int] | None"]
 class Program:
 	"""A growing bytecode buffer, so a caller can emit several and share one."""
 
-	def __init__(self, encodings: tuple[str, ...] = ("ascii",)) -> None:
+	def __init__(self) -> None:
 		self.code = bytearray()
-		#: What the schema's `encoding` directive named. Carried here rather
-		#: than looked up, because a `Program` is built per expression and
-		#: the directive is the file's.
-		self.encodings = encodings
 
 	def character(self, expr: "ast.CharLiteral") -> int:
-		"""A character literal, as the number its encodings agree on.
+		"""A character literal, as the number the parser resolved it to.
 
-		The schema's `encoding` line decided this at parse time and the
-		image carries the number -- so a walker needs no codec, and a
-		character that the declared encodings disagreed about never reached
-		here: it was refused where it was written.
+		Read rather than recomputed, and `expr.py` says why in the same
+		words one layer over: resolved at the literal, where the encodings
+		that disagreed can be named, and by the time an expression is
+		folded there is nothing left to decide.
 
-		ASCII where nothing declared, which is the same default `expr.py`
-		uses. The two read the same table, so a schema cannot mean one
-		thing to the compiler and another to the image.
+		This used to re-derive it from a second copy of the encodings,
+		looked up as the FIRST `encoding` directive in the schema -- which
+		is one file's, and after an `import` not the file the literal was
+		written in. Measured: a root declaring `iso8859_1` importing one
+		that declares `iso8859_5` compiled `sep == '\xa7'` to 0xA7 in all
+		four backends and wrote 0xFD into the image, so the walker compared
+		against a different byte from every compiled reader -- a
+		disagreement in the input to the tool that exists to find
+		disagreements.
+
+		One fact, one place: the compiler and the image cannot part
+		company about a character now, because only one of them decides.
 		"""
-		from situc.types import EncodingError, character_value
-
-		try:
-			return character_value(expr.value, self.encodings)
-		except EncodingError as why:		# pragma: no cover - refused earlier
-			raise PackError(f"`{expr.value}`: {why}") from None
+		return expr.code
 
 	def emit(self, op: int, operand: int | None = None,
 	         width: str = "<I") -> None:
@@ -817,9 +817,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	          and isinstance(decl.value, ast.IntLiteral)}
 
 	# -- the bytecode, first, because a placement record points into it --
-	encodings = next((decl.encodings for decl in schema.decls
-	                  if isinstance(decl, ast.EncodingDirective)), ("ascii",))
-	program = Program(encodings)
+	program = Program()
 	code_at: dict[str, int] = {}
 	for owner, placement in rows:
 		field = members.get(placement.path)

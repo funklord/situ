@@ -334,7 +334,21 @@ class RegisterEmitter:
 
 
 def is_mmio(schema: ast.Schema) -> bool:
+	"""Whether this compilation targets memory-mapped registers.
+
+	The ROOT file's directive, like every other reader of `target`. It took
+	the first in the merged list, and `import` splices another file's
+	declarations in ahead -- so an imported `target mmio` decided whether
+	this backend emitted volatile reads and access-width rules for a schema
+	that had said nothing of the kind.
+
+	`check_imported_directives` refuses an imported target that disagrees
+	with the root's, so the two cannot differ today. This does not rely on
+	that: a rule that is right because another check happens to hold is one
+	that breaks silently when the other is relaxed.
+	"""
 	for decl in schema.decls:
-		if isinstance(decl, ast.TargetDirective):
+		if isinstance(decl, ast.TargetDirective) \
+				and decl.span.source.path == schema.root:
 			return decl.kind is ast.TargetKind.MMIO
 	return False
