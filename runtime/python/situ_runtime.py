@@ -12,9 +12,19 @@ What holds here:
     visible to whoever owns the bytes.
   * **Bounds.** Checked once at acquisition, as in C, and the slice enforces it
     thereafter.
-  * **Invalidation (section 12.3).** A view carries the generation its message
-    had when it was taken, and every access checks it. This is the one place
-    Python is *stronger* than release-build C, where the check compiles out.
+  * **Invalidation (section 12.3), as machinery and not yet as a guarantee.**
+    A view carries the generation its message had when it was taken and every
+    access checks it -- and NOTHING IN THIS BACKEND EVER BUMPS IT. `touch()`
+    below has no caller in the runtime or in the emitter, so the check runs on
+    every access and cannot fire.
+
+    This claimed to be "the one place Python is *stronger* than release-build
+    C, where the check compiles out", which is the reverse of the truth: C's
+    setters take the message and call `situ_msg_touch`, and these do not. A
+    sub-view held across a write that moves a later member reads the bytes
+    that used to be there, with no error -- measured, and C++ does the same.
+    Which setters should invalidate is one rule for four backends and is
+    recorded as an open question rather than settled here (26.306).
   * **Constraints.** `validate()` raises rather than returning a code, because
     that is what a Python caller will actually handle.
 
