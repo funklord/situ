@@ -19854,10 +19854,10 @@ it is the same blind spot one axis over -- `walk.py`'s bit-packed store is
 among the lines the coverage sweep reports unreached, so nothing in the suite
 had ever executed it.
 
-### 26.223 The half-fix that broke a round trip nobody ran
-verbatim, as the read is `situ_bcd_decode` verbatim. C's setter is
-`situ_bits_set_msb(..., situ_bcd_encode(value, 2u))`, so the two now perform
-the same store rather than two stores that agree on readback.
+**The fix is the encode, and it is the read's mirror.** The write is
+`situ_bcd_encode` verbatim, as the read is `situ_bcd_decode` verbatim. C's
+setter is `situ_bits_set_msb(..., situ_bcd_encode(value, 2u))`, so the two
+now perform the same store rather than two stores that agree on readback.
 
 **The range check moved with it, and the boundary is the part worth having.**
 `bcd2 seconds [bits = 7]` reaches 79, not 99 and not 127: 80 encodes to
