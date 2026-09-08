@@ -20,7 +20,7 @@ target buffer
 
 struct header_field size=3..
   @0x0000   until:3a  u8         name  fold-case encoding=ascii
-  ~         until:0d0a|0a u8         value  big trim
+  ~         until:0d0a|0a u8         value  big trim=2009
 
 struct request_head size=6..
   @0x0000   4..8224   request_line start  big

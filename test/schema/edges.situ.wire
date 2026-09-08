@@ -189,7 +189,7 @@ struct marked size=5..17
 
 struct messy size=3..
   @0x0000   until:3a  u8         name  fold-case
-  ~         until:0d0a u8         value  big trim
+  ~         until:0d0a u8         value  big trim=2009
 
 struct packed_driver size=3..63
   @0x0000   4bit      u4         hi  msb_first

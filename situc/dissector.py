@@ -43,7 +43,7 @@ from situc.names import (
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
-	extent_parts, is_counted_run, local_name, own_members,
+	extent_parts, is_counted_run, local_name, own_members, pinned_bytes,
 )
 
 #: Widths Wireshark has a `ProtoField.uintN` for. Unlike C it has a 24-bit one,
@@ -69,6 +69,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	       for struct in resolved.structs.values()
 	       for entry in struct.entries):
 		lines.extend(SCAN_HELPER)
+
+	# Same rule as the scan above: a helper nobody calls is dead Lua in a
+	# file a user is expected to read before trusting it.
+	if any(entry.placement.trimmed
+	       for struct in resolved.structs.values()
+	       for entry in struct.entries):
+		lines.extend(TRIM_HELPER)
 
 	lines.extend(READ_HELPER)
 	lines.extend(_conversation_setup(schema, resolved))
@@ -153,38 +160,92 @@ DIGITS_HELPER = [
 ]
 
 
+TRIM_HELPER = [
+	"-- What `[trim]` removes from a member's VALUE (situ section 8.6.2).",
+	"--",
+	"-- The member's SPAN is unchanged: those bytes are still its own and the",
+	"-- next member starts where it ends, whatever this returns. Only what a",
+	"-- caller reads back moves, which is what every generated accessor's",
+	"-- `_ptr` and `_len` already do -- and what this dissector did not do at",
+	"-- all, so a header value was shown with the space still on it while",
+	"-- four backends and the walker showed it without.",
+	"local function situ_trim(tvb, at, len, set)",
+	"\tlocal function is_ws(k)",
+	"\t\tlocal byte = tvb(at + k, 1):uint()",
+	"\t\tfor i = 1, #set do",
+	"\t\t\tif byte == set[i] then return true end",
+	"\t\tend",
+	"\t\treturn false",
+	"\tend",
+	"",
+	"\tlocal first = 0",
+	"\tlocal last  = len",
+	"\twhile first < last and is_ws(first) do first = first + 1 end",
+	"\twhile last > first and is_ws(last - 1) do last = last - 1 end",
+	"\treturn at + first, last - first",
+	"end",
+	"",
+]
+
+
 SCAN_HELPER = [
 	"-- Where a delimited member stops (situ section 8.6.1).",
 	"--",
-	"-- Returns the content length, or the distance to `limit` when the",
-	"-- delimiter is not there -- the same two answers the generated",
-	"-- accessors give, so a capture and a parser disagree about nothing.",
+	"-- Three answers, because the caller needs three and this used to give",
+	"-- one: the content length, whether a delimiter was actually FOUND, and",
+	"-- WHICH alternative matched. A caller with only the first advanced past",
+	"-- a delimiter whenever the buffer had room for one, so a member that",
+	"-- ran to its cap with nothing in it put every later member a byte late.",
 	"--",
-	"-- And SECOND, whether the delimiter was actually found, which is not",
-	"-- the same question and had no answer here. The caller advanced past a",
-	"-- delimiter whenever the buffer had room for one, so a member that ran",
-	"-- to its cap with no delimiter in it put every later member one byte",
-	"-- late -- against a walker that starts the next member where this one",
-	"-- stopped. Only a scalar directly after a capped delimited member can",
-	"-- show it, and the corpus had none until `edges.signed_number`.",
-	"local function situ_scan(tvb, at, delim, limit)",
-	"\tlocal n = #delim",
-	"\tif n == 0 or at + n > limit then",
-	"\t\treturn limit - at, false",
-	"\tend",
-	"\tfor i = at, limit - n do",
-	"\t\tlocal match = true",
-	"\t\tfor j = 0, n - 1 do",
-	"\t\t\tif tvb(i + j, 1):uint() ~= delim[j + 1] then",
-	"\t\t\t\tmatch = false",
-	"\t\t\t\tbreak",
+	"-- `quote` and `escape` are the same rules `situ_walk_scan` applies and",
+	"-- this had neither. JSON's strings carry `[escape = \"\\\\\"]`, so a",
+	"-- `\\\\\" inside one is content -- and without that rule this framed",
+	"-- `say \\\\\"hi\\\\\"` as five bytes where every other reader frames",
+	"-- eleven, then placed everything after it on the wrong offset.",
+	"--",
+	"-- The alternatives are a LIST and the longest match at a position wins,",
+	"-- which is the tie-break the walker makes and for its reason: `\"\\r\"`",
+	"-- and `\"\\r\\n\"` can both match in one place, and taking the shorter",
+	"-- leaves the newline as the next member's first byte. Scanning only the",
+	"-- first alternative ran an HTTP header line ending in a bare newline",
+	"-- straight through to the next CRLF.",
+	"local function situ_scan(tvb, at, delims, limit, quote, escape)",
+	"\tlocal quoted = false",
+	"\tlocal i = 0",
+	"",
+	"\twhile at + i < limit do",
+	"\t\tlocal byte = tvb(at + i, 1):uint()",
+	"",
+	"\t\tif escape and byte == escape then",
+	"\t\t\ti = i + 2\t-- the next byte is content, whatever it is",
+	"\t\telseif quote and byte == quote then",
+	"\t\t\tquoted = not quoted",
+	"\t\t\ti = i + 1",
+	"\t\telse",
+	"\t\t\tlocal best = 0",
+	"\t\t\tif not quoted then",
+	"\t\t\t\tfor d = 1, #delims do",
+	"\t\t\t\t\tlocal one = delims[d]",
+	"\t\t\t\t\tlocal n = #one",
+	"\t\t\t\t\tif n > best and at + i + n <= limit then",
+	"\t\t\t\t\t\tlocal match = true",
+	"\t\t\t\t\t\tfor j = 1, n do",
+	"\t\t\t\t\t\t\tif tvb(at + i + j - 1, 1):uint() ~= one[j] then",
+	"\t\t\t\t\t\t\t\tmatch = false",
+	"\t\t\t\t\t\t\t\tbreak",
+	"\t\t\t\t\t\t\tend",
+	"\t\t\t\t\t\tend",
+	"\t\t\t\t\t\tif match then best = n end",
+	"\t\t\t\t\tend",
+	"\t\t\t\tend",
 	"\t\t\tend",
-	"\t\tend",
-	"\t\tif match then",
-	"\t\t\treturn i - at, true",
+	"\t\t\tif best > 0 then",
+	"\t\t\t\treturn i, true, best",
+	"\t\t\tend",
+	"\t\t\ti = i + 1",
 	"\t\tend",
 	"\tend",
-	"\treturn limit - at, false",
+	"\treturn limit - at, false, 0",
 	"end",
 	"",
 ]
@@ -853,6 +914,20 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if placement.delimiters:
 		return _delimited(resolved, struct, placement, field, seek)
 
+	# A VARINT's width is in its own bytes, and `byte_span` answers with the
+	# scalar's MINIMUM -- one byte -- so the generic branch below showed a
+	# three-byte SQLite varint as one, with the confidence of a decode, and
+	# then declined every member after it. The decline was right and the row
+	# was not: a wrong line is worse than a missing one, which is what
+	# `_uncomputable` exists to say. Walking the continuation bits in Lua
+	# would let the members after it be placed too, and is a capability this
+	# dissector does not have yet rather than a line it should guess.
+	if placement.varint is not None:
+		return _uncomputable(
+			placement.path,
+			"a varint, whose width is in its own bytes and which this"
+			" dissector does not walk")
+
 	if placement.kind == "variant":
 		return _variant(resolved, struct, placement, seek)
 
@@ -984,6 +1059,24 @@ def _dynamic_width(placement: Placement) -> int | None:
 
 
 
+def _scan_call(placement: Placement, at: str) -> str:
+	"""`situ_scan(...)` for one member, from `at`.
+
+	Shared with `_delimited` so that the scan a length expression performs
+	and the scan the member's own row performs cannot describe the member
+	differently -- which is the shape of every defect in this file today.
+	"""
+	alts = ", ".join("{" + ", ".join(str(byte) for byte in one) + "}"
+	                 for one in placement.delimiters)
+	cap  = ("tvb:len()" if placement.delimiter_cap is None
+	        else f"math.min({at} + {placement.delimiter_cap}, tvb:len())")
+	quote  = ("nil" if placement.delimiter_quote is None
+	          else str(placement.delimiter_quote))
+	escape = ("nil" if placement.delimiter_escape is None
+	          else str(placement.delimiter_escape))
+	return f"situ_scan(tvb, {at}, {{{alts}}}, {cap}, {quote}, {escape})"
+
+
 def _at(base: str, offset: int) -> str:
 	"""`base + offset`, without the halves that are zero."""
 	if base == "0":
@@ -1019,6 +1112,22 @@ def _read(placement: Placement, base: str) -> str | None:
 			# harness rather than a short field. A text number in situ is
 			# digits (8.6.2); the compiled backends have no sign to read and
 			# this had one.
+			#
+			# A DELIMITED one is as wide as its digits and `count` above is
+			# the scalar's width, so this read a fixed two-byte window at
+			# the member's start. `texty` is `decimal u16 count until
+			# "\r\n"` driving `u8 body[count]`, and a frame declaring 123
+			# was dissected as 12 -- a valid message, every member after the
+			# run placed on the wrong bytes, and Lua's `tonumber` tolerating
+			# a trailing `\r` is the only reason one and two digits worked.
+			#
+			# Scanned inline rather than declined: the parentheses truncate
+			# `situ_scan` to its first return, and the helper is emitted for
+			# any schema that has a delimiter to scan for.
+			if placement.delimiters:
+				return (f"situ_digits(tvb, {_at(base, first)}, "
+				        f"({_scan_call(placement, _at(base, first))}), "
+				        f"{placement.radix})")
 			return (f"situ_digits(tvb, {_at(base, first)}, {count},"
 			        f" {placement.radix})")
 
@@ -1691,25 +1800,41 @@ def _delimited(resolved: ResolvedSchema, struct: ResolvedStruct,
 			_LOST,
 		]
 
-	bytes_ = ", ".join(str(byte) for byte in delim)
-	cap    = ("tvb:len()" if placement.delimiter_cap is None
-	          else f"math.min(at + {placement.delimiter_cap}, tvb:len())")
-
+	# EVERY alternative, not just the first. `placement.delimiter` is the
+	# one this used to read, and `until "\r\n" | "\n"` has two: a header
+	# line ending in a bare newline was never found, so the member ran to
+	# the end of the buffer and everything after it moved.
 	return [
 		f"\t-- {placement.path}, to the first {render_delimiter(delim)}",
 		*seek,
-		f"\tlocal {name}_len, {name}_end = "
-		f"situ_scan(tvb, at, {{{bytes_}}}, {cap})",
-		f"\tif {name}_len > 0 then",
-		f"\t\tsubtree:add({field}, tvb(at, {name}_len))",
-		"\tend",
+		f"\tlocal {name}_len, {name}_end, {name}_took =",
+		f"\t\t{_scan_call(placement, 'at')}",
+		# `[trim]` moves the VALUE and not the frame, so the advance below
+		# reads `_len` either way. Shown trimmed because that is what every
+		# generated accessor hands a caller: `_ptr` starts past the
+		# whitespace and `_len` stops before it.
+		*([f"\tlocal {name}_at, {name}_shown = situ_trim(tvb, at, "
+		   f"{name}_len,",
+		   "\t\t{" + ", ".join(str(byte) for byte in placement.trim_set)
+		   + "})",
+		   f"\tif {name}_shown > 0 then",
+		   f"\t\tsubtree:add({field}, tvb({name}_at, {name}_shown))",
+		   "\tend"] if placement.trimmed else
+		  [f"\tif {name}_len > 0 then",
+		   f"\t\tsubtree:add({field}, tvb(at, {name}_len))",
+		   "\tend"]),
 		f"\tat = at + {name}_len",
-		# The delimiter is consumed because it was FOUND, not because the
-		# buffer had room for one. Asking about room put the member after an
-		# unterminated capped scan a byte late, everywhere.
-		f"\tif {name}_end then",
-		f"\t\tat = at + {len(delim)}",
-		"\tend",
+		# Three conditions, and this had none of them. The delimiter is
+		# consumed because it was FOUND rather than because the buffer had
+		# room; by the width that MATCHED rather than the first
+		# alternative's; and only where the member owns it -- `before` says
+		# the delimiter belongs to what follows, so consuming it there put
+		# the next member one byte on.
+		(f"\tif {name}_end then" if placement.delimiter_consumed else
+		 f"\t-- `before`: the delimiter belongs to the member after this"
+		 f" one,\n\t-- so `at` stops in front of it rather than past it."),
+		*([f"\t\tat = at + {name}_took", "\tend"]
+		  if placement.delimiter_consumed else []),
 	]
 
 
@@ -1763,8 +1888,18 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if element is None:
 		# Scalar elements: one range, shown as bytes.
 		scale = "" if each == 1 else f" * {each}"
+		# `[size = N]` pins the FOOTPRINT while the length stays whatever
+		# the message says, so the member is `min(declared, N)` bytes and
+		# the next member starts N on regardless. `traverse.pinned_bytes`
+		# is the shared decision and its docstring counts six readers; this
+		# was a seventh that never asked. `pinned.body[used] [size = 16]`
+		# with `used = 48` was shown as 48 bytes, three times the member.
+		footprint = pinned_bytes(placement)
 		lines.extend([
 			f"\tlocal {name}_len = {name}_n{scale}",
+			*([f"\tif {name}_len > {footprint} then",
+			   f"\t\t{name}_len = {footprint}\t-- `[size = {footprint}]`",
+			   "\tend"] if footprint is not None else []),
 			f"\tif tvb:len() >= at + {name}_len then",
 			f"\t\tsubtree:add({field}, tvb(at, {name}_len))",
 			"\tend",
@@ -1774,7 +1909,9 @@ def _repeated(resolved: ResolvedSchema, struct: ResolvedStruct,
 			# anyway. A dissector returns what it consumed, so an eight-byte
 			# UDP header declaring a length of 24 reported consuming 24 --
 			# and the run walking it is the same shape.
-			f"\tat = math.min(at + {name}_len, tvb:len())",
+			(f"\tat = math.min(at + {footprint}, tvb:len())"
+			 if footprint is not None else
+			 f"\tat = math.min(at + {name}_len, tvb:len())"),
 		])
 		return lines
 

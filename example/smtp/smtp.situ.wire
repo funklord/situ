@@ -20,7 +20,7 @@ target buffer
 
 struct command size=3..528
   @0x0000   until:20  u8         verb  fold-case cap=16 encoding=ascii
-  ~         until:0d0a u8         argument  big trim cap=512
+  ~         until:0d0a u8         argument  big trim=2009 cap=512
 
 struct data_block size=5..
   @0x0000   until:0d0a2e0d0a dot_stuffing body  codec=dot_stuffing

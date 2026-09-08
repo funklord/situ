@@ -49,7 +49,7 @@ PLACEMENT_BYTES	= 50
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 36
 SKIP_BYTES	= 8
-WHITESPACE_BYTES = 4
+WHITESPACE_BYTES = 8
 REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
@@ -1436,14 +1436,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	arms_blob    = bytearray()
 	delims_blob  = bytearray()
 	skips_blob   = bytearray()
-	# What `[trim]` removes, for the whole schema rather than a member:
-	# `whitespace` is a file-level directive and `[trim]` asks it. Written
-	# unconditionally, because "the schema states nothing" and "this image
-	# predates the section" are different facts and a walker that could not
-	# tell them apart would guess for one of them.
+	# What `[trim]` removes, PER MEMBER and not per schema. `whitespace` is
+	# declared per file and `import` splices another file's structs in, so a
+	# `[trim]` in an imported file asks that file's set -- which is what
+	# `skip` in the same file has always done. A file-level section made the
+	# two attributes disagree about one question.
 	ws_blob = bytearray()
-	for byte in traverse.whitespace_set(schema):
-		ws_blob += _struct.pack("<B3x", byte)
 	regions_blob = bytearray()
 	tlvs_blob    = bytearray()
 	index_blob   = bytearray()
@@ -1511,6 +1509,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# nothing and no row has to carry a count.
 		for byte in placement.skip:
 			skips_blob += _struct.pack("<IB3x", at, byte)
+		# The same arrangement for `[trim]`, and written only where the
+		# attribute is: a member with no `[trim]` has no set to state, and a
+		# walker reading no row for one falls back to OWS -- which is what an
+		# image written before this section carried means.
+		if placement.trimmed:
+			for byte in placement.trim_set:
+				ws_blob += _struct.pack("<IB3x", at, byte)
 
 		if placement.regions:
 			flags = (1 if placement.sealed_by else 0) \

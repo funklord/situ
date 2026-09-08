@@ -353,6 +353,20 @@ class Placement:
 	#: Whether it was written as a bare `skip` against the file's declared
 	#: set, so the unparser prints the word rather than the expansion.
 	skip_declared: bool		= False
+	#: `[trim]`: the byte values this member's own file calls whitespace.
+	#:
+	#: Resolved HERE rather than looked up per consumer, which is what
+	#: `skip` above has always done and is why `skip` never had this bug.
+	#: `whitespace` is declared per file and `import` splices another
+	#: file's structs in, so the answer belongs to the member and not to
+	#: the schema -- six readers asking a schema-level helper got the root
+	#: file's set for an imported member while `skip` two lines away got
+	#: its own.
+	#:
+	#: Empty where the member is not trimmed: a member with no `[trim]`
+	#: has no set to state, and the emptiness says so rather than naming
+	#: a default nobody asked for.
+	trim_set: tuple[int, ...]	= ()
 	#: Whether the delimiter belongs to this member: `until` against
 	#: `before`. The scan is the same and only the span differs, so this is
 	#: read wherever a span adds the delimiter's length and nowhere else.
@@ -481,6 +495,29 @@ class Placement:
 	def offset_bytes(self) -> int:
 		assert self.offset_bits is not None, "offset is dynamic"
 		return self.offset_bits // BITS_PER_BYTE
+
+
+#: What `[trim]` removes where the member's own file declares nothing:
+#: HTTP's OWS and SIP's LWS. Not `isspace`, which is locale dependent and
+#: takes CR, LF, VT and FF -- three of which are framing in the protocols
+#: this default is for.
+OWS: tuple[int, ...] = (0x20, 0x09)
+
+
+def _whitespace_of(schema: "ast.Schema", span: Span) -> tuple[int, ...]:
+	"""The `whitespace` set declared by the file this span is in.
+
+	The file's and not the root's. `whitespace` is a vocabulary the members
+	of a file are written against, like the encoding a character literal
+	resolves in -- unlike `target`, `endian` and `strictness`, which
+	configure the compiler and must not reach the root's members from an
+	imported file.
+	"""
+	for decl in schema.decls:
+		if isinstance(decl, ast.WhitespaceDirective) \
+				and decl.span.source.path == span.source.path:
+			return decl.values
+	return OWS
 
 
 @dataclass
@@ -1823,6 +1860,8 @@ class Solver:
 			radix              = getattr(member, "radix", None),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
+			trim_set           = (_whitespace_of(self.schema, member.span)
+			                      if _has_attr(member.attrs, "trim") else ()),
 			since              = _since_of(member),
 			version_field      = _version_field(decl),
 			case_insensitive   = _has_attr(member.attrs, "case_insensitive"),

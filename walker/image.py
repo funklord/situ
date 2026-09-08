@@ -215,15 +215,15 @@ class Image:
 	#: `before`. Kept apart from the rules above because it decides the
 	#: SPAN rather than the scan, and those are read in different places.
 	delimiter_consumed: dict[int, bool]	= field(default_factory=dict)
-	#: What `[trim]` removes: the schema's `whitespace` set.
+	#: placement index -> what `[trim]` removes there, in table order.
 	#:
-	#: The SCHEMA's rather than a member's, because `whitespace` is a
-	#: file-level directive and `[trim]` asks it. Space and tab where the
-	#: image carries no such section, which is an image written before the
-	#: section existed and is what every schema written before the
-	#: directive meant -- the same compatibility the section directory is
-	#: for.
-	whitespace: tuple[int, ...]		= (0x20, 0x09)
+	#: Keyed by MEMBER and not by schema: `whitespace` is declared per file,
+	#: `import` splices another file's structs in, and a member is written
+	#: against the vocabulary of its own file -- which is what `skip` below
+	#: has always done. A member with no row means space and tab, which is
+	#: an image written before this section was keyed this way, and is the
+	#: same compatibility the section directory is for.
+	whitespace: dict[int, tuple[int, ...]]	= field(default_factory=dict)
 	#: placement index -> the bytes that may precede it and belong to it
 	#: (`skip`), in table order.
 	#:
@@ -392,9 +392,9 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 
 	if WHITESPACE in found:
 		at, records, stride = found[WHITESPACE]
-		image.whitespace = tuple(
-			_struct.unpack_from("<B", blob, at + i * stride)[0]
-			for i in range(records))
+		for i in range(records):
+			where, byte = _struct.unpack_from("<IB", blob, at + i * stride)
+			image.whitespace[where] = image.whitespace.get(where, ()) + (byte,)
 
 	if SKIPS in found:
 		at, records, stride = found[SKIPS]

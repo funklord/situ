@@ -292,14 +292,20 @@ struct image_delimiter {
 	u8   delim_pad[3];
 }
 
-// What `[trim]` removes: the schema's `whitespace` set, one row per byte.
+// What `[trim]` removes, one row per byte under the member that asks.
 //
-// The SCHEMA's rather than a member's, which is what makes this a section of
-// its own rather than a column on `image_placement`: `whitespace` is a
-// file-level directive and `[trim]` asks it. A walker reading an image
-// written before this section existed gets HTTP's OWS, space and tab, which
-// is what every schema written before the directive meant.
+// Keyed by PLACEMENT and not by schema, which is `image_skip`'s arrangement
+// and for the same reason: `whitespace` is declared per file, `import`
+// splices another file's structs in, and a member is written against the
+// vocabulary of the file it is written in. A file-level section made
+// `[trim]` read the root's set where `skip` in the same imported file read
+// its own -- two attributes, one question, two answers.
+//
+// A member with no row uses HTTP's OWS, space and tab, which is what a
+// member with no `[trim]` needs no answer for and what an image written
+// before this section carried means.
 struct image_whitespace {
+	u32  placement;
 	u8   octet;
 	u8   ws_pad[3];
 }
@@ -532,7 +538,7 @@ require size(image_struct) == 16;
 require size(image_placement) == 48;
 require size(image_arm) == 24;
 require size(image_delimiter) == 36;
-require size(image_whitespace) == 4;
+require size(image_whitespace) == 8;
 require size(image_skip) == 8;
 require size(image_region) == 16;
 require size(image_codec) == 4;

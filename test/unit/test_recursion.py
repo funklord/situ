@@ -897,3 +897,109 @@ def test_the_walkers_stop_where_the_generated_code_does(shape: str) -> None:
 			with pytest.raises(TooDeep):
 				struct_extent(view)
 
+
+
+#: `[limit]` strictly below `[depth]`, which no schema in the corpus states.
+#: The two attributes are the same number everywhere else, so every place
+#: that reads the wrong one of the pair is correct by coincidence until a
+#: schema separates them -- and this is the schema that separates them.
+SPLIT = ("struct node [depth = 8, limit = 3] {\n"
+         "\tu8    tag;\n"
+         "\tnode  more[] while (tag == 1);\n"
+         "}\n")
+
+
+def _emitted_split() -> dict[str, str]:
+	from situc.codegen.c import generate as gen_c
+	from situc.codegen.cpp import generate as gen_cpp
+	from situc.codegen.python import generate as gen_py
+	from situc.codegen.rust import generate as gen_rs
+
+	schema   = parse_text(PREAMBLE + SPLIT)
+	resolved = resolve(schema, solve(schema))
+	return {
+		"c":      gen_c(schema, resolved, "unit").header,
+		"cpp":    gen_cpp(schema, resolved, "unit").header,
+		"python": gen_py(schema, resolved, "unit").module,
+		"rust":   gen_rs(schema, resolved, "unit").module,
+	}
+
+
+def test_the_prototype_names_the_bound_its_own_code_enforces() -> None:
+	"""A C-only sentence, and it named the wrong member of the pair.
+
+	`_recursive_prototypes` read `[limit]` and the `_at` form it describes
+	is bounded by `[depth] + 1`, so with `[depth] = 8, [limit] = 3` the
+	header said "bounded by 3" over code reading `depth >= 9u`. Every schema
+	stating only `[depth]` makes the two spellings one number, which is why
+	it read correctly from the day `[limit]` arrived.
+
+	Asserted as a RELATIONSHIP rather than against the literal 9: the guard
+	is found in the emitted text and the sentence is held to it, so a schema
+	with different numbers cannot make this pass for the wrong reason.
+	"""
+	import re
+
+	header = _emitted_split()["c"]
+	guard  = re.search(r"if \(depth >= (\d+)u\)", header)
+	said   = re.search(r"bounded by (\d+) rather", header)
+
+	assert guard is not None and said is not None, header[:400]
+	assert said.group(1) == guard.group(1), (
+		f"the prototype says the `_at` form is bounded by {said.group(1)} "
+		f"and the code it describes reads `depth >= {guard.group(1)}u`")
+
+
+def test_the_four_state_one_saturation_for_the_nesting_probe(
+		tmp_path: Path) -> None:
+	"""All four say "capped at N", and three of them said the guard.
+
+	The probe stops descending past `min(limit, depth) + 1` and therefore
+	SATURATES one higher, so C printed 5 where C++, Rust and Python printed
+	4 for identical code. Both readings of "capped at" are defensible and
+	that is exactly the problem: four descriptions of one layout stating two
+	numbers for one quantity.
+
+	Settled by measuring rather than by picking. The generated Python module
+	is run against chains of increasing depth and the number every backend
+	prints is held to the value it actually returns -- so the sentence
+	cannot drift from the behaviour again, in any of the four, and a schema
+	with different bounds cannot make this pass for the wrong reason.
+	"""
+	import importlib.util
+	import re
+	import sys as _sys
+
+	built = _emitted_split()
+	said  = {}
+	for name, text in built.items():
+		found = re.search(r"nests, capped at (\d+)", text)
+		assert found is not None, f"{name} says nothing about the cap"
+		said[name] = int(found.group(1))
+
+	assert len(set(said.values())) == 1, f"four backends, {said}"
+
+	(tmp_path / "unit.py").write_text(built["python"], encoding="ascii")
+	root = Path(__file__).resolve().parents[2] / "runtime" / "python"
+	_sys.path.insert(0, str(root))
+	try:
+		spec = importlib.util.spec_from_file_location(
+			"unit_split", tmp_path / "unit.py")
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+	finally:
+		_sys.path.remove(str(root))
+
+	# A chain of `tag == 1` bytes and a terminator: nesting is one more than
+	# the chain's length until the probe stops descending. Nine is well past
+	# the declared depth, so the highest value seen IS the saturation.
+	seen = set()
+	for deep in range(0, 10):
+		data = bytearray(b"\x01" * deep + b"\x00\x00")
+		one  = module.node.at(module.Message(data), 0, len(data))
+		seen.add(one.nesting)
+
+	assert max(seen) == said["c"], (
+		f"the backends say the probe caps at {said['c']} and it returns "
+		f"{sorted(seen)}")

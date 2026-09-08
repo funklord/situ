@@ -612,7 +612,10 @@ def test_a_delimited_member_is_scanned_not_counted() -> None:
 	lua = emit('struct s { u8 name[] until ": "; u8 rest[remaining]; }')
 
 	assert "name_n = 1" not in lua
-	assert "situ_scan(tvb, at, {58, 32}, tvb:len())" in lua
+	# The alternatives are a list now, and the scan carries the quote and
+	# escape rules it used to ignore -- so the call is spelled with all of
+	# them even where a schema states none.
+	assert "situ_scan(tvb, at, {{58, 32}}, tvb:len(), nil, nil)" in lua
 
 
 def test_the_scan_helper_appears_only_where_something_scans() -> None:
@@ -940,6 +943,14 @@ NOT_A_MEMBER = frozenset({"validate", "no-view"})
 #: emitted text rather than off a row, because `dissect.lua` prints the value
 #: and not the kind it printed it as -- and the kind is what decides whether
 #: the row is an integer at all.
+#: A member the dissector said it could not size, from the comment it emits
+#: above the row: `-- <path>: <why>;` then `-- the rest of the frame is shown
+#: raw`. The pair is the marker, because the first line alone is how every
+#: member is introduced.
+DECLINED = re.compile(
+	r"^\t-- (\S+):[^\n]*;\n\t-- the rest of the frame is shown raw$",
+	re.M)
+
 PROTOFIELD = re.compile(
 	r'ProtoField\.(\w+)\("([^"]+)",\s*"[^"]*"(?:,\s*(base\.\w+))?')
 
@@ -960,7 +971,8 @@ class Comparison(NamedTuple):
 
 
 def _shown(rows: list[tuple[str, int, int, str]], proto: str,
-		kinds: dict[str, tuple[str, str]]) -> tuple[int, dict[str, int]]:
+		kinds: dict[str, tuple[str, str]],
+		declined: set[str] | None = None) -> tuple[int, dict[str, int]]:
 	"""What the dissector showed about `proto` itself: how much, and which of
 	it is an integer a walker's reading can be held against.
 
@@ -994,11 +1006,32 @@ def _shown(rows: list[tuple[str, int, int, str]], proto: str,
 	total  = 0
 	values: dict[str, int] = {}
 	seen:   set[str] = set()
-	for abbrev, _, _, value in rows:
+	for abbrev, _, length, value in rows:
 		if not abbrev.startswith(proto + "."):
 			continue
 		total += 1
 		kind, base = kinds.get(abbrev, ("", ""))
+		# A byte run's LENGTH, under a key of its own. The exclusion below
+		# was right about the value and was applied to the whole row: "the
+		# walker answers `len=` and a first byte about the same member,
+		# neither is wrong and neither is the other" is true of the bytes
+		# and false of the count, and throwing the row away threw both out.
+		#
+		# What that cost: a wrong delimited frame was visible only when a
+		# SCALAR followed it in the same struct, and three of the corpus's
+		# delimited members have none. `[escape]`, `[quoted]`, a second
+		# delimiter alternative and `before` were all ignored by the
+		# generated Lua, on schemas this differential runs over every time.
+		if kind in ("bytes", "string"):
+			if declined is not None and abbrev in declined:
+				continue	# "the rest of the frame is shown raw"
+			local = abbrev.split(".")[-1]
+			if f"{local}#len" in seen:
+				values.pop(f"{local}#len", None)
+			else:
+				seen.add(f"{local}#len")
+				values[f"{local}#len"] = length
+			continue
 		if not kind.startswith(("uint", "int")):
 			continue
 		# A packed-decimal member, which `gen-dissector` declares `base.HEX`
@@ -1055,6 +1088,15 @@ def _walked(image: Image, proto: str,
 		total += 1
 		if len(parts) == 2 and "=" not in parts[1]:
 			values[parts[0]] = int(parts[1])
+			continue
+		# `name len=N` for a delimited or counted run: the same question
+		# the dissector's row length answers, under the key `_shown` gives
+		# it. The value beside it stays uncompared -- raw bytes against a
+		# first byte really are two questions, which is what the exclusion
+		# this replaces was about.
+		for part in parts[1:]:
+			if part.startswith("len="):
+				values[f"{parts[0]}#len"] = int(part[4:])
 	return total, values
 
 
@@ -1078,6 +1120,13 @@ def compare(schema: Path) -> Comparison:
 	image   = load(blob)
 	kinds   = {abbrev: (kind, base)
 	           for kind, abbrev, base in PROTOFIELD.findall(text)}
+	# Members the dissector DECLINED to size, which it says in the emitted
+	# comment and then shows the rest of the frame raw for -- a deliberate
+	# display choice for somebody reading a capture, and not a claim about
+	# how long the member is. Read from the generator's own output rather
+	# than guessed at from a row that happens to reach the end of the
+	# buffer, which is not the same thing.
+	declined = set(DECLINED.findall(text))
 
 	shown = walked = compared = 0
 	differ: list[str] = []
@@ -1098,7 +1147,7 @@ def compare(schema: Path) -> Comparison:
 				packet = dissect_bytes(rng)
 				_, rows = read_back(lua, name, packet)
 
-				rows_total, said = _shown(rows, name, kinds)
+				rows_total, said = _shown(rows, name, kinds, declined)
 				line_total, read = _walked(image, name, packet)
 				shown  += rows_total
 				walked += line_total
@@ -1365,3 +1414,79 @@ def test_a_located_member_is_read_where_the_data_says() -> None:
 	block = lua[lua.index("-- bitmap_file.pixels"):]
 	block = block[:block.index("\n\n")]
 	assert "at = at +" not in block, block
+
+
+#: Chosen bytes for the delimiter rules, because the sweep cannot see them.
+#:
+#: Each is a member whose framing depends on an attribute the generated Lua
+#: ignored, and each was measured against the walker before and after. The
+#: sweep draws from a fixed seed over generic alphabets, so `\"` before a
+#: bare `"` never arises in it: breaking the escape rule leaves the whole
+#: corpus differential green, which is the shape of a check with nothing in
+#: its population. Verified by sabotage rather than assumed.
+DELIMITER_VECTORS = (
+	# `[escape = "\\"]`: the byte after the escape is content, whatever it
+	# is, so the string ends at its own closing quote and not two bytes in.
+	("example/json/json.situ", "text", b'say \\"hi\\"",rest',
+	 {"text.chars": 10}),
+	# `before ',' | ']' | '}'`: three alternatives, and the delimiter
+	# belongs to the member that FOLLOWS -- so it is found whichever it is,
+	# and not consumed.
+	("example/json/json.situ", "number", b"12,x", {"number.rest": 2}),
+	("example/json/json.situ", "number", b"12]x", {"number.rest": 2}),
+	("example/json/json.situ", "number", b"12}x", {"number.rest": 2}),
+	# `[trim]` against the file's own declared whitespace, which for JSON is
+	# four bytes rather than HTTP's two.
+	("example/json/json.situ", "number", b"1 \n,x", {"number.rest": 1}),
+	# `until "\r\n" | '\n'`: a header line ending in a bare newline, which
+	# scanning only the first alternative ran straight through.
+	("example/http/http.situ", "header_field", b"X: v\nnext: w\r\n",
+	 {"header_field.name": 1, "header_field.value": 1}),
+	# A delimited text number driving a run. Its width is its digits, and
+	# reading a fixed two-byte window showed a 123-byte body as 12.
+	("test/schema/edges.situ", "texty", b"123\r\n" + b"y" * 123,
+	 {"texty.body": 123}),
+)
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+@pytest.mark.parametrize(
+	"path,proto,packet,want", DELIMITER_VECTORS,
+	ids=[f"{Path(p).stem}.{s}.{i}"
+	     for i, (p, s, _, _) in enumerate(DELIMITER_VECTORS)])
+def test_the_delimiter_rules_are_dissected(tmp_path: Path, path: str,
+		proto: str, packet: bytes, want: dict[str, int]) -> None:
+	"""The lengths the sweep cannot reach, pinned to the walker's.
+
+	Held against `want` rather than only against the walker, so that a
+	change moving BOTH readers the same way still fails. The numbers came
+	from the compiled C backend, which is the arbiter whenever the two
+	descriptions here disagree: `situ_text_chars_len` reads 10 for the
+	escaped string and `situ_text_chars_span` reads 11.
+	"""
+	rows = dissect(tmp_path, ROOT / path, proto, packet)[1]
+	said = {field: length for field, _, length, _ in rows}
+
+	for member, expected in want.items():
+		assert said.get(member) == expected, (
+			f"{member} on {packet!r}: the dissector shows "
+			f"{said.get(member)}, expected {expected}\n  all rows: {rows}")
+
+	# And the walker agrees, which is what makes `want` a fact about the
+	# layout rather than a number this test made up.
+	source, resolved, _ = analyse(ROOT / path)
+	image = load(packer.pack(parse(source), resolved, metadata=True)[0])
+	where, read = "", {}
+	for line in report.listing(image, packet).splitlines():
+		if line.startswith("-- "):
+			where = line[3:]
+		elif where == proto and "len=" in line:
+			parts = line.split()
+			for part in parts[1:]:
+				if part.startswith("len="):
+					read[f"{proto}.{parts[0]}"] = int(part[4:])
+	for member, expected in want.items():
+		if member in read:
+			assert read[member] == expected, (
+				f"{member} on {packet!r}: the walker reads {read[member]}, "
+				f"expected {expected}")

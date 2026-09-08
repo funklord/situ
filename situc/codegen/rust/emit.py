@@ -45,7 +45,6 @@ from situc.traverse import (
 	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
-	whitespace_set,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
@@ -2356,16 +2355,17 @@ class Emitter:
 		lead = self._lead_methods(struct, entry.placement)
 		return bounds + lead + self._getter_body(struct, entry)
 
-	def _trim_set(self) -> str:
-		"""What `[trim]` removes here, as a byte-slice literal.
+	def _trim_set(self, placement: Placement) -> str:
+		"""What `[trim]` removes for this member, as a byte-slice literal.
 
-		The schema's `whitespace`, or space and tab where it states none.
+		The set stated by the file the MEMBER is written in, or space and
+		tab where that file states none.
 		Passed rather than known, because the runtime used to hold the
 		answer and a format calling CR and LF whitespace kept them in the
 		value.
 		"""
 		return "&[" + ", ".join(str(byte)
-		                        for byte in whitespace_set(self.schema)) + "]"
+		                        for byte in placement.trim_set) + "]"
 
 	def _lead_methods(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3504,12 +3504,12 @@ class Emitter:
 				"\t/// than value, so the span above is unchanged.",
 				f"\tpub fn {_ident(f'{base}_len')}(&self) -> usize {{",
 				f"\t\tsitu_rt::trim(self.{_ident(f'{base}_raw')}(),"
-				f" {self._trim_set()}).len()",
+				f" {self._trim_set(placement)}).len()",
 				"\t}",
 			])
 
 		value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}(),"
-		         f" {self._trim_set()})"
+		         f" {self._trim_set(placement)})"
 		         if placement.trimmed else f"self.{_ident(f'{base}_raw')}()")
 
 		if placement.radix is not None:
@@ -4117,7 +4117,7 @@ class Emitter:
 		          else f"self.{_ident(f'{base}_digits')}()")
 
 		if placement.radix_minimal:
-			value = (f"situ_rt::trim({digits}, {self._trim_set()})"
+			value = (f"situ_rt::trim({digits}, {self._trim_set(placement)})"
 			         if placement.trimmed
 			         else digits)
 			lines.extend([
@@ -6202,9 +6202,10 @@ class Emitter:
 			return []
 		cap = min(depth_limit(self.schema, struct.name),
 		          declared_depth(self.schema, struct.name)) + 1
+		# `cap + 1` in the sentence below is deliberate: it is the value it SATURATES at, which is one above the depth the walk stops descending at -- measured, not read off the guard: a chain of four returns 5 and so does a chain of nine. Naming the guard here instead said 4 for a function that returns 5, in three backends, while C said 5.
 		lines = [
 			"",
-			f"\t/// How deep this `{struct.name}` nests, capped at {cap}.",
+			f"\t/// How deep this `{struct.name}` nests, capped at {cap + 1}.",
 			"\tpub fn nesting_at(&self, depth: usize) -> usize {",
 			"\t\tlet mut deepest = depth;",
 			"",

@@ -24368,6 +24368,163 @@ came from implementing `skip` and this came from asking what else the file
 claimed it could not do. The question is cheap and the answer is not
 discoverable any other way.
 
+### 26.300 Two attributes in one file, one question, two answers
+
+`whitespace` is declared per file. `skip` has always read the file the
+member is written in -- the parser resolves the bare form from its own
+per-file state, so an imported struct skips its own file's bytes. `[trim]`,
+added the same day, read the ROOT file's set.
+
+    inner.situ    whitespace '\t';
+                  u8  word[] until "," [trim];   removed the ROOT's 0x20
+                  u8  led  skip;                 removed inner's 0x09
+
+**Both were written to follow the same rule and one of them followed the
+wrong one.** 26.295 says a directive is a claim about the file it is written
+in, and that is right for `target`, `endian`, `bit_order` and `strictness`,
+which **configure the compiler**: an imported file's copy must not reach the
+root's members. `whitespace` is not that kind of directive. It is a
+**vocabulary the members of a file are written against**, like the encoding a
+character literal resolves in (26.296) -- so it belongs to the file that
+states it, and `skip` had it right from the start.
+
+**The fix is one resolution point rather than six lookups.** `Placement`
+carries `trim_set`, resolved in `layout.py` beside `skip`, and the four
+backends, the packer and the wire signature read the field. The
+schema-level helper is gone: it was the second answer, and a second answer
+is what let the two attributes disagree.
+
+**Fixing the four backends alone would have been worse than the shared
+mistake.** The image carried ONE file-level whitespace section, so a walker
+would have gone on trimming the root's set while the generated code trimmed
+the member's -- a disagreement introduced by a fix, in the reader that
+exists to disagree. `image_whitespace` is keyed by placement now, which is
+`image_skip`'s arrangement and for `image_skip`'s reason.
+
+**And the committed signature could not have seen it.** `_directives` filters
+by root, correctly, so an imported file's `whitespace` never reached the
+signature at all -- while `trim` printed as a bare flag. A change to the
+imported set would have changed what every trimmed member's value IS and
+left the contract byte-identical. `skip=` had this right too, printing its
+bytes on the member line; `trim=2009` does now, and the file-level line is
+gone as the redundancy it became.
+
+**Zero corpus schemas import**, which is the third defect family from that
+census in three entries. The single-file corpus makes the root's set and
+every member's set the same tuple, so the wrong lookup is correct by
+coincidence in all 39 schemas.
+
+### 26.301 A generated comment that named the wrong one of a pair
+
+Two more of the same shape, in the depth machinery, and both found by
+writing the schema the corpus does not contain: `[depth = 8, limit = 3]`,
+where the two attributes stop being one number.
+
+**C's prototype named `[limit]` for a bound that is `[depth] + 1`.** The
+`_at` form's guard reads `depth >= 9u`; the sentence above it said "bounded
+by 3". Every schema stating only `[depth]` makes the two spellings one
+number, so it read correctly from the day `[limit]` arrived.
+
+**And "capped at N" meant two different numbers in four backends.** The
+nesting probe stops descending past `min(limit, depth) + 1` and therefore
+SATURATES one higher. C printed the saturation, C++, Rust and Python printed
+the guard, for identical code. Both readings of "capped at" are defensible,
+which is what makes it worth settling rather than arguing: **four
+descriptions of one layout stating two numbers for one quantity.**
+
+Settled by measuring rather than by picking. The generated Python module
+returns 1, 2, 3, 4, 5, 5, 5, 5 for chains of 0 through 7, so the value is 5
+and all four say 5. The test holds the printed number to what the module
+actually returns, so it cannot drift from the behaviour again.
+
+**Neither changes a byte of behaviour, and both are false statements about a
+stack bound in the file a user reads to decide whether to trust one.** The
+four-way differential compares answers and not the documentation the headers
+carry, so nothing in the tree was looking.
+
+**What the census bought.** Re-derived rather than quoted, over 39 schemas:
+`import` and `[limit]` have zero. `[limit]` produced these two; `import`
+produced 26.300 and the three before it. A construct with no schema is
+compared by nothing -- not the four-way differential, not the walker
+comparison, not the dissector's. Writing the schema is the whole method, and
+it costs about a minute.
+
+### 26.302 The differential could not see a delimited member's length
+
+Four attributes were ignored by the generated Lua, on schemas the dissector
+differential runs over every time:
+
+    json  text.chars   [escape = "\\"]              framed  5, walker 11
+    json  number.rest  before ',' | ']' | '}'      framed  4 on `12]x`
+    json  number.rest  before, on `12,x`           CONSUMED the delimiter
+    http  value        until "\r\n" | '\n'          framed 10, walker  3
+
+`situc/dissector.py` had **no mention of `escape` or `quote` anywhere**, never
+read `delimiter_consumed`, and scanned `placement.delimiter` where the
+schema holds `placement.delimiters`. Its scan is `situ_walk_scan`'s rules
+now -- escape skips the next byte whatever it is, quote toggles, the longest
+alternative at a position wins -- and it consumes the delimiter only where
+the member owns one.
+
+**Why five suites and 4899 tests never saw it is the finding.** `_walked`
+compares lines shaped `name value` with a plain integer, which is scalars. A
+delimited byte run renders as `len=` and was excluded, and `_shown` said
+why:
+
+> `bytes` -- a run or a delimited member, shown as its raw bytes. The walker
+> answers `len=` and a first byte about the same member. Neither is wrong
+> and neither is the other.
+
+**True of the value, false of the length, and the exclusion discarded
+both.** The dissector's row is `(field, offset, length, value)` and the
+walker's `len=` is the same question about the same member. So a wrong
+delimited frame was visible only where a SCALAR followed it in the same
+struct -- which is why `edges.signed_number.tail` caught 26.297's delimiter
+bug and why `number`, `text` and `header_field`, having no scalar
+downstream, were invisible.
+
+`evidence.md`'s "a sentence every clause of which is true" met in a comment
+that had been read many times.
+
+**Widening it found three more within seconds of being turned on**, and each
+is a different reader failing to ask a shared decision:
+
+- **A delimited text number's value read from a fixed window.** `texty` is
+  `decimal u16 count until "\r\n"` driving `u8 body[count]`, and `_read`
+  used the scalar's width -- two bytes at the member's start. A frame
+  declaring **123** was dissected as **12**: a valid message, every member
+  after the run on the wrong bytes, and Lua's `tonumber` tolerating a
+  trailing `\r` the only reason one and two digits ever worked. It scans
+  inline now, through the same helper the member's own row uses, so the two
+  cannot describe one member differently.
+- **`[size = N]` ignored.** `traverse.pinned_bytes`' docstring counts "four
+  backends and two walkers"; the dissector is a seventh reader that never
+  asked. `pinned.body[used] [size = 16]` with `used = 48` was shown as 48
+  bytes. C says `min(used, 16)`, measured across `used` 0 to 20.
+- **A varint shown as one byte.** `byte_span` answers with the scalar's
+  minimum, so a three-byte SQLite varint was drawn as one -- with the
+  confidence of a decode, directly above an honest decline of everything
+  after it. It declines the row too now. Walking the continuation bits in
+  Lua would let the members after it be placed and is a capability this
+  backend does not have, not a line it should guess.
+
+**And the widening is necessary and not sufficient, which the controls
+say.** Sabotaging the pinned footprint turns the corpus differential red;
+sabotaging the escape rule leaves it entirely green, because the sweep draws
+from a fixed seed over generic alphabets and `\"` before a bare `"` never
+arises in it. **A fixed seed turns a low-probability probe into a
+deterministic zero.** So the delimiter rules get chosen vectors as well --
+seven of them, held to numbers the compiled C backend produced -- and each
+of the four rules has a sabotage that fires on exactly its own vectors.
+
+One thing this closed on the way: `example/json`'s bill said `[trim]` could
+not take out a CR or an LF and that widening it "is not this construct's to
+make". 26.300 made it, so the comment was false in both halves. That is the
+third line of that bill corrected in as many days, and the pattern is worth
+more than the correction: **a bill is written once, when a schema is
+written, and nothing brings it back together with the language as the
+language grows.**
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

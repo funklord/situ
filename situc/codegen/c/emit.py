@@ -47,7 +47,7 @@ from situc.traverse import (
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
-	is_own_member, is_recursive, whitespace_set,
+	is_own_member, is_recursive,
 	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
 	readable_names,
@@ -3175,10 +3175,12 @@ class Emitter:
 			"",
 			f"/* How deep this `{struct.name}` nests, capped at {cap + 1}.",
 			" *",
-			" * Capped so it terminates on any input, and one ABOVE the",
-			" * declared depth so that `= cap` is distinguishable from `at",
-			" * the limit` -- a probe that saturated at the limit could not",
-			" * tell a conforming message from a violating one. */",
+			" * Capped so it terminates on any input, and one above the",
+			" * bound THIS BUILD ENFORCES -- not the declared depth, which",
+			" * this said until a schema stated `[depth]` and `[limit]`",
+			" * separately and the two stopped being one number. A probe",
+			" * that saturated at the bound could not tell a conforming",
+			" * message from a violating one. */",
 			f"static inline uint32_t {name}_at(situ_view_t view,"
 			" uint32_t depth);",
 			f"static inline uint32_t {name}_at(situ_view_t view, uint32_t depth)",
@@ -3392,7 +3394,16 @@ class Emitter:
 		"""
 		if not self._recursive(struct.name):
 			return []
-		limit = self._depth_limit(struct.name)
+		# `_declared_depth` and NOT `_depth_limit`, because this sentence
+		# describes the `_at` form's own guard and that guard is the
+		# format's `[depth]`. The two spellings are the same number for
+		# every schema that states only `[depth]`, which is every schema in
+		# this repository -- so the wrong one read correctly from the day
+		# `[limit]` arrived until a schema stated both. With `[depth] = 8,
+		# limit = 3` the header said "bounded by 3" over code reading
+		# `depth >= 9u`: a false statement about a stack bound, in the file
+		# a user reads to decide whether to trust one.
+		bound = self._declared_depth(struct.name) + 1
 		# The whole cycle, not this struct. `expr`'s run accessors call
 		# `situ_item_extent`, and `item` is emitted after `expr`, so
 		# declaring only `expr`'s pair leaves the header refusing to compile
@@ -3414,7 +3425,7 @@ class Emitter:
 			" * emission order puts both above the other, which is what",
 			" * these are for.",
 			" *",
-			f" * The `_at` form carries the depth, bounded by {limit} rather",
+			f" * The `_at` form carries the depth, bounded by {bound} rather",
 			" * than by the message's own length: a hostile message would",
 			" * otherwise nest as deep as its bytes allow, and 20.1 promises",
 			" * generated code has a bounded stack. */",
@@ -4717,8 +4728,8 @@ class Emitter:
 		local = c_name(self._local(struct, placement))
 		set_  = ident(self.prefix, struct.name, local, "trim_set")
 		bytes_ = ", ".join(f"0x{byte:02X}u"
-		                   for byte in whitespace_set(self.schema))
-		count = len(whitespace_set(self.schema))
+		                   for byte in placement.trim_set)
+		count = len(placement.trim_set)
 
 		lines.extend([
 			"/* `[trim]`: the whitespace at either end is framing rather than",

@@ -236,7 +236,11 @@ def _trim_span(view: View, index: int, content: int) -> tuple[int, int]:
 		return 0, content
 	start = view.at + offset_bits(view, index) // 8
 	data  = view.buffer[start:start + content]
-	removes = view.image.whitespace
+	# The MEMBER's set: `whitespace` is per file and an imported struct is
+	# written against its own file's. `OWS` where the image carries no row,
+	# which is a member the schema did not trim or an image written before
+	# the section was keyed this way.
+	removes = view.image.whitespace.get(index, OWS)
 	head    = 0
 	while head < len(data) and data[head] in removes:
 		head += 1

@@ -170,13 +170,16 @@ struct text {
 // digits is inside the member rather than in front of the separator that
 // follows -- the scan gets there before the separator's lead does, and one
 // of them has to own those bytes. `[trim]` takes them out of the VALUE,
-// which is what a caller reads. What it does not take out is a CR or an LF:
-// `[trim]` is HTTP's optional whitespace, space and horizontal tab, which is
-// what that attribute has always meant and is a smaller set than this file's
-// `whitespace`. So `{"a": 1\n}` frames correctly and its number reads back
-// with the newline still on it. Widening `trim` to a declared set is a
-// change to an attribute five schemas here use, which is not this
-// construct's to make.
+// which is what a caller reads.
+//
+// It takes out all four of them now. This said `[trim]` was HTTP's optional
+// whitespace, space and horizontal tab, and that widening it to a declared
+// set was "a change to an attribute five schemas here use, which is not
+// this construct's to make" -- and the change was made, so `[trim]` removes
+// whatever the file's own `whitespace` declares. For this file that is
+// RFC 8259 section 2's four bytes, so `{"a": 1\n}` frames correctly AND its
+// number reads back without the newline. The signature says which bytes:
+// `trim=20090d0a` on this member, `trim=2009` on HTTP's header value.
 struct number {
 	u8  rest[] before ',' | ']' | '}' [trim];
 }

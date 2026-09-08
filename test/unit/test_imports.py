@@ -15,7 +15,7 @@ import pytest
 from situc import ast
 from situc.diagnostics import SituError
 from situc.layout import solve
-from situc.pack import Program
+from situc.pack import Program, pack
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
 from situc.imports import library_root
@@ -447,3 +447,96 @@ def test_every_designed_schema_says_so_in_its_own_text() -> None:
 		assert ("project.md example" in head
 		        or "designed rather than described" in head
 		        or "invented for itself" in head), name
+
+
+#: An imported file with a `whitespace` set the root does not share, and two
+#: members asking what whitespace means: one with `skip`, one with `[trim]`.
+#:
+#: The pair is the assertion. Either attribute alone can be read against the
+#: wrong file and look right, because every schema in the corpus is one file
+#: and the two answers coincide there.
+WS_INNER = ("target buffer;\nendian big;\n"
+            "whitespace '\\t';\n\n"
+            "struct inner {\n"
+            "\tu8  word[]  until \",\" [trim];\n"
+            "\tu8  led  skip;\n"
+            "}\n")
+
+WS_OUTER = ("target buffer;\nendian big;\n"
+            "whitespace ' ';\n\n"
+            'import "inner.situ";\n\n'
+            "struct outer {\n\tu8  c;\n\tinner  held;\n}\n")
+
+
+def _ws_schema(tmp_path: Path):
+	write(tmp_path, "inner.situ", WS_INNER)
+	root = write(tmp_path, "outer.situ", WS_OUTER)
+	schema = load(root)
+	return schema, resolve(schema, solve(schema))
+
+
+def _member(resolved, struct: str, name: str):
+	for entry in resolved.structs[struct].entries:
+		if entry.placement.name == name:
+			return entry.placement
+	raise AssertionError(f"no member {struct}.{name}")
+
+
+def test_trim_and_skip_agree_about_whitespace_in_an_imported_file(
+		tmp_path: Path) -> None:
+	"""Two attributes, one question, and they gave two answers.
+
+	`skip` resolves its set in the parser, from the file the member is
+	written in, so an imported struct has always used its own file's
+	whitespace. `[trim]` read the ROOT's, on the reasoning that a directive
+	is a claim about the file it is written in (26.295) -- which is the
+	right rule for `target`, `endian` and `strictness`, because those
+	configure the compiler, and the wrong one for `whitespace`, which is a
+	vocabulary the members of a file are written against, like the encoding
+	a character literal resolves in (26.296).
+
+	So `[trim]` in `inner.situ` removed the root's space where `skip` two
+	lines below it removed inner's tab. Held as the RELATIONSHIP between the
+	two rather than against the literal byte: a schema with different sets
+	cannot make this pass for the wrong reason.
+	"""
+	_, resolved = _ws_schema(tmp_path)
+	trimmed = _member(resolved, "inner", "word")
+	led     = _member(resolved, "inner", "led")
+
+	assert tuple(led.skip) == tuple(trimmed.trim_set), (
+		f"`skip` takes {tuple(led.skip)} and `[trim]` takes "
+		f"{tuple(trimmed.trim_set)} in one file")
+	# And it is the IMPORTED file's set rather than the root's, which is
+	# what makes the agreement above the right agreement rather than both
+	# of them reading the root.
+	assert tuple(trimmed.trim_set) == (0x09,)
+	assert tuple(led.skip) != (0x20,)
+
+
+def test_the_image_carries_the_trim_set_per_member(tmp_path: Path) -> None:
+	"""And so does the walker, which is the sixth reader.
+
+	The four backends emit the set beside each member, so making them
+	member-aware is a change they carry on their own. The image had one
+	file-level section, so a walker would have gone on trimming the root's
+	set -- a disagreement introduced by fixing the backends alone, which is
+	worse than the shared mistake it replaced.
+	"""
+	from walker.image import load as load_image
+	from walker.walk import acquire
+	from walker import report
+
+	schema, resolved = _ws_schema(tmp_path)
+	image = load_image(pack(schema, resolved, metadata=True)[0])
+
+	shape = image.struct_names.index("inner")
+	index = image.members(image.structs[shape])[0]
+
+	# A tab is inner's whitespace and a space is not, so the two spellings
+	# separate the sets rather than merely exercising one.
+	view = acquire(image, b"\thi\t,X", shape)
+	assert report._trim_span(view, index, 4) == (1, 2)
+
+	view = acquire(image, b" hi ,X", shape)
+	assert report._trim_span(view, index, 4) == (0, 4)

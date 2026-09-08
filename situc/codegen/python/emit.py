@@ -44,7 +44,6 @@ from situc.traverse import (
 	codec_entry_point, decode_counts_bits,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
-	whitespace_set,
 	Check, Member, arm_members, coded_spans, containment_order, covered_run,
 	data_sized,
 	dynamic_frame_owner,
@@ -2515,15 +2514,16 @@ class Emitter:
 		lead = self._lead_methods(struct, entry.placement)
 		return bounds + lead + self._member_body(struct, entry)
 
-	def _trim_set(self) -> str:
-		"""What `[trim]` removes here, as a bytes literal.
+	def _trim_set(self, placement: Placement) -> str:
+		"""What `[trim]` removes for this member, as a bytes literal.
 
-		The schema's `whitespace`, or space and tab where it states none.
+		The set stated by the file the MEMBER is written in, or space and
+		tab where that file states none.
 		Passed rather than known, because the runtime used to hold the
 		answer and a format calling CR and LF whitespace -- JSON does --
 		kept them in the value.
 		"""
-		return repr(bytes(whitespace_set(self.schema)))
+		return repr(bytes(placement.trim_set))
 
 	def _lead_methods(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -3640,10 +3640,10 @@ class Emitter:
 				f"\tdef {name}_len(self) -> int:",
 				f'\t\t"""The value\'s length: `[trim]` makes the whitespace at',
 				'\t\teither end framing rather than value."""',
-				f"\t\treturn len(trim(self.{name}_raw, {self._trim_set()}))",
+				f"\t\treturn len(trim(self.{name}_raw, {self._trim_set(placement)}))",
 			])
 
-		value = (f"trim(self.{name}_raw, {self._trim_set()})" if placement.trimmed
+		value = (f"trim(self.{name}_raw, {self._trim_set(placement)})" if placement.trimmed
 		         else f"self.{name}_raw")
 
 		if placement.radix is None:
@@ -4328,10 +4328,11 @@ class Emitter:
 			return []
 		cap = min(depth_limit(self.schema, struct.name),
 		          declared_depth(self.schema, struct.name)) + 1
+		# `cap + 1` in the sentence below is deliberate: it is the value it SATURATES at, which is one above the depth the walk stops descending at -- measured, not read off the guard: a chain of four returns 5 and so does a chain of nine. Naming the guard here instead said 4 for a function that returns 5, in three backends, while C said 5.
 		lines = [
 			"",
 			"\tdef nesting_at(self, depth: int) -> int:",
-			f'\t\t"""How deep this `{struct.name}` nests, capped at {cap}."""',
+			f'\t\t"""How deep this `{struct.name}` nests, capped at {cap + 1}."""',
 			"\t\tdeepest = depth",
 			f"\t\tif depth > {cap}:",
 			"\t\t\treturn depth",
@@ -4994,7 +4995,7 @@ class Emitter:
 			# those NULs is an ASCII zero, and a code of `0` was not, because
 			# `bytes(0)` is empty and no digits is not a number. No exception
 			# anywhere, and three backends passing the bytes.
-			digits = (f"trim(self.{name}_raw, {self._trim_set()})" if placement.trimmed
+			digits = (f"trim(self.{name}_raw, {self._trim_set(placement)})" if placement.trimmed
 			          else f"self.{name}_raw")
 			lines.extend(self._minimal_check(placement, name, digits))
 		if placement.radix is not None:

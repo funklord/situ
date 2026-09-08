@@ -49,7 +49,6 @@ from situc.traverse import (
 	codec_entry_point,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
-	whitespace_set,
 	Check, Member, arm_members, arm_of, coded_spans, containment_order,
 	covered_run,
 	data_sized,
@@ -1571,7 +1570,7 @@ class Emitter:
 		# The set the schema states, passed rather than known: `[trim]` used
 		# to remove HTTP's OWS wherever it appeared, so a format that calls
 		# CR and LF whitespace kept them in the value.
-		ws    = whitespace_set(self.schema)
+		ws    = placement.trim_set
 		set_  = f"{name}_trim_set"
 		table = ", ".join(f"0x{byte:02X}u" for byte in ws)
 		trim  = f"{set_}, {len(ws)}u"
@@ -6224,9 +6223,10 @@ class Emitter:
 			return []
 		cap = min(depth_limit(self.schema, struct.name),
 		          declared_depth(self.schema, struct.name)) + 1
+		# `cap + 1` in the sentence below is deliberate: it is the value it SATURATES at, which is one above the depth the walk stops descending at -- measured, not read off the guard: a chain of four returns 5 and so does a chain of nine. Naming the guard here instead said 4 for a function that returns 5, in three backends, while C said 5.
 		lines = [
 			"",
-			f"\t/* How deep this `{struct.name}` nests, capped at {cap}. */",
+			f"\t/* How deep this `{struct.name}` nests, capped at {cap + 1}. */",
 			"\t[[nodiscard]] std::uint32_t nesting_at(std::uint32_t depth)"
 			" const noexcept",
 			"\t{",
@@ -6420,7 +6420,7 @@ class Emitter:
 			at = (f"raw_.base + {name}_offset()" if not placement.trimmed else
 			      f"raw_.base + {name}_offset() + situ_trim_start("
 			      f"raw_.base + {name}_offset(), {name}_raw_len(),"
-			      f" {name}_trim_set, {len(whitespace_set(self.schema))}u)")
+			      f" {name}_trim_set, {len(placement.trim_set)}u)")
 			# The fixed-width form has no `_len`: its length is the digit
 			# count the schema declared, which is a constant here.
 			count = (f"{name}_len()" if placement.delimiters

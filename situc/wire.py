@@ -97,14 +97,6 @@ def _directives(schema: ast.Schema) -> list[str]:
 			found.append(f"bit_order {decl.bit_order.value}")
 		elif isinstance(decl, ast.TargetDirective):
 			found.append(f"target {decl.kind.value}")
-		elif isinstance(decl, ast.WhitespaceDirective):
-			# WHICH bytes `[trim]` removes, stated once because it is a
-			# file-level fact rather than a member's. A signature saying
-			# only `trim` cannot tell a reader whether a trailing newline
-			# is part of a value, and the answer used to be HTTP's OWS
-			# whatever the format said.
-			found.append("whitespace " + "".join(f"{byte:02x}"
-			                                     for byte in decl.values))
 
 	return ["", *sorted(found)] if found else []
 
@@ -312,7 +304,15 @@ def _constraints(placement: Placement) -> list[str]:
 	if placement.radix_minimal:
 		facts.append("minimal")
 	if placement.trimmed:
-		facts.append("trim")
+		# The bytes, not the flag, which is what `skip=` below already does
+		# and for the same reason: `trim` alone cannot tell a reader whether
+		# a trailing newline is part of a value. And it belongs HERE rather
+		# than on a file-level line, because `whitespace` is declared per
+		# file and an imported struct trims its own file's set -- a
+		# signature listing only the root's could not see the imported set
+		# change at all.
+		facts.append("trim=" + "".join(f"{byte:02x}"
+		                               for byte in placement.trim_set))
 	if placement.skip:
 		# A committed fact about the bytes, not a convenience: a member
 		# that may be preceded by whitespace frames differently from one
@@ -1001,7 +1001,7 @@ INTERPRETATION = (
 	"big", "little", "native", "msb_first", "lsb_first",
 	"radix=", "sized-by=", "varint=", "codec=", "encoding=",
 	"nonce=", "key=", "pad-to=",
-	"endian-from=", "quote=", "escape=", "trim", "fold-case",
+	"endian-from=", "quote=", "escape=", "trim=", "fold-case",
 	"nul_terminated",
 	# Where the bytes are, where the run stops, and what the checksum field
 	# is worth while the sum runs over it. None of the three narrows a set of

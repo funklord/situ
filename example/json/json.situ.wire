@@ -17,7 +17,6 @@
 
 endian big
 target buffer
-whitespace 20090d0a
 
 struct array size=1..
   @0x0000   1..       element    entries  while=sep==','
@@ -40,7 +39,7 @@ struct nothing size=3
   @0x0000   3         u8         rest  big must_eq="ull"
 
 struct number size=1..
-  @0x0000   before:2c|5d|7d u8         rest  trim
+  @0x0000   before:2c|5d|7d u8         rest  trim=20090d0a
 
 struct object size=4..
   @0x0000   4..       member     entries  big while=sep==','

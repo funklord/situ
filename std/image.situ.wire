@@ -177,6 +177,7 @@ struct image_version size=8
   @0x0000   4         u32        shape  little
   @0x0004   4         u32        placement  little
 
-struct image_whitespace size=4
-  @0x0000   1         u8         octet
-  @0x0001   3         u8         ws_pad  little
+struct image_whitespace size=8
+  @0x0000   4         u32        placement  little
+  @0x0004   1         u8         octet
+  @0x0005   3         u8         ws_pad  little
