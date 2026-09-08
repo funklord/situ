@@ -47,7 +47,7 @@ from situc.traverse import (
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
-	is_own_member, is_recursive,
+	declared_depth, depth_limit, is_own_member, is_recursive,
 	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
 	readable_names,
@@ -3109,23 +3109,6 @@ class Emitter:
 		"""
 		return is_recursive(self.resolved.structs, name)
 
-	def _depth_limit(self, name: str) -> int:
-		"""How deep this build follows the recursion before answering zero.
-
-		`[limit]` where the schema states one and `[depth]` otherwise --
-		`check_depth_bounds` has already refused a limit above the depth, so
-		the format's own bound is the ceiling either way.
-		"""
-		found: dict[str, int] = {}
-		for decl in self.schema.structs():
-			if decl.name != name:
-				continue
-			for attr in decl.attrs:
-				if attr.name in ("depth", "limit") \
-						and isinstance(attr.value, ast.IntLiteral):
-					found[attr.name] = attr.value.value
-		return found.get("limit", found.get("depth", 1))
-
 	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
 		"""How deep this message actually nests, for `validate` to judge.
 
@@ -3169,8 +3152,8 @@ class Emitter:
 		# stating rather than hiding: **this build then refuses a too-deep
 		# message without determining whether it is also malformed**, because
 		# finding that out costs exactly the frames `[limit]` exists to save.
-		cap   = min(self._depth_limit(struct.name),
-		            self._declared_depth(struct.name)) + 1
+		cap   = min(depth_limit(self.schema, struct.name),
+		            declared_depth(self.schema, struct.name)) + 1
 		lines = [
 			"",
 			f"/* How deep this `{struct.name}` nests, capped at {cap + 1}.",
@@ -3315,18 +3298,6 @@ class Emitter:
 				              else f"{disc} == {arm.value}u"))
 		return found
 
-	def _declared_depth(self, name: str) -> int:
-		"""The format's own `[depth]`, which is what makes a message
-		malformed rather than merely more than this build will follow."""
-		for decl in self.schema.structs():
-			if decl.name != name:
-				continue
-			for attr in decl.attrs:
-				if attr.name == "depth" \
-						and isinstance(attr.value, ast.IntLiteral):
-					return attr.value.value
-		return self._depth_limit(name)
-
 	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
 		"""`validate`'s two depth verdicts, which are different verdicts.
 
@@ -3339,8 +3310,8 @@ class Emitter:
 		"""
 		if not self._recursive(struct.name):
 			return []
-		declared = self._declared_depth(struct.name)
-		limit    = self._depth_limit(struct.name)
+		declared = declared_depth(self.schema, struct.name)
+		limit    = depth_limit(self.schema, struct.name)
 		name     = ident(self.prefix, struct.name, "nesting")
 		if limit < declared:
 			return [
@@ -3394,7 +3365,7 @@ class Emitter:
 		"""
 		if not self._recursive(struct.name):
 			return []
-		# `_declared_depth` and NOT `_depth_limit`, because this sentence
+		# `declared_depth` and NOT `depth_limit`, because this sentence
 		# describes the `_at` form's own guard and that guard is the
 		# format's `[depth]`. The two spellings are the same number for
 		# every schema that states only `[depth]`, which is every schema in
@@ -3403,7 +3374,7 @@ class Emitter:
 		# limit = 3` the header said "bounded by 3" over code reading
 		# `depth >= 9u`: a false statement about a stack bound, in the file
 		# a user reads to decide whether to trust one.
-		bound = self._declared_depth(struct.name) + 1
+		bound = declared_depth(self.schema, struct.name) + 1
 		# The whole cycle, not this struct. `expr`'s run accessors call
 		# `situ_item_extent`, and `item` is emitted after `expr`, so
 		# declaring only `expr`'s pair leaves the header refusing to compile
@@ -3594,7 +3565,7 @@ class Emitter:
 		# walk over them comes back short and `validate` sees a conforming
 		# message. "At the limit" and "past the limit" have to be
 		# distinguishable, or the limit can only truncate.
-		limit = self._declared_depth(struct.name) + 1
+		limit = declared_depth(self.schema, struct.name) + 1
 		deep  = [self._length_expression(struct, placement, depth="depth")
 		         for placement in variable]
 		lines = [*head,

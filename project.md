@@ -24525,6 +24525,66 @@ more than the correction: **a bill is written once, when a schema is
 written, and nothing brings it back together with the language as the
 language grows.**
 
+### 26.303 A reason that was true when it was written
+
+Two exclusions in two differentials, each with its reason written down, each
+overtaken by machinery built later in the same file. 26.302 has the
+dissector's; this is the four-way differ's, found by the same question asked
+one column over.
+
+    elif kind is Member.DELIMITED:
+        # A text number framed by a delimiter is asked the framing
+        # question and not the value one: its value accessor returns an
+        # error in three languages and raises in the fourth, which are
+        # four shapes rather than one answer.
+
+**`Probe.ARM_VALUE`, three hundred lines above it, reduces exactly that
+shape to one line** -- a fallible getter with an out-parameter in three
+languages and a raise in the fourth, printed as `name ok=<0|1>
+value=<v>`. It was built for a variant's arm, and nothing brought it back
+together with a comment that had stopped being true.
+
+**The fixed-width form was worse: it reached no branch at all.**
+`Member.TEXT_NUMBER` appears nowhere in the chain, so cpio's header --
+thirteen of them -- was asked nothing.
+
+Measured before the fix: **29 text-number members across three corpus
+schemas, and not one of them probed for its value.** The drivers ask a
+delimited one for `len=` and `term=` and stop. So the parse, the radix, the
+declared domain and the minimal spelling were four things the backends could
+disagree about with nothing comparing any of them -- which is why 26.297's
+signed text number needed a test file written by hand.
+
+**The four already agreed**, so this closed a hole rather than catching a
+defect. The control is what makes that worth saying: with the Python
+runtime's parsed value shifted by one, cpio, http and smtp all go red, so
+the probe has a demonstrated ability to speak in both forms. **A first
+sabotage did not fire and the reason is worth keeping** -- it broke the
+range check, and `hex u32 ino[8]` holds `0..0xFFFFFFFF`, which is exactly
+the type's maximum, so that check can never reject on that schema. A
+control has to be able to fail the way the thing it controls for fails.
+
+### 26.304 A private copy of a decision the layer owns
+
+`declared_depth` and `depth_limit` say in their own docstrings that the
+decision layer answers them once "so four backends and two walkers spell one
+rule rather than each deriving it". The C backend carried `_declared_depth`
+and `_depth_limit` as private methods, byte-for-byte the same logic -- and
+26.301's wrong number lived in exactly that code.
+
+Found mechanically rather than by reading: for every public function in
+`traverse.py`, which files name it. The rows worth looking at are the ones
+where **three of four backends** ask, and this pair was two of them.
+
+Deleted, and the proof is that the change is invisible: **every generated C
+file for all 39 schemas is byte-identical** before and after.
+
+Two others in the same sweep were checked and cleared, which is the half a
+sweep usually does not write down. Python guards a variant's arm without
+calling `arm_of`, and agrees with C including on a discriminant inside a
+nested struct. `containment_order` says "three backends need this" and three
+read it; Rust abstains because Rust has no declaration-order constraint.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

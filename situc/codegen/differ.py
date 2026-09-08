@@ -128,6 +128,18 @@ class Probe(Enum):
 	ARM_BYTES = "arm_bytes"
 	#: `name ok=<0|1> value=<v>` -- a variant's scalar arm.
 	ARM_VALUE = "arm_value"
+	#: `name ok=<0|1> value=<v>` -- a TEXT number, whose getter has the same
+	#: shape as an arm's: fallible, out-parameter, error where the digits are
+	#: not digits or the value is outside the declared domain.
+	#:
+	#: Excluded until now, silently, in the same line as the marker: "an enum
+	#: is a different type in each language; a marker resolves byte order
+	#: rather than holding a value" -- neither of which is a reason about a
+	#: radix. So the four backends' agreement about `[min = 200, max = 599]`
+	#: on HTTP's status code, cpio's thirteen hex fields per header and
+	#: SMTP's reply code was compared by nothing: the drivers ask a text
+	#: number for `len=` and `term=` and never for the number.
+	TEXT_VALUE = "text_value"
 	#: `name ok=<0|1> count=<n> [0]=<v>` -- a variant's arm that is a run of
 	#: values wider than a byte, which is reached by index like any other.
 	ARM_ELEMENT = "arm_element"
@@ -354,11 +366,26 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			found.append(Ask(Probe.NESTED, local, fixed,
 			                 inner=c_name(placement.type_name or "")))
 		elif kind is Member.DELIMITED:
-			# A text number framed by a delimiter is asked the framing
-			# question and not the value one: its value accessor returns an
-			# error in three languages and raises in the fourth, which are
-			# four shapes rather than one answer.
 			found.append(Ask(Probe.DELIMITED, local))
+			# ...and, where it is a NUMBER, for the number as well. This
+			# asked the framing question only, because "its value accessor
+			# returns an error in three languages and raises in the fourth,
+			# which are four shapes rather than one answer" -- and that is
+			# exactly the shape `ARM_VALUE` above already reduces to one
+			# line, having been built for a variant's arm. The reason was
+			# true when it was written and the machinery arrived later, so
+			# nothing compared HTTP's `[min = 200, max = 599]`, SMTP's reply
+			# code or any of it across the four.
+			if placement.radix is not None and scalar is not None:
+				found.append(Ask(Probe.TEXT_VALUE, local, None,
+				                 max(8, scalar.bits), scalar.signed))
+		elif kind is Member.TEXT_NUMBER:
+			# The fixed-width form, which reached no branch at all: cpio's
+			# header is thirteen of these and the drivers asked about none
+			# of them.
+			if scalar is not None:
+				found.append(Ask(Probe.TEXT_VALUE, local, None,
+				                 max(8, scalar.bits), scalar.signed))
 		elif kind is Member.TAG:
 			found.append(Ask(Probe.TAG, local, placement.array_count))
 		elif kind is Member.MARKER:
@@ -922,7 +949,7 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        "\t\t\t\t\t(long long)held);",
 		        "\t\t\t}"]
 
-	if ask.probe is Probe.ARM_VALUE:
+	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
 		return ["\t\t\t{",
 		        f"\t\t\t\t{'int' if ask.signed else 'uint'}{ask.bits}_t"
 		        " held = 0;",
@@ -1163,7 +1190,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\tstatic_cast<long long>(held));",
 		        "\t\t\t}"]
 
-	if ask.probe is Probe.ARM_VALUE:
+	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
 		return ["\t\t\t{",
 		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
 		        f"{ask.bits}_t held = 0;",
@@ -1367,7 +1394,7 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        ' [0]=0"),',
 		        "\t\t\t\t}"]
 
-	if ask.probe is Probe.ARM_VALUE:
+	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
 		return [f"\t\t\t\tmatch view.{call}() {{",
 		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
 		        ' value={}", held as u64),',
@@ -1548,7 +1575,7 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f'\tprint("{ask.local} ok=1 count=%d [0]=%d"'
 		        f" % (n, 0 if n == 0 else view.{call}(0)))"]
 
-	if ask.probe is Probe.ARM_VALUE:
+	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
 		return ["try:",
 		        f"\theld = view.{call}",
 		        "except situ_runtime.SituError:",
