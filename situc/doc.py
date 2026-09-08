@@ -20,7 +20,7 @@ whole point of the format.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
@@ -400,7 +400,12 @@ def _size(placement: Placement) -> str:
 	# column somebody sizes a buffer from -- and it is unbounded, which is
 	# the fact a reader most needs and the one a byte count cannot carry.
 	if placement.skip:
-		return "whitespace + " + _size_without_lead(placement)
+		# Named here too, and for the same reason: a member preceded by
+		# whitespace frames differently from one that is not, and WHICH
+		# bytes may stand there is what somebody sizing a buffer or writing
+		# a parser has to know.
+		return (f"{_byte_set(placement.skip)} + "
+		        + _size_without_lead(placement))
 	return _size_without_lead(placement)
 
 
@@ -452,7 +457,20 @@ def _size_without_lead(placement: Placement) -> str:
 
 
 #: Attributes this module says in words rather than passing through.
-RENDERED_IN_PROSE = ("since",)
+RENDERED_IN_PROSE = ("since", "trim")
+
+
+#: Whitespace bytes a reader would rather see named than in hex. A document
+#: is read by somebody implementing the format, and `20 09 0d 0a` asks them
+#: to decode four numbers to learn that a newline counts.
+WHITESPACE_NAMES = {0x20: "space", 0x09: "tab", 0x0D: "CR", 0x0A: "LF",
+                    0x0B: "VT", 0x0C: "FF"}
+
+
+def _byte_set(values: "Sequence[int]") -> str:
+	"""A set of bytes, named where a name exists and hex otherwise."""
+	return ", ".join(WHITESPACE_NAMES.get(one, f"0x{one:02X}")
+	                 for one in values)
 
 
 def _notes(placement: Placement) -> list[str]:
@@ -491,6 +509,13 @@ def _notes(placement: Placement) -> list[str]:
 			continue
 		notes.append(attr.name if attr.value is None
 		             else f"{attr.name} = {_attr_value(attr)}")
+	# `[trim]` with the bytes it removes, not the bare word. Which bytes is
+	# the whole of what a reader needs: `trim` alone cannot tell them
+	# whether a trailing newline is part of the value, and the answer is
+	# the file's own `whitespace` rather than a constant (26.300). The wire
+	# signature had the same omission and lost it for the same reason.
+	if placement.trimmed:
+		notes.append("trim: " + _byte_set(placement.trim_set))
 	if placement.covered_by:
 		notes.append("covered by " + ", ".join(placement.covered_by))
 	if placement.radix is not None:

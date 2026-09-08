@@ -24965,6 +24965,29 @@ a way the names do not show: `test_codegen_c.py` is inside `make test-c` is
 inside `make test`, which is one of five things in `make check`. Reporting
 "the tests pass" from any of them is true and says less than it sounds like.
 
+### 26.312 The same omission, one document over
+
+26.300 put `[trim]`'s byte set on the member line of the wire signature,
+because `trim` alone "cannot tell a reader whether a trailing newline is
+part of a value". `situc doc` -- the human-facing description, the one
+somebody implements a format FROM -- said the same bare word, and said
+`whitespace + 1 byte` for a lead.
+
+    before   v      whitespace + 1 byte    w...  trim
+    after    v      space, tab + 1 byte    w...  trim: space, tab
+
+Named rather than hex, because the audience differs: a signature is diffed
+by a tool and `trim=20090d0a` is exact, while a document is read by a person
+and four hex numbers ask them to decode which one is a newline. JSON's four
+bytes now read `space, tab, CR, LF` and HTTP's two read `space, tab`, which
+is the difference between the two formats stated where a reader will look.
+
+**How it was found is the reusable part, and it is not a new lens.** It is
+the old one asked of a different artifact: after fixing a claim in one
+place, ask which other document makes the same claim. 26.300 fixed the
+signature and the schema comment; nobody asked what `doc` said, and `doc` is
+the one of the three a stranger reads.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
