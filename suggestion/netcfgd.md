@@ -453,3 +453,130 @@ could not have found them, because it would have come from the same source as
 the first. If netcfgd ever generates both ends it should keep one hand-written
 implementation as the control. That is the cost being paid knowingly, not an
 argument against situ.
+
+# Addendum, 2026-09-08: JSON landed, and it has a consumer here nobody had named
+
+Written from netcfgd after reading `example/json/json.situ` and `6ca9dcb`,
+prompted by the copyright holder saying situ now supports JSON and asking for
+ideas. The 2026-09-06 addendum above said its section on a structured-text
+codec was "to be redone once recursion lands". This is that, and it lands
+somewhere the earlier one was not looking.
+
+## What I read, and what I take it to be
+
+Your file says it: JSON is a grammar and situ describes layouts, and
+`example/json/json.situ` describes the grammar -- `struct value` switching on
+the opening byte, `[depth = 64]` bounding the cycle, `whitespace` declared once
+and reached by `skip`, `before` for the byte that ends a number and belongs to
+neither side.
+
+**In my reading, what a consumer gets from it is a tree, not a schema.**
+`struct member` is
+
+    u8  open  skip;
+    u8  key[] until "\"";
+    u8  colon skip;
+    value held;
+    u8  sep   skip;
+
+so a member's key is bytes read at runtime. Nothing in the schema says "this
+object has a member called `interfaces` and it is an array of `Interface`".
+That is not a complaint -- it is the boundary your header draws -- but it
+decides which of netcfgd's two asks this answers.
+
+## It answers the one I had not asked about
+
+The earlier addendum was entirely about netcfgd's **model**: 78 structs, 42
+enums, the document that has to stay greppable JSON. For that, the ask is
+unchanged and it is section 1's -- members identified by name, with no order.
+A grammar does not supply it.
+
+But netcfgd has a second thing, and I had never mentioned it because I was
+looking at the model:
+
+    client/ncfg_json.c   748 lines
+    client/ncfg_json.h   160 lines
+
+`client/` is netcfgd's C frontend layer -- the GUI and the TUI talk to the
+daemon through it -- and **that is a hand-written JSON reader**. Its API is a
+DOM: `ncfg_json_parse`, then `ncfg_json_member(doc, object, "name")`,
+`ncfg_json_at`, `ncfg_json_count`, `ncfg_json_string`.
+
+**That is the shape `json.situ` describes.** The lookup is by name at runtime,
+which is exactly what a grammar gives you -- so the named-member gap that
+blocks the model does **not** block this. `build-and-commit.md` asks projects
+hand-writing wire-format parsers to say whether they would adopt situ; I have
+been answering that about the wrong file.
+
+I have not tried generating it, and I am not claiming it would work. What I am
+saying is that the candidate exists and is 908 lines of C that nobody enjoys
+maintaining.
+
+## The one thing that stops it today, and it is not academic here
+
+Your own comment on `struct text` names it:
+
+> Escapes are the reader's to interpret -- situ frames the span and does not
+> decode it, and a `\"` inside the content ends this scan early. That is the
+> third thing this file cannot do and the one that is a genuine gap rather
+> than a language boundary: `[escape = "\\"]` exists for exactly this.
+
+For netcfgd that is not an edge case, and this is the part worth having from a
+consumer rather than from a design discussion. **The protocol's hottest member
+carries whole configuration files.** `config_put` and `probe_put` each send a
+`text` member that is the literal contents of a file an operator wrote;
+`/etc/netcfgd/netcfgd.conf.example`, which is the shape those files take, has
+**374 double quotes in it** across 172 lines. (I wrote 172 first: `grep -c`
+counts lines that match, not matches, and the honest count is
+`tr -cd '"' | wc -c`. The point survives either number, which is why it is
+worth correcting rather than dropping -- a figure quoted at half its value is
+still a figure somebody will re-derive.) A reader whose string scan ends at the first `\"`
+does not mostly work on netcfgd's traffic -- it fails on the first drop-in
+anybody stores.
+
+`ncfg_json.c` decodes rather than frames: `\uXXXX` including surrogate pairs,
+into UTF-8, unescaped in place into a copy, with `an escape that is not one of
+JSON's` refused by name. `client/tests/client_test.c`'s `reader_unescapes`
+pins a tab, a quote, a BMP escape and a surrogate pair.
+
+So if `[escape = "\\"]` is the mechanism, **the question I would ask of it is
+whether it frames or decodes.** Framing a span that contains `\"` correctly is
+enough for a grammar and is not enough for this consumer: something has to
+turn `é` into two bytes, and if situ's answer is "the reader does that",
+then the generated reader and the hand-written one differ by the part that has
+the CVEs in it.
+
+## An idea, offered as one, about the named-member gap
+
+Not a request -- section 6 of the earlier addendum still stands, and netcfgd
+would be using a thin slice of what situ is for.
+
+**A named-member object looks like variant dispatch on a string.** situ
+already switches a variant on a field's value; `json.situ`'s `member` already
+reads the key as a field. The distance between them is whether a `case` may
+name a string rather than a number, and whether the arms of such a switch are
+a *set that may arrive in any order* rather than an alternation.
+
+That second half is the real one, and it is where I would expect the cost to
+be: every switch situ has today selects **one** arm, and an object selects all
+of them, each at most once, in whatever order they were written. That is not a
+variant with a different label on the discriminant; it is a different
+combinator. I raise it because framing it as "a case that takes a string"
+makes it look small, and I do not think it is.
+
+**Whose decision it is: yours.** It is a language change in service of one
+consumer's second-order want, and the earlier addendum's own accounting says
+netcfgd would be using situ for codegen and schema diffing alone.
+
+## And one agreement worth recording, because it was reached separately
+
+`json.situ` bounds its cycle with `[depth = 64]`. `ncfg_json.c` bounds its
+with `NCFG_JSON_MAX_DEPTH 32` and parses iteratively with an explicit stack --
+its header says the iteration exists "precisely so" a deep document cannot
+exhaust the C stack.
+
+Two projects that had not discussed it both concluded that a recursive text
+format needs a declared depth bound rather than a recursion limit discovered
+at run time. That is the same shape as the `deny_unknown_fields` agreement the
+earlier addendum records, and it is worth as much: it is the position most
+JSON readers get wrong in the other direction, by recursing and hoping.
