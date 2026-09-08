@@ -23973,6 +23973,72 @@ the first was fixed. **A gate is worth exactly what it runs**, and this one
 ran nothing for three days while reporting a failure that was real and was
 not the only one.
 
+### 26.294 A check that fits in one byte, and a corpus that does not
+
+`gen-checks` tested a pinned value only when the member was **exactly one
+byte wide**. The gate is two lines and neither carries a comment:
+
+    if placement.offset_bits % BITS_PER_BYTE or placement.size_bits != BITS_PER_BYTE:
+        continue
+
+Counted across the corpus, that is 20 of 60 `[must_eq]` and 39 of 62 enum
+members. What went untested is the characteristic field of each format --
+`bmp.signature`, `sqlite.magic` at 128 bits, `tiff.magic`,
+`image_header.magic`, `ethernet.ethertype`, `mqtt.packet.kind`,
+`arp.operation`.
+
+**And the drop was silent, with the mechanism for saying so two functions
+away.** `Suite.skip` exists and `generate` renders what it collects; the
+`must_eq` loop used it for an unfoldable value and fell through the width
+without a word. So `bmp_checks.c` did not contain the string `signature`
+anywhere: from the artifact, an untested BMP magic and a tested one are the
+same file. That is the standard `_declined` states one module over -- a file
+that quietly omits something is indistinguishable from one that never had
+it.
+
+**The width was never the hard part.** `_reserved_checks` had placed a value
+at any width since it was written, through `_placed_bytes`, which knows the
+member's byte order and bit order. Extracting that as `_break_to` and
+pointing the other two checks at it is the whole of the fix; the arithmetic
+was already in the file, in the one check that did not need it most.
+
+    _must_eq_is_enforced                17 -> 50
+    _rejects_a_value_no_member_names    32 -> 43
+    _must_be_zero_is_enforced           28 -> 28   (untouched)
+
+The enum check gained the same thing twice: it searched `range(256)` for a
+value no member names, beside a gate that had already excluded everything
+wider than a byte. It searches the member's own width now, and where an enum
+names every value its width can hold it says so rather than dropping the
+check -- four of those, all 2 and 3 bits, and each is a fact about the schema
+rather than a gap.
+
+**The refactor was proved inert before any behaviour moved**, which is what
+made the rest safe to read: extracting `_break_to`, then splitting the
+run-check body from its naming, left all 39 generated files byte-identical
+each time. Only then did the gate change.
+
+**And the control was missing, which is the finding this one was hiding.**
+The `must_eq` check never asserted that its fixture validates before
+breaking a field -- so a refusal proved nothing, since a fixture the schema
+already refuses refuses everything after it too. Adding the control turned
+`cpio_header` red at once, and correctly: thirteen `hex u32 ...[8]` text
+numbers sat at `0x00`, which is not a digit in any radix, so no check on
+that struct had ever had an honest control.
+
+`_baseline` writes the digit spelling now -- the smallest admitted value, in
+the field's own radix, zero-padded to its width -- which is the same gap the
+pinned runs had in 26.293, one construct over. **Twice in two days the
+fixture every constraint check rests on was invalid for a construct the
+baseline had never been told about**, and both times the check went on
+passing until something made it assert the fixture was good.
+
+**What the sabotages proved.** Making the wide poke write the DEMANDED value
+turns the new checks red and leaves the byte-wide ones green, which is what
+says the new coverage is real rather than emitted. The digit baseline needed
+no sabotage: the run before it existed failed exactly the two checks it
+fixes, on the artifact, which is better evidence than a fixture.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
