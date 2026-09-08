@@ -580,3 +580,140 @@ format needs a declared depth bound rather than a recursion limit discovered
 at run time. That is the same shape as the `deny_unknown_fields` agreement the
 earlier addendum records, and it is worth as much: it is the position most
 JSON readers get wrong in the other direction, by recursing and hoping.
+
+# Addendum, 2026-09-08 (second): the formats I had not surveyed
+
+Asked directly: what else is missing or could be improved for situ to cover
+netcfgd's formats well. The honest first answer is that **the three addenda
+above surveyed one format and called it "netcfgd's formats"**, and it is the
+one situ is least suited to. What follows is the enumeration I should have
+done first.
+
+## What netcfgd actually speaks
+
+Measured across the tree today, hand-written codec by hand-written codec:
+
+| format | where | lines | kind |
+|---|---|---|---|
+| rtnetlink framing | `netcfgd-sys/src/wire.rs` | 646 | binary, hostile input |
+| rtnetlink message building | `netcfgd-sys/src/ops.rs` | 1104 | binary, constructed |
+| dumps | `netcfgd-sys/src/dump.rs` | 887 | binary |
+| qdisc / tc | `netcfgd-sys/src/qdisc.rs` | 631 | binary, nested |
+| nftables | `netcfgd-sys/src/nft.rs` | 498 | binary, nested |
+| wireguard genl | `netcfgd-sys/src/wg.rs` | 427 | binary, nested |
+| ethtool genl | `netcfgd-sys/src/ethtool.rs` | 195 | binary, nested |
+| rfkill | `netcfgd-sys/src/rfkill.rs` | 196 | binary, a record that grew |
+| inotify | `netcfgd-sys/src/inotify.rs` | 235 | binary record stream |
+| JSON | `client/ncfg_json.c` | 748 | text, and the previous addendum |
+| supplicant ctrl | `netcfgd-supplicant/` | ~1800 | text, line |
+| hostapd ctrl + conf | `netcfgd-hostapd/` | ~1400 | text, line + rendered |
+| openvpn management | `netcfgd-openvpn/lib.rs` | 905 | text, line |
+| resolv.conf, dnsmasq, unbound | `netcfgd-dns/src/lib.rs` | 663 | text, rendered out |
+
+`crates/netcfgd-sys` is **8,491 lines**, and the great majority of it is
+reading and writing bytes off a kernel socket. **That is situ's home ground,
+and I spent three addenda on the one format that is not.** The model is JSON
+because a document has to be greppable; netlink is netlink because the kernel
+says so, and nobody chose it.
+
+## What that changes
+
+`wire.rs`'s own header says what it is: everything in it "takes a `&[u8]` that
+came off a socket -- which is to say, input this process does not control", and
+it lists the two properties every iterator must have -- **it terminates** ("a
+length field of zero must not produce an infinite loop. This is the classic
+netlink parser bug and there is a test for it") and **it does not panic**.
+
+Those are properties a generated reader has by construction and a
+hand-written one has by somebody remembering. That is the argument for situ
+here, and it is a much better argument than anything in my JSON addenda.
+
+## netcfgd uses every rung of the ladder
+
+I assumed situ generated readers and that netcfgd's building half was out of
+scope; `--layer edit` says "build or resize a message whose extent is not
+fixed", so that assumption was wrong and I checked before writing it down.
+Mapping netcfgd's netlink code onto `doc/decision/0032`'s ladder:
+
+| rung | what netcfgd does with it |
+|---|---|
+| `view` | `wire.rs` -- `nlmsghdr`, `rtattr`, alignment, TLV iteration |
+| `edit` | `ops.rs` -- builds `RTM_NEWLINK`/`NEWADDR`/`NEWROUTE` with nested attributes |
+| `relate` | comparing a dump against desired state, today done above the codec |
+| `frame` | one `recv` yields several messages; `NLMSG_OK` walks them |
+| `converse` | `socket.rs` carries a `seq`, increments per request, and drops a reply whose `seq` is neither the request's nor zero |
+| `drive` | the socket, the ACK wait, the error message that is an acknowledgement |
+
+**A consumer that lands on all six is evidence about the ladder** rather than
+about netcfgd: it was built so "should situ do X" is asked once, and the
+answer for one real adopter is "all of it, and the rungs are in the right
+order". `converse` in particular is not a rung I would have predicted needing
+until I read that netlink's ACK is an `NLMSG_ERROR` with a zero error code.
+
+## Four things that would decide adoption
+
+Not a feature list -- these are what I would have to answer before proposing
+it here, and three of them may already be answered.
+
+**1. A record whose length is implicit in the read.** `rfkill_event` is eight
+bytes; newer kernels write `rfkill_event_ext`, which appends a field. The
+kernel's rule for userspace is *read at least the eight you know and ignore
+what follows*, so the version is not a field -- it is the length the read
+returned. netcfgd's comment records what the first version got wrong:
+assuming a byte stream and carrying a reassembly buffer, which on a newer
+kernel "would have kept the extra byte and shifted every following record by
+one, which is a fault that appears only on kernels newer than the one it was
+written against."
+
+Section 19's versioning is about declared versions. **Is "trailing bytes I do
+not know are not an error, and there is exactly one record per read" sayable?**
+It is the same shape as netlink's own forward compatibility and as
+`deny_unknown_fields` pointing the other way, so I suspect it is one rule
+rather than three.
+
+**2. Nesting depth, and whose length bounds a nested TLV.** netcfgd nests in
+six modules -- `IFLA_LINKINFO { IFLA_INFO_KIND, IFLA_INFO_DATA { ... } }` is
+routine when creating a vlan, a bridge, a bond or a wireguard device.
+`example/netlink/netlink.situ` names `NLA_F_NESTED`. What I could not tell
+from reading it is whether a nested attribute's own length is checked against
+the *parent's* remaining extent, which is the netlink parser bug that is not
+the zero-length one: a child claiming more than its parent holds.
+
+**3. A family id discovered at run time.** genetlink resolves a family name to
+a numeric id by asking the kernel, and every subsequent message carries it.
+netcfgd does this for wireguard, ethtool and nl80211. The id is not a
+constant in the schema and not a field of the message either -- it is in the
+`nlmsghdr.type` of every message in that conversation. That looks like a
+`converse`-rung fact rather than a layout one, and I do not know whether the
+schema can say so.
+
+**4. `situc verify` is the adoption path, and it is already built.** "whether
+real bytes conform to the schema, generating nothing -- the way to adopt one
+without taking the codegen." netcfgd has captured netlink bytes in its test
+fixtures already. Verifying them against a schema costs no code in the
+shipped daemon, no dependency, and no commitment -- and it would answer
+questions 1 to 3 with measurements instead of my reading of your files.
+
+**If one thing here is worth doing first, it is not a feature: it is that
+`verify` exists and I have not run it.** That is netcfgd's to do, not situ's.
+
+## And the text protocols, where I expect the answer is no
+
+The supplicant, hostapd and openvpn control interfaces are ~4,100 lines
+between them, and almost none of it is framing: it is `CTRL-EVENT-CONNECTED`
+and `>INFO:` and `SUCCESS: signal SIGTERM thrown` -- a vocabulary, not a
+layout. `section 13`'s line codecs would cover the framing, which is the
+cheap part, and leave the part that is actually long.
+
+I mention it so the ratio is on the record rather than implied, counted by
+`wc -l` over the files in the table:
+
+    binary layouts (the nine files above)   4,819
+    JSON reader (client/ncfg_json.c)          748
+    text line protocols + rendered config   5,241
+
+**So the part situ plausibly covers is about 5,500 lines and the part it
+plausibly does not is about 5,200** -- and the second number is soft, because
+a line protocol's framing is cheap and its vocabulary is the expensive part.
+Not one of these files is a line of netcfgd's *own* design: every format here
+belongs to the kernel, to a daemon netcfgd drives, or to RFC 8259.
