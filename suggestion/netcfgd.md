@@ -542,7 +542,7 @@ pins a tab, a quote, a BMP escape and a surrogate pair.
 So if `[escape = "\\"]` is the mechanism, **the question I would ask of it is
 whether it frames or decodes.** Framing a span that contains `\"` correctly is
 enough for a grammar and is not enough for this consumer: something has to
-turn `é` into two bytes, and if situ's answer is "the reader does that",
+turn `U+00E9` into two bytes, and if situ's answer is "the reader does that",
 then the generated reader and the hand-written one differ by the part that has
 the CVEs in it.
 
