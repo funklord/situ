@@ -400,6 +400,53 @@ def test_a_kernel_with_no_pair_is_declined() -> None:
 	assert "static void test_c_" not in text
 
 
+def test_a_ones_complement_kernel_is_declined_like_any_other_digest() -> None:
+	"""RFC 1071's sum reduces its input to a value exactly as a CRC does, so
+	it has no inverse of the same shape and no pair to attack.
+
+	It was answered as a pair until 2026-09-08, because `pair_of` EXCLUDED
+	the families that produce none and this family arrived after the list
+	was written (26.245). `gen-codec-tests` then emitted a suite calling
+	`situ_internet_checksum_encode`, which `gen-derived` does not define --
+	and `make test-c` did not link."""
+	text = codec_tests(
+		"codec c { kernel = ones_complement(width = 16, complement); }\n"
+		"impl c derived;", bind=False)
+
+	assert "no suite" in text
+	assert "static void test_c_" not in text
+	assert "situ_c_encode" not in text
+
+
+def test_every_kernel_family_is_decided_as_a_transform_or_a_digest() -> None:
+	"""The partition, rather than the two cells a schema happens to reach.
+
+	This is the assertion that would have caught the link failure the entry
+	above records, and it is the reason the predicate lists what it INCLUDES:
+	a family added to `KernelFamily` and to no set fails here, by name,
+	before anything generates a call to a function nobody emits."""
+	from situc.codegen.c.derived import DIGEST_FAMILIES, TRANSFORM_FAMILIES
+
+	assert TRANSFORM_FAMILIES | DIGEST_FAMILIES == set(ast.KernelFamily)
+	assert not TRANSFORM_FAMILIES & DIGEST_FAMILIES
+
+
+def test_a_refusal_names_the_kernel_rather_than_the_tier() -> None:
+	""""its implementation is derived" was never the reason a derived codec
+	was declined: `manchester_802_3` is derived and gets a full suite.
+
+	What decides it is the kernel, and a refusal naming the wrong reason
+	sends its reader to look at the wrong thing -- which is worse than one
+	that says nothing, because it arrives with the authority of a diagnosis."""
+	text = codec_tests(
+		"codec c { kernel = polynomial(width = 32, poly = 0x04C11DB7,"
+		" init = 0xFFFFFFFF, xorout = 0xFFFFFFFF, reflect); }\n"
+		"impl c derived;", bind=False)
+
+	assert "its implementation is derived" not in text
+	assert "`polynomial` kernel is a digest over its input" in text
+
+
 def test_the_standard_library_declines_every_suite() -> None:
 	"""`std/codecs.situ` is contracts and no `impl`, which is what it is for.
 

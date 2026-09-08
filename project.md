@@ -23876,6 +23876,88 @@ what it did before, byte for byte: the predicate that decides all of this
 is false wherever `placement.skip` is empty, so the whole construct is
 absent from the corpus except where a schema asked for it.
 
+### 26.293 Two reasons one gate was red, and the second hid the first
+
+`make test-c` had not passed since 2026-09-04. It stopped for one reason and
+then, a day earlier in the history, for another -- and because the later one
+stopped the build at the LINK step, the earlier one ran nowhere and was
+invisible for three days.
+
+    2026-09-04  9e1e766  a byte run as a value
+    2026-09-05  4e987c4  describe the Internet checksum
+
+**The visible one is an exclusion list meeting a new member.** `pair_of`
+says which derived codecs a conformance harness can attack, and it named the
+families that produce NO encode/decode pair: `polynomial` and
+`linear_block`. `ones_complement` arrived afterwards (26.245), was admitted
+by default, and `gen-codec-tests` emitted a suite calling
+`situ_internet_checksum_encode` -- while `gen-derived` emits
+`situ_internet_checksum`, `_holed` and `_spans`, because a checksum is one
+function and not a transform with an inverse.
+
+**Its docstring carried the count**: "four of the six families". There are
+seven. A present-tense countable claim about the tree's own shape, true when
+written, in a sentence nobody re-derives -- which is `evidence.md`'s own
+description of the claim most likely to rot.
+
+**The direction is the fix rather than the entry.** An exclusion list fails
+OPEN: what it has not heard of is admitted, and the failure lands as a
+linker error in a generated artifact two commands downstream. An inclusion
+list fails CLOSED: an unlisted family is declined with a stated reason and
+generates nothing. `TRANSFORM_FAMILIES` and `DIGEST_FAMILIES` are asserted
+equal to `KernelFamily`, so a family classified into neither is a named test
+failure -- which is what the link error should have been.
+
+**The one behind it was a fixture that had stopped being valid.**
+`_baseline` builds the buffer every reserved and enum check asserts
+`SITU_OK` on before breaking one field, and it skipped every array. All
+three spellings of a pinned byte run are arrays: `[must_eq = "WOZ2"]` on a
+`u8[4]`, a `preamble` (0052), and an enum whose members are byte runs.
+`edges` has one of each.
+
+So from the day `edges.sig` was pinned, the control was refused before any
+check had broken anything:
+
+    [ RUN      ] check_edges_reserved0_must_be_zero_is_enforced
+    [  ERROR   ] --- 0x2 != 0
+
+`0x2` is `SITU_ERR_CONSTRAINT`, and it was `sig` reading four zero bytes
+where the schema demands `WOZ2`. Every reserved and enum check in that file
+rested on the same buffer; one of them happened to be the one that names it.
+
+**`_required_run` is a second function rather than a branch in the first**,
+because a run has no single integer to fold to -- `_required_pattern`
+answers for a scalar and cannot answer for these. It returns the FIRST of
+several where a schema admits several: a `signature` is `BM` or `MZ`, either
+validates, and a baseline needs one that does rather than a rule about
+which.
+
+**And one the fix made visible rather than caused.** `_declined` gave every
+declined derived codec the reason "its implementation is derived, so its
+properties follow from its own kernel and cannot lie". That was never the
+reason -- `manchester_802_3` is derived and gets a full suite. What decides
+it is the kernel. A refusal that names the wrong reason is worse than one
+that says nothing, because it arrives with the authority of a diagnosis and
+sends its reader somewhere else; the generated file names the kernel and the
+shape now.
+
+**What is still open, and it is a label rather than a wrong assertion.**
+`_reserved_policy` calls a `preamble` `must_be_zero`, so the check over
+`edges.<reserved0>` is named and commented for a policy the schema does not
+declare. The assertion holds -- the poke writes all-ones, which is not
+`\r\n`, and `validate` refuses it -- but it holds by luck rather than by
+construction, and a preamble pinned to 0xffff would make it vacuous.
+
+**What this cost, and the lesson is about gates rather than about codecs.**
+A gate that cannot START tells you nothing about everything downstream of
+it, and a red result that is always red trains its readers to stop reading
+-- which is the argument `build-and-commit.md` makes for deactivating a
+workflow rather than leaving it failing. Here the two failures were
+independent, three days apart, and the count of them was not knowable until
+the first was fixed. **A gate is worth exactly what it runs**, and this one
+ran nothing for three days while reporting a failure that was real and was
+not the only one.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

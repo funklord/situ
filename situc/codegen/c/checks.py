@@ -2017,6 +2017,32 @@ def _selected_arms(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return held
 
 
+def _required_run(placement: Placement) -> bytes | None:
+	"""The bytes a pinned byte RUN must hold, or None where it pins none.
+
+	Three spellings reach one fact, and each of them is an array:
+	`[must_eq = "WOZ2"]` on a `u8[4]`, a `preamble` (0052), and an enum
+	whose members are byte runs. `_required_pattern` next door answers for
+	a scalar and cannot answer for these -- a run has no single integer to
+	fold to, which is why the two are separate functions rather than one
+	with a branch.
+
+	The FIRST of several, where the schema admits several: `signature` is
+	`BM` or `MZ` and either validates, so a baseline needs one that does
+	rather than a rule about which.
+	"""
+	if placement.pinned_runs:
+		return placement.pinned_runs[0]
+
+	for attr in placement.attrs:
+		if attr.name != "must_eq":
+			continue
+		held = getattr(attr.value, "value", None)
+		if isinstance(held, str):
+			return held.encode("latin-1")
+	return None
+
+
 def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		extent: int, inside: str | None = None) -> list[str] | None:
 	"""Statements making the buffer satisfy every constraint the struct has.
@@ -2046,6 +2072,24 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement = entry.placement
 		if placement.offset_bits is None or not placement.size_bits:
 			continue
+		# A pinned byte RUN, before the array skip below, because all three
+		# spellings of one are arrays and the skip took every one of them.
+		# That left the baseline claiming a validity it did not have:
+		# `edges.sig` is `u8 sig[4] [must_eq = "WOZ2"]`, so the buffer this
+		# builds failed `validate` before any check had broken anything --
+		# and every check built on it asserted `SITU_OK` about a buffer that
+		# was already refused.
+		run = _required_run(placement)
+		if run is not None:
+			if placement.offset_bits % BITS_PER_BYTE:
+				return None
+			at = placement.offset_bits // BITS_PER_BYTE
+			if at + len(run) > extent:
+				return None
+			writes.extend(f"\tbuf[{at + i}u] = {byte:#04x}u;"
+			              for i, byte in enumerate(run))
+			continue
+
 		if placement.array_count is not None or placement.sized_by is not None:
 			continue
 		if "[]" in placement.path:

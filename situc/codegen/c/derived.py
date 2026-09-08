@@ -224,14 +224,49 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 	return lines
 
 
+#: The kernel families whose generated implementation is a TRANSFORM:
+#: bytes in, bytes out, and a count, which is what `_byte_declarations`
+#: emits and the one shape a harness can attack through `_encode` and
+#: `_decode`.
+#:
+#: Listed rather than excluded, and the direction is the point. This was an
+#: exclusion list naming `polynomial` and `linear_block`, so a family added
+#: afterwards was admitted by default -- and one was: `ones_complement`
+#: arrived with RFC 1071's sum (26.245), was carried by `gen-derived` as a
+#: digest, and was still answered here as a pair. `gen-codec-tests` then
+#: emitted a suite calling `situ_internet_checksum_encode`, which nothing
+#: defines, and `make test-c` did not link. An unlisted family is declined
+#: with a reason now, which is the failure this set exists to choose.
+TRANSFORM_FAMILIES = frozenset({
+	ast.KernelFamily.TABLE,
+	ast.KernelFamily.SHIFT,
+	ast.KernelFamily.PERMUTATION,
+	ast.KernelFamily.STUFFING,
+})
+
+#: The rest, and each is a DIGEST over its input rather than a transform
+#: with an inverse of the same shape: a polynomial kernel and RFC 1071's
+#: sum both reduce their input to a value, and a linear block code takes a
+#: nibble in and gives a codeword out.
+#:
+#: Named rather than left as "the others" so that `KernelFamily` and this
+#: file cannot part company silently. The two sets are asserted equal to
+#: the enum, which is what makes a family added tomorrow a failing test
+#: rather than a link error.
+DIGEST_FAMILIES = frozenset({
+	ast.KernelFamily.POLYNOMIAL,
+	ast.KernelFamily.ONES_COMPLEMENT,
+	ast.KernelFamily.LINEAR,
+})
+
+
 def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None:
 	"""The `(in, count, out) -> count` encode/decode pair this kernel emits.
 
-	Four of the six families produce that one shape, which is what
-	`_byte_declarations` says: bytes in, bytes out, and a count. `None` for
-	the two that do not -- a polynomial kernel is a checksum over its input
-	and a linear block code is a nibble in and a codeword out, and neither is
-	a transform with an inverse of the same shape.
+	`None` where the family produces no such pair, and `None` again where
+	the family does but this particular code is not one situ generates --
+	an unnamed table code, a stuffing code outside `DERIVED_STUFFING`, a
+	permutation with no `rows`.
 
 	Asked here rather than inferred from the emitted text, because
 	`gen-codec-tests` needs to know which codecs it can attack and reading a
@@ -242,7 +277,7 @@ def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None
 		return None
 
 	family = kernel.family
-	if family is ast.KernelFamily.POLYNOMIAL or family is ast.KernelFamily.LINEAR:
+	if family not in TRANSFORM_FAMILIES:
 		return None
 	if family is ast.KernelFamily.PERMUTATION and kernel.argument("rows") is None:
 		return None

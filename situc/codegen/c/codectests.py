@@ -32,12 +32,14 @@ kernel -- what it can get wrong is the transform, which is a different harness.
 
 from __future__ import annotations
 
+import textwrap
+
 from situc import __version__
 
 from math import lcm
 
 from situc import ast
-from situc.codegen.c.derived import pair_of
+from situc.codegen.c.derived import DIGEST_FAMILIES, pair_of
 from situc.traverse import decode_counts_bits, extern_symbol,\
 	table_is_padded
 
@@ -138,17 +140,40 @@ def _declined(schema: ast.Schema, codec: ast.CodecDecl) -> list[str]:
 	"""Why a codec has no suite, where it would have had one.
 
 	A refusal that names itself, like every other artifact here: a file that
-	quietly omits a codec is indistinguishable from one that never had it.
+	quietly omits a codec is indistinguishable from one that never had it --
+	and a refusal naming the WRONG reason sends its reader somewhere else,
+	which is what this said until the reasons were separated.
+
+	Three, because a derived codec reaches here for two of them and "its
+	implementation is derived" is not one: `manchester_802_3` is derived and
+	gets a full suite. What decides it is the kernel. A digest reduces its
+	input to a value and has no inverse of the same shape, so there is no
+	pair to attack; a transform family whose particular code situ does not
+	generate has a pair in principle and nothing behind it.
 	"""
 	bound = next((decl for decl in schema.impls()
 	              if decl.codec == codec.name), None)
-	why = ("no `impl` binds an implementation, and a signature may exist with"
-	       " none (13.1)" if bound is None else
-	       "its implementation is derived, so its properties follow from its"
-	       " own kernel and cannot lie (13.1)")
+	family = codec.kernel.family if codec.kernel is not None else None
 
+	if bound is None:
+		why = ("no `impl` binds an implementation, and a signature may exist"
+		       " with none (13.1)")
+	elif family in DIGEST_FAMILIES:
+		why = (f"a `{family.value}` kernel is a digest over its input rather"
+		       " than a transform with an inverse, so its implementation is"
+		       " one function and there is no pair to attack (13.4)")
+	else:
+		why = ("situ generates no implementation for this kernel, so there is"
+		       " nothing here to attack (13.1)")
+
+	# Wrapped, because a reason that says which kernel and why does not fit
+	# a line and generated C is read by people.
+	body = textwrap.wrap(why + ".", width = 71)
 	return [f"/* ---- {codec.name}: no suite ---- */",
-	        f"/* {why}. */", ""]
+	        *(f"/* {body[0]}" + (" */" if len(body) == 1 else ""),),
+	        *(f" * {line}" for line in body[1:-1]),
+	        *([f" * {body[-1]} */"] if len(body) > 1 else []),
+	        ""]
 
 
 def _codec_suite(codec: ast.CodecDecl,
