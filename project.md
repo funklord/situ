@@ -3842,6 +3842,19 @@ because the alternative is an ambiguity rather than because it is tidier:
 - **Once per compilation**, keyed on the resolved absolute path. A diamond --
   two imports that both import a third -- contributes the third once. Without
   that, a flat namespace would make every diamond a redefinition.
+- **Declarations, not directives.** The four above are about things that have
+  NAMES, and a directive names nothing: it is a claim about the file it is
+  written in. `endian` and `bit_order` scope a struct positionally within its
+  own source and stop at that source's edge; `encoding` and `whitespace` are
+  resolved as each file is parsed and always did. `target` and `strictness`
+  are the artifact's rather than a struct's -- one compilation has one target
+  -- so the root file's holds and an imported file stating a different one is
+  refused, naming both. Agreement is not refused.
+
+  This is stated because it was not, and four directives rode in on the word
+  "declaration": a file with no `endian` inherited the last imported one and
+  compiled, which is 17.0's "situ never guesses a byte order" answered by a
+  line the importing file never wrote. 26.295 has the measurements.
 
 A cycle stops rather than recursing: the second visit contributes nothing,
 which is the same mechanism the diamond uses and needs no separate rule.
@@ -24038,6 +24051,77 @@ turns the new checks red and leaves the byte-wide ones green, which is what
 says the new coverage is real rather than emitted. The digit baseline needed
 no sabotage: the run before it existed failed exactly the two checks it
 fixes, on the artifact, which is better evidence than a fixture.
+
+### 26.295 A directive is a claim about the file it is written in
+
+`import` splices another file's declarations into this one's, ahead of them,
+and section 17.0a says what that brings in terms of NAMES: flat, transitive,
+once per compilation. It says nothing about directives, because they name
+nothing -- and four of them rode along.
+
+    endian       a running variable over the merged list; a file declaring
+                 none inherited the last imported one
+    bit_order    the same
+    target       the FIRST in the merged list, so an imported one won
+                 outright over the importer's own
+    strictness   the same
+
+**`endian` is the one that matters, and it defeats the refusal this language
+is proudest of.** A file with a multi-byte scalar and no byte order is
+refused -- "situ never guesses where the wrong choice is undetectable at
+runtime (17.0)". Measured before the fix: a file declaring no `target` and
+no `endian`, importing one that declares both, compiled, and its `u16` read
+`situ_get_le16`. The rule fires for a lone file and not for one that imports
+anything, and an import is the most accidental way there is to acquire a
+byte order.
+
+**`target` was worse in kind, though not in consequence.** `_target_of`
+returned the first directive in the merged list, so a schema with
+`target file;` on its own first line resolved to `buffer` -- the importer's
+claim discarded outright rather than merely overridden. `target file` sets
+`effect = EffectOnWrite` on every member and makes the extent growable, and
+none of that happened.
+
+**And the wire signature published both.** A committed contract listing
+`endian big` and `endian little`, `target buffer` and `target file` -- two
+answers to one question, which is no contract at all.
+
+**`encoding` and `whitespace` never had it**, which is what makes this a
+defect rather than a design. They are parser state, resolved as each file is
+read, and 26.290's `check_encoding_place` argues the reason in as many
+words: a file-level claim that is only true of part of the file is worse
+than none. Two families of file-level directive, opposite behaviour, and the
+specification silent about which is intended.
+
+**Two shapes, because two of these are not per-struct facts.** `endian` and
+`bit_order` scope positionally, which `scopes_of`'s own docstring says is
+what "lets one file describe a protocol whose layers disagree about byte
+order" -- ONE FILE, and the loop was over one list. They are keyed by source
+path now, so positional scoping survives inside a file and stops at its
+edge. `target` and `strictness` are properties of the artifact rather than
+of a struct: there is one compilation with one target, so the root file's
+holds and an imported file stating a different one is REFUSED, naming both
+files. Agreement is not refused, so the ordinary case -- every schema here
+saying `target buffer` -- passes untouched.
+
+Refused rather than resolved, and 17.0 is the reason rather than taste. The
+two available resolutions are to let the import win, which is what happened
+and threw away a line the importer wrote, or to let the importer win, which
+throws away a line the imported file wrote. Neither is visible in the
+output.
+
+**Nothing in the corpus imports anything, so none of this was reachable in
+tree** -- and `import std "..."` exists precisely so consumers outside it can
+import `std/`, where `image.situ` declares `target buffer; endian little;`.
+The reach was zero here and one line away for anybody using the feature as
+documented.
+
+**The sabotage is the pair rather than the case.** Putting the running
+variable back fails two tests: the file that inherits a byte order it never
+declared, and the file that imports one whose byte order differs from its
+own and must keep both. A fix that closed the leak by making an imported
+`endian` invisible would pass the first and fail the second, which is why
+the second is written down.
 
 ## 27. Questions, and how they were settled
 

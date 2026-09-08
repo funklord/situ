@@ -14,7 +14,9 @@ import pytest
 
 from situc import ast
 from situc.diagnostics import SituError
+from situc.layout import solve
 from situc.parser import parse, parse_text
+from situc.resolve import resolve
 from situc.imports import library_root
 from situc.diagnostics import Source
 
@@ -223,6 +225,128 @@ def test_the_form_survives_a_round_trip() -> None:
 
 
 # -- what ships, and which half of the corpus it is -------------------------
+
+
+# -- a directive is a claim about the file it is written in ----------------
+
+
+def test_an_import_does_not_supply_a_byte_order(tmp_path: Path) -> None:
+	"""`endian` is mandatory because situ never guesses a byte order where
+	the wrong choice is undetectable at run time (17.0). An import used to
+	answer for it: a file declaring none inherited the last imported one and
+	compiled, so the refusal fired for a lone file and not for one that
+	imported anything.
+
+	The whole point of the rule is that nobody chooses a byte order by
+	accident, and an import is the most accidental way there is."""
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian little;\nstruct lib { u16 x; }\n")
+	app = write(tmp_path, "app.situ",
+	            'import "lib.situ";\nstruct app { u16 y; }\n')
+
+	with pytest.raises(SituError) as raised:
+		resolve(load(app), solve(load(app)))
+	assert "no endianness in scope" in str(raised.value)
+
+
+def test_each_file_keeps_its_own_byte_order(tmp_path: Path) -> None:
+	"""And the other half, which the fix must not break: importing a file
+	whose byte order differs from yours is legitimate and useful. Positional
+	scoping is per FILE -- one file may still describe layers that disagree,
+	which is what `scopes_of` exists for -- and it stops at the file
+	boundary."""
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian little;\nstruct lib { u16 x; }\n")
+	app = write(tmp_path, "app.situ",
+	            "target buffer;\nendian big;\n"
+	            'import "lib.situ";\nstruct app { u16 y; }\n')
+
+	resolved = resolve(load(app), solve(load(app)))
+	orders = {name: {e.placement.name: e.placement.endian
+	                 for e in struct.entries}
+	          for name, struct in resolved.structs.items()}
+
+	assert orders["app"]["y"] is ast.Endian.BIG
+	assert orders["lib"]["x"] is ast.Endian.LITTLE
+
+
+def test_an_imported_target_may_not_disagree(tmp_path: Path) -> None:
+	"""`target` is the compilation's rather than one struct's, and it was
+	taken from the FIRST directive in the merged list -- which `import`
+	splices in ahead. A schema declaring `target file` on its own first line
+	resolved to `buffer`: the importer's claim discarded outright rather
+	than merely overridden.
+
+	Refused rather than resolved either way, because both resolutions drop
+	a claim somebody wrote and neither is visible in the output."""
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian big;\nstruct lib { u16 x; }\n")
+	app = write(tmp_path, "app.situ",
+	            "target file;\nendian big;\n"
+	            'import "lib.situ";\nstruct app { u16 y; }\n')
+
+	with pytest.raises(SituError) as raised:
+		load(app)
+	# The rendered form, because the point of the refusal is that it names
+	# BOTH files: neither line is wrong on its own, and a diagnostic
+	# pointing at one of them reads as though it were.
+	shown = raised.value.diagnostic.render()
+	assert "disagrees about `target`" in shown
+	assert "target file" in shown and "target buffer" in shown
+	assert "lib.situ" in shown and "app.situ" in shown
+
+
+def test_an_imported_target_that_agrees_is_fine(tmp_path: Path) -> None:
+	"""The usual case, and the reason the rule is a comparison rather than a
+	ban: every schema in this tree says `target buffer`, so importing one
+	says nothing new and is refused by nothing."""
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian big;\nstruct lib { u16 x; }\n")
+	app = write(tmp_path, "app.situ",
+	            "target buffer;\nendian big;\n"
+	            'import "lib.situ";\nstruct app { u16 y; }\n')
+
+	assert {struct.name for struct in load(app).structs()} == {"lib", "app"}
+
+
+def test_an_imported_strictness_does_not_reach_the_importer(
+		tmp_path: Path) -> None:
+	"""`strictness` is the same shape as `target` and had the same defect:
+	first wins, imports first, so an imported `strictness = lenient` made
+	the importer lenient from a line it never wrote. 14.5 is a security
+	position, which is what makes inheriting it quietly the wrong way for
+	it to travel."""
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian big;\nstrictness = lenient;\n"
+	      "struct lib { u16 x; }\n")
+	app = write(tmp_path, "app.situ",
+	            "target buffer;\nendian big;\n"
+	            'import "lib.situ";\nstruct app { u16 y; }\n')
+
+	with pytest.raises(SituError) as raised:
+		load(app)
+	assert "disagrees about `strictness`" in str(raised.value)
+
+
+def test_the_signature_publishes_this_file_s_directives(
+		tmp_path: Path) -> None:
+	"""The wire signature is a committed contract, and it listed every
+	directive in the merged list -- so a schema that imported one said it
+	was big AND little endian, and both `buffer` and `file`. Two answers to
+	one question is no contract at all."""
+	from situc import wire
+
+	write(tmp_path, "lib.situ",
+	      "target buffer;\nendian little;\nstruct lib { u16 x; }\n")
+	app = write(tmp_path, "app.situ",
+	            "target buffer;\nendian big;\n"
+	            'import "lib.situ";\nstruct app { u16 y; }\n')
+
+	schema   = load(app)
+	rendered = wire.render(schema, resolve(schema, solve(schema)), "app.situ")
+
+	assert "endian big" in rendered
+	assert "endian little" not in rendered
 
 
 def test_the_corpus_is_partitioned() -> None:

@@ -2871,17 +2871,30 @@ def _scopes(schema: ast.Schema) -> dict[str, Scope]:
 	layers disagree about byte order, without giving every struct in it an
 	`[endian = ...]` attribute.
 	"""
-	endian: ast.Endian | None      = None
-	bit_order: ast.BitOrder | None = None
-	scopes: dict[str, Scope]       = {}
+	# Per FILE, and the docstring above is why: positional scoping is what
+	# lets one file describe a protocol whose layers disagree about byte
+	# order. `import` splices another file's declarations in ahead of this
+	# one's, so a single running variable made that "one list" instead --
+	# and a file declaring no `endian` inherited the last imported one.
+	#
+	# That is the one refusal 17.0 is proudest of, defeated by a line the
+	# importing file never wrote: `endian` is mandatory because situ never
+	# guesses where the wrong choice is undetectable at run time, and an
+	# import was answering for it. A struct takes the directives from its
+	# own source, in its own source's order.
+	endian: dict[str, ast.Endian | None]       = {}
+	bit_order: dict[str, ast.BitOrder | None]  = {}
+	scopes: dict[str, Scope]                   = {}
 
 	for decl in schema.decls:
+		where = decl.span.source.path
 		if isinstance(decl, ast.EndianDirective):
-			endian = decl.endian
+			endian[where] = decl.endian
 		elif isinstance(decl, ast.BitOrderDirective):
-			bit_order = decl.bit_order
+			bit_order[where] = decl.bit_order
 		elif isinstance(decl, ast.StructDecl):
-			scopes[decl.name] = Scope(endian, bit_order)
+			scopes[decl.name] = Scope(endian.get(where),
+			                          bit_order.get(where))
 
 	return scopes
 

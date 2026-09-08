@@ -85,6 +85,12 @@ def _directives(schema: ast.Schema) -> list[str]:
 	"""
 	found = []
 	for decl in schema.decls:
+		# This file's, not an imported one's. A signature that listed both
+		# said the schema was big AND little endian, and both `buffer` and
+		# `file` -- a committed contract naming two answers to one
+		# question, which is no contract at all.
+		if decl.span.source.path != schema.root:
+			continue
 		if isinstance(decl, ast.EndianDirective):
 			found.append(f"endian {decl.endian.value}")
 		elif isinstance(decl, ast.BitOrderDirective):

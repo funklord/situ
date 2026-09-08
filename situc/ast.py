@@ -1477,6 +1477,18 @@ class Schema(Node):
 	span: Span
 	decls: list[Decl] = field(default_factory=list)
 
+	@property
+	def root(self) -> str:
+		"""The file this compilation was invoked on.
+
+		`import` splices another file's declarations into `decls`, ahead of
+		this file's own, so position no longer says whose claim a
+		declaration is -- `decl.span.source.path` does. A directive is a
+		statement about the file it is written in, and this is what the
+		whole-compilation ones are compared against.
+		"""
+		return self.span.source.path
+
 	def structs(self) -> list[StructDecl]:
 		return [decl for decl in self.decls if isinstance(decl, StructDecl)]
 
@@ -1509,8 +1521,17 @@ class Schema(Node):
 
 	@property
 	def strictness(self) -> Strictness:
-		"""Strict unless the schema says otherwise (section 14.5)."""
+		"""Strict unless THIS schema says otherwise (section 14.5).
+
+		The root file's, because strictness is a property of what is being
+		compiled rather than of one struct: an imported file saying
+		`strictness = lenient` used to make the importer lenient, from a
+		line the importer never wrote. `wellformed` refuses an imported
+		directive that disagrees, so the only one that can reach here is
+		one the root file also holds.
+		"""
 		for decl in self.decls:
-			if isinstance(decl, StrictnessDirective):
+			if isinstance(decl, StrictnessDirective) \
+					and decl.span.source.path == self.root:
 				return decl.strictness
 		return Strictness.STRICT

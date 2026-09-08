@@ -73,6 +73,7 @@ def check(schema: ast.Schema) -> None:
 	check_registers(schema)
 	check_encoding_place(schema)
 	check_whitespace_place(schema)
+	check_imported_directives(schema)
 	check_skips(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
@@ -161,6 +162,80 @@ def _check_directive_place(schema: ast.Schema, kind: type[ast.Decl],
 			continue
 		if isinstance(decl, (ast.StructDecl, ast.EnumDecl)):
 			declared.add(where)
+
+
+def check_imported_directives(schema: ast.Schema) -> None:
+	"""`target` and `strictness` are the compilation's, so an import may not
+	disagree about them.
+
+	The other file-level directives are per file and need no rule here:
+	`endian` and `bit_order` scope a struct positionally within its own
+	source, and `encoding` and `whitespace` are resolved as the parser reads
+	each file. `target` and `strictness` are not like that -- there is one
+	artifact with one target, and a schema is strict or lenient as a whole
+	-- so an imported file stating one is stating something about a
+	compilation it is not the subject of.
+
+	Refused rather than resolved, which is 17.0's rule and not a preference:
+	the alternatives are to let the import win, which is what used to happen
+	and discarded `target file` written on the importer's own first line, or
+	to let the importer win, which silently drops a claim the imported file
+	made. Neither is visible in the output. Agreement is not refused, so the
+	usual case -- everything saying `target buffer` -- passes.
+	"""
+	root_target = next((decl for decl in schema.decls
+	                    if isinstance(decl, ast.TargetDirective)
+	                    and decl.span.source.path == schema.root), None)
+	root_strict = next((decl for decl in schema.decls
+	                    if isinstance(decl, ast.StrictnessDirective)
+	                    and decl.span.source.path == schema.root), None)
+
+	kind   = root_target.kind if root_target else ast.TargetKind.BUFFER
+	append = root_target.append if root_target else False
+	strict = (root_strict.strictness if root_strict
+	          else ast.Strictness.STRICT)
+
+	for decl in schema.decls:
+		if decl.span.source.path == schema.root:
+			continue
+
+		if isinstance(decl, ast.TargetDirective) \
+				and (decl.kind, decl.append) != (kind, append):
+			_disagreeing_import(
+				decl, "target",
+				f"{decl.kind.value}{' append' if decl.append else ''}",
+				f"{kind.value}{' append' if append else ''}",
+				root_target, schema)
+
+		if isinstance(decl, ast.StrictnessDirective) \
+				and decl.strictness is not strict:
+			_disagreeing_import(decl, "strictness", decl.strictness.value,
+			                    strict.value, root_strict, schema)
+
+
+def _disagreeing_import(decl: ast.Decl, word: str, theirs: str, ours: str,
+		root: ast.Decl | None, schema: ast.Schema) -> None:
+	"""The refusal, pointing at both files.
+
+	Both, because neither line is wrong on its own and a diagnostic naming
+	one of them reads as though it were.
+	"""
+	stated = (f"`{schema.root}` says `{word} {ours}`" if root is not None
+	          else f"`{schema.root}` says nothing, so `{word}` is `{ours}`")
+
+	raise SituError(Diagnostic(
+		severity = Severity.ERROR,
+		message  = f"an imported file disagrees about `{word}`",
+		primary  = Label(decl.span, f"this file says `{word} {theirs}`"),
+		labels   = ([Label(root.span, f"and this one says `{word} {ours}`")]
+		            if root is not None else []),
+		notes    = [f"{stated}, and there is one compilation with one {word}",
+		            f"`{word}` is a statement about what is being built "
+		            "rather than about one struct, so an imported file "
+		            "stating a different one is describing something else",
+		            "make them agree, or drop the directive from the "
+		            "imported file"],
+	))
 
 
 def check_skips(schema: ast.Schema) -> None:
@@ -3262,8 +3337,10 @@ def check_registers(schema: ast.Schema) -> None:
 
 
 def _target_of(schema: ast.Schema) -> ast.TargetKind | None:
+	"""The root file's target, for the checks that ask what is being built."""
 	for decl in schema.decls:
-		if isinstance(decl, ast.TargetDirective):
+		if isinstance(decl, ast.TargetDirective) \
+				and decl.span.source.path == schema.root:
 			return decl.kind
 	return None
 

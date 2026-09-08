@@ -198,8 +198,15 @@ def _target_of(schema: ast.Schema) -> tuple[ast.TargetKind, bool]:
 	`buffer` when the schema says nothing, which is what every schema written
 	before `target file` existed says.
 	"""
+	# The ROOT file's. `_target_of` returned the FIRST directive in the
+	# merged list and `import` splices the imported file's declarations in
+	# ahead, so a schema declaring `target file` on its own first line
+	# resolved to `buffer` -- the importer's claim discarded outright
+	# rather than merely overridden. `wellformed` refuses an imported
+	# directive that disagrees with this one.
 	for decl in schema.decls:
-		if isinstance(decl, ast.TargetDirective):
+		if isinstance(decl, ast.TargetDirective) \
+				and decl.span.source.path == schema.root:
 			return decl.kind, decl.append
 	return ast.TargetKind.BUFFER, False
 
