@@ -33,6 +33,7 @@ situ_err_t situ_view_at(const situ_msg_t *msg, uint32_t offset, uint32_t extent,
 	out->base	= msg->base + offset;
 	out->limit	= extent;
 	out->generation	= msg->generation;
+	out->owner	= msg;
 	return SITU_OK;
 }
 
@@ -45,6 +46,10 @@ situ_err_t situ_view_sub(situ_view_t view, uint32_t offset, uint32_t extent, sit
 	out->base	= view.base + offset;
 	out->limit	= extent;
 	out->generation	= view.generation;
+	/* Carried down, so a SUB-view is checkable too -- which is the
+	 * case that actually goes wrong: a parent re-derives its offsets
+	 * and a sub-view holds the one it was built with. */
+	out->owner	= view.owner;
 	return SITU_OK;
 }
 

@@ -104,6 +104,22 @@ typedef struct situ_view {
 	uint8_t	 *base;
 	uint32_t  limit;
 	uint32_t  generation;
+	/* The message this is a view OF, so that the generation above has
+	 * something to be compared against.
+	 *
+	 * Without it the check was impossible rather than merely absent: an
+	 * ordinary getter takes a view and returns a value, so it had no way
+	 * to reach the current generation and no way to report a mismatch.
+	 * Generated code promised "a stale view is caught on use in a
+	 * SITU_CHECKED build" 258 times and implemented it nowhere (26.306).
+	 *
+	 * A pointer per view rather than a parameter per accessor: the view
+	 * is the thing that goes stale, so it is the thing that should know
+	 * what it belongs to -- which is how the Python backend has always
+	 * been the one where 12.3 holds. `situ_view_sub` carries it down, so
+	 * a sub-view is checkable too, and that is the case that actually
+	 * goes wrong. */
+	const struct situ_msg *owner;
 } situ_view_t;
 
 /* One run of bytes a scattered transform runs over (13.2b).
@@ -150,28 +166,27 @@ static inline int situ_in_bounds(situ_view_t view, uint32_t offset, uint32_t ext
 
 #ifdef SITU_CHECKED
 
-/* Assert that a view still matches its message.
+/* Whether a view still matches the message it was taken from.
  *
- * NOT called by any generated accessor: measured across the corpus, zero
- * call sites. This said "generated accessors call this on entry", which was
- * the claim rather than the code -- an ordinary getter takes a view and no
- * message, so it has nothing to compare against, and the generation the
- * setters bump is therefore written and never read here (26.306).
- *
- * Python is the one backend where 12.3 holds end to end, its views carrying
- * a reference to the message; Rust needs none of this, `&mut self` on a
- * setter being the borrow checker's refusal of the other view. Closing it
- * in C means every accessor taking the message, which is a change to this
- * API's shape rather than a fix, and is recorded as an open question.
- *
- * Available to a caller who holds both and wants the check, and it compiles
- * to nothing in a release build. */
-static inline situ_err_t situ_view_check(const situ_msg_t *msg, situ_view_t view)
+ * One argument now, the view carrying its own owner: a getter takes a view
+ * and nothing else, so a two-argument form could not be called from the
+ * place that needed it and never was -- zero call sites across the corpus,
+ * under a comment claiming generated accessors called it on entry. */
+static inline situ_err_t situ_view_check(situ_view_t view)
 {
-	if (view.base == NULL || view.generation != msg->generation) {
-		return SITU_ERR_STALE;
+	if (view.base == NULL) {
+		return SITU_ERR_STALE;	/* a zero-initialised view is never live */
 	}
-	return SITU_OK;
+	/* A view with no owner cannot be stale, because there is no message to
+	 * have moved under it. That is not a hole: the framing path builds one
+	 * over bytes that have merely ARRIVED, before any message exists, and
+	 * reads lengths through the ordinary accessors. Nothing can invalidate
+	 * what nothing owns. */
+	if (view.owner == NULL) {
+		return SITU_OK;
+	}
+	return view.generation == view.owner->generation
+	     ? SITU_OK : SITU_ERR_STALE;
 }
 
 static inline situ_err_t situ_bounds_check(situ_view_t view, uint32_t off, uint32_t ext)
@@ -179,13 +194,62 @@ static inline situ_err_t situ_bounds_check(situ_view_t view, uint32_t off, uint3
 	return situ_in_bounds(view, off, ext) ? SITU_OK : SITU_ERR_BOUNDS;
 }
 
+/* What a generated accessor calls on entry.
+ *
+ * A stale view is a CALLER BUG and not a message condition -- the same
+ * class as a use-after-free, which is why the Python backend raises rather
+ * than returning an error for it. A getter returns a value and has no error
+ * channel to report one through, so this traps instead, and only in a
+ * checked build.
+ *
+ * `SITU_STALE()` is the hook: define it before including this header to
+ * route the trap somewhere a freestanding target can use. The default pulls
+ * in <stdlib.h>, which is why it lives behind SITU_CHECKED -- a release
+ * build still depends on <stdint.h> and <stddef.h> and nothing else. */
+#ifndef SITU_STALE
+#include <stdlib.h>
+#define SITU_STALE() abort()
+#endif
+
+static inline void situ_view_assert(situ_view_t view)
+{
+	if (situ_view_check(view) != SITU_OK) {
+		SITU_STALE();
+	}
+}
+
+/* The bytes a view maps, checked on the way past.
+ *
+ * Every generated read and write goes through this rather than touching
+ * `view.base`, which is what makes the check REAL rather than promised:
+ * there is no single point where an accessor begins -- the emitter has 38
+ * of them -- and there is exactly one point where the bytes are reached.
+ * Section 12.3's guarantee follows the data instead of a list somebody
+ * has to keep complete.
+ *
+ * Compiles to `view.base` in a release build. */
+static inline uint8_t *situ_base(situ_view_t view)
+{
+	situ_view_assert(view);
+	return view.base;
+}
+
 #else
 
-static inline situ_err_t situ_view_check(const situ_msg_t *msg, situ_view_t view)
+static inline situ_err_t situ_view_check(situ_view_t view)
 {
-	(void)msg;
 	(void)view;
 	return SITU_OK;
+}
+
+static inline void situ_view_assert(situ_view_t view)
+{
+	(void)view;
+}
+
+static inline uint8_t *situ_base(situ_view_t view)
+{
+	return view.base;
 }
 
 static inline situ_err_t situ_bounds_check(situ_view_t view, uint32_t off, uint32_t ext)

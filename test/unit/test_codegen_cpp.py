@@ -139,7 +139,7 @@ def test_a_byte_array_carries_its_length() -> None:
 	header = emit("struct s { u8 octets[4]; }")
 
 	assert "::situ::rt::bytes octets() const noexcept" in header
-	assert "::situ::rt::bytes(raw_.base + 0, 4)" in header
+	assert "::situ::rt::bytes(situ_base(raw_) + 0, 4)" in header
 
 
 def test_errors_cannot_be_ignored() -> None:
@@ -177,11 +177,20 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	header = emit(SEALED_VARIABLE)
 
 	assert "::situ::rt::bytes body() const noexcept" in header
-	assert "raw_.base + (" in header
-	# Through the gate's view, not the struct's.
+	assert "situ_base(raw_) + (" in header
+	# Through the gate's view, not the struct's -- which is now a
+	# STRUCTURAL fact rather than a textual one. This asserted `base()` was
+	# absent and `raw_.base` present, two spellings that named the struct's
+	# inherited method and the gate's own field; both are `situ_base(raw_)`
+	# since every read goes through the checked accessor (26.306), and
+	# inside the gate class `raw_` is unambiguously the gate's view.
 	body = header[header.index("bytes body()"):]
-	assert "base()" not in body[:body.index("}")]
-	assert "raw_.base" in body[:body.index("}")]
+	body = body[:body.index("}")]
+	assert "situ_base(raw_)" in body
+	# The offset is the gate's own frame, so it cannot be the struct's: an
+	# outer read would have to name a member of the enclosing class, and
+	# nothing here does.
+	assert "gate" not in body and "owner" not in body
 
 
 # -- what it compiles to ----------------------------------------------------
@@ -705,7 +714,7 @@ def test_a_compressed_name_walks(tmp_path: Path) -> None:
 static bool walk(const std::uint8_t *b, std::uint32_t n, std::uint32_t labels,
                  std::uint32_t extent, ::situ::rt::err want)
 {
-	situ_view_t raw{ const_cast<std::uint8_t *>(b), n, 0 };
+	situ_view_t raw{ const_cast<std::uint8_t *>(b), n, 0, nullptr };
 	::situ::name held{ raw };
 
 	if (held.labels_count() != labels || held.labels_span() != extent)
@@ -768,7 +777,7 @@ int main()
 	std::uint8_t buf[16] = { 0 };
 	buf[1] = 0x03; buf[2] = 0xE8;		/* says 1000 bytes of body */
 
-	const ::situ::s held{ situ_view_t{ buf, sizeof buf, 0 } };
+	const ::situ::s held{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
 	const auto body = held.body();
 
 	if (body.size() != 13u)
@@ -819,7 +828,7 @@ int main()
 	situ_msg_t msg;
 	situ_msg_init(&msg, buf, sizeof buf);
 
-	const ::situ::s held{ situ_view_t{ buf + 4, 24, msg.generation } };
+	const ::situ::s held{ situ_view_t{ buf + 4, 24, msg.generation, nullptr } };
 	::situ::rt::bytes body;
 
 	/* `after` sits where it would if `body` were not declared at all. */
@@ -925,7 +934,7 @@ int main()
 {
 	/* n = 3 "abc", m = 2 "xy": 2 + 3 + 2 + 2 = 9. */
 	std::uint8_t buf[9] = { 0, 3, 'a','b','c', 0, 2, 'x','y' };
-	const ::situ::s held{ situ_view_t{ buf, sizeof buf, 0 } };
+	const ::situ::s held{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
 
 	if (held.b_offset() != 7u)
 		return 1;
@@ -1110,7 +1119,7 @@ int main()
 	std::memset(buf, 0, 10);
 	buf[0] = 0xFF; buf[1] = 0xFF;		/* n = 65535 */
 
-	const ::situ::s held{ situ_view_t{ buf, 10, 0 } };
+	const ::situ::s held{ situ_view_t{ buf, 10, 0, nullptr } };
 	const std::uint32_t len = held.b_len();
 	std::free(buf);
 
@@ -1162,18 +1171,18 @@ int main()
 	for (int i = 0; i < 40; i++) { buf[k++] = 1; buf[k++] = 'a'; }
 	buf[k++] = 0;
 
-	const ::situ::n v{ situ_view_t{ buf, k, 0 } };
+	const ::situ::n v{ situ_view_t{ buf, k, 0, nullptr } };
 	const auto idx = v.ls_indexed();
 
 	if (idx.count != v.ls_count() || idx.count != 41u)
 		return 1;
 	for (std::uint32_t i = 0; i < idx.count; i++) {
-		::situ::l a{ situ_view_t{ buf, k, 0 } }, b{ situ_view_t{ buf, k, 0 } };
+		::situ::l a{ situ_view_t{ buf, k, 0, nullptr } }, b{ situ_view_t{ buf, k, 0, nullptr } };
 		if (v.ls(i, a) != ::situ::rt::err::ok)          return 2;
 		if (v.ls_at(idx, i, b) != ::situ::rt::err::ok)  return 3;
-		if (a.base() != b.base() || a.limit() != b.limit()) return 4;
+		if (situ_base(a.raw()) != situ_base(b.raw()) || a.limit() != b.limit()) return 4;
 	}
-	::situ::l past{ situ_view_t{ buf, k, 0 } };
+	::situ::l past{ situ_view_t{ buf, k, 0, nullptr } };
 	if (v.ls_at(idx, idx.count, past) != ::situ::rt::err::bounds)
 		return 5;
 	return 0;
@@ -1222,12 +1231,12 @@ int main()
 	::situ::rt::bytes b;
 	std::uint8_t low;
 
-	const ::situ::label a{ situ_view_t{ text, sizeof text, 0 } };
+	const ::situ::label a{ situ_view_t{ text, sizeof text, 0, nullptr } };
 	if (a.body_text(b) != ::situ::rt::err::ok)                return 1;
 	if (b.size() != 3 || std::memcmp(b.data(), "www", 3) != 0) return 2;
 	if (a.body_pointer_low(low) != ::situ::rt::err::version)  return 3;
 
-	const ::situ::label c{ situ_view_t{ ptr, sizeof ptr, 0 } };
+	const ::situ::label c{ situ_view_t{ ptr, sizeof ptr, 0, nullptr } };
 	if (c.body_pointer_low(low) != ::situ::rt::err::ok)       return 4;
 	if (low != 0x0Cu)                                          return 5;
 	if (c.body_text(b) != ::situ::rt::err::version)            return 6;
@@ -1280,9 +1289,9 @@ int main()
 	std::uint8_t buf[8] = { 0 };
 	buf[0] = 1; buf[1] = 0xBE; buf[2] = 0xEF;
 
-	const ::situ::S s{ situ_view_t{ buf, sizeof buf, 0 } };
-	::situ::A a{ situ_view_t{ buf, sizeof buf, 0 } };
-	::situ::B b{ situ_view_t{ buf, sizeof buf, 0 } };
+	const ::situ::S s{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
+	::situ::A a{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
+	::situ::B b{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
 
 	if (s.v_p(a) != ::situ::rt::err::ok || a.x() != 0xBEEF) return 1;
 	if (s.v_q(b) != ::situ::rt::err::version)               return 2;
@@ -1376,7 +1385,7 @@ int main()
 	std::uint8_t buf[64];
 	std::memcpy(buf, raw, sizeof raw - 1);
 
-	const ::situ::data_block v{ situ_view_t{ buf, sizeof raw - 1, 0 } };
+	const ::situ::data_block v{ situ_view_t{ buf, sizeof raw - 1, 0, nullptr } };
 	if (v.body_len() != 17u)    return 1;
 	if (v.body_span() != 22u)   return 2;
 	if (!v.body_terminated())   return 3;
@@ -1433,7 +1442,7 @@ int main()
 	std::uint32_t len = 0;
 
 	situ_halve_encode(plain, 32u, buf);
-	const ::situ::S v{ situ_view_t{ buf, sizeof buf, 0 } };
+	const ::situ::S v{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
 
 	if (v.body().size() != 8u)                                     return 1;
 	if (::situ::S::body_decoded_max != 4u)                         return 2;
@@ -1567,7 +1576,7 @@ int main()
 
 	if (msg.label(item) != situ::rt::err::ok) return 5;
 	if (item.wire != 2u || item.value_len != 4u || item.at != 3u) return 6;
-	if (std::memcmp(msg.base() + item.value_at, "situ", 4) != 0) return 7;
+	if (std::memcmp(situ_base(msg.raw()) + item.value_at, "situ", 4) != 0) return 7;
 
 	/* A wire type the schema refuses. */
 	std::uint8_t group[] = { 0x0B };
@@ -1617,7 +1626,7 @@ def test_an_indexed_region_gets_its_table_walked() -> None:
 def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
 	header = emit(INDEXED)
 
-	assert "situ_get_be16(raw_.base + at)" in header
+	assert "situ_get_be16(situ_base(raw_) + at)" in header
 
 
 def test_an_index_over_variable_elements_measures_one() -> None:
@@ -1799,7 +1808,7 @@ def test_a_be128_field_uses_the_big_endian_reader() -> None:
 	refusal one commit ago -- invariant 11, and the shelf life was a day."""
 	header = emit(BE128 + "struct S { sq n; u16 after; }")
 
-	assert "situ_varint_be_get(raw_.base + at, raw_.limit - at, 9u, 8u, &raw)" in header
+	assert "situ_varint_be_get(situ_base(raw_) + at, raw_.limit - at, 9u, 8u, &raw)" in header
 	assert "is not an encoding this" not in header
 
 
@@ -2132,7 +2141,7 @@ def test_a_fixed_width_text_number_parses() -> None:
 
 	assert "code(std::uint16_t &out) const noexcept" in header
 	assert "code_digits() const noexcept" in header
-	assert "situ_parse_uint(raw_.base + (0), 3u, 10u, 999u, &value)" in header
+	assert "situ_parse_uint(situ_base(raw_) + (0), 3u, 10u, 999u, &value)" in header
 
 
 def test_the_range_is_the_fields_not_the_types() -> None:
@@ -2299,7 +2308,7 @@ int main()
 	std::uint8_t buf[64];
 	std::memcpy(buf, raw, sizeof raw - 1);
 
-	const situ::line view{ situ_view_t{ buf, sizeof raw - 1, 0 } };
+	const situ::line view{ situ_view_t{ buf, sizeof raw - 1, 0, nullptr } };
 	situ::line::offsets at;
 	view.resolve_offsets(at);
 
@@ -2410,7 +2419,7 @@ int main()
 	raw[6] = 0x03;			/* hdr.length = 1000, inside `[max = 1024]` */
 	raw[7] = 0xe8;
 
-	situ::packet view{ situ_view_t{ raw, sizeof raw, 0 } };
+	situ::packet view{ situ_view_t{ raw, sizeof raw, 0, nullptr } };
 
 	if (!view.tag().empty())                             return 1;
 	if (view.validate() != situ::rt::err::bounds)        return 2;
@@ -2594,7 +2603,7 @@ int main()
 	if (situ::option::at(msg, 0, one) != situ::rt::err::ok) return 1;
 	if (one.option() != 0x11 || one.length() != 0x22)       return 2;
 
-	const situ::frame whole{ situ_view_t{ buf, sizeof buf, 0 } };
+	const situ::frame whole{ situ_view_t{ buf, sizeof buf, 0, nullptr } };
 	situ::option held;
 	if (whole.first(held) != situ::rt::err::ok)              return 6;
 	if (held.option() != 0x11)                              return 3;

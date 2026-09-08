@@ -201,13 +201,13 @@ def test_accessors_are_static_inline() -> None:
 
 def test_big_endian_field_goes_through_the_swap_helper() -> None:
 	header, _ = emit("struct S { u32 a; }")
-	assert "situ_get_be32(view.base + 0u)" in header
-	assert "situ_put_be32(view.base + 0u" in header
+	assert "situ_get_be32(situ_base(view) + 0u)" in header
+	assert "situ_put_be32(situ_base(view) + 0u" in header
 
 
 def test_little_endian_field_uses_the_other_helper() -> None:
 	header, _ = emit("struct S { u32 a; }", preamble="endian little;\n")
-	assert "situ_get_le32(view.base + 0u)" in header
+	assert "situ_get_le32(situ_base(view) + 0u)" in header
 
 
 def test_converted_field_gets_no_pointer_accessor() -> None:
@@ -237,8 +237,8 @@ def test_converted_array_gets_an_indexed_getter_not_a_pointer() -> None:
 
 def test_bit_field_goes_through_the_bit_helpers() -> None:
 	header, _ = emit("struct S { u3 a; u5 b; }")
-	assert "situ_bits_get_msb(view.base, 0u, 3u)" in header
-	assert "situ_bits_set_msb(view.base, 0u, 3u" in header
+	assert "situ_bits_get_msb(situ_base(view), 0u, 3u)" in header
+	assert "situ_bits_set_msb(situ_base(view), 0u, 3u" in header
 
 
 def test_bit_order_selects_the_helper() -> None:
@@ -280,7 +280,7 @@ def test_a_bit_field_read_leaves_no_call_behind_at_minus_os(tmp_path: Path) -> N
 	probe  = ("#include \"unit.h\"\n"
 	          "uint32_t probe(const uint8_t *p, uint32_t len)\n"
 	          "{\n"
-	          "\tsitu_view_t view = { (uint8_t *)(uintptr_t)p, len, 1u };\n"
+	          "\tsitu_view_t view = { (uint8_t *)(uintptr_t)p, len, 1u, NULL };\n"
 	          f"\treturn {reads};\n"
 	          "}\n")
 	compile_generated(tmp_path, "struct S [allow_straddle] { " + fields + " }",
@@ -981,7 +981,7 @@ def test_dynamic_offset_resolves_from_the_driving_field() -> None:
 	header, _ = emit("struct S { u16 n [max = 100]; u8 v[n]; u32 z; }")
 	assert "static inline uint32_t situ_S_z_offset(situ_view_t view)" in header
 	# The driving field is at a static offset, so reading it is a constant load.
-	assert "situ_get_be16(view.base + 0u)" in header
+	assert "situ_get_be16(situ_base(view) + 0u)" in header
 
 
 def test_remaining_measures_to_the_end_of_the_view() -> None:
@@ -1039,7 +1039,7 @@ def test_opaque_gets_bytes_and_a_length() -> None:
 
 def test_opaque_length_is_a_byte_count_not_an_element_count() -> None:
 	header, _ = emit("struct S { u16 n; opaque payload [n]; }")
-	assert "return (uint32_t)(situ_get_be16(view.base + 0u));" in header
+	assert "return (uint32_t)(situ_get_be16(situ_base(view) + 0u));" in header
 
 
 VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
@@ -1188,7 +1188,7 @@ def test_an_index_entry_is_read_in_the_region_s_byte_order() -> None:
 	back a plausible offset."""
 	header, _ = emit(INDEXED)
 
-	assert "situ_get_be16(view.base + at)" in header
+	assert "situ_get_be16(situ_base(view) + at)" in header
 
 
 def test_an_index_over_variable_elements_measures_one() -> None:
@@ -1494,8 +1494,8 @@ def test_declared_text_encoding_is_validated() -> None:
 	_, ascii_source = emit("struct s { u8 tag[4] [encoding = ascii]; }")
 	_, utf8_source  = emit("struct s { u8 name[8] [encoding = utf8]; }")
 
-	assert "situ_ascii_valid((view.base) + 0u, 4u)" in ascii_source
-	assert "situ_utf8_valid((view.base) + 0u, 8u)" in utf8_source
+	assert "situ_ascii_valid((situ_base(view)) + 0u, 4u)" in ascii_source
+	assert "situ_utf8_valid((situ_base(view)) + 0u, 8u)" in utf8_source
 	assert "SITU_ERR_CONSTRAINT" in utf8_source
 
 
@@ -1515,10 +1515,10 @@ def test_a_nul_terminated_field_reports_its_content_length() -> None:
 	header, source = emit("struct s { u8 name[8] [nul_terminated]; }")
 
 	assert "uint32_t situ_s_name_len(situ_view_t view)" in header
-	assert "situ_nul_len(view.base + 0u, 8u)" in header
+	assert "situ_nul_len(situ_base(view) + 0u, 8u)" in header
 
 	# And the terminator has to be there, or nobody knows where content stops.
-	assert "situ_nul_terminated((view.base) + 0u, 8u)" in source
+	assert "situ_nul_terminated((situ_base(view)) + 0u, 8u)" in source
 
 
 def test_a_nul_terminated_field_does_not_move_what_follows() -> None:
@@ -1528,8 +1528,8 @@ def test_a_nul_terminated_field_does_not_move_what_follows() -> None:
 	plain, _      = emit("struct s { u8 name[8]; u16 after; }")
 
 	assert "#define SITU_S_SIZE_FIXED 10u" in terminated
-	assert terminated.count("situ_get_be16(view.base + 8u)") == \
-	       plain.count("situ_get_be16(view.base + 8u)") == 1
+	assert terminated.count("situ_get_be16(situ_base(view) + 8u)") == \
+	       plain.count("situ_get_be16(situ_base(view) + 8u)") == 1
 
 
 def test_a_plain_byte_array_gets_no_length_accessor() -> None:
@@ -1638,7 +1638,7 @@ def test_a_delimited_member_gets_content_and_span() -> None:
 	# the resolved offset in. What the test is about -- that the scan starts
 	# at the member's own base and not at `_ptr`, which `[trim]` moves -- is
 	# unchanged.
-	assert "situ_scan(view.base + at" in header
+	assert "situ_scan(situ_base(view) + at" in header
 	assert ("situ_s_line_len(situ_view_t view)\n{\n"
 		"\treturn situ_s_line_len_from(view, 4u);") in header
 
@@ -2292,7 +2292,7 @@ def test_a_declared_length_is_clamped_to_the_frame() -> None:
 	"""
 	header, _ = emit(OVERLONG)
 
-	assert "situ_min_u32((uint32_t)(situ_get_be16(view.base + 1u))," in header
+	assert "situ_min_u32((uint32_t)(situ_get_be16(situ_base(view) + 1u))," in header
 	assert "situ_remaining_u32(view.limit," in header
 
 
@@ -3436,12 +3436,12 @@ int main(void)
 
 	if (situ_S_fields_user_id(view, &item) != SITU_OK) return 3;
 	if (item.wire != 0u) return 4;
-	situ_varint_get(view.base + item.value_at, item.value_len, 10u, &user_id);
+	situ_varint_get(situ_base(view) + item.value_at, item.value_len, 10u, &user_id);
 	if (user_id != 150u) return 5;
 
 	if (situ_S_fields_label(view, &item) != SITU_OK) return 6;
 	if (item.wire != 2u || item.value_len != 4u) return 7;
-	if (memcmp(view.base + item.value_at, "situ", 4) != 0) return 8;
+	if (memcmp(situ_base(view) + item.value_at, "situ", 4) != 0) return 8;
 
 	return 0;
 }
@@ -3547,7 +3547,7 @@ def test_a_be128_field_uses_the_big_endian_reader() -> None:
 	plausible number and not the one on the wire."""
 	header, _ = emit(BE128 + "struct S { sq n; }")
 
-	assert "situ_varint_be_get(view.base + at, view.limit - at, 9u, 8u, &raw)" \
+	assert "situ_varint_be_get(situ_base(view) + at, view.limit - at, 9u, 8u, &raw)" \
 		in header
 
 

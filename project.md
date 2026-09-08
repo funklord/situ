@@ -24717,6 +24717,90 @@ of no other backend -- which is how a question about setters became one
 about invalidation.
 
 
+### 26.307 The check is real now, and one line is why it was not
+
+26.306 left C and C++ bumping a generation that nothing read, and called
+closing it a question about accessor signatures. It was not. The obstacle
+was one missing field.
+
+    typedef struct situ_view {
+            uint8_t  *base;
+            uint32_t  limit;
+            uint32_t  generation;   <- the one it was taken at
+    } situ_view_t;                  <- and nothing to compare it against
+
+`situ_view_check(msg, view)` took the message because the view could not
+supply it, and an ordinary getter takes a view and returns a value -- so the
+two-argument form could not be called from the place that needed it, and
+never was. **Zero call sites across the corpus, under a comment saying
+generated accessors called it on entry, and 258 more in generated code
+promising a stale view "is caught on use in a SITU_CHECKED build".**
+
+**The view now knows what it is a view of.** One `const struct situ_msg
+*owner`, set by `situ_view_at` and carried down by `situ_view_sub` -- which
+is the half that matters, a sub-view being the thing that actually goes
+stale. `situ_view_check(view)` takes one argument now and no signature
+anywhere else changed.
+
+**And the check goes where the bytes are, not where an accessor begins.**
+There are 38 places the C emitter writes an accessor signature and exactly
+one place the bytes are reached, so every read and write goes through
+`situ_base(view)` -- which asserts and returns `view.base`. The guarantee
+follows the data rather than a list somebody has to keep complete, which is
+the difference between this and a check that covers whatever anybody
+remembered to annotate.
+
+A mechanical change, so it carries a proof: **every generated C file for all
+36 schemas differs only by `view.base` -> `situ_base(view)`, plus 65
+deliberate `view.owner = NULL` lines.** The substitution missed seven sites
+spelled `f"{held}.base"` and two spelled `gate.view.base`, and the count of
+substitutions would not have caught either -- what caught them was grepping
+the OUTPUT for a surviving `.base` and finding 176, then 65, then only the
+synthetic-view writes.
+
+**A stale view traps, and only in a checked build.** Measured on the same
+fixture as 26.306, a held sub-view read after a length-changing write:
+
+    C     release  reads 0x11 (stale, as before)   checked  abort, exit 134
+    C++   release  reads 0x11 (stale, as before)   checked  abort, exit 134
+
+`SITU_STALE()` is the hook, defaulting to `abort()` and pulling `<stdlib.h>`
+only under `SITU_CHECKED`, so a release build still depends on `<stdint.h>`
+and `<stddef.h>` and nothing else.
+
+**A stale view is a caller bug and not a message condition** -- the same
+class as a use-after-free, which is why the Python backend raises rather
+than returning an error for it. A getter returns a value and has no channel
+to report one through, so a trap is the honest analogue rather than a
+sentinel nobody would check.
+
+**What a null owner means, and why it is not a hole.** The framing path
+builds a view over bytes that have merely ARRIVED, before any message
+exists, and reads lengths through the ordinary accessors. Nothing can have
+moved under what nothing owns, so `situ_view_check` reads an absent owner as
+OK. That case was already there and had to be found: leaving the field
+uninitialised would have had the checked build dereference whatever was on
+the stack.
+
+**The cost is one pointer per view**, passed by value, against a parameter
+on every accessor -- and the pointer is the more intuitive of the two: the
+view is the thing that goes stale, so it is the thing that should know what
+it belongs to. Which is how the Python backend has been the one where 12.3
+held all along.
+
+**One C++ spelling had to be re-derived rather than rewritten.** A member
+named `base` in a schema hides `element.base()`, which 26.80 solved with the
+qualified `element.::situ::rt::view::base()`. The answer now is
+`situ_base(element.raw())` -- a free function in the C runtime, which no
+member of any name can hide, and the same one C calls, so both backends trap
+in the same place on the same condition.
+
+**And a stale artifact cost two runs before it was read as one.**
+`test_both_backends_describe_the_same_bytes` links a prebuilt `libsitu.a`;
+it was five hours older than the runtime it was linking against, so the
+`owner` field was never set and the backends "disagreed". `make runtime`
+fixed it. Never conclude from a binary the build step did not rebuild.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

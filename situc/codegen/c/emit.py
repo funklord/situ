@@ -438,7 +438,7 @@ class Emitter:
 				f"static inline void {ident(self.prefix, struct.name, local, 'recompute')}"
 				f"(situ_msg_t *msg, situ_view_t view)",
 				"{",
-				f"	{self._store_statement(scalar, entry.placement, 'view.base', f'({value})')}",
+				f"	{self._store_statement(scalar, entry.placement, 'situ_base(view)', f'({value})')}",
 				f"	situ_msg_clear_dirty(msg, {bit});",
 				"}",
 				"",
@@ -707,7 +707,7 @@ class Emitter:
 			f"\tif (!situ_in_bounds(view, crc_at, {width}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\treturn {read}(view.base + crc_at) == want",
+			f"\treturn {read}(situ_base(view) + crc_at) == want",
 			"\t       ? SITU_OK : SITU_ERR_CHECKSUM;",
 			"}",
 		]
@@ -959,7 +959,7 @@ class Emitter:
 			if owner is not None:
 				where = self._base_expression(struct, owner,
 				                              gated=gate is not None)
-				base  = f"({held}.base + {where})"
+				base  = f"(situ_base({held}) + {where})"
 				at    = placement.offset_bytes
 				# ...and the offset is the message's, so the frame is not known
 				# to hold it. Every other dynamic setter says this; the covered
@@ -1064,7 +1064,7 @@ class Emitter:
 			f"static inline void "
 			f"{ident(self.prefix, struct.name, local, 'zeroize')}({taken})",
 			"{",
-			f"\tsitu_zeroize({held}.base + "
+			f"\tsitu_zeroize(situ_base({held}) + "
 			f"{self._base_expression(struct, placement, gated=gate is not None)}, "
 			f"{length});",
 			"}",
@@ -1814,7 +1814,7 @@ class Emitter:
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"",
-			f"\tused = situ_varint_get(view.base + at, view.limit - at, {max_tag}u, &tag);",
+			f"\tused = situ_varint_get(situ_base(view) + at, view.limit - at, {max_tag}u, &tag);",
 			"\tif (used == 0u) {",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
@@ -1886,7 +1886,7 @@ class Emitter:
 			return [
 				"\t\t{",
 				"\t\t\tuint64_t carried = 0;",
-				f"\t\t\tused = situ_varint_get(view.base + at, view.limit - at,"
+				f"\t\t\tused = situ_varint_get(situ_base(view) + at, view.limit - at,"
 				f" {max_tag}u, &carried);",
 				"\t\t\tif (used == 0u) {",
 				"\t\t\t\treturn SITU_ERR_BOUNDS;",
@@ -1916,7 +1916,7 @@ class Emitter:
 			return [
 				f"{indent}{{",
 				f"{indent}\tuint64_t length = 0;",
-				f"{indent}\tused = situ_varint_get(view.base + at,"
+				f"{indent}\tused = situ_varint_get(situ_base(view) + at,"
 				f" view.limit - at, {width}u, &length);",
 				f"{indent}\tif (used == 0u) {{",
 				f"{indent}\t\treturn SITU_ERR_BOUNDS;",
@@ -1946,9 +1946,9 @@ class Emitter:
 		"""A length prefix of a fixed width, in the region's byte order."""
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		if suffix is None:
-			return "(uint32_t)view.base[at]"
+			return "(uint32_t)situ_base(view)[at]"
 		order = _order_suffix(endian)
-		return f"(uint32_t)situ_get_{order}{suffix}(view.base + at)"
+		return f"(uint32_t)situ_get_{order}{suffix}(situ_base(view) + at)"
 
 	def _tlv_cursor(self, struct: ResolvedStruct, placement: Placement,
 			item: str, local: str) -> list[str]:
@@ -2125,9 +2125,9 @@ class Emitter:
 	def _index_entry_read(self, placement: Placement, width: int) -> str:
 		"""One table entry, in the region's byte order."""
 		if width == 1:
-			return "(uint32_t)view.base[at]"
+			return "(uint32_t)situ_base(view)[at]"
 		order = _order_suffix(placement.endian)
-		return f"(uint32_t)situ_get_{order}{width * 8}(view.base + at)"
+		return f"(uint32_t)situ_get_{order}{width * 8}(situ_base(view) + at)"
 
 	def _index_base_noun(self, table: IndexTable) -> str:
 		if table.base == "message":
@@ -2152,7 +2152,7 @@ class Emitter:
 				" a struct this",
 				" * build can frame -- so an entry gives where an element starts"
 				" and not",
-				" * how far it runs. `view.base + <offset>` is the element;"
+				" * how far it runs. `situ_base(view) + <offset>` is the element;"
 				" what is in",
 				" * it is the caller's to know. */",
 			]
@@ -2300,7 +2300,7 @@ class Emitter:
 			f"static inline uint8_t *"
 			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
 			"{",
-			f"	return view.base + {base};",
+			f"	return situ_base(view) + {base};",
 			"}",
 		]
 
@@ -2404,7 +2404,7 @@ class Emitter:
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
 				"\t}",
-				f"\t*out = view.base + {base};",
+				f"\t*out = situ_base(view) + {base};",
 				# Clamped for the reason every other run is (see `_array`): the
 				# length is the message's. A DNS label declaring 55 bytes in a
 				# five-byte frame handed back that 55 here, and an arm is where
@@ -2558,7 +2558,7 @@ class Emitter:
 		count  = ident(self.prefix, struct.name, local, "count")
 		getter = ident(self.prefix, struct.name, local, "get")
 		load   = self._load_expression(
-			scalar, placement, f"view.base + {base} + index * {width}u", offset=0)
+			scalar, placement, f"situ_base(view) + {base} + index * {width}u", offset=0)
 
 		return [
 			f"static inline situ_err_t {count}(situ_view_t view, uint32_t *out)",
@@ -2649,9 +2649,9 @@ class Emitter:
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries -- eight bits
 		# and no continuation flag where there is no spare bit for one.
-		read = (f"situ_varint_be_get(view.base + at, view.limit - at,"
+		read = (f"situ_varint_be_get(situ_base(view) + at, view.limit - at,"
 		        f" {width}u, {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(view.base + at, view.limit - at,"
+		        f"situ_varint_get(situ_base(view) + at, view.limit - at,"
 		        f" {width}u, &raw)")
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
@@ -2786,7 +2786,7 @@ class Emitter:
 			f"static inline int "
 			f"{ident(self.prefix, struct.name, local, 'is_little')}(situ_view_t view)",
 			"{",
-			f"\treturn situ_get_be{width}(view.base + {placement.offset_bytes}u)"
+			f"\treturn situ_get_be{width}(situ_base(view) + {placement.offset_bytes}u)"
 			f" == {base}_LITTLE;",
 			"}",
 			f"static inline uint{width}_t "
@@ -2797,7 +2797,7 @@ class Emitter:
 			f"static inline void "
 			f"{ident(self.prefix, struct.name, local, 'set_host')}(situ_view_t view)",
 			"{",
-			f"\tsitu_put_be{width}(view.base + {placement.offset_bytes}u, {base}_HOST);",
+			f"\tsitu_put_be{width}(situ_base(view) + {placement.offset_bytes}u, {base}_HOST);",
 			"}",
 		]
 
@@ -2814,7 +2814,7 @@ class Emitter:
 		frame view: the gate is a compile-time obligation, not a different base,
 		so the load is still `base + K`.
 		"""
-		base = "gate.view.base" if gated else "view.base"
+		base = "situ_base(gate.view)" if gated else "situ_base(view)"
 		if placement.offset_bits is not None:
 			return base
 		return f"({base} + {self._base_expression(struct, placement, gated)})"
@@ -2984,7 +2984,7 @@ class Emitter:
 			"",
 			f"static inline uint32_t {fn}(situ_view_t view, uint32_t at)",
 			"{",
-			f"\treturn situ_skip(view.base + at,"
+			f"\treturn situ_skip(situ_base(view) + at,"
 			f" situ_remaining_u32(view.limit, at), {sym}, {count}u);",
 			"}",
 		]
@@ -3735,6 +3735,12 @@ class Emitter:
 			"\tview.base       = (uint8_t *)(uintptr_t)(const void *)data;",
 			"\tview.limit      = have;",
 			"\tview.generation = 0u;",
+			# No message yet: these bytes have arrived and nothing owns
+			# them. `situ_view_check` reads an absent owner as "nothing
+			# can have moved under this", which is exactly true here --
+			# and leaving the field uninitialised would have the checked
+			# build dereference whatever was on the stack.
+			"\tview.owner      = NULL;",
 		] if uses_view else ["\t(void)data;"]
 
 		size_min = macro(self.prefix, struct.name, "SIZE_MIN")
@@ -4369,7 +4375,7 @@ class Emitter:
 			# offset is a constant here, so it is read where it sits.
 			assert placement.scalar is not None
 			return leaf(self._load_expression(placement.scalar, placement,
-			                                  f"{held}.base"),
+			                                  f"situ_base({held})"),
 			            placement.scalar.signed)
 
 		return expand_calls(
@@ -4396,7 +4402,7 @@ class Emitter:
 			"",
 			"\t\t/* The terminator only terminates where an element would",
 			"\t\t * start. Inside one it is that element's own byte. */",
-			f"\t\tif (situ_scan(view.base + at, {len(delim)}u, {sym}, "
+			f"\t\tif (situ_scan(situ_base(view) + at, {len(delim)}u, {sym}, "
 			f"{len(delim)}u) == 0u) {{",
 			"\t\t\tbreak;",
 			"\t\t}",
@@ -4622,9 +4628,9 @@ class Emitter:
 		] + ([
 			"\tuint32_t took = 0u;",
 			"",
-			f"\treturn {self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym, 'took')};",
+			f"\treturn {self._scan_call(placement, 'situ_base(view) + at', self._scan_limit(placement, 'at'), sym, 'took')};",
 		] if many else [
-			f"\treturn {self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym)};",
+			f"\treturn {self._scan_call(placement, 'situ_base(view) + at', self._scan_limit(placement, 'at'), sym)};",
 		]) + [
 			"}",
 			"",
@@ -4645,7 +4651,7 @@ class Emitter:
 			"{",
 			"\tuint32_t took = 0u;",
 			"",
-			f"\t(void){self._scan_call(placement, 'view.base + at', self._scan_limit(placement, 'at'), sym, 'took')};",
+			f"\t(void){self._scan_call(placement, 'situ_base(view) + at', self._scan_limit(placement, 'at'), sym, 'took')};",
 			"\treturn took;",
 			"}",
 			"",
@@ -4693,7 +4699,7 @@ class Emitter:
 			lines.extend([
 				f"static inline const uint8_t *{ptr}(situ_view_t view)",
 				"{",
-				f"\treturn view.base + {base};",
+				f"\treturn situ_base(view) + {base};",
 				"}",
 			])
 			return lines
@@ -4722,13 +4728,13 @@ class Emitter:
 			"",
 			f"static inline const uint8_t *{ptr}(situ_view_t view)",
 			"{",
-			f"\treturn view.base + {base} + situ_trim_start(view.base + {base},"
+			f"\treturn situ_base(view) + {base} + situ_trim_start(situ_base(view) + {base},"
 			f" {scan_len}(view), {set_}, {count}u);",
 			"}",
 			"",
 			f"static inline uint32_t {length}(situ_view_t view)",
 			"{",
-			f"\treturn situ_trim_len(view.base + {base}, {scan_len}(view),"
+			f"\treturn situ_trim_len(situ_base(view) + {base}, {scan_len}(view),"
 			f" {set_}, {count}u);",
 			"}",
 		])
@@ -4757,7 +4763,7 @@ class Emitter:
 		local = c_name(self._local(struct, placement))
 		ctype = self._field_ctype(placement)
 		base  = self._base_expression(struct, placement)
-		base  = f"view.base + {base}" if base.isdigit() or base.endswith("u") \
+		base  = f"situ_base(view) + {base}" if base.isdigit() or base.endswith("u") \
 			else base
 
 		return [
@@ -4952,7 +4958,7 @@ class Emitter:
 			f"static inline const uint8_t *"
 			f"{ident(self.prefix, struct.name, local, 'ptr')}(situ_view_t view)",
 			"{",
-			f"\treturn view.base + {base};",
+			f"\treturn situ_base(view) + {base};",
 			"}",
 			*self._decode_accessor(struct, placement),
 		]
@@ -5183,7 +5189,7 @@ class Emitter:
 				        else f"{last.size_bits // 8}u")
 				size = f"{lead}u + {tail}" if lead else tail
 				out += [
-					f"	spans[{index}].base = view.base"
+					f"	spans[{index}].base = situ_base(view)"
 					f" + {first.offset_bits // 8}u;",
 					f"	spans[{index}].len  = {size};",
 				]
@@ -6217,7 +6223,7 @@ class Emitter:
 		# A nested member has no `_ptr` of this struct's own, and does not
 		# need one: its offset is a constant here.
 		nested = "." in placement.path[len(struct.name) + 1:]
-		base   = (f"view.base + {placement.offset_bytes}u" if nested
+		base   = (f"situ_base(view) + {placement.offset_bytes}u" if nested
 		          else f"{ident(self.prefix, struct.name, local, 'ptr')}(view)")
 
 		# And a declared width is the width. `_len` is the *scan's* answer and
@@ -6623,10 +6629,10 @@ class Emitter:
 			fits = (self._fits(struct, placement, count, held,
 			                   gate is not None)
 			        if count is not None else None)
-			body = (f"\treturn {held}.base + "
+			body = (f"\treturn situ_base({held}) + "
 			        f"{self._base_expression(struct, placement, gated=gate is not None)};"
 			        if fits is None else
-			        f"\treturn {fits}\n\t\t? {held}.base + "
+			        f"\treturn {fits}\n\t\t? situ_base({held}) + "
 			        f"{self._base_expression(struct, placement, gated=gate is not None)}"
 			        "\n\t\t: NULL;")
 			lines.extend([
@@ -6688,7 +6694,7 @@ class Emitter:
 		# family that was written without one.
 		base = self._base_expression(struct, placement, gated=gated)
 		load = self._load_expression(
-			scalar, placement, f"{held}.base + {base} + index * {stride}u",
+			scalar, placement, f"situ_base({held}) + {base} + index * {stride}u",
 			offset=0)
 
 		# A constant count at a constant offset is what section 20.2 amortises:
@@ -6850,7 +6856,7 @@ class Emitter:
 				f"{ident(self.prefix, struct.name, local, 'ptr')}({taken})",
 				"{",
 				f"\treturn ({self._ctype(scalar)} *)"
-				f"({'gate.view.base' if gate else 'view.base'} + "
+				f"({'situ_base(gate.view)' if gate else 'situ_base(view)'} + "
 				f"{self._base_expression(struct, placement, gated=gate is not None)});",
 				"}",
 			])
@@ -7678,7 +7684,7 @@ class Emitter:
 			policy = _reserved_policy(placement.attrs)
 			if policy in ("must_be_zero", "must_be_one"):
 				expect = "0" if policy == "must_be_zero" else _all_ones(scalar.bits)
-				read   = self._load_expression(scalar, placement, "view.base")
+				read   = self._load_expression(scalar, placement, "situ_base(view)")
 				lines.extend([
 					f"\t/* reserved {placement.type_name} [{policy}] */",
 					f"\tif ({read} != {expect}) {{",
@@ -7728,7 +7734,7 @@ class Emitter:
 		# above nine. The getter cannot report that -- it returns a number
 		# either way -- so parsing is where it has to be caught.
 		if scalar.is_bcd:
-			raw = self._raw_load(scalar, placement, "view.base")
+			raw = self._raw_load(scalar, placement, "situ_base(view)")
 			lines.extend([
 				f"\t/* {placement.path}: every nibble must be a decimal digit */",
 				f"\tif (!situ_bcd_valid((uint64_t){raw}, {scalar.digits}u)) {{",
@@ -7880,7 +7886,7 @@ class Emitter:
 			f"static inline uint32_t "
 			f"{ident(self.prefix, struct.name, local, 'len')}({taken})",
 			"{",
-			f"\treturn situ_nul_len({held}.base + {base},"
+			f"\treturn situ_nul_len(situ_base({held}) + {base},"
 			f" {placement.array_count}u);",
 			"}",
 		]
@@ -7900,7 +7906,7 @@ class Emitter:
 		return [
 			f"\t/* {placement.path} [nul_terminated]: the terminator must be"
 			f" within the field */",
-			f"\tif (!situ_nul_terminated((view.base) + {placement.offset_bytes}u,"
+			f"\tif (!situ_nul_terminated((situ_base(view)) + {placement.offset_bytes}u,"
 			f" {count}u)) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
@@ -7937,7 +7943,7 @@ class Emitter:
 			count = self._length_expression(struct, placement)
 		return [
 			f"\t/* {placement.path} [encoding = {named}] */",
-			f"\tif (!situ_{named}_valid((view.base) + {placement.offset_bytes}u,"
+			f"\tif (!situ_{named}_valid((situ_base(view)) + {placement.offset_bytes}u,"
 			f" {count})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
@@ -7976,7 +7982,7 @@ class Emitter:
 			f"\t\tfor (a = 0; a < {len(expected)}u && !matched; a++) {{",
 			"\t\t\tmatched = 1;",
 			f"\t\t\tfor (i = 0; i < {width}u; i++) {{",
-			"\t\t\t\tif ((view.base)[at + i] != want[a][i]) {",
+			"\t\t\t\tif ((situ_base(view))[at + i] != want[a][i]) {",
 			"\t\t\t\t\tmatched = 0;",
 			"\t\t\t\t\tbreak;",
 			"\t\t\t\t}",
@@ -8037,7 +8043,7 @@ class Emitter:
 		filler = _self_as(placement.attrs)
 		before = placement.tag_prefix
 		if filler is None and before is None:
-			return [f"\t*out = {codec}(view.base + at, n);"]
+			return [f"\t*out = {codec}(situ_base(view) + at, n);"]
 
 		local = c_name(self._local(struct, placement))
 		lines: list[str] = []
@@ -8073,7 +8079,7 @@ class Emitter:
 
 		if filler is None:
 			lines.append(f"\t*out = {codec}_spans({head}"
-			             " view.base + at, n, 0, 0, 0);")
+			             " situ_base(view) + at, n, 0, 0, 0);")
 			return lines
 
 		span = ident(self.prefix, struct.name, local, "self_span")
@@ -8084,7 +8090,7 @@ class Emitter:
 			"\t    || hole_at < at) {",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\t*out = {codec}_spans({head} view.base + at, n,"
+			f"\t*out = {codec}_spans({head} situ_base(view) + at, n,"
 			f" {ahead} + (hole_at - at), hole_n, {filler:#04x}u);",
 		])
 		return lines
@@ -8138,7 +8144,7 @@ class Emitter:
 			"\t\tuint32_t i;",
 			"",
 			"\t\tfor (i = 0; i < n; i++) {",
-			f"\t\t\tif ((view.base)[at + i] != {expect}) {{",
+			f"\t\t\tif ((situ_base(view))[at + i] != {expect}) {{",
 			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t\t}",
 			"\t\t}",

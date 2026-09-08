@@ -161,12 +161,24 @@ private:
  */
 class view {
 public:
-	constexpr view() noexcept : raw_{nullptr, 0, 0} {}
+	constexpr view() noexcept : raw_{nullptr, 0, 0, nullptr} {}
 	explicit constexpr view(situ_view_t raw) noexcept : raw_(raw) {}
 
 	constexpr situ_view_t raw() const noexcept { return raw_; }
 
-	constexpr std::uint8_t  *base()  const noexcept { return raw_.base; }
+	/* The bytes this view maps, checked on the way past (12.3).
+	 *
+	 * Every generated read and write reaches them through here rather
+	 * than through `raw_.base`, which is what makes the check real: there
+	 * is no single point where an accessor begins and exactly one point
+	 * where the bytes are reached, so the guarantee follows the data
+	 * rather than a list somebody has to keep complete.
+	 *
+	 * `situ_base` is the C runtime's, so both backends trap in the same
+	 * place on the same condition; it compiles to `raw_.base` in a
+	 * release build. Not `constexpr` any more, because the check is not:
+	 * nothing here was evaluating a view at compile time. */
+	std::uint8_t  *base()  const noexcept { return situ_base(raw_); }
 	constexpr std::uint32_t  limit() const noexcept { return raw_.limit; }
 
 protected:

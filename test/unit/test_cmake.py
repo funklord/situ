@@ -127,7 +127,7 @@ MAIN = """\
 int main(void)
 {
 	uint8_t raw[8] = { 0x04, 0xd2, 0x00, 0x50, 0x00, 0x18, 0x00, 0x00 };
-	situ_view_t view = { raw, sizeof raw, 0 };
+	situ_view_t view = { raw, sizeof raw, 0, NULL };
 
 	if (situ_udp_header_source_port_get(view) != 1234u) { return 1; }
 	if (situ_udp_header_length_get(view) != 24u)        { return 2; }
