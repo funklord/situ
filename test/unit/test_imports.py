@@ -8,6 +8,7 @@ refusing a cycle.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,8 @@ from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.pack import Program, pack
 from situc.parser import parse, parse_text
-from situc.resolve import resolve
+from situc.layout import Placement
+from situc.resolve import ResolvedSchema, resolve
 from situc.imports import library_root
 from situc.diagnostics import Source
 
@@ -387,7 +389,7 @@ def test_a_character_means_what_its_own_file_says(tmp_path: Path) -> None:
 	assert Program().character(found[0]) == 0xA7
 
 
-def _every_node(node: object):
+def _every_node(node: object) -> Iterator[object]:
 	"""Every `ast.Node` under this one, so a literal can be found wherever a
 	construct happens to keep it."""
 	if isinstance(node, ast.Node):
@@ -468,14 +470,14 @@ WS_OUTER = ("target buffer;\nendian big;\n"
             "struct outer {\n\tu8  c;\n\tinner  held;\n}\n")
 
 
-def _ws_schema(tmp_path: Path):
+def _ws_schema(tmp_path: Path) -> tuple[ast.Schema, ResolvedSchema]:
 	write(tmp_path, "inner.situ", WS_INNER)
 	root = write(tmp_path, "outer.situ", WS_OUTER)
 	schema = load(root)
 	return schema, resolve(schema, solve(schema))
 
 
-def _member(resolved, struct: str, name: str):
+def _member(resolved: ResolvedSchema, struct: str, name: str) -> Placement:
 	for entry in resolved.structs[struct].entries:
 		if entry.placement.name == name:
 			return entry.placement

@@ -1,9 +1,15 @@
 /* situ.h -- minimal runtime for generated situ accessors: views, bounds,
  * generation tracking.
  *
- * Nothing here allocates, recurses, or uses a VLA, and the only headers it
- * pulls in are <stdint.h> and <stddef.h>. Generated code depends on this file
- * and on nothing else.
+ * Nothing here allocates, recurses, or uses a VLA, and a RELEASE build pulls
+ * in <stdint.h> and <stddef.h> and nothing else. Generated code depends on
+ * this file and on nothing else.
+ *
+ * A SITU_CHECKED build adds <stdlib.h>, for the `abort()` that a stale view
+ * traps through -- a getter returns a value and has no error channel to
+ * report a caller bug through. Define `SITU_STALE()` before including this
+ * to route the trap somewhere a freestanding target can use, and the
+ * include goes with it.
  *
  * SITU_CHECKED enables bounds and generation checking. Checked and unchecked
  * builds are ABI-compatible: no structure layout below depends on the flag,
@@ -203,9 +209,8 @@ static inline situ_err_t situ_bounds_check(situ_view_t view, uint32_t off, uint3
  * checked build.
  *
  * `SITU_STALE()` is the hook: define it before including this header to
- * route the trap somewhere a freestanding target can use. The default pulls
- * in <stdlib.h>, which is why it lives behind SITU_CHECKED -- a release
- * build still depends on <stdint.h> and <stddef.h> and nothing else. */
+ * route the trap somewhere a freestanding target can use, and the
+ * <stdlib.h> below goes with it. A release build pulls in neither. */
 #ifndef SITU_STALE
 #include <stdlib.h>
 #define SITU_STALE() abort()

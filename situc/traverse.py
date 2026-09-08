@@ -692,7 +692,8 @@ def invalidating_members(
 		nested[name] = {
 			local_name(struct, placement): placement.type_name
 			for placement in own_members(struct)
-			if placement.type_name in structs}
+			if placement.type_name is not None
+			and placement.type_name in structs}
 
 	for name, struct in structs.items():
 		members = list(own_members(struct))
@@ -736,9 +737,9 @@ def invalidating_members(
 				# not what a fix to 12.3 is for.
 				found[name].add(local)
 				holder, _, leaf = local.partition(".")
-				inner = nested[name].get(holder)
-				if inner is not None:
-					found[inner].add(leaf)
+				owner = nested[name].get(holder)
+				if owner is not None:
+					found[owner].add(leaf)
 	return found
 
 

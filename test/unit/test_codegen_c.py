@@ -13,6 +13,7 @@ import sys
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -4189,14 +4190,17 @@ def test_every_backend_ends_a_covered_region_at_the_same_byte() -> None:
 	              if placement.name == "header")
 
 	# C and C++ take a symbol prefix and a namespace; the other two do not.
-	ends = {
+	# Rebinding `ends` from emitters to their answers left the name typed as
+	# whichever the checker saw first, so `made._region_end` was a call on
+	# `object` and the assertions below were `in` on one. Two names.
+	made: dict[str, Any] = {
 		"c":      CEmitter(parsed, resolved, "ipv4", "situ"),
 		"cpp":    CppEmitter(parsed, resolved, "ipv4", "situ"),
 		"python": PyEmitter(parsed, resolved, "ipv4"),
 		"rust":   RsEmitter(parsed, resolved, "ipv4"),
 	}
-	ends = {name: made._region_end(held, region)
-	        for name, made in ends.items()}
+	ends: dict[str, str] = {name: one._region_end(held, region)
+	                        for name, one in made.items()}
 
 	# None of them may fall back to "the rest of the buffer".
 	for name, text in ends.items():
@@ -4233,3 +4237,30 @@ def test_owned_encode_writes_a_preamble_rather_than_zeros() -> None:
 	assert ("static const uint8_t want[] = { 0x89u, 0x50u, 0x4Eu, 0x47u,"
 	        " 0x0Du, 0x0Au, 0x1Au, 0x0Au };") in source
 	assert "memset(data + 0u, 0, 8u)" not in source
+
+
+def test_the_runtime_pulls_in_only_what_it_says() -> None:
+	"""The header's own claim, made checkable.
+
+	`situ.h` opens by saying a release build pulls in `<stdint.h>` and
+	`<stddef.h>` and nothing else, and that a checked one adds `<stdlib.h>`
+	for the trap a stale view fires through. Nothing held it to that: the
+	test beside this one pins what GENERATED code includes, which is a
+	different file and a different claim, and the runtime acquired a third
+	dependency without anything noticing (26.311).
+
+	Asserted as the whole set rather than as an absence, so a fourth include
+	fails here whichever it is.
+	"""
+	text = (ROOT / "runtime" / "c" / "situ.h").read_text(encoding="ascii")
+	found = re.findall(r"^#include (<[a-z.]+>)", text, re.M)
+
+	assert sorted(found) == ["<stddef.h>", "<stdint.h>", "<stdlib.h>"], found
+
+	# And the third is behind the flag, with the hook that removes it named
+	# on the line above -- a freestanding target defines `SITU_STALE()` and
+	# pulls in nothing.
+	guarded = text.split("#ifdef SITU_CHECKED", 1)[1]
+	assert "#include <stdlib.h>" in guarded
+	assert "#include <stdlib.h>" not in text.split("#ifdef SITU_CHECKED", 1)[0]
+	assert "#ifndef SITU_STALE" in guarded

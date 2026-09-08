@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from situc import wellformed
+from situc import ast
 from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import ATTRIBUTE_NAMES, parse_text
@@ -1491,6 +1492,7 @@ def test_a_preamble_pins_bytes_and_has_no_name() -> None:
 	schema = parse_text('struct S { preamble u8[4] = "WOZ2"; u32 n; }',
 	                    path="s.situ")
 	member = list(schema.structs())[0].members[0]
+	assert isinstance(member, ast.Reserved)
 	assert member.pinned == b"WOZ2"
 
 
@@ -1498,7 +1500,9 @@ def test_a_preamble_may_omit_its_length() -> None:
 	"""The literal already says how many bytes there are, so requiring the
 	author to repeat the count is a second place to be wrong."""
 	schema = parse_text('struct S { preamble u8 = "BM"; u32 n; }', path="s.situ")
-	assert list(schema.structs())[0].members[0].pinned == b"BM"
+	held = list(schema.structs())[0].members[0]
+	assert isinstance(held, ast.Reserved)
+	assert held.pinned == b"BM"
 
 
 def test_a_preamble_length_must_agree_with_its_literal() -> None:
@@ -1548,7 +1552,9 @@ def test_a_byte_run_enum_field_is_the_run_it_denotes() -> None:
 	schema = parse_text('enum m : u8[2] { bmp = "BM" }\nstruct S { m t; }',
 	                    path="s.situ")
 	field = list(schema.structs())[0].members[0]
+	assert isinstance(field, ast.Field)
 	assert field.array is not None
+	assert isinstance(field.array.size, ast.IntLiteral)
 	assert field.array.size.value == 2
 
 

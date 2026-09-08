@@ -24917,6 +24917,54 @@ suites, the vector suites, the fuzz harnesses and the hand-written tests.
 Reporting "the C suite is green" from the first is the vacuous pass with a
 true result: it inspected something, and not the thing that broke.
 
+### 26.311 Two gates in `make check` that nobody had run
+
+The last entry ended by noting that `test_codegen_c.py` and `make test-c`
+are different populations, so the next question was which other populations
+exist. `make check` answers it: `style typecheck lint test cross-test`.
+**`typecheck` and `cross-test` had not been run all session**, against
+changes to every backend's signatures and to `situ_view_t`'s layout.
+
+`cross-test` passes -- host, aarch64 under qemu, aarch64 big-endian
+compile-only -- so the extra pointer per view costs nothing there.
+
+**`typecheck` was red, and had been before any of this.** One error was
+mine, in `invalidating_members`. Nine more were pre-existing, in situ's own
+tests, and are fixed: a `Member` union accessed without narrowing, a
+`parametrize` string where `int.from_bytes` wants a literal, and a name
+rebound from emitters to their answers so that `made._region_end` was a call
+on `object`.
+
+**The other 151 are in two files situ may not edit.**
+`tool/style_gate.py` and `tool/test_style_gate.py` are verbatim copies
+spread from `~/.claude/tool/`, differing only by the two-line header saying
+so, and `code-style.md` requires a copy not to diverge. So situ was between
+two failures: with `tool/` in the checked set, 151 errors it cannot fix;
+without it, two unresolved-import errors, because `test_conventions.py`
+imports `style_gate`.
+
+Resolved by keeping them resolvable and exempting them --
+`ignore_errors` on the four module spellings, with the reason in
+`pyproject.toml` -- and signalled to `claude-guidelines` as
+`7ed067d`, which is where a question about a shared tool belongs. `make
+typecheck` passes now.
+
+**And a claim I made false and then made checkable.** `situ.h` opens by
+saying it pulls in `<stdint.h>` and `<stddef.h>` and nothing else; 26.307
+added `<stdlib.h>` for the trap. It is behind `SITU_CHECKED` and the hook
+that removes it is named beside it, but the top-of-file sentence still said
+"nothing else". Corrected -- and pinned, because nothing held the runtime to
+it: `test_generated_code_includes_nothing_but_the_situ_runtime` is about
+GENERATED code, a different file and a different claim, so the runtime
+acquired a dependency with nothing watching. The new test asserts the whole
+set rather than an absence, so a fourth include fails whichever it is.
+
+**The shape, since it is the third time in two entries.** A gate is only a
+gate over the population it inspects, and the populations here are nested in
+a way the names do not show: `test_codegen_c.py` is inside `make test-c` is
+inside `make test`, which is one of five things in `make check`. Reporting
+"the tests pass" from any of them is true and says less than it sounds like.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -33,8 +33,9 @@ from situc.layout import solve
 from situc.pack import pack
 from situc.parser import parse, parse_text
 from situc.resolve import ResolvedSchema, resolve
-from walker.image import load as load_image
-from walker.walk import (TooDeep, acquire, chain_bits, content_bits,
+from situc.layout import Placement
+from walker.image import Image, load as load_image
+from walker.walk import (TooDeep, View, acquire, chain_bits, content_bits,
                          lead_bytes, offset_bits, size_bits, struct_extent)
 
 from test_codegen_python import load as load_module
@@ -53,14 +54,15 @@ def build(text: str) -> ResolvedSchema:
 	return resolve(schema, solve(schema))
 
 
-def placement(resolved: ResolvedSchema, struct: str, name: str):
+def placement(resolved: ResolvedSchema, struct: str, name: str) -> Placement:
 	for entry in resolved.structs[struct].entries:
 		if entry.placement.name == name:
 			return entry.placement
 	raise AssertionError(f"no member {struct}.{name}")
 
 
-def walked(text: str, message: bytes, struct: str | int = 0):
+def walked(text: str, message: bytes,
+		struct: str | int = 0) -> tuple[Image, View]:
 	"""One packed image and one view over it, for the walker's answers.
 
 	Packed WITH metadata so a struct can be named rather than numbered. The

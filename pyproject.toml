@@ -27,3 +27,21 @@ warn_unreachable       = true
 disallow_any_unimported = true
 show_error_codes       = true
 pretty                 = true
+
+# The two files in `tool/` that are VERBATIM COPIES spread from
+# `~/.claude/tool/`, differing from the source only by a two-line header
+# saying so. `harmonization.md` requires a copy not to diverge, so situ
+# cannot annotate them -- and typechecking a file you may not edit is a gate
+# you cannot pass.
+#
+# They stay in the checked SET rather than being dropped from it, because
+# `test/unit/test_conventions.py` imports `style_gate` and mypy has to
+# resolve it: excluding the directory turns 151 errors into two
+# unresolved-import ones, which is the same gate red for a worse reason.
+#
+# The annotations themselves are the shared tool's business and are recorded
+# as a signal to `claude-guidelines` rather than fixed here (26.311).
+[[tool.mypy.overrides]]
+module = ["style_gate", "test_style_gate",
+          "tool.style_gate", "tool.test_style_gate"]
+ignore_errors = true

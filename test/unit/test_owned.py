@@ -25,6 +25,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -375,7 +376,7 @@ int main(void)
 @pytest.mark.parametrize("width", [24, 40, 48, 56])
 @pytest.mark.parametrize("order", ["little", "big"])
 def test_the_owned_form_reads_a_wide_field_in_the_declared_byte_order(
-		width: int, order: str, tmp_path: Path) -> None:
+		width: int, order: Literal["little", "big"], tmp_path: Path) -> None:
 	"""A width that is a whole number of bytes but not 1, 2, 4 or 8.
 
 	These have no `get_le32` to go through and fall to the runtime's bit

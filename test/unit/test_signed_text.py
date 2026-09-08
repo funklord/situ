@@ -40,7 +40,10 @@ from situc.pack import pack
 from situc.parser import parse_text
 from situc.resolve import resolve
 from walker import report
-from walker.image import load as load_image
+from pathlib import Path
+from typing import Callable
+
+from walker.image import Image, load as load_image
 
 from test_codegen_python import load as load_module
 from test_walker_c import COMPILER, VALUES, _drive, c_verdict
@@ -86,7 +89,7 @@ CASES = [
 OUT_OF_DOMAIN = {b"32768,x": 32768, b"-32769,x": -32769}
 
 
-def image_of(text: str):
+def image_of(text: str) -> Image:
 	schema   = parse_text(text)
 	resolved = resolve(schema, solve(schema))
 	return load_image(pack(schema, resolved, metadata=True)[0])
@@ -127,7 +130,8 @@ def test_an_unsigned_fixed_width_text_number_is_still_accepted() -> None:
 
 
 @pytest.mark.parametrize("raw,want", CASES, ids=[c[0].decode() for c in CASES])
-def test_the_python_backend_reads_the_grammar(tmp_path, raw, want) -> None:
+def test_the_python_backend_reads_the_grammar(
+		tmp_path: Path, raw: bytes, want: int | str) -> None:
 	module = load_module(tmp_path, BODY, PREAMBLE)
 	view   = module.s.at(module.Message(bytearray(raw)), 0, len(raw))
 
@@ -139,7 +143,8 @@ def test_the_python_backend_reads_the_grammar(tmp_path, raw, want) -> None:
 
 
 @pytest.mark.parametrize("raw,want", CASES, ids=[c[0].decode() for c in CASES])
-def test_the_walker_agrees_about_the_verdict(raw, want) -> None:
+def test_the_walker_agrees_about_the_verdict(
+		raw: bytes, want: int | str) -> None:
 	"""The fifth column, which reaches the number by another road entirely:
 	the packed image's check rows rather than a generated accessor. It is
 	the only thing here that exercises the floor being DERIVED from the
@@ -155,7 +160,7 @@ def test_the_walker_agrees_about_the_verdict(raw, want) -> None:
 		f"{want!r}")
 
 
-def test_the_non_failing_read_signs_too(tmp_path) -> None:
+def test_the_non_failing_read_signs_too(tmp_path: Path) -> None:
 	"""`_value` is the read the offset arithmetic uses, where nothing may
 	raise. It returned a magnitude while the fallible getter returned a
 	negative number, which is the disagreement that matters: every offset
@@ -179,7 +184,7 @@ def test_minimal_skips_the_sign() -> None:
 	import sys
 	sys.path.insert(0, "runtime/python")
 	try:
-		from situ_runtime import digits_minimal
+		from situ_runtime import digits_minimal  # type: ignore[import-not-found]
 	finally:
 		sys.path.remove("runtime/python")
 
@@ -198,7 +203,8 @@ def test_minimal_skips_the_sign() -> None:
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 @pytest.mark.parametrize("raw,want", CASES, ids=[c[0].decode() for c in CASES])
-def test_the_c_walker_parses_the_grammar(tmp_path, raw, want) -> None:
+def test_the_c_walker_parses_the_grammar(
+		tmp_path: Path, raw: bytes, want: int | str) -> None:
 	"""`situ_walk_read` on the member, which is the C walker's own
 	`parse_digits` rather than a generated accessor.
 
@@ -231,7 +237,8 @@ def test_the_c_walker_parses_the_grammar(tmp_path, raw, want) -> None:
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 @pytest.mark.parametrize("raw,want", CASES, ids=[c[0].decode() for c in CASES])
-def test_the_c_walker_agrees_about_the_verdict(tmp_path, raw, want) -> None:
+def test_the_c_walker_agrees_about_the_verdict(
+		tmp_path: Path, raw: bytes, want: int | str) -> None:
 	"""And the domain, which is where the derived floor lives in C.
 
 	The image carries the ceiling and nothing else; `-(want + 1)` is
@@ -247,7 +254,7 @@ def test_the_c_walker_agrees_about_the_verdict(tmp_path, raw, want) -> None:
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no C compiler")
-def test_the_c_backend_reads_the_grammar(tmp_path) -> None:
+def test_the_c_backend_reads_the_grammar(tmp_path: Path) -> None:
 	"""The generated C accessor, which reaches `situ_parse_int` in the C
 	runtime -- a fourth implementation of the grammar and the only one the
 	tests above do not touch. The walker has its own parser and the three
@@ -312,7 +319,7 @@ int main(void)
 
 	binary = tmp_path / "probe"
 	built  = subprocess.run(
-		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		[str(HOST_CC), *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
 		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
 		 str(RUNTIME / "situ.c"), "-o", str(binary)],
 		capture_output=True, text=True)
@@ -323,7 +330,7 @@ int main(void)
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
-def test_the_cpp_backend_reads_the_grammar(tmp_path) -> None:
+def test_the_cpp_backend_reads_the_grammar(tmp_path: Path) -> None:
 	"""The C++ accessor, which shares the C runtime's `situ_parse_int` and
 	nothing else: its own `int64_t` holding, its own cast back down, and its
 	own `[[nodiscard]] err` in place of an out-parameter and a code."""
@@ -334,7 +341,7 @@ def test_the_cpp_backend_reads_the_grammar(tmp_path) -> None:
 
 	binary = tmp_path / "probe"
 	built  = subprocess.run(
-		[HOST_CXX, *[w for w in CXX_WARNINGS if w != "-fsyntax-only"],
+		[str(HOST_CXX), *[w for w in CXX_WARNINGS if w != "-fsyntax-only"],
 		 f"-I{CPP_RUNTIME / 'c'}", f"-I{CPP_RUNTIME / 'cpp'}", f"-I{tmp_path}",
 		 str(tmp_path / "main.cpp"), str(CPP_RUNTIME / "c" / "situ.c"),
 		 "-o", str(binary)],
@@ -346,7 +353,7 @@ def test_the_cpp_backend_reads_the_grammar(tmp_path) -> None:
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
-def test_the_rust_backend_reads_the_grammar(tmp_path) -> None:
+def test_the_rust_backend_reads_the_grammar(tmp_path: Path) -> None:
 	"""The fourth reading of the grammar, and the only one with a parser of
 	its own in a language that is not C: `situ_rt::parse_int` shares no code
 	with `situ_parse_int` and has to agree with it byte for byte."""
@@ -364,7 +371,7 @@ def test_the_rust_backend_reads_the_grammar(tmp_path) -> None:
 	assert ran.returncode == 0, ran.stdout + ran.stderr
 
 
-def _rows(spell) -> str:
+def _rows(spell: Callable[[object], str]) -> str:
 	out = []
 	for raw, want in CASES:
 		spelled = "".join(f"\\x{byte:02x}" for byte in raw)
