@@ -40,7 +40,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	declared_depth, depth_limit, is_recursive,
+	declared_depth, depth_limit, invalidating_members,
+	is_recursive,
 	codec_entry_point, decode_counts_bits,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
@@ -219,6 +220,10 @@ class Emitter:
 		#: backend declined is not a layout fact, so it is asked of the
 		#: emitter, which knows, rather than of the layout, which cannot.
 		self._emitted: set[str] = set()
+		#: Per struct, the members whose write moves a later one (12.3).
+		#: Asked once of the decision layer rather than re-derived here,
+		#: because it is one rule for four backends and two walkers.
+		self._invalidating = invalidating_members(resolved.structs)
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
@@ -2827,12 +2832,22 @@ class Emitter:
 		# the other backends do: the slice assignment would raise here rather
 		# than corrupt anything, and four backends answering three ways about
 		# one message is the disagreement they exist to avoid (26.27).
+		# Section 12.3: a write that can move a later member invalidates
+		# every view of this message, and one that cannot does not. Nothing
+		# in this backend bumped the generation at all, so the check on
+		# every access could not fire and a sub-view held across such a
+		# write read the bytes that used to be there (26.306).
+		moves = local_name(struct, placement) in self._invalidating.get(
+			struct.name, set())
+		touch = ["\t\tself._msg.touch()\t# 12.3: this moves what follows"] \
+			if moves else []
+
 		lines.extend([
 			"",
 			f"\t@{name}.setter",
 			f"\tdef {name}(self, value: {hint}) -> None:",
 			*gate,
-			*([f"\t\t{self._store(placement, scalar, offset)}"]
+			*([f"\t\t{self._store(placement, scalar, offset)}", *touch]
 			  if fits is None else [
 				f"\t\tif not ({fits}):",
 				"\t\t\t# Its offset is a sum of lengths the message chose,"
@@ -2841,6 +2856,7 @@ class Emitter:
 				" message.",
 				"\t\t\treturn",
 				f"\t\t{self._store(placement, scalar, offset)}",
+				*touch,
 			]),
 		])
 		return lines

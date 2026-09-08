@@ -99,6 +99,7 @@ from situc.capability import Axis
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	invalidating_members,
 	Member, arm_members, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, local_name, own_entries,
 	own_members, unmeasurable_inside,
@@ -470,10 +471,14 @@ def writes(struct: ResolvedStruct,
 	"""
 	# A field whose value decides where a later member starts writes through
 	# a setter that takes the message and bumps its generation (12.3), so its
-	# signature is not the ordinary one. `sqlite`'s `cell_count` is the case:
-	# four backends spell that extended setter four ways on purpose.
-	drivers = {placement.sized_by for placement in own_members(struct)
-	           if placement.sized_by and placement.sized_by != "remaining"}
+	# signature is not the ordinary one.
+	#
+	# The decision layer's answer, not a fourth private copy of it. This read
+	# `sized_by` alone, which holds a path and holds nothing for `u8 data[len
+	# - 8]`, so it round-tripped members whose setter had the other signature
+	# the moment C stopped under-counting them too (26.306).
+	drivers = invalidating_members(structs_by_name or {}).get(
+		struct.name, set())
 
 	found: list[Ask] = []
 

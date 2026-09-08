@@ -150,8 +150,22 @@ static inline int situ_in_bounds(situ_view_t view, uint32_t offset, uint32_t ext
 
 #ifdef SITU_CHECKED
 
-/* Assert that a view still matches its message. Generated accessors call this
- * on entry; it compiles to nothing in a release build. */
+/* Assert that a view still matches its message.
+ *
+ * NOT called by any generated accessor: measured across the corpus, zero
+ * call sites. This said "generated accessors call this on entry", which was
+ * the claim rather than the code -- an ordinary getter takes a view and no
+ * message, so it has nothing to compare against, and the generation the
+ * setters bump is therefore written and never read here (26.306).
+ *
+ * Python is the one backend where 12.3 holds end to end, its views carrying
+ * a reference to the message; Rust needs none of this, `&mut self` on a
+ * setter being the borrow checker's refusal of the other view. Closing it
+ * in C means every accessor taking the message, which is a change to this
+ * API's shape rather than a fix, and is recorded as an open question.
+ *
+ * Available to a caller who holds both and wants the check, and it compiles
+ * to nothing in a release build. */
 static inline situ_err_t situ_view_check(const situ_msg_t *msg, situ_view_t view)
 {
 	if (view.base == NULL || view.generation != msg->generation) {

@@ -47,7 +47,8 @@ from situc.traverse import (
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
-	declared_depth, depth_limit, is_own_member, is_recursive,
+	declared_depth, depth_limit, invalidating_members, is_own_member,
+	is_recursive,
 	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
 	readable_names,
@@ -127,6 +128,9 @@ class Emitter:
 		self.resolved = resolved
 		self.basename = basename
 		self.prefix   = prefix
+		#: Per struct, the members whose write moves a later one (12.3).
+		#: One rule for four backends, asked of the decision layer.
+		self._invalidating = invalidating_members(resolved.structs)
 		#: Accessor paths this emitter actually wrote, recorded as it writes
 		#: them. `validate` consults it rather than re-deriving whether an
 		#: accessor exists: three backends each grew their own answer to that
@@ -1153,12 +1157,16 @@ class Emitter:
 		return lines
 
 	def _drivers(self, struct: ResolvedStruct) -> list[str]:
-		"""Fields whose value decides where later members start."""
-		return sorted({
-			placement.sized_by
-			for placement in self._top_level(struct)
-			if placement.sized_by and placement.sized_by != "remaining"
-		})
+		"""Fields whose value decides where later members start.
+
+		The decision layer's answer, not a second one. This read `sized_by`
+		alone, which holds a path and holds nothing at all for `u8 data[len
+		- 8]` -- so 23 of the corpus's 48 such fields got the ordinary
+		setter, wrote a length, and left every view of the message valid.
+		`ipv4_header.ihl`, `udp_header.length` and `bmp`'s `pixel_offset`
+		were among them (26.306).
+		"""
+		return sorted(self._invalidating.get(struct.name, set()))
 
 	def _durability_note(self, struct: ResolvedStruct) -> list[str]:
 		"""Say that a store to this struct outlives the process.

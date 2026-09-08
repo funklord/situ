@@ -12,19 +12,24 @@ What holds here:
     visible to whoever owns the bytes.
   * **Bounds.** Checked once at acquisition, as in C, and the slice enforces it
     thereafter.
-  * **Invalidation (section 12.3), as machinery and not yet as a guarantee.**
-    A view carries the generation its message had when it was taken and every
-    access checks it -- and NOTHING IN THIS BACKEND EVER BUMPS IT. `touch()`
-    below has no caller in the runtime or in the emitter, so the check runs on
-    every access and cannot fire.
+  * **Invalidation (section 12.3), and this is the one backend where it holds
+    end to end.** A view carries the generation its message had when it was
+    taken, every access checks it, and a setter that can move a later member
+    bumps it -- `traverse.invalidating_members` says which, one rule for four
+    backends.
 
-    This claimed to be "the one place Python is *stronger* than release-build
-    C, where the check compiles out", which is the reverse of the truth: C's
-    setters take the message and call `situ_msg_touch`, and these do not. A
-    sub-view held across a write that moves a later member reads the bytes
-    that used to be there, with no error -- measured, and C++ does the same.
-    Which setters should invalidate is one rule for four backends and is
-    recorded as an open question rather than settled here (26.306).
+    All three halves are recent. Nothing here bumped the generation at all
+    until 26.306, so the check ran on every access and could not fire, and
+    this docstring claimed invalidation was "the one place Python is
+    *stronger* than release-build C" while a sub-view held across a
+    length-changing write read the bytes that used to be there. C and C++ bump
+    it now and read it nowhere: `situ_view_check` needs the message and an
+    ordinary getter takes a view, so their generation is written and unread.
+    Rust needs none of it -- `&mut self` on a setter is the borrow checker
+    refusing the other view.
+
+    So the guarantee is real here, sound by construction in Rust, and an open
+    question about accessor signatures in the other two.
   * **Constraints.** `validate()` raises rather than returning a code, because
     that is what a Python caller will actually handle.
 

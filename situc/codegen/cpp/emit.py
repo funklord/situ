@@ -45,7 +45,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	declared_depth, depth_limit, is_recursive,
+	declared_depth, depth_limit, invalidating_members,
+	is_recursive,
 	codec_entry_point,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
@@ -129,6 +130,9 @@ class Emitter:
 		self.resolved  = resolved
 		self.basename  = basename
 		self.namespace = namespace
+		#: Per struct, the members whose write moves a later one (12.3).
+		#: One rule for four backends, asked of the decision layer.
+		self._invalidating = invalidating_members(resolved.structs)
 		#: Accessor paths this emitter actually wrote, recorded as it writes
 		#: them. `validate` consults it rather than re-deriving whether an
 		#: accessor exists: three backends each grew their own answer to that
@@ -5034,6 +5038,15 @@ class Emitter:
 		# `transmittable()` go on saying the message was ready to send -- the
 		# capability map's `auth = Covered(t)` is a claim that writing marks
 		# `t` stale, and here it was not true. C and Python both refuse it.
+		# Section 12.3, on the same principle as the covered setter below:
+		# a write that can move a later member invalidates every view of the
+		# message, so it takes the message and says so in its signature.
+		# Nothing in this backend bumped the generation at all, so the check
+		# on every access could not fire and a sub-view held across such a
+		# write read the bytes that used to be there (26.306).
+		moves = local_name(struct, placement) in self._invalidating.get(
+			struct.name, set())
+
 		if placement.covered_by:
 			bits = self._dirty_bits(struct, placement)
 			what = ", ".join(placement.covered_by)
@@ -5041,12 +5054,14 @@ class Emitter:
 			# to hold it. The plain setter below has said so since 26.27 and
 			# the covered one above it did not, so the one write that carries a
 			# security obligation was the one without the bound.
+			shift = ["\t\towner.touch();"] if moves else []
 			body = ([f"\t\t{self._store(scalar, placement, stored, offset)}",
-			         f"\t\towner.mark_dirty({bits});"]
+			         f"\t\towner.mark_dirty({bits});", *shift]
 			        if fits is None else [
 				f"\t\tif ({fits}) {{",
 				f"\t\t\t{self._store(scalar, placement, stored, offset)}",
 				f"\t\t\towner.mark_dirty({bits});",
+				*[f"\t{one}" for one in shift],
 				"\t\t}",
 			])
 			lines.extend([
@@ -5063,6 +5078,31 @@ class Emitter:
 		# A write at an offset the message chose is the same hole as a read,
 		# and worse: reading past the frame is a wrong answer, writing past it
 		# is somebody else's data. No error channel here, so it does nothing.
+		if moves:
+			lines.extend([
+				"\t/* Writing this moves where the members after it start, so"
+				" every",
+				"\t * view of this message is stale afterwards (12.3). It"
+				" takes the",
+				"\t * message to say so, and the cost is in the signature"
+				" rather than",
+				"\t * in a comment somebody may not read. Re-acquire after"
+				" the write. */",
+				f"\tvoid set_{name}(::situ::rt::message &owner, {ctype} value)"
+				" noexcept",
+				"\t{",
+				*([f"\t\t{self._store(scalar, placement, stored, offset)}",
+				   "\t\towner.touch();"]
+				  if fits is None else [
+					f"\t\tif ({fits}) {{",
+					f"\t\t\t{self._store(scalar, placement, stored, offset)}",
+					"\t\t\towner.touch();",
+					"\t\t}",
+				]),
+				"\t}",
+			])
+			return lines
+
 		lines.extend([
 			*([] if fits is None else [
 				"\t/* Does nothing where the member does not fit the view:"

@@ -24643,67 +24643,79 @@ unnamed value in all of them.
 ### 26.306 A check on every access that nothing can make fail
 
 Section 12.3's invalidation rule is a generation: a message carries one, a
-view records the one it was taken at, and every access compares them. Two of
-the four backends have the whole apparatus and **nothing that arms it**.
+view records the one it was taken at, and every access compares them. Asked
+of each backend in turn, end to end, it holds in one of four -- and only
+since this entry.
 
-    Message.touch()   no caller in runtime/python or in the Python emitter
-    C++               `touch` appears nowhere in situc/codegen/cpp/emit.py
-    C                 every setter takes the message: situ_msg_touch(msg)
-    Rust              `set_n(&mut self, ...)` -- sound by construction
+    write side (bump the generation)      read side (compare it)
+    C      48 of 48 setters, now          NO generated accessor calls
+                                          `situ_view_check`: zero, measured
+    C++    the setters that move, now     nothing compares a generation
+    Python every moving setter, now       `_check()` on every access
+    Rust   not needed: `&mut self`        not needed, same reason
 
-Measured rather than read, over `struct e { u8 n; u8 body[n]; inner tail; }`,
-holding a sub-view of `tail` across `n = 2` becoming `n = 3`:
+**What was there before.** `Message.touch()` had no caller in the Python
+backend or runtime, and `touch` appeared nowhere in the C++ emitter -- so
+in both the check ran on every access and could not fire. Measured over
+`struct e { u8 n; u8 body[n]; inner tail; }`, holding a sub-view of `tail`
+across `n = 2` becoming `n = 3`:
 
     Python   fresh view x=0x22 y=0x33    held sub-view x=0x11 y=0x22
     C++      fresh view x=0x22 y=0x33    held sub-view x=0x11 y=0x22
 
-**No error in either.** The held view reads the bytes that used to be there,
-which is exactly what 12.3 exists to refuse and what C does refuse.
+No error in either. The held view read the bytes that used to be there,
+which is what 12.3 exists to refuse. Python refuses it now.
 
-**And the Python backend's own docstring had it backwards**, claiming
-invalidation was "the one place Python is *stronger* than release-build C,
-where the check compiles out". C is the one that invalidates; Python is the
-one whose check cannot fire. Corrected, because a false statement about a
-guarantee needs no decision from anybody.
+**And C's write side was two thirds absent, which nobody had counted.** C
+has `_shifting_setters` for exactly this -- "setters for fields that drive a
+length in this struct... the setter therefore takes the message, which also
+makes the cost visible in the signature rather than only in a comment" --
+and its private `_drivers` read `sized_by` alone. That holds a path and
+holds nothing for `u8 data[len - 8]`, so **23 of the corpus's 48 such fields
+got the ordinary setter**: `ipv4_header.ihl`, `udp_header.length`,
+`ipv6ext.hdr_ext_len`, BMP's `pixel_offset`. They wrote a length and left
+every view valid. It is 48 of 48 now.
 
-**The fix does need one, which is why this is recorded rather than made.**
-Three rules are available and they are not equivalent:
+**The decision moved to the layer, which is what made the count possible.**
+`traverse.invalidating_members` answers, per struct, which members' writes
+move a later one, and the four backends ask it rather than each deriving an
+answer. The sources are the ones a length or an offset can READ, which is
+what `_over_fields` substitutes into in every backend: a named length
+(`sized_by`), arithmetic over several (`size_expr`), a located member's
+offset, and a discriminant whose arms are not all one size.
 
-- **Touch on every setter, as C does.** Tried: it turns the round-trip
-  probes red, because a Python view that performs a write is then stale for
-  its own next read. C callers live with that -- a C setter takes the
-  message and the caller re-acquires -- and no Python caller, test or
-  example expects it.
-- **Touch only where the write can MOVE a later member**, which is the
-  smallest set that restores the guarantee. It is also a change to C, which
-  currently touches unconditionally, so it is one rule for four backends
-  rather than a Python patch.
-- **Leave Python and C++ as they are and say so**, on the ground that
-  Python re-derives offsets on every access so only a held sub-view is
-  exposed. That is a narrowing of 12.3 and would have to be written into it.
+It is **schema-wide**, because a struct does not know its callers: BMP's
+pixels sit `at file.pixel_offset`, and `pixel_offset` belongs to the nested
+header rather than to the struct that reads it, so writing it through the
+header's own setter moves a member of a struct the header has never heard
+of. A per-struct answer cannot see that.
 
-**C++ cannot take the first two without an API change.** Its `view` holds
-`situ_view_t` and no message pointer -- "a value, deliberately... it owns
-nothing" -- so a C++ setter has nothing to bump. The message-taking form
-exists there for covered members (`set_sealed_inner_kind(msg, 7)`), so the
-pattern is available; extending it to every setter is a change to a public
-interface across a backend.
+`[since]` is deliberately absent: a versioned struct is append-only, so
+nothing moves and what varies is how much of the struct is there (19.4).
 
-So: which setters invalidate is a question about 12.3 rather than about four
-emitters, and the cost falls differently in each language. It goes to the
-copyright holder with the reproduction above, per *`project.md` is the source
-of truth* -- the document and the code contradict each other, and resolving
-that quickly in either direction spends the discrepancy without cashing it.
+**What is still open, and it is a question about this API's shape rather
+than a fix.** C and C++ now bump a generation that nothing reads. Closing
+that means every accessor taking the message -- `situ_view_check(msg, view)`
+needs both, and an ordinary getter takes a view -- which is a change to
+every signature in two backends. C's own comment claimed "generated
+accessors call this on entry"; they do not, and that sentence is corrected
+rather than made true.
 
-**How it was found is the reusable part**, and it is the same census as
-26.303 and 26.305 pointed at the differ's other half. `writes()` round-trips
-376 of 730 own members; sorting the rest by `classify` leaves 26 scalars
-with no reason on the list, and they are all length drivers, excluded
-because "a field whose value decides where a later member starts writes
-through a setter that takes the message and bumps its generation (12.3), so
-its signature is not the ordinary one". That sentence is true of C and of no
-other backend -- which is how a question about setters turned into one about
-invalidation.
+So the honest state is: **the guarantee holds in Python, is sound by
+construction in Rust, and in C and C++ is a written-and-unread counter.**
+Whether to spend every accessor's signature on it is the copyright
+holder's.
+
+**How it was found** is the census of 26.303 and 26.305 pointed at the
+differ's other half. `writes()` round-trips 376 of 730 own members; sorting
+the rest by `classify` leaves 26 scalars with no reason on the list, all of
+them length drivers, held out because "a field whose value decides where a
+later member starts writes through a setter that takes the message and
+bumps its generation (12.3), so its signature is not the ordinary one".
+That is true of C, was true of only half of C's own drivers, and was true
+of no other backend -- which is how a question about setters became one
+about invalidation.
+
 
 ## 27. Questions, and how they were settled
 

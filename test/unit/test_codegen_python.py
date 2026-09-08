@@ -408,8 +408,16 @@ def test_an_element_is_bounded_by_the_count(tmp_path: Path) -> None:
 	rt     = runtime()
 
 	buf = bytearray(32)
-	s   = module.s.at(rt.Message(buf), 0, 32)
+	msg = rt.Message(buf)
+	s   = module.s.at(msg, 0, 32)
 	s.hdr.n = 2
+
+	# Re-acquired, because that write MOVED what follows it and section
+	# 12.3 says every view taken before it is stale. This read through the
+	# view it had written through, which worked only because nothing in
+	# this backend bumped the generation -- the check ran on every access
+	# and could not fire (26.306).
+	s = module.s.at(msg, 0, 32)
 
 	assert s.recs_count == 2
 	assert s.recs(1)._at - s.recs(0)._at == 4

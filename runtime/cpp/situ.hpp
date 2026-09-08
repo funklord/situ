@@ -118,6 +118,18 @@ public:
 	 *
 	 * These are not [[nodiscard]]: they return nothing, and the thing a
 	 * caller must not drop is `transmittable`, which is. */
+	/* Section 12.3: something moved, so every view taken before now is
+	 * stale. Called by the setters that can move a later member, which
+	 * take this message for exactly that reason -- the cost is in the
+	 * signature rather than in a comment somebody may not read.
+	 *
+	 * Not [[nodiscard]] and not an error: invalidation is a fact about
+	 * the bytes, and the refusal happens later, on the stale view. */
+	void touch() noexcept
+	{
+		situ_msg_touch(&raw_);
+	}
+
 	void mark_dirty(std::uint32_t bits) noexcept
 	{
 		situ_msg_mark_dirty(&raw_, bits);

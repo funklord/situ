@@ -15,6 +15,8 @@ backend reads the same way.
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -632,6 +634,112 @@ class OffsetStep:
 	kind: str
 	placement: Placement | None	= None
 	size: int			= 0
+
+
+def invalidating_members(
+		structs: dict[str, "ResolvedStruct"]) -> dict[str, set[str]]:
+	"""Per struct, the local names whose WRITE can move a later member.
+
+	Section 12.3's invalidation rule needs exactly this and no more. A
+	message carries a generation, a view records the one it was taken at,
+	and every access compares them -- so a setter has to bump the generation
+	when, and only when, a view could now be looking at the wrong bytes.
+
+	C bumped it on every setter, which is safe and inaccurate: a write that
+	moves nothing invalidated every view of the message. Python and C++
+	bumped it on none, which is neither -- `Message.touch()` had no caller
+	in either, so the check ran on every access and could not fire, and a
+	sub-view held across a length-changing write read the bytes that used to
+	be there with no error (26.306). Rust needs none of it: `&mut self` on
+	the setter means the borrow checker has already refused the other view.
+
+	The sources are the ones a length or an offset can READ, which is what
+	`_over_fields` substitutes into in every backend -- so this is as
+	accurate as the code the backends emit rather than a second opinion
+	about it:
+
+	  * an array length, whether a named field (`sized_by`) or arithmetic
+	    over several (`size_expr`) -- `u8 body[n]` and `u8 data[len - 8]`
+	    move what follows them equally;
+	  * a located member's offset, which reads a field outright;
+	  * a variant's discriminant, where the arms are not all one size, since
+	    the member after the variant starts wherever the selected arm ends.
+
+	**Schema-wide, because a struct does not know its callers.** BMP's pixel
+	array sits `at file.pixel_offset`, and `pixel_offset` is a member of the
+	nested header rather than of the struct that reads it -- so writing it
+	through the header's own setter moves a member of a struct the header
+	has never heard of. A per-struct answer cannot see that; this pass
+	walks every struct's expressions and marks the member wherever it lives.
+
+	Section 10's no-forward-reference rule is what makes the within-struct
+	half answerable: a size expression may only name a field declared before
+	it, so the members a write can move are always the ones after it. Across
+	structs there is no such order, and a nested member that anybody reads
+	is marked outright.
+
+	`[since]` is deliberately absent. A versioned struct is append-only, so
+	nothing moves and what varies is how much of the struct is there (19.4)
+	-- a version field changes PRESENCE, not offsets, and the accessor for
+	an absent member refuses on its own.
+	"""
+	found: dict[str, set[str]] = {name: set() for name in structs}
+
+	#: member name -> the struct it holds, per struct, so a dotted path read
+	#: in one struct can be marked in the struct that owns the member.
+	nested: dict[str, dict[str, str]] = {}
+	for name, struct in structs.items():
+		nested[name] = {
+			local_name(struct, placement): placement.type_name
+			for placement in own_members(struct)
+			if placement.type_name in structs}
+
+	for name, struct in structs.items():
+		members = list(own_members(struct))
+		locals_ = [local_name(struct, placement) for placement in members]
+
+		for index, other in enumerate(members):
+			sources = [other.size_expr, other.located]
+			named   = ({other.sized_by} if other.sized_by
+			           and other.sized_by != "remaining" else set())
+			if other.discriminant and len(set(other.arm_sizes or ())) > 1:
+				named.add(other.discriminant)
+
+			for source in sources:
+				if not source:
+					continue
+				for local in locals_[:index]:
+					if local and _names_a_field(source, local):
+						named.add(local)
+				# A dotted path reaches into a nested struct, and the
+				# member it names belongs to that struct's own setters.
+				for holder, inner in nested[name].items():
+					for deep in own_members(structs[inner]):
+						leaf = local_name(structs[inner], deep)
+						if leaf and _names_a_field(
+								source, f"{holder}.{leaf}"):
+							found[inner].add(leaf)
+
+			for local in named:
+				if local in locals_[:index]:
+					found[name].add(local)
+				elif "." in local:
+					holder, _, leaf = local.partition(".")
+					inner = nested[name].get(holder)
+					if inner is not None:
+						found[inner].add(leaf)
+	return found
+
+
+def _names_a_field(source: str, local: str) -> bool:
+	"""Whether an expression's source reads the field called `local`.
+
+	The same match every backend makes when it substitutes a field into an
+	emitted length, bounded to whole identifiers so that `n` does not match
+	`nlattr` and `len` does not match `length`.
+	"""
+	return re.search(rf"(?<![A-Za-z0-9_.]){re.escape(local)}"
+	                 rf"(?![A-Za-z0-9_])", source) is not None
 
 
 def occupies_fixed_bytes(placement: Placement) -> bool:
