@@ -1,0 +1,32 @@
+// `endian native`, at the widths nothing else reaches.
+//
+// Two schemas already declare it -- netlink and tiff, both because the bytes
+// are a host structure rather than a wire format -- and between them they
+// reach neither of the accessors native byte order actually has of its own.
+// A width of 1, 2, 4 or 8 bytes goes through `situ_get_ne<N>`; anything else
+// whole falls to the bit extractor, where `bit_extractor` decides on ENDIAN
+// rather than on `bit_order` and returns `ne`. So `u24` and `u64` are the
+// two shapes that name a native accessor, and until this file existed the
+// corpus had neither.
+//
+// It found one on the first run: the four-way differ printed every scalar as
+// a signed 64-bit word, so a `u64` above 2^63 read negative in C, C++ and
+// Rust and positive in Python -- a disagreement about a value the four
+// agree on, in the tool whose whole job is to tell those apart (26.309).
+// The corpus could not have shown it: five `i64` in it and not one `u64`.
+//
+// `[allow_host_dependent]` is not decoration. `endian native` on a struct
+// without it is refused, because the answer depends on the machine that
+// wrote the bytes and a capture does not record which -- so this file is
+// also the one place that waiver is exercised on something other than a
+// kernel interface.
+
+target buffer;
+endian native;
+
+struct native [allow_host_dependent] {
+	u24  wide;			// the bit extractor, in `ne`
+	u64  big;			// situ_get_ne64
+	u16  small;			// situ_get_ne16, for contrast
+	u8   tail;
+}

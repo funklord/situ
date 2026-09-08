@@ -40,6 +40,7 @@ from situc.propagate import Resolved
 from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	invalidating_members,
 	Obligation, data_sized, enclosing_arm, has_computable_extent,
 	indexed_elements, obligations, own_members, local_name,
 )
@@ -1166,7 +1167,7 @@ def _field_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct
 		return		# reached through the gate; checked by _gate_checks
 
 	_extent_check(suite, struct, entry, prefix, extent)
-	_round_trip_check(suite, struct, entry, prefix, extent)
+	_round_trip_check(suite, resolved, struct, entry, prefix, extent)
 	_encoding_check(suite, struct, entry, prefix, extent)
 
 
@@ -1257,7 +1258,8 @@ def _extent_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		 " * must notice exactly the ones the map named. */"])
 
 
-def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
+def _round_trip_check(suite: Suite, resolved: ResolvedSchema,
+		struct: ResolvedStruct, entry: Resolved,
 		prefix: str, extent: int) -> None:
 	"""Boundary values, and the claim that writing one moves nothing else.
 
@@ -1295,6 +1297,14 @@ def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		return
 
 	values = _boundary_values(scalar)
+	# A driver's setter takes the message and bumps its generation (12.3),
+	# so its signature is not the plain one. This site did not ask, and it
+	# only mattered once the emitter stopped under-counting drivers: with
+	# `sized_by` alone, `link.units` -- sized by arithmetic -- had the plain
+	# setter and this compiled (26.306).
+	taken = ("&msg, view"
+	         if local in invalidating_members(resolved.structs)[struct.name]
+	         else "view")
 	body: list[str] = [*_acquire(struct, prefix, extent), ""]
 	body.extend([
 		"\tuint8_t witness[sizeof buf];",
@@ -1306,7 +1316,7 @@ def _round_trip_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	for value in values:
 		body.extend([
 			"\tmemcpy(witness, buf, sizeof buf);",
-			f"\t{setter}(view, {value});",
+			f"\t{setter}({taken}, {value});",
 			f"\tassert_int_equal((uint64_t){_getter(struct, placement, prefix)}, "
 			f"(uint64_t)({value}));",
 			"",

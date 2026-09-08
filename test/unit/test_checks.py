@@ -223,8 +223,8 @@ def test_a_wrong_offset_is_caught(tmp_path: Path) -> None:
 	knowing anything about how the accessor is written.
 	"""
 	result = build(tmp_path, SIMPLE,
-		corrupt=("situ_get_be32(view.base + 3u)",
-		         "situ_get_be32(view.base + 4u)"))
+		corrupt=("situ_get_be32(situ_base(view) + 3u)",
+		         "situ_get_be32(situ_base(view) + 4u)"))
 
 	assert result.returncode != 0, "a field moved off its claimed offset and no check noticed"
 	assert "check_s_seq_occupies_its_claimed_bytes" in result.stdout
@@ -238,9 +238,9 @@ def test_a_setter_that_touches_a_neighbour_is_caught(tmp_path: Path) -> None:
 	to make.
 	"""
 	result = build(tmp_path, SIMPLE,
-		corrupt=("situ_put_be32(view.base + 3u, (uint32_t)value);",
-		         "situ_put_be32(view.base + 3u, (uint32_t)value);"
-		         " (view.base)[0] = 0;"))
+		corrupt=("situ_put_be32(situ_base(view) + 3u, (uint32_t)value);",
+		         "situ_put_be32(situ_base(view) + 3u, (uint32_t)value);"
+		         " (situ_base(view))[0] = 0;"))
 
 	assert result.returncode != 0, "a setter scribbled outside its field unnoticed"
 	assert "round_trips_in_place" in result.stdout
@@ -301,8 +301,8 @@ def test_a_swapped_byte_order_is_caught(tmp_path: Path) -> None:
 	is byte order.
 	"""
 	result = build(tmp_path, SIMPLE,
-		corrupt=("situ_get_be32(view.base + 3u)",
-		         "situ_get_le32(view.base + 3u)"))
+		corrupt=("situ_get_be32(situ_base(view) + 3u)",
+		         "situ_get_le32(situ_base(view) + 3u)"))
 
 	assert result.returncode != 0, "a byte-swapped getter went unnoticed"
 	assert "decodes_a_known_encoding" in result.stdout
@@ -428,8 +428,8 @@ def test_a_run_length_that_stops_clamping_is_caught(tmp_path: Path) -> None:
 	is about: break the generator, watch the generated suite go red."""
 	result = build(tmp_path, "struct s { u8 n; u8 data[n]; u8 tail; }",
 		corrupt=(
-			"return situ_min_u32((uint32_t)((uint8_t)(view.base)[0u]),",
-			"return ((uint32_t)((uint8_t)(view.base)[0u]) + 0u * (uint32_t)0 +"))
+			"return situ_min_u32((uint32_t)((uint8_t)(situ_base(view))[0u]),",
+			"return ((uint32_t)((uint8_t)(situ_base(view))[0u]) + 0u * (uint32_t)0 +"))
 
 	assert result.returncode != 0, "a dropped run-length clamp went unnoticed"
 	assert "length_is_clamped_to_the_frame" in result.stdout
@@ -445,8 +445,8 @@ def test_a_reserved_field_that_stops_being_enforced_is_caught(tmp_path: Path) ->
 	# under the project's own flags: the validator reads the field and accepts
 	# what the schema forbids, which is the shape this goes wrong in.
 	result = build(tmp_path, "struct s { u8 v; reserved u8 [must_be_zero]; }",
-		corrupt=("(uint8_t)(view.base)[1u] != 0",
-		         "(uint8_t)(view.base)[1u] != 0 && view.limit == 0u"))
+		corrupt=("(uint8_t)(situ_base(view))[1u] != 0",
+		         "(uint8_t)(situ_base(view))[1u] != 0 && view.limit == 0u"))
 
 	assert result.returncode != 0, "a dropped reserved check went unnoticed"
 	assert "must_be_zero_is_enforced" in result.stdout

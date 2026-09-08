@@ -24850,6 +24850,73 @@ native` reaching `situ_get_ne64` or `situ_bits_get_ne`. Each is emitted
 correctly today and compared by nothing, which is the same standing the
 signed text number had before 26.297 -- and that one had a defect in it.
 
+### 26.309 A differential that disagreed about a value nobody disputes
+
+The census in 26.308 named `endian native` at the widths nothing reaches as
+uncovered, so the next move was to write that schema. It found something on
+the first run, and not the thing it was written for.
+
+    c        big -6232767268286081968
+    cpp      big -6232767268286081968
+    rust     big -6232767268286081968
+    python   big 12213976805423469648
+
+Same bits: `12213976805423469648 - 2^64 = -6232767268286081968`. The
+four-way differ printed **every** scalar as a signed 64-bit word -- `(long
+long)` in C and C++, `as i64` in Rust -- and Python's accessor returns the
+unsigned value. Exact for every width but one, so a `u64` above 2^63 is a
+disagreement the tool reports about a value the four agree on.
+
+**The corpus could not have shown it: five `i64` in it and not one `u64`.**
+The one `u64` anywhere is in a comment.
+
+The ask carries the scalar's width and signedness now, and each driver
+prints accordingly. `test/schema/native.situ` keeps it covered, along with
+the two shapes native byte order has accessors of its own for -- `u24`
+through the bit extractor, `u64` through `situ_get_ne64`.
+
+### 26.310 Five more copies of one rule, and a suite I had not run
+
+Making `invalidating_members` the shared answer (26.306) turned up consumers
+that each had their own. Two were found by reading; **three were found by
+`make test-c`, which I had not run** -- `test_codegen_c.py` passed and I
+reported the C side green, which is a population that does not include the
+hand-written C tests or the generated check and vector suites.
+
+    situc/codegen/c/emit.py        `_drivers`, `sized_by` only
+    situc/codegen/cpp/emit.py      none at all
+    situc/codegen/python/emit.py   none at all
+    situc/codegen/differ.py        `writes()`, `sized_by` only
+    situc/codegen/c/vectors.py     `sized_by` only -- round-trip vectors
+    situc/codegen/c/checks.py      a boundary-value witness, no notion at all
+    test/generated/*.c             hand-written, the two-argument check
+
+Each agreed with the emitter only while the emitter was wrong in the same
+way. The vectors generator's comment even cited the case that taught it
+(`le_advertising_report.num`), and `checks.py` already computed the
+arithmetic drivers for its span checks while calling the plain setter for
+them.
+
+**And one API regression, caught by the same suite.** Marking a nested
+driver in the struct that owns it dropped the ENCLOSING struct's setter:
+`situ_message_hdr_length_set` vanished. A dotted driver is marked in both
+now -- the nested struct, whose own setter has to invalidate, and the outer
+one, which reaches it through the outer view. Removing an accessor is not
+what a fix to 12.3 is for.
+
+**Two hand-written tests changed rather than broke**, and both had encoded
+the absence of the guarantee: one read through a view it had just written a
+length through, and one called `situ_view_check` with the message. The first
+is the same edit the Python suite needed, and `test_message.c` already had
+`test_reacquiring_after_a_shift_is_valid_again` two lines below it -- the
+rule stated on purpose, beside a test that broke it by accident.
+
+**The lesson is about the population, not the copies.** `test_codegen_c.py`
+compiles generated C; `make test-c` compiles generated C *and* the check
+suites, the vector suites, the fuzz harnesses and the hand-written tests.
+Reporting "the C suite is green" from the first is the vacuous pass with a
+true result: it inspected something, and not the thing that broke.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

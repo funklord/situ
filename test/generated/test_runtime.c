@@ -86,7 +86,7 @@ static void test_view_sub(void **state)
 
 static void test_in_bounds(void **state)
 {
-	situ_view_t view = { g_buf, 16, 1 };
+	situ_view_t view = { g_buf, 16, 1, NULL };
 
 	(void)state;
 	assert_true(situ_in_bounds(view, 0, 16));
@@ -131,30 +131,30 @@ static void test_stale_view(void **state)
 	(void)state;
 	situ_msg_init(&msg, g_buf, (uint32_t)sizeof(g_buf));
 	assert_int_equal(situ_view_at(&msg, 0, 16, &view), SITU_OK);
-	assert_int_equal(situ_view_check(&msg, view), SITU_OK);
+	assert_int_equal(situ_view_check(view), SITU_OK);
 
 	situ_msg_touch(&msg);
 
 #ifdef SITU_CHECKED
-	assert_int_equal(situ_view_check(&msg, view), SITU_ERR_STALE);
+	assert_int_equal(situ_view_check(view), SITU_ERR_STALE);
 #else
 	/* The check is compiled out; a release build cannot see this. */
-	assert_int_equal(situ_view_check(&msg, view), SITU_OK);
+	assert_int_equal(situ_view_check(view), SITU_OK);
 #endif
 }
 
 static void test_zeroed_view_is_never_live(void **state)
 {
 	situ_msg_t msg;
-	situ_view_t view = { NULL, 0, 0 };
+	situ_view_t view = { NULL, 0, 0, NULL };
 
 	(void)state;
 	situ_msg_init(&msg, g_buf, (uint32_t)sizeof(g_buf));
 
 #ifdef SITU_CHECKED
-	assert_int_equal(situ_view_check(&msg, view), SITU_ERR_STALE);
+	assert_int_equal(situ_view_check(view), SITU_ERR_STALE);
 #else
-	assert_int_equal(situ_view_check(&msg, view), SITU_OK);
+	assert_int_equal(situ_view_check(view), SITU_OK);
 #endif
 }
 

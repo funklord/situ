@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
+from situc.traverse import invalidating_members
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import data_sized
 from situc import __version__
@@ -391,9 +392,12 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 	# signature is not the plain one. `le_advertising_report.num` is the case:
 	# the round trip called the two-argument form and the suite did not
 	# compile (26.36).
-	drivers = {placement.sized_by for placement in
-	           (entry.placement for entry in struct.entries)
-	           if placement.sized_by and placement.sized_by != "remaining"}
+	#
+	# The decision layer's answer, and this was the FIFTH private copy of
+	# the same narrow rule -- `sized_by` alone, which holds a path and holds
+	# nothing for `u8 data[len - 8]`. It agreed with the emitter only while
+	# the emitter was wrong in the same way (26.306).
+	drivers = invalidating_members(resolved.structs)[struct.name]
 
 	writes = []
 	for entry in struct.entries:

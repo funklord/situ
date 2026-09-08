@@ -1,0 +1,25 @@
+# situ wire signature v1
+# schema: native.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+endian native
+target buffer
+
+struct native size=14
+  @0x0000   3         u24        wide  native
+  @0x0003   8         u64        big  native
+  @0x000b   2         u16        small  native
+  @0x000d   1         u8         tail

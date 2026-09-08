@@ -723,11 +723,22 @@ def invalidating_members(
 			for local in named:
 				if local in locals_[:index]:
 					found[name].add(local)
-				elif "." in local:
-					holder, _, leaf = local.partition(".")
-					inner = nested[name].get(holder)
-					if inner is not None:
-						found[inner].add(leaf)
+					continue
+				if "." not in local:
+					continue
+				# A dotted driver is marked in BOTH structs, and the pair is
+				# not redundant. The member belongs to the nested struct, so
+				# its own setter is the one that has to invalidate -- and
+				# the ENCLOSING struct emits a setter for it too, reached
+				# through the outer view (`situ_message_hdr_length_set`),
+				# which would otherwise have vanished when this stopped
+				# reading `sized_by`'s dotted path. Removing an accessor is
+				# not what a fix to 12.3 is for.
+				found[name].add(local)
+				holder, _, leaf = local.partition(".")
+				inner = nested[name].get(holder)
+				if inner is not None:
+					found[inner].add(leaf)
 	return found
 
 

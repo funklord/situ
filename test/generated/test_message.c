@@ -167,6 +167,14 @@ static void test_length_write_shifts_everything_after_it(void **state)
 	/* Growing the options moves the records. The schema said this would
 	 * happen -- `mutate=Shifting` on opts -- and here it is. */
 	situ_message_hdr_length_set(&msg, view, 8);
+
+	/* Re-acquired, because that write moved what follows and every view
+	 * taken before it is now stale (12.3). This read through the same
+	 * view, which worked only while nothing checked the generation: the
+	 * accessors reach their bytes through `situ_base` now, so a checked
+	 * build traps here rather than answering. `test_reacquiring_after_a_
+	 * shift_is_valid_again` below is the same rule stated on purpose. */
+	view = view_of(&msg, buf);
 	assert_int_equal(situ_message_recs_offset(view), 19);
 }
 
@@ -200,19 +208,19 @@ static void test_stale_view_is_caught_when_checked(void **state)
 	view = view_of(&msg, buf);
 
 	assert_int_equal(situ_message_recs_at(view, 0, &record), SITU_OK);
-	assert_int_equal(situ_view_check(&msg, record), SITU_OK);
+	assert_int_equal(situ_view_check(record), SITU_OK);
 
 	/* The element view was taken before the shift, so it now points at the
 	 * wrong bytes. This is the bug class section 12.3 exists to catch. */
 	situ_message_hdr_length_set(&msg, view, 8);
 
 #ifdef SITU_CHECKED
-	assert_int_equal(situ_view_check(&msg, record), SITU_ERR_STALE);
-	assert_int_equal(situ_view_check(&msg, view), SITU_ERR_STALE);
+	assert_int_equal(situ_view_check(record), SITU_ERR_STALE);
+	assert_int_equal(situ_view_check(view), SITU_ERR_STALE);
 #else
 	/* Compiled out in a release build, which is why the checked build is the
 	 * one to develop against. */
-	assert_int_equal(situ_view_check(&msg, record), SITU_OK);
+	assert_int_equal(situ_view_check(record), SITU_OK);
 #endif
 }
 
@@ -231,10 +239,10 @@ static void test_reacquiring_after_a_shift_is_valid_again(void **state)
 	/* Take the view again and it is live: the generation is what makes the
 	 * difference, not the bytes. */
 	assert_int_equal(situ_message_view(&msg, 0, VECTOR_LEN, &view), SITU_OK);
-	assert_int_equal(situ_view_check(&msg, view), SITU_OK);
+	assert_int_equal(situ_view_check(view), SITU_OK);
 
 	assert_int_equal(situ_message_recs_at(view, 0, &record), SITU_OK);
-	assert_int_equal(situ_view_check(&msg, record), SITU_OK);
+	assert_int_equal(situ_view_check(record), SITU_OK);
 	assert_ptr_equal(record.base, buf + 19);
 }
 

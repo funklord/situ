@@ -324,7 +324,8 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				continue
 			if placement.type_name not in _SCALAR_TYPES:
 				continue
-			found.append(Ask(Probe.SCALAR, local))
+			found.append(Ask(Probe.SCALAR, local,
+			                 bits=max(8, scalar.bits), signed=scalar.signed))
 		elif kind is Member.ARRAY and scalar is not None \
 				and placement.array_count is not None:
 			if scalar.bits == BITS_PER_BYTE:
@@ -876,8 +877,17 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	# is exactly that. It came back as `situ_s_n___`.
 	call = ident(prefix, struct, ask.local) + "_{}"
 	if ask.probe is Probe.SCALAR:
-		return [f'\t\t\tprintf("{ask.local} %lld\\n",'
-		        f' (long long){call.format("get")}(view));']
+		# `%llu` for an unsigned member, and this narrowed everything to a
+		# signed 64-bit word. Exact for every width but one: a `u64` above
+		# 2^63 came out negative here and positive in Python, so the four
+		# would have reported a disagreement about a value they agree on.
+		# The corpus has no unsigned 64-bit field at all -- five `i64` and
+		# not one `u64` -- which is the only reason it never fired.
+		if ask.signed or ask.bits < 64:
+			return [f'\t\t\tprintf("{ask.local} %lld\\n",'
+			        f' (long long){call.format("get")}(view));']
+		return [f'\t\t\tprintf("{ask.local} %llu\\n",'
+		        f' (unsigned long long){call.format("get")}(view));']
 	if ask.probe is Probe.DELIMITED:
 		return [f'\t\t\tprintf("{ask.local} len=%u term=%d\\n",'
 		        f' {call.format("len")}(view),'
@@ -1108,8 +1118,11 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	call = bare_name(ask.local)
 
 	if ask.probe is Probe.SCALAR:
-		return [f'\t\t\tstd::printf("{ask.local} %lld\\n",'
-		        f" static_cast<long long>(view.{call}()));"]
+		if ask.signed or ask.bits < 64:
+			return [f'\t\t\tstd::printf("{ask.local} %lld\\n",'
+			        f" static_cast<long long>(view.{call}()));"]
+		return [f'\t\t\tstd::printf("{ask.local} %llu\\n",'
+		        f" static_cast<unsigned long long>(view.{call}()));"]
 	if ask.probe is Probe.DELIMITED:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u term=%d\\n",'
 		        f" view.{call}_len(),"
@@ -1329,7 +1342,9 @@ def _rust_writes(resolved: ResolvedSchema) -> list[str]:
 def _rust_ask(ask: Ask) -> list[str]:
 	call = rust_ident(ask.local)
 	if ask.probe is Probe.SCALAR:
-		return [f'\t\t\t\tprintln!("{ask.local} {{}}", view.{call}() as i64);']
+		held = "i64" if (ask.signed or ask.bits < 64) else "u64"
+		return [f'\t\t\t\tprintln!("{ask.local} {{}}",'
+		        f' view.{call}() as {held});']
 	if ask.probe is Probe.DELIMITED:
 		return [f'\t\t\t\tprintln!("{ask.local} len={{}} term={{}}",'
 		        f" view.{rust_ident(ask.local + '_len')}(),"
