@@ -348,12 +348,21 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			                 bits=max(8, scalar.bits if scalar else 8)))
 		elif kind is Member.VARIABLE and scalar is not None \
 				and scalar.bits == BITS_PER_BYTE:
-			# Only where a *field* gives the length. A member sized by
-			# arithmetic over other fields -- `u8 data[(len + 1) * 8 - 2]` --
-			# gets no `_len` accessor in C, the count being an expression the
-			# caller can evaluate, so there is no fourth spelling to compare.
-			if placement.sized_by is None:
-				continue
+			# Whether a FIELD gives the length or arithmetic over several
+			# does. This asked only the first, because "a member sized by
+			# arithmetic over other fields -- `u8 data[(len + 1) * 8 - 2]`
+			# -- gets no `_len` accessor in C, the count being an expression
+			# the caller can evaluate, so there is no fourth spelling to
+			# compare". C emits one: `situ_udp_header_payload_len` is right
+			# there, and the other three hand back a slice whose length is
+			# the same question.
+			#
+			# What that left uncompared is the worst half of the two. The
+			# arithmetic is over ATTACKER bytes and it underflows --
+			# `length - 8` on a UDP header declaring 0, `(ihl - 5) * 4` on
+			# an IPv4 header declaring 0 -- so the members nothing compared
+			# are exactly the ones where four independent clamps could
+			# disagree.
 			found.append(Ask(Probe.BYTES, local))
 		elif kind is Member.NESTED and placement.type_name in structs \
 				and _nested_is_measurable(placement, structs_by_name):

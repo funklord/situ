@@ -24585,6 +24585,61 @@ calling `arm_of`, and agrees with C including on a discriminant inside a
 nested struct. `containment_order` says "three backends need this" and three
 read it; Rust abstains because Rust has no declaration-order constraint.
 
+### 26.305 The members nothing compared were the ones that underflow
+
+The third exclusion in three differentials, found by the same question and
+in the same shape: a reason that was true when it was written.
+
+    elif kind is Member.VARIABLE and scalar is not None ...:
+        # Only where a *field* gives the length. A member sized by
+        # arithmetic over other fields -- `u8 data[(len + 1) * 8 - 2]` --
+        # gets no `_len` accessor in C, the count being an expression the
+        # caller can evaluate, so there is no fourth spelling to compare.
+        if placement.sized_by is None:
+            continue
+
+**C emits one.** `situ_udp_header_payload_len` is in the generated header,
+and the other three hand back a slice whose length answers the same
+question. So the fourth spelling exists and the exclusion had outlived it.
+
+**What it left uncompared is the worse half of the two.** A member sized by
+a named field is sized by one number the message chose; one sized by
+arithmetic is sized by a computation over attacker bytes that UNDERFLOWS --
+`length - 8` on a UDP header declaring 0, `(ihl - 5) * 4` on an IPv4 header
+declaring 0, `((hdr_ext_len + 1) * 8) - 2` on an IPv6 extension header. Four
+independent clamps, in four languages, and nothing had ever compared them.
+
+Twenty-two members across twelve schemas. The four agree -- C and Python
+were checked by hand first, at declared lengths 0, 4, 7, 8, 12 and 65535,
+and both answer 0, 0, 0, 0, 4, 12 -- so this closes a hole rather than
+catching a defect. The control is what says the probe can speak: with
+`nonneg` returning 1 instead of 0 for a non-positive length, `ipv4.options`
+goes red.
+
+**Three exclusions, three differentials, one shape.** The dissector's
+(26.302) said the walker's `len=` and a first byte were two questions, which
+was true of the byte and false of the length. The four-way differ's on text
+numbers (26.303) said a fallible getter is four shapes rather than one
+answer, which `ARM_VALUE` had already reduced to one. This one said C had no
+accessor, and C has one.
+
+None of the three was careless. Each was a correct statement about the tree
+at the moment it was written, in a comment nobody had a reason to re-read --
+**and what retires such a sentence is never the code it guards, but code
+somewhere else that grew a capability it was written to work around.** The
+detector is cheap and worth repeating: for each `continue` in a comparison,
+ask what the stated reason covers, and check whether it still holds rather
+than whether it sounds right.
+
+**And the census that produced all three.** For every own member of every
+struct in the corpus, is the four-way differ asking about it: 614 of 730
+before this, and the gap sorted by `classify` is the whole list of what a
+differential cannot see. What remains uncompared after these three is
+reserved members (no accessor to compare), regions asked through their gate
+instead, and enums -- and the enum exclusion holds, because the four return
+genuinely different types while `validate`, which IS compared, refuses an
+unnamed value in all of them.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
