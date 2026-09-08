@@ -24801,6 +24801,55 @@ it was five hours older than the runtime it was linking against, so the
 `owner` field was never set and the backends "disagreed". `make runtime`
 fixed it. Never conclude from a binary the build step did not rebuild.
 
+### 26.308 A sweep that was wrong five times out of six
+
+26.306 and 26.307 both came from finding a guard nothing called, so the
+obvious next move was to ask it of every function in every runtime: define
+the names, count the calls in generated code and in the emitters, report the
+rest. The C runtime has 79 and it reported 22, which narrowed to six after
+counting calls made inside the runtime itself.
+
+**Five of the six were the instrument.** The emitters build a name and do not
+write one:
+
+    situ_get_{order}{width * 8}        -> situ_get_ne64, situ_put_ne64
+    situ_bits_get_{order}              -> situ_bits_get_ne, situ_bits_set_ne
+    situ_rt::{spelling}_valid          -> Rust's four encoding validators
+
+A literal grep cannot see any of them, and every one is reachable -- checked
+by writing the schema and reading the output rather than by arguing:
+`endian native` on an `[allow_host_dependent]` struct emits `situ_get_ne64`
+for a `u64` and `situ_bits_get_ne` for a `u24`, and all four backends emit
+all four encoding checks for `[encoding = utf16be]` on a `u16` run.
+
+That is *Four ways to manufacture an absence* met by my own probe, and the
+tell was there to be read: the sweep reported Rust as validating no encoding
+at all, which is a big enough claim to check before believing.
+
+**The sixth is real.** `situ_delimiter_absent` is called by nothing --
+grepped for the literal name across the whole tree, and for a dynamic
+spelling in the emitters, since that is what the other five were -- and its
+comment said "for a CRLF-framed protocol this is the header-injection check,
+**which is why it is generated** rather than remembered". A claim about the
+emitters, made in the runtime, false in all four.
+
+**It is kept, and the reason it cannot fire is the useful part.** On the read
+path a delimited member's content is whatever the scan returned; the scan
+stops at the first delimiter; and the language refuses any other length
+source for one -- `u8 v[4] until ","` is "`v` says twice where it stops". So
+the content never contains the delimiter by construction rather than by
+checking. What would make it live is a WRITE path for a delimited member,
+and there is none: `mutate = Shifting` means no setter, because a longer
+value moves everything after it. The day situ re-encodes a frame, this is
+the check that has to run before the bytes go out.
+
+**And the census it produced, which is the other half.** Constructs the
+corpus does not exercise at all, added to `import` and `[limit]` from
+26.301: `[encoding = utf16be]` and `[encoding = utf16le]`, and `endian
+native` reaching `situ_get_ne64` or `situ_bits_get_ne`. Each is emitted
+correctly today and compared by nothing, which is the same standing the
+signed text number had before 26.297 -- and that one had a defect in it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

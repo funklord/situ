@@ -878,8 +878,22 @@ static inline uint32_t situ_scan_relaxed(const uint8_t *data, uint32_t limit,
  * Without a quote or escape byte the content may not contain the delimiter:
  * writing back content that did would produce different framing, so such a
  * field did not come from this schema. For a CRLF-framed protocol this is the
- * header-injection check, which is why it is generated rather than remembered.
- */
+ * header-injection check.
+ *
+ * NOTHING CALLS THIS, and the comment here said "which is why it is
+ * generated rather than remembered" -- a claim about the emitters, made in
+ * the runtime, and false in all four. It is kept rather than deleted because
+ * it is not wrong, only not yet needed, and the reason is worth having
+ * written down: on the READ path it cannot fail. A delimited member's
+ * content is whatever the scan returned, the scan stops at the first
+ * delimiter, and the language refuses any other length source for one --
+ * `u8 v[4] until ","` is "`v` says twice where it stops". So content never
+ * contains the delimiter, by construction rather than by checking.
+ *
+ * What would make it live is a WRITE path for a delimited member. There is
+ * none today: `mutate = Shifting` means no setter is emitted, because a
+ * longer value moves everything after it. The day situ re-encodes a frame,
+ * this is the check that has to run before the bytes go out (26.308). */
 static inline int situ_delimiter_absent(const uint8_t *data, uint32_t len,
         const uint8_t *delim, uint32_t delim_len)
 {
