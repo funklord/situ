@@ -67,6 +67,7 @@ enum image_section_tag : u32 {
 	pinned_runs  = 20,     // the bytes a `[must_eq]` on a byte run pins
 	depths       = 21,     // how deep a recursive struct may nest (0054)
 	skips        = 22,     // the whitespace a member owns in front of it
+	whitespace   = 23,     // what `[trim]` removes, for the whole schema
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -291,6 +292,18 @@ struct image_delimiter {
 	u8   delim_pad[3];
 }
 
+// What `[trim]` removes: the schema's `whitespace` set, one row per byte.
+//
+// The SCHEMA's rather than a member's, which is what makes this a section of
+// its own rather than a column on `image_placement`: `whitespace` is a
+// file-level directive and `[trim]` asks it. A walker reading an image
+// written before this section existed gets HTTP's OWS, space and tab, which
+// is what every schema written before the directive meant.
+struct image_whitespace {
+	u8   octet;
+	u8   ws_pad[3];
+}
+
 // `skip`: the bytes that may stand in front of a member and belong to it.
 //
 // One ROW per byte, all under the same placement, which is `image_delimiter`'s
@@ -498,6 +511,7 @@ require absolute_static(image_struct);
 require absolute_static(image_placement);
 require absolute_static(image_arm);
 require absolute_static(image_delimiter);
+require absolute_static(image_whitespace);
 require absolute_static(image_skip);
 require absolute_static(image_region);
 require absolute_static(image_codec);
@@ -518,6 +532,7 @@ require size(image_struct) == 16;
 require size(image_placement) == 48;
 require size(image_arm) == 24;
 require size(image_delimiter) == 36;
+require size(image_whitespace) == 4;
 require size(image_skip) == 8;
 require size(image_region) == 16;
 require size(image_codec) == 4;

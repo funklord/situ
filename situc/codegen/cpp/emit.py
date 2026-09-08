@@ -49,6 +49,7 @@ from situc.traverse import (
 	codec_entry_point,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
+	whitespace_set,
 	Check, Member, arm_members, arm_of, coded_spans, containment_order,
 	covered_run,
 	data_sized,
@@ -1567,19 +1568,32 @@ class Emitter:
 			"\t}",
 		]
 
+		# The set the schema states, passed rather than known: `[trim]` used
+		# to remove HTTP's OWS wherever it appeared, so a format that calls
+		# CR and LF whitespace kept them in the value.
+		ws    = whitespace_set(self.schema)
+		set_  = f"{name}_trim_set"
+		table = ", ".join(f"0x{byte:02X}u" for byte in ws)
+		trim  = f"{set_}, {len(ws)}u"
+
 		if placement.trimmed:
 			lines.extend([
 				"\t/* `[trim]`: the whitespace at either end is framing rather",
-				"\t * than value, so the span above is unchanged. */",
+				"\t * than value, so the span above is unchanged. The set is",
+				"\t * this schema's `whitespace`, or space and tab where it",
+				"\t * states none. */",
+				f"\tstatic constexpr std::uint8_t {set_}[] = {{{table}}};",
+				"",
 				f"\t[[nodiscard]] std::uint32_t {name}_len() const noexcept",
 				"\t{",
-				f"\t\treturn situ_trim_len(raw_.base + {name}_offset(), {scan}());",
+				f"\t\treturn situ_trim_len(raw_.base + {name}_offset(),"
+				f" {scan}(), {trim});",
 				"\t}",
 			])
 
 		value_at = (f"raw_.base + {name}_offset()" if not placement.trimmed else
 		            f"raw_.base + {name}_offset() + situ_trim_start("
-		            f"raw_.base + {name}_offset(), {scan}())")
+		            f"raw_.base + {name}_offset(), {scan}(), {trim})")
 
 		if placement.radix is None:
 			lines.extend([
@@ -1625,15 +1639,31 @@ class Emitter:
 		ctype = self._ctype(scalar)
 		limit = (1 << scalar.bits) - 1
 
+		# A signed text number takes the other parse: an optional leading
+		# `-`, then digits, and never a `+` or a `-0`. Only the delimited
+		# form can be signed -- a fixed-width one is refused -- so the two
+		# fixed-width sites in this backend stay unsigned by construction.
+		if scalar.signed:
+			held = "\t\tstd::int64_t value"
+			call = (f"situ_parse_int({value_at}, {name}_len(),"
+			        f" {placement.radix}u, INT64_C({placement.radix_min}),"
+			        f" INT64_C({placement.radix_max}), &value)")
+			span = f"{placement.radix_min}..{placement.radix_max}"
+		else:
+			held = "\t\tstd::uint64_t value"
+			call = (f"situ_parse_uint({value_at}, {name}_len(),"
+			        f" {placement.radix}u, {limit}u, &value)")
+			span = f"0..{limit}"
+
 		return [
-			f"\t/* Digits, in the range of {scalar.name}. The only getter here",
-			"\t * that can fail, which is what `repr = TextConverted` means. */",
+			f"\t/* Digits, in the range of {scalar.name} ({span}). The only",
+			"\t * getter here that can fail, which is what",
+			"\t * `repr = TextConverted` means. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out) const noexcept",
 			"\t{",
-			"\t\tstd::uint64_t value;",
+			f"{held};",
 			"",
-			f"\t\tif (situ_parse_uint({value_at}, {name}_len(),"
-			f" {placement.radix}u, {limit}u, &value) != 0) {{",
+			f"\t\tif ({call} != 0) {{",
 			"\t\t\treturn ::situ::rt::err::constraint;",
 			"\t\t}",
 			f"\t\tout = static_cast<{ctype}>(value);",
@@ -1645,10 +1675,9 @@ class Emitter:
 			"\t * one always parses here. */",
 			f"\t[[nodiscard]] {ctype} {name}_value() const noexcept",
 			"\t{",
-			"\t\tstd::uint64_t value = 0u;",
+			f"{held} = 0;",
 			"",
-			f"\t\t(void)situ_parse_uint({value_at}, {name}_len(),"
-			f" {placement.radix}u, {limit}u, &value);",
+			f"\t\t(void){call};",
 			f"\t\treturn static_cast<{ctype}>(value);",
 			"\t}",
 		]
@@ -6390,7 +6419,8 @@ class Emitter:
 			# with `[trim]` start past the whitespace.
 			at = (f"raw_.base + {name}_offset()" if not placement.trimmed else
 			      f"raw_.base + {name}_offset() + situ_trim_start("
-			      f"raw_.base + {name}_offset(), {name}_raw_len())")
+			      f"raw_.base + {name}_offset(), {name}_raw_len(),"
+			      f" {name}_trim_set, {len(whitespace_set(self.schema))}u)")
 			# The fixed-width form has no `_len`: its length is the digit
 			# count the schema declared, which is a constant here.
 			count = (f"{name}_len()" if placement.delimiters

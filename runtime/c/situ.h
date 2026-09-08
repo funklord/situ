@@ -863,36 +863,102 @@ static inline int situ_parse_uint(const uint8_t *data, uint32_t len,
 
 /* Optional whitespace, and case-insensitive tokens (section 8.6.4).
  *
- * Space and horizontal tab, and nothing else. Not `isspace`, which is locale
- * dependent and includes CR, LF, VT and FF -- three of which are delimiters in
- * the protocols this is for, so trimming them would eat the framing. This is
- * HTTP's OWS and SIP's LWS, which is the set the formats actually mean.
+ * The SET IS PASSED IN, and that is the whole of what changed here. It was
+ * `situ_is_ows` -- space and horizontal tab, and nothing else -- which is
+ * right for HTTP and SIP, where CR and LF are framing and trimming them
+ * would eat it. It is wrong for a format that calls them whitespace: JSON
+ * does, by RFC 8259 section 2, so a number followed by a newline kept the
+ * newline in its value.
+ *
+ * A schema states its set with `whitespace`, and a file that states none
+ * gets HTTP's, which is what every schema written before this one meant.
+ * Passing it also retires four other copies of the same constant -- one per
+ * runtime and one in the walker, whose own comment said that a second copy
+ * of "what does `[trim]` remove" is how two readers of one attribute start
+ * disagreeing.
  */
-static inline int situ_is_ows(uint8_t byte)
+static inline int situ_in_set(uint8_t byte, const uint8_t *set, uint32_t count)
 {
-	return byte == (uint8_t)' ' || byte == (uint8_t)'\t';
+	uint32_t i;
+
+	for (i = 0u; i < count; i++) {
+		if (byte == set[i]) {
+			return 1;
+		}
+	}
+	return 0;
 }
 
-static inline uint32_t situ_trim_start(const uint8_t *data, uint32_t len)
+static inline uint32_t situ_trim_start(const uint8_t *data, uint32_t len,
+        const uint8_t *set, uint32_t count)
 {
 	uint32_t i = 0u;
 
-	while (i < len && situ_is_ows(data[i])) {
+	while (i < len && situ_in_set(data[i], set, count)) {
 		i++;
 	}
 	return i;
 }
 
 /* The length of the content with the whitespace at both ends removed. */
-static inline uint32_t situ_trim_len(const uint8_t *data, uint32_t len)
+static inline uint32_t situ_trim_len(const uint8_t *data, uint32_t len,
+        const uint8_t *set, uint32_t count)
 {
-	uint32_t start = situ_trim_start(data, len);
+	uint32_t start = situ_trim_start(data, len, set, count);
 	uint32_t end   = len;
 
-	while (end > start && situ_is_ows(data[end - 1u])) {
+	while (end > start && situ_in_set(data[end - 1u], set, count)) {
 		end--;
 	}
 	return end - start;
+}
+
+/* The same for a signed text number: an optional leading `-`, then digits.
+ *
+ * A SEPARATE function rather than a flag, so every schema written before
+ * signed text numbers existed calls exactly what it called before. The
+ * unsigned path is the common one and stays a magnitude parse with no sign
+ * to consider.
+ *
+ * `-` and never `+`, and no `-0`. Both are the same rule `[minimal]` already
+ * states about leading zeros: `+5` and `5` are two spellings of one value,
+ * and so are `-0` and `0`. Refusing them is what keeps a signed text number
+ * `Canonical`, which the unsigned form is and which would be a poor thing to
+ * lose for a character nobody needs (8.6.2).
+ *
+ * `-` with nothing after it is refused for the reason an empty run is: no
+ * digits is not the number zero.
+ */
+static inline int situ_parse_int(const uint8_t *data, uint32_t len,
+        uint32_t radix, int64_t min, int64_t max, int64_t *out)
+{
+	uint64_t magnitude = 0u;
+	int      negative  = 0;
+	uint64_t ceiling;
+
+	if (len == 0u) {
+		return -1;
+	}
+	if (data[0] == (uint8_t)'-') {
+		negative = 1;
+		data     = data + 1;
+		len      = len - 1u;
+	}
+
+	/* The magnitude a signed value may reach is one larger going down than
+	 * going up, and writing it as `-min` would overflow at the bottom of the
+	 * range. Built from the bound instead. */
+	ceiling = negative ? (uint64_t)(-(min + 1)) + 1u : (uint64_t)max;
+
+	if (situ_parse_uint(data, len, radix, ceiling, &magnitude) != 0) {
+		return -1;
+	}
+	if (negative && magnitude == 0u) {
+		return -1;	/* `-0` is a second spelling of zero */
+	}
+
+	*out = negative ? -(int64_t)magnitude : (int64_t)magnitude;
+	return 0;
 }
 
 /* Write a value as fixed-width digits, which is `situ_parse_uint` backwards.
@@ -996,12 +1062,23 @@ static inline int situ_ascii_ci_eq(const uint8_t *a, uint32_t alen,
  * so is a change of case. `[minimal]` is what asks for this; without it the
  * field is NonCanonical and the map says so, which is the honest default --
  * most formats do permit `007`, and refusing it would reject valid data.
+ *
+ * A leading `-` is skipped before the question is asked. It belongs to the
+ * spelling of a signed text number, so `-042` is non-minimal for the same
+ * reason `042` is -- and it can only reach here from a signed field, an
+ * unsigned one refusing the byte at the parse. All six implementations skip
+ * it identically, which is what keeps them naming the same check when a
+ * frame is refused.
  */
 static inline int situ_digits_minimal(const uint8_t *data, uint32_t len,
         uint32_t radix)
 {
 	uint32_t i;
 
+	if (len > 0u && data[0] == (uint8_t)'-') {
+		data += 1;
+		len  -= 1u;
+	}
 	if (len == 0u) {
 		return 0;
 	}

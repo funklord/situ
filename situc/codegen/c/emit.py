@@ -47,7 +47,7 @@ from situc.traverse import (
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	coded_spans, covered_run, data_sized, dynamic_frame_owner,
-	is_own_member, is_recursive,
+	is_own_member, is_recursive, whitespace_set,
 	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
 	readable_names,
@@ -4708,19 +4708,38 @@ class Emitter:
 			])
 			return lines
 
+		# The set the schema states, passed rather than known: `[trim]` used
+		# to remove HTTP's OWS wherever it appeared, so a format that calls
+		# CR and LF whitespace kept them in the value. A table per member,
+		# the way `_lead_scan` emits one, because the symbol is already
+		# per-member and a shared one would need a file-level emission point
+		# this function does not have.
+		local = c_name(self._local(struct, placement))
+		set_  = ident(self.prefix, struct.name, local, "trim_set")
+		bytes_ = ", ".join(f"0x{byte:02X}u"
+		                   for byte in whitespace_set(self.schema))
+		count = len(whitespace_set(self.schema))
+
 		lines.extend([
 			"/* `[trim]`: the whitespace at either end is framing rather than",
 			" * value, so the span above is unchanged -- those bytes are still",
-			" * this member's -- and these two describe what is left. */",
+			" * this member's -- and these two describe what is left.",
+			" *",
+			" * The set is this schema's `whitespace`, or space and tab where",
+			" * it states none, which is what every schema written before that",
+			" * directive meant. */",
+			f"static const uint8_t {set_}[{count}] = {{{bytes_}}};",
+			"",
 			f"static inline const uint8_t *{ptr}(situ_view_t view)",
 			"{",
 			f"\treturn view.base + {base} + situ_trim_start(view.base + {base},"
-			f" {scan_len}(view));",
+			f" {scan_len}(view), {set_}, {count}u);",
 			"}",
 			"",
 			f"static inline uint32_t {length}(situ_view_t view)",
 			"{",
-			f"\treturn situ_trim_len(view.base + {base}, {scan_len}(view));",
+			f"\treturn situ_trim_len(view.base + {base}, {scan_len}(view),"
+			f" {set_}, {count}u);",
 			"}",
 		])
 		return lines
@@ -4803,7 +4822,25 @@ class Emitter:
 		length = ident(self.prefix, struct.name, local, "len")
 		ptr    = ident(self.prefix, struct.name, local, "ptr")
 		base   = {10: "decimal", 16: "hexadecimal"}[placement.radix]
-		limit  = (1 << scalar.bits) - 1
+		limit  = placement.radix_max
+		floor  = placement.radix_min
+
+		# A signed text number takes the other parse: an optional leading
+		# `-`, then digits, and never a `+` or a `-0`. It is delimited by
+		# construction -- `wellformed` refuses the fixed-width form, because
+		# a sign costs a byte and a fixed width cannot pay it -- so the
+		# range is the type's rather than the digit count's.
+		if scalar.signed:
+			call = (f"\tif (situ_parse_int({ptr}(view), {length}(view), "
+			        f"{placement.radix}u, INT64_C({floor}), "
+			        f"INT64_C({limit}), &value) != 0) {{")
+			held = "\tint64_t value;"
+			said = f"outside {floor}..{limit}"
+		else:
+			call = (f"\tif (situ_parse_uint({ptr}(view), {length}(view), "
+			        f"{placement.radix}u, {limit}u, &value) != 0) {{")
+			held = "\tuint64_t value;"
+			said = f"above {limit}"
 
 		return [
 			"",
@@ -4815,15 +4852,14 @@ class Emitter:
 			" fail, which",
 			" * no other scalar getter here can. Empty digits, a byte that is"
 			" not one,",
-			f" * and anything above {limit} are all SITU_ERR_CONSTRAINT. */",
+			f" * and anything {said} are all SITU_ERR_CONSTRAINT. */",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'get')}"
 			f"(situ_view_t view, {ctype} *out)",
 			"{",
-			"\tuint64_t value;",
+			held,
 			"",
-			f"\tif (situ_parse_uint({ptr}(view), {length}(view), "
-			f"{placement.radix}u, {limit}u, &value) != 0) {{",
+			call,
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 			f"\t*out = ({ctype})value;",
@@ -6200,6 +6236,7 @@ class Emitter:
 		width = (f"{placement.array_count}u" if placement.array_count is not None
 		         else f"{ident(self.prefix, struct.name, local, 'len')}(view)")
 		source = (base, width)
+		signed_text = bool(placement.scalar and placement.scalar.signed)
 
 		return [
 			"",
@@ -6214,10 +6251,18 @@ class Emitter:
 			f"static inline {ctype} "
 			f"{ident(self.prefix, struct.name, local, 'value')}(situ_view_t view)",
 			"{",
-			"	uint64_t value = 0u;",
+			# A signed text number reads through the signed parse here too,
+			# or a negative value comes back as a refusal folded to zero --
+			# which is the one answer this function is not allowed to be
+			# wrong about, since everything downstream of it is arithmetic.
+			("	int64_t value = 0;" if signed_text else
+			 "	uint64_t value = 0u;"),
 			"",
-			f"	(void)situ_parse_uint({source[0]}, {source[1]},"
-			f" {placement.radix}u, {limit}u, &value);",
+			((f"	(void)situ_parse_int({source[0]}, {source[1]},"
+			  f" {placement.radix}u, INT64_C({placement.radix_min}),"
+			  f" INT64_C({placement.radix_max}), &value);") if signed_text else
+			 (f"	(void)situ_parse_uint({source[0]}, {source[1]},"
+			  f" {placement.radix}u, {limit}u, &value);")),
 			f"	return ({ctype})value;",
 			"}",
 		]

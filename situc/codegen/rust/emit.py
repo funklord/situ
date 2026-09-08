@@ -45,6 +45,7 @@ from situc.traverse import (
 	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
+	whitespace_set,
 	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
@@ -2355,6 +2356,17 @@ class Emitter:
 		lead = self._lead_methods(struct, entry.placement)
 		return bounds + lead + self._getter_body(struct, entry)
 
+	def _trim_set(self) -> str:
+		"""What `[trim]` removes here, as a byte-slice literal.
+
+		The schema's `whitespace`, or space and tab where it states none.
+		Passed rather than known, because the runtime used to hold the
+		answer and a format calling CR and LF whitespace kept them in the
+		value.
+		"""
+		return "&[" + ", ".join(str(byte)
+		                        for byte in whitespace_set(self.schema)) + "]"
+
 	def _lead_methods(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""`skip`: the whitespace in front of a member, and what it costs.
@@ -3491,11 +3503,13 @@ class Emitter:
 				"\t/// `[trim]`: the whitespace at either end is framing rather",
 				"\t/// than value, so the span above is unchanged.",
 				f"\tpub fn {_ident(f'{base}_len')}(&self) -> usize {{",
-				f"\t\tsitu_rt::trim(self.{_ident(f'{base}_raw')}()).len()",
+				f"\t\tsitu_rt::trim(self.{_ident(f'{base}_raw')}(),"
+				f" {self._trim_set()}).len()",
 				"\t}",
 			])
 
-		value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}())"
+		value = (f"situ_rt::trim(self.{_ident(f'{base}_raw')}(),"
+		         f" {self._trim_set()})"
 		         if placement.trimmed else f"self.{_ident(f'{base}_raw')}()")
 
 		if placement.radix is not None:
@@ -3534,7 +3548,12 @@ class Emitter:
 		name  = _ident(local_name(struct, placement))
 		base  = c_name(local_name(struct, placement))
 		rtype = self._field_type(placement, writing=True)
-		limit = (1 << scalar.bits) - 1
+		# A signed text number takes the other parse: an optional leading
+		# `-`, then digits, and never a `+` or a `-0`. It is delimited by
+		# construction, so the range is the type's.
+		signed_text = scalar.signed
+		limit = placement.radix_max or 0
+		floor = placement.radix_min or 0
 
 		return [
 			"",
@@ -3546,7 +3565,10 @@ class Emitter:
 			f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
 			f"\t\tlet raw = {value};",
 			"",
-			f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix}, {limit}) {{",
+			(f"\t\tmatch situ_rt::parse_int(raw, {placement.radix},"
+			 f" {floor}, {limit}) {{" if signed_text else
+			 f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix},"
+			 f" {limit}) {{"),
 			f"\t\t\tSome(value) => Ok(value as {rtype}),",
 			"\t\t\tNone => Err(Error::Constraint),",
 			"\t\t}",
@@ -4095,7 +4117,8 @@ class Emitter:
 		          else f"self.{_ident(f'{base}_digits')}()")
 
 		if placement.radix_minimal:
-			value = (f"situ_rt::trim({digits})" if placement.trimmed
+			value = (f"situ_rt::trim({digits}, {self._trim_set()})"
+			         if placement.trimmed
 			         else digits)
 			lines.extend([
 				f"\t\tif !situ_rt::digits_minimal({value}, {placement.radix}) {{",

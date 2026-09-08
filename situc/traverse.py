@@ -634,6 +634,39 @@ class OffsetStep:
 	size: int			= 0
 
 
+#: What `[trim]` removes where a schema states nothing: HTTP's OWS and
+#: SIP's LWS, space and horizontal tab. Not `isspace`, which is locale
+#: dependent and takes CR, LF, VT and FF -- three of which are framing in
+#: the protocols this default is for.
+OWS = (0x20, 0x09)
+
+
+def whitespace_set(schema: Schema) -> tuple[int, ...]:
+	"""What `[trim]` removes in this schema.
+
+	The root file's `whitespace` directive where there is one, and `OWS`
+	otherwise -- which is what every schema written before that directive
+	existed meant, and what one stating nothing still means. So no schema's
+	generated code changes meaning; what changes is that a format which
+	CALLS CR and LF whitespace now has them trimmed. JSON does, by RFC 8259
+	section 2, and a number followed by a newline used to keep it.
+
+	One decision and six readers -- four backends, the packer and the
+	walker -- because the constant used to sit in five of them, and
+	`report.py`'s own comment said that a second copy of what `[trim]`
+	removes is how two readers of one attribute start disagreeing.
+
+	The ROOT file's, for 26.295's reason: a directive is a claim about the
+	file it is written in, and `import` splices another file's declarations
+	in ahead of this one's.
+	"""
+	for decl in schema.decls:
+		if isinstance(decl, ast.WhitespaceDirective) \
+				and decl.span.source.path == schema.root:
+			return decl.values
+	return OWS
+
+
 def occupies_fixed_bytes(placement: Placement) -> bool:
 	"""Whether this member contributes a CONSTANT to an offset chain.
 

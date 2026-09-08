@@ -28,6 +28,7 @@ SECTION_BYTES	= 16
 STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 SKIPS                             = 22
+WHITESPACE                        = 23
 VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
@@ -214,6 +215,15 @@ class Image:
 	#: `before`. Kept apart from the rules above because it decides the
 	#: SPAN rather than the scan, and those are read in different places.
 	delimiter_consumed: dict[int, bool]	= field(default_factory=dict)
+	#: What `[trim]` removes: the schema's `whitespace` set.
+	#:
+	#: The SCHEMA's rather than a member's, because `whitespace` is a
+	#: file-level directive and `[trim]` asks it. Space and tab where the
+	#: image carries no such section, which is an image written before the
+	#: section existed and is what every schema written before the
+	#: directive meant -- the same compatibility the section directory is
+	#: for.
+	whitespace: tuple[int, ...]		= (0x20, 0x09)
 	#: placement index -> the bytes that may precede it and belong to it
 	#: (`skip`), in table order.
 	#:
@@ -379,6 +389,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				+ (blob[start:start + length],)
 			image.delimiter_rules[where] = (quote, escape, cap)
 			image.delimiter_consumed[where] = bool(consumed)
+
+	if WHITESPACE in found:
+		at, records, stride = found[WHITESPACE]
+		image.whitespace = tuple(
+			_struct.unpack_from("<B", blob, at + i * stride)[0]
+			for i in range(records))
 
 	if SKIPS in found:
 		at, records, stride = found[SKIPS]

@@ -258,6 +258,10 @@ struct shadowing size=20
   @0x000c   4         u8         bytes  big
   @0x0010   4         u32        str  big
 
+struct signed_number size=2..9
+  @0x0000   until:2c  i16        offset  radix=10 minimal cap=8
+  ~         1         u8         tail
+
 struct text_driver size=6..14
   @0x0000   4         u32        n  big radix=10 max=4
   @0x0004   0..8      u16        d  sized-by=n

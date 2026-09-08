@@ -173,6 +173,23 @@ struct texty {
 	u8            body[count];
 }
 
+// A SIGNED text number, which nothing else in the tree carries. Its grammar
+// is one optional `-` and then digits, and that is the whole of it: no `+`,
+// because two spellings of a positive number is one too many for a
+// byte-exact layout, and no `-0`, because that is a second spelling of zero.
+// Both are refused rather than normalised.
+//
+// Delimited by construction -- `wellformed` refuses the fixed-width form,
+// since a sign costs a byte a fixed width cannot pay -- so its domain is the
+// type's rather than a digit count's, and it is the only member here whose
+// floor is not zero. `[minimal]` is on it because the interesting case is
+// `-042`, which is non-minimal for the same reason `042` is and which no
+// unsigned field can pose.
+struct signed_number {
+	decimal  i16  offset until "," max 8  [minimal];
+	u8            tail;
+}
+
 // A run of records ending where a terminator stands in for one. The only
 // construct in the tree where the delimiter is *not* looked for anywhere: a
 // CRLF inside a header line belongs to that line, and treating this as a

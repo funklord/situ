@@ -1042,7 +1042,8 @@ representable, which is what the range check is written against.
 **Two ways to say where the digits stop.** `until "\r\n"` for a delimited
 number, and `[3]` for one of declared width -- SMTP's reply code and HTTP's
 status are both exactly three digits with nothing after them, and requiring
-`until` made those unwriteable.
+`until` made those unwriteable. A signed number has only the first, for the
+reason below.
 
 The two differ on canonicity, in the direction that surprises. A *padded*
 field is `Canonical`: `007` is the only spelling of seven in three digits,
@@ -1090,8 +1091,22 @@ same word `varint_type` already uses for the same reason. Refusing them
 unasked would reject valid data, because most formats do permit `007`, so the
 loose reading is the default and the map says what it costs.
 
-Signed and fractional text formats are refused. A sign or a point is a grammar
-rather than a number, which is the same line drawn below.
+**A signed text number is one optional `-` and then digits**, and that is the
+whole of the grammar. `decimal i32 offset until ","` reads `-42`; `+42` and
+`-0` are refused, each being a second spelling of a value that already has
+one, which is the rule `[minimal]` states about leading zeros applied to the
+sign.
+
+It is **delimited only**. `decimal i32 n[6]` is refused, because a sign costs
+a byte and the two facts cannot both hold: with the sign always written, `+5`
+and `5` spell one value; with it written only for negatives, the field is not
+a fixed width. situ refuses rather than choosing, since either choice is a
+canonicality the schema did not state. That is also why the signed form's
+range is the *type's* own rather than a digit count's -- there is no digit
+count.
+
+Fractional text formats are still refused. A point and an exponent are a
+grammar rather than a number, which is the same line drawn below.
 
 ### 8.6.3 Runs of records
 
@@ -5229,8 +5244,10 @@ non-C backends, the language server, cross-field invariants, text protocols,
 schema evolution, and the constructs the worked examples asked for.
 **Everything describing a single message is done.** What situ deliberately
 does not cover *within* one is named where the construct that would cover it
-would go -- 8.6.6 for a grammar, 8.6.2 for signed text -- rather than in a
-list of absences, which goes stale the moment one of them lands.
+would go -- 8.6.6 for a grammar, 8.6.2 for a fractional text format --
+rather than in a list of absences, which goes stale the moment one of them
+lands. Signed text was on that list and is not any more (26.297), which is
+the habit working.
 
 **What is outstanding is the layer ladder, and only above the bottom rung.**
 Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
@@ -24192,6 +24209,164 @@ closed: 26.224's "`walk.py` never mentions `bit_order`" -- it reads it now,
 at two sites. And the census's own first draft called `tlv` unexercised,
 which was the probe rather than the tree: the syntax is `tlv fields (...)`
 and `example/protobuf` uses it.
+
+### 26.297 A text number the schema declared signed, and nothing read
+
+`decimal i32 n until ","` compiled. It reached the capability map, the wire
+signature and four getters, every one of them returning `int32_t`, and the
+one thing that reads the bytes parsed a magnitude into an unsigned
+accumulator and range-checked it against `0..2^32-1`. **A field declared
+signed could not hold a negative number, and no diagnostic anywhere said
+so.**
+
+The type guard that would have caught it existed and was in the wrong
+place: it lived inside the DELIMITER check, so it saw the delimited form and
+never `decimal i32 n[6]`, which is the other half of the construct. Moved to
+`check_text_numbers`, which walks every member with a radix, both forms
+reach it -- and the fixed-width one is now refused outright:
+
+    decimal i32 n[6]     a sign costs a byte, so `+5` and `5` are two
+                         spellings of one value, or the field is not a
+                         fixed width. situ refuses rather than choosing,
+                         because either choice is a canonicality the
+                         schema did not state (8.6.2)
+
+That refusal is not a restriction so much as the thing that makes the rest
+definable. **The signed form is delimited by construction**, so there is no
+digit count to cap it and its domain is the type's own -- which is why
+`radix_max` needed a `radix_min` beside it rather than a second special
+case at each of the six places that read a text number.
+
+The grammar is one optional `-` and then digits. No `+` and no `-0`, for
+the reason `[minimal]` already gives about leading zeros: each is a second
+spelling of a value that already has one.
+
+**Six implementations, and the interesting one is the image.** The four
+backends carry both bounds in the generated code; the packed check row
+carries a single `int64_t`, and both walkers derive the floor from it as
+`-(max + 1)`. In two's complement that is exact, and a second field in the
+row would be a second thing to be wrong.
+
+`digits_minimal` gained the same sign skip in all six, because `-042` is
+non-minimal for the reason `042` is -- and because a check that disagreed
+about the skip would have the implementations naming different checks for
+one refused frame, which is worse than disagreeing about the verdict.
+
+**The corpus gained `signed_number` and it is not what covers this.**
+`test/schema/edges.situ` puts the construct in front of the four-way
+differential and the walker comparison, which is worth having. But those
+drive random bytes, and a `-` followed by digits and then a delimiter does
+not arise in them: breaking the sign in the C walker leaves every schema in
+the corpus green. Measured, not assumed -- and it is why `test_signed_text.py`
+drives the grammar directly in all six, with a table of thirteen spellings
+and one control per implementation. Fifteen sabotages, each seen to fail
+through the check under test and naming the case it was aimed at.
+
+**One thing the fix found on the way.** The packed row for a fixed-width
+text number carried the TYPE's maximum where all four backends check
+`radix_max` -- so the image said `decimal u16 code[3]` holds `0..65535` and
+the generated code said `0..999`. It carries `radix_max` now, and the two
+agree.
+
+**And three things the corpus struct found, which is the argument for adding
+it even though it does not cover the grammar.** `signed_number` is the first
+member in the tree with a SCALAR directly after a capped delimited member,
+and that shape is what each of these needed:
+
+- **The Lua dissector consumed a delimiter that was not there.** It advanced
+  past one whenever the buffer had room -- `if at + n <= tvb:len()` -- where
+  every other reader advances only when the scan FOUND one. So after a member
+  that ran to its cap with no delimiter in it, every later member was a byte
+  late. `situ_scan` returns the two answers now, the length and whether it
+  terminated. Arbitrated by the compiled backend rather than between the two
+  that disagreed: C says `tail_offset=8` for the buffer in question, which is
+  the walker's answer and not the dissector's.
+- **A test asserted the old refusal**, in as many words:
+  `test_a_signed_text_number_is_refused`, matching "must be an unsigned
+  integer". It is two tests now -- the getter's shape for the signed form,
+  and the fractional refusal, which is the half that did not move.
+- **A hard-coded shape index quietly became a different struct.** A struct
+  added above `constrained` shifted every index below it, and
+  `test_they_agree_about_a_versioned_member` went on asking shape 11 of a
+  walker pair that agreed with each other perfectly. What failed was only the
+  expectation about which struct was being asked -- a wrong-population read
+  wearing a disagreement's clothes. It looks the name up now.
+- **The generated fuzz harness declared an unsigned holder** for every value
+  it reads back, so `situ_signed_number_offset_get(view, &parsed)` with a
+  `uint16_t` was `-Werror=pointer-sign` and no schema carrying a signed text
+  number could build one. `_ctype_of` follows the member now, which closes a
+  latent case as well: a `[since]` member of a signed type would have failed
+  the same way and none exists.
+
+**That one was found by `make test-c` and by nothing else.** The Python
+suite was green over the same tree -- 4899 passed -- because it does not
+build the fuzz harnesses. Two suites, and the second is not a formality.
+
+### 26.298 The trim set was HTTP's, in a compiler that is not HTTP's
+
+`[trim]` removed space and horizontal tab, everywhere, in every schema.
+That is HTTP's OWS and SIP's LWS, and it was the right default and the
+wrong answer: **a format that CALLS CR and LF whitespace did not get them
+trimmed**, and JSON does, by RFC 8259 section 2.
+
+The constant was in five places -- the four backends and the walker -- and
+`report.py`'s own comment beside its copy said what a second copy costs. So
+the fix is not a better constant. `whitespace` already existed as a
+file-level directive, put there by `skip`; `traverse.whitespace_set` reads
+it and everything else asks that. One decision, six readers.
+
+**The image carries the set, in a section of its own.** Not a column on
+`image_placement`, because it is the SCHEMA's fact and not a member's -- and
+written unconditionally, because "this schema states nothing" and "this
+image predates the section" are different facts and a walker that could not
+tell them apart would have to guess for one of them. An image with no such
+section means OWS, which is what every schema written before the directive
+meant.
+
+**And the wire signature says which bytes.** A signature reading only `trim`
+cannot tell a reader whether a trailing newline is part of a value, and the
+answer used to be HTTP's whatever the format said.
+
+### 26.299 The gap named the construct that closed it
+
+`example/json` carried this in its bill, one line above the whitespace line
+26.292 corrected:
+
+> Escapes are the reader's to interpret -- situ frames the span and does
+> not decode it, and a `\"` inside the content ends this scan early. That
+> is the third thing this file cannot do and the one that is a genuine gap
+> rather than a language boundary: `[escape = "\\"]` exists for exactly
+> this and is asserted below.
+
+**The sentence names the attribute that fixes it and calls itself a gap in
+the same breath.** It was not a gap in situ; it was a gap in this schema,
+and the fix is `[escape = "\\"]` on `text.chars`.
+
+The measurement, because a short extent with no complaint is the answer this
+repository rates worst and it was being produced here:
+
+    {"a":"say \"hi\""}    18 bytes    extent 13    before
+    {"a":"say \"hi\""}    18 bytes    extent 18    now
+    ["a\"b"]               8 bytes    extent  6    before
+
+The rule is that the byte after the escape is content whatever it is, itself
+included, so `"back\\slash"` ends at its own closing quote rather than two
+bytes later. That case framed correctly before and still does, which is the
+half worth checking: a fix to the failing case that breaks the passing one
+is not a fix.
+
+What situ still does not do is DECODE one. `\u0061` is framed as six bytes
+and means `a` to a reader, which is the division of labour every other
+member in that file already follows -- and it weakens `canonical` a second
+way, which the map says.
+
+**Why it sat there.** A bill is written once, when a schema is written, and
+nothing brings it back together with the language as the language grows.
+Both lines corrected in two days were true when written and false by the
+time anybody read them, and neither was found by reading the bill -- 26.292
+came from implementing `skip` and this came from asking what else the file
+claimed it could not do. The question is cheap and the answer is not
+discoverable any other way.
 
 ## 27. Questions, and how they were settled
 

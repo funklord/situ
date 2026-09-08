@@ -17,6 +17,7 @@
 
 endian big
 target buffer
+whitespace 20090d0a
 
 struct array size=1..
   @0x0000   1..       element    entries  while=sep==','
@@ -45,7 +46,7 @@ struct object size=4..
   @0x0000   4..       member     entries  big while=sep==','
 
 struct text size=1..
-  @0x0000   until:22  u8         chars
+  @0x0000   until:22  u8         chars  escape=0x5c
 
 struct value size=2..
   ~         1         u8         kind  skip=20090d0a

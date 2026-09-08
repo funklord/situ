@@ -97,6 +97,14 @@ def _directives(schema: ast.Schema) -> list[str]:
 			found.append(f"bit_order {decl.bit_order.value}")
 		elif isinstance(decl, ast.TargetDirective):
 			found.append(f"target {decl.kind.value}")
+		elif isinstance(decl, ast.WhitespaceDirective):
+			# WHICH bytes `[trim]` removes, stated once because it is a
+			# file-level fact rather than a member's. A signature saying
+			# only `trim` cannot tell a reader whether a trailing newline
+			# is part of a value, and the answer used to be HTTP's OWS
+			# whatever the format said.
+			found.append("whitespace " + "".join(f"{byte:02x}"
+			                                     for byte in decl.values))
 
 	return ["", *sorted(found)] if found else []
 

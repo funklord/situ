@@ -117,14 +117,33 @@ struct element [depth = 64] {
 
 // A string, from after its opening quote to its closing one.
 //
-// `canonical` is weakened here and the map says so, which is right: `A`
-// and `A` are the same string and different bytes. Escapes are the reader's
-// to interpret -- situ frames the span and does not decode it, and a `\"`
-// inside the content ends this scan early. That is the third thing this file
-// cannot do and the one that is a genuine gap rather than a language
-// boundary: `[escape = "\\"]` exists for exactly this and is asserted below.
+// `[escape = "\\"]` is what makes that true of real JSON. Without it a `\"`
+// inside the content ends the scan, and this file said so for a while --
+// "the one thing that is a genuine gap rather than a language boundary" --
+// while the construct that closes it sat one attribute away, named in the
+// same sentence. It was not a gap in situ; it was a gap in this schema.
+//
+// The measurement, because a short extent with no complaint is the answer
+// this repository rates worst and it was being produced here:
+//
+//     {"a":"say \"hi\""}    18 bytes    extent 13    before
+//     {"a":"say \"hi\""}    18 bytes    extent 18    now
+//     ["a\"b"]               8 bytes    extent  6    before
+//
+// The rule is the byte AFTER the escape is content, whatever it is --
+// itself included -- so `"back\\slash"` ends at its own closing quote
+// rather than at the one a naive reader would find two bytes later. That
+// case framed correctly before and still does, which is the half worth
+// checking: a fix to the failing case that breaks the passing one is not a
+// fix.
+//
+// `canonical` is weakened here and the map says so, which is right, and the
+// escape weakens it a second way: two spellings of one string, since `a`
+// and `\u0061` are the same character. Situ frames the span and
+// does not decode it -- what an escape MEANS is the reader's, and what this
+// says is only where the string ends.
 struct text {
-	u8  chars[]  until "\"";
+	u8  chars[]  until "\"" [escape = "\\"];
 }
 
 // The three literals. Each is its first byte -- the discriminant -- plus the
@@ -196,6 +215,13 @@ struct nothing { u8  rest[3]  [must_eq = "ull"]; }
 // the schema cannot meet. Permitting leading whitespace and knowing where the
 // first byte is are the same question asked twice, and JSON's answer is the
 // first.
+//
+// AND ESCAPES ARE FRAMED, which was the other line of this bill and was
+// never a language boundary: `[escape = "\\"]` on `text.chars` is the whole
+// of it, and the entry above `text` records what the schema measured while
+// it went unused. What situ still does not do is DECODE one -- `\\u0061` is
+// framed as six bytes and means `a` to a reader, which is the same division
+// of labour every other member here follows.
 //
 // TRAILING whitespace belongs to nobody, and that is the honest remaining
 // edge. `{"a":1} ` is eight bytes and this schema measures seven of them: a

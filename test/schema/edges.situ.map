@@ -270,6 +270,10 @@ struct shadowing size=20 repr=ValueConverted atomic=NonAtomic
   shadowing.bytes                        offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic
   shadowing.str                          offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
+struct signed_number size=2..9 access=Sequential mutate=Shifting address=Unstable repr=TextConverted
+  signed_number.offset                   offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
+  signed_number.tail                     offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable
+
 struct text_driver size=6..14 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
   text_driver.n                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=TextConverted atomic=NonAtomic
   text_driver.d                          offset=AbsoluteStatic(0x04) size=Bounded(0, 8) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting

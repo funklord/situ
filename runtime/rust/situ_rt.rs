@@ -154,7 +154,6 @@ impl Dirty {
 	}
 }
 
-/// A big-endian read of `width` bytes at `at`.
 #[inline]
 /// Advance an offset by a length the message chose, and stop at the end.
 ///
@@ -195,6 +194,7 @@ fn holds(len: usize, at: usize, width: usize) -> bool {
 	width <= len && at <= len - width
 }
 
+/// A big-endian read of `width` bytes at `at`.
 pub fn read_be(bytes: &[u8], at: usize, width: usize) -> u64 {
 	if !holds(bytes.len(), at, width) {
 		return 0;
@@ -486,26 +486,63 @@ pub fn parse_uint(bytes: &[u8], radix: u32, max: u64) -> Option<u64> {
 	Some(value)
 }
 
-/// What `[trim]` removes: space and horizontal tab, and nothing else.
+/// A signed text number: an optional leading `-`, then digits.
 ///
-/// Not `u8::is_ascii_whitespace`, which also takes CR, LF and FF -- three of
-/// which are delimiters in the protocols this is for, so trimming them would
-/// eat the framing. This is HTTP's OWS.
-#[inline]
-pub fn is_ows(byte: u8) -> bool {
-	byte == b' ' || byte == b'\t'
+/// A separate function rather than a flag on `parse_uint`, so every schema
+/// written before signed text numbers existed calls exactly what it called
+/// before.
+///
+/// `-` and never `+`, and no `-0`. Both are the rule `[minimal]` already
+/// states about leading zeros: `+5` and `5` are two spellings of one value,
+/// and so are `-0` and `0`. Refusing them keeps a signed text number
+/// canonical, which the unsigned form is.
+pub fn parse_int(bytes: &[u8], radix: u32, low: i64, high: i64) -> Option<i64> {
+	if bytes.is_empty() {
+		return None;
+	}
+
+	let negative = bytes[0] == b'-';
+	let digits = if negative { &bytes[1..] } else { bytes };
+
+	// The magnitude reaches one further down than up, and building the
+	// ceiling from the bound avoids negating `i64::MIN`.
+	let ceiling = if negative {
+		(-(low + 1)) as u64 + 1
+	} else {
+		high as u64
+	};
+
+	let value = parse_uint(digits, radix, ceiling)?;
+	if negative && value == 0 {
+		return None;
+	}
+
+	Some(if negative { -(value as i64) } else { value as i64 })
 }
 
+/// What `[trim]` removes where a schema states nothing: HTTP's OWS, space
+/// and horizontal tab.
+///
+/// Not `u8::is_ascii_whitespace`, which also takes CR, LF and FF -- three of
+/// which are framing in the protocols this default is for. A schema states
+/// its own set with `whitespace`, and the generated code passes it.
+pub const OWS: &[u8] = b" \t";
+
 /// The value with the optional whitespace at either end removed.
+///
+/// The set is the caller's, because it is the schema's: it used to be a
+/// constant here and in four other places, and the walker's own comment
+/// said that a second copy of what `[trim]` removes is how two readers of
+/// one attribute start disagreeing.
 #[inline]
-pub fn trim(bytes: &[u8]) -> &[u8] {
+pub fn trim<'a>(bytes: &'a [u8], chars: &[u8]) -> &'a [u8] {
 	let mut start = 0;
 	let mut end = bytes.len();
 
-	while start < end && is_ows(bytes[start]) {
+	while start < end && chars.contains(&bytes[start]) {
 		start += 1;
 	}
-	while end > start && is_ows(bytes[end - 1]) {
+	while end > start && chars.contains(&bytes[end - 1]) {
 		end -= 1;
 	}
 	&bytes[start..end]
@@ -525,8 +562,16 @@ pub fn ascii_ci_eq(a: &[u8], b: &[u8]) -> bool {
 /// so is a change of case. `[minimal]` is what asks for this; without it the
 /// field is NonCanonical and the map says so, which is the honest default --
 /// most formats do permit `007`.
+///
+/// A leading `-` is skipped before the question is asked. It belongs to the
+/// spelling of a signed text number, so `-042` is non-minimal for the same
+/// reason `042` is -- and it can only reach here from a signed field, an
+/// unsigned one refusing the byte at the parse. All six implementations skip
+/// it identically, which is what keeps them naming the same check when a
+/// frame is refused.
 #[inline]
 pub fn digits_minimal(bytes: &[u8], radix: u32) -> bool {
+	let bytes = if bytes.first() == Some(&b'-') { &bytes[1..] } else { bytes };
 	if bytes.is_empty() {
 		return false;
 	}

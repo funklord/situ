@@ -157,3 +157,7 @@ struct image_varint size=12 repr=ValueConverted
 struct image_version size=8 repr=ValueConverted
   image_version.shape                    offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_version.placement                offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct image_whitespace size=4 atomic=NonAtomic
+  image_whitespace.octet                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_whitespace.ws_pad                offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic

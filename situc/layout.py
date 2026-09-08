@@ -404,14 +404,36 @@ class Placement:
 		Not the type's maximum. `decimal u16 code[3]` is three digits, so it
 		holds 0..999 whatever `u16` would allow -- and a range check written
 		against the type would accept a value the field cannot represent.
+
+		A SIGNED text number is delimited by construction -- `wellformed`
+		refuses the fixed-width form, because a sign costs a byte and a
+		fixed width cannot pay it -- so there is no digit count to cap it
+		with, and the type's own maximum is the answer.
 		"""
 		if self.radix is None or self.scalar is None:
 			return None
+
+		if self.scalar.signed:
+			return (1 << (self.scalar.bits - 1)) - 1
 
 		limit = (1 << self.scalar.bits) - 1
 		if self.array_count is None:
 			return limit
 		return min(limit, int(self.radix ** self.array_count) - 1)
+
+	@property
+	def radix_min(self) -> int | None:
+		"""The smallest value this text number can hold.
+
+		Zero for the unsigned form, which is why nothing asked before: a
+		magnitude has no lower end worth checking. A signed one does, and it
+		is the type's, for `radix_max`'s reason.
+		"""
+		if self.radix is None or self.scalar is None:
+			return None
+		if not self.scalar.signed:
+			return 0
+		return -(1 << (self.scalar.bits - 1))
 
 	#: `[minimal]`: leading zeros are refused, so one value has one spelling.
 	#: Without it "007" and "7" are the same number written two ways, which is

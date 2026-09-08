@@ -1056,6 +1056,14 @@ def parse_digits(view: View, index: int) -> int:
 	A byte that is not a digit of this radix fails the whole parse, as the
 	runtime does: a field that is meant to be a number and is not is a
 	malformed message, not a number with some of it ignored.
+
+	A signed text number is one leading `-` and then digits, which is the
+	whole of the grammar: no `+`, because two spellings of a positive number
+	is one spelling too many for a byte-exact layout, and no `-0`, because
+	that is a second spelling of zero. Both are refused rather than accepted
+	and normalised, which is `situ_parse_int`'s rule and has to be this
+	walker's too or the fifth column disagrees with the four it exists to
+	check.
 	"""
 	placement = view.image.placements[index]
 	radix = placement.radix
@@ -1063,6 +1071,12 @@ def parse_digits(view: View, index: int) -> int:
 		raise Refused(f"radix {radix} is not one to parse")
 
 	data = digits_of(view, index)
+
+	negative = placement.signed and data[:1] == b"-"
+	if negative:
+		data = data[1:]
+		if not data:
+			raise Refused("a sign with no digits after it")
 
 	value = 0
 	for byte in data:
@@ -1077,6 +1091,10 @@ def parse_digits(view: View, index: int) -> int:
 		if digit >= radix:
 			raise Refused("a digit outside this radix")
 		value = value * radix + digit
+	if negative:
+		if value == 0:
+			raise Refused("a negative zero, which is zero written twice")
+		return -value
 	return value
 
 

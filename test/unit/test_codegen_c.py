@@ -1770,11 +1770,25 @@ def test_validate_refuses_digits_that_are_not_digits() -> None:
 	assert "situ_s_count_get(view, &parsed)" in source
 
 
-def test_a_signed_text_number_is_refused() -> None:
-	"""situ reads digits as a magnitude. A sign or a point is a grammar rather
-	than a number, which is the line decision 0020 draws."""
-	with pytest.raises(SituError, match="must be an unsigned integer"):
-		emit('struct s { decimal i32 n until "\\r\\n"; }')
+def test_a_signed_text_number_is_read_as_one() -> None:
+	"""It used to be refused here, and this test asserted the refusal.
+
+	The delimited form reads a sign now (26.297), so the assertion is the
+	getter's shape instead: `situ_parse_int` and the type's own bounds,
+	which is what separates it from the magnitude parse beside it.
+	"""
+	header, _ = emit('struct s { decimal i32 n until "\\r\\n"; }')
+
+	assert "situ_parse_int(" in header
+	assert "INT64_C(-2147483648), INT64_C(2147483647)" in header
+
+
+def test_a_fractional_text_number_is_still_refused() -> None:
+	"""The half of that refusal that did not move. A point and an exponent
+	are a grammar rather than a number, which is the line decision 0020
+	draws -- and it is drawn at the type, so `f32` never reaches a radix."""
+	with pytest.raises(SituError, match="must be an "):
+		emit('struct s { decimal f32 n until "\\r\\n"; }')
 
 
 def test_a_text_number_needs_somewhere_to_stop() -> None:

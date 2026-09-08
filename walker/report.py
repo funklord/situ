@@ -205,10 +205,14 @@ def _element(view: View, index: int, at: int) -> int:
 #: `image_placement.text_flags`
 MINIMAL, TRIMMED, CASE_INSENSITIVE = 1, 2, 4
 
-#: What `[trim]` removes. HTTP's OWS and SIP's LWS, and deliberately not
-#: `isspace`, which is locale dependent and includes CR, LF, VT and FF --
-#: three of which are delimiters in the protocols this is for, so trimming
-#: them would eat the framing.
+#: What `[trim]` removes where the image carries no set: HTTP's OWS and
+#: SIP's LWS, and deliberately not `isspace`, which is locale dependent and
+#: includes CR, LF, VT and FF -- three of which are framing in the protocols
+#: this default is for.
+#:
+#: A default rather than the answer, and the comment below said why while
+#: this was the answer: a schema states its set with `whitespace`, the image
+#: carries it, and this is what an image written before that section means.
 OWS = (0x20, 0x09)
 
 
@@ -232,11 +236,12 @@ def _trim_span(view: View, index: int, content: int) -> tuple[int, int]:
 		return 0, content
 	start = view.at + offset_bits(view, index) // 8
 	data  = view.buffer[start:start + content]
-	head  = 0
-	while head < len(data) and data[head] in OWS:
+	removes = view.image.whitespace
+	head    = 0
+	while head < len(data) and data[head] in removes:
 		head += 1
 	tail = len(data)
-	while tail > head and data[tail - 1] in OWS:
+	while tail > head and data[tail - 1] in removes:
 		tail -= 1
 	return head, tail - head
 
@@ -684,6 +689,12 @@ def _validate(image: Image, view: View, struct_index: int,
 				digits = digits_of(view, index)
 			except Refused:
 				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
+			# A leading `-` belongs to the spelling of a signed number and
+			# is skipped before the question is asked, exactly as
+			# `situ_digits_minimal` skips it: `-042` is non-minimal for the
+			# same reason `042` is.
+			if digits[:1] == b"-":
+				digits = digits[1:]
 			if not digits:
 				return fail(ERR_CONSTRAINT, index, DIGITS_MINIMAL)
 			if len(digits) > 1 and digits[0:1] == b"0":
@@ -702,7 +713,12 @@ def _validate(image: Image, view: View, struct_index: int,
 				value = parse_digits(view, index)
 			except Refused:
 				return fail(ERR_CONSTRAINT, index, DIGITS_VALID)
-			if value > against:
+			# The row carries the ceiling. A signed text number's floor is
+			# derived from it rather than packed beside it: in two's
+			# complement the two are one number, and a second field would
+			# be a second thing to be wrong.
+			floor = -(against + 1) if placement.signed else 0
+			if value > against or value < floor:
 				return fail(ERR_CONSTRAINT, index, DIGITS_VALID)
 
 		# The byte-run checks: a terminator inside the field, an

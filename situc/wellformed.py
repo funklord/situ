@@ -75,6 +75,7 @@ def check(schema: ast.Schema) -> None:
 	check_whitespace_place(schema)
 	check_imported_directives(schema)
 	check_skips(schema)
+	check_text_numbers(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
 	check_delimiters(schema)
@@ -236,6 +237,59 @@ def _disagreeing_import(decl: ast.Decl, word: str, theirs: str, ours: str,
 		            "make them agree, or drop the directive from the "
 		            "imported file"],
 	))
+
+
+def check_text_numbers(schema: ast.Schema) -> None:
+	"""What a `decimal` or `hex` member's type may be, in both its forms.
+
+	This lived in the DELIMITER check, so it saw `decimal u32 n until ":"`
+	and never `decimal u32 n[8]` -- and the fixed-width form is half the
+	construct. `decimal i32 n[6]` compiled, and the generated reader parsed
+	it as a magnitude against an unsigned range, so a field the schema
+	declared signed could not hold a negative number and said so nowhere.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if not isinstance(member, ast.Field):
+				continue
+			if getattr(member, "radix", None) is None:
+				continue
+			_check_one_text_number(member)
+
+
+def _check_one_text_number(member: ast.Field) -> None:
+	scalar = member.type_ref.scalar
+	fixed  = member.array is not None and member.array.size is not None
+
+	if scalar is None or scalar.kind not in (ScalarKind.UINT, ScalarKind.SINT):
+		raise error(
+			f"`{member.name}` is a text number, so its type must be an "
+			"integer",
+			member.type_ref.span,
+			label = f"`{member.type_ref.name}` is not one",
+			notes = ["the type gives the range of values the digits may "
+			         "spell, and situ reads digits as an integer",
+			         "a fractional text format needs a point and an exponent, "
+			         "which is a grammar rather than a number: frame it as a "
+			         "byte run and let the reader parse it"],
+		)
+
+	if scalar.kind is ScalarKind.SINT and fixed:
+		raise error(
+			f"`{member.name}` is a signed text number with a fixed width",
+			member.type_ref.span,
+			label = "signed, and this many bytes whatever the value",
+			notes = ["a sign costs a byte, so the two cannot both hold: with "
+			         "the sign always written, `+5` and `5` are two spellings "
+			         "of one value, and with it written only for negatives "
+			         "the field is not a fixed width",
+			         "situ refuses rather than choosing, because either "
+			         "choice is a canonicality the schema did not state "
+			         "(8.6.2)",
+			         f"`decimal {member.type_ref.name} {member.name} "
+			         'until "D"` is signed and framed by its delimiter, where '
+			         "the width IS the number"],
+		)
 
 
 def check_skips(schema: ast.Schema) -> None:
@@ -463,21 +517,6 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 			         f"`decimal {member.type_ref.name} {name} until ...` reads "
 			         "the run as a number written in digits"],
 		)
-
-	radix = getattr(member, "radix", None)
-	if radix is not None:
-		scalar = member.type_ref.scalar
-		if scalar is None or scalar.kind is not ScalarKind.UINT:
-			raise error(
-				f"`{name}` is a text number, so its type must be an unsigned "
-				f"integer",
-				member.type_ref.span,
-				label = f"`{member.type_ref.name}` is not one",
-				notes = ["the type gives the range of values the digits may "
-				         "spell, and situ reads digits as a magnitude",
-				         "a signed or fractional text format needs a sign or a "
-				         "point, which is a grammar rather than a number"],
-			)
 
 	if any(attr.name == "nul_terminated" for attr in member.attrs):
 		raise error(

@@ -526,12 +526,28 @@ situ_walk_err situ_walk_scan(const situ_walk_image *image,
  * writes a number that needs it, so the two agree for every digit count the
  * tree contains and this says where they would stop. */
 static situ_walk_err parse_digits(const uint8_t *data, uint32_t len,
-                                  uint32_t radix, uint64_t *out)
+                                  uint32_t radix, int is_signed, uint64_t *out)
 {
-	uint64_t value = 0u;
+	uint64_t value    = 0u;
+	int      negative = 0;
 
 	if (len == 0u || radix < 2u || radix > 16u) {
 		return SITU_WALK_CONSTRAINT;	/* no digits is not the number zero */
+	}
+
+	/* One leading `-` and then digits, which is the whole of the grammar for
+	 * a signed text number: no `+`, because two spellings of a positive
+	 * number is one too many for a byte-exact layout, and no `-0` below,
+	 * because that is a second spelling of zero. `situ_parse_int` refuses
+	 * both and this walker exists to disagree with it when it is wrong, not
+	 * when it is right. */
+	if (is_signed && data[0] == (uint8_t)'-') {
+		data += 1;
+		len  -= 1u;
+		negative = 1;
+		if (len == 0u) {
+			return SITU_WALK_CONSTRAINT;	/* a sign with no digits after it */
+		}
 	}
 
 	for (uint32_t i = 0u; i < len; i++) {
@@ -557,6 +573,16 @@ static situ_walk_err parse_digits(const uint8_t *data, uint32_t len,
 			return SITU_WALK_CONSTRAINT;
 		}
 		value = value * radix + digit;
+	}
+
+	if (negative) {
+		if (value == 0u) {
+			return SITU_WALK_CONSTRAINT;	/* zero written twice */
+		}
+		/* The walker's convention for a signed value: the two's-complement
+		 * bit pattern, sign-extended through the `uint64_t`, exactly as a
+		 * fixed-width signed read comes back. */
+		value = (uint64_t)0 - value;
 	}
 
 	*out = value;
@@ -1895,7 +1921,8 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		if (at > len || width > len - at) {
 			return SITU_WALK_BOUNDS;
 		}
-		return parse_digits(message + at, width, held.radix, out);
+		return parse_digits(message + at, width, held.radix,
+		                    (held.flags & FLAG_SIGNED) != 0u, out);
 	}
 
 	/* A run has no single value, and neither does a member whose width the
@@ -2562,8 +2589,15 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				break;
 			case CHECK_DIGITS_VALID:
 				/* The read has already parsed the digits; what is left is
-				 * the declared domain the row carries. */
-				broken = (value > (uint64_t)want);
+				 * the declared domain the row carries. The row carries the
+				 * ceiling only: a signed number's floor is derived from it,
+				 * the two being one number in two's complement. */
+				if ((held.flags & FLAG_SIGNED) != 0u) {
+					broken = ((int64_t)value > want
+					          || (int64_t)value < -want - 1);
+				} else {
+					broken = (value > (uint64_t)want);
+				}
 				break;
 			case CHECK_DIGITS_MINIMAL:
 				broken = 0;	/* the spelling, checked below */
@@ -2583,6 +2617,13 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				if (err != SITU_WALK_OK) {
 					*verdict = SITU_WALK_CONSTRAINT;
 					return SITU_WALK_OK;
+				}
+				/* A leading `-` belongs to the spelling of a signed
+				 * number and is skipped before the question is asked,
+				 * exactly as `situ_digits_minimal` skips it. */
+				if (count_of > 0u && digits[0] == (uint8_t)'-') {
+					digits   += 1;
+					count_of -= 1u;
 				}
 				if (count_of == 0u
 				                || (count_of > 1u && digits[0] == (uint8_t)'0')) {

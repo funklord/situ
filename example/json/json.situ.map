@@ -46,8 +46,8 @@ struct object size=4.. access=Sequential mutate=Shifting address=Unstable atomic
   object.entries[].held                  offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   object.entries[].sep                   offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
 
-struct text size=1.. mutate=Shifting effect=EffectOnRead
-  text.chars                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
+struct text size=1.. mutate=Shifting canonical=NonCanonical effect=EffectOnRead
+  text.chars                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
 
 struct value size=2.. access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
   value.kind                             offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
@@ -65,8 +65,8 @@ struct value size=2.. access=Sequential mutate=Shifting address=Unstable atomic=
   value.body.as_array.entries[]          offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
   value.body.as_array.entries[].held     offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
   value.body.as_array.entries[].sep      offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
-  value.body.as_string                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
-  value.body.as_string.chars             offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable effect=EffectOnRead
+  value.body.as_string                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  value.body.as_string.chars             offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable canonical=NonCanonical effect=EffectOnRead
   value.body.as_true                     offset=Dynamic size=Fixed(3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
   value.body.as_true.rest                offset=FrameStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic address=FrameStable
   value.body.as_false                    offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable

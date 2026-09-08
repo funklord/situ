@@ -44,6 +44,7 @@ from situc.traverse import (
 	codec_entry_point, decode_counts_bits,
 	declared_value_bounds, pinned_bytes,
 	is_own_member,
+	whitespace_set,
 	Check, Member, arm_members, coded_spans, containment_order, covered_run,
 	data_sized,
 	dynamic_frame_owner,
@@ -324,8 +325,12 @@ class Emitter:
 			needed.append("scan")
 		if any(len(p.delimiters) > 1 for p in placements):
 			needed.append("scan_any")
-		if any(p.radix is not None for p in placements):
+		if any(p.radix is not None and not (p.scalar and p.scalar.signed)
+		       for p in placements):
 			needed.append("parse_uint")
+		if any(p.radix is not None and p.scalar and p.scalar.signed
+		       for p in placements):
+			needed.append("parse_int")
 		if any(p.radix_minimal for p in placements):
 			needed.append("digits_minimal")
 		if any(p.trimmed for p in placements):
@@ -2510,6 +2515,16 @@ class Emitter:
 		lead = self._lead_methods(struct, entry.placement)
 		return bounds + lead + self._member_body(struct, entry)
 
+	def _trim_set(self) -> str:
+		"""What `[trim]` removes here, as a bytes literal.
+
+		The schema's `whitespace`, or space and tab where it states none.
+		Passed rather than known, because the runtime used to hold the
+		answer and a format calling CR and LF whitespace -- JSON does --
+		kept them in the value.
+		"""
+		return repr(bytes(whitespace_set(self.schema)))
+
 	def _lead_methods(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""`skip`: the whitespace in front of a member, and what it costs.
@@ -3625,10 +3640,11 @@ class Emitter:
 				f"\tdef {name}_len(self) -> int:",
 				f'\t\t"""The value\'s length: `[trim]` makes the whitespace at',
 				'\t\teither end framing rather than value."""',
-				f"\t\treturn len(trim(self.{name}_raw))",
+				f"\t\treturn len(trim(self.{name}_raw, {self._trim_set()}))",
 			])
 
-		value = f"trim(self.{name}_raw)" if placement.trimmed else f"self.{name}_raw"
+		value = (f"trim(self.{name}_raw, {self._trim_set()})" if placement.trimmed
+		         else f"self.{name}_raw")
 
 		if placement.radix is None:
 			lines.extend([
@@ -3671,17 +3687,32 @@ class Emitter:
 		limit = (1 << scalar.bits) - 1
 		raw   = value
 
+		# A signed text number takes the other parse -- an optional leading
+		# `-`, then digits -- and its range is the type's own rather than
+		# 0..limit. Only the delimited form can be signed; a fixed-width
+		# signed text number is refused, so the two sites above stay
+		# unsigned by construction.
+		signed = scalar.signed
+		if signed:
+			call = (f"parse_int({raw}, {placement.radix},"
+			        f" {placement.radix_min}, {placement.radix_max})")
+			span = f"{placement.radix_min}..{placement.radix_max}"
+		else:
+			call = f"parse_uint({raw}, {placement.radix}, {limit})"
+			span = f"0..{limit}"
+
 		return [
 			"",
 			"\t@property",
 			f"\tdef {name}(self) -> int:",
-			f'\t\t"""{placement.path}: digits, in the range of {scalar.name}.',
+			f'\t\t"""{placement.path}: digits, in the range of'
+			f' {scalar.name}, {span}.',
 			"",
 			"\t\tThe only property here that can raise. Every other conversion",
 			"\t\tis total; a decimal parse is not, and returning 0 for `12x4`",
 			'\t\twould hand back a number nobody wrote."""',
 			"\t\tself._check()",
-			f"\t\tvalue = parse_uint({raw}, {placement.radix}, {limit})",
+			f"\t\tvalue = {call}",
 			"\t\tif value is None:",
 			f"\t\t\traise ConstraintError(",
 			f'\t\t\t\tf"{placement.path} is not a {scalar.name} written in '
@@ -3696,7 +3727,7 @@ class Emitter:
 			"\t\tmaking it so would put a try/except in every accessor after",
 			"\t\tit. `validate` refuses a frame whose digits are not digits,",
 			'\t\tso a validated one always parses here."""',
-			f"\t\tvalue = parse_uint({raw}, {placement.radix}, {limit})",
+			f"\t\tvalue = {call}",
 			"\t\treturn 0 if value is None else value",
 		]
 
@@ -4963,7 +4994,7 @@ class Emitter:
 			# those NULs is an ASCII zero, and a code of `0` was not, because
 			# `bytes(0)` is empty and no digits is not a number. No exception
 			# anywhere, and three backends passing the bytes.
-			digits = (f"trim(self.{name}_raw)" if placement.trimmed
+			digits = (f"trim(self.{name}_raw, {self._trim_set()})" if placement.trimmed
 			          else f"self.{name}_raw")
 			lines.extend(self._minimal_check(placement, name, digits))
 		if placement.radix is not None:

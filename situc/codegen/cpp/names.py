@@ -101,6 +101,11 @@ SUFFIXES = frozenset({
 	# `x_took_from` would collide with it exactly as `x_len` collides with a
 	# getter.
 	"took_from",
+	# `[trim]` reads the schema's `whitespace` set, and the set is emitted
+	# beside the member as a table rather than passed as a literal at each
+	# call. A schema field named `x_trim_set` would collide with it exactly
+	# as `x_len` collides with a getter.
+	"trim_set",
 })
 
 

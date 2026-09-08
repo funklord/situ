@@ -619,9 +619,16 @@ def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
 
 
 def _ctype_of(placement: Placement) -> str:
+	"""The holder for a value this harness reads back.
+
+	Signed where the member is, which nothing here asked until a text
+	number could be: the getter takes `int16_t *` for `decimal i16`, and a
+	`uint16_t` handed to it is `-Werror=pointer-sign` rather than a wrong
+	number -- so the harness for any schema carrying one did not compile.
+	"""
 	scalar = placement.scalar
 	assert scalar is not None
-	return f"uint{max(8, scalar.bits)}_t"
+	return f"{'int' if scalar.signed else 'uint'}{max(8, scalar.bits)}_t"
 
 
 def _key_bytes(resolved: ResolvedSchema, struct_name: str,

@@ -240,6 +240,25 @@ def image_for(path: Path) -> bytes:
 	return pack(schema, resolved)[0]
 
 
+def shape_named(path: Path, name: str) -> int:
+	"""The index of a struct in `image_for`'s blob, asked rather than counted.
+
+	That blob is packed without metadata, so it carries no names; this packs
+	the same schema WITH them and looks the name up. The index transfers,
+	because metadata adds sections rather than reordering one.
+
+	Written after a hard-coded 11 quietly became a different struct. A schema
+	gained a struct above `constrained`, every index below it shifted, and
+	the two walkers went on agreeing with each other perfectly -- what failed
+	was only the expectation about WHICH struct was being asked, which is a
+	wrong-population read wearing a disagreement's clothes.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	return load(pack(schema, resolved, metadata=True)[0]).struct_names.index(name)
+
+
 def python_answers(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	image = load(blob)
 	view  = acquire(image, message, shape)
@@ -712,7 +731,8 @@ def test_they_agree_about_a_versioned_member(tmp_path: Path) -> None:
 	the version field the packer names per shape and gates on it, member for
 	member with the Python walk.
 
-	`edges`' `constrained [version = rev]` is the case, shape 11: `rev` at byte
+	`edges`' `constrained [version = rev]` is the case, looked up by name
+	rather than numbered (`shape_named`): `rev` at byte
 	zero, then `magic [since = 2, must_eq = 0x1234]`, `how [since = 3]` and
 	`pad [since = 3, must_eq = 0]`. The endianness is `edges`' own, big. The
 	gate has to *gate*: a v1 message whose later bytes would fail `magic`'s
@@ -720,7 +740,9 @@ def test_they_agree_about_a_versioned_member(tmp_path: Path) -> None:
 	check -- and a walker that read it anyway would answer CONSTRAINT for a
 	field the message never claimed to carry.
 	"""
-	blob = image_for(ROOT / "test" / "schema" / "edges.situ")
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	blob  = image_for(edges)
+	shape = shape_named(edges, "constrained")
 
 	# (message, expected verdict): 0 OK, 2 CONSTRAINT.
 	cases = [
@@ -733,8 +755,8 @@ def test_they_agree_about_a_versioned_member(tmp_path: Path) -> None:
 		(bytes.fromhex("0312340900"),   "2"),  # v3: `how` is not a known dialect
 	]
 	for message, want in cases:
-		verdict = c_verdict(tmp_path, blob, message, shape=11)
-		assert verdict == python_verdict(blob, message, shape=11), message.hex()
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message.hex()
 		assert verdict == want, message.hex()
 
 

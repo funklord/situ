@@ -606,18 +606,62 @@ def parse_uint(data: memoryview | bytes, radix: int, limit: int) -> int | None:
 	return value if 0 <= value <= limit else None
 
 
+def parse_int(data: "memoryview | bytes", radix: int,
+		low: int, high: int) -> int | None:
+	"""A signed text number: an optional leading `-`, then digits.
+
+	A separate function rather than a flag on `parse_uint`, so every schema
+	written before signed text numbers existed calls exactly what it called
+	before.
+
+	`-` and never `+`, and no `-0`. Both are the rule `[minimal]` already
+	states about leading zeros: `+5` and `5` are two spellings of one value,
+	and so are `-0` and `0`. Refusing them keeps a signed text number
+	`Canonical`, which the unsigned form is (8.6.2).
+	"""
+	raw = bytes(data)
+	if not raw:
+		return None
+
+	negative = raw[:1] == b"-"
+	if negative:
+		raw = raw[1:]
+
+	# The magnitude reaches one further down than up, and `-low` is the
+	# bound to use rather than `abs`, which says the same thing less
+	# obviously about the end that is not symmetric.
+	ceiling = -low if negative else high
+	value = parse_uint(raw, radix, ceiling)
+	if value is None or (negative and value == 0):
+		return None
+
+	return -value if negative else value
+
+
 DIGITS: Final = "0123456789abcdef"
 
 
-#: What `[trim]` removes. Space and horizontal tab, and nothing else -- not
-#: `str.strip`, which also takes CR, LF, VT and FF, three of which are
-#: delimiters in the protocols this is for. This is HTTP's OWS.
+#: What `[trim]` removes where a schema states nothing: HTTP's OWS, space
+#: and horizontal tab. Not `str.strip`, which also takes CR, LF, VT and FF,
+#: three of which are framing in the protocols this default is for.
+#:
+#: A default rather than the answer. `whitespace` states the set and the
+#: generated code passes it, so a format that calls CR and LF whitespace --
+#: JSON does, by RFC 8259 section 2 -- gets them trimmed. This constant is
+#: what a schema saying nothing means, which is every schema written before
+#: the directive existed.
 OWS: Final = b" \t"
 
 
-def trim(data: memoryview | bytes) -> bytes:
-	"""The value with the optional whitespace at either end removed."""
-	return bytes(data).strip(OWS)
+def trim(data: "memoryview | bytes", chars: bytes = OWS) -> bytes:
+	"""The value with the optional whitespace at either end removed.
+
+	The set is the caller's, because it is the schema's: five copies of
+	"what does `[trim]` remove" used to sit in the three runtimes, the
+	walker and the C header, and the walker's own comment said that a
+	second copy is how two readers of one attribute start disagreeing.
+	"""
+	return bytes(data).strip(chars)
 
 
 def ascii_ci_eq(a: memoryview | bytes, b: memoryview | bytes) -> bool:
@@ -639,8 +683,17 @@ def digits_minimal(data: memoryview | bytes, radix: int) -> bool:
 	so is a change of case. `[minimal]` is what asks for this; without it the
 	field is NonCanonical and the map says so, which is the honest default --
 	most formats do permit `007`.
+
+	A leading `-` is skipped before the question is asked. It belongs to the
+	spelling of a signed text number, so `-042` is non-minimal for the same
+	reason `042` is -- and it can only reach here from a signed field, an
+	unsigned one refusing the byte at the parse. All six implementations skip
+	it identically, which is what keeps them naming the same check when a
+	frame is refused.
 	"""
 	raw = bytes(data)
+	if raw[:1] == b"-":
+		raw = raw[1:]
 	if not raw:
 		return False
 	if len(raw) > 1 and raw[0:1] == b"0":

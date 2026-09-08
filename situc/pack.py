@@ -49,6 +49,7 @@ PLACEMENT_BYTES	= 50
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 36
 SKIP_BYTES	= 8
+WHITESPACE_BYTES = 4
 REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
@@ -87,6 +88,7 @@ SECTION_STRINGS		= 4
 SECTION_ARMS		= 5
 SECTION_DELIMITERS	= 6
 SECTION_SKIPS		= 22
+SECTION_WHITESPACE	= 23
 SECTION_REGIONS		= 7
 SECTION_CODECS		= 8
 SECTION_VARINTS		= 9
@@ -1069,8 +1071,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				if placement.radix_minimal:
 					constraints_blob += _struct.pack(
 						"<IqBxxx", at, placement.radix, 10)
+				# `radix_max` and not the type's maximum, which is what the
+				# four backends have always checked here: `decimal u16
+				# code[3]` holds 0..999, and an image carrying 65535 made
+				# the walker accept a value C refuses.
 				constraints_blob += _struct.pack(
-					"<IqBxxx", at, (1 << placement.scalar.bits) - 1, 9)
+					"<IqBxxx", at, placement.radix_max, 9)
 
 			if kind in (traverse.Check.CONSTRAINED,
 			            traverse.Check.TEXT_NUMBER):
@@ -1326,9 +1332,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					if placement.radix_minimal:
 						constraints_blob += _struct.pack(
 							"<IqBxxx", at, placement.radix, 10)
+					# The same, and the signed form's ceiling too. Both
+					# walkers derive the floor from this where the placement
+					# says signed, which is exact in two's complement and
+					# costs the row no second field.
 					constraints_blob += _struct.pack(
-						"<IqBxxx", at,
-						(1 << placement.scalar.bits) - 1, 9)
+						"<IqBxxx", at, placement.radix_max, 9)
 					# ...and then whatever the schema declared about the
 					# number. Every backend emits these after the parse now,
 					# and none of them did before: a delimited text number's
@@ -1427,6 +1436,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	arms_blob    = bytearray()
 	delims_blob  = bytearray()
 	skips_blob   = bytearray()
+	# What `[trim]` removes, for the whole schema rather than a member:
+	# `whitespace` is a file-level directive and `[trim]` asks it. Written
+	# unconditionally, because "the schema states nothing" and "this image
+	# predates the section" are different facts and a walker that could not
+	# tell them apart would guess for one of them.
+	ws_blob = bytearray()
+	for byte in traverse.whitespace_set(schema):
+		ws_blob += _struct.pack("<B3x", byte)
 	regions_blob = bytearray()
 	tlvs_blob    = bytearray()
 	index_blob   = bytearray()
@@ -1640,6 +1657,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_ARMS, arms_blob, ARM_BYTES),
 			(SECTION_DELIMITERS, delims_blob, DELIMITER_BYTES),
 			(SECTION_SKIPS, skips_blob, SKIP_BYTES),
+			(SECTION_WHITESPACE, ws_blob, WHITESPACE_BYTES),
 			(SECTION_REGIONS, regions_blob, REGION_BYTES),
 			(SECTION_CODECS, codecs_blob, CODEC_BYTES),
 			(SECTION_VARINTS, varints_blob, VARINT_BYTES),
