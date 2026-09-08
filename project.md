@@ -24988,6 +24988,40 @@ place, ask which other document makes the same claim. 26.300 fixed the
 signature and the schema comment; nobody asked what `doc` said, and `doc` is
 the one of the three a stranger reads.
 
+### 26.313 An empty sweep, recorded because it is one
+
+`[encoding = utf16be]` and `[encoding = utf16le]` came out of 26.308's
+census as constructs the corpus does not exercise, and the census had been
+three for three: signed text numbers, `import` and native-endian `u64` each
+carried a defect. This one does not.
+
+Swept across all six readers -- four backends and both walkers -- on cases
+chosen because random bytes never reach them:
+
+    plain BMP, both endiannesses      accepted by all six
+    a proper surrogate pair           accepted by all six
+    a lone HIGH surrogate             refused by all six
+    a lone LOW surrogate              refused by all six
+    the same, little-endian           refused by all six
+
+The little-endian rows are the ones worth having: the bytes `00 D8` are the
+code unit 0xD800, and a reader that forgot to swap sees 0x00D8 and accepts
+it. Nothing did.
+
+**Recorded rather than dropped, because an absence with no method behind it
+licenses nothing.** What was looked for is written above, and what the code
+does instead is that every backend emits `situ_utf16be_valid` or its
+sibling and both walkers carry `utf16_valid` with an endianness flag. So
+that family is swept, and the next fault in this area needs a different
+lens.
+
+**And pinned, in `edges.situ` rather than a new schema.** That file exists
+to carry "the constructs the worked examples happen not to have", which is
+this exactly -- and unlike `native.situ` one entry back, this one earns its
+place by holding a result rather than by having found a fix. The compiler
+refuses the byte form of the attribute by name, which is why no schema had
+stumbled into a `u16` run and why the six had never been asked to agree.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

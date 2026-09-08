@@ -173,6 +173,26 @@ struct texty {
 	u8            body[count];
 }
 
+// UTF-16, which six readers validate and nothing exercised.
+//
+// `[encoding = utf16be]` and its little-endian twin read 2-byte code units,
+// so they validate a `u16` run rather than a `u8` one -- the compiler
+// refuses the byte form by name, and that refusal is why no schema had
+// stumbled into one. Four backends emit `situ_utf16be_valid` and the two
+// walkers have their own; none of it was compared by anything.
+//
+// Swept before it was added, and the sweep was clean: plain BMP, a proper
+// surrogate pair, a lone high surrogate and a lone low one, in both
+// endiannesses, agree across all six. So this pins a result rather than
+// recording a fix -- and the case that matters is `le`, where the bytes
+// `00 D8` are the code unit 0xD800 and a reader that forgot to swap sees
+// 0x00D8 and accepts it.
+struct utf16 {
+	u16  be[4]  [encoding = utf16be];
+	u16  le[4]  [encoding = utf16le];
+	u8   tail;
+}
+
 // A SIGNED text number, which nothing else in the tree carries. Its grammar
 // is one optional `-` and then digits, and that is the whole of it: no `+`,
 // because two spellings of a positive number is one too many for a

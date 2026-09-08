@@ -293,6 +293,11 @@ struct unverified size=19
   @0x0003   16        u8         mac
   mac covers: body seq
 
+struct utf16 size=17
+  @0x0000   8         u16        be  big encoding=utf16be
+  @0x0008   8         u16        le  big encoding=utf16le
+  @0x0010   1         u8         tail
+
 struct varint_driver size=5..36893488147419103243
   @0x0000   1..9      edge_varint n  varint=edge_varint
   ~         2..36893488147419103232 u16        d  big sized-by=n+1

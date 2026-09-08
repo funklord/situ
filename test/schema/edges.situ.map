@@ -305,6 +305,11 @@ struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic 
   unverified.body.seq                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.mac                         offset=AbsoluteStatic(0x03) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
+struct utf16 size=17 repr=ValueConverted atomic=NonAtomic
+  utf16.be                               offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  utf16.le                               offset=AbsoluteStatic(0x08) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  utf16.tail                             offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+
 struct varint_driver size=5..36893488147419103243 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   varint_driver.n                        offset=AbsoluteStatic(0x00) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   varint_driver.d                        offset=Dynamic size=Bounded(2, 36893488147419103232) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
