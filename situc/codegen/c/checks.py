@@ -35,6 +35,7 @@ from situc.capability import Axis
 from situc.codegen.c import frame
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.names import render_delimiter
 from situc.propagate import Resolved
 from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -2368,6 +2369,59 @@ def _reach_version(struct: ResolvedStruct, extent: int) -> list[str] | None:
 	        ""]
 
 
+def _pinned_run_check(struct: ResolvedStruct, placement: Placement,
+		prefix: str, extent: int,
+		prelude: list[str]) -> tuple[str, list[str], list[str]] | None:
+	"""`preamble u8[2] = "\\x0d\\x0a"`: the bytes are the constraint.
+
+	Broken BY CONSTRUCTION rather than by writing all-ones and hoping it
+	differs: the first byte is set to a value no alternative begins with, so
+	the poke is wrong for every pin the schema admits and stays wrong for
+	one nobody has written yet. The all-ones poke was right for `\\r\\n`
+	and would have been vacuous for a preamble pinned to 0xffff.
+
+	`None` where the run does not start on a byte, or where the schema has
+	taken all 256 first bytes -- neither is reachable from anything here,
+	and a check that cannot break its subject is worse than none.
+	"""
+	runs = placement.pinned_runs or ()
+	if not runs or placement.offset_bits is None:
+		return None
+	if placement.offset_bits % BITS_PER_BYTE:
+		return None
+
+	at = placement.offset_bits // BITS_PER_BYTE
+	if at >= extent:
+		return None
+
+	taken = {run[0] for run in runs if run}
+	wrong = next((one for one in range(256) if one not in taken), None)
+	if wrong is None:
+		return None
+
+	shown    = " or ".join(render_delimiter(run).strip("`") for run in runs)
+	validate = ident(prefix, struct.name, "validate")
+
+	body = [*_acquire(struct, prefix, extent), "", *prelude]
+	body.append(f"\tassert_int_equal({validate}(view), SITU_OK);")
+	body.append("")
+	body.append(f"\t/* {placement.path} is pinned to {shown}; the byte below")
+	body.append("\t * begins none of them. */")
+	body.append(f"\tbuf[{at}u] = {wrong:#04x}u;")
+	body.append(f"\tassert_int_equal({validate}(view), SITU_ERR_CONSTRAINT);")
+
+	return (
+		f"check_{c_name(placement.path)}_preamble_is_enforced",
+		body,
+		[f"/* {placement.path} is a preamble pinned to {shown} (0052).",
+		 " *",
+		 " * Fixed bytes no accessor reaches, so the only thing that can",
+		 " * check them is `validate`. A receiver that ignores them lets a",
+		 " * sender vary bytes the format states, which is section 8.8's",
+		 " * argument for reserved bits and holds the same way here. */"],
+	)
+
+
 def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 		prefix: str, extent: int) -> None:
 	"""Reserved bits are a constraint, and section 8.8 says why.
@@ -2404,6 +2458,19 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 		# as long as no schema had a reserved field inside an arm.
 		prelude = _prelude(resolved, struct, placement, extent)
 		if prelude is None:
+			continue
+
+		# A `preamble` is a reserved run pinned to BYTES (0052), and it has
+		# no bit policy at all -- `_reserved_policy` returns its default,
+		# `must_be_zero`, which is a policy the schema does not declare. The
+		# check below then named and commented one, and broke the run by
+		# writing all-ones: right for `\r\n` by luck, and vacuous for a
+		# preamble pinned to 0xffff. What it enforces is the pin.
+		if placement.pinned_runs:
+			pinned = _pinned_run_check(struct, placement, prefix, extent,
+			                           prelude)
+			if pinned is not None:
+				suite.add(*pinned)
 			continue
 
 		# Break exactly this field: the bits it owns, flipped away from what the

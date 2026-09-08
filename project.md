@@ -23941,12 +23941,27 @@ that says nothing, because it arrives with the authority of a diagnosis and
 sends its reader somewhere else; the generated file names the kernel and the
 shape now.
 
-**What is still open, and it is a label rather than a wrong assertion.**
-`_reserved_policy` calls a `preamble` `must_be_zero`, so the check over
-`edges.<reserved0>` is named and commented for a policy the schema does not
-declare. The assertion holds -- the poke writes all-ones, which is not
-`\r\n`, and `validate` refuses it -- but it holds by luck rather than by
-construction, and a preamble pinned to 0xffff would make it vacuous.
+**And the label the first fix left wrong.** `_reserved_policy` answers
+`must_be_zero` for a `preamble`, because that is its default for a reserved
+member and a preamble declares no bit policy at all. So the check over
+`edges.<reserved0>` was named and commented for a policy the schema does not
+state, and broke the run by writing all-ones -- which is not `\r\n`, so the
+assertion held, and held BY LUCK: a preamble pinned to 0xffff would have
+made it vacuous, and nothing in the check would have said so.
+
+A preamble is a run pinned to BYTES (0052), so what it enforces is the pin.
+The check says that now, and breaks it by construction: the first byte is
+set to a value no alternative begins with, which is wrong for every pin the
+schema admits and stays wrong for one nobody has written yet.
+
+    /* edges.<reserved0> is pinned to "\r\n"; the byte below
+     * begins none of them. */
+    buf[23u] = 0x00u;
+
+**The bit-policy checks are untouched**, which is the half worth stating: a
+`reserved u4 [must_be_one]` has no `pinned_runs`, takes the branch it always
+took, and keeps its name. Only the construct that had no policy stopped
+being described as having one.
 
 **What this cost, and the lesson is about gates rather than about codecs.**
 A gate that cannot START tells you nothing about everything downstream of
