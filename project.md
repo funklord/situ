@@ -25715,11 +25715,11 @@ but one that is red for a real reason nobody is reading.
 because it needs clang with libFuzzer and takes minutes. Three things make
 it worth more than a smoke run:
 
-- **The corpus is cached** and restored by prefix, so each run starts from
-  what earlier runs reached rather than rediscovering that a length field
-  exists. It cannot grow without bound -- libFuzzer keeps an input only
-  when it reaches new coverage -- and it is 23 MB after a day of local
-  runs.
+- **The corpus is cached**, so each run starts from what earlier runs
+  reached rather than rediscovering that a length field exists. It cannot
+  grow without bound -- libFuzzer keeps an input only when it reaches new
+  coverage -- and it is 23 MB after a day of local runs, 256 KB after one
+  cold CI run.
 - **A crash uploads the input that caused it.** Without that the report is
   "something crashed" and the mutation is gone.
 - **The budget is 20 seconds a harness**, 37 of them, about fifteen minutes
@@ -25751,6 +25751,31 @@ and holds a runner for the six hours GitHub allows by default.
 The `check` job has no bound either and is left alone: it is not this
 change's, and a job that has run in nine minutes for months is a different
 judgement from one being added today.
+
+**And the caching was written up as working before it had worked once.**
+The sentence above said "restored by prefix" while the only evidence was
+that the step existed. Measured on the next run: `Cache not found for input
+keys: fuzz-corpus-<sha>, fuzz-corpus-`.
+
+**The miss was self-inflicted and the timestamps say so.** Run 2's restore
+ran at 21:40:14 and run 1's save landed at 21:42:08 -- two minutes later,
+because the second commit was pushed while the first run was still fuzzing.
+There was nothing to find. Both caches exist now, 261 KB and 256 KB on
+`master`.
+
+**What is demonstrated and what is not.** A `workflow_dispatch` run against
+the same commit -- no push, no overlap -- reports `Cache restored from key:
+fuzz-corpus-cea9217...`, so the path, the scope and the mechanism work.
+That is an EXACT key hit. The `restore-keys` prefix fallback, which is what
+makes the corpus accumulate across different commits, is the documented
+behaviour of `actions/cache` and has not been watched happening here; the
+next ordinary push exercises it.
+
+**The distinction is worth the paragraph because the two failures look
+identical from the log.** A prefix that never matches and a prefix that had
+nothing to match yet both print `Cache not found`, and the first would mean
+every run starts cold for ever while the second means somebody pushed twice
+in a quarter of an hour.
 
 ## 27. Questions, and how they were settled
 
