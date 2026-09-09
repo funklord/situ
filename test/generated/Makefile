@@ -147,7 +147,7 @@ OBJS_test_spans		:= $(GEN_DIR)/edges.o codec_impl.c
 # it (which is how test_kernels first failed).
 .SECONDEXPANSION:
 
-.PHONY: all test clean generate fuzz
+.PHONY: all test clean generate fuzz fuzz-generated fuzz-walker run-fuzz
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 	$(CODEC_BINS)
@@ -229,9 +229,12 @@ $(foreach name,$(RELATE_NAMES),\
 # and a register is a bus transaction rather than bytes off a wire -- and a
 # count that includes them reports more tests than exist. Deleted as spent,
 # they were unreadable by the time the summary ran.
+# The walker images are here for the plain reason: each is a `situc pack`
+# run, and deleted as spent they are 37 of them again on the next build.
 .SECONDARY: $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.c) \
 	    $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.h) \
-	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
+	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c) \
+	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_walk_image.h)
 
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
@@ -305,6 +308,25 @@ $(BUILD_DIR)/kernels_codec_tests: $(GEN_DIR)/kernels_codec_tests.c \
 $(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' \
 		--out '$(abspath $(GEN_DIR))'
+
+# The packed layout image, as a C array the walker harness compiles in. A
+# walker trusts its image -- that is the schema -- so it is fixed and the
+# message is what the fuzzer supplies. Written through a temporary and
+# renamed, so an interrupted `situc pack` leaves no half-written header for
+# the next build to include.
+$(GEN_DIR)/%_walk_image.h: $(SITUC_SOURCES)
+	@mkdir -p '$(@D)'
+	cd '$(REPO_ROOT)' && $(SITUC) pack '$(SCHEMA_$*)' > '$(abspath $@).bin'
+	$(PYTHON) -c "import sys; \
+	  b = open(sys.argv[1] + '.bin', 'rb').read(); \
+	  rows = ',\n\t'.join(', '.join('0x%02x' % x for x in b[i:i+12]) \
+	                       for i in range(0, len(b), 12)); \
+	  open(sys.argv[1] + '.tmp', 'w').write( \
+	    '/* generated: situc pack -- do not edit. */\n' \
+	    'static const unsigned char IMAGE_BLOB[] = {\n\t%s\n};\n' % rows)" \
+	  '$(abspath $@)'
+	mv '$@.tmp' '$@'
+	rm -f '$@.bin'
 
 # The derived implementations, generated beside the accessors from the same
 # kernel descriptions. That they come from one source is the whole point of
@@ -392,21 +414,37 @@ FUZZ_CC		?= $(firstword $(shell for c in clang clang-19 clang-18 clang-17; \
 FUZZ_SECONDS	?= 30
 FUZZ_DIR	:= $(BUILD_DIR)/fuzz
 FUZZ_CFLAGS	:= -g -O1 -fsanitize=fuzzer,address -fno-omit-frame-pointer
+WALKER_DIR	:= $(REPO_ROOT)/walker/c
+WALKER_SRC	:= $(WALKER_DIR)/situ_walk.c
 FUZZ_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/%)
+
+# The same schemas walked rather than accessed. `walk_fuzz.c` is one source
+# for all of them -- the image is what differs, and it is included by name.
+WALK_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/walk_%)
+
+# The walker harness: `-I$(GEN_DIR)` is how `walk_image.h` resolves, and the
+# per-schema image is renamed into place so one source can include a fixed
+# name. Built from the walker's own sources rather than the runtime's: it
+# links nothing else, which is the property that makes it embeddable.
+$(FUZZ_DIR)/walk_%: walk_fuzz.c $(GEN_DIR)/%_walk_image.h $(WALKER_SRC)
+	@mkdir -p '$(@D)' '$(FUZZ_DIR)/img_$*'
+	cp '$(GEN_DIR)/$*_walk_image.h' '$(FUZZ_DIR)/img_$*/walk_image.h'
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -I'$(WALKER_DIR)' \
+		-I'$(FUZZ_DIR)/img_$*' \
+		$< $(WALKER_SRC) -o $@
 
 $(FUZZ_DIR)/%: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.c
 	@mkdir -p '$(@D)'
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
 		$^ '$(RUNTIME_INC)/situ.c' -o $@
 
-fuzz: $(FUZZ_RUNNERS) $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
-	@for t in $(FUZZ_RUNNERS); do \
-		corpus="$(FUZZ_DIR)/corpus/$$(basename $$t)"; \
-		mkdir -p "$$corpus"; \
-		echo "--- $$t ($(FUZZ_SECONDS)s)"; \
-		"$$t" -max_total_time=$(FUZZ_SECONDS) -print_final_stats=1 \
-			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
-	done
+# Split so CI can run the two sets side by side. `fuzz` is both, which is
+# what somebody at a terminal means; 74 harnesses at a minute each is over
+# an hour in one job and two jobs of forty minutes in parallel.
+fuzz: fuzz-generated fuzz-walker
+
+fuzz-generated: $(FUZZ_RUNNERS) $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
+	@$(MAKE) --no-print-directory RUN_FUZZ='$(FUZZ_RUNNERS)' run-fuzz
 	@real=0; empty=''; \
 	for n in $(FUZZ_SCHEMAS); do \
 		src='$(GEN_DIR)'/$${n}_fuzz.c; \
@@ -422,6 +460,22 @@ fuzz: $(FUZZ_RUNNERS) $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
 		echo "no crash in $$real harnesses; $${empty}have no parseable" \
 		     "struct and test nothing"; \
 	else echo "no crash in $$real harnesses"; fi
+
+fuzz-walker: $(WALK_RUNNERS)
+	@$(MAKE) --no-print-directory RUN_FUZZ='$(WALK_RUNNERS)' run-fuzz
+	@echo "no crash in $(words $(WALK_RUNNERS)) walker harnesses"
+
+# The loop both use. One copy, because two would be two things to keep
+# agreeing about `-artifact_prefix` and the `|| exit 1` that stops at the
+# first crash rather than reporting the last.
+run-fuzz:
+	@for t in $(RUN_FUZZ); do \
+		corpus="$(FUZZ_DIR)/corpus/$$(basename $$t)"; \
+		mkdir -p "$$corpus"; \
+		echo "--- $$t ($(FUZZ_SECONDS)s)"; \
+		"$$t" -max_total_time=$(FUZZ_SECONDS) -print_final_stats=1 \
+			-artifact_prefix="$$corpus/" "$$corpus" || exit 1; \
+	done
 
 clean:
 	rm -rf '$(BUILD_DIR)'

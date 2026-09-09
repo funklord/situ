@@ -298,8 +298,8 @@ jobs:
       #
       # `make fuzz` stops at the first crash, which is what `|| exit 1` in
       # its own loop is for -- so this step's status is the whole answer.
-      - name: make fuzz
-        run: make fuzz FUZZ_SECONDS=60
+      - name: make fuzz-generated
+        run: make fuzz-generated FUZZ_SECONDS=60
 
       # A crash input is the only thing that makes a fuzz failure actionable:
       # without it the report is "something crashed" and the mutation that
@@ -310,6 +310,55 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-crashes
+          path: |
+            build/host/tests/fuzz/corpus/**/crash-*
+            build/host/tests/fuzz/corpus/**/leak-*
+            build/host/tests/fuzz/corpus/**/timeout-*
+            build/host/tests/fuzz/corpus/**/oom-*
+          if-no-files-found: warn
+
+  # The walker is the OTHER reading of the same layouts, and it had no fuzz
+  # harness at all: it is held to the Python walker on hand-written cases,
+  # so every byte it had ever seen was a byte this repository chose. The
+  # generated accessors were in the same position until yesterday, and three
+  # memory-safety defects came out of the first run (26.322).
+  #
+  # Its own job rather than more harnesses in the one above, because 74 at a
+  # minute each is over an hour in series and two forty-minute jobs in
+  # parallel. Its own corpus key for the same reason: the inputs that reach
+  # a walker are not the inputs that reach an accessor, and one cache for
+  # both would have each half evicting the other.
+  fuzz-walker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - uses: actions/cache@v4
+        with:
+          path: build/host/tests/fuzz/corpus
+          key: walk-corpus-${{ github.sha }}
+          restore-keys: |
+            walk-corpus-
+
+      - name: Report what will build the harnesses
+        run: |
+          set -o pipefail
+          clang --version | head -1
+          python3 --version
+
+      - name: make fuzz-walker
+        run: make fuzz-walker FUZZ_SECONDS=60
+
+      - name: Keep whatever crashed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: walk-crashes
           path: |
             build/host/tests/fuzz/corpus/**/crash-*
             build/host/tests/fuzz/corpus/**/leak-*

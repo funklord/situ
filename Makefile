@@ -49,7 +49,9 @@ endif
 export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
-.PHONY: all runtime compiler test test-c test-py check typecheck lint bench fuzz \ veryclean distclean style style-source style-docs hooks walk-c
+.PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
+	fuzz fuzz-generated fuzz-walker \
+	veryclean distclean style style-source style-docs hooks walk-c
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
@@ -175,6 +177,14 @@ test-c: runtime
 # not need. FUZZ_SECONDS is per harness.
 fuzz:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz
+
+# The two halves, so a caller with a time budget can take one. `fuzz` is
+# both and is what somebody at a terminal means.
+fuzz-generated:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-generated
+
+fuzz-walker:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-walker
 
 # aarch64 has a cross compiler here but no cmocka build and no emulator, so
 # the cross target compiles the runtime warning-clean and stops there.

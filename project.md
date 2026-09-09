@@ -25790,6 +25790,50 @@ for ever, the second meaning somebody pushed twice inside a quarter of an
 hour. Only the second run tells them apart, and it was nearly not done: an
 exact hit reads easily as the whole answer.
 
+### 26.324 The other reading of the layout, never fuzzed
+
+Every generated backend has had a fuzz harness since phase 22, and running
+them found three memory-safety defects the first time anybody did (26.322).
+The walker is the OTHER reading of the same layouts -- decision 0026's
+device, a parser over bytes somebody else chose -- and it had none. It is
+held to the Python walker on hand-written cases, so every byte it had ever
+seen was a byte this repository wrote.
+
+**Reading 3015 lines looking for the hole is the wrong instrument, and the
+right one was to hand.** `situc pack` already emits the image a walker
+reads, so a harness is the image compiled in and the message left to
+libFuzzer -- which is the threat model exactly: a walker trusts its schema
+and not its input.
+
+**Nine schemas, about 1.35 million executions, no crash**, and then all 39
+at eight seconds each for 8.1 million more. The walker holds up.
+
+**That is a measurement because the control fired.** An empty sweep and a
+sweep that reached nothing print the same thing, so the bound at
+`situ_walk.c:1834` -- `at > len || width > len - at`, the byte-aligned
+read's own check -- was removed and the harness rebuilt. It reported a
+heap-buffer-overflow in under fifty seconds, naming `read_at` at 1840 under
+`read_deep` under `situ_walk_read`. The instrument reaches the read path
+and the sanitizer is watching it.
+
+**Two things the harness does that `main.c` does not**, and they are where
+a walker would fail rather than answer: it reads the LAST byte of the span
+`situ_walk_bytes` hands back rather than the first, because a span reaching
+past the message is the failure being looked for and the first byte misses
+every one of them; and it asks `situ_walk_element` for elements of a run,
+which is a second offset arithmetic nothing else exercised.
+
+**Split into its own target and its own CI job**, because 74 harnesses at a
+minute each is over an hour in series and two forty-minute jobs in
+parallel. Its own corpus key as well: the inputs that reach a walker are
+not the inputs that reach an accessor, and one cache for both would have
+each half evicting the other.
+
+**And the image headers are `.SECONDARY`**, named rather than swept, which
+is this repository's third meeting with that rule. Make deletes an
+intermediate once it is spent; a `situc pack` per schema is 37 of them
+again on the next build.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
