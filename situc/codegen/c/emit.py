@@ -1045,13 +1045,46 @@ class Emitter:
 		]
 
 	def _secret_note(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
-		"""No debug accessor, and a way to erase it (section 14.6)."""
+		"""No debug accessor, and a way to erase it (section 14.6).
+
+		The length is taken two ways because no one way is right for both
+		shapes, and each backend had shipped exactly one of them.
+		`_length_expression` reads a count out of the bytes, which is what a
+		member sized by another field needs -- and for a member with a
+		constant span it produced `0u * 2u` for a nested struct and `0u` for
+		an `opaque`, erasers that erase nothing. `size_bits` is right for
+		every constant shape and is **zero, not None**, for a runtime-sized
+		one, so preferring it unguarded reintroduces the same silent no-op
+		from the other side.
+
+		So: the constant where there is one, the expression otherwise. C had
+		the expression and not the constant; C++, Rust and Python had the
+		constant and not the expression, and emitted a zero-length erase for
+		`u8 key[n] [secret]` behind a doc comment promising erasure (26.316).
+		"""
 		placement = entry.placement
 		local     = c_name(self._local(struct, placement))
 		gate      = self._gate_type(struct, placement)
 		taken     = f"{gate} gate" if gate else "situ_view_t view"
 		held      = "gate.view" if gate else "view"
-		length    = self._length_expression(struct, placement, held)
+		base      = self._base_expression(struct, placement,
+		                                  gated=gate is not None)
+		# `-> str` here, unlike the other three backends where it is
+		# `str | None`, so this one always has a length to clamp.
+		declared  = self._length_expression(struct, placement, held)
+
+		# Clamped, for the reason every other run in this file is, and this
+		# was the one place that never had been. `_length_expression` is the
+		# length the DATA declares; the length accessor emitted directly
+		# above wraps it in exactly this `situ_min_u32`, and the eraser took
+		# the raw one. `struct r { u8 n; u8 key[n] [secret]; }` in a
+		# five-byte buffer with `n` = 255 erased 255 bytes -- a
+		# wire-controlled heap overrun, confirmed under ASan, sitting two
+		# lines under a `_len` that answered 4 (26.316).
+		length    = (f"{placement.size_bits // BITS_PER_BYTE}u"
+		             if placement.size_bits
+		             else f"situ_min_u32({declared},\n"
+		                  f"\t\tsitu_remaining_u32({held}.limit, {base}))")
 
 		return [
 			f"/* `{placement.name}` is `[secret]`. No debug or format accessor is",
@@ -1064,9 +1097,7 @@ class Emitter:
 			f"static inline void "
 			f"{ident(self.prefix, struct.name, local, 'zeroize')}({taken})",
 			"{",
-			f"\tsitu_zeroize(situ_base({held}) + "
-			f"{self._base_expression(struct, placement, gated=gate is not None)}, "
-			f"{length});",
+			f"\tsitu_zeroize(situ_base({held}) + {base}, {length});",
 			"}",
 		]
 
@@ -1342,6 +1373,21 @@ class Emitter:
 		lines_bounds = self._value_bounds(struct, placement)
 		body = self._field_body(struct, entry)
 
+		# Here rather than inside `_field_body`, which is eleven early
+		# returns deep and had this hanging off the last two of them: the
+		# array branch and the scalar branch. So `[secret]` on a nested
+		# struct, an array of structs, an `opaque` span or a text number
+		# emitted no eraser at all and no "no debug accessor" note --
+		# silently, since the attribute is accepted everywhere.
+		#
+		# The other three backends emit this from their own per-member
+		# choke point and were correct for all five shapes; C was the
+		# reference when zeroization was added to them (26.314) and so was
+		# the one tree nobody re-read. This is that entry's own lesson
+		# arriving where it came from.
+		if _has_attr(placement.attrs, "secret"):
+			body = body + self._secret_note(struct, entry)
+
 		# After the body, because the stride is the lead plus the CONTENT and
 		# a delimited member's content length is its own `_span_from`, which
 		# the body emits. Nothing earlier calls it: a stride is read by the
@@ -1598,14 +1644,10 @@ class Emitter:
 				or data_sized(placement):
 			lines.extend(self._array(struct, entry))
 			lines.extend(self._covered_pointer_note(struct, placement))
-			if _has_attr(placement.attrs, "secret"):
-				lines.extend(self._secret_note(struct, entry))
 			return lines
 
 		lines.extend(self._scalar_get(struct, entry))
 		lines.extend(self._scalar_set(struct, entry))
-		if _has_attr(placement.attrs, "secret"):
-			lines.extend(self._secret_note(struct, entry))
 		return lines
 
 	def _authenticated_note(self, struct: ResolvedStruct,

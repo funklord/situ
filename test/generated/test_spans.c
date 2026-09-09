@@ -148,9 +148,81 @@ static void test_an_adjacent_cover_transforms_one_merged_run(void **state)
 	}
 }
 
+/* secret_run: n(1) key[n] tail(2), and `key` is `[secret]`. The eraser is
+ * the one accessor that was never clamped: `situ_secret_run_key_len` wraps
+ * the declared length in `situ_min_u32` and, two lines below it,
+ * `_key_zeroize` passed the raw wire byte to `situ_zeroize`. With `n` at
+ * 255 in a six-byte frame that wrote 251 bytes past the end -- ASan called
+ * it a heap-buffer-overflow, and nothing in the suite could, because both
+ * `[secret]` fixtures anybody had written were constant spans.
+ *
+ * A canary rather than a sanitizer, so the ordinary build catches it. */
+#define RUN_FRAME  6u
+#define RUN_ARENA 10u
+
+static void test_zeroize_clamps_a_wire_declared_length(void **state)
+{
+	uint8_t     arena[RUN_ARENA];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    i;
+
+	(void)state;
+	memset(arena, 0x5Au, sizeof arena);	/* the four past the frame */
+	arena[0] = 255u;			/* n, straight off the wire */
+	arena[1] = 0xAAu;
+	arena[2] = 0xBBu;
+	arena[3] = 0xCCu;
+	arena[4] = 0xDDu;
+	arena[5] = 0xEEu;
+	view = view_of(&msg, arena, RUN_FRAME);
+
+	/* What the frame really holds, which is what the eraser must use. */
+	assert_int_equal(situ_secret_run_key_len(view), RUN_FRAME - 1u);
+
+	situ_secret_run_key_zeroize(view);
+
+	for (i = 1u; i < RUN_FRAME; i++) {
+		assert_int_equal(arena[i], 0u);
+	}
+	for (i = RUN_FRAME; i < RUN_ARENA; i++) {
+		assert_int_equal(arena[i], 0x5Au);
+	}
+}
+
+static void test_zeroize_erases_the_key_and_stops(void **state)
+{
+	uint8_t     arena[RUN_FRAME];
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	/* The honest length, and the half a zero-length eraser passes: the
+	 * three backends that read `size_bits` -- zero for a data-sized member
+	 * rather than absent -- erased nothing here and said they had. */
+	(void)state;
+	arena[0] = 3u;
+	arena[1] = 0xAAu;
+	arena[2] = 0xBBu;
+	arena[3] = 0xCCu;
+	arena[4] = 0xDDu;
+	arena[5] = 0xEEu;
+	view = view_of(&msg, arena, RUN_FRAME);
+
+	situ_secret_run_key_zeroize(view);
+
+	assert_int_equal(arena[0], 3u);		/* the length itself stays */
+	assert_int_equal(arena[1], 0u);
+	assert_int_equal(arena[2], 0u);
+	assert_int_equal(arena[3], 0u);
+	assert_int_equal(arena[4], 0xDDu);	/* tail, not the eraser's */
+	assert_int_equal(arena[5], 0xEEu);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
+		cmocka_unit_test(test_zeroize_clamps_a_wire_declared_length),
+		cmocka_unit_test(test_zeroize_erases_the_key_and_stops),
 		cmocka_unit_test(test_a_split_cover_transforms_both_spans),
 		cmocka_unit_test(test_a_split_cover_leaves_the_gap_alone),
 		cmocka_unit_test(test_bytes_after_the_region_are_untouched),

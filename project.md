@@ -3253,7 +3253,9 @@ non-security schemas, but `strict` is the default and `lenient` sets
   made; its docstring says so rather than leaving somebody to find out.
 
   This said "emits zeroization" with no target named while one backend of
-  four did it (26.314)
+  four did it (26.314). The four then erased the wrong span: three erased
+  nothing where the length is data-decided, and C erased what the wire
+  asked for without clamping it (26.316)
 - forbids the field from being used in any expression that controls layout
   (no secret-dependent lengths or discriminants -- that is a length-based side
   channel)
@@ -3261,7 +3263,8 @@ non-security schemas, but `strict` is the default and `lenient` sets
   "Any expression that controls layout" was always the right scope and the
   check enforced one corner of it: a length written as a bare field name.
   An arithmetic length, an `at` offset and the discriminant this bullet
-  names by name all walked past (26.315)
+  names by name all walked past (26.315), and so did a secret whose own
+  length is read from its own bytes (26.316)
 - generated accessors avoid data-dependent branching and data-dependent
   memory access patterns; where that is not possible for a construct, the
   compiler refuses to generate the accessor and says why
@@ -25208,6 +25211,110 @@ map had already been verified unchanged. Two results that could not both be
 true is what caught it. The real before and after come from `git archive
 HEAD` into a scratch tree, which is the only version of that measurement
 where the control is the code that shipped.
+
+### 26.316 An eraser that erased nothing, and one that erased too much
+
+Three faults in `[secret]`, all found by auditing the one bullet 26.314
+had already been wrong about, and the last of them is a memory-safety
+defect in generated C.
+
+**A secret may not measure itself.** A length read from the member's own
+bytes is a function of the value, so an observer counting bytes reads part
+of the secret without touching the cipher, and everything after it moves.
+Four shapes were accepted:
+
+    u8   name[] until ','         size=Unbounded,     struct 3..
+    Item run[]  until "\r\n"       size=Unbounded,     struct 4..
+    Item run[]  while (more == 1)  size=Unbounded,     struct 4..
+    vint n                         size=Bounded(1,10), struct 3..12
+
+`Placement.extent_from_own_bytes` names the population and `resolve`
+refuses it. Deliberately NOT "the size axis is Unbounded":
+`u8 rest[remaining] [secret]` is Unbounded too, its length is the frame's,
+and the frame is public. The question is who decides the length. Both
+controls -- `[remaining]` and `u8 key[n]` over a public `n` -- stay legal
+and are asserted.
+
+**C emitted no eraser at all for four constructs.** `_secret_note` hung
+off the last two branches of an eleven-early-return dispatch, so a
+`[secret]` on a nested struct, an array of structs, an `opaque` span or a
+text number got nothing -- no eraser and no "no debug accessor" note. The
+other three backends emit from a per-member choke point and were right for
+all four. That is 26.314's own lesson: C was the reference when the other
+three were given erasers, so it was the one tree nobody re-read.
+
+**And the count that said it was fixed was not a check.** Moving the call
+to the choke point took `grep -c zeroize` from 0 to 2 for every construct,
+which looked exactly like success. The emitted lines:
+
+    nested   situ_zeroize(situ_base(view) + 0u, (uint32_t)0u * 2u);
+    opaque   situ_zeroize(situ_base(view) + 0u, (uint32_t)0u);
+    textnum  situ_zeroize(situ_base(view) + 0u, (uint32_t)3u * 2u);
+
+Two erase nothing and one erases six bytes of a three-byte field.
+`_length_expression` answers for a member the data sizes; these have a
+constant span, and the constant is what the other three backends use. The
+fix takes the constant where there is one and the expression otherwise --
+**and reading the generated line is what found it, where the count said
+five for five.**
+
+**The length itself was wrong in every backend, in two directions.** The
+constant-span guard reads
+
+    if placement.offset_bits is None or placement.size_bits is None:
+            return []               # no constant span to erase
+
+and a data-sized member's `size_bits` is **zero, not None**. So the branch
+written for exactly that case never fired, and for
+`struct r { u8 n; u8 key[n] [secret]; u16 tail; }`:
+
+    C++     situ_zeroize(situ_base(raw_) + 1, 0u);
+    Rust    situ_rt::zeroize(&mut self.bytes[1..1]);
+    Python  self._msg.buffer[start:start + 0] = bytes(0)
+
+Three erasers that erase nothing, each under a comment promising erasure.
+All three are code from 26.314; C, the backend that pass left alone, was
+the only one that read the length.
+
+**C read it and did not clamp it, which is worse than not erasing.**
+
+    static inline uint32_t situ_secret_run_key_len(situ_view_t view)
+    {
+            return situ_min_u32((uint32_t)((uint8_t)(situ_base(view))[0u]),
+                    situ_remaining_u32(view.limit, 1u));
+    }
+    ...
+    situ_zeroize(situ_base(view) + 1u,
+            (uint32_t)((uint8_t)(situ_base(view))[0u]));
+
+The clamp is two lines above, in the length accessor, and the eraser took
+the raw wire byte. `n` = 255 in a six-byte frame writes 255 bytes:
+
+    ==13003==ERROR: AddressSanitizer: heap-buffer-overflow
+    WRITE of size 1 at 0x502000000015 thread T0
+        #0 situ_zeroize           runtime/c/situ.c:64
+        #1 situ_r_key_zeroize     p3.h:85
+
+Wire-controlled, in an accessor a caller reaches for precisely when
+handling key material. The comment beside the clamp in `_arm_bytes` records
+the same hole being closed once before -- "a DNS label declaring 55 bytes
+in a five-byte frame" -- and the eraser was the one run in the file that
+had never had it.
+
+All four clamp now, demonstrated at runtime rather than read: C and C++
+under ASan, Rust and Python directly, and all four agree exactly.
+
+    n=255, 6-byte frame    FF 00 00 00 00 00     clamped, no overrun
+    n=3                    03 00 00 00 DD EE     key gone, tail intact
+
+**Why no test caught any of it: both `[secret]` fixtures in the tree are
+constant spans.** `packet`'s `session_key[16]` and `keystore`'s
+`secret_key[32]`, and an eraser handling only constants passes both.
+`test/schema/edges.situ` grows a `secret_run` with a data-sized secret,
+and `test_spans.c` asserts the clamp with a canary past the frame rather
+than a sanitizer, so the ordinary build catches it. Reverted, that test
+does not fail -- it **crashes**, the overrun taking the stack with it, and
+`make test-c` stops at Error 2.
 
 ## 27. Questions, and how they were settled
 

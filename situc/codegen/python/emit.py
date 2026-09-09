@@ -2554,6 +2554,25 @@ class Emitter:
 		name  = py_name(local_name(struct, placement))
 		at    = placement.offset_bits // BITS_PER_BYTE
 		width = placement.size_bits // BITS_PER_BYTE
+
+		# `size_bits` is ZERO, not None, for a member the data sizes -- so
+		# the guard above passes `u8 key[n] [secret]` through and the
+		# constant span wrote `buffer[start:start + 0] = bytes(0)`: an
+		# eraser that erases nothing, under a docstring promising erasure
+		# (26.316). Clamped for the same reason every run here is, and
+		# because C's unclamped one overran a five-byte buffer by 251.
+		if not placement.size_bits:
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return []		# nothing honest to erase
+			body = [
+				f"\t\tn = min(({length}), max(0, self._len - {at}))",
+				"\t\tself._msg.buffer[start:start + n] = bytes(n)",
+			]
+		else:
+			body = [f"\t\tself._msg.buffer[start:start + {width}]"
+			        f" = bytes({width})"]
+
 		return [
 			"",
 			f"\tdef {name}_zeroize(self) -> None:",
@@ -2570,7 +2589,7 @@ class Emitter:
 			'\t\tdrop; this write is an ordinary one."""',
 			"\t\tself._check()",
 			f"\t\tstart = self._at + {at}",
-			f'\t\tself._msg.buffer[start:start + {width}] = bytes({width})',
+			*body,
 		]
 
 	def _trim_set(self, placement: Placement) -> str:

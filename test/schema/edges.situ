@@ -931,3 +931,20 @@ struct pinned {
 
 require size(pinned) == 19;
 require absolute_static(pinned.trailer);
+
+// A `[secret]` whose length the data decides, which is the shape every
+// backend's eraser got wrong. The two secrets anybody had written down --
+// `packet`'s `session_key[16]` and `keystore`'s `secret_key[32]` -- are
+// both constant spans, so an eraser that only handled constants passed
+// every test there was.
+//
+// What each backend did with this one: C erased `n` bytes UNCLAMPED, so a
+// 255 here wrote 255 bytes into whatever frame arrived; C++, Rust and
+// Python read a `size_bits` that is zero rather than absent for a
+// data-sized member and erased nothing at all, behind a comment promising
+// erasure. `tail` is here so a test can say the erase stopped.
+struct secret_run {
+	u8   n;
+	u8   key[n]  [secret];
+	u16  tail;
+}

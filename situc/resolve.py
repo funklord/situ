@@ -405,6 +405,29 @@ def _check_secret_is_not_layout_bearing(decl: ast.StructDecl,
 		return
 
 	for placement in layout.placements:
+		# The secret's OWN extent, before asking what reads it. A delimited
+		# run, a `while` run and a varint each end where their bytes say, so
+		# the length is a function of the value: an observer counting bytes
+		# reads part of the secret off the wire, and everything after it sits
+		# at an offset that moves with it. Finding the end means scanning the
+		# secret as well, which is the branch half of 14.6.
+		if _has_attr(placement.attrs, "secret") \
+				and placement.extent_from_own_bytes:
+			raise error(
+				f"`{placement.name}` is `[secret]` and its own length is read "
+				f"from its own bytes",
+				placement.span,
+				label = "layout depends on secret material",
+				notes = [
+					"the encoded length is a function of the value, so it is "
+					"visible to anyone counting bytes and everything after it "
+					"moves with the secret",
+					"give it a fixed width, or a length in a public field; "
+					"`[remaining]` is fine, its length being the frame's "
+					"rather than the secret's",
+				],
+			)
+
 		# A NAMED length, which is all this used to look at. `sized_by`
 		# holds a path and holds nothing for `u8 body[n * 2]`, so the
 		# arithmetic form -- the commonest shape there is -- walked past a

@@ -2383,7 +2383,7 @@ class Emitter:
 		name  = _ident(local_name(struct, placement))
 		at    = placement.offset_bits // BITS_PER_BYTE
 		width = placement.size_bits // BITS_PER_BYTE
-		return [
+		head  = [
 			"",
 			f"\t/// Erase {placement.path}, which is `[secret]`.",
 			"\t///",
@@ -2392,6 +2392,35 @@ class Emitter:
 			"\t/// how a caller erases it when done, through the volatile",
 			"\t/// write `situ_rt::zeroize` makes for the same reason C's",
 			"\t/// runtime does.",
+		]
+
+		# `size_bits` is ZERO, not None, for a member the data sizes -- so
+		# the guard above lets `u8 key[n] [secret]` through and the constant
+		# span below was `bytes[1..1]`: an eraser that erases nothing, under
+		# a doc comment promising erasure. The same shape reached C++ and
+		# Python from this one, all three written in the pass that gave the
+		# three backends an eraser at all (26.314, corrected in 26.316).
+		if not placement.size_bits:
+			declared = self._length_expression(struct, placement)
+			if declared is None:
+				return [*head, "\t/// ...except that this backend cannot",
+				        "\t/// compute the span, so there is no eraser: one",
+				        "\t/// that guessed would clear the wrong bytes."]
+			return [
+				*head,
+				f"\tpub fn {name}_zeroize(&mut self) {{",
+				f"\t\tlet at = {at};",
+				# Clamped like every other run here: the length is the
+				# message's, and C's unclamped one was a heap overflow
+				# rather than a long slice.
+				f"\t\tlet n  = core::cmp::min({self._unparen(declared)},",
+				"\t\t\tself.bytes.len().saturating_sub(at));",
+				"\t\tsitu_rt::zeroize(&mut self.bytes[at..at + n]);",
+				"\t}",
+			]
+
+		return [
+			*head,
 			f"\tpub fn {name}_zeroize(&mut self) {{",
 			f"\t\tsitu_rt::zeroize(&mut self.bytes[{at}..{at + width}]);",
 			"\t}",

@@ -4640,12 +4640,39 @@ class Emitter:
 		name  = bare_name(local_name(struct, placement))
 		at    = placement.offset_bits // BITS_PER_BYTE
 		width = placement.size_bits // BITS_PER_BYTE
-		return [
+		head  = [
 			"",
 			f"\t/* `{placement.name}` is `[secret]`. No debug or format",
 			"\t * accessor is generated for it: that is the most common way",
 			"\t * key material reaches a log. This is how a caller erases it",
 			"\t * when done, through the same volatile write C uses. */",
+		]
+
+		# `size_bits` is ZERO, not None, for a member the data sizes, so the
+		# guard above passes `u8 key[n] [secret]` through and the constant
+		# span below became `situ_zeroize(base + 1, 0u)`: an eraser that
+		# erases nothing, under a comment promising erasure (26.316).
+		if not placement.size_bits:
+			length = self._length_expression(struct, placement)
+			if length is None:
+				return [*head, "\t/* ...except the span is not one this",
+				        "\t * backend can compute, so there is no eraser:",
+				        "\t * one that guessed would clear other bytes. */"]
+			return [
+				*head,
+				f"\tvoid {name}_zeroize() noexcept",
+				"\t{",
+				# Clamped like the byte-run accessor above, and for a
+				# sharper reason: C's unclamped eraser wrote 255 bytes into
+				# a five-byte buffer.
+				f"\t\tsitu_zeroize(situ_base(raw_) + {at},",
+				f"\t\t\tsitu_min_u32({length},",
+				f"\t\t\t\tsitu_remaining_u32(raw_.limit, {at}u)));",
+				"\t}",
+			]
+
+		return [
+			*head,
 			f"\tvoid {name}_zeroize() noexcept",
 			"\t{",
 			f"\t\tsitu_zeroize(situ_base(raw_) + {at}, {width}u);",

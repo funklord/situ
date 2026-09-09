@@ -398,6 +398,26 @@ class Placement:
 	radix: int | None		= None
 
 	@property
+	def extent_from_own_bytes(self) -> bool:
+		"""Whether this member's own length is read from its own content.
+
+		A delimited run ends where its bytes say; a `while` run ends after the
+		element its bytes fail; a varint ends at the byte whose continuation
+		bit is clear. In each the length is a function of the value, so the
+		value is partly readable from the length alone -- which matters where
+		the value is `[secret]`, and is why `resolve` refuses that pairing.
+
+		Deliberately NOT "the size axis is Unbounded". `u8 rest[remaining]`
+		is Unbounded too and its length comes from the frame, which is public
+		and which an observer already knows; refusing it would forbid the
+		ordinary way to say "the rest of the message" and buy nothing. The
+		question is who decides the length, not whether the layout knows it.
+		"""
+		return (bool(self.delimiters)
+		        or self.repeat_while is not None
+		        or self.varint is not None)
+
+	@property
 	def arm_widths(self) -> set[int]:
 		"""The distinct sizes the arms take.
 

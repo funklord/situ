@@ -16,6 +16,10 @@ import pytest
 
 from situc import requirements, traverse
 from situc.capability import Axis, Value
+from situc.codegen.c import generate as generate_c
+from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.python import generate as generate_py
+from situc.codegen.rust import generate as generate_rs
 from situc.diagnostics import SituError
 from situc.dump import dump
 from situc.layout import solve
@@ -433,6 +437,134 @@ def test_a_secret_may_not_decide_a_length() -> None:
 	""")
 	assert "takes its size from the secret field `n`" in rendered
 	assert "visible to anyone counting bytes" in rendered
+
+
+SELF_MEASURED = [
+	("delimited",   "u8   body[] until ','        [secret];"),
+	("record run",  "Item body[] until \"\\r\\n\"     [secret];"),
+	("while run",   "Item body[] while (more == 1) [secret];"),
+	("varint",      "vint body                     [secret];"),
+]
+
+
+@pytest.mark.parametrize("what, member", SELF_MEASURED,
+                         ids=[what for what, _ in SELF_MEASURED])
+def test_a_secret_may_not_measure_itself(what: str, member: str) -> None:
+	"""A `[secret]` whose own length is read from its own bytes.
+
+	The other cases in this section are about a secret deciding where
+	SOMETHING ELSE sits. This is the secret deciding where it itself ends,
+	which leaks by the same route and one step earlier: the encoded length
+	is a function of the value, so an observer counting bytes reads part of
+	the secret off the wire without touching the cipher, and everything
+	after it moves.
+
+	All four were accepted -- `size=Unbounded` for the three runs and
+	`Bounded(1, 10)` for the varint, with the enclosing struct `3..` and
+	`3..12` respectively.
+	"""
+	rendered = failure("varint_type vint { encoding = leb128; max_bits = 64; }\n"
+	                   "struct Item { u8 more; u8 a; }\n"
+	                   "struct S {\n\t" + member + "\n\tu8 tail[2];\n}\n")
+	assert "its own length is read from its own bytes" in rendered
+	assert "visible to anyone counting bytes" in rendered
+
+
+ERASER = "struct S { u8 n; u8 key[n] [secret]; u16 tail; }"
+
+
+def _generated(body: str) -> dict[str, str]:
+	"""One schema through all four backends, as text."""
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	return {
+		"c":      generate_c(schema, resolved, "unit").header,
+		"cpp":    generate_cpp(schema, resolved, "unit").header,
+		"rust":   generate_rs(schema, resolved, "unit").module,
+		"python": generate_py(schema, resolved, "unit").module,
+	}
+
+
+def _eraser_body(source: str) -> str:
+	"""The eraser, from its name to the end of it.
+
+	A fixed character window reached the end of Python's docstring and no
+	further, so the assertion below read prose rather than code -- and
+	passed or failed on how long a comment happened to be, which is the
+	kind of test that goes green for the wrong reason later.
+	"""
+	after = source.split("key_zeroize", 1)[1]
+	for end in ('"""', "\n\t}", "\n\tdef ", "\n}"):
+		if end in after:
+			after = after.split(end, 1)[1] if end == '"""' else after
+	# Everything up to whichever terminator comes first.
+	cuts = [after.index(e) for e in ("\n\tdef ", "\n\t}", "\n}")
+	        if e in after]
+	return after[:min(cuts)] if cuts else after
+
+
+def test_every_backend_erases_a_data_sized_secret() -> None:
+	"""The shape both committed `[secret]` fixtures happen not to be.
+
+	`packet`'s `session_key[16]` and `keystore`'s `secret_key[32]` are
+	constant spans, so an eraser that handled only constants passed
+	everything there was to pass. `u8 key[n] [secret]` is the other half and
+	all four got it wrong, in two different directions:
+
+	C read the declared length and did not clamp it, so `n` = 255 in a
+	six-byte frame wrote 255 bytes -- a wire-controlled heap overflow, which
+	ASan named and `test_spans.c` now catches with a canary. C++, Rust and
+	Python guarded on `size_bits is None`, and a data-sized member's
+	`size_bits` is ZERO rather than absent, so all three emitted a
+	zero-length erase behind a comment promising erasure (26.316).
+
+	Asserting the clamp rather than the erase, because the clamp is what
+	distinguishes the fix from either bug: a zero-length erase has no clamp
+	in it and an unclamped one has no minimum.
+	"""
+	text = _generated(ERASER)
+	body = {name: _eraser_body(source) for name, source in text.items()}
+
+	assert "situ_min_u32"   in body["c"]
+	assert "situ_min_u32"   in body["cpp"]
+	assert "core::cmp::min" in body["rust"]
+	assert "min("           in body["python"]
+
+	# And none of them still says "erase zero bytes", which is what the
+	# three constant-span backends emitted here.
+	assert ", 0u)"   not in body["c"]
+	assert ", 0u)"   not in body["cpp"]
+	assert "[1..1]"  not in body["rust"]
+	assert "bytes(0)" not in body["python"]
+
+
+def test_every_backend_still_erases_a_constant_span() -> None:
+	"""The half that worked, kept honest while the other half was added.
+
+	A constant span needs no clamp and gets none: reading the length out of
+	the bytes to erase a fixed sixteen would be slower and no safer, and the
+	two paths are told apart by `size_bits` being non-zero.
+	"""
+	text = _generated("struct S { u8 key[16] [secret]; u16 tail; }")
+
+	assert "situ_zeroize(situ_base(view) + 0u, 16u);" in text["c"]
+	assert "situ_zeroize(situ_base(raw_) + 0, 16u);" in text["cpp"]
+	assert "self.bytes[0..16]" in text["rust"]
+	assert "start + 16] = bytes(16)" in text["python"]
+
+
+def test_a_secret_whose_length_is_public_is_allowed() -> None:
+	"""The two controls, and the reason the rule is not "size is Unbounded".
+
+	`[remaining]` is Unbounded and its length belongs to the frame, which an
+	observer already knows from the message it is holding; `key[n]` is
+	Bounded and its length is in the clear in `n`. Refusing either would
+	forbid the ordinary ways to carry a key and buy nothing, and the first
+	would be refused by a rule keyed on the size axis -- which is why the
+	rule is keyed on who decides the length instead.
+	"""
+	build("struct S { u8 hdr; u8 rest[remaining] [secret]; }")
+	build("struct S { u8 n; u8 key[n] [secret]; u8 tail[2]; }")
 
 
 def test_a_secret_may_not_decide_a_computed_length() -> None:
