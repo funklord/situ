@@ -1888,7 +1888,70 @@ def test_the_harness_compiles_for_a_variable_struct() -> None:
 	text = fuzz_source("struct S { u8 n; u8 body[n]; }")
 
 	assert "SITU_S_SIZE_FIXED" not in text
-	assert "extent = size < sizeof buf" in text
+	assert "extent = size < SITU_S_SIZE_MAX" in text
+
+
+def test_the_harness_allocates_the_frame_and_not_the_maximum() -> None:
+	"""Otherwise it can only see an overrun bigger than the struct.
+
+	The buffer was `uint8_t buf[SITU_X_SIZE_MAX]` with the frame a prefix of
+	it, so an accessor running past the frame landed in the slack and no
+	sanitizer had anything to say. Measured on the eraser that had lost its
+	clamp: over a 258-byte buffer holding a six-byte frame it wrote 194
+	bytes past the frame and ASan stayed silent, reporting success, while
+	the same code over a six-byte allocation tripped it at once (26.317).
+
+	Past the frame has to be past the ALLOCATION, so the harness asks for
+	exactly `extent` bytes and gives them back.
+	"""
+	text = fuzz_source("struct S { u8 n; u8 body[n]; }")
+
+	assert "uint8_t    *buf;" in text, "a pointer, not an array"
+	assert "buf = (uint8_t *)malloc(extent);" in text
+	assert "free(buf);" in text
+	assert "buf[SITU_S_SIZE_MAX]" not in text, \
+		"the slack this existed to remove"
+
+
+def test_the_harness_erases_every_reachable_secret() -> None:
+	"""The one family of accessor it never called.
+
+	Its docstring says it "exercises every accessor the schema has without
+	anybody maintaining a list", which was a claim about how the walk is
+	derived rather than a fact about what it reaches: no harness in the tree
+	contained the string `zeroize`, while three schemas carry `[secret]`
+	members. They are also the only accessors that WRITE a span the data
+	chose, which is what made the missing clamp in C's eraser a
+	wire-controlled heap overflow nothing was looking for.
+
+	Last in the function, because they write and every read above them
+	should see the bytes the fuzzer sent.
+	"""
+	text = fuzz_source("struct S { u8 n; u8 key[n] [secret]; u16 tail; }")
+
+	assert "situ_S_key_zeroize(view);" in text
+	assert text.index("situ_S_key_zeroize") > text.index("situ_S_tail_get"), \
+		"the eraser must run after the reads, not before them"
+
+
+def test_the_harness_leaves_a_gated_secret_alone() -> None:
+	"""A sealed interior takes a gate this harness never opens, so its
+	accessors are not callable from here and an eraser call would not
+	compile.
+
+	Which is a wider gap than the erasers were and is recorded rather than
+	closed: 13 members across five schemas sit behind a verified gate, and
+	they are every `[secret]` in the tree bar one -- so the bytes a fuzzer
+	would most like to reach are the ones it cannot.
+	"""
+	text = fuzz_source("""struct S {
+	u8  hop;
+	sealed(aead) { u8 key[8] [secret]; }
+	tag u8[16];
+}
+""", preamble=CRYPTO)
+
+	assert "zeroize" not in text
 
 
 def test_the_harness_gives_a_variable_struct_the_fuzzers_own_length() -> None:

@@ -25316,6 +25316,78 @@ than a sanitizer, so the ordinary build catches it. Reverted, that test
 does not fail -- it **crashes**, the overrun taking the stack with it, and
 `make test-c` stops at Error 2.
 
+### 26.317 The fuzz harness could not have caught it, twice over
+
+26.316's overrun was a wire-controlled write in generated C, and the tree
+has a fuzz harness per schema whose docstring says it "exercises every
+accessor the schema has without anybody maintaining a list". It did not
+catch it, and would not have: two independent reasons, either of which
+alone was enough.
+
+**It never called an eraser.** Zero occurrences of `zeroize` across all
+39 generated harnesses, while three schemas carry `[secret]` members.
+The docstring's claim is about how the walk is DERIVED -- from the layout
+rather than from a list somebody maintains -- and that is true and is not
+the same as reaching everything. An accessor family absent from `_reads`
+is absent from the harness, and nothing counts the families.
+
+Erasers are also the accessor a fuzzer most wants: the only ones that
+WRITE a span the data chose. They run last now, after the reads, so the
+bytes above them are still the fuzzer's.
+
+**And its buffer hid the overrun from the sanitizer.** The variable
+preamble declared
+
+    uint8_t buf[SITU_X_SIZE_MAX];
+    extent = size < sizeof buf ? size : sizeof buf;
+
+so the frame is a PREFIX of the buffer and everything past the frame is
+still inside the allocation. Measured with the same unclamped eraser, one
+driver each way and nothing else different:
+
+    buf[258], extent 6     wrote 255 bytes; ASan SILENT, exit 0,
+                           and buf[200] came back zeroed
+    malloc(6), extent 6    heap-buffer-overflow at once
+
+The second line is the finding and the first is what the harness was
+doing. **A harness sized to the struct's maximum can only see an overrun
+bigger than the struct**, which is the opposite of the ones worth
+finding: an off-by-one, a missing clamp, a length read one field early.
+It allocates `extent` and frees it now, so past the frame is past the
+allocation.
+
+`_fixed_preamble` never had this -- a fixed-size struct's buffer IS its
+frame -- so the blind spot was exactly the variable-size structs, which
+the same function's own docstring calls "the structs most likely to have
+a parsing bug".
+
+**Proved end to end rather than argued.** With the clamp sabotaged, the
+fixed harness reports it:
+
+    ERROR: AddressSanitizer: heap-buffer-overflow
+    WRITE of size 1
+        #0 situ_zeroize                runtime/c/situ.c:64
+        #1 situ_secret_run_key_zeroize edges.h:9018
+        #2 fuzz_secret_run             edges_fuzz.c:2701
+
+and with the clamp in place it is silent. Both halves are sabotaged
+separately in `test_codegen_c.py` and each takes down only its own test.
+
+**The smoke test is not the detector and is not meant to be.** It builds
+without a sanitizer and feeds eight random inputs, which is a check that
+the harness still runs. What changed is what `make fuzz` under libFuzzer
+can see, and that is where this class gets found.
+
+**Left open, and measured: 13 members sit behind a verified gate the
+harness never opens** -- `dtls.record.sealed`, `keystore.sealed`,
+`packet.sealed`, `edges.sealed_run` and their interiors, against 1111 it
+can reach. Those 13 are every `[secret]` in the tree bar the one 26.316
+added, so the bytes a fuzzer would most like to reach are the ones it
+cannot, and `keystore`'s `secret_key` appears nowhere in its own harness.
+Opening a gate means passing `verified` for a tag nothing checked, which
+is a decision about what the harness is entitled to assume rather than a
+gap to close in passing.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

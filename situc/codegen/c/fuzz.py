@@ -72,6 +72,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 		"#include <stddef.h>",
 		"#include <stdint.h>",
+		"#include <stdlib.h>",
 		"#include <string.h>",
 		"",
 		f'#include "{basename}.h"',
@@ -135,6 +136,17 @@ def _harness(struct: ResolvedStruct, prefix: str,
 	else:
 		lines.append("\t(void)view;")
 
+	# After every read, because these WRITE. The erasers were the one family
+	# of accessor this harness never called, and its docstring says it
+	# "exercises every accessor the schema has without anybody maintaining a
+	# list" -- which was a claim about how the walk is derived rather than a
+	# fact about what it reaches. They are also the only accessors that write
+	# a span the DATA chose, which makes them the ones a fuzzer most wants:
+	# C's erased what the wire asked for without clamping it (26.316).
+	lines.extend(_erases(struct, prefix))
+
+	if not struct.layout.is_fixed_size:
+		lines.append("\tfree(buf);")
 	lines.extend(["}", ""])
 	return lines
 
@@ -213,21 +225,66 @@ def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 		"{",
 		"\tsitu_msg_t  msg;",
 		"\tsitu_view_t view;",
-		f"\tuint8_t     buf[{cap}];",
+		"\tuint8_t    *buf;",
 		"\tuint32_t    extent;",
 		"",
 		*floor,
 		"\t/* As much of the input as fits. The extent that reaches the bounds",
 		"\t * check is then one the fuzzer chose, and one it can shrink. */",
-		"\textent = size < sizeof buf ? (uint32_t)size : (uint32_t)sizeof buf;",
+		f"\textent = size < {cap} ? (uint32_t)size : (uint32_t){cap};",
+		"\tif (extent == 0u) {",
+		"\t\treturn;",
+		"\t}",
+		"",
+		"\t/* Allocated to the EXTENT, not to the struct's maximum. A",
+		"\t * `buf[SIZE_MAX]` holds the frame and a tail of slack, so an",
+		"\t * accessor running past the frame lands in that slack and no",
+		"\t * sanitizer says anything: measured, an unclamped eraser wrote",
+		"\t * 194 bytes past a six-byte frame into a 258-byte buffer and",
+		"\t * ASan stayed silent, while the same code over a six-byte",
+		"\t * allocation tripped it at once. Past the frame has to be past",
+		"\t * the allocation or this harness can only see the overruns that",
+		"\t * are bigger than the struct. */",
+		"\tbuf = (uint8_t *)malloc(extent);",
+		"\tif (buf == NULL) {",
+		"\t\treturn;",
+		"\t}",
 		"\tmemcpy(buf, data, extent);",
 		"\tsitu_msg_init(&msg, buf, extent);",
 		"",
 		f"\tif ({ident(prefix, struct.name, 'view')}(&msg, 0, extent, &view)"
 		" != SITU_OK) {",
+		"\t\tfree(buf);",
 		"\t\treturn;",
 		"\t}",
 	]
+
+
+def _erases(struct: ResolvedStruct, prefix: str) -> list[str]:
+	"""Call every `[secret]` member's eraser, last.
+
+	Gated members are skipped: an interior sealed behind a verified tag takes
+	a gate this harness never opens, so its accessors are not callable from
+	here at all -- which is why `keystore`'s `secret_key` appears nowhere in
+	its harness. That is a wider gap than the erasers and belongs to whoever
+	teaches this to open a gate.
+	"""
+	lines: list[str] = []
+	for entry in own_entries(struct):
+		placement = entry.placement
+		if not any(attr.name == "secret" for attr in placement.attrs):
+			continue
+		if placement.sealed_by is not None and not placement.unverified_ok:
+			continue
+
+		local = c_name(placement.path[len(struct.name) + 1 :])
+		if not lines:
+			lines.append("")
+			lines.append("\t/* Last, because these write. The span an eraser")
+			lines.append("\t * clears is the one the data declares, so a")
+			lines.append("\t * missing clamp is an out-of-frame write here. */")
+		lines.append(f"\t{ident(prefix, struct.name, local, 'zeroize')}(view);")
+	return lines
 
 
 def _reads(struct: ResolvedStruct, prefix: str,
