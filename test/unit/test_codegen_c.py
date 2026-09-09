@@ -1990,6 +1990,41 @@ def test_the_harness_reads_an_unverified_interior_without_a_gate() -> None:
 	assert "situ_S_body_t gate;" not in text
 
 
+def test_the_smoke_input_clears_every_size_floor() -> None:
+	"""The smoke test feeds each harness a fixed number of random bytes, and
+	a harness returns at its struct's SIZE_MIN before touching anything.
+
+	At 32 bytes it reached 168 of this tree's 181 structs and returned at
+	once for the other 13 -- `cpio_entry` at 111, `keystore` at 87, `packet`
+	at 62 -- which included both schemas whose sealed interiors had just
+	stopped being unreachable. An input below the floor is not a weak test of
+	a struct; it is no test of it, and the two print the same thing.
+
+	Derived rather than typed: a schema arriving with a larger minimum fails
+	this instead of quietly falling out of the smoke test. The dispatcher
+	spends one byte choosing the struct, so the input must clear the floor by
+	at least that.
+	"""
+	makefile = (ROOT / "test" / "generated" / "Makefile").read_text(
+		encoding="utf-8")
+	sizes = [int(n) for n in re.findall(r"head -c (\d+) /dev/urandom",
+	                                    makefile)]
+	assert sizes, "no smoke input size found in the Makefile"
+
+	worst = 0
+	for path in SCHEMAS:
+		schema   = parse_text(path.read_text(encoding="utf-8"))
+		resolved = resolve(schema, solve(schema))
+		for struct in resolved.structs.values():
+			floor = struct.layout.size_bytes
+			if floor is not None:
+				worst = max(worst, floor)
+
+	assert min(sizes) > worst, (
+		f"the smoke input is {min(sizes)} bytes and the largest struct floor "
+		f"is {worst}; every struct at or above that is fed nothing")
+
+
 def test_no_schema_has_an_interior_shape_the_harness_cannot_reach() -> None:
 	"""The population, rather than the four shapes I happened to find.
 

@@ -25566,6 +25566,44 @@ a crash, because a plain build need not crash on an overread and a test
 that waits for one passes on the days it matters least. Reverted, it says
 `the span escaped the frame: reported 60000 of 22`.
 
+### 26.321 The fix with no test, found by listing them
+
+Asked whether the session's findings were stored as regression tests, the
+answer came from listing them against the fixes rather than from memory --
+and one fix had none. The smoke input was raised from 32 bytes to 256
+because 13 of 181 structs have a SIZE_MIN above 31 and were being fed
+nothing (26.318); nothing asserted it, so putting `head -c 32` back would
+have passed every gate.
+
+`test_the_smoke_input_clears_every_size_floor` reads the size out of the
+Makefile and the floors out of the schemas, so a schema arriving with a
+larger minimum fails it rather than quietly dropping out of the smoke test.
+Reverted, it says which numbers disagree.
+
+**The general point is the method, not the miss.** A fix to a *test's* own
+configuration has nothing downstream to trip over -- no code changes
+behaviour, no gate goes red -- so it is exactly the kind that ships
+untested and stays that way. Twenty of the session's twenty-one tests were
+written beside the code they defend; the twenty-first existed only because
+somebody asked for the list.
+
+**What is stored, and what is not.** Twenty-two tests across five files,
+plus `secret_run` in `edges.situ`, and every defect this session found
+fails at least one of them when its fix is reverted -- each checked by
+reverting it. What is NOT stored is the sanitizer work: the ASan witnesses
+that demonstrated the eraser overrun, the harness's buffer blind spot and
+the C++ wild pointer were scratch programs, and `make check` builds nothing
+under a sanitizer. `make fuzz` does -- `-fsanitize=fuzzer,address` -- and
+needs clang with libFuzzer and runs for as long as it is told, so it is not
+part of the standing gate.
+
+That is a real limit rather than an oversight to close in passing: the
+substance of each finding is covered by a stored test that needs no
+sanitizer -- a canary past the frame in C, an asserted span size in C++, an
+asserted allocation in the harness -- and putting ASan into `make test-c`
+would change what every build costs, which is the copyright holder's call
+rather than a session's.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
