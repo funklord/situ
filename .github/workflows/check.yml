@@ -185,6 +185,7 @@ jobs:
           expected="$expected|no draw validated"              # padded.situ needs vectors
           expected="$expected|where the interpreter is the check"  # we are ON the floor
           expected="$expected|Qt6Core"                        # not installed, deliberately
+          expected="$expected|no struct this schema frames"   # --frame, per schema
 
           total=$(sed -n 's/.*[^0-9]\([0-9]\+\) skipped.*/\1/p' \
                   /tmp/check.log | tail -1)
@@ -214,3 +215,82 @@ jobs:
             echo "check: install what they name, or add the reason above" >&2
             exit 1
           fi
+
+  # `make fuzz` is not part of `make check` and deliberately: it needs clang
+  # with libFuzzer, and it takes minutes rather than seconds. Its own job
+  # here, so a crash is distinguishable from a check failure at a glance and
+  # so the two run at once.
+  #
+  # WHY IT IS WORTH A JOB. Run by hand for the first time on 2026-09-09 it
+  # failed on its first second and three times after, each on a different
+  # defect: an extent function reading a length past the frame, a `validate`
+  # reading a `u16` at offset 6 of a five-byte view, and -- once those were
+  # fixed -- a divergence the differential caught. Three memory-safety bugs
+  # in generated C, found by an instrument this repository already had and
+  # nobody was running (26.322).
+  #
+  # A crash fails the workflow. libFuzzer with a warm corpus does not report
+  # one for a mutation it has already tried, so a new one is a new defect
+  # rather than the dice.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The floor, as the check job runs it and for the same reason: the
+      # harness sources come out of `situc`, and generating them on a
+      # different interpreter than the one this project claims would be a
+      # second thing to be wrong about.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      # THE CORPUS IS THE POINT. A fuzzer starting from nothing spends its
+      # budget rediscovering that a length field exists; one that starts from
+      # what previous runs reached goes further every time. Restored by
+      # prefix so any earlier run will do, saved under this commit so each
+      # run leaves a corpus rather than overwriting one.
+      #
+      # It cannot grow without bound: libFuzzer keeps an input only when it
+      # reaches new coverage, so the size follows the code rather than the
+      # number of runs. 23 MB after a day of local runs.
+      - uses: actions/cache@v4
+        with:
+          path: build/host/tests/fuzz/corpus
+          key: fuzz-corpus-${{ github.sha }}
+          restore-keys: |
+            fuzz-corpus-
+
+      # Named and printed for the reason the check job prints its toolchains:
+      # `FUZZ_CC` falls back to `clang` when it finds none of the versioned
+      # names, and a target that fails with "No such file or directory" for a
+      # compiler the machine has is a target nobody runs twice.
+      - name: Report what will build the harnesses
+        run: |
+          set -o pipefail
+          clang --version | head -1
+          python3 --version
+
+      # 20 seconds per harness over 37 of them, plus the builds: about
+      # fifteen minutes, against the check job's nine. Long enough that the
+      # corpus above earns its keep and short enough to sit beside a push.
+      # `make fuzz` stops at the first crash, which is what `|| exit 1` in
+      # its own loop is for -- so this step's status is the whole answer.
+      - name: make fuzz
+        run: make fuzz FUZZ_SECONDS=20
+
+      # A crash input is the only thing that makes a fuzz failure actionable:
+      # without it the report is "something crashed" and the mutation that
+      # did it is gone. libFuzzer writes them into the corpus directory under
+      # `-artifact_prefix`, so they are already here.
+      - name: Keep whatever crashed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            build/host/tests/fuzz/corpus/**/crash-*
+            build/host/tests/fuzz/corpus/**/leak-*
+            build/host/tests/fuzz/corpus/**/timeout-*
+            build/host/tests/fuzz/corpus/**/oom-*
+          if-no-files-found: warn

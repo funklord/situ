@@ -25676,6 +25676,59 @@ and checking that this one does.
 
 
 
+### 26.323 CI had been red for five days, and nobody had looked
+
+Asked to wire `make fuzz` into CI, the first thing to establish is whether
+there is a CI to wire it into. `gh repo view` says the repository is
+PUBLIC, so Actions are free and the standing rule wants the workflow on
+rather than deactivated. It is on, and it has been failing.
+
+    runs in the last 100 (2026-09-04 to 2026-09-09): 86 failure, 14 success
+    most recent success: 2026-09-04 14:06
+
+**`make check` passes on the runner.** The step that fails is the one after
+it, "Refuse a skip this machine caused", and what it refuses is
+
+    check: 4 skip(s) this machine caused:
+    skipped: 44 (40 accounted for, 4 not)
+      SKIPPED [4] test_codegen_c.py:577: no struct this schema frames
+
+which is not a machine-caused skip at all: a schema that frames nothing has
+nothing for the frame backend to emit. The reason arrived on 2026-09-05 in
+`a25eb6b`, the day after the last green run, and the workflow's list of
+expected reasons never gained a line for it.
+
+**The guard is working exactly as designed and that is the point.** 26.155
+replaced a count with a classification and said so in the workflow: "Adding
+a line here is the deliberate act the old ceiling asked for, and it costs a
+reason rather than a number." A line was owed for five days and this is
+what the design does when nobody pays it -- fail, by name, on every push.
+The alternative it replaced would have absorbed four more skips silently.
+
+**What it cost is a session's worth of pushes onto a red badge.** Seven
+commits went in today without anybody reading the result, which is the
+failure mode the rule about deactivating dead workflows exists to prevent,
+arriving from the other side: not a badge that is red because nothing runs,
+but one that is red for a real reason nobody is reading.
+
+**`make fuzz` is now its own job**, beside `check` rather than inside it,
+because it needs clang with libFuzzer and takes minutes. Three things make
+it worth more than a smoke run:
+
+- **The corpus is cached** and restored by prefix, so each run starts from
+  what earlier runs reached rather than rediscovering that a length field
+  exists. It cannot grow without bound -- libFuzzer keeps an input only
+  when it reaches new coverage -- and it is 23 MB after a day of local
+  runs.
+- **A crash uploads the input that caused it.** Without that the report is
+  "something crashed" and the mutation is gone.
+- **The budget is 20 seconds a harness**, 37 of them, about fifteen minutes
+  against the check job's nine.
+
+Verified against a clean tree rather than assumed: `make fuzz` with a fresh
+`BUILD_ROOT` builds and runs all 37 from nothing, needs no cmocka and no
+archive, and puts its corpus where the cache step looks for it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
