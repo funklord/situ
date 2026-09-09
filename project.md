@@ -25763,19 +25763,20 @@ because the second commit was pushed while the first run was still fuzzing.
 There was nothing to find. Both caches exist now, 261 KB and 256 KB on
 `master`.
 
-**What is demonstrated and what is not.** A `workflow_dispatch` run against
-the same commit -- no push, no overlap -- reports `Cache restored from key:
-fuzz-corpus-cea9217...`, so the path, the scope and the mechanism work.
-That is an EXACT key hit. The `restore-keys` prefix fallback, which is what
-makes the corpus accumulate across different commits, is the documented
-behaviour of `actions/cache` and has not been watched happening here; the
-next ordinary push exercises it.
+**Demonstrated, in two steps.** A `workflow_dispatch` run against the same
+commit -- no push, no overlap -- reports `Cache restored from key:
+fuzz-corpus-cea9217...`, an EXACT key hit, which shows the path, the scope
+and the mechanism work. The next ordinary commit then restored from
+`fuzz-corpus-cea9217...` as well: a DIFFERENT commit's cache, reached
+through the `restore-keys` prefix, which is the half that makes the corpus
+accumulate rather than merely persist.
 
-**The distinction is worth the paragraph because the two failures look
-identical from the log.** A prefix that never matches and a prefix that had
-nothing to match yet both print `Cache not found`, and the first would mean
-every run starts cold for ever while the second means somebody pushed twice
-in a quarter of an hour.
+**The two steps were worth separating because the failures print the same
+line.** A prefix that never matches and a prefix that had nothing to match
+yet both say `Cache not found` -- the first meaning every run starts cold
+for ever, the second meaning somebody pushed twice inside a quarter of an
+hour. Only the second run tells them apart, and it was nearly not done: an
+exact hit reads easily as the whole answer.
 
 ## 27. Questions, and how they were settled
 
