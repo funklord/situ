@@ -27,6 +27,11 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Measured 8.7 to 10.3 minutes over nine runs, so this is about two and
+    # a half times the longest. Not a budget -- a bound for the case the
+    # suite hangs rather than fails, where the default is the six hours
+    # GitHub allows and the symptom is a queue rather than a red tick.
+    timeout-minutes: 25
     steps:
       # v5 is where checkout moved to Node 24, which is the deprecation the
       # runner annotates; v7 is the current major and the two steps between
@@ -239,9 +244,14 @@ jobs:
     # exits on the first crash -- so this is the bound for the case where it
     # does not: a harness that hangs inside one input holds the runner for
     # six hours by default, which is a bill on a private repository and a
-    # queue on this one. Generous against the twelve minutes of fuzzing plus
-    # the builds, tight enough to notice.
-    timeout-minutes: 30
+    # queue on this one.
+    #
+    # 37 harnesses at 60 seconds is 37 minutes of fuzzing, and the overhead
+    # measured 2.5 -- four runs at 20 seconds took 14.5 to 14.8 minutes
+    # against 12.3 of fuzzing. So about 40, and this is 55. The spread is
+    # two percent because the duration is the budget rather than the work,
+    # which is what lets the bound sit this close.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v7
 
@@ -279,13 +289,17 @@ jobs:
           clang --version | head -1
           python3 --version
 
-      # 20 seconds per harness over 37 of them, plus the builds: about
-      # fifteen minutes, against the check job's nine. Long enough that the
-      # corpus above earns its keep and short enough to sit beside a push.
+      # 60 seconds per harness over 37 of them: about forty minutes with the
+      # builds, against the check job's ten. It was 20, which was a guess
+      # made before anybody knew what the runner could do -- it turned in
+      # 493 million executions on a cold corpus, roughly four times what
+      # this project's own machine manages in the same wall clock, so the
+      # budget was the thing to spend rather than save.
+      #
       # `make fuzz` stops at the first crash, which is what `|| exit 1` in
       # its own loop is for -- so this step's status is the whole answer.
       - name: make fuzz
-        run: make fuzz FUZZ_SECONDS=20
+        run: make fuzz FUZZ_SECONDS=60
 
       # A crash input is the only thing that makes a fuzz failure actionable:
       # without it the report is "something crashed" and the mutation that

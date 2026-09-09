@@ -25722,8 +25722,12 @@ it worth more than a smoke run:
   cold CI run.
 - **A crash uploads the input that caused it.** Without that the report is
   "something crashed" and the mutation is gone.
-- **The budget is 20 seconds a harness**, 37 of them, about fifteen minutes
-  against the check job's nine.
+- **The budget is 60 seconds a harness**, 37 of them, about forty minutes
+  against the check job's ten. It was 20 to begin with, which was a guess
+  made before anybody knew what the runner could do: it turned in 493
+  million executions on a cold corpus, roughly four times what this
+  project's own machine manages in the same wall clock. The budget was the
+  thing to spend rather than save, and the holder said so.
 
 Verified against a clean tree rather than assumed: `make fuzz` with a fresh
 `BUILD_ROOT` builds and runs all 37 from nothing, needs no cmocka and no
@@ -25748,9 +25752,17 @@ stops itself, so the job needs no timeout for the case that works; it needs
 one for the case that does not, where a harness hangs inside a single input
 and holds a runner for the six hours GitHub allows by default.
 `timeout-minutes: 30`, against twelve minutes of fuzzing plus the builds.
-The `check` job has no bound either and is left alone: it is not this
-change's, and a job that has run in nine minutes for months is a different
-judgement from one being added today.
+**Both jobs are bounded, and the numbers come from the runs rather than
+from taste.** `check` measured 8.7 to 10.3 minutes over nine runs and gets
+25; `fuzz` at 60 seconds a harness predicts about 40 and gets 55. The
+second bound can sit that close because a fuzz job's duration is its
+budget rather than its work -- four runs at 20 seconds took 14.5 to 14.8
+minutes, a spread of two percent.
+
+**Raising the budget forced the bound**, which is the sort of pair that
+gets missed: 60 seconds over 37 harnesses is 37 minutes of fuzzing, and
+the 30-minute timeout set an hour earlier would have killed the job every
+time. A number changed in one place and enforced in another.
 
 **And the caching was written up as working before it had worked once.**
 The sentence above said "restored by prefix" while the only evidence was
