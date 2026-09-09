@@ -193,6 +193,31 @@ def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	assert "gate" not in body and "owner" not in body
 
 
+CPP_GATED_SPAN = '#include "unit.hpp"\n#include <cstdio>\nint main()\n{\n\tstd::uint8_t buf[40] = {0};\n\n\t/* hdr.length, a big-endian u16 at 2, claims 60000 bytes. The frame\n\t * holds 40, and `body` starts at 18, so 22 are actually there. */\n\tbuf[2] = 0xEAu;\n\tbuf[3] = 0x60u;\n\n\tsitu::rt::message msg(buf, sizeof buf);\n\tsitu::s p;\n\tif (situ::s::at(msg, 0, sizeof buf, p) != situ::rt::err::ok) { return 1; }\n\n\tstd::size_t seen = 0;\n\tif (p.with_sealed(true, [&](situ::s::sealed_gate g) {\n\t\tseen = g.body().size();\n\t}) != situ::rt::err::ok) { return 1; }\n\n\tstd::printf("%zu\\n", seen);\n\treturn seen == 22 ? 0 : 2;\n}\n'
+
+
+def test_a_gated_byte_run_is_clamped_to_the_frame() -> None:
+	"""The length is the wire's; the span must not be.
+
+	`::situ::rt::bytes` is a bare pointer and size with nothing to check it,
+	and this one was built from `_count_expression` raw. Over a 100-byte
+	keystore frame whose length field said 60000, `plaintext()` handed back
+	a span of 60000 and reading its last byte was a heap overflow ~60KB past
+	the allocation -- through the documented API, from a wire field. C, Rust
+	and Python all answered 33 for the same bytes (26.320).
+
+	The test above this one names the same member and asserts everything
+	about it except the number.
+	"""
+	header = emit(SEALED_VARIABLE)
+
+	body = header[header.index("bytes body()"):]
+	body = body[:body.index("}")]
+	assert "situ_min_u32" in body, "the declared length reaches the span raw"
+	assert "situ_remaining_u32(raw_.limit" in body, \
+		"and it is clamped against the gate's own frame"
+
+
 # -- what it compiles to ----------------------------------------------------
 
 
@@ -257,6 +282,36 @@ def test_it_compiles_clean(tmp_path: Path, body: str) -> None:
 	assert built.returncode == 0, built.stderr
 
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_gated_span_does_not_escape_the_frame(tmp_path: Path) -> None:
+	"""The same thing at run time, where the text assertion cannot reach.
+
+	A wire length of 60000 over a 40-byte frame: the span must report the 22
+	bytes that are there. Unclamped it reported 60000, and a caller doing the
+	ordinary thing with a span -- iterating it, taking its last byte -- read
+	~60KB past the allocation, which AddressSanitizer calls a wild pointer.
+
+	The size is asserted rather than the crash, because a plain build does
+	not have to crash on an overread and a test that waits for one is a test
+	that passes on the days it matters least.
+	"""
+	result = compiles(tmp_path, SEALED_VARIABLE, extra=CPP_GATED_SPAN)
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "span"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, \
+		f"the span escaped the frame: reported {run.stdout.strip()} of 22"
 
 
 @pytest.mark.skipif(HOST_CXX is None or not LIBSITU.exists(),

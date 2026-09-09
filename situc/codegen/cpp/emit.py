@@ -1125,13 +1125,25 @@ class Emitter:
 		start = self._in_gate(struct, start)
 		count = self._in_gate(struct, count)
 
+		# Clamped to what the frame actually holds, which every other run in
+		# this backend already is and this one was not. `_count_expression`
+		# is the length the DATA declares, and a `::situ::rt::bytes` is a
+		# bare pointer and size with nothing to check it: over a 100-byte
+		# frame whose length field said 60000, `plaintext()` handed back a
+		# span of 60000, and reading its last byte is a heap overflow ~60KB
+		# past the allocation -- through the documented API, driven entirely
+		# by a wire field. C, Rust and Python all answered 33 for the same
+		# bytes; this backend was the only one that did not, and the gated
+		# spelling was the one the differential never compared (26.320).
 		return [
 			"",
 			f"\t\t/* {placement.path}: {placement.array_count or placement.sized_by}"
 			f" bytes, reached through the gate. */",
 			f"\t\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t\t{",
-			f"\t\t\treturn ::situ::rt::bytes(situ_base(raw_) + ({start}), {count});",
+			f"\t\t\treturn ::situ::rt::bytes(situ_base(raw_) + ({start}),",
+			f"\t\t\t\tsitu_min_u32({count},",
+			f"\t\t\t\t\tsitu_remaining_u32(raw_.limit, ({start}))));",
 			"\t\t}",
 		]
 

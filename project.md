@@ -25508,6 +25508,64 @@ written erasers disagreed about a data-sized span in 26.316, a byte run
 behind a gate is the next place to look rather than a limitation to
 leave recorded.
 
+### 26.320 The gap that was written down, and a wild pointer behind it
+
+`_gated`'s docstring had said for a long time that a byte run inside a
+sealed region "is spelled four ways that have not been checked against each
+other yet". Checked, they were not the same.
+
+One 100-byte keystore frame whose `length` field claims 60000:
+
+    c      plaintext len=33
+    rust   plaintext len=33
+    python plaintext len=33
+    cpp    plaintext len=60000
+
+C++'s gated span took the declared length raw. `::situ::rt::bytes` is
+`span<uint8_t>`, a bare pointer and size with nothing to check it, so
+`plaintext()` handed back 60000 bytes and the ordinary thing to do with a
+span -- iterate it, take its last byte -- reads about 60KB past the
+allocation:
+
+    ERROR: AddressSanitizer: heap-buffer-overflow
+    READ of size 1
+        #0 operator()            cpp_probe.cpp:18
+        #1 with_sealed<...>      keystore.hpp:558
+    Address 0x50b00000eae2 is a wild pointer
+
+Through the documented API, driven entirely by a wire field, in the one
+region the language exists to protect. The other three clamp: C wraps the
+length in `situ_min_u32`, Rust takes `min(length, len - offset)`, Python
+`min(length, max(0, _len - start))`. This backend clamps every UNGATED run
+already; the gated spelling was the one that did not, and it is the one
+nothing compared.
+
+**A test named the member and asserted everything about it except the
+number.** `test_a_variable_member_inside_a_gate_is_reachable` checks that
+`body()` exists, that it reads through the gate's view and not the
+struct's, and that no outer name leaks into it -- all true, all still true,
+and none of them about how many bytes it hands out.
+
+**The differential now asks.** `_gated_bytes` puts the byte runs on the
+`SEALED` probe beside the scalars, and all four print `len=` and the last
+byte -- the length alone would miss an offset that disagrees while the
+count happens to match. With the clamp reverted the harness catches it on
+`dtls`, `keystore` and `packet`, not as a value mismatch but as a dead C++
+driver: `answers()` treats a driver that dies as a disagreement, and this
+one dies reading its own span.
+
+**And the differential is not enough on its own**, which is why two more
+tests exist. It carries `skipif(not COMPLETE)` -- all four toolchains -- so
+on a machine without rustc it skips, and a skip is silence. `evidence.md`
+calls this a gate that needs the thing it checks for.
+`test_a_gated_byte_run_is_clamped_to_the_frame` reads the emitted text and
+needs nothing installed; `test_a_gated_span_does_not_escape_the_frame`
+compiles and runs it, asserting the span reports 22 over a 40-byte frame
+whose length field says 60000. It asserts the SIZE rather than waiting for
+a crash, because a plain build need not crash on an overread and a test
+that waits for one passes on the days it matters least. Reverted, it says
+`the span escaped the frame: reported 60000 of 22`.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

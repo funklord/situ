@@ -183,6 +183,13 @@ class Ask:
 	#: once it opens. The interior is the half a tag exists to protect, so
 	#: reading it is the half worth comparing.
 	inside: tuple[str, ...] = ()
+	#: For `SEALED`: the byte runs inside it, answered as `len=` and the last
+	#: byte. `_gated`'s docstring said for a long time that these are "spelled
+	#: four ways that have not been checked against each other yet", and the
+	#: first time they were, C++ answered 60000 where the other three answered
+	#: 33 -- an unclamped span over a wire-declared length, and a heap
+	#: overflow to read (26.320).
+	inside_bytes: tuple[str, ...] = ()
 	#: For `NESTED`: the member's type, which C++ needs to declare the
 	#: out-parameter the accessor fills in.
 	inner: str = ""
@@ -251,7 +258,8 @@ def asks(struct: ResolvedStruct, structs: set[str],
 						bits=max(8, scalar.bits), signed=scalar.signed))
 				continue
 			found.append(Ask(Probe.SEALED, local, None, 0, False,
-			                 _gated(struct, placement)))
+			                 _gated(struct, placement),
+			                 _gated_bytes(struct, placement)))
 			continue
 
 		# A member *inside* a sealed region is reached through the gate, which
@@ -711,6 +719,37 @@ def _interior_scalars(struct: ResolvedStruct,
 	return found
 
 
+def _gated_bytes(struct: ResolvedStruct,
+		region: Placement) -> tuple[str, ...]:
+	"""Byte runs inside a region, as the names they carry on the gate.
+
+	The length is the comparable answer and the last byte is what catches an
+	offset that disagrees while the length happens to match. Secrets are out
+	for the reason they are out of `_interior_scalars`: 14.6 emits no reader
+	for one at all.
+	"""
+	found: list[str] = []
+
+	for entry in struct.entries:
+		placement = entry.placement
+		scalar    = placement.scalar
+		if placement.sealed_by != region.name or placement.kind != "field":
+			continue
+		if "[]" in placement.path:
+			continue
+		if scalar is None or scalar.bits != BITS_PER_BYTE:
+			continue
+		if placement.array_count is None and not data_sized(placement):
+			continue
+		if any(attr.name == "secret" for attr in placement.attrs):
+			continue
+
+		found.append(c_name(local_name(struct, placement))
+		             [len(c_name(region.name)) + 1:])
+
+	return tuple(found)
+
+
 def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
 	"""Those scalars as the names they carry ON THE GATE.
 
@@ -972,6 +1011,17 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        *[f'\t\t\t\t\tprintf("{one} %lld\\n", (long long)'
 		          f"{ident(prefix, struct, ask.local, one, 'get')}(held));"
 		          for one in ask.inside],
+		        *[line for one in ask.inside_bytes for line in (
+			        "\t\t\t\t\t{",
+			        f"\t\t\t\t\t\tconst uint32_t n ="
+			        f" {ident(prefix, struct, ask.local, one, 'len')}(held);",
+			        "",
+			        f'\t\t\t\t\t\tprintf("{one} len=%u last=%d\\n", n,',
+			        "\t\t\t\t\t\t\tn != 0u ? (int)"
+			        f"{ident(prefix, struct, ask.local, one, 'ptr')}(held)"
+			        "[n - 1u] : -1);",
+			        "\t\t\t\t\t}",
+		        )],
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
@@ -1198,6 +1248,10 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return ["\t\t\t{",
 		        *[f"\t\t\t\tlong long {bare_name(one)} = 0;"
 		          for one in ask.inside],
+		        *[line for one in ask.inside_bytes for line in (
+			        f"\t\t\t\tlong long {bare_name(one)}_len = 0;",
+			        f"\t\t\t\tlong long {bare_name(one)}_last = -1;",
+		        )],
 		        f"\t\t\t\tconst auto refused = view.with_{call}("
 		        "false, [](auto) {});",
 		        f"\t\t\t\tconst auto opened = view.with_{call}("
@@ -1205,6 +1259,19 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        *[f"\t\t\t\t\t{bare_name(one)} ="
 		          f" static_cast<long long>(gate.{bare_name(one)}());"
 		          for one in ask.inside],
+		        *[line for one in ask.inside_bytes for line in (
+			        "\t\t\t\t\t{",
+			        f"\t\t\t\t\t\tconst auto held ="
+			        f" gate.{bare_name(one)}();",
+			        "",
+			        f"\t\t\t\t\t\t{bare_name(one)}_len ="
+			        " static_cast<long long>(held.size());",
+			        f"\t\t\t\t\t\t{bare_name(one)}_last ="
+			        " held.size() == 0 ? -1",
+			        "\t\t\t\t\t\t\t: static_cast<long long>"
+			        "(held[held.size() - 1]);",
+			        "\t\t\t\t\t}",
+		        )],
 		        "\t\t\t\t\t(void)gate;",
 		        "\t\t\t\t});",
 		        "",
@@ -1215,6 +1282,9 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        *[f'\t\t\t\t\tstd::printf("{one} %lld\\n",'
 		          f" {bare_name(one)});"
 		          for one in ask.inside],
+		        *[f'\t\t\t\t\tstd::printf("{one} len=%lld last=%lld\\n",'
+		          f" {bare_name(one)}_len, {bare_name(one)}_last);"
+		          for one in ask.inside_bytes],
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
@@ -1426,11 +1496,22 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        " { 1 } else { 0 },",
 		        f"\t\t\t\t\tif view.{opener}(true).is_ok()"
 		        " { 1 } else { 0 });",
-		        *([] if not ask.inside else [
+		        *([] if not (ask.inside or ask.inside_bytes) else [
 			        f"\t\t\t\tif let Ok(gate) = view.{opener}(true) {{",
 			        *[f'\t\t\t\t\tprintln!("{one} {{}}",'
 			          f" gate.{rust_ident(one)}() as i64);"
 			          for one in ask.inside],
+			        *[line for one in ask.inside_bytes for line in (
+				        "\t\t\t\t\t{",
+				        f"\t\t\t\t\t\tlet held ="
+				        f" gate.{rust_ident(one)}();",
+				        "",
+				        f'\t\t\t\t\t\tprintln!("{one} len={{}} last={{}}",',
+				        "\t\t\t\t\t\t\theld.len(),",
+				        "\t\t\t\t\t\t\tif held.is_empty() { -1i64 }"
+				        " else { held[held.len() - 1] as i64 });",
+				        "\t\t\t\t\t}",
+			        )],
 			        "\t\t\t\t}",
 		        ])]
 	if ask.probe is Probe.VARINT:
@@ -1615,6 +1696,11 @@ def _python_ask(ask: Ask) -> list[str]:
 		        "if gate is not None:",
 		        *[f'\tprint("{one} %d" % gate.{py_name(one)})'
 		          for one in ask.inside],
+		        *[line for one in ask.inside_bytes for line in (
+			        f"\theld = gate.{py_name(one)}",
+			        f'\tprint("{one} len=%d last=%d"'
+			        " % (len(held), held[len(held) - 1] if held else -1))",
+		        )],
 		        "\tpass"]
 	if ask.probe is Probe.VARINT:
 		return [f'print("{ask.local} len=%d value=%d"'
