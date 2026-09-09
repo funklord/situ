@@ -398,6 +398,25 @@ class Placement:
 	radix: int | None		= None
 
 	@property
+	def arm_widths(self) -> set[int]:
+		"""The distinct sizes the arms take.
+
+		Which is the question every caller of `arm_sizes` was actually
+		asking: one width and the extent is the same whichever arm the
+		discriminant picked, so nothing shifts underneath a view and nobody
+		counting bytes learns which it was.
+
+		It is a property rather than a comprehension at each site because
+		`arm_sizes` pairs each size with its arm's NAME, so `set(arm_sizes)`
+		counts arms rather than widths -- two arms one byte wide give a set
+		of two, and a caller asking "do the arms differ?" gets yes for every
+		variant with more than one arm. Three callers asked; one had it
+		right, and the two that did not were written a fortnight apart by
+		the same reasoning.
+		"""
+		return {size for _, size in self.arm_sizes}
+
+	@property
 	def delimiter(self) -> bytes:
 		"""The first alternative, for readers that genuinely want one.
 

@@ -573,7 +573,7 @@ def _indexes_outside_the_region(context: Context) -> bool:
 
 
 def _has_unequal_arms(context: Context) -> bool:
-	sizes = {size for _, size in context.placement.arm_sizes}
+	sizes = context.placement.arm_widths
 	return len(sizes) > 1
 
 

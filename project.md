@@ -3257,6 +3257,11 @@ non-security schemas, but `strict` is the default and `lenient` sets
 - forbids the field from being used in any expression that controls layout
   (no secret-dependent lengths or discriminants -- that is a length-based side
   channel)
+
+  "Any expression that controls layout" was always the right scope and the
+  check enforced one corner of it: a length written as a bare field name.
+  An arithmetic length, an `at` offset and the discriminant this bullet
+  names by name all walked past (26.315)
 - generated accessors avoid data-dependent branching and data-dependent
   memory access patterns; where that is not possible for a construct, the
   compiler refuses to generate the accessor and says why
@@ -25055,6 +25060,12 @@ survivable and hard to see: the secret-dependent-layout prohibition is a
 length side channel; and none of the four emits a debug or format accessor
 for a secret field.
 
+**The first of those two was narrower than this sentence reads, and the
+sentence is why nobody looked further.** `u8 body[n]` is the one shape it
+caught; `u8 body[n * 2]`, `u8 body[2] at off` and a secret discriminant
+were all accepted. Written the day the zeroization gap was closed, from
+the one example that had a test (26.315).
+
 **All four erase now, and the guarantee is not the same in all four**, so
 each says which it is rather than leaving one sentence to cover them:
 
@@ -25081,6 +25092,122 @@ the MUTABLE type, because erasing is a write and the read-only view holds a
 Demonstrated at runtime in all four, including that the byte after the
 secret is untouched, and in Python that a copy taken beforehand still holds
 the bytes -- which is the documented limit, shown rather than asserted.
+
+### 26.315 One rule read from both ends, and a set counting the wrong thing
+
+Section 14's `[secret]` bullet forbids "the field from being used in any
+expression that controls layout (no secret-dependent lengths or
+discriminants)". The check enforcing it is
+`_check_secret_is_not_layout_bearing`, and its own docstring said "a length
+or a discriminant read from secret material leaks it" while the code below
+read `placement.sized_by` and nothing else.
+
+`sized_by` holds a path. It holds nothing for arithmetic, nothing for an
+offset, and nothing for a variant. So three of the four ways a schema can
+make its layout depend on a field were accepted, and the one that was
+caught is the one shape the suite had an example of:
+
+    u8 body[n]             refused
+    u8 body[n * 2]         accepted, size=1..511
+    u8 body[2] at off      accepted, address=Unstable
+    variant switch (kind)  accepted, size=2..3
+
+(each over a `[secret]` driver of that name; the first is the only shape
+the suite had a test for)
+
+Each is the same leak. The extent of the message and the addresses an
+accessor touches are both readable without breaking any cipher, which is
+what the bullet means by a side channel, and the last of the three is the
+one the bullet names in as many words.
+
+**The rule is "a secret may not be a discriminant", and the first version
+written here was not.** It asked whether the arms differ in width, on the
+reasoning that the extent is what an observer counts and `[equalize]` pads
+that away -- so an equalized secret discriminant was permitted, and the
+entry said in as many words that refusing it "would forbid the one
+construct that closes the hole".
+
+What settled it was generating the permitted case and reading it:
+
+    static inline situ_err_t situ_d_body_as_alpha_view(...)
+    {
+            if (situ_d_kind_get(view) != 1u) {
+
+Reading an arm compares the discriminant, whatever the arms are shaped
+like. That is a branch on secret material, which is the bullet AFTER the
+one about layout -- "generated accessors avoid data-dependent branching" --
+and `[equalize]` has nothing to say about it. Section 14's flat "no
+secret-dependent lengths or discriminants" was right and the refinement
+was wrong.
+
+**Two channels, and evening one is not a remedy for the other.** The
+diagnostic now cites the branch always, adds the extent only where the
+arms actually differ, and names `[equalize]` as a non-remedy rather than
+leaving an author to try the obvious thing:
+
+    ... branches on secret material -- a timing and cache channel
+    whatever the arms are shaped like
+    ... `[equalize]` evens the extent but leaves the branch, so it is
+    not the remedy here
+
+The generated code was one command away throughout. The conditional rule
+was reasoned from the map's `size=2..3`, which is a true fact about the
+extent and silent about everything else the accessor does; **a measurement
+of one channel argued about a construct with two.**
+
+**The four sources are `traverse.invalidating_members`' four sources, and
+naming that is the point of the entry.** That function answers "which
+writes move the bytes underneath a view"; this one answers "which reads
+tell an observer where the bytes are". A field a writer can move the layout
+with is a field an observer can read the layout for -- one question from
+opposite ends -- so the population test derives its sweep from
+`invalidating_members` rather than from a list. A fifth source added to the
+differential arrives here as a fifth driver and fails until this check
+learns it too. A list typed out would have gone on passing, which is how
+the first three came to be missing.
+
+Containment rather than equality, by exactly the case above: a variant
+whose arms are one width moves nothing, so it is not a driver, and it is
+refused anyway for the branch. The secret rule is the wider of the two,
+and the test asserts the direction that has to hold rather than an
+equality that would have to be edited every time the two diverge.
+
+**Then the discriminant rule was written twice and both copies counted
+arms.** `arm_sizes` is `tuple[tuple[str, int], ...]` -- each size paired
+with its arm's name -- so `set(arm_sizes)` has one element per arm, and
+`len(...) > 1` is true of every variant anybody would write:
+
+    (('as_alpha', 8), ('as_gamma', 8))   set() -> 2 elements, one width
+
+Three callers asked the question. `propagate` had it right with an explicit
+`{size for _, size in ...}`; `traverse.invalidating_members` and this new
+check both reached for `set(arm_sizes)`, a fortnight apart, by the same
+reasoning. It is `Placement.arm_widths` now, a property beside the field
+whose shape is the trap, and all three go through it.
+
+**The cost was visible in a committed example and nobody had read it.**
+`icmp_message` has six arms, every one 32 bits. Generated against HEAD its
+header said the view "is invalidated by writing `type` -- those decide
+where the members after them start", `situ_icmp_message_type_set` called
+`situ_msg_touch`, and callers were told to re-acquire. Nothing moves: the
+message is one size whichever arm is taken. The header now says "nothing
+invalidates a icmp_message view", and the setter keeps only the
+`mark_dirty` it genuinely owes the checksum.
+
+The map did not move, which is why the contract diff the suite runs on
+every build had nothing to say: invalidation is a property of the generated
+setters, not of the capability vector, so the one committed schema that
+exercised the bug was never asked about it.
+
+**The false control that nearly made it into this entry.** Measuring the
+icmp change, the "before" column was produced by reverting `arm_widths` to
+the buggy expression -- which also broke `propagate`, a call site that had
+been correct all along and had just been routed through the new property.
+That diff showed `Bounded(4, 4)` becoming `Fixed(4)`, a map change, and the
+map had already been verified unchanged. Two results that could not both be
+true is what caught it. The real before and after come from `git archive
+HEAD` into a scratch tree, which is the only version of that measurement
+where the control is the code that shipped.
 
 ## 27. Questions, and how they were settled
 

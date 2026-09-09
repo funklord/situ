@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from situc import requirements
+from situc import requirements, traverse
 from situc.capability import Axis, Value
 from situc.diagnostics import SituError
 from situc.dump import dump
@@ -433,6 +433,174 @@ def test_a_secret_may_not_decide_a_length() -> None:
 	""")
 	assert "takes its size from the secret field `n`" in rendered
 	assert "visible to anyone counting bytes" in rendered
+
+
+def test_a_secret_may_not_decide_a_computed_length() -> None:
+	"""The same leak with arithmetic in the way.
+
+	`sized_by` holds a path and holds nothing for `body[n * 2]`, so for as
+	long as the check read only that, the commonest shape of a
+	secret-dependent length walked straight past it -- `size=1..511`, the
+	extent moving with the secret, no complaint.
+	"""
+	rendered = failure("""struct S {
+		u8 n [secret];
+		u8 body[n * 2];
+	}
+	""")
+	assert "computes its size from the secret field `n`" in rendered
+	assert "visible to anyone counting bytes" in rendered
+
+
+def test_a_secret_may_not_decide_an_offset() -> None:
+	"""A secret offset leaks without any length changing.
+
+	The struct stays one size, so nobody counting bytes learns anything --
+	and the accessor touches whichever bytes the secret names, which is the
+	data-dependent access pattern 14.6 forbids in the same breath.
+	"""
+	rendered = failure("""struct S {
+		u8 off [secret];
+		u8 pad[4];
+		u8 body[2] at off;
+	}
+	""")
+	assert "is placed at an offset from the secret field `off`" in rendered
+	assert "watching memory" in rendered
+
+
+VARIANT = """struct A { u8 a; }
+	struct B { %s b; }
+	struct S {
+		u8 kind [secret];
+		variant body switch (kind) %s {
+			case 1:  A as_a;
+			case 2:  B as_b;
+			default: error;
+		}
+	}
+	"""
+
+
+def test_a_secret_may_not_select_an_arm() -> None:
+	"""The discriminant half, which 14.6 has always named.
+
+	The function enforcing this said "a length or a discriminant" in its own
+	docstring while checking only the length, so `size=2..3` compiled: the
+	extent says which arm was taken and therefore something about the key.
+	"""
+	rendered = failure(VARIANT % ("u16", ""))
+	assert "selects an arm using the secret field `kind`" in rendered
+	assert "the arms differ in width" in rendered
+
+
+def test_a_secret_discriminant_is_refused_however_the_arms_are_shaped() -> None:
+	"""Equal widths, and `[equalize]`, and neither is a way out.
+
+	The first version of this rule permitted both, on the reasoning that the
+	extent is what an observer counts and padding the arms removes it. That
+	is true and it is one of two channels: reading an arm emits
+	`if (kind != 1u)`, so the accessor branches on the secret whatever the
+	arms are shaped like, and that is the bullet after the one about layout.
+
+	Both shapes are here rather than one because they even the extent by
+	different routes -- equal widths by accident of the schema, `[equalize]`
+	on purpose -- and a rule conditioned on the extent let both through.
+	"""
+	for arms, attr in (("u8", ""), ("u16", "[equalize]")):
+		rendered = failure(VARIANT % (arms, attr))
+		assert "selects an arm using the secret field `kind`" in rendered
+		assert "branches on secret material" in rendered
+		assert "the arms differ in width" not in rendered, \
+			"the extent is even here, so only the branch may be cited"
+	assert "not the remedy here" in failure(VARIANT % ("u16", "[equalize]")), \
+		"and `[equalize]` must be named as a non-remedy, since it is the " \
+		"first thing an author reaching for it will try"
+
+
+def test_equal_width_arms_do_not_invalidate_a_view() -> None:
+	"""The other half of the same discovery, which is not about secrets.
+
+	`arm_sizes` pairs each size with its arm's name, so the obvious
+	`len(set(arm_sizes)) > 1` counts ARMS -- true of every variant worth
+	writing. `invalidating_members` reached for it and so told the
+	generators that writing any discriminant shifts the bytes after it.
+
+	`icmp_message` is the committed example: six arms, every one 32 bits,
+	and its header told callers to re-acquire their views after writing
+	`type` while its setter bumped the generation. Nothing moves.
+	"""
+	built = build("""struct A { u8 a; }
+	struct G { u8 g; }
+	struct S {
+		u8 kind;
+		variant body switch (kind) {
+			case 1:  A as_a;
+			case 2:  G as_g;
+			default: error;
+		}
+	}
+	""")
+	placement = {entry.placement.name: entry.placement
+	             for entry in built.structs["S"].entries}["body"]
+	assert len(placement.arm_sizes) == 2, "two arms, so the pair-set says 2"
+	assert placement.arm_widths == {8}, "one width, which is the question"
+	assert traverse.invalidating_members(built.structs)["S"] == set()
+
+
+LAYOUT_DECIDING = """struct A { u8 a; }
+struct B { u16 b; }
+struct S {
+	u8 n;
+	u8 m;
+	u8 off;
+	u8 kind;
+	u8 named[n];
+	u8 arith[m * 2];
+	u8 spot[1] at off;
+	variant body switch (kind) {
+		case 1:  A as_a;
+		case 2:  B as_b;
+		default: error;
+	}
+}
+"""
+
+
+def test_every_layout_deciding_field_is_refused_as_a_secret() -> None:
+	"""The population, rather than the four cases above one at a time.
+
+	`traverse.invalidating_members` already answers "which fields decide
+	where later members sit", because the differential needs to know which
+	setters shift the bytes underneath a view. That is 14.6's question read
+	from the other end -- a field a writer can move the layout with is a
+	field an observer can read the layout for -- so every driver it names
+	must be refused as a secret.
+
+	Containment rather than equality, and the gap is one case: a variant
+	whose arms are all one width moves nothing, so it is not a driver, and
+	it is refused anyway because reading an arm branches on the
+	discriminant. The secret rule is the wider of the two and this asserts
+	the direction that has to hold.
+
+	Deriving the list here rather than typing it is what keeps this honest:
+	a fifth source of layout dependence added to the differential arrives in
+	this test as a fifth driver, and fails it until the secret check learns
+	about it too. A list typed out would have gone on passing -- which is
+	how three of the first four came to be missing.
+	"""
+	drivers = traverse.invalidating_members(build(LAYOUT_DECIDING).structs)["S"]
+	assert drivers == {"n", "m", "off", "kind"}, \
+		"the schema no longer exercises every source; the sweep below is " \
+		"only as wide as this set"
+
+	for driver in sorted(drivers):
+		marked = LAYOUT_DECIDING.replace(f"\tu8 {driver};",
+		                                 f"\tu8 {driver} [secret];")
+		assert marked != LAYOUT_DECIDING, f"no field `{driver}` to mark"
+		rendered = failure(marked)
+		assert f"the secret field `{driver}`" in rendered
+		assert "layout depends on secret material" in rendered
 
 
 # -- strictness (14.5) ------------------------------------------------------

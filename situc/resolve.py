@@ -10,6 +10,8 @@ the lattice: a new construct contributes context, and the table gains a row.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -377,9 +379,25 @@ def _check_secret_is_not_layout_bearing(decl: ast.StructDecl,
 		layout: StructLayout) -> None:
 	"""A `[secret]` field may not decide where anything is (section 14.6).
 
-	A length or a discriminant read from secret material leaks it: the extent of
-	the message is visible to anyone counting bytes, whatever the encryption
-	does. This is a side channel the schema can rule out entirely, so it does.
+	A length, an offset or a discriminant read from secret material leaks it:
+	the extent of the message and the bytes an accessor touches are both
+	visible without breaking anything, whatever the encryption does. This is a
+	side channel the schema can rule out entirely, so it does.
+
+	The four sources are the four `traverse.invalidating_members` reads, and
+	that is not a coincidence worth leaving implicit: a field a writer can move
+	the layout with is a field an observer can read the layout for. The two
+	rules ask one question from opposite ends, so a fifth source of layout
+	dependence has to arrive in both -- which `test_crypto` asserts by deriving
+	its sweep from that function rather than from a list.
+
+	The refusal is wider than that set by one case, and deliberately.
+	`invalidating_members` asks what MOVES, so a variant whose arms are all
+	one width does not qualify -- nothing shifts. Reading such an arm still
+	compares the discriminant, and a branch on secret material is the second
+	thing 14.6 forbids. `[equalize]` evens the extent and leaves the branch,
+	so it is not a remedy for a secret discriminant; nothing is, and the
+	diagnostic says so rather than suggesting it.
 	"""
 	secret = {placement.name for placement in layout.placements
 	          if _has_attr(placement.attrs, "secret")}
@@ -387,23 +405,92 @@ def _check_secret_is_not_layout_bearing(decl: ast.StructDecl,
 		return
 
 	for placement in layout.placements:
+		# A NAMED length, which is all this used to look at. `sized_by`
+		# holds a path and holds nothing for `u8 body[n * 2]`, so the
+		# arithmetic form -- the commonest shape there is -- walked past a
+		# check whose whole purpose it was: `size=1..511`, the extent
+		# varying with the secret, and no complaint (26.315).
 		driver = placement.sized_by
-		if driver is None or driver.partition(".")[0] not in secret:
-			continue
+		if driver is not None and driver.partition(".")[0] in secret:
+			_refuse_secret_layout(placement, driver, "takes its size from",
+			                      "the encoded length is visible to anyone "
+			                      "counting bytes, so a secret-dependent "
+			                      "length leaks the secret however strong "
+			                      "the cipher is",
+			                      f"size this member from a public field")
 
-		raise error(
-			f"`{placement.name}` takes its size from the secret field "
-			f"`{driver}`",
-			placement.span,
-			label = "layout depends on secret material",
-			notes = [
-				"the encoded length is visible to anyone counting bytes, so a "
-				"secret-dependent length leaks the secret however strong the "
-				"cipher is",
-				f"drop `[secret]` from `{driver}` if it is not really secret, or "
-				"size this member from a public field",
-			],
-		)
+		# The same question where the answer is arithmetic rather than a
+		# name, and where it is an OFFSET rather than a length: `at off`
+		# puts the member wherever a secret says, so which bytes are
+		# touched depends on it -- the data-dependent access pattern 14.6
+		# forbids in the same breath as the length.
+		for source, how, why, remedy in (
+				(placement.size_expr, "computes its size from",
+				 "the encoded length is visible to anyone counting bytes, "
+				 "so a secret-dependent length leaks the secret however "
+				 "strong the cipher is",
+				 "size this member from public fields only"),
+				(placement.located, "is placed at an offset from",
+				 "which bytes an accessor touches is visible to anyone "
+				 "watching memory, so a secret-dependent offset leaks the "
+				 "secret without any length changing",
+				 "place this member at a public offset")):
+			if source is None:
+				continue
+			for name in secret:
+				if _names_a_field(source, name):
+					_refuse_secret_layout(placement, name, how, why, remedy)
+
+		# A DISCRIMINANT, which this function's own docstring has always
+		# named -- "a length or a discriminant read from secret material
+		# leaks it" -- while only the length was checked.
+		#
+		# Unconditionally, and the first version of this was not: it asked
+		# whether the arms differ in width, on the reasoning that
+		# `[equalize]` pads them to one, the extent stops depending on the
+		# choice, and there is nothing left to count. That is true and it
+		# is half the rule. Reading an arm emits
+		#
+		#	if (situ_d_kind_get(view) != 1u) return SITU_ERR_ARM;
+		#
+		# so the accessor BRANCHES on the secret whatever the widths are --
+		# the second thing 14.6 forbids, in the bullet after the one about
+		# layout, and no attribute removes it. `[equalize]` fixes the
+		# extent and cannot fix this.
+		if placement.discriminant in secret:
+			_refuse_secret_layout(
+				placement, placement.discriminant, "selects an arm using",
+				"reading an arm compares the discriminant, so the accessor "
+				"branches on secret material -- a timing and cache channel "
+				"whatever the arms are shaped like"
+				+ (", and the arms differ in width, so the message's extent "
+				   "says which was chosen as well"
+				   if len(placement.arm_widths) > 1 else ""),
+				"select the arm from a public field; `[equalize]` evens the "
+				"extent but leaves the branch, so it is not the remedy here")
+
+
+def _refuse_secret_layout(placement: Placement, driver: str, how: str,
+		why: str, remedy: str) -> None:
+	raise error(
+		f"`{placement.name}` {how} the secret field `{driver}`",
+		placement.span,
+		label = "layout depends on secret material",
+		notes = [why, f"drop `[secret]` from `{driver}` if it is not really "
+		              f"secret, or {remedy}"],
+	)
+
+
+def _names_a_field(source: str, local: str) -> bool:
+	"""Whether an expression's source reads the field called `local`.
+
+	Whole identifiers, so `n` does not match `nlattr`. The same match the
+	backends make when they substitute a field into an emitted length, which
+	is what keeps this check and the code it protects talking about the same
+	set of fields.
+	"""
+	return re.search(rf"(?<![A-Za-z0-9_.]){re.escape(local)}"
+	                 rf"(?![A-Za-z0-9_])", source) is not None
 
 
 def _check_required_alignment(decl: ast.StructDecl, layout: StructLayout) -> None:

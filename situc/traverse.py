@@ -703,7 +703,7 @@ def invalidating_members(
 			sources = [other.size_expr, other.located]
 			named   = ({other.sized_by} if other.sized_by
 			           and other.sized_by != "remaining" else set())
-			if other.discriminant and len(set(other.arm_sizes or ())) > 1:
+			if other.discriminant and len(other.arm_widths) > 1:
 				named.add(other.discriminant)
 
 			for source in sources:
