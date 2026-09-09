@@ -25451,6 +25451,63 @@ stopped being unreachable, so the gate that runs on every build was silent
 about exactly the new code. It feeds 256 bytes now, clearing every floor in
 the tree with room to spare.
 
+### 26.319 Two skips in a row, each right on its own
+
+The four-way differential is this tree's main cross-backend evidence, and
+one interior was compared by nothing: the one inside
+`[allow_unverified_read]`.
+
+Two `continue`s, neither wrong where it was written. The gate probe returns
+early on a waived region -- there is no gate type and no `_open` to name,
+so a driver naming both did not compile. The test below it skips anything
+carrying a `sealed_by`, on the stated grounds that
+
+    # A member *inside* a sealed region is reached through the gate, which
+    # the probe above opens; the interior is asked about there.
+
+true of a gate and false of a waiver, because for a waiver the branch
+above asked nothing. **The reason was correct in the case it was
+written for and became a justification for silence in the neighbouring
+one**, which is this session's recurring shape and the reason `evidence.md`
+says to ask what a check discriminates rather than whether it is a good
+check.
+
+It matters more here than for an ordinary member. `[allow_unverified_read]`
+is the one construct in the language whose whole purpose is to give up a
+guarantee, so its interior is read on a plain view by four separately
+written backends -- and was checked against nothing.
+
+**The obvious fix was in the wrong place, worth recording because it
+looked right and was a no-op.** Relaxing the second skip to `if
+placement.sealed_by and not placement.unverified_ok` reads as the whole
+answer and changes nothing: `own_entries` yields no interior members at
+all, so that test never sees one. The same walk gap as 26.318, met from the
+other side and by the same author a day later. It was reverted; the fix
+belongs in the branch that does run.
+
+Both paths now share one definition of what the interior IS.
+`_interior_scalars` returns the placements and `_gated` maps them to the
+names they carry on a gate, so the gated and waived probes cannot drift
+about which members count -- a second copy of those five filters is exactly
+how this file's own docstring says a question gets answered differently in
+two places.
+
+**Verified both ways, because a passing differential proves nothing until
+the probe is known to run.** The line is printed by all four in 151 of 200
+draws and they agree every time. With one backend deliberately reporting
+the value one too high, the harness catches it in 40 of 60 draws and names
+it:
+
+    -body_seq 12851
+    +body_seq 12852
+
+**Still open, and already written down:** `_gated`'s docstring says a byte
+run inside a gate "is spelled four ways that have not been checked
+against each other yet", and that is still true. Given that four separately
+written erasers disagreed about a data-sized span in 26.316, a byte run
+behind a gate is the next place to look rather than a limitation to
+leave recorded.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

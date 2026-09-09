@@ -53,6 +53,9 @@ import pytest
 
 from every_schema import SCHEMAS, ids
 from fourway import COMPLETE, answers, build, draw
+from situc.layout import solve
+from situc.parser import parse_text
+from situc.resolve import resolve
 
 #: Buffers per schema. Enough to reach past the acquiring bounds check on the
 #: bigger frames, few enough that four processes per buffer stay quick.
@@ -87,3 +90,61 @@ def test_the_four_agree_about_bytes_nobody_meant_to_send(
 	# A run where every buffer was refused at acquisition would pass while
 	# testing nothing, which is the failure mode of a random-input test.
 	assert reached >= 1, f"{schema.name}: no buffer reached an accessor"
+
+WAIVED = """target buffer;
+endian big;
+
+codec sealing_aead {
+	length_preserving;
+	seekable;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl sealing_aead extern "my_sealing_aead";
+
+struct waived {
+	u8  hop;
+	sealed body(sealing_aead) [allow_unverified_read] {
+		u16  seq;
+	}
+	tag u8  mac[16] covers(body);
+}
+"""
+
+
+def test_a_waived_interior_is_compared() -> None:
+	"""`[allow_unverified_read]` had the one interior nobody compared.
+
+	Two skips in a row, each right on its own. The gate probe returns early
+	on a waived region -- there is no gate type and no `_open` to name -- and
+	the test below it skips anything with a `sealed_by`, on the stated
+	grounds that "the interior is asked about there". For a gate that is
+	true. For a waiver the branch above asked nothing, so the reason was
+	false in exactly the case it was being applied to, and the interior fell
+	out of the comparison entirely.
+
+	Which matters more here than for an ordinary member: this is the one
+	construct in the language whose purpose is to give up a guarantee, so its
+	interior is read on a plain view by four separately-written backends and
+	was checked against nothing.
+	"""
+	from situc.codegen import differ
+
+	schema   = parse_text(WAIVED)
+	resolved = resolve(schema, solve(schema))
+	asked    = differ.asks(
+		resolved.structs["waived"],
+		{struct.name for struct in differ.structs_of(resolved)})
+
+	locals_ = [ask.local for ask in asked]
+	assert "body_seq" in locals_, \
+		f"the waived interior is not compared; asked about {locals_}"
+
+	# And on the plain view, not through a gate that does not exist.
+	seq = next(ask for ask in asked if ask.local == "body_seq")
+	assert seq.probe is differ.Probe.SCALAR
+	assert not any(ask.probe is differ.Probe.SEALED for ask in asked), \
+		"a waived region has no gate to open"

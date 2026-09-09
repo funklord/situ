@@ -233,6 +233,22 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# the driver named both and did not compile, for the first schema
 			# to write the waiver down.
 			if placement.unverified_ok:
+				# ...and then the interior is read on the plain view, like
+				# any other member. It was skipped here and skipped again by
+				# the `sealed_by` test below, whose reason -- "the interior
+				# is asked about there" -- is true of a gate and false of a
+				# waiver, because this branch asked nothing. So the one
+				# construct in the language whose purpose is to give up a
+				# guarantee had the one interior no backend was ever
+				# compared against another on (26.319).
+				for inside in _interior_scalars(struct, placement):
+					scalar = inside.scalar
+					if scalar is None:
+						continue
+					found.append(Ask(
+						Probe.SCALAR,
+						c_name(local_name(struct, inside)),
+						bits=max(8, scalar.bits), signed=scalar.signed))
 				continue
 			found.append(Ask(Probe.SEALED, local, None, 0, False,
 			                 _gated(struct, placement)))
@@ -648,14 +664,21 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 	return found
 
 
-def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
-	"""Plain scalars inside a sealed region, in declaration order.
+def _interior_scalars(struct: ResolvedStruct,
+		region: Placement) -> list[Placement]:
+	"""Plain scalars inside a region, in declaration order.
 
 	Only the scalars: a `[secret]` member has no debug accessor at all by
 	design (14.6), and a byte run inside a gate is spelled four ways that have
 	not been checked against each other yet.
+
+	Split out from `_gated` when a second caller appeared. A waived region has
+	no gate to read its interior through, and its members are read on the
+	plain view instead -- a different probe over the same set, which is
+	exactly the shape that ends with two lists disagreeing about what "the
+	interior" means if each has its own copy of these filters.
 	"""
-	found: list[str] = []
+	found: list[Placement] = []
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -683,14 +706,22 @@ def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
 		if any(attr.name == "secret" for attr in placement.attrs):
 			continue
 
-		# The name *inside* the gate, which is the member's local name with
-		# the region's stripped: `packet.sealed.inner_kind` is `inner_kind` on
-		# the gate in three backends, and `sealed_inner_kind` only in C, where
-		# there are no scopes to put it in. The caller spells that difference.
-		found.append(c_name(local_name(struct, placement))
-		             [len(c_name(region.name)) + 1:])
+		found.append(placement)
 
-	return tuple(found)
+	return found
+
+
+def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
+	"""Those scalars as the names they carry ON THE GATE.
+
+	Which is the member's local name with the region's stripped:
+	`packet.sealed.inner_kind` is `inner_kind` on the gate in three backends,
+	and `sealed_inner_kind` only in C, where there are no scopes to put it in.
+	The caller spells that difference.
+	"""
+	return tuple(c_name(local_name(struct, placement))
+	             [len(c_name(region.name)) + 1:]
+	             for placement in _interior_scalars(struct, region))
 
 
 #: Scalar type names that are one integer in every backend. An enum is not, and
