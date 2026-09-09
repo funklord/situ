@@ -19,7 +19,7 @@ from collections.abc import Mapping
 
 from situc import ast, relation
 from situc.codegen.c.names import c_name, ident, macro
-from situc.layout import Placement
+from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	data_sized, has_computable_extent, indexed_elements, own_entries,
@@ -260,6 +260,168 @@ def _variable_preamble(struct: ResolvedStruct, prefix: str) -> list[str]:
 	]
 
 
+#: Emitted where a sealed region holds a member in a shape this does not
+#: know how to reach. Nothing in the corpus produces it, and a test asserts
+#: that -- so a new shape appearing inside a region is a failing test rather
+#: than a member that quietly stops being fuzzed, which is how the erasers
+#: came to be missing for as long as they were.
+UNREACHED = "UNREACHED interior shape"
+
+
+def _interior_member(struct: ResolvedStruct, placement: Placement,
+		prefix: str, on: str, tab: str) -> list[str]:
+	"""One member inside a region, read through `on`.
+
+	`on` is the gate where the region has one and the view where it does not,
+	which is the only difference between the two cases: a gate is a struct
+	holding the same view, so every accessor below is the same accessor with
+	a different first argument.
+
+	The four shapes are the corpus's, enumerated by reading the emitted
+	header for all ten interior members rather than inferred from the
+	placement -- a `u16` run has `_count` and `_get(gate, i)` where a `u8`
+	run has `_len` and `_ptr`, and guessing that wrong is a call to a
+	function the header does not declare.
+	"""
+	local  = c_name(placement.path[len(struct.name) + 1 :])
+	scalar = placement.scalar
+
+	if scalar is None:
+		return [f"{tab}/* {UNREACHED}: {placement.path} (no scalar) */"]
+
+	# A constant-count byte array: one pointer, and it is NULL when the
+	# offset the message chose puts it outside the frame. Dereferencing it
+	# anyway is what `_reads` records costing it a crash at -O1.
+	if placement.array_count is not None and scalar.bits == BITS_PER_BYTE:
+		ptr = ident(prefix, struct.name, local, "ptr")
+		return [
+			f"{tab}{{",
+			f"{tab}\tconst uint8_t *reached = {ptr}({on});",
+			"",
+			f"{tab}\tif (reached != NULL) {{",
+			f"{tab}\t\tsitu_fuzz_sink((uint64_t)*reached);",
+			f"{tab}\t}}",
+			f"{tab}}}",
+		]
+
+	if data_sized(placement) and scalar.bits == BITS_PER_BYTE:
+		length = ident(prefix, struct.name, local, "len")
+		ptr    = ident(prefix, struct.name, local, "ptr")
+		return [
+			f"{tab}{{",
+			f"{tab}\tconst uint32_t n = {length}({on});",
+			"",
+			f"{tab}\tsitu_fuzz_sink((uint64_t)n);",
+			f"{tab}\tif (n > 0u) {{",
+			f"{tab}\t\tsitu_fuzz_sink((uint64_t){ptr}({on})[n - 1u]);",
+			f"{tab}\t}}",
+			f"{tab}}}",
+		]
+
+	# A run of wider scalars: no pointer, because the elements are not
+	# bytes. `_count` is how many, `_get` is one of them.
+	if data_sized(placement):
+		count = ident(prefix, struct.name, local, "count")
+		get   = ident(prefix, struct.name, local, "get")
+		return [
+			f"{tab}{{",
+			f"{tab}\tconst uint32_t n = {count}({on});",
+			f"{tab}\tuint32_t i;",
+			"",
+			f"{tab}\tsitu_fuzz_sink((uint64_t)n);",
+			f"{tab}\tfor (i = 0u; i < n; i++) {{",
+			f"{tab}\t\tsitu_fuzz_sink((uint64_t){get}({on}, i));",
+			f"{tab}\t}}",
+			f"{tab}}}",
+		]
+
+	if placement.array_count is not None:
+		count = macro(prefix, struct.name, local, "COUNT")
+		get   = ident(prefix, struct.name, local, "get")
+		return [
+			f"{tab}{{",
+			f"{tab}\tuint32_t i;",
+			"",
+			f"{tab}\tfor (i = 0u; i < {count}; i++) {{",
+			f"{tab}\t\tsitu_fuzz_sink((uint64_t){get}({on}, i));",
+			f"{tab}\t}}",
+			f"{tab}}}",
+		]
+
+	return [f"{tab}situ_fuzz_sink((uint64_t)"
+	        f"{ident(prefix, struct.name, local, 'get')}({on}));"]
+
+
+def _sealed_read(struct: ResolvedStruct, region: Placement,
+		prefix: str) -> list[str]:
+	"""Open a sealed region and read what it protects.
+
+	Nothing reached these before. The interior members are not in
+	`own_entries` -- they belong to the region, not to the struct -- so the
+	walk never saw them, and the region itself fell through to "no sub-view
+	to reach through". Measured across the corpus: 13 members behind a
+	verified gate, and `keystore`'s `secret_key` appeared nowhere in its own
+	harness.
+
+	**`verified` is 1, and that is the decision this makes.** The gate exists
+	to refuse an unverified interior, and the generated `_open` does exactly
+	that and nothing else -- the tag is never computed here, so passing 0
+	only exercises a two-line refusal that `test_packet.c` already covers by
+	hand. What is worth fuzzing is the parsing on the far side, which is
+	reachable no other way and which runs on bytes an attacker chose whenever
+	they hold a key or a forgery succeeds. Passing 1 is not a claim that the
+	tag verified; it is the harness declining to test the gate in order to
+	test what the gate protects.
+	"""
+	interiors = [entry.placement for entry in struct.entries
+	             if entry.placement.sealed_by == region.sealed_by
+	             and entry.placement.path != region.path
+	             and entry.placement.kind != "element"]
+	if not interiors:
+		return []
+
+	local   = c_name(region.path[len(struct.name) + 1 :])
+	secrets = [p for p in interiors
+	           if any(attr.name == "secret" for attr in p.attrs)]
+
+	if region.unverified_ok:
+		# `[unverified_ok]`: the interior is readable without a gate, so its
+		# accessors take the view like any other member's.
+		lines = [f"\t/* {region.path}: readable unverified, so no gate. */"]
+		for placement in interiors:
+			lines.extend(_interior_member(struct, placement, prefix,
+			                              "view", "\t"))
+		for placement in secrets:
+			lines.append(f"\t{ident(prefix, struct.name, c_name(placement.path[len(struct.name) + 1 :]), 'zeroize')}(view);")
+		return lines
+
+	gate_type = ident(prefix, struct.name, local, "t")
+	opener    = ident(prefix, struct.name, local, "open")
+	lines = [
+		"\t{",
+		f"\t\t{gate_type} gate;",
+		"",
+		"\t\t/* Verified, because the gate is not the subject: `_open`",
+		"\t\t * checks the flag and copies the view, and refusing is two",
+		"\t\t * lines the hand-written tests already cover. The parsing on",
+		"\t\t * the far side is reachable no other way, and it runs on",
+		"\t\t * bytes somebody chose. */",
+		f"\t\tif ({opener}(view, 1, &gate) == SITU_OK) {{",
+	]
+	for placement in interiors:
+		lines.extend(_interior_member(struct, placement, prefix,
+		                              "gate", "\t\t\t"))
+	if secrets:
+		lines.append("")
+		lines.append("\t\t\t/* Last, because these write. */")
+		for placement in secrets:
+			member = c_name(placement.path[len(struct.name) + 1 :])
+			lines.append(
+				f"\t\t\t{ident(prefix, struct.name, member, 'zeroize')}(gate);")
+	lines.extend(["\t\t}", "\t}"])
+	return lines
+
+
 def _erases(struct: ResolvedStruct, prefix: str) -> list[str]:
 	"""Call every `[secret]` member's eraser, last.
 
@@ -358,6 +520,10 @@ def _reads(struct: ResolvedStruct, prefix: str,
 				     or data_sized(placement)):
 			lines.extend(_variable_read(frozenset(resolved.structs), struct,
 			                            placement, local, prefix))
+			continue
+
+		if placement.kind == "sealed":
+			lines.extend(_sealed_read(struct, placement, prefix))
 			continue
 
 		if placement.kind == "marker":

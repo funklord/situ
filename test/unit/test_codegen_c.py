@@ -1934,24 +1934,89 @@ def test_the_harness_erases_every_reachable_secret() -> None:
 		"the eraser must run after the reads, not before them"
 
 
-def test_the_harness_leaves_a_gated_secret_alone() -> None:
-	"""A sealed interior takes a gate this harness never opens, so its
-	accessors are not callable from here and an eraser call would not
-	compile.
+SEALED_SECRET = """struct S {
+	u8  hop;
+	sealed(aead) { u8 key[8] [secret]; u16 seq; }
+	tag u8[16];
+}
+"""
 
-	Which is a wider gap than the erasers were and is recorded rather than
-	closed: 13 members across five schemas sit behind a verified gate, and
-	they are every `[secret]` in the tree bar one -- so the bytes a fuzzer
-	would most like to reach are the ones it cannot.
+
+def test_the_harness_opens_a_gate_and_reads_the_interior() -> None:
+	"""Nothing reached a sealed interior before.
+
+	The interior members are not in `own_entries` -- they belong to the
+	region, not to the struct -- so the walk never saw them, and the region
+	itself fell through to "no sub-view to reach through". 13 members across
+	four schemas sat behind a gate, and `keystore`'s `secret_key` appeared
+	nowhere in its own harness.
 	"""
+	text = fuzz_source(SEALED_SECRET, preamble=CRYPTO)
+
+	assert "situ_S_sealed_t gate;" in text
+	assert "situ_S_sealed_open(view, 1, &gate) == SITU_OK" in text
+	assert "situ_S_sealed_seq_get(gate)" in text
+	assert "situ_S_sealed_key_ptr(gate)" in text
+
+
+def test_the_harness_erases_a_gated_secret_through_the_gate() -> None:
+	"""And after the reads, as the ungated ones are.
+
+	The eraser takes the gate rather than the view, so this could not be
+	done from outside the block that opens it -- which is why the previous
+	pass skipped gated secrets rather than erasing them wrongly.
+	"""
+	text = fuzz_source(SEALED_SECRET, preamble=CRYPTO)
+
+	assert "situ_S_sealed_key_zeroize(gate);" in text
+	assert text.index("situ_S_sealed_key_zeroize") \
+		> text.index("situ_S_sealed_seq_get"), \
+		"the eraser must run after the reads"
+
+
+def test_the_harness_reads_an_unverified_interior_without_a_gate() -> None:
+	"""`[unverified_ok]` means the accessors take the view, so no gate is
+	opened and none exists to open. Its interior was equally unread, for the
+	same reason and not for the gate's."""
 	text = fuzz_source("""struct S {
 	u8  hop;
-	sealed(aead) { u8 key[8] [secret]; }
-	tag u8[16];
+	sealed body(aead) [allow_unverified_read] { u16 seq; }
+	tag u8 mac[16] covers(body);
 }
 """, preamble=CRYPTO)
 
-	assert "zeroize" not in text
+	assert "situ_S_body_seq_get(view)" in text
+	assert "_open(view, 1, &gate)" not in text, "there is no gate to open"
+	assert "situ_S_body_t gate;" not in text
+
+
+def test_no_schema_has_an_interior_shape_the_harness_cannot_reach() -> None:
+	"""The population, rather than the four shapes I happened to find.
+
+	The interior reader handles a plain scalar, a constant byte array, a
+	byte run and a run of wider scalars, and those four were enumerated by
+	reading the emitted header for all ten interior members rather than
+	guessed from the placement -- a `u16` run has `_count` and `_get(gate,
+	i)` where a `u8` run has `_len` and `_ptr`, and calling the wrong one is
+	a function the header does not declare.
+
+	A fifth shape appearing inside a region emits a marked comment instead
+	of a read, and this fails on it. Without that the member would simply
+	stop being fuzzed, silently, which is how the erasers went missing.
+	"""
+	from situc.codegen.c import fuzz as fuzz_module
+
+	unreached = []
+	for path in SCHEMAS:
+		source   = path.read_text(encoding="utf-8")
+		schema   = parse_text(source)
+		resolved = resolve(schema, solve(schema))
+		text     = fuzz_module.generate(schema, resolved, path.stem)
+		if fuzz_module.UNREACHED in text:
+			unreached.append(path.name)
+
+	assert not unreached, \
+		f"an interior shape the harness cannot read, in: {unreached}"
 
 
 def test_the_harness_gives_a_variable_struct_the_fuzzers_own_length() -> None:

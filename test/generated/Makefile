@@ -356,10 +356,19 @@ test: all
 	@# The fuzz harnesses get a handful of inputs each, enough to catch a
 	@# harness that no longer runs. Fuzzing them properly is `make fuzz`,
 	@# which needs a compiler with libFuzzer and takes as long as it is told.
+	@#
+	@# 256 bytes rather than 32, because a harness returns at its struct's
+	@# SIZE_MIN and the dispatcher spends one byte choosing the struct: at 32
+	@# it reached 168 of the 181 structs in this tree and returned
+	@# immediately for the other 13, `cpio_entry` at 111 and `keystore` at 87
+	@# among them. Those 13 include both schemas whose sealed interiors this
+	@# harness now opens, so the smoke test was silent about exactly the code
+	@# that had just stopped being unreachable. An input below the floor is
+	@# not a weak test of a struct, it is no test of it.
 	@for t in $(FUZZ_BINS); do \
 		echo "--- $$t (smoke)"; \
 		for i in 0 1 2 3 4 5 6 7; do \
-			head -c 32 /dev/urandom | { case "$$t" in /*) "$$t";; *) "./$$t";; esac; } \
+			head -c 256 /dev/urandom | { case "$$t" in /*) "$$t";; *) "./$$t";; esac; } \
 				|| exit 1; \
 		done; \
 	done

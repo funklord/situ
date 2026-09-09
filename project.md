@@ -25388,6 +25388,69 @@ Opening a gate means passing `verified` for a tag nothing checked, which
 is a decision about what the harness is entitled to assume rather than a
 gap to close in passing.
 
+### 26.318 Opening the gates, and a sweep that measured nothing
+
+26.317 left 13 members behind a verified gate the fuzz harness never
+opened, and the copyright holder settled it: open them.
+
+**Why they were unreachable is not the gate.** A region's interior members
+are not in `own_entries` -- they belong to the region, not to the struct --
+so the walk never saw them, and the region itself fell through to "no
+sub-view to reach through". `[allow_unverified_read]` interiors, which need
+no gate at all, were equally unread: `unverified.body.seq` in `edges` takes
+a plain view and nothing called it either. The gate was the visible half of
+a gap that was really about the walk.
+
+**`verified` is 1, and that is the decision.** The generated `_open` checks
+the flag, copies the view and does nothing else -- no tag is computed there
+-- so passing 0 exercises a two-line refusal that `test_packet.c` already
+covers by hand. What is worth fuzzing is the parsing on the far side, which
+is reachable no other way and runs on bytes an attacker chose whenever they
+hold a key or a forgery lands. Passing 1 is not a claim that a tag
+verified; it is the harness declining to test the gate so as to test what
+the gate protects.
+
+**The four interior shapes were read out of the header, not inferred.**
+
+    plain scalar            _get(gate)
+    constant byte array     _ptr(gate), NULL where the offset escapes
+    byte run                _len(gate) + _ptr(gate)
+    run of wider scalars    _count(gate) + _get(gate, i)
+
+The last is why guessing would not have done: `sealed_run.body.vals` is a
+`u16` run and has no `_ptr` at all, so the byte-run spelling is a call to a
+function the header does not declare. A fifth shape emits a marked comment
+instead of a read, and a test over every schema fails on it -- without that
+the member would simply stop being fuzzed, which is how the erasers went
+missing.
+
+**Then the first sweep measured nothing, and said so only because the
+control was run.** 12,000 random 64-byte inputs across the four schemas,
+zero failures, and it looked like a result. `SITU_KEYSTORE_SIZE_MIN` is 87
+and the dispatcher spends a byte choosing the struct, so every input
+returned at the floor check: the sealed block was entered **0 times in
+400**. Instrumented at 256 bytes it is entered 129 times in 400, the gate
+opens every time, and the deliberate sabotage -- reading one past the
+clamped length -- trips ASan on 138 of 400.
+
+**An input below the floor is not a weak test of a struct, it is no test of
+it**, and nothing in the output distinguishes the two. The clean sweep and
+the unreachable one print the same thing.
+
+The measurement that stands: 2,000 inputs each at 512 bytes, under ASan and
+UBSan, across `keystore`, `packet`, `dtls` and `edges`: 8,000 inputs, zero
+failures, with a control proven to fire at that size. The sealed interiors
+are sound under random input.
+
+**And the same floor was under the standing smoke test.** `make test-c`
+feeds each harness eight 32-byte inputs, which reaches 168 of this tree's
+181 structs and returns at once for the other 13 -- `cpio_entry` at 111,
+`cpio_header` at 110, `sqlite_file_header` at 100, `keystore` at 87,
+`packet` at 62. Those 13 include both schemas whose interiors had just
+stopped being unreachable, so the gate that runs on every build was silent
+about exactly the new code. It feeds 256 bytes now, clearing every floor in
+the tree with room to spare.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
