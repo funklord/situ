@@ -25729,6 +25729,29 @@ Verified against a clean tree rather than assumed: `make fuzz` with a fresh
 `BUILD_ROOT` builds and runs all 37 from nothing, needs no cmocka and no
 archive, and puts its corpus where the cache step looks for it.
 
+**AND THE NEXT RUN FAILED ON A SKIP LINE OWED BY THIS SESSION.** The commit
+that paid the five-day-old line introduced another one the same day:
+`test_backends_refuse_the_same_members.py` skips a schema whose structs are
+all registers or have no floor, which is as much a property of the schema
+as the other eight, and no line was added for it. 44 of 48 accounted, four
+not, red again.
+
+**Which is the entry's own point arriving at its author.** The rule is not
+"remember to update the workflow when CI goes red"; it is that a skip and
+its line are one change. Written a commit apart they are two, and the
+second is owed from the moment the first lands -- for five days last time
+and for one push this time, the difference being only that somebody was
+watching.
+
+**The bound was missing too, and that is the same shape.** `make fuzz`
+stops itself, so the job needs no timeout for the case that works; it needs
+one for the case that does not, where a harness hangs inside a single input
+and holds a runner for the six hours GitHub allows by default.
+`timeout-minutes: 30`, against twelve minutes of fuzzing plus the builds.
+The `check` job has no bound either and is left alone: it is not this
+change's, and a job that has run in nine minutes for months is a different
+judgement from one being added today.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
