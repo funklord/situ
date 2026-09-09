@@ -88,8 +88,8 @@ def test_one_file_may_describe_layers_that_disagree() -> None:
 	"""
 	generated = header(POSITIONAL)
 
-	assert "situ_get_be16(view.base + 0u)" in generated
-	assert "situ_get_le16(view.base + 0u)" in generated
+	assert "situ_get_be16(situ_base(view) + 0u)" in generated
+	assert "situ_get_le16(situ_base(view) + 0u)" in generated
 
 
 def test_a_struct_attribute_still_overrides_the_directive_in_force() -> None:

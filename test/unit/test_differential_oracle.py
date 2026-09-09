@@ -1075,6 +1075,9 @@ UNORACLED = {
 	"header":    "as edges: a schema written to exercise this compiler",
 	"lenient":   "as edges",
 	"padded":    "as edges",
+	"native":    "as edges, and doubly so: `endian native` means the byte "
+	             "order of the machine reading it, so there is no wire "
+	             "format for anybody else to have implemented",
 	"image":     "situ's own packed image (0026). The only second reader is "
 	             "walker/c, which is also ours -- so it finds disagreement "
 	             "and not shared error, which is the distinction this file "

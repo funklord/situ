@@ -79,7 +79,7 @@ def test_a_contiguous_cover_reaches_the_codec_as_one_span() -> None:
 	pieces, not the number of names written down."""
 	out = emit_c(ADJACENT)
 	assert "situ_span_t spans[1];" in out
-	assert "spans[0].base = view.base + 0u;" in out
+	assert "spans[0].base = situ_base(view) + 0u;" in out
 	assert "spans[0].len  = 1u + situ_adj_pn_len(view);" in out
 	assert "app_hp_mask_decode_spans(spans, 1u);" in out
 
@@ -100,9 +100,9 @@ def test_a_split_cover_emits_two_spans_and_skips_the_gap() -> None:
 	spans and the four bytes between them are untouched."""
 	out = emit_c(SPLIT)
 	assert "situ_span_t spans[2];" in out
-	assert "spans[0].base = view.base + 0u;" in out
+	assert "spans[0].base = situ_base(view) + 0u;" in out
 	assert "spans[0].len  = 1u;" in out
-	assert "spans[1].base = view.base + 5u;" in out
+	assert "spans[1].base = situ_base(view) + 5u;" in out
 	assert "app_hp_mask_decode_spans(spans, 2u);" in out
 
 
@@ -207,7 +207,7 @@ def test_a_coded_region_may_cover_an_authenticated_region() -> None:
 	"""`first` ends where `pn` begins, so the two are one run."""
 	out = emit_c(REGION_ADJACENT)
 	assert "situ_span_t spans[1];" in out
-	assert "spans[0].base = view.base + 0u;" in out
+	assert "spans[0].base = situ_base(view) + 0u;" in out
 
 
 def test_covering_a_region_across_a_gap_emits_two_spans_too() -> None:
