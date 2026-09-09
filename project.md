@@ -3241,8 +3241,19 @@ non-security schemas, but `strict` is the default and `lenient` sets
 
 - suppresses generated debug/print/format accessors entirely (the most common
   way key material reaches logs)
-- emits zeroization on scope exit or via an explicit `situ_zeroize()` (using a
-  compiler-barrier-protected memset, not plain `memset`)
+- emits an eraser -- `x_zeroize()` -- in every backend, and the guarantee it
+  carries is not the same in all four, so each says which it is. C and C++
+  write through a volatile pointer the compiler may not drop as a dead
+  store, which is `situ_zeroize` and is what "compiler-barrier-protected
+  memset, not plain `memset`" means. Rust's `situ_rt::zeroize` is the same
+  volatile write plus a `compiler_fence`, and takes `&mut self` so the
+  borrow checker refuses a live reader of the bytes being erased -- the
+  strongest of the four. Python clears the caller's buffer, which is the
+  only storage it owns, and cannot reach a copy the interpreter already
+  made; its docstring says so rather than leaving somebody to find out.
+
+  This said "emits zeroization" with no target named while one backend of
+  four did it (26.314)
 - forbids the field from being used in any expression that controls layout
   (no secret-dependent lengths or discriminants -- that is a length-based side
   channel)
@@ -25021,6 +25032,55 @@ this exactly -- and unlike `native.situ` one entry back, this one earns its
 place by holding a result rather than by having found a fix. The compiler
 refuses the byte form of the attribute by name, which is why no schema had
 stumbled into a `u16` run and why the six had never been asked to agree.
+
+### 26.314 `[secret]` erased in one backend of four
+
+Section 14 says `[secret]` "emits zeroization on scope exit or via an
+explicit `situ_zeroize()`", and said it without naming a target. Measured on
+`u8 key[16] [secret]`:
+
+    C       situ_s_key_zeroize          doc comment says it is secret
+    C++     nothing                     comment says "16 bytes, MemoryIdentical"
+    Rust    nothing                     no mention
+    Python  nothing                     docstring says "zero copy and WRITABLE"
+
+`situ_zeroize` existed only in the C runtime, and zeroization was tested
+exactly once anywhere -- in a hand-written C test. Nothing recorded the
+C-only scope, so a reader of section 14 generating Rust would believe their
+key material was erased.
+
+**The two backend-independent halves did work**, which is what made the gap
+survivable and hard to see: the secret-dependent-layout prohibition is a
+`wellformed` check and refuses `u8 body[n]` where `n` is secret, naming the
+length side channel; and none of the four emits a debug or format accessor
+for a secret field.
+
+**All four erase now, and the guarantee is not the same in all four**, so
+each says which it is rather than leaving one sentence to cover them:
+
+- **C and C++** go through `situ_zeroize` -- a volatile write the compiler
+  may not drop as a store to storage about to die. C++ links that runtime
+  already, so both C targets erase through the same code.
+- **Rust** gets `situ_rt::zeroize`: the same volatile write plus a
+  `compiler_fence`, and the method takes `&mut self`, so the borrow checker
+  refuses a live reader of the bytes being erased. That is the strongest of
+  the four and it is free.
+- **Python** clears the caller's buffer, which is the only storage it owns.
+  It cannot reach a copy the interpreter has already made -- `bytes(view.key)`
+  is one -- and the generated docstring says so. **A backend that erased
+  nothing while the document promised zeroization was the worse of the two
+  failures; one that erases what it can and names what it cannot is the
+  honest version.**
+
+Emitted from each backend's per-member choke point rather than beside each
+accessor: C++ writes a byte-run reader in five places and assembles a member
+in one, which is `situ_base`'s lesson from 26.307 met again. Rust's lands on
+the MUTABLE type, because erasing is a write and the read-only view holds a
+`&[u8]` -- the compiler said so, and it is also what buys the borrow.
+
+Demonstrated at runtime in all four, including that the byte after the
+secret is untouched, and in Python that a copy taken beforehand still holds
+the bytes -- which is the documented limit, shown rather than asserted.
 
 ## 27. Questions, and how they were settled
 

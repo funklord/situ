@@ -106,6 +106,9 @@ SUFFIXES = frozenset({
 	# call. A schema field named `x_trim_set` would collide with it exactly
 	# as `x_len` collides with a getter.
 	"trim_set",
+	# `[secret]` gets an eraser (26.314), so a schema field named
+	# `x_zeroize` would collide with it the same way.
+	"zeroize",
 })
 
 

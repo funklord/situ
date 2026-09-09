@@ -4607,7 +4607,50 @@ class Emitter:
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
 		lead = self._lead_methods(struct, entry.placement)
-		return bounds + lead + self._member_body(struct, entry)
+		return (bounds + lead + self._member_body(struct, entry)
+		        + self._secret_erase(struct, entry))
+
+	def _secret_erase(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A way to erase a `[secret]` member (section 14.6).
+
+		`project.md` says `[secret]` "emits zeroization on scope exit or via
+		an explicit `situ_zeroize()`", and said it without naming a target
+		while one backend of four did it. C++, Rust and Python emitted a
+		plain reader and no eraser, and their doc comments did not even say
+		the field was secret -- Python's said "zero copy and writable"
+		(26.314).
+
+		Through the C runtime's `situ_zeroize`, which this backend already
+		links: the erase goes via a volatile pointer, so it is observable
+		behaviour the compiler may not drop as a dead store, and both C
+		targets erase through exactly the same code.
+
+		Emitted here rather than beside each accessor because there are five
+		places this backend writes a byte-run reader and one place a member
+		is assembled -- the same reason `situ_base` went where the bytes are
+		rather than where an accessor begins.
+		"""
+		placement = entry.placement
+		if not any(attr.name == "secret" for attr in placement.attrs):
+			return []
+		if placement.offset_bits is None or placement.size_bits is None:
+			return []		# no constant span to erase
+
+		name  = bare_name(local_name(struct, placement))
+		at    = placement.offset_bits // BITS_PER_BYTE
+		width = placement.size_bits // BITS_PER_BYTE
+		return [
+			"",
+			f"\t/* `{placement.name}` is `[secret]`. No debug or format",
+			"\t * accessor is generated for it: that is the most common way",
+			"\t * key material reaches a log. This is how a caller erases it",
+			"\t * when done, through the same volatile write C uses. */",
+			f"\tvoid {name}_zeroize() noexcept",
+			"\t{",
+			f"\t\tsitu_zeroize(situ_base(raw_) + {at}, {width}u);",
+			"\t}",
+		]
 
 	def _lead_methods(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

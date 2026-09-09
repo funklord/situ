@@ -449,6 +449,12 @@ class Emitter:
 
 		for entry in own_entries(struct):
 			lines.extend(self._setter(struct, entry))
+			# Here rather than beside the getter: erasing is a WRITE, and
+			# the read-only view's `bytes` is a `&[u8]`. Putting it on the
+			# mutable type is also what makes the borrow checker refuse a
+			# live reader of the bytes being erased, which is a guarantee
+			# the other three targets cannot offer.
+			lines.extend(self._secret_erase(struct, entry))
 
 		lines.extend(self._covered_nested_setters(struct))
 		lines.extend(self._invariants(struct))
@@ -2354,6 +2360,42 @@ class Emitter:
 			if entry.placement.kind == "field" else []
 		lead = self._lead_methods(struct, entry.placement)
 		return bounds + lead + self._getter_body(struct, entry)
+
+	def _secret_erase(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A way to erase a `[secret]` member (section 14.6).
+
+		`project.md` says `[secret]` "emits zeroization on scope exit or via
+		an explicit `situ_zeroize()`", and said it without naming a target
+		while one backend of four did it (26.314).
+
+		`&mut self`, because erasing is a write and the borrow checker
+		should refuse a live reader of the bytes being erased -- which is
+		the same reason a setter takes it, and is a guarantee the other
+		three targets cannot offer.
+		"""
+		placement = entry.placement
+		if not any(attr.name == "secret" for attr in placement.attrs):
+			return []
+		if placement.offset_bits is None or placement.size_bits is None:
+			return []		# no constant span to erase
+
+		name  = _ident(local_name(struct, placement))
+		at    = placement.offset_bits // BITS_PER_BYTE
+		width = placement.size_bits // BITS_PER_BYTE
+		return [
+			"",
+			f"\t/// Erase {placement.path}, which is `[secret]`.",
+			"\t///",
+			"\t/// No debug or format accessor is generated for it: that is",
+			"\t/// the most common way key material reaches a log. This is",
+			"\t/// how a caller erases it when done, through the volatile",
+			"\t/// write `situ_rt::zeroize` makes for the same reason C's",
+			"\t/// runtime does.",
+			f"\tpub fn {name}_zeroize(&mut self) {{",
+			f"\t\tsitu_rt::zeroize(&mut self.bytes[{at}..{at + width}]);",
+			"\t}",
+		]
 
 	def _trim_set(self, placement: Placement) -> str:
 		"""What `[trim]` removes for this member, as a byte-slice literal.

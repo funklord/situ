@@ -2517,7 +2517,61 @@ class Emitter:
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
 		lead = self._lead_methods(struct, entry.placement)
-		return bounds + lead + self._member_body(struct, entry)
+		return (bounds + lead + self._member_body(struct, entry)
+		        + self._secret_erase(struct, entry))
+
+	def _secret_erase(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A way to erase a `[secret]` member (section 14.6).
+
+		`project.md` says `[secret]` "emits zeroization on scope exit or via
+		an explicit `situ_zeroize()`", and said it without naming a target
+		while one backend of four did it. This one emitted a plain reader
+		whose docstring said "zero copy and writable" and nothing about the
+		field being secret at all (26.314).
+
+		**And it is the weakest of the four, which the docstring says rather
+		than leaves for somebody to discover.** It clears the caller's
+		buffer, which is the only storage this backend owns. It cannot
+		reach a copy the interpreter has already made -- `bytes(view.key)`
+		is one, and so is anything that took a slice rather than a
+		memoryview -- and it cannot stop the allocator handing those pages
+		on. C and C++ write through a volatile pointer the compiler may not
+		drop; Rust adds a borrow the checker enforces; here the write is an
+		ordinary one and Python is free to have copied first.
+
+		Saying so is the point. A backend that erased nothing while the
+		document promised zeroization was the worse of the two failures,
+		and a backend that erases what it can while naming what it cannot
+		is the honest version.
+		"""
+		placement = entry.placement
+		if not any(attr.name == "secret" for attr in placement.attrs):
+			return []
+		if placement.offset_bits is None or placement.size_bits is None:
+			return []		# no constant span to erase
+
+		name  = py_name(local_name(struct, placement))
+		at    = placement.offset_bits // BITS_PER_BYTE
+		width = placement.size_bits // BITS_PER_BYTE
+		return [
+			"",
+			f"\tdef {name}_zeroize(self) -> None:",
+			f'\t\t"""Erase {placement.path}, which is `[secret]`.',
+			"",
+			"\t\tNo debug or format accessor is generated for it: that is",
+			"\t\tthe most common way key material reaches a log.",
+			"",
+			"\t\tThis clears the caller's buffer, which is the only storage",
+			"\t\tthis backend owns. It cannot reach a copy the interpreter",
+			"\t\thas already made -- `bytes(view.{})` is one -- and it".format(name),
+			"\t\tcannot stop the allocator handing those pages on. C and",
+			"\t\tC++ write through a volatile pointer the compiler may not",
+			'\t\tdrop; this write is an ordinary one."""',
+			"\t\tself._check()",
+			f"\t\tstart = self._at + {at}",
+			f'\t\tself._msg.buffer[start:start + {width}] = bytes({width})',
+		]
 
 	def _trim_set(self, placement: Placement) -> str:
 		"""What `[trim]` removes for this member, as a bytes literal.

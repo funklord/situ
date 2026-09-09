@@ -534,6 +534,28 @@ pub const OWS: &[u8] = b" \t";
 /// constant here and in four other places, and the walker's own comment
 /// said that a second copy of what `[trim]` removes is how two readers of
 /// one attribute start disagreeing.
+/// Erase bytes that held a secret (section 14.6).
+///
+/// Through `write_volatile`, so the writes are observable behaviour the
+/// compiler may not discard as dead stores to storage about to die -- which
+/// is the same reason `situ_zeroize` in the C runtime writes through a
+/// volatile pointer, and this is deliberately its twin rather than a
+/// `slice::fill(0)` that LLVM is free to remove.
+///
+/// `compiler_fence` after them, so the erase is not sunk past a later
+/// operation that a reader would take as "the secret is gone by here".
+#[inline]
+pub fn zeroize(bytes: &mut [u8]) {
+	for byte in bytes.iter_mut() {
+		// SAFETY: `byte` is a live, aligned, writable `u8` from the
+		// slice being iterated; a volatile write to it is exactly the
+		// store the loop would do anyway, minus the compiler's licence
+		// to drop it.
+		unsafe { core::ptr::write_volatile(byte as *mut u8, 0u8) };
+	}
+	core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
 #[inline]
 pub fn trim<'a>(bytes: &'a [u8], chars: &[u8]) -> &'a [u8] {
 	let mut start = 0;
