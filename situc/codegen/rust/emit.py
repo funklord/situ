@@ -6100,13 +6100,31 @@ class Emitter:
 				                                    name, pinned))
 				continue
 
+			# A variant, before the `NOTHING` test below, because the two
+			# questions are not one: "does the discriminant need checking"
+			# and "do the arms need validating" have different answers, and
+			# nesting the second inside the first meant a variant whose
+			# discriminant is already covered got no arm validation at all.
+			# `classify_check` answers NOTHING for `json`'s `value.body`, so
+			# Rust validated none of its four arms while the other three
+			# validated all of them -- invisible until an arm refused, which
+			# took a guard added elsewhere to produce (26.322).
+			if placement.kind == "variant":
+				if check is Check.DISCRIMINANT:
+					checks.extend(self._discriminant_check(struct, placement))
+				# Each arm in declaration order, which is where the other
+				# three emit theirs: `own_entries` drops a dotted path, so an
+				# arm member never reaches this loop on its own.
+				for _, member in arm_members(struct, placement):
+					if member is not None:
+						checks.extend(self._arm_fits_check(struct, member))
+						checks.extend(self._arm_validation(struct, member))
+				continue
+
 			if check is Check.NOTHING:
 				continue
 			if check is Check.DISCRIMINANT:
 				checks.extend(self._discriminant_check(struct, placement))
-				# And each arm, in declaration order, which is where the
-				# other three emit theirs: `own_entries` drops a dotted
-				# path, so an arm member never reaches this loop on its own.
 				for _, member in arm_members(struct, placement):
 					if member is not None:
 						checks.extend(self._arm_fits_check(struct, member))
@@ -6252,13 +6270,28 @@ class Emitter:
 				checks.extend(mine)
 
 		depth = self._depth_checks(struct)
+
+		# Before any field is read. Every check below reaches a member at an
+		# offset the layout gives, and a view shorter than the struct cannot
+		# hold them. Acquisition refuses a short frame; a sub-view taken at a
+		# computed extent does not go through it, which is how a four-byte
+		# JSON buffer reached `value.validate` (26.322). Rust would panic
+		# rather than read out of bounds, which is safe and is still not the
+		# answer the other three give.
+		floor = ([f"\t\tif self.bytes.len() < {struct.layout.size_bytes} {{",
+		          "\t\t\treturn Err(situ_rt::Error::Bounds);",
+		          "\t\t}"]
+		         if struct.layout.size_bytes and struct.layout.register is None
+		         else [])
+
 		return [
 			*self._nesting_probe(struct),
 			"",
 			"\t/// Every constraint the schema declares, on parse.",
 			"\tpub fn validate(&self) -> Result<()> {",
+			*floor,
 			*depth,
-			*(checks or ([] if depth else
+			*(checks or ([] if depth or floor else
 			             ["\t\t// Nothing in this struct is constrained."])),
 			"\t\tOk(())",
 			"\t}",

@@ -218,9 +218,61 @@ static void test_zeroize_erases_the_key_and_stops(void **state)
 	assert_int_equal(arena[5], 0xEEu);
 }
 
+/* An extent function reads the lengths its struct declares OUT OF that
+ * struct's fixed prefix, so the prefix has to be there first. It was not
+ * checked: a walk hands the function whatever remains of the frame, and
+ * `situ_view_sub(view, at, view.limit - at, ...)` succeeds for any size.
+ * libFuzzer found it in a second on `ble`, whose `adv_report` adds
+ * `base[8]` to a constant 10 and read seven bytes past a five-byte
+ * element (26.322).
+ *
+ * `segment` is the same shape one byte wide: extent is 1 plus `base[0]`.
+ * Over a zero-length view the answer must be the minimum and not one plus
+ * whatever happens to follow -- asserted on the VALUE, because a plain
+ * build need not fault on a read one byte past a buffer, and a test that
+ * waits for a fault passes on the days it matters least. */
+static void test_extent_does_not_read_an_absent_length(void **state)
+{
+	uint8_t     arena[8];
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	(void)state;
+	memset(arena, 0x5Au, sizeof arena);
+	view = view_of(&msg, arena, 0u);
+
+	/* 1, the constant. Reading `base[0]` would give 1 + 0x5A = 91. */
+	assert_int_equal(situ_segment_extent(view), 1u);
+}
+
+/* `validate` is documented as safe on arbitrary bytes -- the fuzz harness
+ * calls it "the first thing a parser runs and the last thing an attacker
+ * controls" -- and it read every member at the offset the layout gives
+ * without asking whether the view was long enough to hold them.
+ *
+ * Acquisition refuses a short frame, so the paths that do not go through
+ * it are the ones that bite: a variant arm takes its sub-view at the arm's
+ * own computed extent, and a five-byte modbus frame produced a view that
+ * `situ_read_write_request_validate` read a `u16` at offset 6 of. */
+static void test_validate_refuses_a_short_view(void **state)
+{
+	uint8_t     arena[8];
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	(void)state;
+	memset(arena, 0x5Au, sizeof arena);
+	view = view_of(&msg, arena, sizeof arena);
+
+	/* `pinned` is 19 bytes; this view is 8. */
+	assert_int_equal(situ_pinned_validate(view), SITU_ERR_BOUNDS);
+}
+
 int main(void)
 {
 	const struct CMUnitTest tests[] = {
+		cmocka_unit_test(test_extent_does_not_read_an_absent_length),
+		cmocka_unit_test(test_validate_refuses_a_short_view),
 		cmocka_unit_test(test_zeroize_clamps_a_wire_declared_length),
 		cmocka_unit_test(test_zeroize_erases_the_key_and_stops),
 		cmocka_unit_test(test_a_split_cover_transforms_both_spans),

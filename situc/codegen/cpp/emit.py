@@ -6474,9 +6474,24 @@ class Emitter:
 			"\t/* Every constraint the schema declares, on parse. */",
 			"\t[[nodiscard]] ::situ::rt::err validate() const noexcept",
 			"\t{",
-			*self._depth_checks(struct),
 		]
-		if not checks:
+
+		# Before any field is read. Every check below reaches a member at an
+		# offset the layout gives, and a view shorter than the struct cannot
+		# hold them -- and here, unlike Rust and Python, the read runs off
+		# the buffer rather than panicking. Acquisition refuses a short
+		# frame; a sub-view taken at a computed extent does not go through
+		# it, which is how a four-byte JSON buffer reached `value.validate`
+		# (26.322).
+		if struct.layout.size_bytes and struct.layout.register is None:
+			lines.extend([
+				f"\t\tif (raw_.limit < {struct.layout.size_bytes}u) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			])
+		lines.extend(self._depth_checks(struct))
+		if not checks and not (struct.layout.size_bytes
+		                       and struct.layout.register is None):
 			lines.append("\t\t/* Nothing in this struct is constrained. */")
 		lines.extend(checks)
 		lines.extend(["\t\treturn ::situ::rt::err::ok;", "\t}"])

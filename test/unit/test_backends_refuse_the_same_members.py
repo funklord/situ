@@ -428,3 +428,124 @@ def test_no_backend_compares_a_bcd_bound_against_the_packed_nibbles() -> None:
 	assert bound, module
 	for line in bound:
 		assert "bcd_decode" in line, line
+
+#: What each backend's `validate` writes when the view is shorter than the
+#: struct it claims to be. Four spellings of one refusal, kept here rather
+#: than in four codegen files so that a backend dropping it is one failure
+#: rather than a silent divergence.
+#: The validate body in each backend, so the floor is asserted where it has
+#: to be rather than anywhere in the file.
+BODY = {
+	"c":      r"situ_err_t situ_\w+_check\(situ_view_t view, uint32_t \*which\)"
+	          r"\n\{(.*?)\n\}",
+	"cpp":    r"err validate\(\) const noexcept\n\t\{(.*?)\n\t\}",
+	"rust":   r"pub fn validate\(&self\) -> Result<\(\)> \{(.*?)\n\t\}",
+	"python": r"def validate\(self\) -> None:(.*?)(?=\n\t*(?:def |@)|\Z)",
+}
+
+#: The floor CHECK, not the error it returns. Matching the error was vacuous
+#: for C, whose other refusals return `SITU_ERR_BOUNDS` too: with the guard
+#: disabled every schema still passed. The condition is what only this guard
+#: writes.
+FLOOR = {
+	"c":      r"if \(view\.limit < SITU_\w+_SIZE_MIN\) \{",
+	"cpp":    r"if \(raw_\.limit < \d+u\) \{",
+	"python": r"if self\._len < \d+:",
+	"rust":   r"if self\.bytes\.len\(\) < \d+ \{",
+}
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_validate_refuses_a_view_below_the_struct(path: Path) -> None:
+	"""`validate` is safe on arbitrary bytes, or it is not documented right.
+
+	Every check it runs reaches a member at an offset the layout gives, and a
+	view shorter than the struct cannot hold them. Acquisition refuses a
+	short frame, so the paths that skip acquisition are the ones that bite: a
+	variant arm takes its sub-view at the arm's own computed extent, and a
+	five-byte modbus frame produced a view whose `validate` read a `u16` at
+	offset 6. libFuzzer found it under ASan in a second (26.322).
+
+	Asserted per backend and over the whole corpus, because the four are
+	written separately and this is the kind of guard that gets added to one.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	name     = path.stem
+
+	# C's `check` body is in the SOURCE, not the header -- the header
+	# carries only its prototype -- so `emitted()`, which hands back
+	# headers, cannot see this one. Ten schemas said so the first time this
+	# ran, which is the test finding its own instrument rather than a bug.
+	built = generate_c(schema, resolved, name)
+	texts = {
+		"c":      built.header + built.source,
+		"cpp":    generate_cpp(schema, resolved, name).header,
+		"python": generate_py(schema, resolved, name).module,
+		"rust":   generate_rs(schema, resolved, name).module,
+	}
+
+	# A register is a bus transaction rather than bytes off a wire and gets
+	# no size constants to compare against; a struct whose minimum is zero
+	# has no floor to be below, and `limit < 0u` is a comparison
+	# `-Wtype-limits` refuses under `-Werror`. Derived rather than exempted
+	# by name, so a schema of only those two kinds skips honestly and one
+	# that grows an ordinary struct starts being asserted.
+	if not any(struct.layout.size_bytes and struct.layout.register is None
+	           for struct in resolved.structs.values()):
+		pytest.skip("every struct here is a register or has no floor")
+
+	# Inside the validate bodies, not anywhere in the file. Asserted
+	# file-wide first, and the sabotage showed that vacuous: `bounds` and
+	# `BoundsError` are what acquisition raises too, so removing the guard
+	# from C++ left 27 of 36 schemas still passing and from Python 32.
+	expected = sum(1 for struct in resolved.structs.values()
+	               if struct.layout.size_bytes
+	               and struct.layout.register is None)
+
+	# Counted the other way round, because these patterns do not match every
+	# body -- a nested block closing at the same indent ends the match early,
+	# and C++ loses two of json's ten that way. What each pattern DOES match
+	# is a real validate body, and a body that qualifies and lacks the floor
+	# is the finding; the allowance is exactly the structs that legitimately
+	# have none.
+	allowed = len(resolved.structs) - expected
+
+	for backend, text in texts.items():
+		bodies = re.findall(BODY[backend], text, re.S)
+		if not bodies:
+			continue		# nothing to guard
+		missing = sum(1 for body in bodies
+		              if not re.search(FLOOR[backend], body))
+		assert missing <= allowed, (
+			f"{path.name}: {backend} has {missing} validate bodies with no "
+			f"floor and only {allowed} struct(s) entitled to none")
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_c_and_rust_validate_the_same_arms(path: Path) -> None:
+	"""A variant's arms are validated by their own type, in every backend.
+
+	Rust nested that inside the branch for "the discriminant needs a check",
+	which is a different question with a different answer:
+	`classify_check` says NOTHING for `json`'s `value.body`, so Rust
+	validated none of its four arms while the other three validated all of
+	them. Nothing noticed, because until an arm actually refused the two
+	answers were the same (26.322).
+
+	C and Rust are compared because both name an `arm`, so the two counts
+	mean the same thing. C++ and Python fold arm and nested validation into
+	one spelling and are covered by the differential instead.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	name     = path.stem
+
+	built = generate_c(schema, resolved, name)
+	in_c  = (built.header + built.source).count("_validate(arm)")
+	in_rs = generate_rs(schema, resolved, name).module.count("arm.validate()?")
+
+	assert in_c == in_rs, (
+		f"{path.name}: C validates {in_c} variant arms and Rust {in_rs}; "
+		f"the schema means different things in the two languages")

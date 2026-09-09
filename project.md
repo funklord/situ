@@ -25604,6 +25604,78 @@ asserted allocation in the harness -- and putting ASan into `make test-c`
 would change what every build costs, which is the copyright holder's call
 rather than a session's.
 
+### 26.322 What the fuzzers found the moment they could see
+
+`make fuzz` builds every harness under libFuzzer and an address sanitizer,
+and it is not part of `make check` -- clang and minutes rather than
+seconds. Run after 26.318 gave the harnesses an exact-size buffer, gated
+interiors and the erasers, it failed on its **first second** -- and again
+after each fix, three times over.
+
+**An extent function read a length that was not there.** `adv_report`'s is
+ten bytes plus `base[8]`, and the walk hands it whatever remains of the
+frame -- `situ_view_sub(view, at, view.limit - at, ...)` succeeds at any
+size -- so a five-byte element read seven bytes past itself. The caller's
+`at + size > view.limit` guard runs one line later, on a number the
+out-of-bounds read produced.
+
+    #0 situ_adv_report_extent            ble.h:387
+    #1 situ_le_advertising_report_reports_at
+    0x502000000611c is located 7 bytes after 5-byte region
+
+**And a `validate` read fields the view did not contain.** `request_check`
+takes an arm's sub-view at the arm's own extent and calls
+`read_write_request_validate` on it; over a five-byte modbus frame that
+read the `u16` at offset 6. The fuzz harness's own comment calls `validate`
+"the first thing a parser runs and the last thing an attacker controls".
+Acquisition refuses a short frame; a sub-view taken at a computed extent
+never goes through acquisition.
+
+Both are guarded now -- the extent against its own fixed prefix, `check`
+against the struct's `SIZE_MIN` -- and the guards went into all four
+backends, because a guard in one is a disagreement.
+
+**The first shape of the extent fix was wrong, and the differential said
+so.** It returned 0 for "too short", which is the walk's stop signal -- and
+`situ_view_sub(view, at, 0u, out)` succeeds, so a zero-length view reached
+`validate` anyway and C became the only backend answering `ok=1` where the
+other three refuse. Making the view refuse a zero extent then flipped
+`dnsname` the other way round. **A sentinel that means "no element" cannot
+also be a length**, and the version that holds returns the struct's own
+minimum: no read, no new meaning, and `view_sub` fails on it exactly as
+before.
+
+**Then Rust turned out to validate no variant arms at all**, in `json` and
+`netlink`. Its `_arm_validation` sits inside the branch for
+`Check.DISCRIMINANT`, and `classify_check` answers `NOTHING` for
+`value.body` -- so the arms of a variant whose discriminant needs no check
+were validated by nobody. **Two questions conflated**: whether the
+discriminant needs checking, and whether the arms do. Invisible for as long
+as no arm refused, which is why a guard added elsewhere is what exposed it.
+
+**What the sweep cost and what it bought.** Four fixes, three of them
+memory-safety, found by an instrument the tree already had and nobody had
+run against this code -- because until 26.318 the harness could not reach
+the erasers or the sealed interiors, and its buffer hid every read that
+stayed inside the struct's maximum. 124 million executions later it is
+quiet, and `make fuzz` is still not in `make check`.
+
+**Pinned by five tests rather than by the fuzzer**, which is not a standing
+gate: two run-time C tests over `edges` -- an extent asked for a length
+that is absent, and a `validate` handed eight bytes for a nineteen-byte
+struct -- and three static ones over the corpus, for the floor in each of
+the four backends and for C and Rust validating the same number of arms.
+
+**Two of those tests were vacuous when written and the sabotage said so.**
+Asserting that `validate` can return a bounds error passed with the guard
+deleted, because acquisition returns one too: 27 of 36 schemas still green
+in C++, 32 in Python, all 36 in C. The assertion has to name the guard's
+own condition -- `if (view.limit < SITU_X_SIZE_MIN)` -- and not the error
+it returns, which is the difference between checking that a refusal exists
+and checking that this one does.
+
+
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

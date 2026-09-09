@@ -5027,9 +5027,24 @@ class Emitter:
 			"",
 			"\t\tRaises ConstraintError rather than returning a code: a Python",
 			'\t\tcaller drops a return value far too easily."""',
-			*self._depth_checks(struct),
 		]
-		if not checks and not self._depth_checks(struct):
+
+		# Before any field is read. Every check below reaches a member at an
+		# offset the layout gives, and a view shorter than the struct cannot
+		# hold them. Acquisition refuses a short frame already; a sub-view
+		# taken at a computed extent does not go through it, which is how a
+		# four-byte JSON buffer reached `value.validate` (26.322).
+		if struct.layout.size_bytes and struct.layout.register is None:
+			lines.extend([
+				f"\t\tif self._len < {struct.layout.size_bytes}:",
+				f'\t\t\traise BoundsError("{struct.name} needs at least '
+				f'{struct.layout.size_bytes} bytes; "',
+				'\t\t\t\tf"{self._len} given")',
+			])
+		lines.extend(self._depth_checks(struct))
+		if not checks and not self._depth_checks(struct) \
+				and not (struct.layout.size_bytes
+				         and struct.layout.register is None):
 			lines.append("\t\t# Nothing in this struct is constrained.")
 			lines.append("\t\treturn")
 		lines.extend(checks)

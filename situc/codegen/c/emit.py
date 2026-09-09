@@ -3584,7 +3584,28 @@ class Emitter:
 
 		if not self._recursive(struct.name):
 			lines = [*head, f"static inline uint32_t {name}(situ_view_t view)",
-			         "{", f"\tuint32_t extent = {constant}u;"]
+			         "{"]
+			# The lengths below are read OUT OF the fixed prefix, so the
+			# prefix has to be here before any of them is touched. It was
+			# not checked: a walk hands this function whatever remains of
+			# the frame -- `situ_view_sub(view, at, view.limit - at, ...)`
+			# succeeds for any size -- and `adv_report`, whose extent adds
+			# `base[8]` to a constant 10, read seven bytes past a five-byte
+			# element. libFuzzer found it in a second (26.322).
+			#
+			# Zero, because that is already the walk's stop signal: every
+			# caller reads it as "not an element" and breaks. Refusing would
+			# need a second return channel in eleven callers to say what a
+			# short tail already means.
+			if constant and terms:
+				lines.extend([
+					f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
+					f"\t\treturn {constant}u;\t/* the lengths below are not"
+					" here to read */",
+					"\t}",
+					"",
+				])
+			lines.append(f"\tuint32_t extent = {constant}u;")
 			lines.extend(f"\textent = extent + ({term});" for term in terms)
 			if not terms:
 				lines.append("\t(void)view;")
@@ -7411,6 +7432,39 @@ class Emitter:
 			"\t}",
 			f"\t*which = {_NO_CHECK};",
 		]
+
+		# Before a single field is read. Every check below reaches a member
+		# at an offset this struct's layout gives, and a view shorter than
+		# the struct cannot hold them -- `validate` is documented as safe on
+		# arbitrary bytes, being "the first thing a parser runs and the last
+		# thing an attacker controls", and it was not.
+		#
+		# Acquisition already refuses a short frame; the paths that do not go
+		# through it are the ones that bite. A variant arm takes its
+		# sub-view with `situ_view_sub(view, 1u, size, out)` where `size` is
+		# the arm's own extent, so a five-byte modbus frame produced a view
+		# of nothing and `situ_read_write_request_validate` read the `u16` at
+		# offset 6 straight past it. libFuzzer found it in a second (26.322).
+		#
+		# Skipped where the minimum is zero: `limit < 0u` is always false and
+		# `-Wtype-limits` says so under `-Werror`, which is the same reason
+		# the accessors skip it.
+		# Not a register: its `check` takes a view for uniformity, but a
+		# register is a bus transaction rather than bytes off a wire and
+		# gets no size constants at all, so the macro this names would not
+		# exist. The fuzz generator excludes them for the same reason.
+		if struct.layout.size_bytes and struct.layout.register is None:
+			lines.extend([
+				"",
+				f"\tif (view.limit < {macro(self.prefix, struct.name, 'SIZE_MIN')}) {{",
+				"\t\t/* The whole struct is short, so no member is the one",
+				"\t\t * that broke it -- the same case the depth checks",
+				"\t\t * meet, and `check`'s contract is that every refusal",
+				"\t\t * sets `*which` on the line above it. */",
+				f"\t\t*which = {_NO_CHECK};",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			])
 
 		checks = []
 		for at, (member, group) in enumerate(self._check_groups(struct)):
