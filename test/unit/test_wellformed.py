@@ -1805,3 +1805,29 @@ def test_a_case_insensitive_token_set_makes_its_member_non_canonical() -> None:
 
 	assert canonical(folded) == "NonCanonical"
 	assert canonical(exact) != "NonCanonical"
+
+
+@pytest.mark.parametrize("arm", ["unknown", "UNKNOWN", "arms", "which"])
+def test_a_token_set_refuses_an_arm_named_after_its_own_members(
+		arm: str) -> None:
+	"""Every backend emits `unknown`, `arms` and `which` beside the arms.
+
+	Found by the C++ affix guard rather than by thinking: it refuses an
+	emitter suffix nothing has registered, which is what made the whole
+	family visible. Three of the four languages would fail to compile, and
+	Python would not fail at all -- the arm shadows the sentinel, and every
+	unknown spelling then reads as that arm. That is the one that had to be
+	refused in the front end rather than left to a compiler.
+	"""
+	assert "is a name the token set itself uses" in rendered(
+		_tokens(f'{arm} = "AAA", helo = "HELO",'))
+
+
+def test_a_token_set_keeps_an_arm_merely_containing_a_reserved_word() -> None:
+	"""The control. Without it this would pass against a rule matching a
+	substring, which would refuse `unknown_command` for no reason."""
+	schema = parse_text(_tokens('unknown_command = "AAA", helo = "HELO",'),
+	                    path="s.situ")
+	decl = next(iter(schema.token_sets()))
+	assert [member.name for member in decl.members] == ["unknown_command",
+	                                                    "helo"]

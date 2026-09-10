@@ -225,6 +225,7 @@ class Emitter:
 		#: because it is one rule for four backends and two walkers.
 		self._invalidating = invalidating_members(resolved.structs)
 		self.enums    = {decl.name: decl for decl in schema.enums()}
+		self.tokens   = {decl.name: decl for decl in schema.token_sets()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
 		self.structs  = set(resolved.structs)
@@ -291,20 +292,8 @@ class Emitter:
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 
-		# 0055 is built in the C backend only. Refused loudly rather than
-		# ignored: a token set that generated nothing would leave a schema
-		# stating a vocabulary the code does not enforce, which section 14.5
-		# calls worse than stating nothing -- and the author would have no
-		# way to tell from the output.
 		for token_set in self.schema.token_sets():
-			raise error(
-				f"`{token_set.name}` is a token set, and the Python backend does "
-				"not generate one yet",
-				token_set.span,
-				label = "not generated here",
-				notes = ["a token set is built in the C backend (0055)",
-				         "generate this schema with `--target c`, or drop "
-				         "the token set"])
+			lines.extend(self._tokens(token_set))
 
 		# The item records first, at module scope. A nested class would work in
 		# Python and would put a type a caller names inside the class it is
@@ -395,6 +384,54 @@ class Emitter:
 		])
 		return lines
 
+
+	def _tokens(self, decl: ast.TokensDecl) -> list[str]:
+		"""A token set: named spellings of differing length, and a lookup.
+
+		A dict keyed by the bytes rather than `_byte_enum`'s frozenset,
+		because `which` has to report the ARM and not merely membership: a
+		caller that has to compare the span itself to find out is the caller
+		this replaces (0055).
+		"""
+		arms = self.resolved.layout.env.token_sets[decl.name]
+		how  = "ignoring case" if decl.case_insensitive else "byte for byte"
+		lines = [
+			"",
+			f"class {py_name(decl.name)}:",
+			f'\t"""tokens {decl.name} -- compared {how}; unknown spellings'
+			f' are {decl.effective_default.value}."""',
+			"",
+			"\tUNKNOWN = 0xFFFFFFFF",
+		]
+		for index, arm in enumerate(arms):
+			lines.append(f"\t{arm.upper()} = {index}")
+		lines.append("")
+
+		# Folded at generation time where the set says so, so the lookup is
+		# one dict hit rather than a scan -- and folded with `.lower()` on
+		# ASCII bytes, which `bytes.lower()` does without consulting a
+		# locale. A wire vocabulary must not move with the reader's
+		# environment.
+		rows = ", ".join(
+			f"{(run.lower() if decl.case_insensitive else run)!r}: {index}"
+			for index, run in enumerate(arms.values()))
+		lines.extend([
+			f"\tARMS = {{{rows}}}",
+			"",
+			"\t@staticmethod",
+			"\tdef which(data: bytes | bytearray | memoryview) -> int:",
+			f'\t\t"""Which member of `{decl.name}` these bytes spell, or'
+			' UNKNOWN.',
+			"",
+			"\t\tA dict hit compares the whole key, so a prefix is not a",
+			"\t\tmatch -- which is what a `startswith` would quietly make",
+			"\t\tit.",
+			'\t\t"""',
+		])
+		folded = "bytes(data).lower()" if decl.case_insensitive else "bytes(data)"
+		lines.append(f"\t\treturn {py_name(decl.name)}.ARMS.get("
+		             f"{folded}, {py_name(decl.name)}.UNKNOWN)")
+		return lines
 
 	def _enum(self, decl: ast.EnumDecl) -> list[str]:
 		if decl.width is not None:
@@ -5139,7 +5176,27 @@ class Emitter:
 			# returns before the scalar path that emits those, so a delimited
 			# text number's `[min]` and `[max]` reached no backend.
 			lines.extend(self._attr_checks(struct, placement, f"self.{name}"))
+		lines.extend(self._token_check(placement, name))
 		return lines
+
+	def _token_check(self, placement: Placement, name: str) -> list[str]:
+		"""A delimited member typed by a token set holds one of its arms.
+
+		Only where the set says `default = error`; `pass` means the protocol
+		has an extension point, and an unknown spelling is a message this
+		reader does not understand rather than a malformed one (0055).
+		"""
+		decl = self.tokens.get(placement.type_name or "")
+		if decl is None or decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+
+		held = py_name(decl.name)
+		return [
+			f"\t\tif {held}.which(self.{name}_raw) == {held}.UNKNOWN:",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\t"{placement.path} is not one of {decl.name}\'s '
+			f'{len(decl.members)} spelling(s)")',
+		]
 
 	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
 			read: str) -> list[str]:

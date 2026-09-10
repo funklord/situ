@@ -26182,15 +26182,27 @@ correct, and only the lattice was wrong about it. The control is a
 case-sensitive set, which must still read Canonical; without it the test
 would pass against a rule that weakened every token member.
 
-**Built in C, refused loudly in the other three.** A backend that generated
-nothing for a token set would leave a schema stating a vocabulary the code
-does not enforce, which 14.5 calls worse than stating nothing, and the
-author would have no way to tell from the output. So C++, Rust and Python
-raise a diagnostic naming the construct and the backend. The construct is
-deliberately NOT in a corpus schema yet: 0052's consequence says a
-construct without a corpus schema poses no case to the four-way
-differential, and a corpus schema that only one backend can build would
-break it instead.
+**Built in all four backends, and each one was run rather than read.**
+The same eight inputs through C, C++, Rust and Python: the three arms, two
+case-folded spellings, a prefix of an arm, a span that merely starts with
+one, and a word nobody declared. All four agree on all eight.
+
+**Each backend expresses the lookup in its own idiom rather than
+transliterating C's loop**, which is the difference between four backends
+and one written four times. C and C++ walk a table of `{ bytes, len }`;
+Rust is `ARMS.iter().position(|arm| arm.eq_ignore_ascii_case(bytes))`;
+Python folds the arms at GENERATION time and the lookup is one dict hit.
+The prefix cases fall out of each idiom for the same underlying reason --
+every one of them compares the length before or with the bytes -- which is
+exactly what a `strncmp`, a `starts_with` or a `startswith` would not.
+
+**A backend that generated nothing would be worse than one that refuses.**
+While only C had it, the other three raised a diagnostic naming the
+construct and the backend: a schema stating a vocabulary the code does not
+enforce is what 14.5 calls worse than stating nothing, and nothing in the
+output would have said so. That guard is gone now because all four
+generate, and the sequence is worth keeping -- refuse first, implement
+second, so the tree is honest at every commit rather than only at the end.
 
 **The control is the part worth copying.** Both checks on a delimited
 member return `SITU_ERR_CONSTRAINT`, so watching an unknown verb be refused
@@ -26200,12 +26212,96 @@ refusal disappears, and it could not have disappeared if it had come from
 the delimiter. That is a second test rather than a second assertion,
 because the discriminator is the build.
 
-**Still open**, in the order they matter: the three other backends, then a
-corpus schema and the differential case that comes with it, then the map
-and wire contracts, then the walkers and the dissector. And the extent
-question stays refused -- json's `true`, `false` and `null`, where the
-token would have to decide where it ends, is the grammar case and 0055
-deliberately does not prejudge whether it should ever be admitted.
+**A name collision the C++ affix guard found, which nothing else would
+have.** That test reads the emitter's SOURCE and refuses any suffix the
+emitter appends to a name without registering it -- and my arms carried
+one. Following it back turned up a family: every backend emits `unknown`,
+`arms` and `which` beside the arms, so an arm spelled like one of those
+declares the same thing twice. Three languages fail to compile. **Python
+does not fail at all** -- the arm shadows the sentinel, and every unknown
+spelling then reads as that arm, which is a wrong answer rather than an
+error. That is the one that had to be refused in the front end rather than
+left to a compiler, and it is refused case-insensitively because the
+backends disagree about case.
+
+The suffix itself is gone rather than registered: C++ puts the arms' bytes
+in a nested `run` namespace and Rust writes them straight into `ARMS` as
+byte-string literals. Registering it would have papered over a second
+collision the guard was not looking for -- an arm named `helo` beside one
+named `helo_run` declares one symbol twice, silently, in a construct whose
+entire job is to hold a set of distinct names.
+
+**And the guard reads the file as TEXT, so writing the rejected spelling
+into a COMMENT was enough to keep it red.** Recorded because the next
+person will hit it and read it as a stale failure: the fix was to reword
+a comment, and the guard is right to be that blunt -- a suffix mentioned
+is a suffix somebody may add.
+
+**The corpus schema is in, and the differential was watched failing.**
+`edges` carries two sets -- one whose unknown spellings are an error and
+one whose pass, because they generate different code and the second would
+otherwise be uncovered. Four backends agreeing over random bytes is worth
+nothing until something establishes the bytes REACH the members: a check
+three backends skipped would agree with itself perfectly. Deleting the
+Python check turns that test red, naming the buffer and the disagreement.
+That is what says the case is posed rather than merely present, and it
+cost one edit and one run.
+
+**The walker and the dissector were not extra work; the corpus schema
+made them fail.** Both were on the "still open" list an hour earlier, and
+adding `spoken` to `edges` turned each from an absence into a red test --
+which is the argument for landing a corpus schema WITH a construct rather
+than after it, made by the thing itself rather than by 0052 asserting it.
+The walker accepted a verb C refused, and the dissector added a member for
+which it had declared no `ProtoField`, which in Lua is an error at the
+first packet rather than a wrong display.
+
+**The walker needed no new image section**, and finding that out was the
+whole of the work. A token set asks the question `PINNED_RUNS` already
+answers -- is this span one of these byte runs -- of a member whose extent
+came from a delimiter rather than from a declared width. Membership is
+membership; the only difference is who sized the span, and the walker has
+that before it looks. Two things had to be true and both already were: the
+section stores each run with its own length, so unequal arms fit, and the
+image already carried `case_insensitive` per placement, so the fold had a
+flag to read.
+
+**And a third reader disagreed for a reason neither of those explained.**
+The generated conformance tests asked `spoken.opening` for `_count` and
+`_at` -- accessors a byte run does not have and no backend emits -- so the
+C suite failed at the compiler. The cause was one field: a token member's
+`scalar` was `None`, and every "is this a byte run or a run of records"
+question in the tree reads a member with no scalar as a run of RECORDS.
+`checks.py` says so in a comment written years before this construct
+existed: "the element type is what separates them, not the delimiter".
+
+**A token member IS `u8 x[] until " "` plus a value constraint**, and the
+two placements were identical in every field but that one. Answering `u8`
+fixed the conformance tests, and it also corrected the capability map: the
+member had been `atomic = NonAtomic` where the plain byte run beside it in
+the same struct is `AtomicWord`. Nobody would have looked at that number,
+and it was wrong for the same reason and would have stayed wrong.
+
+**The lesson is not about tokens.** A new construct arrives with its
+fields half-filled, and the fields nobody sets are the ones that never
+raise an error -- they answer a default, and every consumer believes it.
+What found this was not a review: it was a corpus schema being read by the
+tree's other five readers, each of which asks a different question.
+
+**The one hour lost was to putting that branch in the wrong arm of the
+dispatch.** `pinned_runs` is consulted under `Check.REPEATED`, a token
+member is `Check.DELIMITED`, and the code packed nothing while looking
+exactly like code that packed something -- the walker went on reporting
+clean and the test went on failing for what looked like the same reason as
+before. A branch that never runs and a branch that runs wrongly read
+identically from the failure.
+
+**Still open:** converting smtp and http to use the construct they asked
+for, which is its own change because it moves committed contracts for two
+worked examples. The extent question stays refused: json's `true`, `false`
+and `null`, where the token would have to decide where it ends, is the
+grammar case, and 0055 deliberately does not prejudge whether it should
+ever be admitted.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -2898,3 +2898,82 @@ struct S {
 	# The schema says `endian little`, and the codec's output is a number.
 	assert "situ_get_le32" in header
 	assert "err::checksum" in header
+
+
+TOKENS = """
+tokens verb [case_insensitive] {
+	helo = "HELO",
+	quit = "QUIT",
+	extended = "EXTENDED",
+}
+
+struct command {
+	verb  keyword  until " "  max 16;
+}
+"""
+
+TOKEN_PROBE = """
+#include <cstring>
+#include "unit.hpp"
+
+static bool one(const char *text, ::situ::rt::err want,
+                std::uint32_t want_which)
+{
+	char buf[64];
+	std::strncpy(buf, text, sizeof buf - 1);
+	buf[sizeof buf - 1] = '\\0';
+
+	const auto len = static_cast<std::uint32_t>(std::strlen(text));
+	::situ::rt::message owner(reinterpret_cast<std::uint8_t *>(buf), len);
+	::situ::command view;
+
+	if (::situ::command::at(owner, 0u, len, view) != ::situ::rt::err::ok)
+		return false;
+	if (view.validate() != want)
+		return false;
+	return ::situ::verb::which(view.base() + view.keyword_offset(),
+	                           view.keyword_len()) == want_which;
+}
+
+int main()
+{
+	using namespace ::situ;
+	if (!one("HELO ", rt::err::ok, verb::helo)) return 1;
+	if (!one("QUIT ", rt::err::ok, verb::quit)) return 2;
+	if (!one("EXTENDED ", rt::err::ok, verb::extended)) return 3;
+	/* Folded without a locale, so the answer does not move with the
+	 * environment the reader happens to run under. */
+	if (!one("helo ", rt::err::ok, verb::helo)) return 4;
+	if (!one("HeLo ", rt::err::ok, verb::helo)) return 5;
+	/* A prefix of a declared arm is not that arm, nor is a span that
+	 * merely starts with one. */
+	if (!one("HEL ", rt::err::constraint, verb::unknown)) return 6;
+	if (!one("HELOX ", rt::err::constraint, verb::unknown)) return 7;
+	if (!one("NOPE ", rt::err::constraint, verb::unknown)) return 8;
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_token_set_reports_which_arm_and_refuses_the_rest(
+		tmp_path: Path) -> None:
+	"""0055, compiled and run rather than read.
+
+	The four ways this can be wrong, each silent on its own: the arm ids,
+	case folding that does not consult a locale, a prefix not matching a
+	longer arm, and a longer span not matching a shorter arm. The last two
+	are what a `strncmp` against a literal quietly gets wrong, and the length
+	is compared first precisely so that they cannot.
+	"""
+	assert compiles(tmp_path, TOKENS, extra=TOKEN_PROBE).returncode == 0
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0

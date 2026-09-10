@@ -2401,6 +2401,18 @@ class Solver:
 		if enum is not None:
 			return enum.backing.scalar
 
+		# A token set stores a run of bytes, exactly as `u8 x[] until " "`
+		# does, and the two placements are otherwise identical -- a delimited
+		# member with no declared count (0055). Answering `None` here made it
+		# a member with no scalar, which every "is this a byte run or a run
+		# of records" question in the tree reads as a run of RECORDS: the
+		# generated conformance tests asked it for `_count` and `_at`,
+		# accessors a byte run does not have and no backend emits. The
+		# element type is what separates the two, so the element type is what
+		# this has to answer.
+		if member.type_ref.name in self.tokens:
+			return lookup("u8")
+
 		return None
 
 	def narrowed(self, member: ast.Field | ast.Reserved,

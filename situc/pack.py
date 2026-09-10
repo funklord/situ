@@ -697,6 +697,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	"""
 	coverage = Coverage()
 	members  = _ast_members(schema)
+	# 0055's arms, keyed by the set's name. Only where unknown spellings are
+	# an error: `pass` says the protocol has an extension point, and a walker
+	# that refused one would disagree with all four backends about a message
+	# they accept.
+	tokens   = {decl.name: decl for decl in schema.token_sets()
+	            if decl.effective_default is ast.EnumDefault.ERROR}
 
 	# A stable index for every placement, and for every struct. Declaration
 	# order, so that two runs over one schema produce one image -- the
@@ -1272,6 +1278,27 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					constraints_blob += _struct.pack("<IqBxxx", at, 0, 6)
 				continue
 			if kind is traverse.Check.DELIMITED:
+				# A token set asks the same question a pinned run does --
+				# is this span one of these byte runs -- of a member whose
+				# extent came from a delimiter rather than from a declared
+				# width (0055). One section serves both, because the CHECK
+				# is membership either way and the only difference is who
+				# sized the span, which the walker has done before it
+				# looks. Written here rather than beside `pinned_runs`
+				# because a token member is DELIMITED and never REPEATED,
+				# and putting it there is how it silently packed nothing.
+				if placement.type_name in tokens:
+					arms = tuple(resolved.layout.env
+					             .token_sets[placement.type_name].values())
+					if any(len(run) > PINNED_OCTETS for run in arms):
+						whole = False
+					else:
+						for run in arms:
+							pinned_blob += _struct.pack(
+								f"<IB{PINNED_OCTETS}s", at, len(run), run)
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, len(arms), 14)
+
 				# The delimiter has to be there, and for a plain delimited
 				# member that is the whole of it.
 				#

@@ -948,3 +948,39 @@ struct secret_run {
 	u8   key[n]  [secret];
 	u16  tail;
 }
+
+// A token set, which is 0055's whole construct and the one shape the
+// differential could not pose before it existed.
+//
+// The arms differ in length deliberately -- that is what separates a token
+// set from `enum m : u8[k]`, whose arms must agree because an enum decides
+// its member's extent. Here the delimiter decides it and the set only says
+// which spellings are legal, so a reader compares a span it already has
+// against a list.
+//
+// `[case_insensitive]` on the SET rather than on the member, and the
+// difference is not cosmetic: the placement was built from the member's
+// attributes alone, so the lattice called this member Canonical while the
+// generated comparison folded case. A map claiming a property the code does
+// not have is the one thing it must never do.
+tokens greeting [case_insensitive] {
+	hello = "HELLO",
+	hi    = "HI",
+	longer_than_the_others = "SALUTATIONS",
+	default = error,
+}
+
+// And one whose unknown spellings pass, because the two generate different
+// code: `error` emits a check and `pass` emits none, and a reader still
+// gets `which` either way so it can decide for itself. Without both, half
+// the construct is uncovered.
+tokens extension {
+	known = "KNOWN",
+	default = pass,
+}
+
+struct spoken {
+	greeting   opening  until " "   max 16;
+	extension  kind     until "\r"  max 16;
+	u8         rest[remaining];
+}

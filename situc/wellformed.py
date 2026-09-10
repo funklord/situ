@@ -2215,6 +2215,13 @@ def _is_byte_run_equality(member: ast.Member, attr: ast.Attr) -> bool:
 	return getattr(type_ref, "name", None) == "u8"
 
 
+#: Names a token set's own generated members occupy, so an arm may not.
+#: Compared case-insensitively because the backends do not agree on case:
+#: C writes `SITU_VERB_UNKNOWN`, Rust `UNKNOWN`, Python `UNKNOWN`, C++
+#: `unknown`, so an arm named `Unknown` collides in three of the four.
+TOKEN_RESERVED = frozenset({"unknown", "arms", "which"})
+
+
 def check_token_sets(schema: ast.Schema) -> None:
 	"""A token set's arms are literals, distinct, and reachable (0055).
 
@@ -2231,6 +2238,18 @@ def check_token_sets(schema: ast.Schema) -> None:
 	for decl in sets.values():
 		seen: dict[bytes, str] = {}
 		for member in decl.members:
+			if member.name.lower() in TOKEN_RESERVED:
+				raise error(
+					f"`{member.name}` is a name the token set itself uses",
+					member.span,
+					label = "reserved here",
+					notes = ["every backend emits `unknown`, `arms` and "
+					         "`which` beside the arms, so an arm spelled "
+					         "like one declares the same thing twice",
+					         "in Python it does not even fail: the arm "
+					         "shadows the sentinel and every unknown "
+					         "spelling then reads as that arm",
+					         "rename the arm"])
 			held = _token_bytes(decl, member)
 
 			key = held.lower() if decl.case_insensitive else held

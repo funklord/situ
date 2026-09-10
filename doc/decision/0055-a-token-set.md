@@ -1,6 +1,6 @@
 # 0055: a token set
 
-Status: accepted 2026-09-10; front end built
+Status: accepted 2026-09-10; built in all four backends
 Date: 2026-09-10
 Phase: raised by the copyright holder, from two schemas already in the tree
 
@@ -138,7 +138,27 @@ was written to end for fixed-width runs, one form away.
 consequence, and the reason is unchanged: a per-member fact deciding what
 bytes *mean* is exactly the shape the four-way differential exists to catch,
 and a construct with no corpus schema poses no case. `test/schema/edges.situ`
-carries the tree's instance and the differential reaches it.
+carries two -- `greeting`, whose unknown spellings are an error, and
+`extension`, whose pass -- because the two generate different code and one
+of them would otherwise be uncovered.
+
+**And the differential was watched failing.** Agreement between four
+backends over random bytes is worth nothing until something establishes
+that the bytes reach the members in question: a token set whose check three
+backends skipped would agree with itself perfectly. Removing the check from
+the Python emitter turns that test red, naming the buffer and the
+disagreement, which is what says the case is posed rather than merely
+present.
+
+**Five readings, not four.** The walkers and the dissector read the same
+layout and had to learn it too, and the corpus schema is what made that a
+failure rather than an omission. The walker needed no new image section:
+`PINNED_RUNS` already answers "is this span one of these byte runs", the
+section stores each run with its own length so unequal arms fit, and the
+image already carried `case_insensitive` per placement. What it needed was
+the branch in the right arm of the dispatch -- a token member is
+`Check.DELIMITED` and not `Check.REPEATED`, and in the wrong arm it packed
+nothing while looking like it packed something.
 
 **The extent question becomes a wellformed check.** A member typed by a token
 set and given neither a delimiter nor a fixed width is the grammar case, and

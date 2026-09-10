@@ -2152,3 +2152,68 @@ def test_value_bounds_agree_with_validate_for_a_converted_type(
 		month(packed.s.MONTH_VALUE_MAX + 1).validate()
 	with pytest.raises(packed.ConstraintError):
 		month(packed.s.MONTH_VALUE_MIN - 1).validate()
+
+
+TOKENS = """
+tokens verb [case_insensitive] {
+	helo = "HELO",
+	quit = "QUIT",
+	extended = "EXTENDED",
+}
+
+struct command {
+	verb  keyword  until " "  max 16;
+}
+"""
+
+
+def test_a_token_set_reports_which_arm_and_refuses_the_rest(
+		tmp_path: Path) -> None:
+	"""0055, executed rather than matched.
+
+	Four things at once, because each is silent on its own: the arm ids,
+	case folding that does not consult a locale, a prefix NOT matching a
+	longer arm, and a longer span not matching a shorter arm. The last two
+	are what a `startswith` quietly gets wrong, and the dict lookup compares
+	the whole key precisely so that it cannot.
+	"""
+	module = load(tmp_path, TOKENS)
+
+	def one(text: str) -> tuple[bool, int]:
+		data = text.encode("ascii")
+		held = module.command.at(module.Message(bytearray(data)), 0, len(data))
+		try:
+			held.validate()
+			valid = True
+		except module.ConstraintError:
+			valid = False
+		return valid, module.verb.which(held.keyword_raw)
+
+	assert one("HELO ")     == (True,  module.verb.HELO)
+	assert one("QUIT ")     == (True,  module.verb.QUIT)
+	assert one("EXTENDED ") == (True,  module.verb.EXTENDED)
+	assert one("helo ")     == (True,  module.verb.HELO)
+	assert one("HeLo ")     == (True,  module.verb.HELO)
+	assert one("HEL ")      == (False, module.verb.UNKNOWN)
+	assert one("HELOX ")    == (False, module.verb.UNKNOWN)
+	assert one("NOPE ")     == (False, module.verb.UNKNOWN)
+
+
+def test_a_token_set_that_passes_unknown_spellings_accepts_them(
+		tmp_path: Path) -> None:
+	"""The control, and the reason it is a separate test.
+
+	Both checks on a delimited member raise `ConstraintError`, so a refusal
+	alone does not say which check refused. "NOPE " is delimited, so the
+	delimiter check passes and only the token check can speak -- and with
+	`default = pass` the refusal disappears while the delimiter situation is
+	identical, which it could not do if it had come from the delimiter.
+	"""
+	module = load(tmp_path, TOKENS.replace(
+		'extended = "EXTENDED",', 'extended = "EXTENDED",\n\tdefault = pass,'))
+
+	data = b"NOPE "
+	held = module.command.at(module.Message(bytearray(data)), 0, len(data))
+
+	held.validate()
+	assert module.verb.which(held.keyword_raw) == module.verb.UNKNOWN

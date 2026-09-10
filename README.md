@@ -992,11 +992,13 @@ The arms may differ in length, which is what separates it from
 an enum decides how wide its member is, so unequal arms would mean trying
 each in turn -- a search. A token set decides nothing, because the delimiter
 already ended the member, so it is a comparison against a list.
-`situ_verb_which(...)` reports *which* arm matched, `default = pass` admits
-an unknown spelling as an extension point, and the case fold is arithmetic
-rather than `tolower` so that a wire vocabulary does not move with the
-reader's locale. Built in the C backend; the other three refuse a schema
-that uses one rather than generating code that ignores it
+`verb::which(...)` reports *which* arm matched, `default = pass` admits an
+unknown spelling as an extension point, and the case fold never consults a
+locale, so a wire vocabulary does not move with the reader's environment.
+All four backends generate it, each in its own idiom -- C and C++ walk a
+table, Rust is `eq_ignore_ascii_case`, Python folds the arms at generation
+time and looks them up in a dict -- and all four compare the length, which
+is what a `strncmp`, a `starts_with` or a `startswith` would not
 (decision 0055).
 
 **Where situ stops is a grammar.** A field whose *text* contains an expression
@@ -1487,13 +1489,27 @@ today and which is a written-down design.
   member names for one fact, with comments rendering the magic in decimal.
   cpio's `magic` is the worked case.
 
+- **A token set** (decision 0055). `tokens verb { helo = "HELO", ... }`
+  names a set of text keywords of differing length and types a delimited
+  member, which is what a byte run plus a comparison in the caller used to
+  be. What separates it from `enum m : u8[k]` is extent rather than
+  spelling: an enum decides how wide its member is, so unequal arms would
+  mean a search, while a token set is consulted after the delimiter has
+  already ended the member. All four backends generate it, and
+  `test/schema/edges.situ` carries the corpus cases the four-way
+  differential poses against them.
+
 **Proposed.**
 
-- **A token set** (decision 0055). Built in the C backend and refused in the
-  other three, which is where it stops for now: the construct is
-  deliberately not in a corpus schema until all four generate it, because a
-  corpus schema only one backend can build would break the four-way
-  differential rather than feed it.
+- **Text encoding, scoped and named by the data.** `encoding` is a file
+  directive and `[encoding = ascii]` is a member attribute, with nothing in
+  between, so a region cannot carry one -- refused on purpose, and now
+  asked for. The harder half is an encoding the data names, as MIME's
+  `charset=` and an XML declaration do, where the declaration must be read
+  before its own answer is known. Situ cannot resolve that circularity, but
+  it can make the assumption writable and checkable: a bootstrap encoding
+  for the region holding the declaration, the declared one for what
+  follows, and a refusal when they disagree. Section 26.330.
 
 ## Reading further
 

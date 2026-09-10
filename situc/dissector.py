@@ -449,6 +449,16 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
 
+	# A token set has no scalar and the body adds the member anyway, which
+	# is the shape the varint and region branch below was written for: no
+	# field declared, `subtree:add(nil, ...)`, a Lua error at the first
+	# packet rather than a wrong display. Shown as a string for the reason
+	# the radix branch above gives -- an analyst reading an SMTP session
+	# wants to see `HELO`, not five byte values (0055).
+	if placement.type_name in resolved.layout.env.token_sets:
+		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
+
 	if data_sized(placement) or placement.array_count is not None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")

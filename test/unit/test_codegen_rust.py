@@ -2005,3 +2005,88 @@ def test_a_schema_binding_no_codec_carries_no_implementation() -> None:
 	text = emit("struct S { u16 a; }")
 	assert "CRC32_TABLE" not in text
 	assert "pub fn crc32" not in text
+
+
+TOKENS = """
+tokens verb [case_insensitive] {
+	helo = "HELO",
+	quit = "QUIT",
+	extended = "EXTENDED",
+}
+
+struct command {
+	verb  keyword  until " "  max 16;
+}
+"""
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_token_set_reports_which_arm_and_refuses_the_rest(
+		tmp_path: Path) -> None:
+	"""0055, compiled under `-D warnings` and run.
+
+	`eq_ignore_ascii_case` compares lengths as well as bytes, which is what
+	makes the two hard cases fall out: a prefix of a longer arm is not that
+	arm, and a span that merely starts with an arm is not it either. Those
+	are what a `starts_with` would quietly get wrong.
+	"""
+	result = build(tmp_path, TOKENS, main='''
+fn one(text: &str, want_ok: bool, want_which: u32) {
+	let bytes = text.as_bytes();
+	let view = unit::Command::new(bytes).unwrap();
+
+	assert_eq!(view.validate().is_ok(), want_ok, "validate: {text}");
+	assert_eq!(unit::verb::which(view.keyword_raw()), want_which,
+	           "which: {text}");
+}
+
+fn main() {
+	one("HELO ", true, unit::verb::HELO);
+	one("QUIT ", true, unit::verb::QUIT);
+	one("EXTENDED ", true, unit::verb::EXTENDED);
+	// Folded without a locale, so the answer does not move with the
+	// environment the reader happens to run under.
+	one("helo ", true, unit::verb::HELO);
+	one("HeLo ", true, unit::verb::HELO);
+	// A prefix of a declared arm is not that arm, nor is a span that
+	// merely starts with one.
+	one("HEL ", false, unit::verb::UNKNOWN);
+	one("HELOX ", false, unit::verb::UNKNOWN);
+	one("NOPE ", false, unit::verb::UNKNOWN);
+}
+''')
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_token_set_that_passes_unknown_spellings_accepts_them(
+		tmp_path: Path) -> None:
+	"""The control, and the reason it is a separate test.
+
+	Both checks on a delimited member return `Error::Constraint`, so a
+	refusal alone does not say which one refused. "NOPE " is delimited, so
+	the delimiter check passes and only the token check can speak -- and
+	with `default = pass` the refusal disappears while the delimiter
+	situation is identical, which it could not do if it had come from the
+	delimiter.
+	"""
+	result = build(tmp_path, TOKENS.replace(
+		'extended = "EXTENDED",',
+		'extended = "EXTENDED",\n\tdefault = pass,'), main='''
+fn main() {
+	let bytes = b"NOPE ";
+	let view = unit::Command::new(bytes).unwrap();
+
+	view.validate().unwrap();
+	assert_eq!(unit::verb::which(view.keyword_raw()), unit::verb::UNKNOWN);
+}
+''')
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr

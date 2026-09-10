@@ -142,6 +142,7 @@ class Emitter:
 		#: emitter, which knows, rather than of the layout, which cannot.
 		self._emitted: set[str] = set()
 		self.enums     = {decl.name: decl for decl in schema.enums()}
+		self.tokens    = {decl.name: decl for decl in schema.token_sets()}
 		self.codecs    = {decl.name: decl for decl in schema.codecs()}
 		self.markers   = {decl.name: decl for decl in schema.markers()}
 		self.structs   = set(resolved.structs)
@@ -173,20 +174,8 @@ class Emitter:
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 
-		# 0055 is built in the C backend only. Refused loudly rather than
-		# ignored: a token set that generated nothing would leave a schema
-		# stating a vocabulary the code does not enforce, which section 14.5
-		# calls worse than stating nothing -- and the author would have no
-		# way to tell from the output.
 		for token_set in self.schema.token_sets():
-			raise error(
-				f"`{token_set.name}` is a token set, and the C++ backend does "
-				"not generate one yet",
-				token_set.span,
-				label = "not generated here",
-				notes = ["a token set is built in the C backend (0055)",
-				         "generate this schema with `--target c`, or drop "
-				         "the token set"])
+			lines.extend(self._tokens(token_set))
 
 		order    = self._struct_order()
 		deferred: list[str] = []
@@ -339,6 +328,101 @@ class Emitter:
 		return f"{head}inline {text[:start]}{holder}::{text[start:]}"
 
 	# -- enums ---------------------------------------------------------
+
+	def _tokens(self, decl: ast.TokensDecl) -> list[str]:
+		"""A token set: named spans of differing length, and a lookup (0055).
+
+		A table of `{ bytes, len }` rather than `_byte_enum`'s array of
+		equal-width arrays, because the lengths differ -- which is the whole
+		construct. The lookup reports WHICH arm matched: a caller that has to
+		compare the span itself to find out is the caller this replaces.
+		"""
+		arms = self.resolved.layout.env.token_sets[decl.name]
+		how  = "ignoring case" if decl.case_insensitive else "byte for byte"
+		lines = [
+			"",
+			f"/* tokens {decl.name} -- compared {how}; unknown spellings are"
+			f" {decl.effective_default.value} */",
+			f"namespace {c_name(decl.name)} {{",
+			"\tinline constexpr std::uint32_t unknown = 0xFFFFFFFFu;",
+		]
+		for index, name in enumerate(arms):
+			lines.append(f"\tinline constexpr std::uint32_t {name}"
+			             f" = {index}u;")
+		lines.append("")
+		# The bytes live one namespace down rather than under a suffix on
+		# the arm's own name. Two reasons, and the second is the one that
+		# bites: a suffix would have to be registered in `cpp/names.py`,
+		# which exists to stop a STRUCT name colliding with a MEMBER
+		# accessor and has nothing to say about token arms -- and an arm
+		# named `helo` beside one whose name is that plus the suffix would
+		# declare the same symbol twice, silently, in a construct whose
+		# whole job is to hold a set of names.
+		#
+		# `test_the_affixes_match_the_emitter` is what found this, and it
+		# reads this file as TEXT: writing the rejected spelling out here,
+		# even inside a comment, is enough to make it fail.
+		lines.append("")
+		lines.append("\tnamespace run {")
+		for name, run in arms.items():
+			body = ", ".join(f"0x{byte:02X}" for byte in run)
+			lines.append(f"\t\tinline constexpr std::uint8_t {name}"
+			             f"[{len(run)}] = {{ {body} }};")
+		lines.append("\t}")
+
+		lines.extend([
+			"",
+			f"\t/** Which member of `{decl.name}` these bytes spell,"
+			" or `unknown`.",
+			"\t *",
+			"\t * The length is compared first, so a prefix is not a match"
+			" -- which",
+			"\t * is what a `strncmp` against a literal quietly makes it.",
+			"\t */",
+			"\t[[nodiscard]] inline std::uint32_t which"
+			"(const std::uint8_t *bytes,",
+			"\t\t\tstd::uint32_t len) noexcept",
+			"\t{",
+			"\t\tstruct arm { const std::uint8_t *run; std::uint32_t len; };",
+			"\t\tstatic constexpr arm arms[] = {",
+		])
+		for name, run in arms.items():
+			lines.append(f"\t\t\t{{ run::{name}, {len(run)}u }},")
+		lines.extend([
+			"\t\t};",
+			"",
+			"\t\tfor (std::uint32_t a = 0; a < "
+			"(sizeof arms / sizeof arms[0]); ++a) {",
+			"\t\t\tif (arms[a].len != len) continue;",
+			"",
+			"\t\t\tstd::uint32_t i = 0;",
+			"\t\t\tfor (; i < len; ++i) {",
+		])
+		if decl.case_insensitive:
+			# Folded arithmetically rather than with `std::tolower`, which is
+			# locale-dependent: a wire vocabulary must not move with the
+			# environment the reader happens to run in.
+			lines.extend([
+				"\t\t\t\tstd::uint8_t got  = bytes[i];",
+				"\t\t\t\tstd::uint8_t want = arms[a].run[i];",
+				"",
+				"\t\t\t\tif (got >= 0x41u && got <= 0x5Au)"
+				" got = static_cast<std::uint8_t>(got | 0x20u);",
+				"\t\t\t\tif (want >= 0x41u && want <= 0x5Au)"
+				" want = static_cast<std::uint8_t>(want | 0x20u);",
+				"\t\t\t\tif (got != want) break;",
+			])
+		else:
+			lines.append("\t\t\t\tif (bytes[i] != arms[a].run[i]) break;")
+		lines.extend([
+			"\t\t\t}",
+			"\t\t\tif (i == len) return a;",
+			"\t\t}",
+			"\t\treturn unknown;",
+			"\t}",
+			"}",
+		])
+		return lines
 
 	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
 		"""A byte-run enum: named spans rather than an `enum class` (0052).
@@ -6588,7 +6672,29 @@ class Emitter:
 			])
 
 		lines.extend(self._text_number_check(struct, placement, name))
+		lines.extend(self._token_check(placement, name))
 		return lines
+
+	def _token_check(self, placement: Placement, name: str) -> list[str]:
+		"""A delimited member typed by a token set holds one of its arms.
+
+		Only where the set says `default = error`; `pass` means the protocol
+		has an extension point, and an unknown spelling is a message this
+		reader does not understand rather than a malformed one (0055).
+		"""
+		decl = self.tokens.get(placement.type_name or "")
+		if decl is None or decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+
+		return [
+			f"\t\t/* {placement.path} is one of `{decl.name}`'s"
+			f" {len(decl.members)} spelling(s). */",
+			f"\t\tif ({c_name(decl.name)}::which("
+			f"situ_base(raw_) + {name}_offset(),",
+			f"\t\t\t\t{name}_len()) == {c_name(decl.name)}::unknown) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
 
 	def _text_number_check(self, struct: ResolvedStruct,
 			placement: Placement,

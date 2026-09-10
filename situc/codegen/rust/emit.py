@@ -221,6 +221,28 @@ def _pascal(name: str) -> str:
 	return "".join(part.capitalize() or "_" for part in c_name(name).split("_"))
 
 
+def _byte_string(run: bytes) -> str:
+	"""One token as a Rust byte-string literal.
+
+	Escaped rather than rendered: a token may hold a quote, a backslash or
+	a byte with no printable spelling, and `b"..."` has to survive all
+	three. Non-ASCII is not reachable through a `b"..."` literal at all,
+	so those bytes go out as `\\xNN`.
+	"""
+	out = ['b"']
+	for byte in run:
+		if byte == 0x22:		# "
+			out.append('\\"')
+		elif byte == 0x5C:		# backslash
+			out.append("\\\\")
+		elif 0x20 <= byte < 0x7F:
+			out.append(chr(byte))
+		else:
+			out.append(f"\\x{byte:02X}")
+	out.append('"')
+	return "".join(out)
+
+
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
 			basename: str, materialize: bool = False) -> None:
@@ -228,6 +250,7 @@ class Emitter:
 		self.resolved = resolved
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
+		self.tokens   = {decl.name: decl for decl in schema.token_sets()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
 		self.structs  = set(resolved.structs)
@@ -241,20 +264,8 @@ class Emitter:
 		for decl in self.schema.enums():
 			body.extend(self._enum(decl))
 
-		# 0055 is built in the C backend only. Refused loudly rather than
-		# ignored: a token set that generated nothing would leave a schema
-		# stating a vocabulary the code does not enforce, which section 14.5
-		# calls worse than stating nothing -- and the author would have no
-		# way to tell from the output.
 		for token_set in self.schema.token_sets():
-			raise error(
-				f"`{token_set.name}` is a token set, and the Rust backend does "
-				"not generate one yet",
-				token_set.span,
-				label = "not generated here",
-				notes = ["a token set is built in the C backend (0055)",
-				         "generate this schema with `--target c`, or drop "
-				         "the token set"])
+			body.extend(self._tokens(token_set))
 		for name in sorted(self.structs):
 			body.extend(self._struct(self.resolved.structs[name]))
 
@@ -299,6 +310,61 @@ class Emitter:
 		return any(entry.placement.covered_by or entry.placement.derived_by
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries)
+
+	def _tokens(self, decl: ast.TokensDecl) -> list[str]:
+		"""A token set: named spans of differing length, and a lookup (0055).
+
+		A slice of slices rather than `_byte_enum`'s array of equal-width
+		arrays, because the lengths differ -- which is the whole construct.
+		`which` reports the arm rather than a bool: a caller that has to
+		compare the span itself to find out is the caller this replaces.
+		"""
+		arms = self.resolved.layout.env.token_sets[decl.name]
+		how  = "ignoring case" if decl.case_insensitive else "byte for byte"
+		lines = [
+			f"/// tokens {decl.name} -- compared {how}; unknown spellings"
+			f" are {decl.effective_default.value}.",
+			f"pub mod {decl.name} {{",
+			"\tpub const UNKNOWN: u32 = 0xFFFF_FFFF;",
+		]
+		for index, arm in enumerate(arms):
+			lines.append(f"\tpub const {arm.upper()}: u32 = {index};")
+		# The bytes go straight into `ARMS` as byte-string literals rather
+		# than through a `{ARM}_RUN` constant each. It is the idiomatic
+		# spelling, and it removes a collision the suffix would create: an
+		# arm named `helo` beside one named `helo_run` would declare
+		# `HELO_RUN` twice, in a construct whose whole job is to hold a set
+		# of names.
+		rows = ", ".join(_byte_string(run) for run in arms.values())
+		lines.extend([
+			"",
+			f"\tpub const ARMS: [&[u8]; {len(arms)}] = [{rows}];",
+			"",
+			f"\t/// Which member of `{decl.name}` these bytes spell,"
+			" or `UNKNOWN`.",
+			"\t///",
+			"\t/// The length is compared first, so a prefix is not a"
+			" match.",
+			"\t#[must_use]",
+			"\tpub fn which(bytes: &[u8]) -> u32 {",
+		])
+		if decl.case_insensitive:
+			# `eq_ignore_ascii_case` rather than a locale-aware fold: a wire
+			# vocabulary must not move with the reader's environment.
+			lines.append("\t\tmatch ARMS.iter().position(|arm|"
+			             " arm.eq_ignore_ascii_case(bytes)) {")
+		else:
+			lines.append("\t\tmatch ARMS.iter().position(|arm|"
+			             " *arm == bytes) {")
+		lines.extend([
+			"\t\t\tSome(at) => at as u32,",
+			"\t\t\tNone => UNKNOWN,",
+			"\t\t}",
+			"\t}",
+			"}",
+			"",
+		])
+		return lines
 
 	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
 		"""A byte-run enum: named spans rather than a `#[repr]` enum (0052).
@@ -4193,7 +4259,26 @@ class Emitter:
 			])
 
 		lines.extend(self._text_number_checks(struct, placement, base))
+		lines.extend(self._token_checks(placement, base))
 		return lines
+
+	def _token_checks(self, placement: Placement, base: str) -> list[str]:
+		"""A delimited member typed by a token set holds one of its arms.
+
+		Only where the set says `default = error`; `pass` means the protocol
+		has an extension point, and an unknown spelling is a message this
+		reader does not understand rather than a malformed one (0055).
+		"""
+		decl = self.tokens.get(placement.type_name or "")
+		if decl is None or decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+
+		return [
+			f"\t\tif {decl.name}::which(self."
+			f"{_ident(f'{base}_raw')}()) == {decl.name}::UNKNOWN {{",
+			"\t\t\treturn Err(Error::Constraint);",
+			"\t\t}",
+		]
 
 	def _text_number_checks(self, struct: ResolvedStruct,
 			placement: Placement, base: str) -> list[str]:

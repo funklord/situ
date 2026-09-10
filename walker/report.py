@@ -769,6 +769,16 @@ def _validate(image: Image, view: View, struct_index: int,
 						raise Refused(
 							f"placement {index}: {against} pinned run(s) "
 							f"declared, {len(arms)} found")
+					# Folded where the member is case-insensitive, which
+					# for a token set is a property of the SET rather than
+					# of the member's attributes (0055). Without it this
+					# refused `helo` where all four backends take it, and
+					# a fifth description disagreeing wrongly is exactly
+					# what the differential exists to surface.
+					if placement.text_flags & CASE_INSENSITIVE:
+						if data.lower() not in [arm.lower() for arm in arms]:
+							return fail(ERR_CONSTRAINT, index, PINNED_RUN)
+						continue
 					if data not in arms:
 						return fail(ERR_CONSTRAINT, index, PINNED_RUN)
 					continue
