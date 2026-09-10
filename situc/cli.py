@@ -258,6 +258,14 @@ def build_parser() -> argparse.ArgumentParser:
 	fuzz_cmd.add_argument("schema", type=Path)
 	fuzz_cmd.add_argument("--out", type=Path, default=Path("."))
 	fuzz_cmd.add_argument("--prefix", default="situ")
+	# C++ is the other memory-unsafe backend and had no harness at all until
+	# one found two overreads in its first minute (26.325). Its harness is
+	# the differential's own driver, which already names every accessor and
+	# reads them over a byte buffer -- so it is that source with the entry
+	# point libFuzzer wants, rather than a second list of accessors to keep
+	# in step with the first.
+	fuzz_cmd.add_argument("--target", choices=("c", "cpp"), default="c",
+	                      help="which backend's accessors to drive")
 
 	advise_cmd = sub.add_parser("advise", help="ranked, costed schema suggestions")
 	advise_cmd.add_argument("schema", type=Path)
@@ -1068,6 +1076,19 @@ def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 
 	source, resolved, outcomes = analyse(args.schema)
 	name = args.schema.stem
+
+	if args.target == "cpp":
+		from situc.codegen import differ
+
+		text = differ.generate(parse(source), resolved, "cpp", args.prefix)
+		args.out.mkdir(parents=True, exist_ok=True)
+		target = args.out / f"{name}_cpp_fuzz.cpp"
+		target.write_text(text, encoding="ascii")
+		print(f"situc: wrote {target}", file=sys.stderr)
+		_report(args, requirements.warnings(outcomes)
+		        + requirements.deferrals(outcomes))
+		return 0
+
 	text = fuzz.generate(parse(source), resolved, name, args.prefix)
 
 	args.out.mkdir(parents=True, exist_ok=True)

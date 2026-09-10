@@ -147,7 +147,8 @@ OBJS_test_spans		:= $(GEN_DIR)/edges.o codec_impl.c
 # it (which is how test_kernels first failed).
 .SECONDEXPANSION:
 
-.PHONY: all test clean generate fuzz fuzz-generated fuzz-walker run-fuzz
+.PHONY: all test clean generate fuzz fuzz-generated fuzz-cpp \
+	fuzz-walker run-fuzz
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 	$(CODEC_BINS)
@@ -234,7 +235,9 @@ $(foreach name,$(RELATE_NAMES),\
 .SECONDARY: $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.c) \
 	    $(RELATE_NAMES:%=$(GEN_DIR)/%_relate.h) \
 	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c) \
-	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_walk_image.h)
+	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_walk_image.h) \
+	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_cpp_fuzz.cpp) \
+	    $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%.hpp)
 
 $(GEN_DIR)/%.o: $(GEN_DIR)/%.c $(GEN_DIR)/%.h
 	$(CC) $(CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' -c $< -o $@
@@ -314,6 +317,18 @@ $(GEN_DIR)/%_fuzz.c: $(GEN_DIR)/%.h $(SITUC_SOURCES)
 # message is what the fuzzer supplies. Written through a temporary and
 # renamed, so an interrupted `situc pack` leaves no half-written header for
 # the next build to include.
+# The C++ header, which this suite otherwise has no use for -- everything
+# here compiles C. The fuzz harness is the first thing in `test/generated`
+# that needs one, so the rule arrives with it rather than earlier.
+$(GEN_DIR)/%.hpp: $(SITUC_SOURCES)
+	@mkdir -p '$(@D)'
+	cd '$(REPO_ROOT)' && $(SITUC) build '$(SCHEMA_$*)' --target cpp \
+		--out '$(abspath $(GEN_DIR))'
+
+$(GEN_DIR)/%_cpp_fuzz.cpp: $(GEN_DIR)/%.hpp $(SITUC_SOURCES)
+	cd '$(REPO_ROOT)' && $(SITUC) gen-fuzz '$(SCHEMA_$*)' --target cpp \
+		--out '$(abspath $(GEN_DIR))'
+
 $(GEN_DIR)/%_walk_image.h: $(SITUC_SOURCES)
 	@mkdir -p '$(@D)'
 	cd '$(REPO_ROOT)' && $(SITUC) pack '$(SCHEMA_$*)' > '$(abspath $@).bin'
@@ -414,6 +429,10 @@ FUZZ_CC		?= $(firstword $(shell for c in clang clang-19 clang-18 clang-17; \
 FUZZ_SECONDS	?= 30
 FUZZ_DIR	:= $(BUILD_DIR)/fuzz
 FUZZ_CFLAGS	:= -g -O1 -fsanitize=fuzzer,address -fno-omit-frame-pointer
+FUZZ_CXX	?= $(firstword $(shell for c in clang++ clang++-19 clang++-18 \
+			clang++-17; do command -v $$c && break; done) clang++)
+FUZZ_CXXFLAGS	:= -std=c++17 -g -O1 -fsanitize=fuzzer,address \
+		   -fno-omit-frame-pointer
 WALKER_DIR	:= $(REPO_ROOT)/walker/c
 WALKER_SRC	:= $(WALKER_DIR)/situ_walk.c
 FUZZ_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/%)
@@ -421,6 +440,34 @@ FUZZ_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/%)
 # The same schemas walked rather than accessed. `walk_fuzz.c` is one source
 # for all of them -- the image is what differs, and it is included by name.
 WALK_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/walk_%)
+
+# And the same schemas through the C++ accessors, which had no harness at
+# all until one found two overreads in its first minute (26.325). The
+# harness is the differential's own driver with libFuzzer's entry point,
+# so the accessors it names are the ones the differential already compares.
+CPP_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/cpp_%)
+
+# The C++ harness. `situ.c` is C and the driver is C++, so the runtime is
+# an object of its own rather than a source on the same command line --
+# `clang++ -std=c++17` refuses a `.c` outright. `fuzzer-no-link` because
+# libFuzzer's `main` belongs to the link, which the driver does.
+#
+# The header goes in as `unit.hpp` because that is what the driver includes:
+# the differential compiles one schema at a time into a directory of its
+# own, and this keeps that true rather than teaching the generator a second
+# name for the same file.
+$(FUZZ_DIR)/situ_fuzz.o: $(RUNTIME_INC)/situ.c
+	@mkdir -p '$(@D)'
+	$(FUZZ_CC) -g -O1 -fsanitize=fuzzer-no-link,address \
+		-fno-omit-frame-pointer -I'$(RUNTIME_INC)' -c $< -o $@
+
+$(FUZZ_DIR)/cpp_%: $(GEN_DIR)/%_cpp_fuzz.cpp $(GEN_DIR)/%.hpp \
+		$(FUZZ_DIR)/situ_fuzz.o
+	@mkdir -p '$(@D)' '$(FUZZ_DIR)/hpp_$*'
+	cp '$(GEN_DIR)/$*.hpp' '$(FUZZ_DIR)/hpp_$*/unit.hpp'
+	$(FUZZ_CXX) $(FUZZ_CXXFLAGS) -DSITU_FUZZ -I'$(RUNTIME_INC)' \
+		-I'$(REPO_ROOT)/runtime/cpp' -I'$(FUZZ_DIR)/hpp_$*' \
+		$< $(FUZZ_DIR)/situ_fuzz.o -o $@
 
 # The walker harness: `-I$(GEN_DIR)` is how `walk_image.h` resolves, and the
 # per-schema image is renamed into place so one source can include a fixed
@@ -441,7 +488,7 @@ $(FUZZ_DIR)/%: $(GEN_DIR)/%_fuzz.c $(GEN_DIR)/%.c
 # Split so CI can run the two sets side by side. `fuzz` is both, which is
 # what somebody at a terminal means; 74 harnesses at a minute each is over
 # an hour in one job and two jobs of forty minutes in parallel.
-fuzz: fuzz-generated fuzz-walker
+fuzz: fuzz-generated fuzz-cpp fuzz-walker
 
 fuzz-generated: $(FUZZ_RUNNERS) $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
 	@$(MAKE) --no-print-directory RUN_FUZZ='$(FUZZ_RUNNERS)' run-fuzz
@@ -460,6 +507,10 @@ fuzz-generated: $(FUZZ_RUNNERS) $(FUZZ_SCHEMAS:%=$(GEN_DIR)/%_fuzz.c)
 		echo "no crash in $$real harnesses; $${empty}have no parseable" \
 		     "struct and test nothing"; \
 	else echo "no crash in $$real harnesses"; fi
+
+fuzz-cpp: $(CPP_RUNNERS)
+	@$(MAKE) --no-print-directory RUN_FUZZ='$(CPP_RUNNERS)' run-fuzz
+	@echo "no crash in $(words $(CPP_RUNNERS)) C++ harnesses"
 
 fuzz-walker: $(WALK_RUNNERS)
 	@$(MAKE) --no-print-directory RUN_FUZZ='$(WALK_RUNNERS)' run-fuzz

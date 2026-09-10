@@ -50,7 +50,7 @@ export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
-	fuzz fuzz-generated fuzz-walker \
+	fuzz fuzz-generated fuzz-cpp fuzz-walker \
 	veryclean distclean style style-source style-docs hooks walk-c
 	cross cross-test install uninstall clean help deb deb-check
 
@@ -182,6 +182,9 @@ fuzz:
 # both and is what somebody at a terminal means.
 fuzz-generated:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-generated
+
+fuzz-cpp:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-cpp
 
 fuzz-walker:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-walker

@@ -25880,6 +25880,17 @@ about whether the frame reaches that far. All four now check both; Rust
 panicked and Python raised before, which is safe and is still four answers
 to one question.
 
+**Wired in, and it is a third fuzz job.** `gen-fuzz --target cpp` emits
+the driver; the Makefile grows a rule for the C++ header, which nothing in
+`test/generated` had needed before, and one for the runtime as an object of
+its own -- `clang++ -std=c++17` refuses a `.c` on the same command line, so
+`situ.c` is compiled separately with `fuzzer-no-link`. Its own corpus key,
+because the inputs that reach a C++ accessor are not the ones that reach a
+walker, and 111 harnesses at a minute each is nearly two hours in series
+against three parallel jobs of forty minutes.
+
+39 harnesses, 5.97 million executions at eight seconds each, clean.
+
 **Two of the three tests written for this were vacuous, and the sabotage
 said so both times.** The runtime one gave acquisition an escape hatch --
 "acquisition refused it, which is also fine" -- and a one-byte frame is

@@ -317,6 +317,55 @@ jobs:
             build/host/tests/fuzz/corpus/**/oom-*
           if-no-files-found: warn
 
+  # C++ is the other memory-unsafe backend, and it had no harness at all
+  # until one found two overreads in its first minute (26.325): an extent
+  # reading a length past the frame, and an arm accessor that asked which
+  # arm rather than whether the bytes were there. Rust panics and Python
+  # raises; these two read on.
+  #
+  # Its own job for the reason the walker has one -- 111 harnesses at a
+  # minute each is nearly two hours in series -- and its own corpus, because
+  # the inputs that reach a C++ accessor are not the ones that reach a
+  # walker.
+  fuzz-cpp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - uses: actions/cache@v4
+        with:
+          path: build/host/tests/fuzz/corpus
+          key: cpp-corpus-${{ github.sha }}
+          restore-keys: |
+            cpp-corpus-
+
+      - name: Report what will build the harnesses
+        run: |
+          set -o pipefail
+          clang --version | head -1
+          clang++ --version | head -1
+          python3 --version
+
+      - name: make fuzz-cpp
+        run: make fuzz-cpp FUZZ_SECONDS=60
+
+      - name: Keep whatever crashed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpp-crashes
+          path: |
+            build/host/tests/fuzz/corpus/**/crash-*
+            build/host/tests/fuzz/corpus/**/leak-*
+            build/host/tests/fuzz/corpus/**/timeout-*
+            build/host/tests/fuzz/corpus/**/oom-*
+          if-no-files-found: warn
+
   # The walker is the OTHER reading of the same layouts, and it had no fuzz
   # harness at all: it is held to the Python walker on hand-written cases,
   # so every byte it had ever seen was a byte this repository chose. The
