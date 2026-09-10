@@ -25901,6 +25901,59 @@ static one matched `SITU_ERR_BOUNDS`, which C's other refusals return too;
 it matches `!situ_in_bounds(view,` now. Same correction as 26.322's, in the
 same session, by the same hand.
 
+### 26.326 Two empty sweeps and a detector worth keeping
+
+26.325's arm accessor asked which arm and not whether the bytes were there.
+The family it belongs to is "an accessor that is conditionally present", so
+the other members were checked and both are sound.
+
+**Versioned members already carry the bound**, in the getter and the
+setter, in all four backends: `if (!situ_in_bounds(view, 3u, 4u))` beside
+`if (ver < 2u)`. **Setters at computed offsets carry it too** --
+`situ_framed_count_set` writes only inside `situ_in_bounds(view,
+situ_framed_count_offset(view), 2u)` -- and **arms have no setters at
+all**, so the write half of the arm question does not exist. Three lenses,
+three empty results, recorded because an absence of findings and an absence
+of looking print the same thing.
+
+**What came out of it is a detector.** An accessor with no bounds check is
+safe exactly when it stays inside `SIZE_MIN`, because that is the whole of
+what acquisition promises. So: every unguarded constant-offset reader in
+the generated C, against its own struct's minimum. 394 of them across the
+corpus, none past it.
+
+**The zero is a measurement because the control fires.** Removing the guard
+26.325 added puts exactly one back -- `situ_label_body_pointer_low_get
+needs 2, minimum 1` -- and nothing else.
+
+**The detector was wrong twice before it was right, both times about its
+own instrument rather than about the tree.** It counted `situ_base(view) +
+N` in a `_ptr` function as a read, and eighteen pointers at exactly the
+minimum came back as findings -- an address one past the fixed part is not
+a dereference. And `situ_get_ne16` was missing from the width table, so a
+two-byte native read was charged as eight.
+
+**Then it charged a member against the wrong struct.** Owner by longest
+matching prefix said `situ_image_relation_must_count_get` belonged to
+`image_relation_must`, whose minimum is 8, when it is `image_relation`'s
+`must_count` and the minimum is 24. Both structs exist and one name is a
+prefix of the other. The map is built the way the emitter builds the name
+now, which is the difference between asking the schema and guessing from a
+string.
+
+**And the scratch sweep could not see the schema that produced that.** It
+globbed `example/` and `test/schema/`; the test uses
+`every_schema.SCHEMAS`, which includes `std/`. The finding was a false
+positive, but it was a finding the narrower scope could not have made
+either way -- which is `evidence.md`'s point about choosing where to look
+before knowing who owns the answer.
+
+**What it cannot see is in its docstring**, because a detector whose limits
+are unwritten gets quoted for guarantees it never made: a read at a
+computed offset, a read through a returned pointer, and any guard spelled
+differently from the four it knows. It is a floor under one shape of
+mistake.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

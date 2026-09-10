@@ -1990,6 +1990,96 @@ def test_the_harness_reads_an_unverified_interior_without_a_gate() -> None:
 	assert "situ_S_body_t gate;" not in text
 
 
+#: How wide each byte-order load reads, so an offset can be turned into a
+#: span. Anything unlisted counts as eight, which over-reports rather than
+#: under-reports -- the direction to be wrong in for a detector.
+_LOAD_WIDTH = {f"situ_get_{end}{bits}": bits // 8
+               for end in ("be", "le", "ne") for bits in (16, 24, 32, 64)}
+
+_READER = re.compile(
+	r"static inline ([^\n]*?)\b(situ_\w+?)\(situ_view_t view[^)]*\)\s*\n"
+	r"\{(.*?)\n\}", re.S)
+
+
+def _constant_reads(body: str) -> list[tuple[int, int]]:
+	"""The (offset, width) pairs a body reads at a constant offset."""
+	found = [(int(m.group(2)), _LOAD_WIDTH.get(m.group(1), 8))
+	         for m in re.finditer(
+		         r"(situ_get_\w+)\(\s*situ_base\(view\)\s*\+\s*(\d+)u",
+		         body)]
+	found += [(int(m.group(1)), 1)
+	          for m in re.finditer(r"\(situ_base\(view\)\)\[(\d+)u\]", body)]
+	return found
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_no_unguarded_reader_reaches_past_the_minimum(path: Path) -> None:
+	"""An accessor with no bounds check is safe only inside `SIZE_MIN`.
+
+	That is the whole of what acquisition promises: a frame shorter than the
+	struct is refused there, so a reader at a constant offset within the
+	minimum needs no check of its own and every one of them is written
+	without one. A reader that reaches PAST the minimum has no such promise,
+	and `dnsname`'s `label` is the case -- one byte at its smallest, with
+	`body_pointer_low` reading byte 1 whenever `form` says 3 (26.325).
+
+	Because it is a property of the generated text rather than of one
+	member, this sweeps the corpus: 394 unguarded constant-offset readers,
+	none of them past its own minimum. Removing the guard that fix added
+	puts exactly one back, which is what makes the zero a measurement.
+
+	What it cannot see, said plainly rather than left for somebody to
+	assume: a read at a computed offset, a read through a pointer the
+	function returns, and any guard spelled differently from the four it
+	knows. It is a floor under one shape of mistake, not a proof of bounds.
+	"""
+	source, resolved, _ = analyse(path)
+	header = generate(parse(source), resolved, path.stem).header
+
+	minimum = {m.group(1).lower(): int(m.group(2))
+	           for m in re.finditer(r"#define SITU_(\w+)_SIZE_MIN\s+(\d+)u",
+	                                header)}
+
+	# Which struct a function belongs to, built the way the emitter builds
+	# the name rather than guessed from it. Guessing picked the longest
+	# matching prefix, and `situ_image_relation_must_count_get` is
+	# `image_relation`'s `must_count` where `image_relation_must` is also a
+	# struct -- so it was charged against the wrong minimum and reported a
+	# member that fits as one that does not.
+	from situc.codegen.c.names import c_name
+
+	owns = {}
+	for struct in resolved.structs.values():
+		for entry in struct.entries:
+			path_ = entry.placement.path
+			if not path_.startswith(struct.name + "."):
+				continue
+			local = c_name(path_[len(struct.name) + 1:])
+			for suffix in ("get", "ptr", "len", "count"):
+				owns[f"situ_{c_name(struct.name)}_{local}_{suffix}"] = \
+					struct.name.lower()
+
+	past = []
+	for _ret, name, body in _READER.findall(header):
+		if any(guard in body for guard in
+		       ("situ_in_bounds", "situ_min_u32", "situ_remaining_u32",
+		        "index >= ")):
+			continue
+		reads = _constant_reads(body)
+		if not reads:
+			continue
+		owner = owns.get(name)
+		if owner is None or owner not in minimum:
+			continue
+		worst = max(at + wide for at, wide in reads)
+		if worst > minimum[owner]:
+			past.append(f"{name} needs {worst} bytes, minimum {minimum[owner]}")
+
+	assert not past, (
+		f"{path.name}: unguarded reader(s) past the struct's minimum:\n  "
+		+ "\n  ".join(past))
+
+
 def test_the_smoke_input_clears_every_size_floor() -> None:
 	"""The smoke test feeds each harness a fixed number of random bytes, and
 	a harness returns at its struct's SIZE_MIN before touching anything.
