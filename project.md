@@ -25960,6 +25960,45 @@ mistake.
 with the framing that situ is the protocol swiss-army knife and text is
 where the blade is currently shortest.
 
+**THE VOCABULARY IS NOT FROZEN, AND THAT IS THE POINT OF DOING THIS NOW.**
+Instructed the same day: what is already spelled one way may be spelled
+another if the other is better, and the affected `.situ` files get fixed.
+This is not an invitation to churn; it is a window that closes. A keyword
+published and depended on is a keyword nobody can move.
+
+**So the plan may revise as well as extend**, which the paragraph below
+about second askers does not cover -- that rule governs ADDING a construct,
+and says nothing about renaming or reshaping one that is already here.
+
+**What it costs today, measured rather than assumed**, because "we can fix
+the affected files" is true and is the small half. For four representative
+keywords, occurrences across the tree:
+
+    keyword       schemas    situc     test     docs
+    until              73      277      482      198
+    trim               18       47       46       45
+    encoding           37      255      801      164
+    decimal            15       62       88       68
+
+The 40 schemas are about seven per cent of it. The rest is the compiler,
+the suite, and a grammar kept in three places -- section 7,
+`doc/grammar.ebnf` and the parser -- which `test_grammar_sync` holds
+against each other, so a keyword moves in all three or the build says so.
+The prose figures are upper bounds: `until`, `while`, `skip` and `trim` are
+English words and the greps cannot tell a keyword from a sentence.
+
+**Binary keywords are mostly static and text keywords are very dynamic, and
+the vocabulary should keep them at a distance.** The holder's second
+instruction, and it is a real design axis rather than a matter of taste: a
+`u32` at a fixed offset and a run that ends wherever a scan finds a byte
+are different kinds of claim, and a reader should be able to see which kind
+a line is making without resolving it. There is overlap -- `max` bounds
+both a scan and an array, `[minimal]` is canonicity for a text number and
+canonicity is a binary axis too -- so the distance is not a partition. What
+it rules out is a spelling that makes a dynamic thing look static, which is
+the mistake the `offset = Scanned` and `repr = TextConverted` axes were
+added to stop the lattice making (26.21).
+
 **What exists is more than a plan should re-derive.** 8.6.1 through 8.6.6
 are already a text vocabulary: delimited members with alternative
 delimiters and a `max` bound; text-encoded numbers, signed and unsigned,
@@ -25972,14 +26011,15 @@ describe a value inside an array inside an object. `http`, `smtp`, `json`,
 `cpio` and `slip` are written in it and compared across four backends over
 random bytes.
 
-**The boundary is not a gap and the plan must not treat it as one.** 8.6.5:
-"what stays out is a grammar: alternation, repetition and rule references",
-argued in `doc/decision/0020-delimited-data.md`. A field whose text holds
-an expression language is not a layout. Any vocabulary proposed here works
-inside that line or argues explicitly for moving it -- and moving it is a
-different decision from adding a construct.
+**The grammar boundary is not a gap and the plan must not treat it as
+one.** 8.6.5: "what stays out is a grammar: alternation, repetition and
+rule references", argued in `doc/decision/0020-delimited-data.md`. A field
+whose text holds an expression language is not a layout. Any vocabulary
+proposed here works inside that line or argues explicitly for moving it --
+and moving it is a different decision again from either adding or renaming
+a construct.
 
-**And the tree already has a rule for how a construct arrives**, written in
+**For an ADDITION the tree already has a rule**, written in
 `example/smtp/smtp.situ` and worth obeying rather than restating: "a
 language addition wants a second protocol asking for the same thing and one
 example is not that". `while` (8.6.6) is the worked case -- SMTP asked,
@@ -26008,10 +26048,9 @@ second asker yet, which is exactly the gap the paragraph above describes:
 
 **What this entry is for** is that the assessment happens once, with the
 whole picture, rather than a construct at a time from whichever schema
-noticed first. The vocabulary is the copyright holder's to settle; what is
-owed first is the evidence -- protocols written down, and what each of them
-could not say.
-
+noticed first -- and that it happens while the spelling is still free to
+move. The vocabulary is the copyright holder's to settle; what is owed
+first is the evidence: protocols written down, and what each could not say.
 ### 26.328 The harness that could not call the accessor it was for
 
 26.325 found an arm accessor reading past its frame in C, and found it with
