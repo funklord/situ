@@ -972,7 +972,9 @@ outside ASCII -- SLIP's 0xC0 -- can be written.
 
 **Where situ stops is a grammar.** A field whose *text* contains an expression
 language is not a layout, and situ describes the layout around it rather than
-generating a parser for it. Section 8.6.6 is where that line is drawn.
+generating a parser for it. Section 8.6.5 is where that line is drawn --
+"what stays out is a grammar: alternation, repetition and rule
+references" -- and `doc/decision/0020-delimited-data.md` argues it.
 
 ### Registers
 
@@ -1235,7 +1237,7 @@ text files a reviewer can read.
   error class of its own so that a receiver does not log its own
   configuration as an attack (decision 0054).
 - No grammar inside a field. A field whose text holds an expression language
-  is not a layout; situ describes the layout around it (section 8.6.6).
+  is not a layout; situ describes the layout around it (section 8.6.5).
 - **No transform that has to allocate.** A codec whose output is not a view
   over its input -- deflate, LZ4, anything with overlapping copies into a
   second buffer -- stays tier 1: situ checks the contract and the caller
