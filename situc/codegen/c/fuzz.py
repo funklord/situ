@@ -22,7 +22,8 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	data_sized, has_computable_extent, indexed_elements, own_entries,
+	arm_members, data_sized, has_computable_extent, indexed_elements,
+	own_entries,
 )
 
 
@@ -449,6 +450,110 @@ def _erases(struct: ResolvedStruct, prefix: str) -> list[str]:
 	return lines
 
 
+def _arm_reads(struct: ResolvedStruct, placement: Placement, prefix: str,
+		resolved: ResolvedSchema) -> list[str]:
+	"""Every arm of a variant, through the accessor its shape gets.
+
+	`own_entries` drops a dotted path, so an arm member never reached the
+	walk on its own and this harness had asked about none of them -- the
+	same gap the sealed interiors had, one family over (26.318). It is why
+	`dnsname`'s `label.body.pointer_low` read a byte past a one-byte frame
+	for as long as it did: the C harness could not call it, and the defect
+	surfaced only when the C++ backend got a harness built from the
+	differential's driver, which does probe arms (26.325).
+
+	The four shapes are the four `_arm_member` emits, in its order, so this
+	names an accessor exactly when that one wrote it. Anything else gets no
+	call rather than a guess -- a harness naming a function the backend
+	declined to emit is a build failure across every schema, which is a
+	loud way to learn the dispatch has a fifth branch.
+	"""
+	lines: list[str] = []
+	for _arm, member in arm_members(struct, placement):
+		if member is None:
+			continue
+		scalar = member.scalar
+		local  = c_name(member.path[len(struct.name) + 1 :])
+
+		# 1. A plain scalar arm.
+		if scalar is not None and member.array_count is None \
+				and member.sized_by is None and not data_sized(member):
+			lines.extend([
+				"\t{",
+				f"\t\t{_ctype_of(member)} held = 0;",
+				"",
+				f"\t\tif ({ident(prefix, struct.name, local, 'get')}"
+				"(view, &held) == SITU_OK) {",
+				"\t\t\tsitu_fuzz_sink((uint64_t)held);",
+				"\t\t}",
+				"\t}",
+			])
+			continue
+
+		# 2. A byte run. The LAST byte it claims, for the reason `_reads`
+		# gives: the length is the attacker's and an off-by-one in the
+		# extent shows up at the end rather than the start.
+		if scalar is not None and scalar.bits == BITS_PER_BYTE \
+				and not indexed_elements(member):
+			lines.extend([
+				"\t{",
+				"\t\tconst uint8_t *held = NULL;",
+				"\t\tuint32_t       n    = 0u;",
+				"",
+				f"\t\tif ({ident(prefix, struct.name, local, 'ptr')}"
+				"(view, &held, &n) == SITU_OK",
+				"\t\t\t\t&& held != NULL && n != 0u) {",
+				"\t\t\tsitu_fuzz_sink((uint64_t)held[n - 1u]);",
+				"\t\t}",
+				"\t}",
+			])
+			continue
+
+		# 3. A run of values wider than a byte: a count and an indexed
+		# getter, the bytes not being the values.
+		if scalar is not None and indexed_elements(member):
+			lines.extend([
+				"\t{",
+				"\t\tuint32_t n = 0u;",
+				"",
+				f"\t\tif ({ident(prefix, struct.name, local, 'count')}"
+				"(view, &n) == SITU_OK) {",
+				"\t\t\tuint32_t i;",
+				"",
+				"\t\t\tfor (i = 0u; i < n && i < 64u; i++) {",
+				f"\t\t\t\t{_ctype_of(member)} held = 0;",
+				"",
+				f"\t\t\t\tif ({ident(prefix, struct.name, local, 'get')}"
+				"(view, i, &held) == SITU_OK) {",
+				"\t\t\t\t\tsitu_fuzz_sink((uint64_t)held);",
+				"\t\t\t\t}",
+				"\t\t\t}",
+				"\t\t}",
+				"\t}",
+			])
+			continue
+
+		# 4. A struct-typed arm: the sub-view, which is itself the bounds
+		# check. Its own members belong to its type and are fuzzed under
+		# that struct's own harness.
+		nested = resolved.structs.get(member.type_name or "")
+		if nested is not None and member.array_count is None \
+				and member.sized_by is None \
+				and (nested.layout.is_fixed_size
+				     or has_computable_extent(resolved.structs, nested)):
+			lines.extend([
+				"\t{",
+				"\t\tsitu_view_t arm;",
+				"",
+				f"\t\tif ({ident(prefix, struct.name, local, 'view')}"
+				"(view, &arm) == SITU_OK) {",
+				"\t\t\tsitu_fuzz_sink((uint64_t)arm.limit);",
+				"\t\t}",
+				"\t}",
+			])
+	return lines
+
+
 def _reads(struct: ResolvedStruct, prefix: str,
 		resolved: ResolvedSchema) -> list[str]:
 	lines = []
@@ -524,6 +629,10 @@ def _reads(struct: ResolvedStruct, prefix: str,
 
 		if placement.kind == "sealed":
 			lines.extend(_sealed_read(struct, placement, prefix))
+			continue
+
+		if placement.kind == "variant":
+			lines.extend(_arm_reads(struct, placement, prefix, resolved))
 			continue
 
 		if placement.kind == "marker":

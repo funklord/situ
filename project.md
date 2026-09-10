@@ -25954,6 +25954,89 @@ computed offset, a read through a returned pointer, and any guard spelled
 differently from the four it knows. It is a floor under one shape of
 mistake.
 
+### 26.327 A vocabulary for text protocols, to be designed
+
+**Status: not started.** Asked for by the copyright holder on 2026-09-10,
+with the framing that situ is the protocol swiss-army knife and text is
+where the blade is currently shortest.
+
+**What exists is more than a plan should re-derive.** 8.6.1 through 8.6.6
+are already a text vocabulary: delimited members with alternative
+delimiters and a `max` bound; text-encoded numbers, signed and unsigned,
+decimal and hex, with `[minimal]` making the canonical axis mean something;
+runs of records; `[trim]` and a per-file `whitespace` set; `skip`;
+`[case_insensitive]`, `[quoted]`, `[escape]`, `[nul_terminated]`;
+`[encoding = ascii | utf8 | utf16le | leb128]` with real validity checks;
+and recursion bounded by `[depth]`, which is what lets `example/json`
+describe a value inside an array inside an object. `http`, `smtp`, `json`,
+`cpio` and `slip` are written in it and compared across four backends over
+random bytes.
+
+**The boundary is not a gap and the plan must not treat it as one.** 8.6.5:
+"what stays out is a grammar: alternation, repetition and rule references",
+argued in `doc/decision/0020-delimited-data.md`. A field whose text holds
+an expression language is not a layout. Any vocabulary proposed here works
+inside that line or argues explicitly for moving it -- and moving it is a
+different decision from adding a construct.
+
+**And the tree already has a rule for how a construct arrives**, written in
+`example/smtp/smtp.situ` and worth obeying rather than restating: "a
+language addition wants a second protocol asking for the same thing and one
+example is not that". `while` (8.6.6) is the worked case -- SMTP asked,
+IPv6 extension headers asked second, and it landed then. So the first half
+of this work is not design at all: it is writing more text protocols as
+schemas and recording what each cannot say.
+
+**Candidates, to be assessed rather than adopted.** None of these has a
+second asker yet, which is exactly the gap the paragraph above describes:
+
+- **Folded or continued lines** -- a value continued on the next line
+  when that line begins with whitespace. HTTP deprecated it; RFC 5322
+  has it; several MIME-adjacent formats need it.
+- **Parameter lists** -- `; k=v; k="v"` after a value, which is a delimited
+  run inside a delimited member with its own quoting.
+- **A token set** -- a text field whose value is one of a named set,
+  compared case-insensitively, which today is a byte run plus a caller's
+  comparison.
+- **Separator versus terminator** for a list, which `until` and `while`
+  approach from two sides and neither states directly.
+- **Required versus optional whitespace**, where `[trim]` and `skip` cover
+  the optional half.
+- **Percent, base64 and quoted-printable**, probably tier 1 codecs over a
+  delimited span rather than new syntax -- and saying so is part of the
+  assessment.
+
+**What this entry is for** is that the assessment happens once, with the
+whole picture, rather than a construct at a time from whichever schema
+noticed first. The vocabulary is the copyright holder's to settle; what is
+owed first is the evidence -- protocols written down, and what each of them
+could not say.
+
+### 26.328 The harness that could not call the accessor it was for
+
+26.325 found an arm accessor reading past its frame in C, and found it with
+the C++ harness. The C one had been running over `dnsname` since phase 22
+and could not have: `own_entries` drops a dotted path, so an arm member
+never reached the walk and the harness named none of them. Zero arm calls
+across 37 harnesses.
+
+**The same gap as the sealed interiors** (26.318), one family over, and the
+same fix: a branch on `kind == "variant"` that walks `arm_members` and
+calls whichever of the four accessors that arm's shape gets -- a scalar's
+`_get`, a byte run's `_ptr` with its length, an indexed run's `_count` and
+indexed getter, a struct arm's `_view`. The conditions are `_arm_member`'s
+own, in its order, so the harness names an accessor exactly when the
+emitter wrote one. A fifth branch appearing there is a build failure in 37
+harnesses at once, which is a loud way to find out.
+
+70 arm reads now, and the control fires: with 26.325's bound removed the C
+harness reports the overread through `fuzz_label` in under a minute, where
+before it ran clean for ever.
+
+**The sweep with the new coverage found nothing else** -- 37 harnesses, no
+crash. Recorded because an empty sweep and a sweep that could not reach
+anything print the same thing, and this harness has now been both.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
