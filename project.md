@@ -25960,19 +25960,35 @@ mistake.
 with the framing that situ is the protocol swiss-army knife and text is
 where the blade is currently shortest.
 
-**THE VOCABULARY IS NOT FROZEN, AND THAT IS THE POINT OF DOING THIS NOW.**
-Instructed the same day: what is already spelled one way may be spelled
-another if the other is better, and the affected `.situ` files get fixed.
-This is not an invitation to churn; it is a window that closes. A keyword
-published and depended on is a keyword nobody can move.
+**FEATURES FIRST, THEN NORMALIZE. THAT ORDER IS THE INSTRUCTION.** Settled
+by the copyright holder on 2026-09-10, correcting this entry's first
+version, which had the window as a reason to normalize NOW. It is the
+reason it is safe to normalize LATER: a vocabulary is normalized against
+what it must support, and that is not known until the featureset is. Doing
+it early means doing it twice, and the early pass is the one spent on
+incomplete information.
 
-**So the plan may revise as well as extend**, which the paragraph below
-about second askers does not cover -- that rule governs ADDING a construct,
-and says nothing about renaming or reshaping one that is already here.
+**So the work has two phases and only the first is open.** Build the
+featureset out -- the candidates below, and whatever writing more text
+protocols turns up -- accepting that the spelling is provisional while that
+happens. Then one deliberate pass that revises and normalizes the whole of
+it, with the requirements in hand.
 
-**What it costs today, measured rather than assumed**, because "we can fix
-the affected files" is true and is the small half. For four representative
-keywords, occurrences across the tree:
+**What keeps the second phase possible is that nothing is frozen.** The
+holder's other instruction the same day: what is spelled one way may be
+spelled another if the other is better, and the affected `.situ` files get
+fixed. That is a window, and it stays open only while the vocabulary is not
+published and depended on -- so the cost of the normalizing pass is a
+schedule constraint on it, not an argument for bringing it forward.
+
+**It also settles something this entry had left ambiguous.** The rule
+`example/smtp` states -- "a language addition wants a second protocol
+asking for the same thing" -- governs ADDING a construct during phase one.
+It says nothing about renaming or reshaping one in phase two, which is a
+different act again from moving the boundary in 8.6.5.
+
+**What the second phase will cost, measured now so it is not a surprise
+then.** For four representative keywords, occurrences across the tree:
 
     keyword       schemas    situc     test     docs
     until              73      277      482      198
@@ -25987,17 +26003,23 @@ against each other, so a keyword moves in all three or the build says so.
 The prose figures are upper bounds: `until`, `while`, `skip` and `trim` are
 English words and the greps cannot tell a keyword from a sentence.
 
+**And the number grows with the featureset**, which is the honest tension
+in "later" and is recorded rather than argued away: every construct phase
+one adds is more to rename in phase two. The holder has weighed that
+against normalizing on requirements nobody has yet, and taken the second
+cost.
+
 **Binary keywords are mostly static and text keywords are very dynamic, and
-the vocabulary should keep them at a distance.** The holder's second
-instruction, and it is a real design axis rather than a matter of taste: a
-`u32` at a fixed offset and a run that ends wherever a scan finds a byte
-are different kinds of claim, and a reader should be able to see which kind
-a line is making without resolving it. There is overlap -- `max` bounds
-both a scan and an array, `[minimal]` is canonicity for a text number and
-canonicity is a binary axis too -- so the distance is not a partition. What
-it rules out is a spelling that makes a dynamic thing look static, which is
-the mistake the `offset = Scanned` and `repr = TextConverted` axes were
-added to stop the lattice making (26.21).
+the vocabulary should keep them at a distance.** The holder's third
+instruction, and the one phase two is really about: a `u32` at a fixed
+offset and a run that ends wherever a scan finds a byte are different kinds
+of claim, and a reader should be able to see which kind a line is making
+without resolving it. There is overlap -- `max` bounds both a scan and an
+array, `[minimal]` is canonicity for a text number and canonicity is a
+binary axis too -- so the distance is not a partition. What it rules out is
+a spelling that makes a dynamic thing look static, which is the mistake the
+`offset = Scanned` and `repr = TextConverted` axes were added to stop the
+lattice making (26.21).
 
 **What exists is more than a plan should re-derive.** 8.6.1 through 8.6.6
 are already a text vocabulary: delimited members with alternative
@@ -26027,30 +26049,60 @@ IPv6 extension headers asked second, and it landed then. So the first half
 of this work is not design at all: it is writing more text protocols as
 schemas and recording what each cannot say.
 
-**Candidates, to be assessed rather than adopted.** None of these has a
-second asker yet, which is exactly the gap the paragraph above describes:
+**The outstanding featureset, which is what "what is missing" means.**
+Seven items. The split matters more than the list: two are already
+written down in this tree as workarounds, and the other five are
+asserted from the protocols rather than measured here.
+
+**Recorded in the tree, so not candidates.**
+
+- **A text token set** -- a field whose value is one of a named set.
+  cpio writes `decimal u32 magic[6] [min = 70701, max = 70702]` with the
+  comment "there is no enum of text numbers, and the alternative is six
+  bytes nothing constrains", and json writes `true`, `false` and `null`
+  as three structs of `[must_eq = "rue"]`, `"alse"` and `"ull"` behind a
+  first-byte discriminant. Two protocols, two different workarounds,
+  both committed. By 8.6.6's own rule this one has its second asker and
+  is waiting on nothing.
+- **A fractional text number** -- json's `number` is
+  `u8 rest[] before ',' | ']' | '}' [trim]`, an untyped byte run in the
+  one place a JSON reader most wants a number. `decimal` and `hex`
+  cover integers and nothing covers a fraction or an exponent. One
+  asker recorded; CSV or a config format is the obvious second and
+  neither is written yet.
+
+**Asserted from the protocols, and each wants its schema written before
+it is designed.** Naming them is not measuring them, and the naming
+here is mine rather than the tree's:
 
 - **Folded or continued lines** -- a value continued on the next line
-  when that line begins with whitespace. HTTP deprecated it; RFC 5322
-  has it; several MIME-adjacent formats need it.
-- **Parameter lists** -- `; k=v; k="v"` after a value, which is a delimited
-  run inside a delimited member with its own quoting.
-- **A token set** -- a text field whose value is one of a named set,
-  compared case-insensitively, which today is a byte run plus a caller's
-  comparison.
+  when that line begins with whitespace. RFC 5322 has it, iCalendar
+  wraps at 75 octets, HTTP deprecated it and still receives it.
+- **Parameter lists** -- `; k=v; k="v"` after a value, a delimited run
+  inside a delimited member with its own quoting. `Content-Type`, SIP
+  headers and iCalendar properties are one shape; http.situ stops at the
+  header value and says in a comment that it does.
 - **Separator versus terminator** for a list, which `until` and `while`
   approach from two sides and neither states directly.
-- **Required versus optional whitespace**, where `[trim]` and `skip` cover
-  the optional half.
-- **Percent, base64 and quoted-printable**, probably tier 1 codecs over a
-  delimited span rather than new syntax -- and saying so is part of the
-  assessment.
+- **Required versus optional whitespace** -- HTTP's grammar separates
+  RWS from OWS, and `[trim]` and `skip` cover only the second.
+- **Percent, base64 and quoted-printable** -- probably tier 1 codecs over
+  a delimited span rather than new syntax. Establishing that IS the
+  assessment rather than a preliminary to it.
 
-**What this entry is for** is that the assessment happens once, with the
-whole picture, rather than a construct at a time from whichever schema
-noticed first -- and that it happens while the spelling is still free to
-move. The vocabulary is the copyright holder's to settle; what is owed
-first is the evidence: protocols written down, and what each could not say.
+**So phase one has names, not an appetite.** The protocols that would
+supply the missing askers: RFC 5322 headers and iCalendar for folding,
+a `Content-Type` or SIP schema for parameters, CSV for the fractional
+number and for separator-versus-terminator, a URI schema for
+percent-decoding. Each is a schema written against a real capture, and
+what it could not say is the finding.
+
+**What this entry is for** is that the normalizing happens once, against a
+featureset that is known, rather than a construct at a time from whichever
+schema noticed first. Phase one is the open one and it is evidence work:
+protocols written down, and what each could not say. Phase two is the
+copyright holder's to settle, and it is gated on phase one being done
+rather than on anybody's patience with the spelling in the meantime.
 ### 26.328 The harness that could not call the accessor it was for
 
 26.325 found an arm accessor reading past its frame in C, and found it with
