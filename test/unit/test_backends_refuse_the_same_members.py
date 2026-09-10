@@ -549,3 +549,60 @@ def test_c_and_rust_validate_the_same_arms(path: Path) -> None:
 	assert in_c == in_rs, (
 		f"{path.name}: C validates {in_c} variant arms and Rust {in_rs}; "
 		f"the schema means different things in the two languages")
+
+SHORT_ARM = """target buffer;
+endian big;
+
+struct s {
+	u8  kind;
+	variant body switch (kind) {
+		case 0:  u8   narrow;
+		case 1:  u32  wide;
+		default: error;
+	}
+}
+"""
+
+#: The frame CHECK an arm accessor makes, not the error it returns. Matching
+#: the error is vacuous in C, whose other refusals return `SITU_ERR_BOUNDS`
+#: too: with the guard deleted the assertion still passed.
+ARM_BOUND = {
+	"c":      "!situ_in_bounds(view, ",
+	"cpp":    "!situ_in_bounds(raw_, ",
+	"python": "if self._len < ",
+	"rust":   "if self.bytes.len() < ",
+}
+
+
+def test_an_arm_accessor_checks_the_frame_in_every_backend() -> None:
+	"""The arm question and the frame question are two.
+
+	An arm accessor checked which arm the discriminant selected and then
+	read at a fixed offset. A struct's minimum is its SHORTEST arm's, so a
+	longer arm sits past what acquisition guarantees -- `s` above is two
+	bytes at its smallest and `wide` needs five. C and C++ read past the
+	view; Rust panicked and Python raised, which is safe and is still four
+	answers to one question (26.325).
+
+	Asserted per backend because the guard was added to four emitters, and
+	a guard added to three is a disagreement rather than a fix.
+	"""
+	source   = Source("short_arm.situ", SHORT_ARM)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	built = generate_c(schema, resolved, "unit")
+	texts = {
+		"c":      built.header + built.source,
+		"cpp":    generate_cpp(schema, resolved, "unit").header,
+		"python": generate_py(schema, resolved, "unit").module,
+		"rust":   generate_rs(schema, resolved, "unit").module,
+	}
+
+	for backend, text in texts.items():
+		at = text.find("wide")
+		assert at != -1, f"{backend}: no accessor for the long arm at all"
+		window = text[at:at + 700]
+		assert ARM_BOUND[backend] in window, (
+			f"{backend}: the `wide` arm accessor does not check that the "
+			f"frame holds it")

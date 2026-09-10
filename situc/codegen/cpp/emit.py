@@ -45,6 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	byte_span,
 	declared_depth, depth_limit, invalidating_members,
 	is_recursive,
 	codec_entry_point,
@@ -2396,9 +2397,28 @@ class Emitter:
 			"\t * walked, and the walk needs to know where each one ends. */",
 		]
 		if not is_recursive(self.resolved.structs, struct.name):
+			# The lengths below are read OUT OF the fixed prefix, so the
+			# prefix has to be here before any of them is touched. C gained
+			# this guard when libFuzzer found `adv_report` reading seven
+			# bytes past a five-byte element; this backend did not, and it
+			# is the one that reads on quietly. Its own
+			# `write_multiple_request::extent` read `*(base + 4)` of a frame
+			# that did not contain byte 4, reached from `validate` through a
+			# variant arm -- found the first minute this backend was ever
+			# fuzzed (26.325).
+			#
+			# The struct's own minimum, not zero: a sentinel meaning "no
+			# element" cannot also be a length, which is the correction 26.322
+			# records. `view_sub` refuses it exactly as before.
+			floor = ([f"\t\tif (!situ_in_bounds(raw_, 0u, {terms[0]}u)) {{",
+			          f"\t\t\treturn {terms[0]}u;",
+			          "\t\t}",
+			          ""]
+			         if len(terms) > 1 and terms[0] != "0" else [])
 			return [*head,
 			        "\t[[nodiscard]] std::uint32_t extent() const noexcept",
 			        "\t{",
+			        *floor,
 			        f"\t\treturn {' + '.join(terms)};",
 			        "\t}"]
 
@@ -4343,12 +4363,27 @@ class Emitter:
 				and placement.sized_by is None \
 				and not data_sized(placement):
 			ctype = self._field_ctype(placement)
+			# The arm question and the frame question are two. A struct's
+			# minimum is its shortest arm's, so an arm past that minimum
+			# sits outside a frame acquisition accepted -- `dnsname`'s
+			# `label` is one byte at its smallest and `body_pointer_low`
+			# reads byte 1. This backend read past the view for it
+			# (26.325).
+			span  = byte_span(placement)
+			touch = (span[1] if span is not None
+			         else (placement.size_bits + 7) // BITS_PER_BYTE)
+			at    = self._offset_expression(struct, placement)
+			bound = ([f"\t\tif (!situ_in_bounds(raw_, {at}, {touch}u)) {{",
+			          "\t\t\treturn ::situ::rt::err::bounds;",
+			          "\t\t}"]
+			         if at is not None else [])
 			return [
 				*head,
 				f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out)"
 				" const noexcept",
 				"\t{",
 				*refuse,
+				*bound,
 				f"\t\tout = {self._load(scalar, placement, None)};",
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",

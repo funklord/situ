@@ -25834,6 +25834,62 @@ is this repository's third meeting with that rule. Make deletes an
 intermediate once it is spent; a `situc pack` per schema is 37 of them
 again on the next build.
 
+### 26.325 C++ was the backend nobody fuzzed, and it had two
+
+26.324 put the walker under a fuzzer because it was a reading nothing
+fuzzed. The same question asked once more has a sharper answer: of the four
+backends, two are memory-unsafe, and only one of them had a harness.
+
+    generated C       37 harnesses
+    C walker          39 harnesses, added the same day
+    generated C++     NONE
+    Rust, Python      none, and they panic and raise
+
+**A harness cost almost nothing, because the differential already had
+one.** Its C++ driver names every accessor and prints every answer over a
+byte buffer; a fuzz entry point is the same walk with the bytes coming from
+somewhere else. Under `SITU_FUZZ` rather than in a second generator: two
+generators would be two lists of accessors to keep in step, which is the
+mistake `differ.py` exists to avoid one level down.
+
+**It failed in the first minute, twice.**
+
+**An extent that never got C's guard.** `write_multiple_request::extent()`
+returns `5 + *(base + 4)` with nothing checking that byte 4 is in the
+frame, reached from `request::validate()` through a variant arm. C gained
+exactly that guard the day before, when libFuzzer found `adv_report`
+reading seven bytes past a five-byte element (26.322). The fix went to one
+backend of four and the differential could not see the difference, because
+it takes 200 random draws per schema where this took a coverage-guided
+million.
+
+**An arm accessor that asked which arm and not whether the bytes were
+there.** A struct's minimum is its SHORTEST arm's, so a longer arm sits
+past what acquisition guarantees. `dnsname`'s `label` is one byte at its
+smallest, and `body_pointer_low` reads byte 1 whenever `form` says 3:
+
+    acquired a 1-byte label; form=3
+    ERROR: AddressSanitizer: heap-buffer-overflow
+        #0 situ_label_body_pointer_low_get  dnsname.h:115
+
+**That one is C's too**, confirmed by hand in the same minute, and the
+guard's own comment says why it was missed: "reading another arm's bytes as
+this one's stays inside the view and means nothing, so the accessor asks
+first and refuses". Which is true, and is about WHICH ARM. Nothing in it is
+about whether the frame reaches that far. All four now check both; Rust
+panicked and Python raised before, which is safe and is still four answers
+to one question.
+
+**Two of the three tests written for this were vacuous, and the sabotage
+said so both times.** The runtime one gave acquisition an escape hatch --
+"acquisition refused it, which is also fine" -- and a one-byte frame is
+refused, so it returned zero without ever reaching the accessor. Two bytes
+clears the minimum and an acquisition refusal is now a failure, because a
+test that cannot reach its subject should say so rather than pass. The
+static one matched `SITU_ERR_BOUNDS`, which C's other refusals return too;
+it matches `!situ_in_bounds(view,` now. Same correction as 26.322's, in the
+same session, by the same hand.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

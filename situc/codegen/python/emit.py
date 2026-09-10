@@ -40,7 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	declared_depth, depth_limit, invalidating_members,
+	byte_span, declared_depth, depth_limit, invalidating_members,
 	is_recursive,
 	codec_entry_point, decode_counts_bits,
 	declared_value_bounds, pinned_bytes,
@@ -2241,7 +2241,21 @@ class Emitter:
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None \
 				and not data_sized(placement):
-			return [*head, f"\t\treturn {self._raw_load(placement, scalar)}"]
+			# The arm question and the frame question are two. A struct's
+			# minimum is its shortest arm's, so an arm past that minimum sits
+			# outside a frame acquisition accepted -- `dnsname`'s `label` is
+			# one byte at its smallest and `body_pointer_low` reads byte 1.
+			# Python does not read past its buffer, but it answers something
+			# where the other three now answer Bounds (26.325).
+			span  = byte_span(placement)
+			touch = (span[1] if span is not None
+			         else (placement.size_bits + 7) // BITS_PER_BYTE)
+			bound = ([f"\t\tif self._len < {span[0]} + {touch}:",
+			          f'\t\t\traise BoundsError("{placement.path}: outside'
+			          ' the frame")']
+			         if span is not None else [])
+			return [*head, *bound,
+			        f"\t\treturn {self._raw_load(placement, scalar)}"]
 
 		if scalar is not None and indexed_elements(placement):
 			# A run of values wider than a byte, which the slice below is not

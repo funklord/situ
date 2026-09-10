@@ -42,7 +42,8 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
 	NOT_A_MEMBER,
-	Check, arm_members, arm_of, classify_check, containment_order,
+	Check, arm_members, arm_of, byte_span, classify_check,
+	containment_order,
 	pinned_runs,
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
@@ -2419,6 +2420,16 @@ class Emitter:
 			loaded = self._load_expression(
 				scalar, placement, self._value_base(struct, placement),
 				offset=self._value_offset(placement))
+			# The arm question and the FRAME question are two, and this
+			# asked only the first. A struct's minimum is the shortest arm's,
+			# so an arm past that minimum sits outside a frame acquisition
+			# accepted: `dnsname`'s `label` is one byte at its smallest, and
+			# `body_pointer_low` reads byte 1 whenever `form` says 3. C and
+			# C++ read past the view; Rust panics and Python raises, which is
+			# safe and is still four answers to one question (26.325).
+			span  = byte_span(placement)
+			touch = (span[1] if span is not None
+			         else (placement.size_bits + 7) // BITS_PER_BYTE)
 			return [
 				*head,
 				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'get')}"
@@ -2426,6 +2437,9 @@ class Emitter:
 				"{",
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+				f"\tif (!situ_in_bounds(view, {base}, {touch}u)) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
 				f"\t*out = ({ctype})({loaded});",
 				"\treturn SITU_OK;",

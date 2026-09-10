@@ -45,7 +45,8 @@ from situc.traverse import (
 	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
-	Check, Member, arm_members, arm_of, coded_spans, covered_run, data_sized,
+	Check, Member, arm_members, arm_of, byte_span, coded_spans, covered_run,
+	data_sized,
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
@@ -2144,10 +2145,23 @@ class Emitter:
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None \
 				and not data_sized(placement):
+			# The arm question and the frame question are two. A struct's
+			# minimum is its shortest arm's, so an arm past that minimum
+			# sits outside a frame acquisition accepted. Rust does not read
+			# past the slice -- it panics -- which is safe and is still a
+			# different answer from the other three (26.325).
+			span  = byte_span(placement)
+			touch = (span[1] if span is not None
+			         else (placement.size_bits + 7) // BITS_PER_BYTE)
+			bound = ([f"\t\tif self.bytes.len() < {span[0]} + {touch} {{",
+			          "\t\t\treturn Err(Error::Bounds);",
+			          "\t\t}"]
+			         if span is not None else [])
 			return [
 				*head,
 				f"\tpub fn {name}(&self) -> Result<{self._rust_type(scalar)}> {{",
 				*refuse,
+				*bound,
 				# `as` the field's type: `read_be` hands back a `u64` and
 				# the ordinary getter casts the same way.
 				f"\t\tOk({self._unparen(self._raw_load(placement, scalar))}"

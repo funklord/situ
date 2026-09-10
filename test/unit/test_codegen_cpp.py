@@ -970,6 +970,86 @@ int main()
 
 TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"
 
+#: A variant whose arms are different lengths. The struct's minimum is the
+#: SHORTEST arm's -- one byte here -- so `wide` sits at an offset a frame
+#: that acquisition accepted need not contain.
+SHORT_ARM = """struct s {
+	u8  kind;
+	variant body switch (kind) {
+		case 0:  u8   narrow;
+		case 1:  u32  wide;
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_an_arm_accessor_refuses_a_frame_too_short_for_it(
+		tmp_path: Path) -> None:
+	"""The arm question and the frame question are two, and this asked one.
+
+	An arm accessor checked that its arm was the one the discriminant
+	selected and then read at a fixed offset. A struct's minimum is its
+	shortest arm's, so a longer arm sits past what acquisition guarantees:
+	`dnsname`'s `label` is one byte at its smallest and `body_pointer_low`
+	reads byte 1 whenever `form` says 3. C and C++ read past the view for it;
+	Rust panicked and Python raised, which is safe and is still four answers
+	to one question (26.325).
+
+	Found the first minute this backend was ever fuzzed -- it had no harness
+	at all, being the one memory-unsafe backend without one.
+	"""
+	result = compiles(tmp_path, SHORT_ARM, extra="""
+#include <cstdlib>
+#include "unit.hpp"
+
+int main()
+{
+	/* Two bytes on the heap, which clears this struct's minimum -- one for
+	 * `kind` and one for the shortest arm. `kind` says 1, whose `wide` is
+	 * four bytes at offset 1 and only one of them arrived. Exactly the
+	 * frame acquisition accepts and the arm does not fit. */
+	auto *part = static_cast<std::uint8_t *>(std::malloc(2));
+	std::uint32_t got = 0;
+
+	if (part == nullptr)
+		return 1;
+	part[0] = 1;
+	part[1] = 0;
+
+	::situ::rt::message msg(part, 2u);
+	::situ::s view;
+
+	if (::situ::s::at(msg, 0, 2u, view) != ::situ::rt::err::ok) {
+		std::free(part);
+		return 3;	/* not the case this is for: it never reached the arm */
+	}
+
+	const auto err = view.body_wide(got);
+	std::free(part);
+	return err == ::situ::rt::err::bounds ? 0 : 2;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "arm"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-fsanitize=address",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, (
+		"the arm accessor read a frame that does not hold it:\n"
+		+ run.stdout + run.stderr)
+
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
 def test_a_length_behind_a_variable_member_resolves(tmp_path: Path) -> None:
