@@ -1678,3 +1678,130 @@ def test_a_literal_that_is_not_bytes_is_refused() -> None:
 	"""
 	assert "bytes" in rendered('struct S { u8 s[1] [must_eq = "\u4e2d"]; }')
 	assert "bytes" in rendered('struct S { preamble u8[1] = "\u4e2d"; }')
+
+
+# -- a token set (0055) -----------------------------------------------------
+#
+# 0052 admitted a set of FIXED-width spellings and refused a set of differing
+# ones, on the grounds that "an enum whose arms differ in length is a grammar,
+# not a value". 0055 holds that line and reads it precisely: an enum decides
+# its member's extent, so differing arms would mean a search. A token set
+# decides nothing -- the delimiter has already ended the member -- so the
+# refusals below are all about keeping it that way.
+
+
+def _tokens(body: str, member: str = 'verb keyword until " " max 16;') -> str:
+	return f"tokens verb {{ {body} }}\nstruct c {{ {member} }}"
+
+
+def test_a_token_set_holds_spellings_of_differing_length() -> None:
+	"""The whole construct, in one assertion: what an enum refuses."""
+	schema = parse_text(_tokens('helo = "HELO", extended = "EXTENDED",'),
+	                    path="s.situ")
+	decl = next(iter(schema.token_sets()))
+	assert [member.name for member in decl.members] == ["helo", "extended"]
+
+
+def test_a_token_set_without_a_delimiter_is_the_grammar_case() -> None:
+	"""The refusal that keeps 0052's rule rather than relaxing it.
+
+	Nothing else says where the member ends, so admitting this would mean a
+	reader trying arms until one fits -- which is the search an enum's
+	equal-width rule exists to prevent.
+	"""
+	rendered_text = rendered(_tokens('helo = "HELO",', member="verb keyword;"))
+	assert "has no end" in rendered_text
+	assert "grammar rather than a value" in rendered_text
+
+
+def test_a_token_set_refuses_a_declared_width() -> None:
+	"""A fixed width is the enum's job, and the diagnostic says so."""
+	assert "gives a width to a token set" in rendered(
+		_tokens('helo = "HELO",', member='verb keyword[4] until " ";'))
+
+
+def test_a_token_set_refuses_a_cap_shorter_than_its_longest_arm() -> None:
+	"""An arm that the scan gives up before reaching can never match.
+
+	This is the half a byte-run enum needs no check for: its arms are
+	compared against a span it sized itself, so they always fit. A token
+	set's arms are compared against a span the member framed, and the member
+	can be framed too tightly to hold one.
+	"""
+	assert "stops before `extended` could be read" in rendered(
+		_tokens('helo = "HELO", extended = "EXTENDED",',
+		        member='verb keyword until " " max 5;'))
+
+
+def test_a_token_set_refuses_an_arm_holding_the_delimiter() -> None:
+	"""The other way to make an arm unreachable: the scan stops inside it."""
+	assert "contains the delimiter" in rendered(
+		_tokens('rcpt = "RCPT TO",'))
+
+
+def test_a_token_set_refuses_two_arms_spelling_the_same_bytes() -> None:
+	assert "are the same token" in rendered(
+		_tokens('helo = "HELO", again = "HELO",'))
+
+
+def test_a_case_insensitive_token_set_refuses_a_case_duplicate() -> None:
+	assert "the same token ignoring case" in rendered(
+		'tokens verb [case_insensitive] { helo = "HELO", lower = "helo", }\n'
+		'struct c { verb keyword until " " max 16; }')
+
+
+def test_a_case_sensitive_token_set_keeps_both_spellings() -> None:
+	"""The control for the check above.
+
+	Without it the duplicate test passes just as loudly against a check that
+	refuses every pair, and nothing would say which.
+	"""
+	schema = parse_text(_tokens('helo = "HELO", lower = "helo",'),
+	                    path="s.situ")
+	decl = next(iter(schema.token_sets()))
+	assert len(decl.members) == 2
+
+
+def test_a_token_set_refuses_an_empty_arm() -> None:
+	"""An empty token matches wherever the set is read, so it would answer
+	for every message."""
+	assert "is empty" in rendered(_tokens('nothing = "",'))
+
+
+def test_a_token_set_arm_is_a_literal() -> None:
+	assert "is not a token" in rendered(_tokens("one = 1,"))
+
+
+def test_a_token_set_takes_only_case_insensitive() -> None:
+	assert "is not a token set attribute" in rendered(
+		'tokens verb [trim] { helo = "HELO", }\n'
+		'struct c { verb keyword until " " max 16; }')
+
+
+def test_a_case_insensitive_token_set_makes_its_member_non_canonical() -> None:
+	"""The lattice must not claim a property the generated code lacks.
+
+	`[case_insensitive]` on a MEMBER has always set `canonical =
+	NonCanonical` -- `HELO` and `helo` are one value with two spellings, so
+	the bytes do not follow from the value. A token set carries the flag on
+	the DECLARATION instead, and the placement read only the member's
+	attributes: the comparison folded case and the map said Canonical. The
+	case-sensitive set below is the control, without which this would pass
+	against a rule that weakened every token member.
+	"""
+	from situc.capability import Axis
+
+	def canonical(source: str) -> str:
+		schema   = parse_text(source, path="s.situ")
+		resolved = resolve(schema, solve(schema))
+		member   = next(entry for entry in resolved.structs["c"].entries
+		                if entry.placement.name == "keyword")
+		return str(member.vector.get(Axis.CANONICAL))
+
+	folded = ('tokens verb [case_insensitive] { helo = "HELO", }\n'
+	          'struct c { verb keyword until " " max 16; }')
+	exact  = ('tokens verb { helo = "HELO", }\n'
+	          'struct c { verb keyword until " " max 16; }')
+
+	assert canonical(folded) == "NonCanonical"
+	assert canonical(exact) != "NonCanonical"

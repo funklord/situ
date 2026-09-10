@@ -872,6 +872,7 @@ class Solver:
 		self.result  = result
 		self.structs = {decl.name: decl for decl in schema.structs()}
 		self.enums   = {decl.name: decl for decl in schema.enums()}
+		self.tokens  = {decl.name: decl for decl in schema.token_sets()}
 		self.markers = {decl.name: decl for decl in schema.markers()}
 		self.varints = {decl.name: decl for decl in schema.varints()}
 		self.codecs  = {decl.name: decl for decl in schema.codecs()}
@@ -1903,7 +1904,13 @@ class Solver:
 			                      if _has_attr(member.attrs, "trim") else ()),
 			since              = _since_of(member),
 			version_field      = _version_field(decl),
-			case_insensitive   = _has_attr(member.attrs, "case_insensitive"),
+			# Or the token set's, which is where the flag lives for a
+			# member typed by one (0055). Without this the lattice called
+			# such a member Canonical while the generated comparison folded
+			# case -- a map claiming a property the code does not have,
+			# which is the one thing the map must never do.
+			case_insensitive   = (_has_attr(member.attrs, "case_insensitive")
+			                      or self._token_folds_case(member)),
 			delimiter_quote    = _delimiter_byte(member, "quoted"),
 			delimiter_escape   = _delimiter_byte(member, "escape"),
 			delimiter_cap      = self._scan_cap(member),
@@ -2052,6 +2059,13 @@ class Solver:
 		# quotes, one construct along. 26.31 records this exact distinction
 		# for the classifier; this is the other place that had to learn it.
 		if member.array is not None and member.radix is None:
+			return
+
+		# A token set has no single scalar value either: what it holds is a
+		# span, and which arm it matched is reported rather than computed
+		# with. Without this it reached the `scalar is None` return below by
+		# luck rather than by rule.
+		if member.type_ref.name in self.tokens:
 			return
 
 		if member.type_ref.name in self.structs:
@@ -2482,6 +2496,14 @@ class Solver:
 			self.check_directives(member, backing, scope)
 			return Interval.point(backing.bits)
 
+		# A token set is a run of bytes, so its element is a byte and the
+		# delimiter supplies the count -- `delimited_extent` above. The enum
+		# branch cannot serve it: an enum answers with its backing scalar's
+		# width because that IS the member's extent, and a token set has no
+		# width of its own to answer with (0055).
+		if type_ref.name in self.tokens:
+			return Interval.point(BITS_PER_BYTE)
+
 		varint = self.varints.get(type_ref.name)
 		if varint is not None:
 			# Section 8.1.1: one to ceil(max_bits / 7) bytes. The lower bound is
@@ -2504,6 +2526,12 @@ class Solver:
 		# that is still unknown here is unknown everywhere.
 		raise error(f"unknown type `{type_ref.name}`", type_ref.span,
 		            label="not declared")
+
+	def _token_folds_case(self, member: ast.Member) -> bool:
+		"""Whether this member's type is a case-insensitive token set."""
+		name = getattr(getattr(member, "type_ref", None), "name", None)
+		decl = self.tokens.get(name) if name is not None else None
+		return decl is not None and decl.case_insensitive
 
 	def pinned_extent(self, member: ast.Member,
 			total: Interval) -> Interval | None:

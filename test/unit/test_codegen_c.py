@@ -4517,3 +4517,135 @@ def test_the_runtime_pulls_in_only_what_it_says() -> None:
 	assert "#include <stdlib.h>" in guarded
 	assert "#include <stdlib.h>" not in text.split("#ifdef SITU_CHECKED", 1)[0]
 	assert "#ifndef SITU_STALE" in guarded
+
+
+TOKENS = """
+tokens verb [case_insensitive] {
+	helo = "HELO",
+	quit = "QUIT",
+	extended = "EXTENDED",
+}
+
+struct command {
+	verb  keyword  until " "  max 16;
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_token_set_reports_which_arm_and_refuses_the_rest(
+		tmp_path: Path) -> None:
+	"""0055, compiled and run rather than read.
+
+	Four things at once, because they are the four ways this can be wrong
+	and each is silent on its own: the arm ids, case folding that is not
+	`tolower` (which is locale-dependent, so a wire vocabulary would depend
+	on the reader's environment), a prefix NOT matching a longer arm, and a
+	longer span not matching a shorter arm. The last two are what a
+	`strncmp` against a literal quietly gets wrong, and the length is
+	compared first precisely so that they cannot.
+	"""
+	schema   = parse_text(PREAMBLE + TOKENS)
+	resolved = resolve(schema, solve(schema))
+	for name, text in dict(generate(schema, resolved, "unit").files()).items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+static int one(const char *text, situ_err_t want, uint32_t want_which)
+{
+	situ_view_t view;
+	uint32_t which;
+
+	view.base       = (uint8_t *)(uintptr_t)(const void *)text;
+	view.limit      = (uint32_t)strlen(text);
+	view.generation = 0u;
+	view.owner      = NULL;
+
+	which = situ_verb_which(situ_command_keyword_ptr(view),
+	                        situ_command_keyword_len(view));
+	if (which != want_which) return 1;
+	if (situ_command_validate(view) != want) return 2;
+	return 0;
+}
+
+int main(void)
+{
+	if (one("HELO ", SITU_OK, SITU_VERB_HELO)) return 3;
+	if (one("QUIT ", SITU_OK, SITU_VERB_QUIT)) return 4;
+	if (one("EXTENDED ", SITU_OK, SITU_VERB_EXTENDED)) return 5;
+	/* Folded without `tolower`, so the answer does not move with the
+	 * locale the reader happens to run under. */
+	if (one("helo ", SITU_OK, SITU_VERB_HELO)) return 6;
+	if (one("HeLo ", SITU_OK, SITU_VERB_HELO)) return 7;
+	/* A prefix of a declared arm is not that arm. */
+	if (one("HEL ", SITU_ERR_CONSTRAINT, SITU_VERB_UNKNOWN)) return 8;
+	/* Nor is a span that merely starts with one. */
+	if (one("HELOX ", SITU_ERR_CONSTRAINT, SITU_VERB_UNKNOWN)) return 9;
+	if (one("NOPE ", SITU_ERR_CONSTRAINT, SITU_VERB_UNKNOWN)) return 10;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_token_set_that_passes_unknown_spellings_accepts_them(
+		tmp_path: Path) -> None:
+	"""The control for the test above, and the reason it is a separate one.
+
+	Both checks on a delimited member return `SITU_ERR_CONSTRAINT`, so a
+	refusal alone does not say WHICH refused -- and "NOPE " is delimited, so
+	the delimiter check passes and only the token check can speak. Building
+	the same schema with `default = pass` is what separates them: the
+	delimiter situation is identical and the refusal disappears, which it
+	could not do if it had come from the delimiter.
+	"""
+	schema   = parse_text(PREAMBLE + TOKENS.replace(
+		"extended = \"EXTENDED\",", "extended = \"EXTENDED\",\n\tdefault = pass,"))
+	resolved = resolve(schema, solve(schema))
+	for name, text in dict(generate(schema, resolved, "unit").files()).items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	const char *text = "NOPE ";
+	situ_view_t view;
+
+	view.base       = (uint8_t *)(uintptr_t)(const void *)text;
+	view.limit      = (uint32_t)strlen(text);
+	view.generation = 0u;
+	view.owner      = NULL;
+
+	/* Accepted, because the schema said unknown spellings pass ... */
+	if (situ_command_validate(view) != SITU_OK) return 1;
+	/* ... and still reported as unknown, so a caller can decide. */
+	if (situ_verb_which(situ_command_keyword_ptr(view),
+	                    situ_command_keyword_len(view)) != SITU_VERB_UNKNOWN)
+		return 2;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0

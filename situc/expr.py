@@ -546,6 +546,11 @@ class Env:
 	#: than numbers (0052). Kept apart from `enums` so that nothing can get
 	#: an integer out of one: there is no correct integer to get.
 	byte_enums: dict[str, dict[str, bytes]]	= field(default_factory=dict)
+	#: `tokens verb { helo = "HELO" }` -- arms that are spans of differing
+	#: length (0055). Kept apart from `byte_enums` because the two answer
+	#: different questions: a byte-run enum's arms all size the member, and
+	#: these are compared against a span the delimiter sized.
+	token_sets: dict[str, dict[str, bytes]]	= field(default_factory=dict)
 	layout: Callable[[str, str], int | None] | None = None
 	# Fields whose interval is known, keyed by the path an expression would use
 	# to name them. Populated by the solver as it walks a struct, so a size
@@ -865,6 +870,13 @@ def build_env(schema: ast.Schema) -> Env:
 			for member in decl.members:
 				members[member.name] = evaluate(member.value, env)
 			env.enums[decl.name] = members
+		elif isinstance(decl, ast.TokensDecl):
+			# No `evaluate`: a token is bytes and has no numeric value, and
+			# giving it one would be the byte-order mistake 0052 refuses one
+			# construct along.
+			env.token_sets[decl.name] = {
+				member.name: _token_literal(member)
+				for member in decl.members}
 		elif isinstance(decl, ast.ConstDecl):
 			env.consts[decl.name] = _const_value(decl, env)
 
@@ -903,6 +915,20 @@ def _enum_bytes(member: ast.EnumMember, width: int) -> bytes:
 			         f"is how wide one value of it is",
 			         "an enum whose arms differ in length is a grammar, not "
 			         "a value"])
+	return held
+
+
+def _token_literal(member: ast.EnumMember) -> bytes:
+	"""One token set arm's bytes.
+
+	`wellformed.check_token_sets` has already refused a non-literal, an
+	unrepresentable literal and an empty one, so this re-asks rather than
+	decides -- for the reason `pinned_runs` states, that a `None` reaching
+	four backends arrives as a crash rather than as a diagnostic.
+	"""
+	assert isinstance(member.value, ast.StringLiteral), "wellformed refuses"
+	held = literal_bytes(member.value.value)
+	assert held, "wellformed refuses an empty or unrepresentable token"
 	return held
 
 

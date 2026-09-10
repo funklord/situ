@@ -145,6 +145,9 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.EnumDecl):
 		return _enum_lines(decl)
 
+	if isinstance(decl, ast.TokensDecl):
+		return _tokens_lines(decl)
+
 	if isinstance(decl, ast.StructDecl):
 		return _struct_lines(decl)
 
@@ -273,6 +276,21 @@ def codec_granularity(decl: ast.CodecDecl) -> str:
 	if decl.granularity_size is None:
 		return decl.granularity.value
 	return f"{decl.granularity.value}({decl.granularity_size})"
+
+
+def _tokens_lines(decl: ast.TokensDecl) -> list[str]:
+	# No backing type and no width: a token set takes its extent from the
+	# member's delimiter, so there is nothing here to round-trip (0055).
+	head = f"tokens {decl.name}"
+	if decl.case_insensitive:
+		head += " [case_insensitive]"
+	lines = [head + " {"]
+	for member in decl.members:
+		lines.append(f"\t{member.name} = {expr_to_source(member.value)},")
+	if decl.default is not None:
+		lines.append(f"\tdefault = {decl.default.value},")
+	lines.append("}")
+	return lines
 
 
 def _enum_lines(decl: ast.EnumDecl) -> list[str]:

@@ -367,6 +367,7 @@ class Parser:
 			"import":	self.parse_import,
 			"const":	self.parse_const,
 			"enum":		self.parse_enum,
+			"tokens":	self.parse_tokens,
 			"struct":	self.parse_struct,
 			"endian_marker": self.parse_endian_marker,
 			"varint_type":	self.parse_varint,
@@ -385,7 +386,7 @@ class Parser:
 				token.span,
 				label = "not a declaration keyword",
 				notes = ["expected `target`, `endian`, `bit_order`, `encoding`, `import`, `const`, "
-				         "`enum`, `struct`, `require`, `assert`, `invariant` or "
+				         "`enum`, `tokens`, `struct`, `require`, `assert`, `invariant` or "
 				         "`relation`"],
 			)
 
@@ -895,6 +896,50 @@ class Parser:
 				         "canonical = NonCanonical (project.md section 8.7)"],
 			)
 		return default
+
+	def parse_tokens(self) -> ast.TokensDecl:
+		"""`tokens verb [case_insensitive] { helo = "HELO", ... }` (0055).
+
+		No backing type, and that absence is the construct. An enum names a
+		scalar because the scalar says how wide one value is; a token set
+		takes its extent from the member's delimiter, so there is nothing
+		here for a backing type to decide and asking for one would invite
+		the width rule this construct exists to be free of.
+		"""
+		start = self.advance()
+		name  = self.expect_ident("a token set name")
+
+		insensitive = False
+		for attr in self.parse_attrs():
+			if attr.name == "case_insensitive" and attr.value is None:
+				insensitive = True
+				continue
+			raise error(
+				f"`{attr.name}` is not a token set attribute",
+				attr.span,
+				label = "not read here",
+				notes = ["a token set takes `[case_insensitive]` and nothing "
+				         "else",
+				         "an attribute nothing reads is worse than none "
+				         "(project.md section 14.5)"])
+
+		self.expect_symbol("{", "to open the token set body")
+
+		members: list[ast.EnumMember] = []
+		default: ast.EnumDefault | None = None
+
+		while not self.current.is_symbol("}"):
+			if self.current.is_ident("default") and self.peek().is_symbol("="):
+				default = self.parse_enum_default()
+			else:
+				members.append(self.parse_enum_member())
+
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol("}", "to close the token set body")
+		return ast.TokensDecl(self.span_from(start), name.text,
+		                      tuple(members), default, insensitive)
 
 	def parse_codec(self) -> ast.CodecDecl:
 		"""`codec aes_ctr_128 { length_preserving; seekable = linear; ... }`

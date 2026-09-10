@@ -55,6 +55,9 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 	if isinstance(decl, ast.EnumDecl):
 		return _enum(decl, depth)
 
+	if isinstance(decl, ast.TokensDecl):
+		return _tokens(decl, depth)
+
 	if isinstance(decl, ast.StructDecl):
 		return _struct(decl, depth)
 
@@ -136,6 +139,17 @@ def _enum(decl: ast.EnumDecl, depth: int) -> list[str]:
 	                        f"default={decl.effective_default.value}")]
 	for member in decl.members:
 		lines.append(_indent(depth + 1, f"{member.name} = {expr_to_source(member.value)}"))
+	return lines
+
+
+def _tokens(decl: ast.TokensDecl, depth: int) -> list[str]:
+	head = f"tokens {decl.name} default={decl.effective_default.value}"
+	if decl.case_insensitive:
+		head += " case_insensitive"
+	lines = [_indent(depth, head)]
+	for member in decl.members:
+		lines.append(_indent(depth + 1,
+		                     f"{member.name} = {expr_to_source(member.value)}"))
 	return lines
 
 

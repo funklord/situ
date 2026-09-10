@@ -491,6 +491,7 @@ struct cannot describe:
 | declaration | for |
 |---|---|
 | `enum name : u8 { a = 1, default = error }` | a named value set; `default` is `error`, or `pass` to admit unknown values |
+| `tokens name { helo = "HELO" }` | a set of text keywords of differing length, matched against a delimited member |
 | `const name = expr;` | a compile-time constant |
 | `endian_marker name : u16 { little = 0x4949, big = 0x4D4D }` | a byte order the *data* declares |
 | `varint_type name { encoding = leb128; max_bits = 64; }` | a variable-length integer encoding |
@@ -969,6 +970,34 @@ the generated comparison folds case the way the schema says.
 
 String literals know `\n \t \r \0 \\ \"` and `\xNN`, so a frame delimiter
 outside ASCII -- SLIP's 0xC0 -- can be written.
+
+A **token set** says a field's value is one of a named vocabulary, which is
+what a byte run plus a comparison in the caller used to be:
+
+```situ
+tokens verb [case_insensitive] {
+	helo = "HELO",
+	ehlo = "EHLO",
+	quit = "QUIT",
+	default = error,
+}
+
+struct command {
+	verb  keyword  until " "  max 16;
+}
+```
+
+The arms may differ in length, which is what separates it from
+`enum m : u8[k]`, and the difference is about extent rather than spelling:
+an enum decides how wide its member is, so unequal arms would mean trying
+each in turn -- a search. A token set decides nothing, because the delimiter
+already ended the member, so it is a comparison against a list.
+`situ_verb_which(...)` reports *which* arm matched, `default = pass` admits
+an unknown spelling as an extension point, and the case fold is arithmetic
+rather than `tolower` so that a wire vocabulary does not move with the
+reader's locale. Built in the C backend; the other three refuse a schema
+that uses one rather than generating code that ignores it
+(decision 0055).
 
 **Where situ stops is a grammar.** A field whose *text* contains an expression
 language is not a layout, and situ describes the layout around it rather than
@@ -1449,16 +1478,22 @@ today and which is a written-down design.
   traversal. The identity half is built, as above; the `when` construct and
   the text are not.
 
+- **A byte run as a value** (decision 0052). `u8 sig[4] [must_eq = "WOZ2"]`
+  is one span comparison taking one check id, `enum format : u8[2] { bmp =
+  "BM" }` is an enum whose arms are byte runs, and `preamble u8 sync[4] =
+  "\\x8d\\x57\\x4f\\x5a"` is fixed bytes that generate no accessor at all.
+  What they replaced was one field per byte -- which three unrelated schemas
+  arrived at independently -- generating six branches and six invented
+  member names for one fact, with comments rendering the magic in decimal.
+  cpio's `magic` is the worked case.
+
 **Proposed.**
 
-- **A byte run as a value** (decision 0052). Situ has no spelling for "these
-  four bytes are `WOZ2`" -- not `[must_eq]` on an array, not `enum : u8[2]`,
-  not a bare `= "WOZ2"`. The only available route is one field per byte,
-  which three unrelated schemas arrived at independently, and it generates
-  six branches and six invented member names for one fact, with comments
-  that render the magic in decimal. The record proposes a byte-run
-  `[must_eq]`, an `enum : u8[k]` whose arms are byte runs, and `preamble`
-  for fixed bytes that generate no accessor at all.
+- **A token set** (decision 0055). Built in the C backend and refused in the
+  other three, which is where it stops for now: the construct is
+  deliberately not in a corpus schema until all four generate it, because a
+  corpus schema only one backend can build would break the four-way
+  differential rather than feed it.
 
 ## Reading further
 

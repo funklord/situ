@@ -26056,14 +26056,19 @@ asserted from the protocols rather than measured here.
 
 **Recorded in the tree, so not candidates.**
 
-- **A text token set** -- a field whose value is one of a named set.
-  cpio writes `decimal u32 magic[6] [min = 70701, max = 70702]` with the
-  comment "there is no enum of text numbers, and the alternative is six
-  bytes nothing constrains", and json writes `true`, `false` and `null`
-  as three structs of `[must_eq = "rue"]`, `"alse"` and `"ull"` behind a
-  first-byte discriminant. Two protocols, two different workarounds,
-  both committed. By 8.6.6's own rule this one has its second asker and
-  is waiting on nothing.
+- **A text token set.** ~~cpio writes `decimal u32 magic[6] [min = 70701,
+  max = 70702]`~~ -- **that citation was stale when it was published, and
+  the correction sharpened the feature rather than removing it.** cpio
+  moved to `enum format : u8[6] { newc = "070701", newc_crc = "070702" }`
+  when 0052 landed, and the sentence quoted above survives in that
+  schema's comment as a note about what it USED to say. The mistake was
+  reading a history entry in this file as a statement about the tree,
+  which is the exact failure `evidence.md` opens with -- and the fix is
+  its remedy: ask the source, not the sentence.
+  What the schemas actually ask for is the VARIABLE-WIDTH form, and two
+  of them ask: smtp's `u8 verb[] until " " max 16 [case_insensitive]`
+  and http's `u8 method[] until " " max 16`, with http's header `name`
+  a third site. Built as 0055; see 26.329.
 - **A fractional text number** -- json's `number` is
   `u8 rest[] before ',' | ']' | '}' [trim]`, an untyped byte run in the
   one place a JSON reader most wants a number. `decimal` and `hex`
@@ -26127,6 +26132,129 @@ before it ran clean for ever.
 **The sweep with the new coverage found nothing else** -- 37 harnesses, no
 crash. Recorded because an empty sweep and a sweep that could not reach
 anything print the same thing, and this harness has now been both.
+
+### 26.329 A token set, and the line it did not cross
+
+**The first item of 26.327's phase-one list, built as 0055.** `tokens verb
+[case_insensitive] { helo = "HELO", ... }` names a set of text keywords of
+differing length, and types a delimited member:
+
+    verb  keyword  until " "  max 16;
+
+**What made it designable was reading 0052's refusal precisely rather than
+reversing it.** That record admits `enum m : u8[k]` and refuses arms of
+differing length, saying "an enum whose arms differ in length is a grammar,
+not a value". True, and about EXTENT rather than about widths: an enum
+decides its member's extent, so unequal arms would mean trying them in turn
+with the longest winning, which is a search. A token set decides no extent
+at all -- `until " "` ended the member before the set is consulted -- so
+what remains is a comparison of one known span against a list. The
+construct is therefore admitted exactly where something else fixes the
+extent and refused where the extent would have to come from the match, and
+0052's rule is kept rather than relaxed.
+
+**Two refusals are the token set's own and have no analogue in an enum**,
+because an enum's arms are compared against a span it sized itself and
+always fit. A token set's arms are compared against a span the MEMBER
+framed, and the member can be framed so that an arm could never appear in
+it -- `max 5` against an eight-byte arm, or an arm holding the delimiter
+that ends the member. Both are arms that sit in a schema and cannot match,
+which reads to a caller exactly like a protocol that never sends them.
+
+**The case-insensitivity flag is on the set, and the tree proved the axis
+before the record existed.** SMTP's verbs are case-insensitive and its
+schema said so; HTTP's method is case-sensitive and its schema did not say
+so; HTTP's header names are case-insensitive and its schema said so on that
+member. Three fields, two answers, all three already spelled correctly. The
+fold is done arithmetically rather than through `tolower`, which is
+locale-dependent -- a wire vocabulary must not depend on the environment
+the reader happens to run under.
+
+**One defect, found by asking the map rather than by reading the code.**
+`[case_insensitive]` on a MEMBER has always weakened `canonical` to
+NonCanonical -- `HELO` and `helo` are one value with two spellings, so the
+bytes do not follow from the value. A token set carries the flag on the
+DECLARATION, and the placement was built from the member's attributes
+alone: the generated comparison folded case and the map said Canonical.
+A map claiming a property the code does not have is the one thing it must
+never do, and nothing in the C output would have shown it -- the fold was
+correct, and only the lattice was wrong about it. The control is a
+case-sensitive set, which must still read Canonical; without it the test
+would pass against a rule that weakened every token member.
+
+**Built in C, refused loudly in the other three.** A backend that generated
+nothing for a token set would leave a schema stating a vocabulary the code
+does not enforce, which 14.5 calls worse than stating nothing, and the
+author would have no way to tell from the output. So C++, Rust and Python
+raise a diagnostic naming the construct and the backend. The construct is
+deliberately NOT in a corpus schema yet: 0052's consequence says a
+construct without a corpus schema poses no case to the four-way
+differential, and a corpus schema that only one backend can build would
+break it instead.
+
+**The control is the part worth copying.** Both checks on a delimited
+member return `SITU_ERR_CONSTRAINT`, so watching an unknown verb be refused
+does not say WHICH check refused it. Building the same schema with
+`default = pass` separates them: the delimiter situation is identical, the
+refusal disappears, and it could not have disappeared if it had come from
+the delimiter. That is a second test rather than a second assertion,
+because the discriminator is the build.
+
+**Still open**, in the order they matter: the three other backends, then a
+corpus schema and the differential case that comes with it, then the map
+and wire contracts, then the walkers and the dissector. And the extent
+question stays refused -- json's `true`, `false` and `null`, where the
+token would have to decide where it ends, is the grammar case and 0055
+deliberately does not prejudge whether it should ever be admitted.
+
+### 26.330 Text encoding, scoped and named by the data
+
+**Two requests from the copyright holder, 2026-09-10, both about where an
+encoding applies rather than what the encodings are.** They belong to
+26.327's phase one and are recorded here with what the tree already does,
+because the first is a door this project deliberately left shut.
+
+**Region scoping.** `encoding` is a file directive and `[encoding = ascii]`
+is a member attribute; there is nothing in between, so a struct or a block
+cannot carry one. That was a decision rather than an omission --
+`wellformed.check_encoding_place` refuses a directive below a struct and
+says why: "Refused rather than scoped. A per-struct encoding is a
+reasonable language and is not this one; making the directive quietly mean
+'from here on' would be that language arriving without anybody choosing
+it." Somebody has now chosen it. What the reason still buys is the SHAPE:
+a scope has to be written as a scope -- a region, a block, a struct
+attribute -- and never as a directive whose meaning depends on where in
+the file it sits.
+
+**An encoding named by the data**, which is the harder half and the one
+with the interesting failure. A field says what the rest is encoded in:
+MIME's `charset=`, an XML declaration, an HTML `<meta charset>`. The rule
+that makes it tractable already exists here for lengths -- an expression
+may only name fields declared before it -- so an encoding read from the
+data may only govern bytes that follow the field naming it, and the
+circular case is refused at compile time instead of surprising a reader.
+
+**The chicken and egg is real and the copyright holder named its shape
+exactly: "it usually comes out to be the same sequence, it is formally
+broken".** The declaration has to be read before its own answer is known,
+so it is read under an assumption. For the ASCII-compatible encodings the
+assumption happens to hold -- the bytes of `encoding="utf-8"` are the same
+under all of them -- which is why this works in practice and is not a
+proof. UTF-16 is where it stops holding, and XML's answer is not to be
+cleverer but to detect a family from the first bytes and then CONFIRM the
+declaration against it.
+
+So the thing situ can offer is not a resolution of the circularity, which
+nobody has: it is the ability to write the assumption down and check it.
+A bootstrap encoding for the region the declaration lives in, the declared
+encoding for what follows, and a refusal when the two disagree. That turns
+"formally broken" from a property of every reader into a stated premise
+with a check against it -- which is what this project does with every other
+fact it cannot compute.
+
+**Both are design work and neither is started.** Recorded here so that the
+next pass has the constraint rather than rediscovering it, and because the
+existing refusal's reasoning is worth keeping when the door opens.
 
 ## 27. Questions, and how they were settled
 

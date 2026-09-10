@@ -1058,6 +1058,35 @@ class EnumDecl(Decl):
 		return self.default or EnumDefault.ERROR
 
 
+@dataclass(frozen=True)
+class TokensDecl(Decl):
+	"""`tokens verb { helo = "HELO", ... }` -- a set of text keywords (0055).
+
+	Not a mode of `EnumDecl`, and the reason is extent rather than taste. An
+	enum's backing type is mandatory and fixes how wide one value is, so an
+	enum decides its member's extent and its arms must agree in length. A
+	token set has no width at all: the member's delimiter has already said
+	where it ends, and the set only says which spellings are legal. Arms of
+	differing length are the whole point, and are refused in an enum because
+	there they would mean a search.
+	"""
+
+	span: Span
+	name: str
+	members: tuple[EnumMember, ...]
+	default: EnumDefault | None = None
+	#: `tokens verb [case_insensitive] { ... }`. A property of the protocol's
+	#: vocabulary rather than a knob: SMTP's verbs are case-insensitive and
+	#: HTTP's methods are not, and both schemas said so before 0055 existed.
+	case_insensitive: bool = False
+
+	@property
+	def effective_default(self) -> EnumDefault:
+		"""Unknown spellings are refused unless the schema says otherwise,
+		which is `EnumDecl`'s rule and for the same reason."""
+		return self.default or EnumDefault.ERROR
+
+
 class VarintEncoding(Enum):
 	#: Base-128, low group first, continuation bit set on every byte but the
 	#: last. DWARF's, protobuf's.
@@ -1494,6 +1523,9 @@ class Schema(Node):
 
 	def enums(self) -> list[EnumDecl]:
 		return [decl for decl in self.decls if isinstance(decl, EnumDecl)]
+
+	def token_sets(self) -> list[TokensDecl]:
+		return [decl for decl in self.decls if isinstance(decl, TokensDecl)]
 
 	def consts(self) -> list[ConstDecl]:
 		return [decl for decl in self.decls if isinstance(decl, ConstDecl)]

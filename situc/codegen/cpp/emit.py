@@ -32,7 +32,7 @@ from situc.capability import Axis
 from situc.codegen.c.names import KEYWORDS, bare_name, c_name
 from situc.codegen.cpp.names import check_collisions, class_name, renamed
 from situc.codegen.doc import extractable
-from situc.diagnostics import Diagnostic
+from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
 	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
@@ -172,6 +172,21 @@ class Emitter:
 
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
+
+		# 0055 is built in the C backend only. Refused loudly rather than
+		# ignored: a token set that generated nothing would leave a schema
+		# stating a vocabulary the code does not enforce, which section 14.5
+		# calls worse than stating nothing -- and the author would have no
+		# way to tell from the output.
+		for token_set in self.schema.token_sets():
+			raise error(
+				f"`{token_set.name}` is a token set, and the C++ backend does "
+				"not generate one yet",
+				token_set.span,
+				label = "not generated here",
+				notes = ["a token set is built in the C backend (0055)",
+				         "generate this schema with `--target c`, or drop "
+				         "the token set"])
 
 		order    = self._struct_order()
 		deferred: list[str] = []

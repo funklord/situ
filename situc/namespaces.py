@@ -91,7 +91,8 @@ def unqualify(decl: ast.Decl, namespace: str) -> ast.Decl:
 def _declared_names(decls: list[ast.Decl]) -> list[str]:
 	found = []
 	for decl in decls:
-		if isinstance(decl, (ast.StructDecl, ast.EnumDecl, ast.VarintDecl,
+		if isinstance(decl, (ast.StructDecl, ast.EnumDecl, ast.TokensDecl,
+		                     ast.VarintDecl,
 		                     ast.EndianMarkerDecl, ast.CodecDecl, ast.ConstDecl,
 		                     ast.Relation)):
 			found.append(decl.name)
@@ -115,7 +116,8 @@ def rewrite(decl: ast.Decl, name_of: Callable[[str], str]) -> ast.Decl:
 		                               for member in decl.members),
 		               attrs   = _rewrite_attrs(decl.attrs, name_of))
 
-	if isinstance(decl, (ast.EnumDecl, ast.VarintDecl, ast.EndianMarkerDecl,
+	if isinstance(decl, (ast.EnumDecl, ast.TokensDecl, ast.VarintDecl,
+	                     ast.EndianMarkerDecl,
 	                     ast.CodecDecl)):
 		return replace(decl, name = name_of(decl.name))
 

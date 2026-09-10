@@ -55,6 +55,7 @@ qualified	= [ ident "::" ] ident ;
 decl		= namespace_decl
 	| const_decl
 	| enum_decl
+	| tokens_decl
 	| struct_decl
 	| endian_marker_decl
 	| codec_decl
@@ -68,6 +69,15 @@ const_decl	= "const" ident "=" expr ";" ;
 
 enum_decl	= "enum" ident ":" scalar_type "{" enum_body "}" ;
 enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
+
+(* Decision 0055. A set of text keywords of differing length, typing a
+ * member whose extent something else fixes. No backing type, and the
+ * absence is the construct: an enum names a scalar because the scalar says
+ * how wide one value is, while a token set takes its extent from the
+ * member's delimiter. An enum's arms must therefore agree in length -- an
+ * enum decides its member's extent, so unequal arms would mean a search --
+ * and a token set's must not, which is what it is for. *)
+tokens_decl	= "tokens" ident [ attrs ] "{" enum_body "}" ;
 
 struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 

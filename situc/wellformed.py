@@ -65,6 +65,7 @@ def check(schema: ast.Schema) -> None:
 	check_attribute_values(schema)
 	check_byte_run_equality(schema)
 	check_byte_enums(schema)
+	check_token_sets(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
@@ -414,14 +415,16 @@ def check_delimiters(schema: ast.Schema) -> None:
 	or an attribute with nothing to attach to. Both are ambiguity, which
 	section 17.0 makes an error rather than a preference.
 	"""
+	tokens = {decl.name for decl in schema.token_sets()}
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
 			if not isinstance(member, (ast.Field, ast.Reserved)):
 				continue
-			_check_one_delimiter(member)
+			_check_one_delimiter(member, tokens)
 
 
-def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
+def _check_one_delimiter(member: ast.Field | ast.Reserved,
+                         tokens: set[str]) -> None:
 	name = getattr(member, "name", "a reserved member")
 
 	if member.until is not None and len(member.until.delimiters) > 1:
@@ -506,7 +509,13 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved) -> None:
 	# written as digits is as wide as the number (section 8.6.2). A
 	# fixed-width one declares an array size instead and has no `until` to
 	# reach this check.
-	if member.array is None and getattr(member, "radix", None) is None:
+	# A token set is the third delimited single value, and the reason is
+	# 0055's: it has no width of its own, so the delimiter is the only thing
+	# that can say where it ends. An enum is the opposite case -- its backing
+	# type fixes the width -- which is why `format magic;` takes no delimiter
+	# and `verb keyword until " "` requires one.
+	if (member.array is None and getattr(member, "radix", None) is None
+	                        and member.type_ref.name not in tokens):
 		raise error(
 			f"`{name}` is a single value, so a delimiter has nothing to bound",
 			member.until.span,
@@ -2206,6 +2215,136 @@ def _is_byte_run_equality(member: ast.Member, attr: ast.Attr) -> bool:
 	return getattr(type_ref, "name", None) == "u8"
 
 
+def check_token_sets(schema: ast.Schema) -> None:
+	"""A token set's arms are literals, distinct, and reachable (0055).
+
+	Reachable is the half an enum does not need. An enum arm is compared
+	against a span the enum itself sized, so it always fits; a token set arm
+	is compared against a span the member's delimiter sized, and the member
+	can be framed so that the arm could never appear in it. Both ways of
+	arranging that are refused here, because each produces an arm that is in
+	the schema and cannot match -- which reads to a caller exactly like a
+	protocol that never sends it.
+	"""
+	sets = {decl.name: decl for decl in schema.token_sets()}
+
+	for decl in sets.values():
+		seen: dict[bytes, str] = {}
+		for member in decl.members:
+			held = _token_bytes(decl, member)
+
+			key = held.lower() if decl.case_insensitive else held
+			first = seen.get(key)
+			if first is not None:
+				how = " ignoring case" if decl.case_insensitive else ""
+				raise error(
+					f"`{member.name}` and `{first}` are the same token{how}",
+					member.value.span,
+					label = "already spelled above",
+					notes = [f"two arms of `{decl.name}` matching the same "
+					         "bytes means the second can never be reported",
+					         "give the set one arm per spelling"])
+			seen[key] = member.name
+
+	for struct in schema.structs():
+		for field in _walk_members(struct.members):
+			if not isinstance(field, ast.Field):
+				continue
+			used = sets.get(field.type_ref.name)
+			if used is not None:
+				_check_token_member(used, field)
+
+
+def _token_bytes(decl: ast.TokensDecl, member: ast.EnumMember) -> bytes:
+	if not isinstance(member.value, ast.StringLiteral):
+		raise error(
+			f"`{member.name}` is not a token",
+			member.value.span,
+			label = "expected a literal here",
+			notes = ["a token set names spellings, so every arm is written "
+			         "out as one",
+			         "a set of numbers is an `enum` over a scalar"])
+
+	held = literal_bytes(member.value.value)
+	if held is None:
+		raise error(
+			f"`{member.name}` is not writable as bytes",
+			member.value.span,
+			label = "not representable",
+			notes = ["a token is compared against bytes on the wire, so it "
+			         "is written with `\\xNN` escapes where it is not "
+			         "printable"])
+
+	if not held:
+		raise error(
+			f"`{member.name}` is empty",
+			member.value.span,
+			label = "no bytes here",
+			notes = [f"an empty token matches wherever `{decl.name}` is "
+			         "read, so it would answer for every message",
+			         "a member that may be absent is a variant arm, not an "
+			         "empty token"])
+	return held
+
+
+def _check_token_member(decl: ast.TokensDecl, member: ast.Field) -> None:
+	"""Where the extent comes from, and whether the arms can reach it."""
+	if member.array is not None and member.array.size is not None:
+		raise error(
+			f"`{member.name}` gives a width to a token set",
+			member.span,
+			label = "a fixed width here",
+			notes = [f"`{decl.name}` has no width: its arms may differ in "
+			         "length, and the delimiter is what says where one ends",
+			         "a set of fixed-width spellings is `enum "
+			         f"{decl.name} : u8[k]`, which sizes the member itself "
+			         "(0052)"])
+
+	if member.until is None:
+		raise error(
+			f"`{member.name}` has no end",
+			member.span,
+			label = "no delimiter on this member",
+			notes = [f"`{decl.name}` says which spellings are legal, not how "
+			         "far the member runs",
+			         'add `until "D"` to frame it',
+			         "a token set that had to find its own end would be a "
+			         "grammar rather than a value, which is what an enum's "
+			         "equal-width rule refuses (0052)"])
+
+	longest = max(len(_token_bytes(decl, arm)) for arm in decl.members) \
+		if decl.members else 0
+
+	cap = member.until.cap
+	if isinstance(cap, ast.IntLiteral) and cap.value < longest:
+		widest = max(decl.members,
+		             key = lambda arm: len(_token_bytes(decl, arm)))
+		raise error(
+			f"`{member.name}` stops before `{widest.name}` could be read",
+			cap.span,
+			label = f"at most {cap.value} byte(s)",
+			notes = [f"`{widest.name}` is {longest} bytes, so the scan gives "
+			         "up before the token is complete",
+			         f"raise the cap to at least {longest}"])
+
+	for ends in member.until.delimiters:
+		if not ends:
+			continue
+		for arm in decl.members:
+			held = _token_bytes(decl, arm)
+			if ends in held:
+				raise error(
+					f"`{arm.name}` contains the delimiter that ends "
+					f"`{member.name}`",
+					arm.value.span,
+					label = f"holds {ends!r}",
+					notes = [f"the member stops at {ends!r}, so the span "
+					         f"compared against `{decl.name}` can never hold "
+					         f"`{arm.name}` whole",
+					         "a token containing the delimiter needs a "
+					         "different frame, or quoting"])
+
+
 def check_checksum_codecs(schema: ast.Schema) -> None:
 	"""A checksum may name a codec, and only a `derived` one (0053).
 
@@ -2470,6 +2609,7 @@ def check_types_resolve(schema: ast.Schema) -> None:
 
 	declared  = {decl.name for decl in schema.structs()}
 	declared |= {decl.name for decl in schema.enums()}
+	declared |= {decl.name for decl in schema.token_sets()}
 	declared |= {decl.name for decl in schema.varints()}
 	declared |= {decl.name for decl in schema.markers()}
 

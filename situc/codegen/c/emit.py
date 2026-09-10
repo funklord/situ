@@ -162,6 +162,7 @@ class Emitter:
 		self.materialize = materialize
 		self.structs  = {decl.name: decl for decl in schema.structs()}
 		self.enums    = {decl.name: decl for decl in schema.enums()}
+		self.tokens   = {decl.name: decl for decl in schema.token_sets()}
 		self.markers  = {decl.name: decl for decl in schema.markers()}
 		self.codecs   = {decl.name: decl for decl in schema.codecs()}
 
@@ -186,6 +187,9 @@ class Emitter:
 
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
+
+		for token_set in self.schema.token_sets():
+			lines.extend(self._tokens(token_set))
 
 		# Containment order, not declaration order: a sub-view accessor names
 		# the nested struct's SIZE_FIXED macro and an indexed region calls its
@@ -239,6 +243,84 @@ class Emitter:
 			             f" = {values[member.name]},")
 		lines.append(f"}} {ident(self.prefix, decl.name)}_t;")
 		lines.extend(self._enum_is_known(decl))
+		return lines
+
+	def _tokens(self, decl: ast.TokensDecl) -> list[str]:
+		"""A token set: named spans of differing length, and a lookup (0055).
+
+		A table of `{ bytes, len }` rather than the byte-run enum's array of
+		equal-width arrays, because the lengths differ -- which is the whole
+		construct. The lookup reports WHICH arm matched rather than whether
+		one did: a caller that has to compare the span itself to find out is
+		the caller this replaces.
+		"""
+		arms = self.resolved.layout.env.token_sets[decl.name]
+		how  = "ignoring case" if decl.case_insensitive else "byte for byte"
+		lines = [
+			"",
+			f"/* tokens {decl.name} -- compared {how}; unknown spellings are"
+			f" {decl.effective_default.value} */",
+		]
+		for index, (name, run) in enumerate(arms.items()):
+			lines.append(f"#define {macro(self.prefix, decl.name, name)}"
+			             f" {index}u")
+		lines.append(f"#define {macro(self.prefix, decl.name, 'unknown')}"
+		             " 0xFFFFFFFFu")
+		lines.append("")
+
+		for name, run in arms.items():
+			body = ", ".join(f"0x{byte:02X}u" for byte in run)
+			lines.append(
+				f"static const uint8_t {ident(self.prefix, decl.name, name)}"
+				f"[{len(run)}] = {{ {body} }};")
+
+		lines.extend([
+			"",
+			f"/** Which member of `{decl.name}` these bytes spell, or",
+			f" * {macro(self.prefix, decl.name, 'unknown')}.",
+			" *",
+			" * The length is compared first, so a prefix is not a match --"
+			" which is",
+			" * what a `strncmp` against a literal quietly makes it.",
+			" */",
+			f"static inline uint32_t {ident(self.prefix, decl.name, 'which')}"
+			"(const uint8_t *bytes, uint32_t len)",
+			"{",
+			"	static const struct { const uint8_t *run; uint32_t len; }"
+			" arms[] = {",
+		])
+		for name, run in arms.items():
+			lines.append(f"		{{ {ident(self.prefix, decl.name, name)},"
+			             f" {len(run)}u }},")
+		lines.extend([
+			"	};",
+			"	uint32_t a, i;",
+			"",
+			"	for (a = 0; a < sizeof arms / sizeof arms[0]; a++) {",
+			"		if (arms[a].len != len) continue;",
+			"		for (i = 0; i < len; i++) {",
+		])
+		if decl.case_insensitive:
+			# Folded here rather than by `tolower`, which is locale-dependent
+			# and would make a wire format's vocabulary depend on the
+			# environment the reader happens to run in.
+			lines.extend([
+				"			uint8_t got = bytes[i];",
+				"			uint8_t want = arms[a].run[i];",
+				"",
+				"			if (got >= 0x41u && got <= 0x5Au) got |= 0x20u;",
+				"			if (want >= 0x41u && want <= 0x5Au) want |= 0x20u;",
+				"			if (got != want) break;",
+			])
+		else:
+			lines.append("			if (bytes[i] != arms[a].run[i]) break;")
+		lines.extend([
+			"		}",
+			"		if (i == len) return (uint32_t)a;",
+			"	}",
+			f"	return {macro(self.prefix, decl.name, 'unknown')};",
+			"}",
+		])
 		return lines
 
 	def _byte_enum(self, decl: ast.EnumDecl) -> list[str]:
@@ -7223,6 +7305,33 @@ class Emitter:
 
 	# -- validation -----------------------------------------------------
 
+	def _token_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A delimited member typed by a token set holds one of its arms.
+
+		Only where the set says `default = error`. `pass` means the protocol
+		has an extension point and an unknown spelling is a message this
+		reader does not understand rather than one that is malformed -- the
+		same distinction section 8.7 draws for an enum, and the reason a
+		token set carries the same keyword.
+		"""
+		decl = self.tokens.get(placement.type_name or "")
+		if decl is None or decl.effective_default is not ast.EnumDefault.ERROR:
+			return []
+
+		local = c_name(self._local(struct, placement))
+		ptr   = ident(self.prefix, struct.name, local, "ptr")
+		wide  = ident(self.prefix, struct.name, local, "len")
+		return [
+			f"\t/* `{placement.name}` is one of `{decl.name}`'s"
+			f" {len(decl.members)} spelling(s). */",
+			f"\tif ({ident(self.prefix, decl.name, 'which')}({ptr}(view),"
+			f" {wide}(view))",
+			f"\t\t\t== {macro(self.prefix, decl.name, 'unknown')}) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
 	def _delimiter_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A delimited member whose delimiter is missing is a truncated frame.
@@ -7671,7 +7780,12 @@ class Emitter:
 		if placement.delimiters:
 			if "." in placement.path[len(struct.name) + 1:]:
 				return []
-			return self._delimiter_check(struct, placement)
+			# A token set rides on the delimiter check rather than replacing
+			# it: the two say different things, and both can fail. A frame
+			# with no delimiter is truncated, and a complete frame holding a
+			# word nobody declared is a constraint (0055).
+			return [*self._delimiter_check(struct, placement),
+			        *self._token_check(struct, placement)]
 
 		# A struct-typed member carries its own constraints, and they are not
 		# this function's to restate: delegate to the type's own validator.

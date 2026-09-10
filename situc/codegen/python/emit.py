@@ -291,6 +291,21 @@ class Emitter:
 		for decl in self.schema.enums():
 			lines.extend(self._enum(decl))
 
+		# 0055 is built in the C backend only. Refused loudly rather than
+		# ignored: a token set that generated nothing would leave a schema
+		# stating a vocabulary the code does not enforce, which section 14.5
+		# calls worse than stating nothing -- and the author would have no
+		# way to tell from the output.
+		for token_set in self.schema.token_sets():
+			raise error(
+				f"`{token_set.name}` is a token set, and the Python backend does "
+				"not generate one yet",
+				token_set.span,
+				label = "not generated here",
+				notes = ["a token set is built in the C backend (0055)",
+				         "generate this schema with `--target c`, or drop "
+				         "the token set"])
+
 		# The item records first, at module scope. A nested class would work in
 		# Python and would put a type a caller names inside the class it is
 		# reached through, which reads as private.
