@@ -106,7 +106,7 @@ them, and every backend emits exactly the operations the vector supports.
 | `canonical` | `Canonical` > `CanonicalGiven(f)` > `NonCanonical` | does one value have exactly one encoding |
 | `stage` | `CompileTime` < `ParseTime` < `TransformTime` < `VerifyGated` | when the answer is knowable |
 | `auth` | `Uncovered` / `Covered(obligation)` | which obligations cover these bytes |
-| `secrecy` | `Public` / `Secret` | may it be printed, and does it get a debug accessor |
+| `secrecy` | `Public` / `Secret` | may it be printed, does it get a debug accessor, and may it decide layout |
 | `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | does touching it do something |
 
 **The casing carries meaning.** An axis is lowercase and a value on it is
@@ -195,7 +195,7 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 | `situc doc` | RFC-style byte-layout diagrams and a field reference |
 | `situc gen-checks` | tests holding the generated accessors to the map they were generated beside |
 | `situc gen-tests` | golden-vector tests from a schema and hex vectors |
-| `situc gen-fuzz` | a libFuzzer harness per parseable struct |
+| `situc gen-fuzz` | a libFuzzer harness per parseable struct, for C or (`--target cpp`) C++ |
 | `situc gen-tamper` | the harness that watches a tag's gate refuse: every covered byte and every tag byte flipped one at a time, with refusal required |
 | `situc gen-dissector` | a Wireshark dissector in Lua, over the same traversal the code backends use |
 | `situc gen-derived` | codec implementations from kernel descriptions |
@@ -895,6 +895,24 @@ that uses it has to write it down. The waiver moves the interior; it does not
 widen it: a `[secret]` member inside a waived region still gets no accessor,
 and a sibling sealed region in the same struct keeps its gate.
 
+**`[secret]` is three refusals and one accessor.** No debug or format
+accessor is generated for the member at all, that being the most common way
+key material reaches a log. It gets an eraser instead --
+`situ_s_key_zeroize()` in C and C++ through a volatile write the compiler
+may not drop, `key_zeroize(&mut self)` in Rust where the borrow checker
+refuses a live reader of the bytes being erased, and in Python a clear of
+the caller's buffer with a docstring saying what it cannot reach: a copy the
+interpreter already made. Where the length is the data's, the erase is
+clamped to the frame rather than to what the wire declared.
+
+And a secret may not decide where anything is. Not a length, written as a
+name or as arithmetic; not an `at` offset; not a discriminant, whatever the
+arms are shaped like, because reading an arm compares it and that is a
+branch on secret material; and not its own extent, so a `[secret]` run
+ending at a delimiter is refused -- its length would be a function of its
+value, readable by anyone counting bytes. Each refusal names the field and
+says which of the two channels it is.
+
 **A codec must earn the right to seal.** It has to declare `authenticated`,
 so `sealed(crc32)` is refused rather than handing out the interior on a flag
 nothing checked; and a `derived` implementation may not seal at all, because a
@@ -934,9 +952,15 @@ struct header_field {
 
 A radix prefix -- `decimal` or `hex` -- says a number is written as digits
 rather than laid down as bytes, which is what `cpio`'s eight-character hex
-fields and HTTP's status codes need. `[encoding = ascii | utf8 | utf16le |
-leb128]` says what a run holds and gets a validity check that rejects a lone
-surrogate the way the UTF-8 one rejects an overlong form. `[trim]`,
+fields and HTTP's status codes need. The scalar beside it gives the value's
+domain rather than its width in the buffer, so `decimal i16 offset until ','`
+is a signed number whose text is one to six bytes and whose sign costs a byte
+a fixed width cannot pay -- the leading `-` is part of the digits, and
+`[minimal]` refuses a second spelling of the same value.
+
+`[encoding = ascii | utf8 | utf16le | leb128]` says what a run holds and
+gets a validity check that rejects a lone surrogate the way the UTF-8 one
+rejects an overlong form. `[trim]`,
 `[case_insensitive]`, `[nul_terminated]`, `[quoted = "\""]` and
 `[escape = "\\"]` describe the rest, and each is a real claim: a
 case-insensitive token is `NonCanonical` on the lattice, because
@@ -1042,8 +1066,11 @@ it asks a question a hand-written test would have to be remembered to ask:
   member it calls unwritable says why.
 - `gen-tests` turns hex vectors into golden tests, so a corpus somebody else
   produced becomes a build failure when the schema stops describing it.
-- `gen-fuzz` emits a libFuzzer harness per parseable struct. `make fuzz` runs
-  them under ASan.
+- `gen-fuzz` emits a libFuzzer harness per parseable struct, for the C
+  accessors and -- `--target cpp` -- for the C++ ones. `make fuzz` runs those
+  and a third set over the embedded walker, all under ASan: three sets
+  because the layout has three readings that can run off a buffer, and the
+  two that had no harness both had defects the first time they got one.
 - `gen-tamper` drives the caller's verifier across the schema's own coverage
   geometry, flipping every covered byte and every tag byte with refusal
   required. A gate nobody has watched fail is not evidence.
@@ -1198,7 +1225,15 @@ text files a reviewer can read.
   supply memory, and `--layer edit` is the explicit way to ask for more.
   Python allocates because its data model gives it no other spelling, bounded
   by the schema's own `max`.
-- No recursive types: size and capability computation would not terminate.
+- No *unbounded* recursion. A recursive struct that states a depth is
+  described -- `struct value [depth = 64]` is how `example/json` holds a
+  value inside an array inside an object -- and one that states none is
+  refused, because a format whose nesting nobody has bounded is a finding
+  rather than a gap in this language. `[depth = N]` is the format's own
+  limit and a deeper message is malformed; `[limit = N]` is this reader's
+  cap and a deeper message is well formed and refused anyway, with an
+  error class of its own so that a receiver does not log its own
+  configuration as an attack (decision 0054).
 - No grammar inside a field. A field whose text holds an expression language
   is not a layout; situ describes the layout around it (section 8.6.6).
 - **No transform that has to allocate.** A codec whose output is not a view
@@ -1230,7 +1265,11 @@ make            # the C runtime
 make test       # pytest and the generated C
 make check      # everything before a commit: style, types, test, aarch64
 make bench      # what the offset cache costs and saves, in all four backends
-make fuzz       # every generated harness, under libFuzzer and ASan
+make fuzz       # every harness, under libFuzzer and ASan: the C
+                # accessors, the C++ accessors and the walker
+make fuzz-generated   # just the C accessors
+make fuzz-cpp         # just the C++ accessors
+make fuzz-walker      # just the embedded walker
 make hooks      # install the commit-message hook from tool/hooks/
 make walk-c     # build situ-walk-c, the embedded walker
 make deb        # situc and libsitu-dev, with debhelper
