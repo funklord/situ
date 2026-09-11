@@ -295,24 +295,6 @@ class Emitter:
 		for token_set in self.schema.token_sets():
 			lines.extend(self._tokens(token_set))
 
-		# 0056 is built in the C backend only. Refused loudly rather than
-		# generated wrongly: a scaled member reuses the integer text-number
-		# path everywhere it is not taught otherwise, so an unguarded
-		# backend emits `situ_parse_int` over `12.5` -- a silent zero, not
-		# an error, for a member whose whole point is its value.
-		for held in self.resolved.structs.values():
-			for entry in held.entries:
-				if not entry.placement.scaled:
-					continue
-				raise error(
-					f"`{entry.placement.path}` is a scaled text number, and "
-					"the Python backend does not generate one yet",
-					entry.placement.span,
-					label = "not generated here",
-					notes = ["a scaled text number is built in the C backend "
-					         "(0056)",
-					         "generate this schema with `--target c`, or read "
-					         "the member as a byte run"])
 
 		# The item records first, at module scope. A nested class would work in
 		# Python and would put a type a caller names inside the class it is
@@ -353,11 +335,13 @@ class Emitter:
 		if any(len(p.delimiters) > 1 for p in placements):
 			needed.append("scan_any")
 		if any(p.radix is not None and not (p.scalar and p.scalar.signed)
-		       for p in placements):
+		       and not p.scaled for p in placements):
 			needed.append("parse_uint")
 		if any(p.radix is not None and p.scalar and p.scalar.signed
-		       for p in placements):
+		       and not p.scaled for p in placements):
 			needed.append("parse_int")
+		if any(p.scaled for p in placements):
+			needed.append("parse_scaled")
 		if any(p.radix_minimal for p in placements):
 			needed.append("digits_minimal")
 		if any(p.trimmed for p in placements):
@@ -3867,6 +3851,8 @@ class Emitter:
 		# signed text number is refused, so the two sites above stay
 		# unsigned by construction.
 		signed = scalar.signed
+		if placement.scaled:
+			return self._scaled_number(placement, name, scalar, raw)
 		if signed:
 			call = (f"parse_int({raw}, {placement.radix},"
 			        f" {placement.radix_min}, {placement.radix_max})")
@@ -3903,6 +3889,58 @@ class Emitter:
 			'\t\tso a validated one always parses here."""',
 			f"\t\tvalue = {call}",
 			"\t\treturn 0 if value is None else value",
+		]
+
+	def _scaled_number(self, placement: Placement, name: str,
+			scalar: ScalarType, raw: str) -> list[str]:
+		"""A decimal with a point and an exponent, as an exact pair.
+
+		Three properties where an integer text number has two, because the
+		value is two numbers. A float would be this module choosing a
+		rounding for every caller, which `0.1` is the standing example of
+		(0056).
+		"""
+		call = (f"parse_scaled({raw},"
+		        f" {placement.radix_min}, {placement.radix_max})")
+		span = f"{placement.radix_min}..{placement.radix_max}"
+
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}(self) -> tuple[int, int]:",
+			f'\t\t"""{placement.path}: an exact decimal, as a significand'
+			" and a",
+			"\t\tpower of ten -- the value is `significand *"
+			" 10**exponent`,",
+			f"\t\twith the significand in {span}.",
+			"",
+			"\t\tA pair rather than a float, and not for want of a parser:",
+			"\t\trounding is where four backends drift, C's `strtod`"
+			" answers",
+			"\t\tdifferently under different locales, and whoever wants a",
+			'\t\tfloat should own the error."""',
+			"\t\tself._check()",
+			f"\t\theld = {call}",
+			"\t\tif held is None:",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\tf"{placement.path} is not a decimal number written'
+			" in text\")",
+			"\t\treturn held",
+			"",
+			"\t@property",
+			f"\tdef {name}_significand(self) -> int:",
+			'\t\t"""The same digits where nothing may raise, which is the',
+			"\t\tbargain every infallible accessor here makes: `validate`",
+			'\t\trefuses a frame these cannot parse."""',
+			f"\t\theld = {call}",
+			"\t\treturn 0 if held is None else held[0]",
+			"",
+			"\t@property",
+			f"\tdef {name}_exponent(self) -> int:",
+			f'\t\t"""The power of ten `{placement.name}`\'s significand'
+			' carries."""',
+			f"\t\theld = {call}",
+			"\t\treturn 0 if held is None else held[1]",
 		]
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,

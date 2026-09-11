@@ -26487,12 +26487,80 @@ path everywhere it is not taught otherwise, so an unguarded backend emits
 `situ_parse_int` over `12.5` and gets a silent ZERO -- not an error -- for
 a member whose whole point is its value.
 
-**Still open:** the other three backends, `[minimal]` and `canonical`, the
-walker and the dissector, a corpus schema, and converting json's `number`.
-And the second-asker question is open in a way 0055's was not: json is the
-only schema in this tree that asks, and the copyright holder's instruction
-is what stands in for the second. 8.6.6 wants two protocols, and the
-honest thing is to say which one this has.
+**All four backends have it now, and each parses rather than converts.**
+C++ reaches the C runtime's `situ_parse_scaled` directly; Rust and Python
+have the same scan written in their own runtimes, and both were written
+out rather than deferred to `str::parse` or `decimal.Decimal`. Those are
+correctly rounded and accept spellings this grammar does not -- `Infinity`,
+`NaN`, a leading `+`, surrounding space -- so using them would have meant
+narrowing afterwards with a second set of rules to keep in step with four
+others.
+
+**The differential agreed about the scaled members and was proving
+nothing.** It draws from fixed alphabets, and the first version of the
+corpus struct framed on `","` and `";"` -- neither of which appears in any
+alphabet. So the member never terminated in any draw, all four agreed that
+the frame stopped early, and the parse was compared by nobody. Vacuous
+agreement wearing a passing test, in the one test written to prevent
+exactly that.
+
+Two changes fixed it and the second is the general one: the struct frames
+on `":"` and `" "`, which the digit alphabet contains, and that alphabet
+gained `eE+` -- **without them a scaled number's exponent cannot be drawn
+at all**, so half the construct was unreachable by construction. The
+control is a sabotage aimed at the FRACTION alone: `fraction += 1` made
+into `+= 0`, which leaves every plain integer right and only `12.5` wrong.
+The differential goes red. The earlier off-by-one sabotage did too and
+proved less, because it also breaks `125`.
+
+**And the walker disagreed with all four, silently.** A scaled member
+carries `radix = 10`, so the walk ran the INTEGER parse over `12.5` and
+refused a frame every backend accepts -- measured directly rather than
+found by a test, because the differential could not see it for the reason
+above. The image needed no new section: `text_flags` had a spare bit, and
+the walk takes the other parse when it is set.
+
+**A sixth reader, and the round-trip test is what named it.** `unparse`
+renders a text number from its radix, and a scaled member carries
+`radix = 10` beside its flag rather than instead of it -- so the source it
+wrote back said `decimal`, and parsing that gave a different construct.
+Carrying the flag alongside the radix is what made every span accessor and
+delimiter rule work unchanged, and this is the bill for it: each place
+that reads `radix` to decide what a member IS has to be found. Five were
+found by writing them; this one was found by a test that exists for
+exactly this shape of mistake.
+
+**Two more readers, and one of them found a defect that has nothing to do
+with this construct.** The C fuzz harness calls the same fallible getter
+and needed the second out-parameter -- and both numbers go to the sink,
+because fuzzing the significand and dropping the exponent leaves half the
+parse unreached. The C++ affix guard wanted `significand` and `exponent`
+registered, which here is the RIGHT answer and was the wrong one for a
+token set's arms: these genuinely are suffixes on a member's name, so a
+schema field called `x_significand` beside one called `x` would collide
+exactly as `x_len` does.
+
+**And adding `eE+` to a differential alphabet turned sqlite red.** Nothing
+to do with scaled numbers: changing the alphabet changes every draw, and
+one of the new ones was a btree page declaring 2644 cells in a 46-byte
+frame. C says BOUNDS. The walk said clean -- and says so on the committed
+tree too, so this is older than today and was invisible because no draw
+had reached it.
+
+The cause is that an `indexed` region's offset table is `count` entries
+of `offset_type`, and **the image writes an INDEXES section that nothing
+in `walker/` loads**. The walk cannot check the table fits because it
+cannot see the table. So the walk DEFERS on a struct holding an indexed
+region rather than answering, which is the mechanism pack already has for
+every other thing it cannot speak for. Teaching the walker to read that
+section is its own piece of work; answering wrongly in the meantime is the
+one option that was not available.
+
+**Still open:** `[minimal]` and `canonical`, the dissector's rendering of
+one, converting json's `number`, and the walker's INDEXES section. And the second-asker question stays
+open in a way 0055's did not: json is the only schema here that asks, and
+the copyright holder's instruction is what stands in for 8.6.6's second
+protocol.
 
 ### 26.330 Text encoding, scoped and named by the data
 

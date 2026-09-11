@@ -1027,6 +1027,21 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					and version_of.get(name) is None:
 				whole = False
 				continue
+			# An `indexed` region's offset table is `count` entries of
+			# `offset_type`, and whether those fit the frame is a check the
+			# four backends make and this walk cannot: the image writes an
+			# INDEXES section and nothing in `walker/` loads it.
+			#
+			# So the walk defers rather than answering. Found when a
+			# differential alphabet change drew a sqlite page declaring 2644
+			# cells in a 46-byte frame: C said BOUNDS, the walk said clean,
+			# and it had been saying so since indexed regions arrived --
+			# invisible because no draw had reached it. A fifth description
+			# agreeing wrongly is worse than one that says nothing, which is
+			# what the deferral is for.
+			if placement.kind == "indexed":
+				whole = False
+				continue
 			if kind is traverse.Check.NOTHING or at is None:
 				continue
 			if kind is traverse.Check.RESERVED:
@@ -1737,7 +1752,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		text = (1 if placement.radix_minimal else 0) \
 			| (2 if placement.trimmed else 0) \
 			| (4 if placement.case_insensitive else 0) \
-			| (8 if is_bcd else 0)
+			| (8 if is_bcd else 0) \
+			| (16 if placement.scaled else 0)
 		placements_blob += _struct.pack(
 			"<BBBB",
 			_kind_of(placement),

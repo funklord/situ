@@ -2217,3 +2217,37 @@ def test_a_token_set_that_passes_unknown_spellings_accepts_them(
 
 	held.validate()
 	assert module.verb.which(held.keyword_raw) == module.verb.UNKNOWN
+
+
+SCALED = 'struct s { scaled i64 v until ","; u8 rest[remaining]; }'
+
+
+def test_a_scaled_number_reads_as_an_exact_pair(tmp_path: Path) -> None:
+	"""0056, executed. The pair reflects the BYTES, so `1.50` is not `1.5`.
+
+	`parse_scaled` is written out rather than deferred to `decimal.Decimal`,
+	which accepts `Infinity`, `NaN`, a leading `+` and surrounding space --
+	spellings this grammar does not have and the other three backends would
+	refuse. Narrowing it afterwards would be a second set of rules to keep
+	in step with four others.
+	"""
+	module = load(tmp_path, SCALED)
+
+	def one(text: str) -> tuple[bool, int, int]:
+		data = text.encode("ascii")
+		held = module.s.at(module.Message(bytearray(data)), 0, len(data))
+		try:
+			held.validate()
+			valid = True
+		except module.ConstraintError:
+			valid = False
+		return valid, held.v_significand, held.v_exponent
+
+	assert one("12.5e3,") == (True, 125, 2)
+	assert one("-0.004,") == (True, -4, -3)
+	assert one("1.50,")   == (True, 150, -2)
+	assert one("1.5,")    == (True, 15, -1)
+	assert one("-0,")     == (True, 0, 0)
+	for bad in (".5,", "12.,", "1e,", "1e+,", "+1,", "1.2.3,", "12x,",
+	            "0x10,", "Infinity,", "NaN,", " 1,"):
+		assert one(bad)[0] is False, bad

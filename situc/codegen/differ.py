@@ -193,6 +193,17 @@ class Ask:
 	#: For `NESTED`: the member's type, which C++ needs to declare the
 	#: out-parameter the accessor fills in.
 	inner: str = ""
+	#: `scaled` (0056): the value is a significand AND a power of ten, so
+	#: the getter takes two out-parameters and the printed line carries two
+	#: numbers. A flag rather than a probe of its own, because everything
+	#: else about the ask -- the name, the width, the signedness -- is the
+	#: text number's and only the arity differs.
+	#:
+	#: LAST in the field order, and deliberately: several call sites build
+	#: an `Ask` positionally, so a field inserted in the middle silently
+	#: shifts every argument after it. Adding it here put `inside`'s tuple
+	#: into this flag and the type checker is what said so.
+	scaled: bool = False
 
 
 def asks(struct: ResolvedStruct, structs: set[str],
@@ -413,14 +424,16 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# code or any of it across the four.
 			if placement.radix is not None and scalar is not None:
 				found.append(Ask(Probe.TEXT_VALUE, local, None,
-				                 max(8, scalar.bits), scalar.signed))
+				                 max(8, scalar.bits), scalar.signed,
+				                 scaled=placement.scaled))
 		elif kind is Member.TEXT_NUMBER:
 			# The fixed-width form, which reached no branch at all: cpio's
 			# header is thirteen of these and the drivers asked about none
 			# of them.
 			if scalar is not None:
 				found.append(Ask(Probe.TEXT_VALUE, local, None,
-				                 max(8, scalar.bits), scalar.signed))
+				                 max(8, scalar.bits), scalar.signed,
+				                 scaled=placement.scaled))
 		elif kind is Member.TAG:
 			found.append(Ask(Probe.TAG, local, placement.array_count))
 		elif kind is Member.MARKER:
@@ -1067,6 +1080,20 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        "\t\t\t}"]
 
 	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
+		if ask.scaled:
+			return ["\t\t\t{",
+			        f"\t\t\t\t{'int' if ask.signed else 'uint'}"
+			        f"{ask.bits}_t held = 0;",
+			        "\t\t\t\tint32_t power = 0;",
+			        f"\t\t\t\tconst situ_err_t e = {call.format('get')}"
+			        "(view, &held, &power);",
+			        "",
+			        f'\t\t\t\tprintf("{ask.local} ok=%d value=%lld'
+			        ' exp=%d\\n",',
+			        "\t\t\t\t\te == SITU_OK ? 1 : 0,",
+			        "\t\t\t\t\t(long long)(e == SITU_OK ? held : 0),",
+			        "\t\t\t\t\te == SITU_OK ? power : 0);",
+			        "\t\t\t}"]
 		return ["\t\t\t{",
 		        f"\t\t\t\t{'int' if ask.signed else 'uint'}{ask.bits}_t"
 		        " held = 0;",
@@ -1415,6 +1442,20 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t}"]
 
 	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
+		if ask.scaled:
+			return ["\t\t\t{",
+			        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
+			        f"{ask.bits}_t held = 0;",
+			        "\t\t\t\tstd::int32_t power = 0;",
+			        f"\t\t\t\tconst auto e = view.{call}(held, power);",
+			        "",
+			        f'\t\t\t\tstd::printf("{ask.local} ok=%d value=%lld'
+			        ' exp=%d\\n",',
+			        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+			        "\t\t\t\t\tstatic_cast<long long>(",
+			        "\t\t\t\t\t\te == ::situ::rt::err::ok ? held : 0),",
+			        "\t\t\t\t\te == ::situ::rt::err::ok ? power : 0);",
+			        "\t\t\t}"]
 		return ["\t\t\t{",
 		        f"\t\t\t\tstd::{'int' if ask.signed else 'uint'}"
 		        f"{ask.bits}_t held = 0;",
@@ -1632,6 +1673,13 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t}"]
 
 	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
+		if ask.scaled:
+			return [f"\t\t\t\tmatch view.{call}() {{",
+			        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
+			        ' value={} exp={}", held.0 as i64, held.1),',
+			        f'\t\t\t\t\tErr(_)   => println!("{ask.local} ok=0'
+			        ' value=0 exp=0"),',
+			        "\t\t\t\t}"]
 		return [f"\t\t\t\tmatch view.{call}() {{",
 		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
 		        ' value={}", held as u64),',
@@ -1818,6 +1866,14 @@ def _python_ask(ask: Ask) -> list[str]:
 		        f" % (n, 0 if n == 0 else view.{call}(0)))"]
 
 	if ask.probe in (Probe.ARM_VALUE, Probe.TEXT_VALUE):
+		if ask.scaled:
+			return ["try:",
+			        f"\theld = view.{call}",
+			        "except situ_runtime.SituError:",
+			        f'\tprint("{ask.local} ok=0 value=0 exp=0")',
+			        "else:",
+			        f'\tprint("{ask.local} ok=1 value=%d exp=%d"'
+			        " % (held[0], held[1]))"]
 		return ["try:",
 		        f"\theld = view.{call}",
 		        "except situ_runtime.SituError:",

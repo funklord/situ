@@ -653,6 +653,109 @@ def parse_int(data: "memoryview | bytes", radix: int,
 	return -value if negative else value
 
 
+
+def parse_scaled(data: "memoryview | bytes",
+		low: int, high: int) -> tuple[int, int] | None:
+	"""A decimal that may carry a point and an exponent (0056).
+
+	EXACT, and never a float: returns a significand and a power of ten, so
+	the value is `significand * 10**exponent`. `12.5e3` is `(125, 2)`;
+	`-0.004` is `(-4, -3)`; `1.50` is `(150, -2)`.
+
+	The pair reflects the bytes rather than the value, which is why `1.50`
+	and `1.5` differ here and are the same number. Normalising would make a
+	reading of the bytes into a rewriting of them.
+
+	`float()` here is correctly rounded and is still not what this does. The
+	C runtime has no correctly-rounded parser it can reach -- `strtod` is
+	locale-dependent and absent from a freestanding build -- and a construct
+	meaning one thing in three backends and another in the fourth is what
+	the four-way differential exists to prevent.
+
+	The grammar:
+
+	    [ "-" ] digit+ [ "." digit+ ] [ ("e" | "E") [ "+" | "-" ] digit+ ]
+
+	`-0` is accepted where `parse_int` refuses it: that refusal buys the
+	integer form `Canonical`, and `1.50` against `1.5` means this form
+	cannot have it whatever the sign does.
+
+	Written as a scan rather than through `decimal.Decimal`, which would
+	accept spellings this grammar does not -- `Infinity`, `NaN`, a leading
+	`+`, surrounding space -- and would have to be narrowed afterwards by a
+	second set of rules nobody could check against the other three
+	backends.
+	"""
+	raw = bytes(data)
+	if not raw:
+		return None
+
+	negative = raw[:1] == b"-"
+	if negative:
+		raw = raw[1:]
+
+	at = 0
+	magnitude = 0
+	fraction = 0
+
+	# The integer part. At least one digit: a leading point is refused for
+	# the reason an empty run is, that no digits is not the number zero.
+	start = at
+	while at < len(raw) and 0x30 <= raw[at] <= 0x39:
+		magnitude = magnitude * 10 + (raw[at] - 0x30)
+		at += 1
+	if at == start:
+		return None
+
+	# The fraction moves the point rather than the value: each digit is one
+	# more digit of the significand and one less power of ten.
+	if at < len(raw) and raw[at] == 0x2E:
+		at += 1
+		first = at
+		while at < len(raw) and 0x30 <= raw[at] <= 0x39:
+			magnitude = magnitude * 10 + (raw[at] - 0x30)
+			fraction += 1
+			at += 1
+		if at == first:
+			return None
+
+	# The exponent, with its own sign. `+` is allowed here where the
+	# significand's is not: `1e+3` is what a great many formats write.
+	exponent = 0
+	if at < len(raw) and raw[at] in (0x65, 0x45):
+		at += 1
+		down = False
+		if at < len(raw) and raw[at] in (0x2B, 0x2D):
+			down = raw[at] == 0x2D
+			at += 1
+		first = at
+		while at < len(raw) and 0x30 <= raw[at] <= 0x39:
+			# Bounded where the other three bound it, so all four refuse
+			# the same spellings. Python would carry the integer happily
+			# and then disagree with C about `1e99999999999999999999`.
+			if exponent > 1_000_000_000:
+				return None
+			exponent = exponent * 10 + (raw[at] - 0x30)
+			at += 1
+		if at == first:
+			return None
+		if down:
+			exponent = -exponent
+
+	if at != len(raw):
+		return None		# a byte the grammar does not have
+
+	value = -magnitude if negative else magnitude
+	if value < low or value > high:
+		return None
+
+	scale = exponent - fraction
+	if scale < -0x80000000 or scale > 0x7FFFFFFF:
+		return None
+
+	return value, scale
+
+
 DIGITS: Final = "0123456789abcdef"
 
 

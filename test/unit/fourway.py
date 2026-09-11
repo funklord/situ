@@ -53,7 +53,10 @@ SHORTEST = 64
 ALPHABETS = (
 	None,					# uniform over 0..255
 	bytes(range(0x20, 0x7f)) + b"\r\n\t",	# printable text and its framing
-	b"0123456789 \r\n:.-",			# digits and the delimiters
+	# `eE+` as well as the digits: a scaled text number's exponent is
+	# unreachable without them, so `12.5e3` could not be drawn and the
+	# exponent half of 0056 was compared by nobody.
+	b"0123456789 \r\n:.-eE+",		# digits, exponents, delimiters
 	b"\x00\x01\x7f\x80\xff 0123456789",	# edge bytes among text
 	# Text that is *terminated* and not ASCII, which no other alphabet
 	# reaches often enough to matter. `validate` returns on the first thing

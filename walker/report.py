@@ -24,7 +24,8 @@ from walker import vm
 from walker.image import NONE, Image
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
                          acquire, digits_of,
-                         parse_digits, read_bytes, read_scalar,
+                         parse_digits, parse_scaled_digits,
+                         read_bytes, read_scalar,
                          _read_at, offset_bits, scan, size_bits,
                          struct_extent, varint, while_count)
 
@@ -204,6 +205,10 @@ def _element(view: View, index: int, at: int) -> int:
 
 #: `image_placement.text_flags`
 MINIMAL, TRIMMED, CASE_INSENSITIVE = 1, 2, 4
+#: 8 is BCD, which this file has no question for. 16 is `scaled`
+#: (0056): the digits may carry a point and an exponent, and the value
+#: is a significand and a power of ten rather than an integer.
+SCALED = 16
 
 #: What `[trim]` removes where the image carries no set: HTTP's OWS and
 #: SIP's LWS, and deliberately not `isspace`, which is locale dependent and
@@ -713,8 +718,16 @@ def _validate(image: Image, view: View, struct_index: int,
 			# out: C reaches this through the getter, whose `_ptr` and
 			# `_len` clamp, so a text number nobody can read is a field
 			# that is not a number rather than a field that is not there.
+			# A scaled member takes the other parse. Without this the walk
+			# ran the INTEGER one over `12.5` and refused a frame all four
+			# backends accept -- and the differential did not catch it,
+			# because random bytes almost never spell a valid decimal and
+			# the two agreed on refusing everything else (0056).
 			try:
-				value = parse_digits(view, index)
+				if placement.text_flags & SCALED:
+					value, _ = parse_scaled_digits(view, index)
+				else:
+					value = parse_digits(view, index)
 			except Refused:
 				return fail(ERR_CONSTRAINT, index, DIGITS_VALID)
 			# The row carries the ceiling. A signed text number's floor is

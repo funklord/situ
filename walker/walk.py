@@ -1044,6 +1044,85 @@ def digits_of(view: View, index: int) -> bytes:
 	return data
 
 
+def parse_scaled_digits(view: View, index: int) -> tuple[int, int]:
+	"""A scaled text number's value: a significand and a power of ten (0056).
+
+	The fifth reading of the same rule, and it has to be the same rule: the
+	walk exists to disagree with the four backends when one of them is
+	wrong, which it cannot do if it is running a different parse. `12.5e3`
+	is `(125, 2)` here exactly as it is there, and the pair reflects the
+	bytes rather than the value -- `1.50` is `(150, -2)`.
+
+	Written out rather than deferred to `decimal.Decimal`, which accepts
+	spellings this grammar does not: `Infinity`, `NaN`, a leading `+` and
+	surrounding space. Narrowing it afterwards would be a second set of
+	rules to keep in step with four others.
+	"""
+	placement = view.image.placements[index]
+	data = digits_of(view, index)
+
+	if not data:
+		raise Refused("no digits")
+
+	negative = data[:1] == b"-"
+	if negative:
+		data = data[1:]
+
+	at = 0
+	magnitude = 0
+	fraction = 0
+
+	start = at
+	while at < len(data) and 0x30 <= data[at] <= 0x39:
+		magnitude = magnitude * 10 + (data[at] - 0x30)
+		at += 1
+	if at == start:
+		raise Refused("no digits before the point")
+
+	if at < len(data) and data[at] == 0x2E:
+		at += 1
+		first = at
+		while at < len(data) and 0x30 <= data[at] <= 0x39:
+			magnitude = magnitude * 10 + (data[at] - 0x30)
+			fraction += 1
+			at += 1
+		if at == first:
+			raise Refused("a point with nothing after it")
+
+	exponent = 0
+	if at < len(data) and data[at] in (0x65, 0x45):
+		at += 1
+		down = False
+		if at < len(data) and data[at] in (0x2B, 0x2D):
+			down = data[at] == 0x2D
+			at += 1
+		first = at
+		while at < len(data) and 0x30 <= data[at] <= 0x39:
+			# The same ceiling the other four use, so all five refuse the
+			# same spellings. Python would carry the integer happily and
+			# then disagree about `1e99999999999999999999`.
+			if exponent > 1_000_000_000:
+				raise Refused("an exponent too large to be one")
+			exponent = exponent * 10 + (data[at] - 0x30)
+			at += 1
+		if at == first:
+			raise Refused("an exponent marker with no digits")
+		if down:
+			exponent = -exponent
+
+	if at != len(data):
+		raise Refused("a byte the grammar does not have")
+
+	scale = exponent - fraction
+	if scale < -0x80000000 or scale > 0x7FFFFFFF:
+		raise Refused("an exponent that does not fit an int32")
+
+	value = -magnitude if negative else magnitude
+	if not placement.signed and value < 0:
+		raise Refused("a negative value in an unsigned member")
+	return value, scale
+
+
 def parse_digits(view: View, index: int) -> int:
 	"""A text number's value: digits, not bits (section 8.6.2).
 

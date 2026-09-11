@@ -98,6 +98,19 @@ def _is_run(placement: Placement) -> bool:
 	        or data_sized(placement))
 
 
+def _int64_literal(value: int | None) -> str:
+	"""An `int64_t` constant a compiler will accept, INT64_MIN included.
+
+	`INT64_C(-9223372036854775808)` is not one: C++ has no negative
+	literals either, so it is unary minus applied to a value that does not
+	fit, and `-Werror` refuses the translation unit. The C backend carries
+	the same helper for the same reason (0056).
+	"""
+	if value == -(1 << 63):
+		return "(-INT64_C(9223372036854775807) - 1)"
+	return f"INT64_C({value})"
+
+
 @dataclass
 class Generated:
 	"""What a schema compiles to. One file: C++ needs no second one here."""
@@ -177,24 +190,6 @@ class Emitter:
 		for token_set in self.schema.token_sets():
 			lines.extend(self._tokens(token_set))
 
-		# 0056 is built in the C backend only. Refused loudly rather than
-		# generated wrongly: a scaled member reuses the integer text-number
-		# path everywhere it is not taught otherwise, so an unguarded
-		# backend emits `situ_parse_int` over `12.5` -- a silent zero, not
-		# an error, for a member whose whole point is its value.
-		for held in self.resolved.structs.values():
-			for entry in held.entries:
-				if not entry.placement.scaled:
-					continue
-				raise error(
-					f"`{entry.placement.path}` is a scaled text number, and "
-					"the C++ backend does not generate one yet",
-					entry.placement.span,
-					label = "not generated here",
-					notes = ["a scaled text number is built in the C backend "
-					         "(0056)",
-					         "generate this schema with `--target c`, or read "
-					         "the member as a byte run"])
 
 		order    = self._struct_order()
 		deferred: list[str] = []
@@ -1778,6 +1773,9 @@ class Emitter:
 		ctype = self._ctype(scalar)
 		limit = (1 << scalar.bits) - 1
 
+		if placement.scaled:
+			return self._scaled_number(placement, name, ctype, value_at)
+
 		# A signed text number takes the other parse: an optional leading
 		# `-`, then digits, and never a `+` or a `-0`. Only the delimited
 		# form can be signed -- a fixed-width one is refused -- so the two
@@ -1785,8 +1783,9 @@ class Emitter:
 		if scalar.signed:
 			held = "\t\tstd::int64_t value"
 			call = (f"situ_parse_int({value_at}, {name}_len(),"
-			        f" {placement.radix}u, INT64_C({placement.radix_min}),"
-			        f" INT64_C({placement.radix_max}), &value)")
+			        f" {placement.radix}u,"
+			        f" {_int64_literal(placement.radix_min)},"
+			        f" {_int64_literal(placement.radix_max)}, &value)")
 			span = f"{placement.radix_min}..{placement.radix_max}"
 		else:
 			held = "\t\tstd::uint64_t value"
@@ -1821,6 +1820,67 @@ class Emitter:
 			"\t}",
 		]
 
+
+	def _scaled_number(self, placement: Placement, name: str, ctype: str,
+			value_at: str) -> list[str]:
+		"""A decimal with a point and an exponent, read as an exact pair.
+
+		Three members where an integer text number has two, because the
+		value is two numbers: there is no single one to return, and a
+		`double` would be this header choosing a rounding for every caller
+		(0056). `value = significand * 10^exponent`, exactly.
+		"""
+		call = (f"situ_parse_scaled({value_at}, {name}_len(),"
+		        f" {_int64_literal(placement.radix_min)},"
+		        f" {_int64_literal(placement.radix_max)}, &value, &scale)")
+		span = f"{placement.radix_min}..{placement.radix_max}"
+
+		return [
+			f"\t/* An exact decimal: `{name}_significand() * 10 ^",
+			f"\t * {name}_exponent()`, with the significand in the range of",
+			f"\t * {ctype} ({span}).",
+			"\t *",
+			"\t * No `double`, and not for want of a parser: rounding is"
+			" where four",
+			"\t * backends drift, `strtod` answers differently under"
+			" different",
+			"\t * locales, and whoever wants a float should own the error"
+			" (0056). */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out,"
+			" std::int32_t &power) const noexcept",
+			"\t{",
+			"\t\tstd::int64_t value;",
+			"\t\tstd::int32_t scale;",
+			"",
+			f"\t\tif ({call} != 0) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+			f"\t\tout   = static_cast<{ctype}>(value);",
+			"\t\tpower = scale;",
+			"\t\treturn ::situ::rt::err::ok;",
+			"\t}",
+			"\t/* The same digits where an error cannot be returned, which is",
+			"\t * the bargain every other infallible accessor here makes:",
+			"\t * `validate` refuses a frame these cannot parse. */",
+			f"\t[[nodiscard]] {ctype} {name}_significand() const noexcept",
+			"\t{",
+			"\t\tstd::int64_t value = 0;",
+			"\t\tstd::int32_t scale = 0;",
+			"",
+			f"\t\t(void){call};",
+			"\t\t(void)scale;",
+			f"\t\treturn static_cast<{ctype}>(value);",
+			"\t}",
+			f"\t[[nodiscard]] std::int32_t {name}_exponent() const noexcept",
+			"\t{",
+			"\t\tstd::int64_t value = 0;",
+			"\t\tstd::int32_t scale = 0;",
+			"",
+			f"\t\t(void){call};",
+			"\t\t(void)value;",
+			"\t\treturn scale;",
+			"\t}",
+		]
 
 	def _run_index(self, struct: ResolvedStruct, placement: Placement,
 			walk: list[str], cond: str | None, inner: str) -> list[str]:
@@ -6758,11 +6818,16 @@ class Emitter:
 				"\t\t}",
 			])
 
+		# A scaled number's getter reports both parts, so the check has
+		# somewhere for the second to go. It is the PARSE being checked here
+		# rather than either number, which is why neither is read (0056).
 		lines.extend([
 			"\t\t{",
 			f"\t\t\t{self._ctype(scalar)} parsed;",
-			f"\t\t\tif (const ::situ::rt::err e = {name}(parsed);"
-			" e != ::situ::rt::err::ok) {",
+			*(["\t\t\tstd::int32_t power;"] if placement.scaled else []),
+			f"\t\t\tif (const ::situ::rt::err e = {name}(parsed"
+			+ (", power); " if placement.scaled else "); ")
+			+ "e != ::situ::rt::err::ok) {",
 			"\t\t\t\treturn e;",
 			"\t\t\t}",
 			"\t\t}",

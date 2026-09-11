@@ -643,12 +643,22 @@ def _reads(struct: ResolvedStruct, prefix: str,
 			# in three digits, not three numbers. Its accessor parses and
 			# returns an error, and the array branch below called it with an
 			# index and a `_COUNT` macro that is not emitted for one.
+			#
+			# A scaled one reports two numbers, so its getter takes a second
+			# out-parameter and both go to the sink: fuzzing the significand
+			# and dropping the exponent would leave half the parse unreached
+			# (0056).
 			lines.extend([
 				"\t{",
 				f"\t\t{_ctype_of(placement)} parsed = 0;",
+				*(["\t\tint32_t power = 0;"] if placement.scaled else []),
 				f"\t\tif ({ident(prefix, struct.name, local, 'get')}"
-				"(view, &parsed) == SITU_OK) {",
+				+ ("(view, &parsed, &power)" if placement.scaled
+				   else "(view, &parsed)")
+				+ " == SITU_OK) {",
 				"\t\t\tsitu_fuzz_sink((uint64_t)parsed);",
+				*(["\t\t\tsitu_fuzz_sink((uint64_t)power);"]
+				  if placement.scaled else []),
 				"\t\t}",
 				"\t}",
 			])
@@ -900,12 +910,20 @@ def _variable_read(structs: frozenset[str], struct: ResolvedStruct,
 	if placement.delimiters and placement.radix is not None:
 		# A text number: the parse is the interesting part, and it returns an
 		# error rather than a value.
+		#
+		# A scaled one reports two numbers, so its getter takes a second
+		# out-parameter and both go to the sink: fuzzing the significand and
+		# dropping the exponent would leave half the parse unreached (0056).
 		return [
 			"\t{",
 			f"\t\t{_ctype_of(placement)} parsed = 0;",
-			f"\t\tif ({ident(prefix, struct.name, local, 'get')}(view, &parsed)"
-			" == SITU_OK) {",
+			*(["\t\tint32_t power = 0;"] if placement.scaled else []),
+			f"\t\tif ({ident(prefix, struct.name, local, 'get')}(view,"
+			+ (" &parsed, &power)" if placement.scaled else " &parsed)")
+			+ " == SITU_OK) {",
 			"\t\t\tsitu_fuzz_sink((uint64_t)parsed);",
+			*(["\t\t\tsitu_fuzz_sink((uint64_t)power);"]
+			  if placement.scaled else []),
 			"\t\t}",
 			"\t}",
 		]

@@ -1,6 +1,6 @@
 # 0056: a text number with a point and an exponent
 
-Status: accepted 2026-09-11; front end built
+Status: accepted 2026-09-11; built in all four backends and the walker
 Date: 2026-09-11
 Phase: raised by the copyright holder, from json's `number`
 
@@ -141,6 +141,16 @@ with the same rounding decisions unreviewed.
 0055's experience of it: a construct with no corpus schema poses no case
 to the four-way differential, and the differential is the only thing that
 can catch three backends agreeing wrongly.
+
+**And a corpus schema poses no case either, unless the draws can reach
+it.** The differential draws from fixed alphabets. The first version of
+this construct's corpus struct framed on `","`, which appears in none of
+them, so the member never terminated, all four agreed the frame stopped
+early, and the parse was compared by nobody. The struct frames on `":"`
+and `" "` now, and the digit alphabet gained `eE+` -- without those an
+exponent cannot be drawn at all. The control is a sabotage aimed at the
+fraction alone, which leaves every plain integer right and only `12.5`
+wrong; the differential goes red on it.
 
 **`[minimal]` is open and so is `canonical`.** A scaled number is
 NonCanonical today with no way to say otherwise, which is a real cost:

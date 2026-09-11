@@ -980,7 +980,10 @@ no exact double, and C's `strtod` answers differently depending on the
 reader's locale. A consumer that wants a double computes one and owns the
 error. The pair reflects the bytes rather than the value, so `1.50` reads
 `(150, -2)` and `1.5` reads `(15, -1)`: normalising them would be a
-rewriting rather than a reading (decision 0056).
+rewriting rather than a reading. All four backends read it, and so does the
+walker; `[minimal]` is refused on one for now, because `10` and `1e1` are
+one value that no local rule separates, and what a canonical decimal
+spelling is has not been settled (decision 0056).
 
 `[encoding = ascii | utf8 | utf16le | leb128]` says what a run holds and
 gets a validity check that rejects a lone surrogate the way the UTF-8 one

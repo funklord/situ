@@ -267,24 +267,6 @@ class Emitter:
 		for token_set in self.schema.token_sets():
 			body.extend(self._tokens(token_set))
 
-		# 0056 is built in the C backend only. Refused loudly rather than
-		# generated wrongly: a scaled member reuses the integer text-number
-		# path everywhere it is not taught otherwise, so an unguarded
-		# backend emits `situ_parse_int` over `12.5` -- a silent zero, not
-		# an error, for a member whose whole point is its value.
-		for held in self.resolved.structs.values():
-			for entry in held.entries:
-				if not entry.placement.scaled:
-					continue
-				raise error(
-					f"`{entry.placement.path}` is a scaled text number, and "
-					"the Rust backend does not generate one yet",
-					entry.placement.span,
-					label = "not generated here",
-					notes = ["a scaled text number is built in the C backend "
-					         "(0056)",
-					         "generate this schema with `--target c`, or read "
-					         "the member as a byte run"])
 		for name in sorted(self.structs):
 			body.extend(self._struct(self.resolved.structs[name]))
 
@@ -3739,6 +3721,48 @@ class Emitter:
 		signed_text = scalar.signed
 		limit = placement.radix_max or 0
 		floor = placement.radix_min or 0
+
+		if placement.scaled:
+			return [
+				"",
+				f"\t/// `{placement.path}`: an exact decimal, as a"
+				" significand and a",
+				"\t/// power of ten -- the value is `significand *"
+				" 10^exponent`.",
+				"\t///",
+				"\t/// A tuple rather than an `f64`, and not for want of a"
+				" parser:",
+				"\t/// rounding is where four backends drift, C's `strtod`"
+				" answers",
+				"\t/// differently under different locales, and whoever"
+				" wants a float",
+				"\t/// should own the error (0056).",
+				f"\tpub fn {name}(&self) -> Result<({rtype}, i32)> {{",
+				f"\t\tlet raw = {value};",
+				"",
+				f"\t\tmatch situ_rt::parse_scaled(raw, {floor}, {limit}) {{",
+				f"\t\t\tSome((value, scale)) => Ok((value as {rtype},"
+				" scale)),",
+				"\t\t\tNone => Err(Error::Constraint),",
+				"\t\t}",
+				"\t}",
+				"",
+				"\t/// The same digits where an error cannot be returned,"
+				" which is the",
+				"\t/// bargain every infallible accessor here makes:"
+				" `validate`",
+				"\t/// refuses a frame these cannot parse.",
+				f"\tpub fn {_ident(f'{base}_significand')}(&self)"
+				f" -> {rtype} {{",
+				f"\t\tself.{name}().map(|held| held.0).unwrap_or(0)",
+				"\t}",
+				"",
+				f"\t/// The power of ten `{placement.name}`'s significand"
+				" carries.",
+				f"\tpub fn {_ident(f'{base}_exponent')}(&self) -> i32 {{",
+				f"\t\tself.{name}().map(|held| held.1).unwrap_or(0)",
+				"\t}",
+			]
 
 		return [
 			"",

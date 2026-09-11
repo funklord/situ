@@ -520,6 +520,123 @@ pub fn parse_int(bytes: &[u8], radix: u32, low: i64, high: i64) -> Option<i64> {
 	Some(if negative { -(value as i64) } else { value as i64 })
 }
 
+/// Parse a decimal number that may carry a point and an exponent (0056).
+///
+/// EXACT, and never a float: reports a significand and a power of ten, so
+/// that the value is `significand * 10^exponent`. `12.5e3` is `(125, 2)`;
+/// `-0.004` is `(-4, -3)`; `1.50` is `(150, -2)`.
+///
+/// The pair reflects the bytes rather than the value, which is why `1.50`
+/// and `1.5` differ here and are the same number. Normalising would make a
+/// reading of the bytes into a rewriting of them.
+///
+/// `str::parse::<f64>()` is correctly rounded and is still not what this
+/// does. The C runtime has no correctly-rounded parser it can reach --
+/// `strtod` is locale-dependent and absent from a freestanding build -- and
+/// a construct that meant one thing in three backends and another in the
+/// fourth is what the four-way differential exists to prevent.
+///
+/// The grammar:
+///
+///     [ "-" ] digit+ [ "." digit+ ] [ ("e" | "E") [ "+" | "-" ] digit+ ]
+///
+/// `-0` is accepted, where `parse_int` refuses it: that refusal buys the
+/// integer form canonicality, and `1.50` against `1.5` means this form
+/// cannot have it whatever the sign does.
+#[must_use]
+pub fn parse_scaled(bytes: &[u8], low: i64, high: i64) -> Option<(i64, i32)> {
+	if bytes.is_empty() {
+		return None;
+	}
+
+	let negative = bytes[0] == b'-';
+	let rest = if negative { &bytes[1..] } else { bytes };
+	let ceiling = if negative {
+		(-(low + 1)) as u64 + 1
+	} else {
+		high as u64
+	};
+
+	let mut magnitude: u64 = 0;
+	let mut fraction: i64 = 0;
+	let mut at = 0usize;
+
+	// The integer part. At least one digit, so a leading point is refused
+	// for the reason an empty run is: no digits is not the number zero.
+	let start = at;
+	while at < rest.len() && rest[at].is_ascii_digit() {
+		let digit = u64::from(rest[at] - b'0');
+		if magnitude > (ceiling - digit) / 10 {
+			return None;
+		}
+		magnitude = magnitude * 10 + digit;
+		at += 1;
+	}
+	if at == start {
+		return None;
+	}
+
+	// The fraction moves the point rather than the value: each digit is one
+	// more digit of the significand and one less power of ten.
+	if at < rest.len() && rest[at] == b'.' {
+		at += 1;
+		let first = at;
+		while at < rest.len() && rest[at].is_ascii_digit() {
+			let digit = u64::from(rest[at] - b'0');
+			if magnitude > (ceiling - digit) / 10 {
+				return None;
+			}
+			magnitude = magnitude * 10 + digit;
+			fraction += 1;
+			at += 1;
+		}
+		if at == first {
+			return None;
+		}
+	}
+
+	// The exponent, with its own sign. `+` is allowed here where the
+	// significand's is not: `1e+3` is what a great many formats write.
+	let mut exponent: i64 = 0;
+	if at < rest.len() && (rest[at] == b'e' || rest[at] == b'E') {
+		at += 1;
+		let mut down = false;
+		if at < rest.len() && (rest[at] == b'+' || rest[at] == b'-') {
+			down = rest[at] == b'-';
+			at += 1;
+		}
+		let first = at;
+		while at < rest.len() && rest[at].is_ascii_digit() {
+			// Bounded well inside `i64` so the subtraction below cannot
+			// overflow before the `i32` check refuses it.
+			if exponent > 1_000_000_000 {
+				return None;
+			}
+			exponent = exponent * 10 + i64::from(rest[at] - b'0');
+			at += 1;
+		}
+		if at == first {
+			return None;
+		}
+		if down {
+			exponent = -exponent;
+		}
+	}
+
+	if at != rest.len() {
+		return None;	// a byte the grammar does not have
+	}
+
+	let scale = exponent - fraction;
+	let scale = i32::try_from(scale).ok()?;
+	let value = if negative {
+		-(magnitude as i64)
+	} else {
+		magnitude as i64
+	};
+	Some((value, scale))
+}
+
 /// What `[trim]` removes where a schema states nothing: HTTP's OWS, space
 /// and horizontal tab.
 ///

@@ -1004,3 +1004,31 @@ struct spoken {
 	reserved_words word     until "\t"  max 16;
 	u8             rest[remaining];
 }
+
+// A scaled text number, which is 0056's construct and the one shape the
+// differential could not pose before it existed.
+//
+// The value is `significand * 10^exponent`, exactly and never a float:
+// rounding is where four backends would drift, `0.1` has no exact double,
+// and C's `strtod` answers differently under different locales. The pair
+// reflects the BYTES rather than the value, so `1.50` reads (150, -2) where
+// `1.5` reads (15, -1) -- the same number and two spellings, which is what
+// makes a scaled member NonCanonical and why `[minimal]` is refused on one
+// until somebody settles what a canonical decimal spelling is.
+//
+// `i64` on the first, because it is the width that found a defect older
+// than this construct: `INT64_C(-9223372036854775808)` is not an int64
+// constant, and `decimal i64` had emitted it since signed text numbers
+// arrived with no schema in the tree to compile it.
+//
+// Framed on `":"` and `" "` rather than on a comma, and that is not a
+// detail: the differential draws from fixed alphabets, and a delimiter
+// outside all of them means the member never terminates in any draw, so
+// four backends agree about a frame that stops early and nothing compares
+// the parse at all. The first version of this struct used `","` and `";"`
+// and was exactly that -- vacuous agreement wearing a passing test.
+struct measured {
+	scaled i64  reading   until ":"  max 32;
+	scaled u16  positive  until " "  max 12;
+	u8          rest[remaining];
+}

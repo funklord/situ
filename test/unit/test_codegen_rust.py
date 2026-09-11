@@ -2090,3 +2090,46 @@ fn main() {
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
 	                     text=True, check=False)
 	assert run.returncode == 0, run.stderr
+
+
+SCALED = 'struct s { scaled i64 v until ","; u8 rest[remaining]; }'
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_scaled_number_reads_as_an_exact_pair(tmp_path: Path) -> None:
+	"""0056, compiled under `-D warnings` and run.
+
+	`str::parse::<f64>()` is correctly rounded and is deliberately not what
+	this uses: the C runtime has no correctly-rounded parser it can reach,
+	and a construct meaning one thing in three backends and another in the
+	fourth is what the differential exists to prevent.
+	"""
+	result = build(tmp_path, SCALED, main='''
+fn one(text: &str, ok: bool, sig: i64, exp: i32) {
+	let bytes = text.as_bytes();
+	let view = unit::S::new(bytes).unwrap();
+
+	assert_eq!(view.validate().is_ok(), ok, "validate: {text}");
+	if ok {
+		assert_eq!(view.v_significand(), sig, "significand: {text}");
+		assert_eq!(view.v_exponent(), exp, "exponent: {text}");
+	}
+}
+
+fn main() {
+	one("12.5e3,", true, 125, 2);
+	one("-0.004,", true, -4, -3);
+	// The bytes, not the value: `1.50` is not `1.5` here.
+	one("1.50,", true, 150, -2);
+	one("1.5,", true, 15, -1);
+	one("-0,", true, 0, 0);
+	for bad in [".5,", "12.,", "1e,", "1e+,", "+1,", "1.2.3,", "12x,", "0x10,"] {
+		one(bad, false, 0, 0);
+	}
+}
+''')
+	assert result.returncode == 0, result.stderr
+
+	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, run.stderr

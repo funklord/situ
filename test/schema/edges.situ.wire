@@ -187,6 +187,11 @@ struct marked size=5..17
   ~         2         u16        after  endian-from=edge_order
   ~         0..8      u16        samples  endian-from=edge_order sized-by=n
 
+struct measured size=2..
+  @0x0000   until:3a  i64        reading  radix=10 cap=32
+  ~         until:20  u16        positive  radix=10 cap=12
+  ~         0..       u8         rest  sized-by=remaining
+
 struct messy size=3..
   @0x0000   until:3a  u8         name  fold-case
   ~         until:0d0a u8         value  big trim=2009

@@ -384,7 +384,8 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 
 def member_to_source(member: ast.Member) -> str:
 	if isinstance(member, ast.Field):
-		parts = [_radix_to_source(getattr(member, "radix", None)),
+		parts = [_radix_to_source(getattr(member, "radix", None),
+		                          bool(getattr(member, "scaled", False))),
 		         member.type_ref.name, " ", member.name,
 		         _array_to_source(member.array),
 		         _skip_to_source(getattr(member, "skip", None)),
@@ -607,7 +608,16 @@ def _wrap(rendered: str, binding: int, parent_binding: int) -> str:
 RADIX_KEYWORDS = {10: "decimal", 16: "hex"}
 
 
-def _radix_to_source(radix: int | None) -> str:
+def _radix_to_source(radix: int | None, scaled: bool = False) -> str:
+	"""The keyword that put the digits there.
+
+	`scaled` carries `radix = 10` beside it rather than instead of it
+	(0056), so reading the radix alone renders it as `decimal` -- which
+	round-trips into a different construct. The round-trip test is what
+	said so, which is the whole reason that test exists.
+	"""
+	if scaled:
+		return "scaled "
 	return f"{RADIX_KEYWORDS[radix]} " if radix in RADIX_KEYWORDS else ""
 
 

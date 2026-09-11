@@ -2977,3 +2977,70 @@ def test_a_token_set_reports_which_arm_and_refuses_the_rest(
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+SCALED = 'struct s { scaled i64 v until ","; u8 rest[remaining]; }'
+
+SCALED_PROBE = """
+#include <cstring>
+#include "unit.hpp"
+
+static bool one(const char *text, ::situ::rt::err want,
+                std::int64_t sig, std::int32_t exp)
+{
+	char buf[64];
+	std::strncpy(buf, text, sizeof buf - 1);
+	buf[sizeof buf - 1] = '\\0';
+
+	const auto len = static_cast<std::uint32_t>(std::strlen(text));
+	::situ::rt::message owner(reinterpret_cast<std::uint8_t *>(buf), len);
+	::situ::s view;
+
+	if (::situ::s::at(owner, 0u, len, view) != ::situ::rt::err::ok)
+		return false;
+	if (view.validate() != want)
+		return false;
+	if (want != ::situ::rt::err::ok)
+		return true;
+	return view.v_significand() == sig && view.v_exponent() == exp;
+}
+
+int main()
+{
+	using E = ::situ::rt::err;
+	if (!one("12.5e3,", E::ok, 125, 2)) return 1;
+	if (!one("-0.004,", E::ok, -4, -3)) return 2;
+	/* The bytes, not the value: `1.50` is not `1.5` here. */
+	if (!one("1.50,", E::ok, 150, -2)) return 3;
+	if (!one("1.5,", E::ok, 15, -1)) return 4;
+	if (!one("-0,", E::ok, 0, 0)) return 5;
+	if (!one(".5,", E::constraint, 0, 0)) return 6;
+	if (!one("12.,", E::constraint, 0, 0)) return 7;
+	if (!one("1e,", E::constraint, 0, 0)) return 8;
+	if (!one("+1,", E::constraint, 0, 0)) return 9;
+	if (!one("12x,", E::constraint, 0, 0)) return 10;
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_scaled_number_reads_as_an_exact_pair(tmp_path: Path) -> None:
+	"""0056, compiled and run.
+
+	This backend reaches the C runtime's `situ_parse_scaled` directly, so
+	what is being checked here is the accessor shape rather than a second
+	parse: three members where an integer text number has two, because the
+	value is two numbers.
+	"""
+	assert compiles(tmp_path, SCALED, extra=SCALED_PROBE).returncode == 0
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
