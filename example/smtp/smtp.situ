@@ -10,14 +10,52 @@
 target buffer;
 endian big;
 
-// A command: verb, optional argument, CRLF. The verb is case-insensitive by
-// RFC 5321 section 2.4, which is a canonicity cost and is recorded as one.
+// The commands RFC 5321 defines, in the order section 4.1.1 numbers them.
 //
-// `until " "` rather than a fixed four bytes: `DATA` and `RCPT TO:` are both
-// verbs and only one has an argument, so the space is what ends it.
+// `[case_insensitive]` on the SET rather than on the member, which is where
+// the fact belongs: section 2.4 makes the verb case-insensitive, and that is
+// a property of SMTP's vocabulary rather than of this one field. The cost is
+// the same either way and is recorded the same way -- `canonical(command
+// .verb)` still fails, because `HELO` and `helo` are one verb with two
+// spellings.
+//
+// `default = pass`, and this is the half worth reading. An unknown verb is
+// not a malformed frame: RFC 5321 section 4.2.4 has the server answer 500 to
+// a command it does not recognise, which is a reply rather than a parse
+// failure -- and ESMTP adds verbs this list does not have, STARTTLS
+// (RFC 3207), AUTH (RFC 4954) and BDAT (RFC 3030) among them. A schema that
+// refused them would be wrong about ordinary traffic. What the set buys is
+// the accessor: a reader gets `SITU_COMMAND_VERB_QUIT` instead of comparing
+// four bytes itself, and `SITU_COMMAND_VERB_UNKNOWN` where it must decide.
+tokens command_verb [case_insensitive] {
+	ehlo = "EHLO",
+	helo = "HELO",
+	mail = "MAIL",
+	rcpt = "RCPT",
+	data = "DATA",
+	rset = "RSET",
+	vrfy = "VRFY",
+	expn = "EXPN",
+	help = "HELP",
+	noop = "NOOP",
+	quit = "QUIT",
+	default = pass,
+}
+
+// A command: verb, optional argument, CRLF.
+//
+// `until " "` rather than a fixed four bytes: `RCPT TO:` and `MAIL FROM:`
+// carry an argument and the space is what ends the verb. A command that
+// carries none -- `DATA`, `QUIT`, `RSET` -- has no space at all, so this
+// schema frames only the commands that take an argument. That was true
+// before the vocabulary above existed and the vocabulary makes it visible
+// rather than causing it: `which` answers UNKNOWN for a `QUIT` line, because
+// the member it is asked about ran past the verb. Fixing it means framing
+// the verb on `" " | "\r\n"`, which changes where `argument` starts and is
+// its own change rather than a side effect of naming the verbs.
 struct command {
-	u8  verb[]      until " "     max 16  [case_insensitive, encoding = ascii];
-	u8  argument[]  until "\r\n"  max 512 [trim];
+	command_verb  verb  until " "     max 16  [encoding = ascii];
+	u8  argument[]      until "\r\n"  max 512 [trim];
 }
 
 // One line of a reply. The code is three digits with no delimiter, which is

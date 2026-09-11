@@ -52,6 +52,55 @@ struct header_field {
 // did, and what running it against a realistic request showed in one line.
 // The optional whitespace is the *value's* to ignore, which is `[trim]`.
 
+// The methods RFC 9110 defines, in the order sections 9.3.1 to 9.3.8 give
+// them.
+//
+// No `[case_insensitive]`, and the absence is the interesting part. RFC 9110
+// section 9.1 says the method token IS case-sensitive, so `get` is not `GET`
+// and a reader that folded them would accept a request no server should.
+// Compare `smtp.situ`, whose verbs are case-insensitive by RFC 5321 section
+// 2.4 and whose set says so: two protocols, two answers, and the flag sits
+// on the set because it is a property of each protocol's vocabulary rather
+// than of a field.
+//
+// `default = pass`. Section 9.1 makes the method set extensible and has a
+// server answer 501 to one it does not support, so an unknown method is a
+// request this reader cannot serve rather than a frame it cannot parse --
+// and PATCH (RFC 5789) is a registered method this list does not name, which
+// is exactly the case `pass` is for.
+tokens request_method {
+	get     = "GET",
+	head    = "HEAD",
+	post    = "POST",
+	put     = "PUT",
+	delete  = "DELETE",
+	connect = "CONNECT",
+	options = "OPTIONS",
+	trace   = "TRACE",
+	default = pass,
+}
+
+// The two versions this framing carries (RFC 9112 section 2.3).
+//
+// One set used by two structs, which is the whole reason it is a declaration
+// rather than something spelled twice: a request line and a status line name
+// the same vocabulary, and a second copy of the list would be a second thing
+// to be wrong.
+//
+// Both arms are eight bytes, so this looks like a case for `enum : u8[8]` --
+// and it is not, because the member is DELIMITED. An enum decides its
+// member's extent and would say where the field ends a second time, which
+// 8.6.1 refuses; a token set is consulted after the delimiter has already
+// said. Equal-length arms are allowed here and simply not required.
+//
+// `default = pass`, because section 2.3 tells a recipient to process a
+// higher minor version as HTTP/1.1 rather than to refuse it.
+tokens protocol_version {
+	http_1_0 = "HTTP/1.0",
+	http_1_1 = "HTTP/1.1",
+	default  = pass,
+}
+
 // The request line. Each part ends where the next begins.
 //
 // `method` is capped: a token longer than sixteen bytes is not a method any
@@ -59,9 +108,9 @@ struct header_field {
 // than a read to the end of the buffer. `target` is capped for the same
 // reason at a length real servers accept.
 struct request_line {
-	u8  method[]   until " "     max 16   [encoding = ascii];
-	u8  target[]   until " "     max 8192;
-	u8  version[]  until "\r\n"  max 16   [encoding = ascii];
+	request_method    method   until " "     max 16   [encoding = ascii];
+	u8                target[] until " "     max 8192;
+	protocol_version  version  until "\r\n"  max 16   [encoding = ascii];
 }
 
 // The head: a request line, then header lines until a blank one.
@@ -86,9 +135,9 @@ struct request_head {
 // third digit, `validate` reported a frame cut short, and `reason` came back
 // with the space still on the front of it.
 struct status_line {
-	u8       version[]  until " "     max 16  [encoding = ascii];
-	decimal  u16        code until " " max 4  [minimal];
-	u8       reason[]   until "\r\n"  max 256;
+	protocol_version  version  until " "     max 16  [encoding = ascii];
+	decimal  u16              code until " " max 4   [minimal];
+	u8       reason[]         until "\r\n"  max 256;
 }
 
 struct response_head {

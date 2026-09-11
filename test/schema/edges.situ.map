@@ -279,9 +279,10 @@ struct signed_number size=2..9 access=Sequential mutate=Shifting address=Unstabl
   signed_number.offset                   offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
   signed_number.tail                     offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable
 
-struct spoken size=2.. access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
+struct spoken size=3.. access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
   spoken.opening                         offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   spoken.kind                            offset=Scanned size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+  spoken.word                            offset=Scanned size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
   spoken.rest                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
 struct text_driver size=6..14 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic

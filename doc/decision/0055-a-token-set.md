@@ -1,6 +1,7 @@
 # 0055: a token set
 
-Status: accepted 2026-09-10; built in all four backends
+Status: accepted 2026-09-10; built in all four backends, and the two
+schemas that asked for it converted
 Date: 2026-09-10
 Phase: raised by the copyright holder, from two schemas already in the tree
 
@@ -96,9 +97,24 @@ from the member. Spelling two different relationships to extent with one
 keyword is how a construct acquires a mode nobody can read off the page.
 
 **`default` means what it does for an enum.** `error` refuses an unknown
-token, `pass` accepts it and marks the value non-canonical. HTTP's method is
-an extension point and wants `pass`; SMTP's verb list is closed by the
-grammar in RFC 5321 and wants `error`.
+token, `pass` accepts it and marks the value non-canonical.
+
+This paragraph first said HTTP's method wants `pass` and SMTP's verb list
+is "closed by the grammar in RFC 5321" and wants `error`. **The second half
+was wrong, and writing the schema is what found it.** RFC 5321 section
+4.2.4 has a server answer 500 to a command it does not recognise -- a
+reply, not a parse failure -- and ESMTP adds verbs the base list does not
+have: STARTTLS (RFC 3207), AUTH (RFC 4954), BDAT (RFC 3030). A schema that
+refused those would be wrong about ordinary traffic. Both real protocols
+want `pass`.
+
+**So `error` is the right DEFAULT and the rarer answer in text.** It is
+right as a default because silence must not widen what a schema admits,
+which is section 8.7's rule for an enum and holds here for the same
+reason. It is rare in text because a protocol's keyword vocabulary is
+usually a registry, and a registry grows. The closed cases are the ones
+where the token is structural rather than nominal -- cpio's magic, json's
+three literals -- and those are `enum : u8[k]` cases anyway.
 
 **Case-insensitivity belongs on the set, and the two askers prove the axis
 is real rather than a convenience.** SMTP's verbs are case-insensitive by
@@ -149,6 +165,15 @@ backends skipped would agree with itself perfectly. Removing the check from
 the Python emitter turns that test red, naming the buffer and the
 disagreement, which is what says the case is posed rather than merely
 present.
+
+**The conversion cost nothing on any capability axis**, which is the
+strongest thing this record can say about the shape. smtp's and http's
+committed capability maps are byte-identical before and after: the members
+were already delimited byte runs and they still are, and what the schemas
+gained is a named vocabulary and an accessor that reports which arm
+arrived. The wire contracts moved by four lines between them, all of one
+kind -- the type column reads `command_verb` where it read `u8` -- and
+`fold-case` survives in it, which is the set's flag reaching the contract.
 
 **Five readings, not four.** The walkers and the dissector read the same
 layout and had to learn it too, and the corpus schema is what made that a

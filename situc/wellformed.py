@@ -1798,7 +1798,8 @@ STRUCT_ONLY_ATTRS = {
 
 
 def _attribute_place(struct: ast.StructDecl, member: ast.Member,
-		attr: ast.Attr, structs: frozenset[str] = frozenset()) -> str | None:
+		attr: ast.Attr, structs: frozenset[str] = frozenset(),
+		tokens: frozenset[str] = frozenset()) -> str | None:
 	"""Where `attr` would have meant something, if not here.
 
 	`None` when the placement is fine or is not one this table has settled.
@@ -1859,10 +1860,19 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 		return None if isinstance(member, ast.Reserved) else (
 			"a `reserved` member, whose policy it sets")
 
+	# A token set's member has no brackets and is still a delimited run of
+	# bytes: its type carries the run-ness that `u8 x[] until " "` writes in
+	# the brackets (0055). Without this, converting a member to a token set
+	# meant dropping the `[encoding]` it already carried -- which is a real
+	# claim about the bytes, and smtp's verb makes it.
 	if attr.name == "encoding":
-		return None if getattr(member, "array", None) is not None else (
-			"a byte array or a delimited run -- a single scalar has no text "
-			"to have an encoding")
+		if getattr(member, "array", None) is not None:
+			return None
+		named = getattr(member, "type_ref", None)
+		if named is not None and named.name in tokens:
+			return None
+		return ("a byte array or a delimited run -- a single scalar has no "
+		        "text to have an encoding")
 
 	# `[size = N]` pins a member's footprint while its extent expression keeps
 	# saying how much of it is meaningful (0039). Everything it is refused on
@@ -2512,11 +2522,13 @@ def _region_word(member: ast.Member) -> str:
 def check_attribute_places(schema: ast.Schema) -> None:
 	"""An attribute has to sit where something reads it (14.5, 17.0)."""
 	structs = frozenset(held.name for held in schema.structs())
+	tokens  = frozenset(held.name for held in schema.token_sets())
 
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
 			for attr in getattr(member, "attrs", ()):
-				where = _attribute_place(struct, member, attr, structs)
+				where = _attribute_place(struct, member, attr, structs,
+				                         tokens)
 				if where is None:
 					continue
 

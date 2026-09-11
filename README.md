@@ -932,17 +932,24 @@ refusal required. A gate nobody has watched fail is not evidence.
 Situ describes text formats as layouts, which is the part of them that is one:
 
 ```situ
-// example/http/http.situ, abridged to three of its structs.
+// example/http/http.situ, abridged to a token set and three of its structs.
+tokens request_method {
+	get     = "GET",
+	head    = "HEAD",
+	post    = "POST",
+	default = pass,
+}
+
 struct request_line {
-	u8  method[]   until " "     max 16   [encoding = ascii];
-	u8  target[]   until " "     max 8192;
-	u8  version[]  until "\r\n"  max 16   [encoding = ascii];
+	request_method    method   until " "     max 16   [encoding = ascii];
+	u8                target[] until " "     max 8192;
+	protocol_version  version  until "\r\n"  max 16   [encoding = ascii];
 }
 
 struct status_line {
-	u8       version[]  until " "     max 16  [encoding = ascii];
-	decimal  u16        code until " " max 4  [minimal];
-	u8       reason[]   until "\r\n"  max 256;
+	protocol_version  version  until " "     max 16  [encoding = ascii];
+	decimal  u16              code until " " max 4   [minimal];
+	u8       reason[]         until "\r\n"  max 256;
 }
 
 struct header_field {

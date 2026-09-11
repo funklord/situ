@@ -267,9 +267,10 @@ struct signed_number size=2..9
   @0x0000   until:2c  i16        offset  radix=10 minimal cap=8
   ~         1         u8         tail
 
-struct spoken size=2..
+struct spoken size=3..
   @0x0000   until:20  greeting   opening  fold-case cap=16
   ~         until:0d  extension  kind  cap=16
+  ~         until:09  reserved_words word  cap=16
   ~         0..       u8         rest  sized-by=remaining
 
 struct text_driver size=6..14

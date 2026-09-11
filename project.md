@@ -26066,9 +26066,12 @@ asserted from the protocols rather than measured here.
   which is the exact failure `evidence.md` opens with -- and the fix is
   its remedy: ask the source, not the sentence.
   What the schemas actually ask for is the VARIABLE-WIDTH form, and two
-  of them ask: smtp's `u8 verb[] until " " max 16 [case_insensitive]`
+  of them asked: smtp's `u8 verb[] until " " max 16 [case_insensitive]`
   and http's `u8 method[] until " " max 16`, with http's header `name`
-  a third site. Built as 0055; see 26.329.
+  a third site. Both spellings are history now -- built as 0055 (26.329)
+  and both schemas converted (26.331). The header name was deliberately
+  NOT converted, and 26.331 says why: an open registry is not a
+  vocabulary a worked example gets to close.
 - **A fractional text number** -- json's `number` is
   `u8 rest[] before ',' | ']' | '}' [trim]`, an untyped byte run in the
   one place a JSON reader most wants a number. `decimal` and `hex`
@@ -26296,12 +26299,122 @@ clean and the test went on failing for what looked like the same reason as
 before. A branch that never runs and a branch that runs wrongly read
 identically from the failure.
 
-**Still open:** converting smtp and http to use the construct they asked
-for, which is its own change because it moves committed contracts for two
-worked examples. The extent question stays refused: json's `true`, `false`
+~~**Still open:** converting smtp and http to use the construct they asked
+for.~~ Done; 26.331 records what it cost, which on every capability axis
+was nothing. **The extent question stays refused**: json's `true`, `false`
 and `null`, where the token would have to decide where it ends, is the
 grammar case, and 0055 deliberately does not prejudge whether it should
 ever be admitted.
+
+### 26.331 What converting smtp and http to a token set actually cost
+
+**Nothing, on every axis the capability map has, and that is the finding.**
+Both schemas' committed maps are byte-identical before and after. The
+members were already delimited byte runs and they still are; what changed
+is that the schema now names the values they may hold and the generated
+code reports which one arrived. A construct that adds a value constraint
+and an accessor without moving a single capability is the shape a
+description language wants, and the map is what says so rather than
+anybody's judgement.
+
+The wire contracts moved by four lines between them, all of one kind: the
+type column reads `command_verb` where it read `u8`. `fold-case` survives
+in it, which is the case-insensitivity reaching the contract from the SET
+rather than from the member.
+
+**A claim in 0055 was wrong and writing the first real schema is what
+found it.** That record said HTTP's method wants `default = pass` and
+SMTP's verb list is "closed by the grammar in RFC 5321" and wants `error`.
+It is not closed: RFC 5321 section 4.2.4 has the server answer 500 to an
+unrecognised command, which is a reply rather than a parse failure, and
+ESMTP adds STARTTLS, AUTH and BDAT. A schema refusing those would be wrong
+about ordinary traffic. **Both real protocols want `pass`**, which makes
+`error` the right default and the rarer answer in text: a protocol's
+keyword vocabulary is usually a registry, and a registry grows.
+
+**The two schemas disagree about case, and that is why the flag is on the
+set.** SMTP's verbs are case-insensitive by RFC 5321 section 2.4; HTTP's
+method is case-sensitive by RFC 9110 section 9.1, so `get` is not `GET`.
+Both schemas already said so before this construct existed, which is what
+made the axis measured rather than assumed -- and each now says it once,
+in the declaration, instead of on every member that uses the vocabulary.
+
+**HTTP's version is one set used by two structs**, which is the reason it
+is a declaration rather than a list spelled twice: a request line and a
+status line name the same vocabulary, and a second copy would be a second
+thing to be wrong. Both its arms are eight bytes, so it looks like a case
+for `enum : u8[8]` and is not -- the member is DELIMITED, and an enum
+would say where the field ends a second time, which 8.6.1 refuses. Equal
+arms are allowed in a token set and simply not required.
+
+**One defect, and HTTP found it rather than any test written for it.**
+`DELETE` is a method; `delete` is a C++ keyword. Arm names went into the
+generated identifiers unescaped, and C++ is the only backend that emits an
+arm's name on its own -- C carries a path in front of it, Rust and Python
+upper-case it -- so three backends compiled a vocabulary the fourth could
+not, and the four-way differential reported a BUILD failure rather than a
+disagreement. `bare_name` is the escaper the tree already had for exactly
+this, and its docstring already named the case: "every C++ accessor, which
+is `std::uint32_t int() const` and not C++".
+
+**The corpus carries it now, because a worked example is not a regression
+test.** http can be rewritten; `edges` exists to hold the cases nobody
+would write on purpose, and it has a `reserved_words` set whose six arms
+are keywords in at least one of the four languages. That is the `keywords`
+struct beside it -- "DNS calls a field CLASS and half the protocols in this
+tree have a `type`" -- asking the same question one construct along, and
+the construct arrived without anybody connecting the two.
+
+**A second defect, in the test harness rather than the compiler, and
+older than this construct.** A token member gets `ProtoField.string` for
+the reason the radix branch beside it gives -- an analyst reading an SMTP
+session wants to see `HELO`. The Lua harness that stands in for Wireshark
+knew `ProtoField.string` existed and had never rendered one: every
+non-`bytes` field fell through to `item:uint()`. So cpio's eight-digit
+`hex u32` fields had been reported as decimal numbers all along --
+`ino` read `7308814938148140143` -- through a call Wireshark refuses
+outright above four bytes. Measured both ways before and after rather than
+argued, since a fix nobody watched change anything is a claim.
+
+**The harness renders a string field as HEX, not as its text**, and the
+first attempt got that wrong in both available directions: a fuzzed span
+is not valid UTF-8, and the harness's own tab-separated output stopped
+parsing at the first byte over 0x7f. Wireshark SHOWS text; this column is
+not a display but the evidence a test compares, so it has to be comparable
+and it has to survive being read back.
+
+**It is `evidence.md`'s stand-in rule exactly**: a fake reproduces the half
+of a tool its author had met. The stub had met byte and integer fields and
+reproduced those faithfully, and the first schema to need the third kind
+is what found the gap. cpio and the harness both arrived on 2026-08-25 and
+the rows were wrong from that day; what kept them wrong is that no test
+asserted one, so the harness reported a number nobody read.
+
+**Two things the conversion needed that nothing had asked for.**
+`[encoding = ascii]` was refused on a token member, because that check
+tests for brackets and a token member carries its run-ness in its type --
+so converting a member meant dropping a real claim about its bytes, which
+is the wrong direction entirely. And the member may share its type's
+name; `command_verb verb` is spelled apart only because the Python backend
+already carries code for a member shadowing a type, which says the
+collision is tolerated rather than free.
+
+**What was deliberately NOT converted: HTTP's header field name.** 0055
+cited it as a third site and it is the one that should not have one. The
+field-name registry is open and large, so any list a schema wrote would be
+a statement about which headers that schema cares about rather than about
+HTTP -- and this example exists to describe the protocol. A reader that
+wants `Host` and `Content-Length` named can declare its own set; the
+worked example should not choose for it.
+
+**And one thing the vocabulary made visible without causing.** `until " "`
+frames the verb, so a command carrying no argument -- `DATA`, `QUIT`,
+`RSET` -- has no space and the member runs past the verb. That was true
+before, and it was invisible because nothing asked what the bytes spelled.
+`which` answers UNKNOWN now, which is the schema reporting a limit it
+always had. Framing the verb on `" " | "\r\n"` fixes it and moves where
+`argument` starts, so it is its own change rather than a side effect of
+naming the verbs.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -979,8 +979,28 @@ tokens extension {
 	default = pass,
 }
 
+// Arms named after language keywords, which is the `keywords` struct above
+// asking the same question one construct along.
+//
+// HTTP found it rather than this file: `DELETE` is a method, `delete` is a
+// C++ keyword, and that backend emits an arm's name on its own where the
+// other three carry a path in front of it or upper-case it. So C, Rust and
+// Python compiled a header C++ could not, and the four-way differential
+// reported a build failure rather than a disagreement. Each of these is a
+// keyword in at least one of the four.
+tokens reserved_words {
+	delete   = "DELETE",    // C++
+	class    = "CLASS",     // C++, Python
+	type     = "TYPE",      // Rust
+	match    = "MATCH",     // Rust
+	lambda   = "LAMBDA",    // Python
+	int      = "INT",       // C
+	default  = pass,
+}
+
 struct spoken {
-	greeting   opening  until " "   max 16;
-	extension  kind     until "\r"  max 16;
-	u8         rest[remaining];
+	greeting       opening  until " "   max 16;
+	extension      kind     until "\r"  max 16;
+	reserved_words word     until "\t"  max 16;
+	u8             rest[remaining];
 }

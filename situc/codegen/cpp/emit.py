@@ -346,8 +346,13 @@ class Emitter:
 			f"namespace {c_name(decl.name)} {{",
 			"\tinline constexpr std::uint32_t unknown = 0xFFFFFFFFu;",
 		]
+		# `bare_name`, because an arm is emitted on its own: HTTP's
+		# `DELETE` is a method and `delete` is a C++ keyword, so the arm
+		# names go through the same escaper every C++ accessor does. C,
+		# Rust and Python dodge this by upper-casing or by carrying the
+		# path in front, which is why only this backend broke.
 		for index, name in enumerate(arms):
-			lines.append(f"\tinline constexpr std::uint32_t {name}"
+			lines.append(f"\tinline constexpr std::uint32_t {bare_name(name)}"
 			             f" = {index}u;")
 		lines.append("")
 		# The bytes live one namespace down rather than under a suffix on
@@ -366,7 +371,7 @@ class Emitter:
 		lines.append("\tnamespace run {")
 		for name, run in arms.items():
 			body = ", ".join(f"0x{byte:02X}" for byte in run)
-			lines.append(f"\t\tinline constexpr std::uint8_t {name}"
+			lines.append(f"\t\tinline constexpr std::uint8_t {bare_name(name)}"
 			             f"[{len(run)}] = {{ {body} }};")
 		lines.append("\t}")
 
@@ -387,7 +392,7 @@ class Emitter:
 			"\t\tstatic constexpr arm arms[] = {",
 		])
 		for name, run in arms.items():
-			lines.append(f"\t\t\t{{ run::{name}, {len(run)}u }},")
+			lines.append(f"\t\t\t{{ run::{bare_name(name)}, {len(run)}u }},")
 		lines.extend([
 			"\t\t};",
 			"",

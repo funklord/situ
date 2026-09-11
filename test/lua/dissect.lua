@@ -168,6 +168,25 @@ local function shown(field, item)
 			return string.format("%02x", byte:byte())
 		end))
 	end
+	-- A string field's bytes, hex like any other span.
+	--
+	-- Wireshark SHOWS the text, and this column is not a display: it is the
+	-- evidence a test compares, so it has to be comparable and it has to
+	-- survive being read back. Rendering the text was tried and is wrong in
+	-- both ways -- a fuzzed span is not valid UTF-8, and the harness's own
+	-- output stopped parsing at the first byte over 0x7f.
+	--
+	-- What matters is that it no longer falls through to `item:uint()`. A
+	-- radix number's digits and a token set's arm are text, and both came
+	-- back as a DECIMAL NUMBER -- for cpio's eight-digit fields, through a
+	-- call Wireshark refuses outright above four bytes. The stub had met
+	-- `bytes` and integers and reproduced those; this is the half it had
+	-- not seen.
+	if field.kind == "string" then
+		return (item:bytes():gsub(".", function (byte)
+			return string.format("%02x", byte:byte())
+		end))
+	end
 	return display(field, item:uint(), item.length * 8)
 end
 
