@@ -14449,11 +14449,24 @@ case's core.**
 **And the exercise paid for itself in compiler defects, which is what an
 evaluation is for.** Two, both the silently-nothing shape:
 
-- **`at 0` on a variant arm member is accepted and ignored by all four
-  backends.** The C emits `offset = 1u` with the `at` expression nowhere in
-  it. Located members exist for exactly this kind of re-addressing, so the
-  natural spelling of "the positional's text includes the dispatch byte"
-  parses, does nothing, and says nothing about doing nothing.
+- ~~**`at 0` on a variant arm member is accepted and ignored by all four
+  backends.**~~ **Re-measured 2026-09-11 and it has moved -- the finding is
+  now worse rather than gone.** `at` IS honoured: C emits
+  `out->base = msg->base + at`. But it is honoured only for a member of
+  FIXED extent. `at` on a `[remaining]` run generates a call to
+  `situ_<s>_<m>_offset`, and on a delimited one a call to
+  `situ_<s>_<m>_span`, **neither of which is emitted** -- so the header does
+  not compile. Measured by building each shape and compiling it:
+
+      at + scalar         compiles clean
+      at + fixed array    compiles clean
+      at + [remaining]    implicit declaration of `situ_w_t_offset`
+      at + until          implicit declaration of `situ_w_t_span`
+
+  Which retires `at` as the workaround for a non-consuming dispatch rather
+  than confirming it: the members that want to reach back over their
+  discriminant are variable-extent ones -- a JSON number, an argv word --
+  and those are exactly the two that do not build. See 26.334.
 - **A `while` condition comparing text is accepted and emits C that does
   not compile.** `while (text != "--")` passes the front end; the C backend
   emits `situ_arg_text_get(element) != "--"` -- a getter that is not
@@ -26627,6 +26640,82 @@ took its place and three invariant tests went red saying a `str` has no
 `.name`. The type checker saw nothing -- both return a list -- and the
 tests did. Worth the sentence because the mistake is invited by a
 well-named module-level helper doing an obvious thing.
+
+### 26.334 A non-consuming dispatch: what is known before starting
+
+**The next piece of work, folded here so it can be picked up cold.**
+Everything below is measured on 2026-09-11 unless it says otherwise.
+
+**The problem, in one line.** A `variant` switches on a FIELD, a field
+occupies its bytes, so an arm begins after the discriminant -- and some
+formats need the discriminant to be part of the value it selects.
+
+**Two askers, both in this tree, and they arrived eighteen months of
+entries apart.**
+
+- **json's `number`** (26.333). `{"a":12.5}` hands the `number` struct
+  `2.5`; the `1` was spent selecting the arm. This is why 0056's `scaled`
+  construct, built across four backends, the walker, the fuzz harness and
+  the differential, **has no worked example**: its only asker cannot use
+  it.
+- **argv** (26.253). `variant body switch (first)` hands the positional
+  arm `ello` where the message said `hello`. That entry calls it "the
+  single blocker for option grammars, and for text protocols generally"
+  and names HTTP's request line against its header lines as the same
+  shape.
+
+**The precedent is `before`, and it is the whole design argument.** 8.6.1
+has two spellings for a delimiter: `until` makes it a TERMINATOR that
+belongs to the member it ends, `before` makes it a SEPARATOR that belongs
+to neither side. A discriminant has exactly that problem one construct
+along -- it is read to choose, and the bytes may belong to the arm -- and
+has only the consuming spelling. Whatever this is called, it is `before`
+for dispatch.
+
+**`at` is NOT the workaround, and that is measured rather than assumed.**
+A located member re-addresses, so "the arm's text includes the dispatch
+byte" is its natural spelling. It is honoured now -- 26.253's claim that
+all four backends ignore it is corrected there -- and it builds
+uncompilable C for every member shape that would want it:
+
+    at + scalar         compiles clean
+    at + fixed array    compiles clean
+    at + [remaining]    implicit declaration of `situ_w_t_offset`
+    at + until          implicit declaration of `situ_w_t_span`
+
+A JSON number and an argv word are both variable-extent. So `at` fails on
+the two cases and works on the two that never asked.
+
+**And `at` is message-relative, which is the deeper reason it cannot
+serve.** It places from the start of the MESSAGE, and a JSON number sits
+at an arbitrary offset -- so the expression would have to name the
+discriminant's own offset. `offset()` in an `at` is refused as of
+`f4a34c4`, and was a compiler crash before it. A located member is also a
+*reference*: it contributes nothing to the enclosing struct's extent and
+nothing is placed after it, which is the opposite of what an arm needs.
+
+**Three things measured while probing, worth not rediscovering.**
+`positional` is a block keyword, so a struct cannot be called that. The
+arm syntax is `case 'x': type name;`. And the discriminant is an ordinary
+member -- `u8 kind skip;` in json -- so whatever marks it non-consuming
+sits on the member or on the `variant`, not on the arms.
+
+**What has to be decided, and none of it is decided here.** Where the
+marker goes and what it is called. Whether a non-consuming discriminant
+may be read by anything else, or is purely a selector. What the capability
+map says about an arm whose bytes overlap a member before it -- `offset`
+and `access` both have something to say, and "two members share a byte" is
+a claim this project has not had to make before. Whether a struct's
+members still partition its bytes exactly, which json's own bill leans on
+twice and which this breaks by construction. That last one is the real
+question: the answer may be that the discriminant is not a member at all.
+
+**Where the code is.** `parser.parse_variant` and `ast.Variant` for the
+surface; `layout` around line 1850 for where a member's offset is decided;
+`traverse.classify_check`'s `DISCRIMINANT` branch and each backend's
+`_discriminant_check`; `differ.py`'s `ARM_VALUE` probe; `walker/report.py`
+`_arm_selects`. Seven readers, which is what the last three constructs
+each cost.
 
 ### 26.330 Text encoding, scoped and named by the data
 
