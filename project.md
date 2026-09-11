@@ -26573,9 +26573,10 @@ section is its own piece of work; answering wrongly in the meantime is the
 one option that was not available.
 
 **Still open:** `[minimal]` and `canonical`, the dissector's rendering of
-one, and the walker's INDEXES section. ~~Converting json's `number`~~ is
-not open and not done: it is blocked on a non-consuming dispatch, and
-26.333 records the measurement. And the second-asker question stays
+one, and the walker's INDEXES section -- all four in the register at
+26.335, re-measured. ~~Converting json's `number`~~ is not open and not
+done: it is blocked on a non-consuming dispatch, and 26.333 records the
+measurement. And the second-asker question stays
 open in a way 0055's did not: json is the only schema here that asks, and
 the copyright holder's instruction is what stands in for 8.6.6's second
 protocol.
@@ -26716,6 +26717,68 @@ surface; `layout` around line 1850 for where a member's offset is decided;
 `_discriminant_check`; `differ.py`'s `ARM_VALUE` probe; `walker/report.py`
 `_arm_selects`. Seven readers, which is what the last three constructs
 each cost.
+
+### 26.335 What the text-vocabulary run left open
+
+**A register in 26.144's shape rather than a history entry**, and for its
+reason: an item answered elsewhere keeps reading as open, so this carries
+the date it was checked and each line was re-measured rather than recalled.
+**Checked against the tree on 2026-09-11.** The work it closes over is
+26.327 through 26.334 -- the token set (0055), the scaled text number
+(0056), and what converting two schemas to each turned up.
+
+**Blocked on a decision, not on work.**
+
+- **A canonical spelling for a decimal.** `[minimal]` is refused on a
+  scaled member -- `error: `v` is scaled, and `[minimal]` does not yet have
+  a meaning here` -- and the member reads `canonical = NonCanonical` with
+  no way to say otherwise. The rule that would replace it is not
+  canonicality: `10` and `1e1` are one value and no local rule separates
+  them. RFC 8785 canonicalises through a float, which this construct
+  deliberately does not have. 0056 has the detail.
+- **A non-consuming dispatch**, which is 26.334 and is the next piece of
+  work. It is what stops 0056's construct having a worked example at all.
+
+**Built and not wired to anything that reads it.**
+
+- **`scaled` has a corpus schema and no worked example.** `edges.measured`
+  is the only schema in the tree with a `scaled` member; the only PROTOCOL
+  that wants one is json, and json cannot use it. Re-measured: the three
+  other matches for "scaled" in `example/` and `test/schema/` are prose.
+- **The walker's INDEXES section is written and never loaded.** So the walk
+  cannot check that an `indexed` region's offset table fits the frame, and
+  defers on any struct holding one -- `btree_leaf_page` reports
+  `validatable = False` today. Deferring is honest and is not the answer.
+
+**Measured while checking this register, and broader than it was filed
+as.** The dissector gives a DELIMITED text number `ProtoField.bytes` and a
+fixed-width one `ProtoField.string`. That is not a `scaled` gap: cpio's
+`ino` shows as `070701` and HTTP's status code shows as hex, and the split
+predates 0056 by a long way. An analyst reading a capture wants `200`.
+Filed here rather than fixed because the branch that decides it is the one
+0055 and 0056 both touched, and a third pass over it wants the whole
+question rather than another special case.
+
+**Deliberately refused, with the reason recorded.**
+
+- **A token set whose arms decide their own extent.** json spells `true`,
+  `false` and `null` as three structs of `[must_eq = "rue"]` and the rest,
+  which is the shape a reader writes when the token has to find its own
+  end. 0055 admits a token set only where something else fixes the extent,
+  which keeps 0052's rule rather than relaxing it.
+
+**Design work with a schema to write first.** 26.327's phase one: folded
+lines, parameter lists, separator-versus-terminator, required-versus-
+optional whitespace, and the percent/base64 codecs. Each needs the
+protocol written down before the construct is designed, which is what
+smtp and http did for the token set and what nothing has done for these.
+26.330's two encoding questions sit here too -- region scoping, still
+refused with `encoding` comes before the structs it describes`, and an
+encoding the data names.
+
+**And the whole vocabulary is phase two**, which 26.327 settles the order
+of: features first. `decimal`, `hex` and `scaled` now share one slot and
+the trio is an input to that pass rather than a thing to fix now.
 
 ### 26.330 Text encoding, scoped and named by the data
 
