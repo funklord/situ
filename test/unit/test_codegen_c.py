@@ -4649,3 +4649,110 @@ int main(void)
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+SCALED = 'struct s { scaled i64 v until ","; u8 rest[remaining]; }'
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_scaled_number_reads_as_an_exact_pair(tmp_path: Path) -> None:
+	"""0056, compiled and run.
+
+	The pair reflects the BYTES, which is why `1.50` and `1.5` differ here
+	and are the same number: a reading that normalised them would be a
+	rewriting. `-0` is accepted where `situ_parse_int` refuses it, because
+	the canonicality that refusal buys the integer form is not available
+	here anyway.
+	"""
+	schema   = parse_text(PREAMBLE + SCALED)
+	resolved = resolve(schema, solve(schema))
+	for name, text in dict(generate(schema, resolved, "unit").files()).items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+static int one(const char *text, situ_err_t want, int64_t sig, int32_t exp)
+{
+	situ_view_t view;
+
+	view.base       = (uint8_t *)(uintptr_t)(const void *)text;
+	view.limit      = (uint32_t)strlen(text);
+	view.generation = 0u;
+	view.owner      = NULL;
+
+	if (situ_s_validate(view) != want) return 1;
+	if (want != SITU_OK) return 0;
+	if (situ_s_v_significand(view) != sig) return 2;
+	if (situ_s_v_exponent(view) != exp) return 3;
+	return 0;
+}
+
+int main(void)
+{
+	if (one("0,", SITU_OK, 0, 0)) return 1;
+	if (one("42,", SITU_OK, 42, 0)) return 2;
+	if (one("-42,", SITU_OK, -42, 0)) return 3;
+	if (one("12.5,", SITU_OK, 125, -1)) return 4;
+	if (one("12.5e3,", SITU_OK, 125, 2)) return 5;
+	if (one("12.5E3,", SITU_OK, 125, 2)) return 6;
+	if (one("-0.004,", SITU_OK, -4, -3)) return 7;
+	/* The bytes, not the value: `1.50` is not `1.5` here. */
+	if (one("1.50,", SITU_OK, 150, -2)) return 8;
+	if (one("1e+3,", SITU_OK, 1, 3)) return 9;
+	if (one("1e-3,", SITU_OK, 1, -3)) return 10;
+	if (one("-0,", SITU_OK, 0, 0)) return 11;
+	/* Refused, each a spelling the grammar does not have. */
+	if (one(".5,", SITU_ERR_CONSTRAINT, 0, 0)) return 12;
+	if (one("12.,", SITU_ERR_CONSTRAINT, 0, 0)) return 13;
+	if (one("1e,", SITU_ERR_CONSTRAINT, 0, 0)) return 14;
+	if (one("1e+,", SITU_ERR_CONSTRAINT, 0, 0)) return 15;
+	if (one("+1,", SITU_ERR_CONSTRAINT, 0, 0)) return 16;
+	if (one("1.2.3,", SITU_ERR_CONSTRAINT, 0, 0)) return 17;
+	if (one("12x,", SITU_ERR_CONSTRAINT, 0, 0)) return 18;
+	if (one("0x10,", SITU_ERR_CONSTRAINT, 0, 0)) return 19;
+	/* Overflow is refused rather than wrapped, in both halves. */
+	if (one("99999999999999999999999,", SITU_ERR_CONSTRAINT, 0, 0)) return 20;
+	if (one("1e99999999999999999999,", SITU_ERR_CONSTRAINT, 0, 0)) return 21;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_signed_text_number_at_the_full_width_compiles(
+		tmp_path: Path) -> None:
+	"""`INT64_C(-9223372036854775808)` is not an int64 constant.
+
+	C has no negative literals, so it is unary minus applied to a value that
+	does not fit, and `-Werror` refuses the file. `decimal i64` had emitted
+	it since signed text numbers arrived and no schema in the tree used one,
+	so nothing ever compiled it -- found by `scaled i64` reaching the same
+	code with a wider type. Both forms are here because both emit it.
+	"""
+	body = ('struct s { decimal i64 a until ","; scaled i64 b until ";";'
+	        ' u8 rest[remaining]; }')
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	for name, text in dict(generate(schema, resolved, "unit").files()).items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text(
+		'#include "unit.h"\nint main(void) { return 0; }\n', encoding="ascii")
+
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr

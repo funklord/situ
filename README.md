@@ -958,13 +958,29 @@ struct header_field {
 }
 ```
 
-A radix prefix -- `decimal` or `hex` -- says a number is written as digits
-rather than laid down as bytes, which is what `cpio`'s eight-character hex
-fields and HTTP's status codes need. The scalar beside it gives the value's
-domain rather than its width in the buffer, so `decimal i16 offset until ','`
-is a signed number whose text is one to six bytes and whose sign costs a byte
-a fixed width cannot pay -- the leading `-` is part of the digits, and
-`[minimal]` refuses a second spelling of the same value.
+A radix prefix -- `decimal`, `hex` or `scaled` -- says a number is written as
+digits rather than laid down as bytes, which is what `cpio`'s eight-character
+hex fields and HTTP's status codes need. The scalar beside it gives the
+value's domain rather than its width in the buffer, so `decimal i16 offset
+until ','` is a signed number whose text is one to six bytes and whose sign
+costs a byte a fixed width cannot pay -- the leading `-` is part of the
+digits, and `[minimal]` refuses a second spelling of the same value.
+
+`scaled` is the third, and it reads a number that may carry a point and an
+exponent:
+
+```situ
+scaled i64  price  until ",";     // "12.5e3" reads as 125 and 2
+```
+
+**Exactly, and never as a float.** The accessors are `_significand` and
+`_exponent`, so the value is `significand * 10^exponent` with no rounding
+anywhere -- because rounding is where four backends would drift, `0.1` has
+no exact double, and C's `strtod` answers differently depending on the
+reader's locale. A consumer that wants a double computes one and owns the
+error. The pair reflects the bytes rather than the value, so `1.50` reads
+`(150, -2)` and `1.5` reads `(15, -1)`: normalising them would be a
+rewriting rather than a reading (decision 0056).
 
 `[encoding = ascii | utf8 | utf16le | leb128]` says what a run holds and
 gets a validity check that rejects a lone surrogate the way the UTF-8 one

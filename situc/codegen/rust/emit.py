@@ -266,6 +266,25 @@ class Emitter:
 
 		for token_set in self.schema.token_sets():
 			body.extend(self._tokens(token_set))
+
+		# 0056 is built in the C backend only. Refused loudly rather than
+		# generated wrongly: a scaled member reuses the integer text-number
+		# path everywhere it is not taught otherwise, so an unguarded
+		# backend emits `situ_parse_int` over `12.5` -- a silent zero, not
+		# an error, for a member whose whole point is its value.
+		for held in self.resolved.structs.values():
+			for entry in held.entries:
+				if not entry.placement.scaled:
+					continue
+				raise error(
+					f"`{entry.placement.path}` is a scaled text number, and "
+					"the Rust backend does not generate one yet",
+					entry.placement.span,
+					label = "not generated here",
+					notes = ["a scaled text number is built in the C backend "
+					         "(0056)",
+					         "generate this schema with `--target c`, or read "
+					         "the member as a byte run"])
 		for name in sorted(self.structs):
 			body.extend(self._struct(self.resolved.structs[name]))
 

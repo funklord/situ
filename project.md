@@ -1105,8 +1105,18 @@ canonicality the schema did not state. That is also why the signed form's
 range is the *type's* own rather than a digit count's -- there is no digit
 count.
 
-Fractional text formats are still refused. A point and an exponent are a
-grammar rather than a number, which is the same line drawn below.
+~~Fractional text formats are still refused. A point and an exponent are a
+grammar rather than a number, which is the same line drawn below.~~ They
+are `scaled`, since 0056, and that sentence was the reason it had to
+disagree with: the integer form above already carries an optional sign and
+a run of digits, so alternation and repetition cannot be what separates
+them. What does is the value -- digits map onto an integer exactly and onto
+a float only with correct rounding -- so `scaled i64 v until ","` reads an
+EXACT decimal and reports a significand and a power of ten. See 26.332.
+
+```situ
+scaled i64  price  until ",";    // "12.5e3" is 125 and 2
+```
 
 ### 8.6.3 Runs of records
 
@@ -5263,10 +5273,11 @@ non-C backends, the language server, cross-field invariants, text protocols,
 schema evolution, and the constructs the worked examples asked for.
 **Everything describing a single message is done.** What situ deliberately
 does not cover *within* one is named where the construct that would cover it
-would go -- 8.6.6 for a grammar, 8.6.2 for a fractional text format --
-rather than in a list of absences, which goes stale the moment one of them
-lands. Signed text was on that list and is not any more (26.297), which is
-the habit working.
+would go -- 8.6.6 for a grammar -- rather than in a list of absences, which
+goes stale the moment one of them lands. Signed text was on that list and is
+not any more (26.297); so is the fractional text format that stood beside
+8.6.6 in this sentence until 0056 built it (26.332). Twice now, which is the
+habit working.
 
 **What is outstanding is the layer ladder, and only above the bottom rung.**
 Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
@@ -26075,9 +26086,10 @@ asserted from the protocols rather than measured here.
 - **A fractional text number** -- json's `number` is
   `u8 rest[] before ',' | ']' | '}' [trim]`, an untyped byte run in the
   one place a JSON reader most wants a number. `decimal` and `hex`
-  cover integers and nothing covers a fraction or an exponent. One
-  asker recorded; CSV or a config format is the obvious second and
-  neither is written yet.
+  cover integers and nothing covers a fraction or an exponent. Built as
+  0056, `scaled` (26.332), and the second asker never arrived: json is
+  still the only schema here that asks, and the holder's instruction is
+  what stands in for 8.6.6's second protocol.
 
 **Asserted from the protocols, and each wants its schema written before
 it is designed.** Naming them is not measuring them, and the naming
@@ -26415,6 +26427,72 @@ before, and it was invisible because nothing asked what the bytes spelled.
 always had. Framing the verb on `" " | "\r\n"` fixes it and moves where
 `argument` starts, so it is its own change rather than a side effect of
 naming the verbs.
+
+### 26.332 A text number with a point, and the reason that was refused
+
+**0056, and the refusal it had to disagree with was one sentence in 8.6.2:
+"A point and an exponent are a grammar rather than a number."**
+
+That does not separate the two cases. `decimal i32 offset until ","`
+already reads `-42` -- an optional sign, which is alternation, and a run
+of digits, which is repetition. Those are two of the three things 8.6.5
+says stay out of a layout, and the construct that was ADMITTED has both.
+A fraction adds a third optional part and a second run of digits. If
+repetition and alternation were the line, the integer form would be on the
+wrong side of it.
+
+**What actually differs is what the value maps onto**, and it is a better
+reason than the one it replaces. An integer text number maps onto `uN` or
+`iN` exactly, by accumulating digits, and four independently written
+backends agree by construction. A fraction maps onto a binary float only
+with correct rounding: `0.1` has no exact double.
+
+**So the construct is admitted and the float is not.** `scaled i64 v until
+","` reads the bytes as an EXACT decimal and reports a significand and a
+power of ten -- `12.5e3` is `(125, 2)`. Three reasons it is the pair:
+the arithmetic is the integer parse the runtime already has plus a count
+of where the point was, so the backends cannot drift; `strtod` is
+LOCALE-DEPENDENT, and where the decimal point is a comma it stops at the
+point, which is `tolower` in 0055 wearing different clothes; and whoever
+wants a double can compute one and own the rounding rather than have this
+project choose it for them in an accessor.
+
+**`1.50` reads `(150, -2)` and `1.5` reads `(15, -1)`**, which are the
+same number and different spellings. Deliberate: a pair that normalised
+them would be a rewriting of the bytes rather than a reading.
+
+**Writing the record found a hole in the record.** It said `[minimal]`
+buys `Canonical` back by forbidding a leading zero, a trailing fraction
+zero, a `+` in the exponent and so on. Every one of those is a real
+second spelling and removing them is a real narrowing -- and it is not
+canonicality, because **`10` and `1e1` survive all of it and are one
+value**, and no local rule separates them without refusing traffic
+somebody sends. So `[minimal]` is refused on a scaled member rather than
+half-implemented, and what a canonical decimal spelling is stays open.
+Refusing also avoids the concrete wrong answer: `situ_digits_minimal`
+forbids a leading zero, so run unchanged it refuses `0.5`.
+
+**A defect older than the construct, found by it.**
+`INT64_C(-9223372036854775808)` is not an `int64_t` constant: C has no
+negative literals, so it is unary minus applied to a value that does not
+fit, and `-Werror` refuses the file with "integer constant is so large
+that it is unsigned". `decimal i64` has emitted that since signed text
+numbers arrived, and **no schema in the tree uses one**, so nothing ever
+compiled it. `scaled i64` reached the same code with a wider type and the
+unused path ran. Both forms are in a test now.
+
+**Built in C; the other three refuse.** The same sequencing 0055 used and
+for a sharper reason here: a scaled member reuses the integer text-number
+path everywhere it is not taught otherwise, so an unguarded backend emits
+`situ_parse_int` over `12.5` and gets a silent ZERO -- not an error -- for
+a member whose whole point is its value.
+
+**Still open:** the other three backends, `[minimal]` and `canonical`, the
+walker and the dissector, a corpus schema, and converting json's `number`.
+And the second-asker question is open in a way 0055's was not: json is the
+only schema in this tree that asks, and the copyright holder's instruction
+is what stands in for the second. 8.6.6 wants two protocols, and the
+honest thing is to say which one this has.
 
 ### 26.330 Text encoding, scoped and named by the data
 

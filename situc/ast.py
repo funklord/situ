@@ -364,6 +364,16 @@ class Field(Member):
 	#: gives the value's domain, not its width in the buffer, because a text
 	#: number's width in the buffer depends on the number (section 8.6.2).
 	radix: int | None		= None
+	#: `scaled i64 v until ","` -- a decimal number that may carry a point
+	#: and an exponent, read as an exact pair rather than as a float (0056).
+	#:
+	#: Set WITH `radix = 10` rather than instead of it, because a scaled
+	#: number is a text number in every respect but its value: the
+	#: delimiter, the span accessors and where `[minimal]` may sit are all
+	#: the integer form's, and only the parse and the range differ. A
+	#: separate flag is what lets each of those be a deliberate decision
+	#: instead of an inherited one.
+	scaled: bool			= False
 	#: `u8 pixels[n] at hdr.pixel_offset` -- the member sits where a field
 	#: says, measured from the start of the message rather than from the
 	#: member before it. Distinct from `pin`, which asserts the offset the

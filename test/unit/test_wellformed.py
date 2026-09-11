@@ -1831,3 +1831,57 @@ def test_a_token_set_keeps_an_arm_merely_containing_a_reserved_word() -> None:
 	decl = next(iter(schema.token_sets()))
 	assert [member.name for member in decl.members] == ["unknown_command",
 	                                                    "helo"]
+
+
+# -- a scaled text number (0056) --------------------------------------------
+
+
+def test_a_scaled_text_number_is_delimited_and_integer_typed() -> None:
+	"""The type names the SIGNIFICAND's domain, which is why it is still an
+	integer: the value is `significand * 10^exponent` and neither half is a
+	float."""
+	schema = parse_text('struct s { scaled i64 v until ","; u8 r[remaining]; }',
+	                    path="s.situ")
+	member = schema.structs()[0].members[0]
+	assert isinstance(member, ast.Field)
+	assert member.scaled and member.radix == 10
+
+
+def test_a_float_text_number_now_names_the_construct_that_reads_it() -> None:
+	"""The refusal 0056 was written against, which used to end "frame it as
+	a byte run and let the reader parse it"."""
+	rendered_text = rendered('struct s { decimal f64 v until ","; }')
+	assert "its type must be an integer" in rendered_text
+	assert "`scaled v`" in rendered_text
+	assert "exact decimal rather than a float" in rendered_text
+
+
+def test_a_scaled_text_number_refuses_a_fixed_width() -> None:
+	"""The width says how many characters there are and not where the point
+	goes, so `1.50` and `0.15` fit one field and are different numbers."""
+	assert "scaled text number with a fixed width" in rendered(
+		"struct s { scaled i64 v[8]; }")
+
+
+def test_a_scaled_text_number_refuses_minimal_for_now() -> None:
+	"""Refused rather than half-implemented.
+
+	`situ_digits_minimal` forbids a leading zero, so run unchanged here it
+	refuses `0.5`. And the rule it would be replaced by is not canonicality
+	either: `10` and `1e1` are one value and no local rule separates them.
+	"""
+	rendered_text = rendered(
+		'struct s { scaled i64 v until "," [minimal]; u8 r[remaining]; }')
+	assert "`[minimal]` does not yet have a meaning here" in rendered_text
+	assert "`10` and `1e1`" in rendered_text
+
+
+def test_minimal_still_works_on_an_integer_text_number() -> None:
+	"""The control. Without it the refusal above would pass just as loudly
+	against a rule that refused `[minimal]` on every text number."""
+	schema = parse_text(
+		'struct s { decimal u32 v until "," [minimal]; u8 r[remaining]; }',
+		path="s.situ")
+	member = schema.structs()[0].members[0]
+	assert isinstance(member, ast.Field)
+	assert any(attr.name == "minimal" for attr in member.attrs)

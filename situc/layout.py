@@ -396,6 +396,12 @@ class Placement:
 	#: it gives the value's domain rather than its width in the buffer, which
 	#: for a text number depends on the number (section 8.6.2).
 	radix: int | None		= None
+	#: `scaled i64 v until ","` -- the digits may carry a point and an
+	#: exponent, and the value is an exact (significand, power of ten)
+	#: rather than an integer or a float (0056). Set beside `radix = 10`
+	#: rather than instead of it: every span accessor and every delimiter
+	#: rule is the integer form's, and only the parse and the range differ.
+	scaled: bool			= False
 
 	@property
 	def extent_from_own_bytes(self) -> bool:
@@ -1898,6 +1904,7 @@ class Solver:
 			repeat_shown       = _repeat_source(member, explicit=False),
 			repeat_cap         = self._repeat_cap(member),
 			radix              = getattr(member, "radix", None),
+			scaled             = bool(getattr(member, "scaled", False)),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
 			trim_set           = (_whitespace_of(self.schema, member.span)

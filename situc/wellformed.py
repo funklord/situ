@@ -270,9 +270,50 @@ def _check_one_text_number(member: ast.Field) -> None:
 			label = f"`{member.type_ref.name}` is not one",
 			notes = ["the type gives the range of values the digits may "
 			         "spell, and situ reads digits as an integer",
-			         "a fractional text format needs a point and an exponent, "
-			         "which is a grammar rather than a number: frame it as a "
-			         "byte run and let the reader parse it"],
+			         # This used to end "which is a grammar rather than a
+			         # number: frame it as a byte run and let the reader
+			         # parse it". 0056 disagrees with the grammar half and
+			         # builds the construct; what remains true is that the
+			         # value is not a float, which is what the type here
+			         # would be asking for.
+			         f"a point and an exponent are `scaled "
+			         f"{member.name}`, whose type names the SIGNIFICAND's "
+			         "domain and whose value is an exact decimal rather "
+			         "than a float (0056)"],
+		)
+
+	if member.scaled and any(attr.name == "minimal" for attr in member.attrs):
+		raise error(
+			f"`{member.name}` is scaled, and `[minimal]` does not yet have "
+			"a meaning here",
+			next(attr.span for attr in member.attrs
+			     if attr.name == "minimal"),
+			label = "not read on a scaled number",
+			notes = ["on an integer it forbids a leading zero, and the "
+			         "check that does it would refuse `0.5` -- so it is "
+			         "refused rather than run for the wrong construct",
+			         "what a canonical spelling IS here is open: `1.0` and "
+			         "`1` are settled, and `10` and `1e1` are two spellings "
+			         "of one value that no local rule separates (0056)"],
+		)
+
+	if member.scaled and fixed:
+		assert member.array is not None, "`fixed` says there is one"
+		raise error(
+			f"`{member.name}` is a scaled text number with a fixed width",
+			member.type_ref.span,
+			label = "this many bytes whatever the number",
+			notes = ["the width says how many characters there are and not "
+			         "where the point goes, so `1.50` and `0.15` fit one "
+			         "field and spell different values",
+			         "a format whose point is always in the same place is a "
+			         "plain integer with a scale the reader applies: "
+			         f"`decimal {member.type_ref.name} {member.name}"
+			         f"[{member.array.size}]` reads the digits, and the "
+			         "schema says in a comment where the point is",
+			         f'`scaled {member.type_ref.name} {member.name} '
+			         'until "D"` is framed by its delimiter, where the '
+			         "spelling IS the number"],
 		)
 
 	if scalar.kind is ScalarKind.SINT and fixed:

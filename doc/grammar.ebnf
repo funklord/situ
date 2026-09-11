@@ -104,7 +104,12 @@ byte_set	= char { "|" char } ;
  * computed and places nothing -- section 9.8. *)
 located		= "at" expr ;
 repeat		= "while" "(" expr ")" [ "max" expr ] ;	(* section 8.6.6 *)
-radix		= "decimal" | "hex" ;		(* section 8.6.2 *)
+(* Section 8.6.2 and decision 0056. `decimal` and `hex` read an integer;
+ * `scaled` reads a decimal that may carry a point and an exponent, whose
+ * value is an exact (significand, power of ten) rather than a float. In
+ * one slot because all three are the same fact about a member: the digits
+ * are the value, and the scalar beside them names its domain. *)
+radix		= "decimal" | "hex" | "scaled" ;
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 (* The name is optional and defaults to the keyword, so an unnamed tag is
  * `tag` and an unnamed sealed region is `sealed` -- which is what lets

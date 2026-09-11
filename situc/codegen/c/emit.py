@@ -4985,10 +4985,21 @@ class Emitter:
 		# construction -- `wellformed` refuses the fixed-width form, because
 		# a sign costs a byte and a fixed width cannot pay it -- so the
 		# range is the type's rather than the digit count's.
-		if scalar.signed:
+		if placement.scaled:
+			# The fallible read reports BOTH parts, for the reason
+			# `_significand` and `_exponent` are two accessors: the value is
+			# two numbers and there is no single one to put in an
+			# out-parameter (0056).
+			call = (f"\tif (situ_parse_scaled({ptr}(view), {length}(view), "
+			        f"{self._int64_literal(floor)}, "
+			        f"{self._int64_literal(limit)}, &value, &scale) != 0) {{")
+			held = "\tint64_t value;\n\tint32_t scale;"
+			said = (f"a significand outside {floor}..{limit}, and an exponent "
+			        "that does not fit an int32")
+		elif scalar.signed:
 			call = (f"\tif (situ_parse_int({ptr}(view), {length}(view), "
-			        f"{placement.radix}u, INT64_C({floor}), "
-			        f"INT64_C({limit}), &value) != 0) {{")
+			        f"{placement.radix}u, {self._int64_literal(floor)}, "
+			        f"{self._int64_literal(limit)}, &value) != 0) {{")
 			held = "\tint64_t value;"
 			said = f"outside {floor}..{limit}"
 		else:
@@ -4999,7 +5010,9 @@ class Emitter:
 
 		return [
 			"",
-			f"/* `{placement.name}` is a {base} number: the digits between the",
+			(f"/* `{placement.name}` is an exact decimal: the digits between"
+			 if placement.scaled else
+			 f"/* `{placement.name}` is a {base} number: the digits between the"),
 			f" * start of the member and its delimiter, in the range of"
 			f" {scalar.name}.",
 			" *",
@@ -5010,7 +5023,8 @@ class Emitter:
 			f" * and anything {said} are all SITU_ERR_CONSTRAINT. */",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'get')}"
-			f"(situ_view_t view, {ctype} *out)",
+			+ (f"(situ_view_t view, {ctype} *out, int32_t *power)"
+			   if placement.scaled else f"(situ_view_t view, {ctype} *out)"),
 			"{",
 			held,
 			"",
@@ -5018,6 +5032,7 @@ class Emitter:
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 			f"\t*out = ({ctype})value;",
+			*(["\t*power = scale;"] if placement.scaled else []),
 			"\treturn SITU_OK;",
 			"}",
 		]
@@ -6368,6 +6383,32 @@ class Emitter:
 		local = c_name(self._local(struct, driver))
 		return f"{ident(self.prefix, struct.name, local, 'value')}({held})"
 
+	@staticmethod
+	def _int64_literal(value: int | None) -> str:
+		"""An `int64_t` constant C will accept, INT64_MIN included.
+
+		`INT64_C(-9223372036854775808)` is not that constant: C has no
+		negative literals, so it is unary minus applied to
+		9223372036854775808, which does not fit a signed 64-bit type. The
+		compiler promotes it and `-Werror` refuses the file -- "integer
+		constant is so large that it is unsigned".
+
+		Found by `scaled i64`, and older than it: `decimal i64` has emitted
+		this since signed text numbers arrived and no schema in the tree
+		used one, so nothing ever compiled it. The construct that reaches
+		for a wider type is what made an unused path run.
+		"""
+		if value == -(1 << 63):
+			return "(-INT64_C(9223372036854775807) - 1)"
+		return f"INT64_C({value})"
+
+	# `radix_min` and `radix_max` are `int | None` on the placement and are
+	# never None where a text number reaches these call sites -- the
+	# property computes them from the scalar, which `wellformed` has
+	# already required. Typed to accept it rather than asserted at four
+	# call sites, since `None` would render as `INT64_C(None)` and fail to
+	# compile rather than pass quietly.
+
 	def _text_value_helper(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The non-failing read, for the offset arithmetic that cannot fail."""
@@ -6393,6 +6434,10 @@ class Emitter:
 		source = (base, width)
 		signed_text = bool(placement.scalar and placement.scalar.signed)
 
+		if placement.scaled:
+			return self._scaled_value_helper(struct, placement, local,
+			                                 source, ctype)
+
 		return [
 			"",
 			"/* The same digits, read where an error cannot be returned: the",
@@ -6414,11 +6459,68 @@ class Emitter:
 			 "	uint64_t value = 0u;"),
 			"",
 			((f"	(void)situ_parse_int({source[0]}, {source[1]},"
-			  f" {placement.radix}u, INT64_C({placement.radix_min}),"
-			  f" INT64_C({placement.radix_max}), &value);") if signed_text else
+			  f" {placement.radix}u, {self._int64_literal(placement.radix_min)},"
+			  f" {self._int64_literal(placement.radix_max)}, &value);") if signed_text else
 			 (f"	(void)situ_parse_uint({source[0]}, {source[1]},"
 			  f" {placement.radix}u, {limit}u, &value);")),
 			f"	return ({ctype})value;",
+			"}",
+		]
+
+	def _scaled_value_helper(self, struct: ResolvedStruct,
+			placement: Placement, local: str,
+			source: tuple[str, str], ctype: str) -> list[str]:
+		"""The significand and the power of ten, read where nothing can fail.
+
+		Two accessors rather than one, because the value IS two numbers: a
+		scaled member has no single integer to hand back, and handing back a
+		double would be this backend choosing a rounding for every caller
+		(0056). `value = significand * 10^exponent`, exactly.
+
+		Both parse the same bytes rather than one calling the other. It is
+		the same bargain `_value` makes -- an unvalidated frame reads zero --
+		and sharing a cached parse would need somewhere to cache it, which a
+		zero-copy accessor does not have.
+		"""
+		sig = ident(self.prefix, struct.name, local, "significand")
+		exp = ident(self.prefix, struct.name, local, "exponent")
+		call = (f"situ_parse_scaled({source[0]}, {source[1]},"
+		        f" {self._int64_literal(placement.radix_min)},"
+		        f" {self._int64_literal(placement.radix_max)}, &value, &scale)")
+
+		return [
+			"",
+			f"/* `{placement.path}` is an exact decimal: its value is",
+			f" * `{sig} * 10 ^ {exp}`.",
+			" *",
+			" * Two accessors because the value is two numbers. A double",
+			" * would be this header choosing a rounding on the caller's",
+			" * behalf, and `0.1` is where that choice shows (0056).",
+			" *",
+			" * `validate` is what makes these safe, as it is for every",
+			" * other text number: it refuses a frame whose digits are not",
+			" * a number, so a validated frame always parses here and an",
+			" * unvalidated one reads zero. */",
+			f"static inline {ctype} {sig}(situ_view_t view)",
+			"{",
+			"	int64_t value = 0;",
+			"	int32_t scale = 0;",
+			"",
+			f"	(void){call};",
+			"	(void)scale;",
+			f"	return ({ctype})value;",
+			"}",
+			"",
+			f"/** The power of ten `{placement.name}`'s significand carries."
+			" */",
+			f"static inline int32_t {exp}(situ_view_t view)",
+			"{",
+			"	int64_t value = 0;",
+			"	int32_t scale = 0;",
+			"",
+			f"	(void){call};",
+			"	(void)value;",
+			"	return scale;",
 			"}",
 		]
 
@@ -7456,12 +7558,19 @@ class Emitter:
 				"",
 			])
 
+		# A scaled number's getter reports both parts, so the check declares
+		# somewhere for the second one to go. It is the parse that is being
+		# checked here rather than either number, which is why neither is
+		# read afterwards (0056).
 		lines.extend([
 			f"\t/* {placement.path}: its digits have to be digits, in range. */",
 			"\t{",
 			f"\t\t{self._field_ctype(placement)} parsed;",
+			*(["\t\tint32_t power;"] if placement.scaled else []),
 			f"\t\tsitu_err_t e = "
-			f"{ident(self.prefix, struct.name, local, 'get')}(view, &parsed);",
+			f"{ident(self.prefix, struct.name, local, 'get')}"
+			+ ("(view, &parsed, &power);" if placement.scaled
+			   else "(view, &parsed);"),
 			"",
 			"\t\tif (e != SITU_OK) {",
 			"\t\t\treturn e;",

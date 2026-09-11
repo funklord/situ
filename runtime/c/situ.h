@@ -1058,6 +1058,154 @@ static inline int situ_parse_int(const uint8_t *data, uint32_t len,
 	return 0;
 }
 
+/* Parse a decimal number that may carry a point and an exponent (0056).
+ *
+ * EXACT, and never a float: reports a significand and a power of ten, so
+ * that `value = *out * 10^*scale`. `12.5e3` is 125 and 2; `-0.004` is -4
+ * and -3; `1.50` is 150 and -2.
+ *
+ * The pair reflects the bytes rather than the value, which is why `1.50`
+ * and `1.5` differ here and are the same number. Normalising would make a
+ * reading of the bytes into a rewriting of them, and `[minimal]` is how a
+ * schema says the spelling is already canonical.
+ *
+ * No float, and the reason is not difficulty. `strtod` is locale-dependent
+ * -- where the decimal point is a comma it stops at the point -- so a wire
+ * format read through it would mean different things to readers in
+ * different environments; and it is not available to a freestanding
+ * runtime anyway. Correct rounding written four times, once per backend,
+ * is four chances to disagree about `0.1`. Whoever wants a double can
+ * compute one from the pair and own the error.
+ *
+ * The grammar, which is JSON's minus its refusal of a leading zero:
+ *
+ *     [ "-" ] digit+ [ "." digit+ ] [ ("e" | "E") [ "+" | "-" ] digit+ ]
+ *
+ * Refused: an empty run, a point with no digits after it, an exponent
+ * marker with no digits after it, a leading point, any byte that is not
+ * part of the grammar, a significand outside [min, max], and an exponent
+ * that does not fit an `int32_t`.
+ *
+ * `-0` is ACCEPTED, where `situ_parse_int` refuses it. That refusal buys
+ * the integer form `Canonical`, and it cannot buy it here: `1.50` and
+ * `1.5` are already two spellings of one value, so a scaled number is
+ * NonCanonical whatever this does with the sign. What is left is that
+ * real formats emit `-0`, JSON among them. `[minimal]` refuses it.
+ */
+static inline int situ_parse_scaled(const uint8_t *data, uint32_t len,
+        int64_t min, int64_t max, int64_t *out, int32_t *scale)
+{
+	uint64_t magnitude = 0u;
+	uint64_t ceiling;
+	int      negative  = 0;
+	int32_t  fraction  = 0;
+	int64_t  exponent  = 0;
+	uint32_t i         = 0u;
+	uint32_t digits    = 0u;
+
+	if (len == 0u) {
+		return -1;
+	}
+	if (data[0] == (uint8_t)'-') {
+		negative = 1;
+		i        = 1u;
+	}
+
+	/* The magnitude a signed value may reach is one larger going down than
+	 * going up; built from the bound for `situ_parse_int`'s reason. */
+	ceiling = negative ? (uint64_t)(-(min + 1)) + 1u : (uint64_t)max;
+
+	/* The integer part. At least one digit: a leading point is refused,
+	 * because no digits is not the number zero -- the rule the empty run
+	 * already follows. */
+	for (; i < len; i++) {
+		uint8_t c = data[i];
+
+		if (c < (uint8_t)'0' || c > (uint8_t)'9') {
+			break;
+		}
+		if (magnitude > (ceiling - (uint64_t)(c - (uint8_t)'0')) / 10u) {
+			return -1;
+		}
+		magnitude = magnitude * 10u + (uint64_t)(c - (uint8_t)'0');
+		digits++;
+	}
+	if (digits == 0u) {
+		return -1;
+	}
+
+	/* The fraction, which moves the point rather than the value: every
+	 * digit here is one more digit of the significand and one less power
+	 * of ten. */
+	if (i < len && data[i] == (uint8_t)'.') {
+		uint32_t before = digits;
+
+		for (i++; i < len; i++) {
+			uint8_t c = data[i];
+
+			if (c < (uint8_t)'0' || c > (uint8_t)'9') {
+				break;
+			}
+			if (magnitude > (ceiling - (uint64_t)(c - (uint8_t)'0')) / 10u) {
+				return -1;
+			}
+			magnitude = magnitude * 10u + (uint64_t)(c - (uint8_t)'0');
+			digits++;
+			fraction++;
+		}
+		if (digits == before) {
+			return -1;	/* a point with nothing after it */
+		}
+	}
+
+	/* The exponent. Its own sign, and `+` is allowed here where the
+	 * significand's is not: `1e+3` is what a great many formats write, and
+	 * refusing it in the parse would lose them. `[minimal]` refuses it. */
+	if (i < len && (data[i] == (uint8_t)'e' || data[i] == (uint8_t)'E')) {
+		int      down  = 0;
+		uint32_t shown = 0u;
+
+		i++;
+		if (i < len && (data[i] == (uint8_t)'+' || data[i] == (uint8_t)'-')) {
+			down = data[i] == (uint8_t)'-';
+			i++;
+		}
+		for (; i < len; i++) {
+			uint8_t c = data[i];
+
+			if (c < (uint8_t)'0' || c > (uint8_t)'9') {
+				break;
+			}
+			/* Bounded well inside `int64_t` so the sum below cannot
+			 * overflow before the `int32_t` check refuses it. */
+			if (exponent > 1000000000) {
+				return -1;
+			}
+			exponent = exponent * 10 + (int64_t)(c - (uint8_t)'0');
+			shown++;
+		}
+		if (shown == 0u) {
+			return -1;	/* `1e`, `1e+` */
+		}
+		if (down) {
+			exponent = -exponent;
+		}
+	}
+
+	if (i != len) {
+		return -1;	/* a byte the grammar does not have */
+	}
+
+	exponent -= (int64_t)fraction;
+	if (exponent < INT32_MIN || exponent > INT32_MAX) {
+		return -1;
+	}
+
+	*out   = negative ? -(int64_t)magnitude : (int64_t)magnitude;
+	*scale = (int32_t)exponent;
+	return 0;
+}
+
 /* Write a value as fixed-width digits, which is `situ_parse_uint` backwards.
  *
  * Fixed width, so the leading zeros are mandatory rather than optional: a

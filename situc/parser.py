@@ -190,6 +190,11 @@ ATTRIBUTE_NAMES = frozenset({
 #: need a reason beyond being arithmetically possible.
 RADIX_KEYWORDS = {"decimal": 10, "hex": 16}
 
+#: `scaled i64 v until ","` -- base ten, and a point and an exponent
+#: allowed (0056). In the radix slot because that is what it is: a
+#: number written as text, whose scalar names the value's domain.
+SCALED_KEYWORD = "scaled"
+
 KERNEL_FAMILIES	= {family.value: family for family in ast.KernelFamily}
 TARGET_KINDS	= {kind.value: kind for kind in ast.TargetKind}
 STRICTNESS	= {level.value: level for level in ast.Strictness}
@@ -1429,7 +1434,8 @@ class Parser:
 				phase, described = future
 				raise not_yet_implemented(described, token.span, phase)
 
-			if token.text in RADIX_KEYWORDS:
+			if token.text in RADIX_KEYWORDS \
+					or token.text == SCALED_KEYWORD:
 				return self.parse_text_field()
 			if token.text == "endian_marker":
 				return self.parse_marker_field()
@@ -2213,9 +2219,10 @@ class Parser:
 		are representable, which is what a caller needs and what the range
 		check is written against.
 		"""
-		start = self.advance()
-		radix = RADIX_KEYWORDS[start.text]
-		field = self.parse_field()
+		start  = self.advance()
+		scaled = start.text == SCALED_KEYWORD
+		radix  = 10 if scaled else RADIX_KEYWORDS[start.text]
+		field  = self.parse_field()
 
 		# Two ways to say where the digits stop, and SMTP needs the second.
 		# A reply code is exactly three digits with nothing after them, and
@@ -2258,6 +2265,7 @@ class Parser:
 		                 until   = field.until,
 		                 repeat  = field.repeat,
 		                 radix   = radix,
+		                 scaled  = scaled,
 		                 located = field.located,
 		                 skip    = field.skip)
 
