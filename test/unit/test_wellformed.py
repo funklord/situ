@@ -1885,3 +1885,44 @@ def test_minimal_still_works_on_an_integer_text_number() -> None:
 	member = schema.structs()[0].members[0]
 	assert isinstance(member, ast.Field)
 	assert any(attr.name == "minimal" for attr in member.attrs)
+
+
+# -- names in an `at` expression --------------------------------------------
+
+
+def test_an_unknown_name_in_an_at_expression_is_a_diagnostic() -> None:
+	"""It was a traceback.
+
+	The expression reaches the backends as SOURCE TEXT -- `_located_source`
+	renders it and no solver evaluates it -- so the first thing to look at
+	the names was a backend rewriting them, and one it did not know raised
+	`UnknownName`. A size expression in the same schema is refused properly,
+	which is what made this hole invisible: the good diagnostic exists and
+	`at` never reached it.
+	"""
+	assert "`nope` is not in scope here" in rendered(
+		"struct s { u8 a; u8 b[4] at nope; u8 r[remaining]; }")
+
+
+def test_a_layout_builtin_in_an_at_expression_is_a_diagnostic() -> None:
+	"""And this crashed past the check above.
+
+	`invariant.paths_in` folds a call's ARGUMENTS into its result and drops
+	the callee, so `at offset(a)` looked like `at a`, passed the scope check
+	and crashed the backend anyway. The call is refused on its own terms:
+	a layout builtin answers about the layout the solver is computing, and
+	an `at` is an input to it.
+	"""
+	assert "is not something an `at` may call" in rendered(
+		"struct s { u8 a; u8 b[4] at offset(a); u8 r[remaining]; }")
+
+
+def test_an_at_expression_over_fields_and_constants_still_works() -> None:
+	"""The controls. Without them the two refusals above would pass just as
+	loudly against a rule that refused every `at`."""
+	for body in ("struct s { u8 a; u8 b[4] at a; u8 r[remaining]; }",
+	             "struct s { u8 a; u8 b[4] at a + 2; u8 r[remaining]; }",
+	             "const WHERE = 8;\n"
+	             "struct s { u8 a; u8 b[4] at WHERE; u8 r[remaining]; }"):
+		schema = parse_text(body, path="s.situ")
+		assert schema.structs()

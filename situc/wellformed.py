@@ -66,6 +66,7 @@ def check(schema: ast.Schema) -> None:
 	check_byte_run_equality(schema)
 	check_byte_enums(schema)
 	check_token_sets(schema)
+	check_located_names(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
@@ -2413,6 +2414,83 @@ def _check_token_member(decl: ast.TokensDecl, member: ast.Field) -> None:
 					         f"`{arm.name}` whole",
 					         "a token containing the delimiter needs a "
 					         "different frame, or quoting"])
+
+
+def check_located_names(schema: ast.Schema) -> None:
+	"""Every name in an `at` expression has to resolve to something.
+
+	Nothing checked this. The expression is carried to the backends as
+	SOURCE TEXT -- `layout._located_source` renders it and no solver
+	evaluates it -- so the first thing that looked at the names was a
+	backend rewriting them, and a name it did not know raised `UnknownName`
+	as a traceback. `struct s { u8 a; u8 b[4] at nope; }` crashed the
+	compiler; so did `at offset(a)`, since a layout builtin is not a value
+	here either.
+
+	26.253 records the same complaint under a different spelling and
+	`check_run_conditions` guards its half. This is the other one: a size
+	expression is resolved by the solver and refused with "`x` is not in
+	scope here", and `at` never reached it.
+	"""
+	consts = {decl.name for decl in schema.consts()}
+	enums  = {member.name for decl in schema.enums()
+	          for member in decl.members}
+	enums |= {decl.name for decl in schema.enums()}
+
+	for struct in schema.structs():
+		seen: set[str] = set()
+		for member in _walk_members(struct.members):
+			located = getattr(member, "located", None)
+			if located is not None:
+				_check_located(member, located, seen | consts | enums)
+			named = getattr(member, "name", None)
+			if named is not None:
+				seen.add(named)
+
+
+def _check_located(member: ast.Member, located: ast.Expr,
+		known: set[str]) -> None:
+	# A call first, because `paths_in` folds a call's ARGUMENTS into its
+	# result and drops the callee's name -- so `at offset(a)` looked like
+	# `at a`, passed the scope check below, and crashed the backend anyway.
+	#
+	# `_calls_in` is the one the invariant check already uses. Writing a
+	# second one shadowed it, and three of its tests went red saying a
+	# `str` has no `.name` -- which is what a module-level helper with a
+	# good name invites and the type checker did not see, both returning
+	# a list.
+	for call in _calls_in(located):
+		raise error(
+			f"`{call.name}` is not something an `at` may call",
+			call.span,
+			label = "not a value here",
+			notes = ["`at` places a member where a FIELD says, so its "
+			         "expression is arithmetic over fields and constants",
+			         "a layout builtin -- `size`, `offset`, `count` -- "
+			         "answers about the layout the solver is computing, and "
+			         "this is an input to it"],
+		)
+
+	for path in paths_in(located):
+		# The head, because a dotted path names a field of a nested struct
+		# declared earlier and the backends rewrite it whole.
+		head = path.split(".")[0]
+		if head in known:
+			continue
+		listed = ", ".join(sorted(known)[:6]) or "nothing"
+		raise error(
+			f"`{path}` is not in scope here",
+			located.span,
+			label = "cannot be resolved",
+			notes = ["`at` places a member where a FIELD says, so its "
+			         "expression names a field declared earlier in this "
+			         "struct, a `const`, or an enum member",
+			         f"in scope here: {listed}",
+			         "a layout builtin -- `size`, `offset`, `count` -- is "
+			         "not a value an `at` may use: it answers about the "
+			         "layout the solver is computing, and this is an input "
+			         "to it"],
+		)
 
 
 def check_checksum_codecs(schema: ast.Schema) -> None:

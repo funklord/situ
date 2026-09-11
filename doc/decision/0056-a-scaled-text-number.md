@@ -152,6 +152,20 @@ exponent cannot be drawn at all. The control is a sabotage aimed at the
 fraction alone, which leaves every plain integer right and only `12.5`
 wrong; the differential goes red on it.
 
+**Its only asker cannot use it, and that is a fact about a different
+missing feature.** json's `number` is the schema this record was written
+from, and `number.rest` is not a number: `value` switches on `kind`, a
+discriminant occupies its byte, and the arm begins after it. `{"a":12.5}`
+hands the `number` struct `2.5`. A `scaled i64` there would report
+`(25, -1)` confidently for a document whose number is 12.5 -- a wrong
+value where there is now an honest byte run.
+
+26.253 already records the blocker, from an argv evaluation: "dispatch
+consumes; a text grammar needs it to keep". `before` is the shape of the
+answer and reaches only delimiters. So this construct ships with a corpus
+schema and no worked example, which is a weaker position than 0055's and
+should be said rather than left to be noticed.
+
 **`[minimal]` is open and so is `canonical`.** A scaled number is
 NonCanonical today with no way to say otherwise, which is a real cost:
 a format whose numbers ARE canonically spelled cannot say so. Settling

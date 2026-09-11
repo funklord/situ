@@ -26089,7 +26089,10 @@ asserted from the protocols rather than measured here.
   cover integers and nothing covers a fraction or an exponent. Built as
   0056, `scaled` (26.332), and the second asker never arrived: json is
   still the only schema here that asks, and the holder's instruction is
-  what stands in for 8.6.6's second protocol.
+  what stands in for 8.6.6's second protocol. **And the one asker cannot
+  use it** -- its number's first byte is spent on the variant that selects
+  the arm, so the member holds `2.5` of `12.5`. The blocker is a
+  non-consuming dispatch, not this construct; 26.333 has the measurement.
 
 **Asserted from the protocols, and each wants its schema written before
 it is designed.** Naming them is not measuring them, and the naming
@@ -26557,10 +26560,73 @@ section is its own piece of work; answering wrongly in the meantime is the
 one option that was not available.
 
 **Still open:** `[minimal]` and `canonical`, the dissector's rendering of
-one, converting json's `number`, and the walker's INDEXES section. And the second-asker question stays
+one, and the walker's INDEXES section. ~~Converting json's `number`~~ is
+not open and not done: it is blocked on a non-consuming dispatch, and
+26.333 records the measurement. And the second-asker question stays
 open in a way 0055's did not: json is the only schema here that asks, and
 the copyright holder's instruction is what stands in for 8.6.6's second
 protocol.
+
+### 26.333 The scaled number's only asker cannot use it
+
+**json's `number` cannot be a `scaled` member, and the reason is a
+language question rather than a gap in that schema.** Worth stating
+plainly because 0056 built the construct across four backends, the walker,
+the fuzz harness and the differential, and json is the only schema in this
+tree that asks for it.
+
+**`number.rest` is not a number.** `value` switches on `kind`, and a
+discriminant is a FIELD -- it occupies its byte -- so the arm begins after
+it. Measured rather than reasoned, by handing the generated reader a
+document:
+
+    {"a":12.5}    the `number` struct sees    2.5
+
+The `1` was spent selecting the arm. A `scaled i64` there would parse what
+it was given and report `(25, -1)`, confidently, for a document whose
+number is 12.5. **That is a wrong value where there is now an honest byte
+run**, and it is the one trade this repository rates worst.
+
+**The blocker is already recorded, from a different investigation.**
+26.253 says it in as many words -- "dispatch consumes; a text grammar
+needs it to keep" -- from an argv evaluation that hit the same wall:
+`variant body switch (first)` hands the positional arm `ello` where the
+message said `hello`. There is no peek. It called that "the single blocker
+for option grammars, and for text protocols generally", and this is a
+second, independent instance: **a construct with one asker, blocked by a
+missing feature nobody connected to it.**
+
+**`before` is the shape of the answer and does not reach this.** It exists
+because a delimiter can belong to neither side, which is exactly a
+discriminant's problem one construct along -- and 8.6.1 solved it for
+delimiters only. A non-consuming dispatch is its own decision record and
+not one to write while converting a schema.
+
+**What the conversion produced instead**: the measurement above, in
+`json.situ` where the next reader meets it, and two compiler crashes found
+while probing for a way round.
+
+**`at` was the way round, and it crashes on anything it cannot resolve.**
+An `at` expression reaches the backends as SOURCE TEXT -- `_located_source`
+renders it and no solver evaluates it -- so the first thing to look at the
+names was a backend rewriting them, and one it did not know raised
+`UnknownName` as a traceback. `u8 b[4] at nope` crashed the compiler. So
+did `at offset(a)`, past the scope check that fixes the first, because
+`invariant.paths_in` folds a call's ARGUMENTS into its result and drops
+the callee -- so `offset(a)` looked like `a`, which is in scope. Both are
+diagnostics now.
+
+The hole was invisible for the reason these usually are: **the good
+diagnostic already existed and `at` never reached it.** A size expression
+in the same schema is refused with "`x` is not in scope here", by the
+solver, which an `at` expression is never handed to.
+
+**And writing the second check shadowed a helper.** `_calls_in` already
+exists in that module, returning Call NODES; a second one returning names
+took its place and three invariant tests went red saying a `str` has no
+`.name`. The type checker saw nothing -- both return a list -- and the
+tests did. Worth the sentence because the mistake is invited by a
+well-named module-level helper doing an obvious thing.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -180,6 +180,31 @@ struct text {
 // RFC 8259 section 2's four bytes, so `{"a": 1\n}` frames correctly AND its
 // number reads back without the newline. The signature says which bytes:
 // `trim=20090d0a` on this member, `trim=2009` on HTTP's header value.
+//
+// AND IT CANNOT BE A `scaled` NUMBER, which is the thing to say plainly
+// because 0056 built that construct and this is its only asker.
+//
+// `rest` is not a number. The variant above switches on `kind`, and a
+// discriminant is a FIELD -- it occupies its byte -- so the arm begins
+// after it. Measured rather than reasoned:
+//
+//     {"a":12.5}    the `number` struct sees    2.5
+//
+// The `1` was spent selecting the arm. A `scaled i64` here would parse
+// what it was given and report 25 and -1, confidently, for a document
+// whose number is 12.5 -- a wrong value where there is now an honest byte
+// run, which is the trade this repository rates worst.
+//
+// The blocker is not this construct's and is already written down: 26.253
+// records "dispatch consumes; a text grammar needs it to keep", from an
+// argv evaluation that hit the same wall -- `variant body switch (first)`
+// hands the positional arm `ello` where the message said `hello`. There
+// is no peek. `before` solved exactly this shape for delimiters, where the
+// byte belongs to neither side; a discriminant has the same problem and no
+// answer yet.
+//
+// So this member stays a byte run, and the reason is a language question
+// rather than a gap in the schema -- which is what this file is for.
 struct number {
 	u8  rest[] before ',' | ']' | '}' [trim];
 }
