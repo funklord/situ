@@ -1,6 +1,7 @@
 # 0056: a text number with a point and an exponent
 
-Status: accepted 2026-09-11; built in all four backends and the walker
+Status: accepted 2026-09-11; built in all four backends and the walker;
+amended 2026-09-12 -- json's `number` is a `scaled i64` now (26.339)
 Date: 2026-09-11
 Phase: raised by the copyright holder, from json's `number`
 
@@ -152,23 +153,30 @@ exponent cannot be drawn at all. The control is a sabotage aimed at the
 fraction alone, which leaves every plain integer right and only `12.5`
 wrong; the differential goes red on it.
 
-**Its only asker cannot use it, and that is a fact about a different
-missing feature.** json's `number` is the schema this record was written
-from, and `number.rest` is not a number: `value` switches on `kind`, a
-discriminant occupies its byte, and the arm begins after it. `{"a":12.5}`
-hands the `number` struct `2.5`. A `scaled i64` there would report
-`(25, -1)` confidently for a document whose number is 12.5 -- a wrong
-value where there is now an honest byte run.
+~~**Its only asker cannot use it, and that is a fact about a different
+missing feature.**~~ **Amended 2026-09-12 (26.339): json uses it.** What
+follows is why it could not, kept because it is the measurement.
+
+json's `number` is the schema this record was written from, and
+`number.rest` was not a number: `value` switches on `kind`, a
+discriminant occupied its byte, and the arm began after it. `{"a":12.5}`
+handed the `number` struct `2.5`. A `scaled i64` there would have
+reported `(25, -1)` confidently for a document whose number is 12.5 -- a
+wrong value where there was an honest byte run.
 
 26.253 recorded the blocker, from an argv evaluation: "dispatch
 consumes; a text grammar needs it to keep". `before` was named there as
 the shape of the answer, and **0057 is that answer** -- `peek` being
-`before` for dispatch. The LANGUAGE obstacle is gone as of 2026-09-12 and
-json still does not use this construct: converting it needs the walker to
-validate a variant's arm under a permissive `default:`, which C does and
-the walk does not. 26.337 has the measurements. So this record still
-ships with a corpus schema and no worked example, for a reason that has
-moved from the language to a reader.
+`before` for dispatch. The language obstacle went on 2026-09-12 and the
+conversion still waited on the WALKER, three faults deep (26.337): a
+peeked member's span, a permissive `default:` the walk never validated
+(26.338), and a bounds policy that refused where four backends answered
+(26.339). With those closed, `example/json` carries the worked example:
+
+    {"a":12.5}      value  125   power -1
+    {"a":-3.25e2}   value -325   power  0
+
+against the generated C.
 
 **`[minimal]` is open and so is `canonical`.** A scaled number is
 NonCanonical today with no way to say otherwise, which is a real cost:

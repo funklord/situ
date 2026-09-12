@@ -6,8 +6,9 @@
 # the extent of each of these equals its own length, and that is what a run
 # over them depends on.
 
-# A string. The value's own byte is the opening quote and `text` holds what
-# follows, to the closing one.
+# A string. The opening quote is the discriminant AND the arm's first byte,
+# since `peek` hands it back (0057) -- `text.open` is that quote and
+# `text.chars` runs from after it to the closing one.
 value string 22 68 69 22
 	kind = 34
 
@@ -33,7 +34,8 @@ value array 5B 22 78 22 2C 22 79 22 5D
 value mixed 7B 22 61 22 3A 5B 22 62 22 2C 7B 22 63 22 3A 22 64 22 7D 5D 7D
 	kind = 123
 
-# The three literals. Each is its first byte plus a pinned tail, which is the
+# The three literals. Each is a pinned WORD -- `[must_eq = "true"]`, not
+# `[must_eq = "rue"]` -- since the discriminant is not spent, which is the
 # one place this schema can say that a value beginning `t` and not spelling
 # `true` is malformed.
 value yes 74 72 75 65
@@ -60,9 +62,10 @@ value two_numbers 7B 22 61 22 3A 31 32 2C 22 62 22 3A 33 7D
 value number_array 5B 31 2C 32 2C 33 30 5D
 	kind = 91
 
-# A number is whatever the bytes between the delimiters are, so the exponent
-# and the sign cost nothing extra -- which is the point of framing rather
-# than parsing.
+# A number is read as a significand and a power of ten now (0056), and the
+# whole of it: the `-` is the discriminant and `peek` leaves it in, so
+# `{"a":-1.5e3}` reads -15 and 2 rather than a `1.5e3` with its sign spent
+# on the dispatch. Measured against the generated C.
 value scientific 2D 31 2E 35 65 33
 	kind = 45
 

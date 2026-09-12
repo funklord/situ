@@ -26947,10 +26947,8 @@ json's conversion reached it:
   one.
 
 **So json's conversion was blocked on the walker gaining what C has.**
-Two of the three are fixed now (26.338), and what remains is the third:
-for a truncated frame the walk refuses an offset past the limit where C
-clamps and hands back a zero-length view. The schema is unchanged, the
-language obstacle is gone, and the list is one item long.
+Two of the three are fixed now (26.338), and the third is 26.339, which
+turned out to be two rules rather than one. json is converted.
 
 ### 26.338 The walker validates the arm a variant selects
 
@@ -26999,11 +26997,150 @@ the commit rather than after.
 
 **json is still not converted, and now for exactly one reason.** 26.337
 named three; the first two are fixed. What is left is that for a
-truncated frame the walk refuses an offset past the limit --
-`the frame does not reach this member` -- where C clamps and hands back a
-zero-length view, so `member.held` reads `ok=0` against C's `ok=1
-extent=0`. That is a bounds-policy difference between two readers and not
-a variant question; it is next.
+truncated frame the walk answers `ok=0` for `member.held` where C answers
+`ok=1 extent=0`. That is a bounds-policy difference between two readers
+and not a variant question; it is next, and 26.339 has it.
+
+### 26.339 The bounds policy: two rules, and json converted
+
+**The walkers disagreed with the four backends about a short frame, and
+the one symptom had two causes.** The symptom was json's `member.held`
+reading `ok=0 extent=0` against every backend's `ok=1 extent=0`, on a
+buffer the seeded differential draws every run. Chasing it found two
+separate places where a MEASUREMENT refused rather than answering, which
+is the thing this repository decided against long ago and had implemented
+in four readers out of six.
+
+**First: an offset chain must saturate at the frame.** C's generated
+offsets go through `situ_advance_u32(offset, term, view.limit)`, which is
+`at + min(by, limit - at)`, and 26.27 argues it -- a term is a length the
+message chose, so `offset + by` running past a short frame is a pointer
+nothing downstream can check. Both walkers summed with no cap. Measured
+on a deliberately overshooting schema, `u8 key[] until "," ; u8 one; u8
+two; inner held` over 29 bytes with no comma:
+
+    generated C     0  29  29  29
+    walkers, was    0  29  30  31
+    walkers, now    0  29  29  29
+
+`situ_align_up_u32` clamps for the same reason, so `pad_to` clamps too.
+
+**Second: a discriminant the frame does not reach reads as ZERO.** This
+is the one the first rule did not fix, and it is the same sentence one
+step earlier. The backends' generated getter carries the guard with the
+reason written into it -- "Its offset is a sum of lengths the message
+chose, and the frame does not reach it. `validate` reports such a
+message" -- so the switch runs on 0 and the default arm answers. Both
+walkers refused, and the refusal did not stay local: `struct_extent` sums
+`size_bits`, so ONE unreachable discriminant made the whole enclosing
+struct unmeasurable.
+
+`_variant_bits` already said, two lines below the read, that a
+discriminant naming no arm is `validate`'s business and not an extent's.
+Only the reachable half of that sentence had been written.
+
+**What makes this an evidence entry and not a bug entry is why it stood
+so long.** The two walkers agreed with each other perfectly throughout --
+they are one implementation in two languages, and
+`test_it_agrees_with_the_python_walker` compares them. Agreement between
+two readings of one design is one witness, and the test that could see it
+is `test_the_walker_agrees_with_the_compiled_backends`, which is the only
+one asking a reader that was not written from the same notes.
+
+So both new tests pin the BACKENDS' numbers rather than the walkers'
+agreement, and both were sabotaged in each half separately and watched
+failing through their own assertion:
+
+    test_they_agree_that_an_offset_stops_at_a_short_frame
+    test_they_agree_that_an_unreached_discriminant_reads_as_zero
+
+**And json is converted.** `peek u8 kind skip`, the three container arms
+grew the byte they are chosen by, the literals became whole words, and
+`number` is `scaled i64 value before ',' | ']' | '}' [trim]`. Measured
+against the generated C:
+
+    {"a":12.5}      value  125   power -1
+    {"a":-3.25e2}   value -325   power  0
+    {"a":12}        value   12   power  0
+    { "a" : 1 }     value    1   power  0   extent 11 of 11
+
+The first line is the one that matters: 26.333 recorded that same
+document reading `2.5` because dispatch consumed the `1`. Every extent
+equals the document's length, which is the check a short measurement
+would fail silently.
+
+**And converting it found the wire signature silent about both new
+constructs**, which is a defect in a COMMITTED CONTRACT and the reason
+this paragraph is here rather than in a commit message. `situc wire` is
+what a peer implements from, and it recorded neither:
+
+- **`peek` was invisible**, so json's signature named the discriminant
+  and said nothing about its seven arms beginning AT it rather than
+  after it. A peer implementing from that file places every arm one
+  member late -- a wrong layout, not a narrower one. The offsets in the
+  file were already right (`@0x0000` twice); nothing said why, so nothing
+  survived being read by somebody who had not seen the schema.
+- **`scaled` was invisible**, so a `scaled i64` and a `decimal i64`
+  rendered identically as `radix=10`. `12.5` is a number under one and
+  malformed under the other, and what comes back is a pair rather than an
+  integer -- two members that parse differently with one signature.
+
+Both go in `INTERPRETATION`, so dropping either is `breaking` rather
+than a relaxed constraint, which is what 0041 asks: the artifacts record
+exactly what is enforced, and these are enforced by the placement rule
+and the parser respectively.
+
+**The test for the first one passed with the fact deleted**, which is
+worth more than the fix. `assert "breaking" in kinds(...)` is satisfied
+by the offset shift that dropping `peek` also causes, so the assertion
+was carried by a second finding it was not about. It asserts the detail
+now -- `kind: peek -> nothing` -- and fails through its own check.
+
+**And the dissector was spending the peeked byte**, which is the seventh
+reader with the walkers' own fault. It steps `at` over each member and
+stepped over a peeked one too, so everything after it landed a byte late.
+
+Invisible in `test/schema/edges.situ`: `kinded`'s variant assigns `at`
+outright a line later and overwrote the mistake, so the corpus case built
+for 0057 could not show it. Visible in json, whose discriminant is one the
+dissector cannot read -- the step was all that was left, and `value`
+reported spanning one byte more than it did. **A corpus schema that
+exercises a construct is not a corpus schema that exercises every reader
+of it**, and the one that found this was the real format.
+
+The test pins `consumed` rather than a row, because the fault is in what
+the struct says it spanned and not in where any field was drawn. The
+emitter's OTHER branch carries the same rule and appears to be
+unobservable -- a peeked member is always a discriminant, a variant either
+follows and assigns `at` or cannot read it, and a static-offset
+discriminant is always readable -- so sabotaging it leaves the suite
+green. That is recorded at the branch and in the test rather than left for
+somebody to rediscover by deleting it.
+
+**And json's golden vectors were being run by nobody**, which is how
+checking them by hand came to be part of converting the schema.
+`test/generated/Makefile` named nine schemas in `VECTOR_SCHEMAS` and
+fourteen have a `.vectors` file beside them, so `json`, `packet`, `tcp`,
+`tiff` and `udp` held **32 vectors that nothing had ever executed**. A
+corpus file nobody runs is indistinguishable from one that passes, and
+this one was the worked example 0056 and 0057 point at.
+
+The list is derived from the filesystem now, for the reason the same file
+already gives for `RELATE_NAMES` twenty lines down: a hand-kept list is a
+second answer to a question the tree already answers, and the drift is
+silent. All five built and passed on the first run -- they had simply
+never been asked -- and a deliberately wrong `kind` in
+`example/json/json.vectors` was watched failing, because thirty-two
+vectors that pass and cannot fail would be the same nothing in a louder
+voice.
+
+The map moves the way 26.337 predicted: `value` from `size=2..` to
+`size=1..`, which is a correction rather than a loss -- `0` is a one-byte
+JSON document -- and `number` to `repr=TextConverted`,
+`canonical=NonCanonical`, which is what parsing costs. `canonical` is
+refused for `scaled` and `[minimal]` cannot buy it back: `10`, `1e1` and
+`1.0e1` are one value with three spellings and there is no shortest one
+to demand. 0056's only asker now has it.
 
 ### 26.330 Text encoding, scoped and named by the data
 

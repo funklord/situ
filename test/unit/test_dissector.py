@@ -1427,17 +1427,26 @@ def test_a_located_member_is_read_where_the_data_says() -> None:
 DELIMITER_VECTORS = (
 	# `[escape = "\\"]`: the byte after the escape is content, whatever it
 	# is, so the string ends at its own closing quote and not two bytes in.
-	("example/json/json.situ", "text", b'say \\"hi\\"",rest',
-	 {"text.chars": 10}),
+	#
+	# The packet OPENS with the quote since 0057: `text` is a variant arm
+	# and a peeked discriminant hands the arm the byte it was chosen by, so
+	# `text.open` is a member now and the string no longer begins after it.
+	# Re-measured against the C backend rather than adjusted by one --
+	# `situ_text_chars_len` still reads 10, which is the check that the
+	# escape rule survived the conversion rather than merely re-agreeing.
+	("example/json/json.situ", "text", b'"say \\"hi\\"",rest',
+	 {"text.open": 1, "text.chars": 10}),
 	# `before ',' | ']' | '}'`: three alternatives, and the delimiter
 	# belongs to the member that FOLLOWS -- so it is found whichever it is,
-	# and not consumed.
-	("example/json/json.situ", "number", b"12,x", {"number.rest": 2}),
-	("example/json/json.situ", "number", b"12]x", {"number.rest": 2}),
-	("example/json/json.situ", "number", b"12}x", {"number.rest": 2}),
+	# and not consumed. `number.value` was `number.rest` and a byte run;
+	# it is a `scaled i64` now (0056), and the FRAMING is unchanged, which
+	# is what these three say.
+	("example/json/json.situ", "number", b"12,x", {"number.value": 2}),
+	("example/json/json.situ", "number", b"12]x", {"number.value": 2}),
+	("example/json/json.situ", "number", b"12}x", {"number.value": 2}),
 	# `[trim]` against the file's own declared whitespace, which for JSON is
 	# four bytes rather than HTTP's two.
-	("example/json/json.situ", "number", b"1 \n,x", {"number.rest": 1}),
+	("example/json/json.situ", "number", b"1 \n,x", {"number.value": 1}),
 	# `until "\r\n" | '\n'`: a header line ending in a bare newline, which
 	# scanning only the first alternative ran straight through.
 	("example/http/http.situ", "header_field", b"X: v\nnext: w\r\n",
@@ -1490,3 +1499,78 @@ def test_the_delimiter_rules_are_dissected(tmp_path: Path, path: str,
 			assert read[member] == expected, (
 				f"{member} on {packet!r}: the walker reads {read[member]}, "
 				f"expected {expected}")
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+def test_a_peeked_discriminant_is_shown_and_not_spent(tmp_path: Path) -> None:
+	"""`peek` shows the byte and leaves it for the arm (0057).
+
+	A dissector steps `at` over each member, and a peeked one contributes
+	nothing to the struct's span -- its lead is spent and its own byte is
+	not, because the arm the variant selects begins on it. Stepping anyway
+	put every member after it a byte late.
+
+	`example/json`'s `value` is where that shows and `test/schema/edges`'s
+	`kinded` is where it does not, which is the whole reason this test
+	exists. A variant assigns `at` outright, so `kinded` overwrote the extra
+	byte and looked correct; json's discriminant is one the dissector cannot
+	read, so the step was all that remained.
+
+	`consumed` and not a row, because the fault is in what the struct says
+	it spanned rather than in where any field was drawn. Three bytes of
+	whitespace and then `{`: the lead is the member's own and IS spent, so
+	3 is the answer and 4 was the bug.
+	"""
+	consumed, rows = dissect(
+		tmp_path, ROOT / "example/json/json.situ", "value", b'   {"a":1}')
+
+	assert ("value.kind", 3, 1, "123") in [
+		(field, at, length, value) for field, at, length, value in rows]
+	assert consumed == 3
+
+
+PEEKED_FIXED = """target buffer;
+endian big;
+
+struct wide { u8  a; u8  b; u8  c; }
+
+struct chosen {
+	peek u8  kind;
+	variant held switch (kind) {
+		case 0x01: wide  as_wide;
+		default:   wide  as_other;
+	}
+	u8  after;
+}
+"""
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua")
+def test_a_member_after_a_peeked_one_is_placed_on_the_arm_s_bytes(
+		tmp_path: Path) -> None:
+	"""A peeked discriminant costs the struct nothing, so `after` sits at 3
+	-- one past a three-byte arm that begins ON the discriminant, not after
+	it. Spending the byte would put it at 4.
+
+	**What this does NOT cover, deliberately recorded.** The emitter has two
+	branches and this reaches neither's `at` assignment: `chosen.after` is
+	drawn at a STATIC span the layout computed, and the peeked member's own
+	`at = first` is overwritten a line later by the variant, which assigns
+	`at` outright. Sabotaging that assignment leaves this green.
+
+	That branch appears to be unobservable rather than untested. A peeked
+	member is always a discriminant, and a variant either follows it and
+	overwrites `at`, or cannot read it -- and a discriminant at a static
+	offset is always readable. So the reachable case is the dynamic one,
+	which `test_a_peeked_discriminant_is_shown_and_not_spent` holds through
+	`consumed`. Both branches carry the rule because they should agree; only
+	one of them can be watched failing.
+	"""
+	schema = tmp_path / "chosen.situ"
+	schema.write_text(PEEKED_FIXED, encoding="ascii")
+
+	_, rows = dissect(tmp_path, schema, "chosen", b"\x01\x02\x03\x04")
+	where = {field: at for field, at, _, _ in rows}
+
+	assert where.get("chosen.kind") == 0
+	assert where.get("chosen.after") == 3

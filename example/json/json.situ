@@ -38,9 +38,16 @@ encoding ascii | utf8 | latin1;
 whitespace ' ' | '\t' | '\r' | '\n';
 
 // The first byte says which kind of value this is, and it belongs to the
-// value: a variant switches on a *field*, and a field is bytes. So the
-// discriminant is the opening brace, the opening bracket, the opening quote,
-// the `t` of `true`. Each arm holds what comes after it.
+// ARM: `peek` reads it and does not spend it (0057), so the arm begins where
+// the discriminant began and owns the byte it was chosen by. That is why
+// `object`, `array` and `text` each open with their own brace, bracket or
+// quote, why the literals are `true` rather than `rue`, and why `number`
+// can be a number at all.
+//
+// It was `u8 kind skip` until 0057 existed, and every arm below started one
+// byte late. The cost was not cosmetic and is recorded under `number`: the
+// `number` struct was handed `2.5` of `{"a":12.5}`, so a `scaled i64` there
+// would have answered 25 and -1 for a document whose number is 12.5.
 //
 // Written as characters and not as numbers, which is the difference between
 // a schema that asserts an agreement and one that checks it. `0x7B` says
@@ -58,7 +65,7 @@ whitespace ' ' | '\t' | '\r' | '\n';
 // `default:` is the number, and that is the arm this file waited two
 // language changes for. See `number` below.
 struct value [depth = 64] {
-	u8  kind  skip;
+	peek u8  kind  skip;
 	variant body switch (kind) {
 		case '{':  object   as_object;
 		case '[':  array    as_array;
@@ -78,7 +85,11 @@ struct value [depth = 64] {
 // a comma while terminating the object with a brace. A `while` asks about the
 // element just read, so the member that ends in `}` is the one that ends the
 // run -- and it is part of it, which is what makes the brace accounted for.
+//
+// `open` is the `{` the variant chose this arm by, handed back by `peek`
+// (0057). `array` has the same member for the same reason.
 struct object [depth = 64] {
+	u8      open;
 	member  entries[] while (sep == ',');
 }
 
@@ -104,9 +115,18 @@ struct member [depth = 64] {
 // `kind`, which skips, so whitespace before a value is already accounted for
 // by the value. A lead there as well would be a second answer to one
 // question, and the run would walk into the middle of itself.
+//
+// A peeked member keeps its lead, which is the half of 0057 worth stating
+// here rather than leaving to be inferred. `peek` takes the member's OWN
+// byte out of what the struct spends and leaves the whitespace in front of
+// it in -- so `kind` still eats the run before a value and hands on only
+// the discriminant. Taking both out would have left the lead for the arm to
+// skip, and no arm here skips: `{` is not whitespace. Measured --
+// `{ "a" : 1 }` is eleven bytes and this schema frames eleven.
 
 // An array is the same shape with no keys.
 struct array [depth = 64] {
+	u8       open;
 	element  entries[] while (sep == ',');
 }
 
@@ -115,7 +135,12 @@ struct element [depth = 64] {
 	u8     sep  skip;
 }
 
-// A string, from after its opening quote to its closing one.
+// A string: its opening quote, its content, and its closing one.
+//
+// `open` is the quote the variant chose this arm by. It is a member rather
+// than an absence because `peek` handed it back, and `chars` scans from
+// after it -- so the extent of an `as_string` arm is the whole string and
+// not the string minus its first byte.
 //
 // `[escape = "\\"]` is what makes that true of real JSON. Without it a `\"`
 // inside the content ends the scan, and this file said so for a while --
@@ -143,13 +168,11 @@ struct element [depth = 64] {
 // does not decode it -- what an escape MEANS is the reader's, and what this
 // says is only where the string ends.
 struct text {
+	u8  open;
 	u8  chars[]  until "\"" [escape = "\\"];
 }
 
-// The three literals. Each is its first byte -- the discriminant -- plus the
-// rest, pinned, because a value that begins with `t` and is not `true` is
-// malformed and this is the one place in the file where situ can say so.
-// A number, from after its first digit to whatever ends it.
+// A number, from its first byte to whatever ends it.
 //
 // `before` and not `until`, and that distinction is the whole of why this
 // arm exists. A JSON number ends at a comma, a bracket or a brace, and the
@@ -181,37 +204,43 @@ struct text {
 // number reads back without the newline. The signature says which bytes:
 // `trim=20090d0a` on this member, `trim=2009` on HTTP's header value.
 //
-// AND IT CANNOT BE A `scaled` NUMBER, which is the thing to say plainly
-// because 0056 built that construct and this is its only asker.
+// AND IT IS A `scaled` NUMBER, which is 0056's construct meeting its only
+// asker. The two arrived a language change apart and the second is what
+// made the first usable here.
 //
-// `rest` is not a number. The variant above switches on `kind`, and a
-// discriminant is a FIELD -- it occupies its byte -- so the arm begins
-// after it. Measured rather than reasoned:
+// It was a byte run for as long as dispatch consumed. The variant switches
+// on `kind`, a discriminant was a FIELD, and a field occupies its byte, so
+// the arm began one byte late -- measured rather than reasoned, and the
+// measurement is why this stayed prose for two commits:
 //
-//     {"a":12.5}    the `number` struct sees    2.5
+//     {"a":12.5}    the `number` struct saw    2.5     before `peek`
+//     {"a":12.5}    value 125  power -1                now
+//     {"a":-3.25e2} value -325 power 0                 now
+//     {"a":12}      value 12   power 0                 now
 //
-// The `1` was spent selecting the arm. A `scaled i64` here would parse
-// what it was given and report 25 and -1, confidently, for a document
-// whose number is 12.5 -- a wrong value where there is now an honest byte
-// run, which is the trade this repository rates worst.
+// A `scaled i64` on the old spelling would have reported 25 and -1 for a
+// document whose number is 12.5 -- confidently, and wrongly, which is the
+// trade this repository rates worst. 26.253 had written the blocker down as
+// "dispatch consumes; a text grammar needs it to keep", from an argv
+// evaluation that hit the same wall; `peek` is the answer and 0057 is the
+// record.
 //
-// The blocker is not this construct's and is already written down: 26.253
-// records "dispatch consumes; a text grammar needs it to keep", from an
-// argv evaluation that hit the same wall -- `variant body switch (first)`
-// hands the positional arm `ello` where the message said `hello`. There
-// is no peek. `before` solved exactly this shape for delimiters, where the
-// byte belongs to neither side; a discriminant has the same problem and no
-// answer yet.
+// An exact decimal and never a float: a significand and a power of ten, so
+// `-3.25e2` reads back as -325 and 0 rather than as a double that is nearly
+// -325. What situ does not do is DECIDE -- a caller that wants a `double`
+// multiplies, and one that wants the money keeps the pair.
 //
-// So this member stays a byte run, and the reason is a language question
-// rather than a gap in the schema -- which is what this file is for.
+// `canonical` is refused here, and the map says so. `10`, `1e1` and `1.0e1`
+// are one value with three spellings, and `[minimal]` cannot buy it back:
+// on a byte run that attribute means "no leading zeroes", and on a number
+// with an exponent there is no single shortest spelling to demand.
 struct number {
-	u8  rest[] before ',' | ']' | '}' [trim];
+	scaled i64  value  before ',' | ']' | '}' [trim];
 }
 
-struct yes     { u8  rest[3]  [must_eq = "rue"]; }
-struct no      { u8  rest[4]  [must_eq = "alse"]; }
-struct nothing { u8  rest[3]  [must_eq = "ull"]; }
+struct yes     { u8  word[4]  [must_eq = "true"]; }
+struct no      { u8  word[5]  [must_eq = "false"]; }
+struct nothing { u8  word[4]  [must_eq = "null"]; }
 
 // ---------------------------------------------------------------------------
 // The bill, and what is left of it is one thing that is not a gap.
@@ -243,6 +272,15 @@ struct nothing { u8  rest[3]  [must_eq = "ull"]; }
 // the schema cannot meet. Permitting leading whitespace and knowing where the
 // first byte is are the same question asked twice, and JSON's answer is the
 // first.
+//
+// AND A NUMBER IS A NUMBER NOW, which was the last language question this
+// file was holding open. `peek` gives the arm its discriminant back, so
+// `number` reads a significand and a power of ten instead of a span of
+// bytes -- the entry above it has the measurement. What it cost is that
+// every OTHER arm had to grow the byte it was chosen by, which is the
+// better shape anyway: `true` is pinned as a word rather than as `rue`, and
+// an `as_string` arm's extent is the whole string rather than the string
+// minus its quote.
 //
 // AND ESCAPES ARE FRAMED, which was the other line of this bill and was
 // never a language boundary: `[escape = "\\"]` on `text.chars` is the whole

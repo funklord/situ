@@ -1,6 +1,7 @@
 # 0057: a dispatch that does not consume what it reads
 
-Status: accepted 2026-09-12; front end built
+Status: accepted 2026-09-12; front end built;
+amended 2026-09-12 -- `example/json` is the worked example (26.339)
 Date: 2026-09-12
 Phase: raised by the copyright holder, from two schemas in this tree
 
@@ -119,6 +120,18 @@ silence, so the case can be admitted later by deleting a check.
 and 0055's and 0056's experience of it: a construct with no corpus schema
 poses no case to the four-way differential.
 
-**json's `number` becomes a `scaled` number in the same change or the one
-after it**, which is the whole point: 0056 shipped without a worked
-example and this is what supplies one.
+~~**json's `number` becomes a `scaled` number in the same change or the
+one after it**~~, which is the whole point: 0056 shipped without a worked
+example and this is what supplies one. **Done 2026-09-12 (26.339).** It
+was the change after next: converting json found three faults in the
+walker before the schema could land, and the last two are 26.338 and
+26.339.
+
+**A peeked discriminant gives its byte to EVERY arm**, which is the
+consequence nobody had costed and json is where it showed. Seven arms:
+three grew a member to own their brace, bracket or quote, and the three
+literals became `[must_eq = "true"]` where they had carried
+`[must_eq = "rue"]` precisely because the `t` was eaten. That half is an
+improvement and is worth expecting rather than discovering -- a format
+converting to `peek` rewrites every arm, not only the one that needed
+it.

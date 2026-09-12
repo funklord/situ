@@ -18,8 +18,9 @@
 endian big
 target buffer
 
-struct array size=1..
-  @0x0000   1..       element    entries  while=sep==','
+struct array size=2..
+  @0x0000   1         u8         open
+  @0x0001   1..       element    entries  while=sep==','
 
 struct element size=1..
   @0x0000   0..       value      held
@@ -32,23 +33,25 @@ struct member size=4..
   ~         0..       value      held
   ~         1         u8         sep  skip=20090d0a
 
-struct no size=4
-  @0x0000   4         u8         rest  big must_eq="alse"
+struct no size=5
+  @0x0000   5         u8         word  big must_eq="false"
 
-struct nothing size=3
-  @0x0000   3         u8         rest  big must_eq="ull"
+struct nothing size=4
+  @0x0000   4         u8         word  big must_eq="null"
 
 struct number size=1..
-  @0x0000   before:2c|5d|7d u8         rest  trim=20090d0a
+  @0x0000   before:2c|5d|7d i64        value  radix=10 scaled trim=20090d0a
 
-struct object size=4..
-  @0x0000   4..       member     entries  big while=sep==','
+struct object size=5..
+  @0x0000   1         u8         open
+  @0x0001   4..       member     entries  big while=sep==','
 
-struct text size=1..
-  @0x0000   until:22  u8         chars  escape=0x5c
+struct text size=2..
+  @0x0000   1         u8         open
+  @0x0001   until:22  u8         chars  escape=0x5c
 
-struct value size=2..
-  ~         1         u8         kind  skip=20090d0a
+struct value size=1..
+  ~         1         u8         kind  peek skip=20090d0a
   ~         1..       variant    body
   body switch: kind
   body case 34: as_string text
@@ -59,5 +62,5 @@ struct value size=2..
   body case 123: as_object object
   body case default: as_number number
 
-struct yes size=3
-  @0x0000   3         u8         rest  big must_eq="rue"
+struct yes size=4
+  @0x0000   4         u8         word  big must_eq="true"

@@ -1048,14 +1048,29 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			f"\tif tvb:len() >= at + {width} then",
 			f"\t\tsubtree:{add}({field}, tvb(at, {width}))",
 			"\tend",
-			f"\tat = at + {width}",
+			# A peeked member is SHOWN and not spent (0057): its lead is
+			# gone -- `seek` took it -- and its own byte belongs to whatever
+			# comes next, which is the arm a variant selects. Advancing here
+			# put every member after it one byte late. Invisible in
+			# `edges.kinded`, whose variant assigns `at` outright and
+			# overwrote the mistake; visible in `example/json`, where the
+			# discriminant is one this dissector cannot read, so the step
+			# was all that was left and `value` reported a byte too many.
+			*([] if placement.peek else [f"\tat = at + {width}"]),
 		]
 
 	first, count = span
 	return [
 		*note,
 		f"\tsubtree:{add}({field}, tvb({first}, {count}))",
-		f"\tat = {first + count}",
+		# `peek` for the reason above. This branch appears to be
+		# unobservable rather than merely untested: a peeked member is
+		# always a discriminant, a variant either follows and assigns `at`
+		# outright or cannot read it, and a discriminant at a static offset
+		# is always readable. Sabotaging it leaves the suite green. Carried
+		# anyway, because two branches of one rule that disagree are how the
+		# reachable one gets "fixed" back to the wrong answer later.
+		f"\tat = {first if placement.peek else first + count}",
 	]
 
 

@@ -78,11 +78,26 @@ GEN_OBJS	:= $(GEN_NAMES:%=$(GEN_DIR)/%.o)
 # Generated golden-vector suites and fuzz harnesses, built alongside the
 # hand-written tests. The vector suites run under cmocka; the fuzz harness is
 # built standalone so a harness nobody can compile cannot go unnoticed.
+# Where the tree is, needed here rather than two hundred lines down because
+# VECTOR_SCHEMAS asks the filesystem a question and `:=` answers it now.
+REPO_ROOT	:= $(abspath ../..)
+
 # Schemas with golden vectors beside them, in the `gen-tests` format. This was
 # `header` alone, and one schema is a sample of the constructs that schema
 # happens to have -- the argument FUZZ_SCHEMAS above already makes. `bmp` is
-# here because its vectors are two files ImageMagick wrote (26.35).
-VECTOR_SCHEMAS	:= header bmp arp ntp rtc ble netlink cpio sqlite
+# among them because its vectors are two files ImageMagick wrote (26.35).
+#
+# DERIVED by asking which schemas have a `.vectors` beside them, for
+# RELATE_NAMES' reason below: a hand-kept list is a second answer to a
+# question the filesystem already answers, and the two drift in the
+# direction nobody notices -- a corpus file that is never run looks exactly
+# like one that passes. Measured when this became a wildcard: the list named
+# nine and fourteen exist, so `json`, `packet`, `tcp`, `tiff` and `udp` had
+# 32 vectors between them that nothing had ever executed. All five built and
+# passed on the first run, and a deliberately wrong expectation in
+# `example/json/json.vectors` was watched failing, so they discriminate.
+VECTOR_SCHEMAS	:= $(sort $(notdir $(basename \
+		   $(wildcard $(SCHEMAS:%.situ=$(REPO_ROOT)/%.vectors)))))
 VECTOR_BINS	:= $(VECTOR_SCHEMAS:%=$(BUILD_DIR)/%_vectors)
 
 # Fuzz harnesses, for every schema. This was `header` alone once: the harness
@@ -178,8 +193,6 @@ $$(GEN_DIR)/$(notdir $(basename $(1))).h $$(GEN_DIR)/$(notdir $(basename $(1))).
 	cd '$$(REPO_ROOT)' && $$(SITUC) build '$(1)' --layer converse \
 		--out '$$(abspath $$(GEN_DIR))'
 endef
-
-REPO_ROOT	:= $(abspath ../..)
 
 # Generated code depends on the generator, which make cannot see from the
 # schema alone. Without this a codegen change leaves the whole suite running

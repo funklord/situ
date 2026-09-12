@@ -1552,11 +1552,13 @@ today and which is a written-down design.
   `peek u8 kind;` reads a discriminant at the cursor and contributes
   nothing to the struct's extent, so the arm the variant selects begins
   where the discriminant began and owns its byte. It is `before` for
-  dispatch. `example/json` is what it was built for -- a JSON number's
-  first character IS the byte that says it is a number, so the number arm
-  saw `2.5` of `12.5` -- and that schema has not adopted it yet, for a
-  reason recorded in `project.md` section 26.337 that is about the walker
-  rather than about this construct.
+  dispatch. `example/json` is what it was built for and now uses it: a
+  JSON number's first character IS the byte that says it is a number, so
+  the number arm saw `2.5` of `12.5` and its `number` could only be a byte
+  run. It is a `scaled i64` now, reading `{"a":12.5}` as 125 and -1. The
+  cost falls on every OTHER arm, which each grew a member to own the byte
+  it is chosen by -- so json's literals are `[must_eq = "true"]` where
+  they were `[must_eq = "rue"]`.
 
 **Proposed.**
 
