@@ -26766,14 +26766,13 @@ the date it was checked and each line was re-measured rather than recalled.
   defers on any struct holding one -- `btree_leaf_page` reports
   `validatable = False` today. Deferring is honest and is not the answer.
 
-**Measured while checking this register, and broader than it was filed
-as.** The dissector gives a DELIMITED text number `ProtoField.bytes` and a
-fixed-width one `ProtoField.string`. That is not a `scaled` gap: cpio's
-`ino` shows as `070701` and HTTP's status code shows as hex, and the split
-predates 0056 by a long way. An analyst reading a capture wants `200`.
-Filed here rather than fixed because the branch that decides it is the one
-0055 and 0056 both touched, and a third pass over it wants the whole
-question rather than another special case.
+~~**Measured while checking this register, and broader than it was filed
+as.**~~ **Closed 2026-09-12 by 26.340**, which took the third pass this
+asked for. The dissector gave a DELIMITED text number `ProtoField.bytes`
+and a fixed-width one `ProtoField.string`, so HTTP's status code showed as
+`323030` where an analyst wants `200`. It was not a `scaled` gap and the
+split predated 0056 by a long way: the exclusion was a leftover of the
+`hex u32 ino[8]` array fix rather than a claim about text.
 
 **Deliberately refused, with the reason recorded.**
 
@@ -27141,6 +27140,56 @@ JSON document -- and `number` to `repr=TextConverted`,
 refused for `scaled` and `[minimal]` cannot buy it back: `10`, `1e1` and
 `1.0e1` are one value with three spellings and there is no shortest one
 to demand. 0056's only asker now has it.
+
+### 26.340 What the dissector shows as characters, and where that stops
+
+**A delimited text number came out as hex, and the reason was a leftover
+rather than a decision.** `_field` picked `ProtoField.string` for a text
+number and excluded delimited ones with `and not placement.delimiters`.
+That clause was written for the `hex u32 ino[8]` array problem -- the
+bracket is a width and not a count -- and carried no claim about text at
+all, so HTTP's status code was declared `ProtoField.bytes` and shown as
+`323030`. 26.335 filed it and asked that a third pass settle the whole
+branch rather than add a third special case.
+
+**The rule, stated once: a member is shown as characters where the SCHEMA
+says its bytes spell the value in characters.** Two constructs say that.
+A text number -- `decimal`, `hex` or `scaled` -- is digits by 8.6.2,
+however it is framed, so there is no capture in which it is not. A token
+set's arms are keywords (0055). Nothing else says it.
+
+The body needed no change: `_delimited` already adds the scanned span, so
+the member was declared one type and drawn as another. Measured over the
+corpus, 597 field declarations, of which **7 moved from `bytes` to
+`string` and nothing else moved at all**.
+
+**Where it stops is the half worth writing down**, because the obvious
+next step is wrong. A delimited byte run in a text protocol usually IS
+text -- HTTP's header values and json's strings come out as hex -- but
+`delimiters` does not license it: `slip.frame.datagram` is delimited and
+carries an IP datagram. Measured: 39 delimited byte runs in the corpus
+and **not one carries an `[encoding]`**, so there is nothing to read yet.
+That is 26.330's question and this branch is not the place to guess at
+it.
+
+**The test asserts a PARTITION and not an example, which is the part that
+generalises.** Every declaration in the corpus, both directions: string
+if and only if the schema spells it in characters. A test by example
+would not have caught this, because every example anybody wrote was a
+fixed-width number -- the half that worked. Sabotaged three ways and
+each named the member it failed on: restoring the old exclusion gives
+`status_line.code is declared ProtoField.bytes and is spelled in
+characters`, and the two reverse sabotages catch `arp_packet
+.sender_hardware` and `request_line.method`.
+
+**And it asserts the DECLARATION rather than the rendering, because the
+harness cannot see the difference.** `test/lua/dissect.lua` prints a
+string field's bytes as hex on purpose -- that column is evidence a test
+compares rather than a display, and rendering the text broke the
+harness's own output parsing at the first byte over 0x7f. So the whole
+change is invisible to every test that reads the harness's output, which
+is the shape `evidence.md` calls a stand-in reproducing the half of a
+tool its author met. Reading the generated Lua is what can see it.
 
 ### 26.330 Text encoding, scoped and named by the data
 

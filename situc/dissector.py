@@ -439,25 +439,58 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 			and placement.array_count is None and not data_sized(placement):
 		return ""			# a nested struct: its own Proto dissects it
 
-	# Before the array branch, which it looks exactly like from here: the
-	# bracket of `hex u32 ino[8]` is a width in bytes and not a count, and
-	# reading it as a count declared a field of eight `u32`s -- thirty-two
-	# bytes for an eight-byte number, overlapping everything after it. Shown
-	# as a string, which is what the bytes are: an analyst reading a cpio
-	# header wants to see "070701".
-	if placement.radix is not None and not placement.delimiters:
+	# -- what is shown as CHARACTERS, and where that stops -----------------
+	#
+	# The rule is the schema's own say-so and nothing softer: a member is
+	# shown as text where the schema states that its bytes spell the value
+	# in characters. Two constructs say that and no others do.
+	#
+	# It is worth stating as a rule because it was twice arrived at as a
+	# special case -- once for `hex u32 ino[8]` and once for a token set --
+	# and the second did not notice that the first had excluded delimited
+	# members for a reason that had nothing to do with text.
+	#
+	# **A text number, however it is framed.** `decimal`, `hex` and
+	# `scaled` all say the bytes are digits (8.6.2), so there is no capture
+	# in which they are not. This branch also has to come before the array
+	# one, which it looks exactly like from here: the bracket of
+	# `hex u32 ino[8]` is a width in bytes and not a count, and reading it
+	# as a count declared a field of eight `u32`s -- thirty-two bytes for an
+	# eight-byte number, overlapping everything after it.
+	#
+	# `and not placement.delimiters` stood here until 26.340 and was a
+	# leftover of that array fix rather than a claim about text: a DELIMITED
+	# text number is digits by the same definition, and those came out as
+	# hex. HTTP's status code showed as `323030` where an analyst wants
+	# `200`. The body needed nothing -- `_delimited` already adds the
+	# scanned span -- so the member was declared one type and drawn as
+	# another.
+	#
+	# Measured over the corpus: 597 field declarations, of which 7 moved
+	# from `bytes` to `string` and nothing else moved at all. The rule
+	# swept exactly the members it names.
+	if placement.radix is not None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
 
-	# A token set has no scalar and the body adds the member anyway, which
-	# is the shape the varint and region branch below was written for: no
-	# field declared, `subtree:add(nil, ...)`, a Lua error at the first
-	# packet rather than a wrong display. Shown as a string for the reason
-	# the radix branch above gives -- an analyst reading an SMTP session
-	# wants to see `HELO`, not five byte values (0055).
+	# **A token set.** Its arms are keywords, so an analyst reading an SMTP
+	# session wants `HELO` and not five byte values (0055). It has no scalar
+	# either, and the body adds the member regardless -- the shape the
+	# varint and region branch below was written for: no field declared,
+	# `subtree:add(nil, ...)`, a Lua error at the first packet rather than a
+	# wrong display.
 	if placement.type_name in resolved.layout.env.token_sets:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
+
+	# **And it stops there, which is the half worth writing down.** The
+	# obvious next step is that a delimited byte run in a text protocol is
+	# text too -- HTTP's header values and json's strings are, and they
+	# come out as hex. `delimiters` does not license it: slip's `datagram`
+	# is delimited and carries an IP packet. Measured over the corpus, 39
+	# delimited byte runs and not one of them carries an `[encoding]`, so
+	# there is nothing here to read yet. That is 26.330's question, and
+	# this branch is not the place to guess at it.
 
 	if data_sized(placement) or placement.array_count is not None:
 		return (f"{_lua(struct.name)}_f.{_lua(name)} = "

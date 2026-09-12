@@ -34,7 +34,7 @@ import pytest
 from every_schema import SCHEMAS, ids
 from situc import pack as packer
 from situc.cli import analyse
-from situc.dissector import generate
+from situc.dissector import _local, generate
 from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
@@ -1574,3 +1574,57 @@ def test_a_member_after_a_peeked_one_is_placed_on_the_arm_s_bytes(
 
 	assert where.get("chosen.kind") == 0
 	assert where.get("chosen.after") == 3
+
+
+def test_a_value_spelled_in_characters_is_shown_as_one() -> None:
+	"""Which members get `ProtoField.string`, asserted as a PARTITION rather
+	than by example.
+
+	The rule is the schema's own say-so: a text number (`decimal`, `hex` or
+	`scaled` -- its bytes are digits by 8.6.2) and a token set (its arms are
+	keywords, 0055). Everything else is bytes, because nothing in the schema
+	says otherwise -- `slip.frame.datagram` is delimited and carries an IP
+	datagram, so `delimiters` is not a licence to call a span text.
+
+	Both directions, over every declaration in the corpus, because one
+	direction is what let the bug in. The branch was arrived at twice as a
+	special case -- once for `hex u32 ino[8]`, once for a token set -- and
+	the first carried `and not placement.delimiters`, which was a leftover
+	of the array fix rather than a claim about text. So HTTP's status code
+	was declared `ProtoField.bytes` and shown as `323030`.
+
+	A test by example would not have caught it: every example anybody wrote
+	was a FIXED-width number, which was the half that worked.
+
+	And it has to assert the declaration rather than the rendering, because
+	`test/lua/dissect.lua` prints a string field's bytes as hex on purpose
+	-- that column is evidence a test compares, not a display, and rendering
+	the text broke its own output parsing on the first byte over 0x7f. The
+	harness therefore cannot tell `bytes` from `string` at all, which is
+	exactly why this looks at the generated Lua.
+	"""
+	checked = 0
+	for path in EXAMPLES:
+		source, resolved, _ = analyse(path)
+		text = generate(parse(source), resolved, path.stem)
+		declared = {found[1]: found[0] for found in re.findall(
+			r'^\w+_f\.\w+ = ProtoField\.(\w+)\("([\w.]+)"', text, re.M)}
+
+		for struct in resolved.structs.values():
+			for entry in struct.entries:
+				placement = entry.placement
+				abbrev    = f"{struct.name}.{_local(struct, placement)}"
+				if abbrev not in declared:
+					continue	# a nested struct, dissected by its own Proto
+				checked += 1
+				spelled = (placement.radix is not None
+				           or placement.type_name
+				           in resolved.layout.env.token_sets)
+				assert (declared[abbrev] == "string") == spelled, (
+					f"{path.name}: {abbrev} is declared "
+					f"ProtoField.{declared[abbrev]} and is "
+					f"{'' if spelled else 'not '}spelled in characters")
+
+	# The denominator, so a corpus that stopped declaring fields could not
+	# pass this by having nothing to check.
+	assert checked > 500, f"only {checked} declarations were examined"
