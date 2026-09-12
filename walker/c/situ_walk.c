@@ -1012,10 +1012,25 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;	/* no discriminant in this image */
 	}
 
+	/* A discriminant the frame does not reach reads as ZERO. That is the
+	 * four backends' rule and not a choice made here -- their generated
+	 * getter carries the guard and says why: "Its offset is a sum of lengths
+	 * the message chose, and the frame does not reach it. `validate` reports
+	 * such a message." So the switch runs on 0, no case matches, and the
+	 * default arm answers, which is the same thing the `*out = 0u` at the
+	 * foot of this function already says about a discriminant naming no arm.
+	 *
+	 * Both walkers refused instead, and one unreachable discriminant made
+	 * the whole enclosing struct unmeasurable: `struct_extent` sums
+	 * `size_bits`, so json's `member.held` came back `ok=0` where all four
+	 * backends answer `ok=1 extent=0`. Only `SITU_WALK_BOUNDS` is absorbed
+	 * -- every other code from here is a real refusal. */
 	uint64_t value = 0u;
 	situ_walk_err err = read_deep(image, message, len, shape, selects,
 	                              depth + 1u, &value);
-	if (err != SITU_WALK_OK) {
+	if (err == SITU_WALK_BOUNDS) {
+		value = 0u;
+	} else if (err != SITU_WALK_OK) {
 		return err;
 	}
 
@@ -1722,7 +1737,25 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 		return err;
 	}
 
-	uint32_t total = 0u;
+	/* Every term SATURATES at the frame, which is `situ_advance_u32`'s rule
+	 * in `runtime/situ.h` spelled in bits: `at + min(by, limit - at)`. The
+	 * generated backends compute an offset chain that way, and 26.27 says
+	 * why -- a term is a length the message chose, so `offset + by` running
+	 * past a short frame is a pointer no reader downstream can check.
+	 *
+	 * Both walkers summed without a cap, which agreed with each other and
+	 * with nobody else: on a truncated frame they produced an offset past
+	 * the end and refused the read behind it, where the four backends place
+	 * the member at the limit, take a zero-length sub-view and answer
+	 * `ok=1 extent=0`. `validate` is what calls such a message malformed,
+	 * and a measurement is not the place to decide it.
+	 *
+	 * `room` is the frame in bits. `len` is bytes remaining from this
+	 * struct's base -- every nested walk rebases `message + at, len - at` --
+	 * so a long buffer would overflow the multiply, and saturating there is
+	 * the same answer a 512 MB frame would give anyway. */
+	const uint32_t room  = len > 0x1fffffffu ? 0xffffffffu : len * 8u;
+	uint32_t       total = 0u;
 	for (uint32_t i = 0u; i < count; i++) {
 		const uint32_t before = first + i;
 		if (before == index) {
@@ -1741,10 +1774,16 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 		}
 
 		/* `pad_to(n)` advances the total to the next multiple, not by a
-		 * fixed size (decision 0043). */
+		 * fixed size (decision 0043). Clamped for the reason above, which
+		 * is `situ_align_up_u32`'s own. */
 		if (earlier.pad_to != 0u) {
 			const uint32_t unit = (uint32_t)earlier.pad_to * 8u;
-			total = ((total + unit - 1u) / unit) * unit;
+			const uint32_t rem  = total % unit;
+			const uint32_t pad  = rem != 0u ? unit - rem : 0u;
+
+			/* The distance to the next multiple rather than the multiple
+			 * itself, so the add cannot wrap before the clamp sees it. */
+			total = pad < room - total ? total + pad : room;
 			continue;
 		}
 
@@ -1754,10 +1793,7 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
-		if (wide > 0xffffffffu - total) {
-			return SITU_WALK_BOUNDS;
-		}
-		total += wide;
+		total = wide < room - total ? total + wide : room;
 	}
 
 	return SITU_WALK_BOUNDS;	/* not a member of this struct */

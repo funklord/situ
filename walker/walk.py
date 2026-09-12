@@ -156,8 +156,9 @@ def chain_bits(view: View, index: int) -> int:
 	"""Where a member's own bytes begin, whitespace included.
 
 	A constant where the image knows one. Otherwise the members before it
-	are summed, which is the answer `offset = Dynamic` names -- and the
-	reason a walk costs what the capability map says it costs.
+	are summed, SATURATING at the frame, which is the answer
+	`offset = Dynamic` names -- and the reason a walk costs what the
+	capability map says it costs.
 	"""
 	placement = view.image.placements[index]
 	if placement.located_code != NONE:
@@ -174,6 +175,19 @@ def chain_bits(view: View, index: int) -> int:
 	if placement.offset_known:
 		return placement.offset_bits
 
+	# SATURATING at the view, which is `situ_advance_u32`'s rule spelled in
+	# bits: `at + min(by, limit - at)`, so an offset never leaves the frame.
+	# Every backend does this and 26.27 says why -- a term is a length the
+	# message chose, and `offset + by` running past a short frame is a
+	# pointer nothing downstream can check.
+	#
+	# This walk summed without a cap, so on a truncated frame it produced an
+	# offset past the limit and the read behind it refused. C computes the
+	# same member's offset as the limit itself, takes a zero-length sub-view
+	# there and answers `ok=1 extent=0`, and `validate` is what calls the
+	# message malformed. A fifth reader that refuses where four agree is the
+	# disagreement the differential exists to surface, and it surfaced.
+	room  = max(0, view.limit - view.at) * BITS_PER_BYTE
 	total = 0
 	for before in view.image.members(view.shape):
 		if before == index:
@@ -184,11 +198,12 @@ def chain_bits(view: View, index: int) -> int:
 		if earlier.pad_to:
 			# `pad_to(n)` advances the total to the next multiple, not by a
 			# fixed size (0043) -- the same align every backend's offset
-			# function does, spelled in bits here.
+			# function does, spelled in bits here. Clamped for the reason
+			# above, which is `situ_align_up_u32`'s own.
 			unit = earlier.pad_to * BITS_PER_BYTE
-			total = ((total + unit - 1) // unit) * unit
+			total = min(((total + unit - 1) // unit) * unit, room)
 			continue
-		total += size_bits(view, before)
+		total = min(total + size_bits(view, before), room)
 	raise Refused(f"placement {index} is not a member of this struct")
 
 
@@ -426,7 +441,26 @@ def _variant_bits(view: View, index: int, depth: int = 0) -> int:
 	if selects == NONE:
 		raise Refused(f"variant {index} has no discriminant in this image")
 
-	value = read_scalar(view, selects)
+	# A discriminant the frame does not reach reads as ZERO, which is what
+	# the four backends do rather than a choice made here. Their generated
+	# getter carries the guard and the comment: "Its offset is a sum of
+	# lengths the message chose, and the frame does not reach it. `validate`
+	# reports such a message." So the switch runs on 0, no case matches, and
+	# the default arm answers -- the same two lines below that already say a
+	# discriminant naming no arm is `validate`'s business and not an extent's.
+	#
+	# This walker refused instead, and that refusal propagated all the way
+	# out: `struct_extent` sums `size_bits`, so one unreachable discriminant
+	# made the whole enclosing struct unmeasurable and `member.held` came
+	# back `ok=0` against four backends' `ok=1 extent=0`. The bound is
+	# restated here rather than caught from `read_scalar`, which refuses for
+	# half a dozen other reasons that are all real.
+	start = offset_bits(view, selects)
+	width = content_bits(view, selects)
+	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
+		value = 0
+	else:
+		value = read_scalar(view, selects)
 	fallback = None
 	for case, chosen, flags in arms:
 		if flags & 2:				# `default: error` selects nothing

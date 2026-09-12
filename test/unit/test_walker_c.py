@@ -171,6 +171,17 @@ WIDTHS = """uint32_t bits = 0;
 			printf("refused\\n");
 		}"""
 
+#: Where a member starts, in bytes. The width probe above cannot see this:
+#: a chain that overshoots a short frame and one that stops at it produce the
+#: same widths, and differ only in the offset they hand the member after.
+OFFSETS = """uint32_t bits = 0;
+		if (situ_walk_offset_bits(&image, msg, len, shape, first + i, &bits)
+				== SITU_WALK_OK) {
+			printf("%u\\n", bits / 8u);
+		} else {
+			printf("refused\\n");
+		}"""
+
 #: An endian marker's verdict: whether its field, read big-endian, equals the
 #: `little` sentinel. A non-marker member refuses, which is the same shape as
 #: every other probe -- what this build declines is part of what it says.
@@ -253,7 +264,17 @@ def shape_named(path: Path, name: str) -> int:
 	was only the expectation about WHICH struct was being asked, which is a
 	wrong-population read wearing a disagreement's clothes.
 	"""
-	source   = Source(str(path), path.read_text(encoding="ascii"))
+	return shape_named_text(path.read_text(encoding="ascii"), name,
+	                        str(path))
+
+
+def shape_named_text(text: str, name: str, whence: str = "inline.situ") -> int:
+	"""`shape_named` for a schema written into this file rather than on disk.
+
+	The inline schemas here go through `packed_text`, which has no path to
+	hand `shape_named`, and counting the structs by hand is the hard-coded 11
+	above."""
+	source   = Source(whence, text)
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 	return load(pack(schema, resolved, metadata=True)[0]).struct_names.index(name)
@@ -311,6 +332,23 @@ def c_answers(tmp_path: Path, blob: bytes, message: bytes,
 def c_widths(tmp_path: Path, blob: bytes, message: bytes,
 		shape: int = 0) -> list[str]:
 	return _drive(tmp_path, blob, message, WIDTHS, shape)
+
+
+def c_offsets(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, OFFSETS, shape)
+
+
+def python_offsets(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
+	image = load(blob)
+	view  = acquire(image, message, shape)
+	found = []
+	for index in image.members(image.structs[shape]):
+		try:
+			found.append(str(offset_bits(view, index) // 8))
+		except Refused:
+			found.append("refused")
+	return found
 
 
 def c_markers(tmp_path: Path, blob: bytes, message: bytes,
@@ -1650,3 +1688,119 @@ def test_a_message_past_the_ceiling_is_unanswerable_in_both(
 
 	assert c_verdict(tmp_path, blob, message) == python_verdict(blob, message)
 	assert c_verdict(tmp_path, blob, message) == expected
+
+
+OVERSHOT = """target buffer;
+endian big;
+
+struct inner {
+	u8  a[]  until ";";
+}
+
+struct outer {
+	u8     key[]  until ",";
+	u8     one;
+	u8     two;
+	inner  held;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_an_offset_stops_at_a_short_frame(
+		tmp_path: Path) -> None:
+	"""An offset chain saturates at the frame, as `situ_advance_u32` does.
+
+	`key` has no delimiter in these bytes, so it reaches the end and the two
+	scalars after it are chains that overshoot: 29 + 1 + 1 against a frame of
+	29. Both walkers summed without a cap, agreed with each other perfectly,
+	and disagreed with all four backends -- they produced 30 and 31, refused
+	the reads behind them, and `held` came back `ok=0`.
+
+	The generated C for this schema, measured, answers `0 29 29 29` and takes
+	a zero-length sub-view for `held` (`ok=1 extent=0`), because every term
+	goes through `situ_advance_u32(offset, term, view.limit)` and
+	`situ_in_bounds(view, limit, 0)` is true. 26.27 argues the rule: a term
+	is a length the message chose, and an offset past a short frame is a
+	pointer nothing downstream can check. Calling such a message malformed
+	is `validate`'s job, not a measurement's.
+
+	So the numbers are pinned to the BACKENDS' answer rather than only
+	compared between the walkers -- which is the whole finding, since the two
+	walkers being one witness is what let this stand.
+	"""
+	blob    = packed_text(OVERSHOT)
+	message = bytes.fromhex("b19e18d650128f00a574a0d06dce57b3c7718ecaf121b"
+	                        "b6023bc31dbcc")
+	outer   = shape_named_text(OVERSHOT, "outer")
+
+	assert len(message) == 29
+	assert b"," not in message
+
+	assert c_offsets(tmp_path, blob, message, outer) == python_offsets(
+		blob, message, outer)
+	assert c_offsets(tmp_path, blob, message, outer) == ["0", "29", "29", "29"]
+
+
+UNREACHED = """target buffer;
+endian big;
+
+struct short_arm { u8  a; }
+struct long_arm  { u8  a; u8  b; u8  c; }
+
+struct dispatched {
+	u8  key[]  until ",";
+	u8  kind;
+	variant body switch (kind) {
+		case 'x': short_arm  as_short;
+		default:  long_arm   as_long;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_an_unreached_discriminant_reads_as_zero(
+		tmp_path: Path) -> None:
+	"""A discriminant the frame does not reach is 0, and the default arm
+	answers -- which is what the four backends do, not a choice made here.
+
+	Their generated getter carries the guard and the reason: "Its offset is a
+	sum of lengths the message chose, and the frame does not reach it.
+	`validate` reports such a message." Both walkers refused instead, and the
+	refusal did not stay local: `struct_extent` sums `size_bits`, so ONE
+	unreachable discriminant made the whole enclosing struct unmeasurable.
+
+	Found in json, where `member.held` answered `ok=0` against all four
+	backends' `ok=1 extent=0` -- and `variant_bits` already said two lines
+	below the read that a discriminant naming no arm is `validate`'s business
+	and not an extent's. The unreachable case is the same sentence one step
+	earlier, and only the reachable half had been written.
+
+	`key` eats the frame here, so `kind` sits at the limit and reads as 0,
+	which selects `long_arm` -- three bytes, none of them present. The extent
+	is what a measurement says and `validate` is what complains.
+
+	The numbers are the BACKENDS' and not the two walkers'. Generated C for
+	this schema and these bytes, measured:
+
+	    key span       17
+	    kind offset    17
+	    kind value      0      <- the rule, stated by the code that has it
+	    as_long offset 17
+	    as_long view   refused <- the VIEW, which is a different question
+
+	A measurement of 3 and a refused sub-view are both right and are not the
+	same answer: `situ_view_sub` will not hand out bytes that are not there,
+	while the extent says how far the member would reach. The walkers are
+	held to the first.
+	"""
+	blob    = packed_text(UNREACHED)
+	message = b"no delimiter here"
+	shape   = shape_named_text(UNREACHED, "dispatched")
+
+	assert b"," not in message
+
+	assert c_widths(tmp_path, blob, message, shape) == python_widths(
+		blob, message, shape)
+	assert c_widths(tmp_path, blob, message, shape) == ["17", "1", "3"]
