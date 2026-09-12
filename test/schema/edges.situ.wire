@@ -159,7 +159,7 @@ struct keywords size=10
   @0x0009   1         u8         lambda
 
 struct kinded size=2..3
-  @0x0000   1         u8         kind
+  @0x0000   1         u8         kind  peek
   @0x0000   2..3      variant    held
   held switch: kind
   held case 97: as_a kinded_a
@@ -203,8 +203,8 @@ struct marked size=5..17
   ~         0..8      u16        samples  endian-from=edge_order sized-by=n
 
 struct measured size=2..
-  @0x0000   until:3a  i64        reading  radix=10 cap=32
-  ~         until:20  u16        positive  radix=10 cap=12
+  @0x0000   until:3a  i64        reading  radix=10 scaled cap=32
+  ~         until:20  u16        positive  radix=10 scaled cap=12
   ~         0..       u8         rest  sized-by=remaining
 
 struct messy size=3..

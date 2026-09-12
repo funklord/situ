@@ -301,6 +301,13 @@ def _constraints(placement: Placement) -> list[str]:
 		facts.append(f"pad-to={placement.pad_to}")
 	if placement.radix is not None:
 		facts.append(f"radix={placement.radix}")
+	if placement.scaled:
+		# `scaled` and `decimal` both read base ten and do not read the
+		# same bytes: `12.5` is a number under one and malformed under the
+		# other, and what a reader gets back is a pair rather than an
+		# integer (0056). `radix=10` alone said neither, so two members
+		# that parse differently had one signature.
+		facts.append("scaled")
 	if placement.radix_minimal:
 		facts.append("minimal")
 	if placement.trimmed:
@@ -313,6 +320,15 @@ def _constraints(placement: Placement) -> list[str]:
 		# change at all.
 		facts.append("trim=" + "".join(f"{byte:02x}"
 		                               for byte in placement.trim_set))
+	if placement.peek:
+		# The sharpest interpretation fact there is: a peeked member is read
+		# and not spent (0057), so everything after it -- above all the arm
+		# a variant selects -- begins where this member began rather than
+		# after it. A peer that missed this places every arm one member
+		# late, which is a wrong layout and not a narrower one. It showed
+		# in `example/json`, whose signature named the discriminant and
+		# said nothing about the seven arms starting at it.
+		facts.append("peek")
 	if placement.skip:
 		# A committed fact about the bytes, not a convenience: a member
 		# that may be preceded by whitespace frames differently from one
@@ -999,7 +1015,7 @@ def _compare_member(struct: str, index: int, was: str | None,
 #: helps with -- so these are breaking, and the constraint facts are not.
 INTERPRETATION = (
 	"big", "little", "native", "msb_first", "lsb_first",
-	"radix=", "sized-by=", "varint=", "codec=", "encoding=",
+	"radix=", "scaled", "peek", "sized-by=", "varint=", "codec=", "encoding=",
 	"nonce=", "key=", "pad-to=",
 	"endian-from=", "quote=", "escape=", "trim=", "fold-case",
 	"nul_terminated",

@@ -626,3 +626,58 @@ def test_the_lines_beneath_the_members_are_not_members(body: str) -> None:
 	and reports the slide as a break. A schema compared with itself is the
 	test that says the two kinds are told apart."""
 	assert not wire.compare(signature(body), signature(body)).findings
+
+
+def test_it_records_that_a_discriminant_is_peeked() -> None:
+	"""`peek` is where the ARM begins, which is as sharp an interpretation
+	fact as byte order.
+
+	A peeked member is read and not spent (0057), so the arm the variant
+	selects starts at the discriminant rather than after it. The signature
+	named the discriminant and said nothing about this, so a peer reading it
+	placed every arm one member late -- a wrong layout, not a narrower one.
+	Found in `example/json`, whose seven arms all moved.
+	"""
+	body = ("struct a { u8 x; }\nstruct b { u8 x; u8 y; }\n"
+	        "struct s {\n\tpeek u8  kind;\n"
+	        "\tvariant held switch (kind) {\n"
+	        "\t\tcase 1: a  as_a;\n\t\tdefault: b  as_b;\n\t}\n}\n")
+	assert "kind  peek" in signature(body)
+	assert "peek" not in signature(body.replace("peek u8", "u8"))
+
+
+def test_dropping_peek_is_breaking() -> None:
+	"""And the cost is stated, because the same bytes become a different
+	message: every arm shifts by the discriminant's width.
+
+	The DETAIL is asserted and not just the kind, because dropping `peek`
+	also moves `held` from 0x00 to 0x01 and that alone makes the verdict
+	breaking. Written the loose way this passed with the `peek` fact
+	deleted from the signature -- a test carried by a second finding it was
+	not about, which is the failure it was written to prevent one level up.
+	"""
+	arms = ("struct a { u8 x; }\nstruct b { u8 x; u8 y; }\n"
+	        "struct s {\n\t%s u8  kind;\n"
+	        "\tvariant held switch (kind) {\n"
+	        "\t\tcase 1: a  as_a;\n\t\tdefault: b  as_b;\n\t}\n}\n")
+	found = verdict(arms % "peek", arms % "")
+
+	assert "breaking" in kinds(found)
+	assert "kind: peek -> nothing" in detail(found)
+
+
+def test_it_records_that_a_text_number_is_scaled() -> None:
+	"""`scaled` and `decimal` are both base ten and do not read the same
+	bytes: `12.5` is a number under one and malformed under the other, and
+	what comes back is a pair rather than an integer (0056).
+
+	`radix=10` alone said neither, so two members that parse differently had
+	one signature -- and a peer implementing from it would refuse half the
+	documents `example/json` accepts.
+	"""
+	scaled  = "struct s { scaled i64  v  until \",\"; }\n"
+	decimal = "struct s { decimal i64  v  until \",\"; }\n"
+
+	assert "radix=10 scaled" in signature(scaled)
+	assert "scaled" not in signature(decimal)
+	assert "breaking" in kinds(verdict(scaled, decimal))
