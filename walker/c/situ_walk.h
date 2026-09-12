@@ -125,6 +125,18 @@ typedef struct {
 	 * stopped early in silence. It is a ceiling now rather than the answer:
 	 * the schema's number is used where it is lower, and where it is higher
 	 * the walker refuses by name instead of quietly measuring short. */
+	/* An `indexed` region's offset table geometry (section 9.3): one row
+	 * per such member, holding the entry width in bits, the bytecode for
+	 * the entry count, and what an offset is measured from (0024).
+	 *
+	 * The section existed and this build did not read it, so `validate`
+	 * could not ask whether `count * entry_bytes` fits the frame -- the
+	 * one check every backend makes about such a table -- and the packer
+	 * marked any struct holding one unvalidatable. */
+	const uint8_t *indexes;
+	uint32_t       index_count;
+	uint32_t       index_stride;
+
 	const uint8_t *depths;
 	uint32_t       depth_count;
 	uint32_t       depth_stride;

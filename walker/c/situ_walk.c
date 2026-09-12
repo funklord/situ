@@ -14,6 +14,7 @@
 #define TAG_CONSTRAINTS 15u
 #define TAG_ENUM_VALUES 16u
 #define TAG_VERSIONS   17u
+#define TAG_INDEXES    11u
 #define TAG_DEPTHS     21u
 #define TAG_SKIPS      22u
 
@@ -36,6 +37,7 @@
 #define REGION_READS    13u	/* `<IIIB3x`: placement, owner, codec, flags */
 #define VERSION_READS    8u	/* `<II`: shape, version-field placement */
 #define DEPTH_READS     12u	/* `<III`: shape, depth, limit */
+#define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
 #define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
 
 /* The image is little endian by declaration (`endian little` in
@@ -189,6 +191,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->regions       = image + offset;
 			out->region_count  = items;
 			out->region_stride = stride;
+		} else if (kind == TAG_INDEXES) {
+			if (stride < INDEX_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->indexes       = image + offset;
+			out->index_count   = items;
+			out->index_stride  = stride;
 		} else if (kind == TAG_DEPTHS) {
 			if (stride < DEPTH_READS) {
 				return SITU_WALK_MALFORMED;
@@ -2436,6 +2445,66 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		                && (at / 8u > len || (wide + 7u) / 8u > len - at / 8u)) {
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
+		}
+
+		/* An `indexed` region's offset table is `count` entries of
+		 * `entry_bits` and has to fit the frame. That is the one check
+		 * every backend makes about such a table, and it spells it:
+		 *
+		 *     if (situ_remaining_u32(view.limit, 8u) < count * 2u)
+		 *             return SITU_ERR_BOUNDS;
+		 *
+		 * Neither walker could ask it -- the image wrote an INDEXES section
+		 * that nothing loaded, and wrote `none` into its count bytecode --
+		 * so the packer marked any struct holding one unvalidatable. A
+		 * sqlite page declaring 2644 cells in a 46-byte frame was refused
+		 * by all four backends and clean here.
+		 *
+		 * `SITU_WALK_NONE` in either field is still UNSUPPORTED rather than
+		 * a pass: a table whose entry width or whose size nothing states is
+		 * one nobody can bounds-check, and saying nothing is what the
+		 * deferral was for. */
+		{
+			const uint8_t *row = table_row(image->indexes,
+			                               image->index_count,
+			                               image->index_stride, index);
+			if (row != NULL) {
+				const uint32_t entry_bits  = u32_at(row + 4);
+				const uint32_t count_code  = u32_at(row + 8);
+
+				if (entry_bits == SITU_WALK_NONE
+				                || count_code == SITU_WALK_NONE) {
+					return SITU_WALK_UNSUPPORTED;
+				}
+
+				const uint32_t here = at / 8u;
+				const uint32_t room = here < len ? len - here : 0u;
+				walk_ctx ctx = {image, message, len, shape, depth};
+				int64_t  how_many = 0;
+
+				err = situ_walk_eval(image, count_code, ctx_load, &ctx,
+				                     (int64_t)room, &how_many);
+				if (err != SITU_WALK_OK) {
+					return err;
+				}
+				/* The sign first, so the multiply below is over a
+				 * count and not over whatever a negative one wraps
+				 * to. A count cannot be negative and the expression
+				 * is signed, which is the same guard `report`'s
+				 * `count < 0` makes on the other side. */
+				if (how_many < 0) {
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
+				/* 64-bit, because a u32 count times a u32 entry
+				 * width is what overflows -- and an overflow here
+				 * would say a table fits that does not. */
+				if ((uint64_t)how_many * (entry_bits / 8u)
+				                > (uint64_t)room) {
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
+			}
 		}
 
 		/* A nested member is `validate` called through, and its verdict is

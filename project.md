@@ -26761,10 +26761,11 @@ the date it was checked and each line was re-measured rather than recalled.
   language obstacle; json's conversion now waits on the walker validating
   a variant's arm under a permissive `default:`, which C does and the
   walk does not. 26.337 has the measurements.
-- **The walker's INDEXES section is written and never loaded.** So the walk
-  cannot check that an `indexed` region's offset table fits the frame, and
-  defers on any struct holding one -- `btree_leaf_page` reports
-  `validatable = False` today. Deferring is honest and is not the answer.
+- ~~**The walker's INDEXES section is written and never loaded.**~~
+  **Closed 2026-09-12 by 26.341.** It was two gaps rather than one: the
+  section was never loaded AND the packer wrote `none` into its
+  `count_code`, so loading it alone would not have sufficed.
+  `btree_leaf_page` reports `validatable = True` now.
 
 ~~**Measured while checking this register, and broader than it was filed
 as.**~~ **Closed 2026-09-12 by 26.340**, which took the third pass this
@@ -27190,6 +27191,70 @@ harness's own output parsing at the first byte over 0x7f. So the whole
 change is invisible to every test that reads the harness's output, which
 is the shape `evidence.md` calls a stand-in reproducing the half of a
 tool its author met. Reading the generated Lua is what can see it.
+
+### 26.341 The INDEXES section, loaded at last -- and it was two gaps
+
+**The image has written an INDEXES section since `indexed` regions arrived
+and nothing in `walker/` read it**, so neither walker could ask the one
+check every backend makes about an offset table: that `count` entries of
+`entry_bits` fit the frame. The generated C spells it in one line --
+
+    if (situ_remaining_u32(view.limit, 8u) < count * 2u)
+            return SITU_ERR_BOUNDS;
+
+-- and the packer's answer was to mark any struct holding such a region
+unvalidatable, so both walkers said nothing where four backends answered.
+
+**The deferral was right and it was not an answer.** It was found when a
+differential alphabet change drew a sqlite page declaring 2644 cells in a
+46-byte frame: C said BOUNDS, the walk said clean, and it had been saying
+so for as long as the construct existed. No draw had reached it before.
+
+**Loading the section would not have been enough, which is the part worth
+recording.** The record has carried a `count_code` field all along and the
+packer wrote `none` into it, so an image stated the geometry of the table
+and not its size -- and the size is the one number a bounds check needs.
+A reader that loaded the section would have found the width, the offset
+base, and nothing to multiply. So the fix is in three places that had to
+agree: the packer now compiles the count (a literal to a PUSH, a member to
+a FIELD -- the expression the count already is, written where a walker can
+read it), both walkers load the section, and both run the program.
+
+**The deferral survives where it belongs.** `NONE` in either field is
+still `cannot-say` rather than a pass: a table whose entry width or whose
+size nothing states is one nobody can bounds-check. Verified by sabotage
+-- with the count made unencodable, `btree_leaf_page` goes back to
+`validatable = False`.
+
+**What it moved, measured.** Exactly one struct in the corpus:
+`sqlite.btree_leaf_page`, False to True, 166 validatable structs to 167.
+That is the whole population -- sqlite is the only schema here with an
+`indexed` region -- which is worth saying plainly rather than letting a
+one-line diff imply a sweep. The test adds a second, inline.
+
+**The boundary is pinned and not just the extremes**, because a check that
+fires for every count and one that fires for the right counts both refuse
+2644. Against the generated C on `example/sqlite`: a 46-byte page with the
+table at 8 and 2-byte entries validates at 19 cells and refuses at 20, and
+both walkers now agree at both. The inline schema in `test_walker_c` puts
+the table at 3 in a 16-byte frame, where 6 fit and 7 do not.
+
+**And the standing differential catches it, which is better than the test
+I wrote.** Sabotaging the Python check turns
+`test_the_walker_agrees_with_the_compiled_backends[sqlite]` red with
+exactly the disagreement the original report described -- walker
+`validate 0`, C `validate 1`. Before this, the walk emitted no `validate`
+line for that struct at all, so the differential's key intersection
+skipped it silently. It emits 38 over the seeded draws now, 9 of them
+BOUNDS.
+
+**What this did NOT do.** The walk still renders no `count=` line for an
+indexed region, and the differ asks C for one -- so that key is absent
+from one side and the comparison skips it, which is the same silence that
+hid the validate gap. `_runs` excludes the member because its element is a
+struct, and reaching element N needs the offset table read rather than an
+offset chain. That is a feature and not this gap, but it is the same shape
+and should not have to be rediscovered from a fuzz draw.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -963,6 +963,49 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			target[placement.path] = start
 			coverage.expressions += 1
 
+	# How many entries an `indexed` region's offset table holds (section
+	# 9.3). The record has carried a `count_code` field since the section
+	# existed and the packer wrote `none` into it, so an image stated the
+	# geometry of the table without stating its size -- which is the one
+	# number a bounds check needs.
+	#
+	# Without it the walk could not ask whether `count * entry_bytes` fits
+	# the frame, so it deferred `validate` on any struct holding an indexed
+	# region. That is honest and it is not an answer: a sqlite page
+	# declaring 2644 cells in a 46-byte frame is refused by all four
+	# backends and was clean to the walk.
+	#
+	# A literal count compiles to a PUSH and a member count to a FIELD, so
+	# nothing new is needed in the interpreter -- this is the expression the
+	# count already is, written down where a walker can read it.
+	index_count_at: dict[str, int] = {}
+	for owner, placement in rows:
+		table = placement.index_table
+		if table is None:
+			continue
+		start = len(program.code)
+		if table.count_fixed is not None:
+			program.emit(Op.PUSH, table.count_fixed, "<q")
+		else:
+			found = resolve_path(table.count_path, owner)
+			if found is None:
+				# Named rather than dropped, for the reason the region loop
+				# above gives: a silently absent program is a check that
+				# reports clean.
+				coverage.unencodable[placement.path] = (
+					f"the index count `{table.count_path}` is not in the "
+					f"table")
+				continue
+			index, base = found
+			if base:
+				program.emit(Op.FIELD_IN, index)
+				program.code += _struct.pack("<i", base)
+			else:
+				program.emit(Op.FIELD, index)
+		program.emit(Op.END)
+		index_count_at[placement.path] = start
+		coverage.expressions += 1
+
 	# -- the side tables, and the core strings a walk needs to function --
 	strings = _Pool()
 	sections: list[tuple[int, bytes, int]] = []
@@ -1028,18 +1071,23 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				whole = False
 				continue
 			# An `indexed` region's offset table is `count` entries of
-			# `offset_type`, and whether those fit the frame is a check the
-			# four backends make and this walk cannot: the image writes an
-			# INDEXES section and nothing in `walker/` loads it.
+			# `offset_type`, and whether those fit the frame is the check
+			# every backend makes about one. This deferred until 26.341,
+			# because the image wrote an INDEXES section that nothing in
+			# `walker/` loaded -- and wrote `none` into its `count_code`,
+			# so loading it alone would not have been enough.
 			#
-			# So the walk defers rather than answering. Found when a
-			# differential alphabet change drew a sqlite page declaring 2644
-			# cells in a 46-byte frame: C said BOUNDS, the walk said clean,
-			# and it had been saying so since indexed regions arrived --
-			# invisible because no draw had reached it. A fifth description
-			# agreeing wrongly is worse than one that says nothing, which is
-			# what the deferral is for.
-			if placement.kind == "indexed":
+			# The deferral was found when a differential alphabet change
+			# drew a sqlite page declaring 2644 cells in a 46-byte frame:
+			# C said BOUNDS, the walk said clean, and it had been saying so
+			# since indexed regions arrived -- invisible because no draw
+			# had reached it.
+			#
+			# It still defers where the count could not be encoded, which
+			# is the honest case rather than the unbuilt one: a table whose
+			# size nothing states is one nobody can bounds-check.
+			if placement.kind == "indexed" \
+					and placement.path not in index_count_at:
 				whole = False
 				continue
 			# A variant is let past, because `classify_check` answers the
@@ -1599,7 +1647,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			index_blob += _struct.pack(
 				"<IIIB3x", at,
 				_u32(None if entry_bytes is None else entry_bytes * 8),
-				NONE, _index_base(placement))
+				_u32(index_count_at.get(placement.path)),
+				_index_base(placement))
 
 	# Which member carries each struct's version. `Placement.version_field`
 	# already names it -- the layout resolves `[version = ver]` onto every

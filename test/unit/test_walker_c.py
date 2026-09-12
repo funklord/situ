@@ -1804,3 +1804,65 @@ def test_they_agree_that_an_unreached_discriminant_reads_as_zero(
 	assert c_widths(tmp_path, blob, message, shape) == python_widths(
 		blob, message, shape)
 	assert c_widths(tmp_path, blob, message, shape) == ["17", "1", "3"]
+
+
+INDEXED = """target buffer;
+endian big;
+
+struct cell {
+	u8  payload[2];
+}
+
+struct paged {
+	u8   kind  [must_eq = 13];
+	u16  count;
+
+	indexed(offset_type = u16, count = count, base = kind) {
+		cell  cells[];
+	}
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_that_an_index_table_has_to_fit_the_frame(
+		tmp_path: Path) -> None:
+	"""An `indexed` region's offset table is `count` entries of its entry
+	width, and `validate` is where a count the frame cannot hold is called
+	malformed.
+
+	Neither walker could ask this. The image has written an INDEXES section
+	since indexed regions arrived, nothing in `walker/` loaded it, AND the
+	packer wrote `none` into the section's `count_code` -- so loading it
+	alone would not have been enough either. The packer therefore marked any
+	struct holding an indexed region unvalidatable, and both walkers said
+	`cannot-say` where four backends answer.
+
+	Found when a differential alphabet change drew a sqlite page declaring
+	2644 cells in a 46-byte frame: C said BOUNDS, the walk said clean, and
+	it had been saying so for as long as the construct existed -- invisible
+	because no draw had reached it.
+
+	The boundary is pinned rather than only the two extremes, because a
+	check that fires for every count and one that fires for the right ones
+	both refuse 2644. Here the table starts at byte 3 of a 16-byte frame and
+	each entry is 2 bytes, so 6 fit and 7 do not. `example/sqlite` gives the
+	same arithmetic against the generated C: a 46-byte page with the table
+	at 8 and 2-byte entries validates at 19 cells and refuses at 20.
+	"""
+	blob, image = _packed_named(INDEXED)
+	shape = [image.struct_name(i)
+	         for i in range(len(image.structs))].index("paged")
+
+	def page(count: int) -> bytes:
+		return bytes([13]) + count.to_bytes(2, "big") + bytes(13)
+
+	# "0" is OK and "1" is BOUNDS, which is `situ_err_t`'s own numbering and
+	# the vocabulary every other case in this file is written in.
+	for count, expected in ((0, "0"), (6, "0"), (7, "1"), (2644, "1")):
+		message = page(count)
+		assert len(message) == 16
+		assert c_verdict(tmp_path, blob, message, shape) \
+			== python_verdict(blob, message, shape), f"count={count}"
+		assert c_verdict(tmp_path, blob, message, shape) == expected, \
+			f"count={count}"

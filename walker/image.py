@@ -268,6 +268,20 @@ class Image:
 	#: whether such a field is *wrong* cannot be asked until this says
 	#: whether it is *there*.
 	versions: dict[int, int]		= field(default_factory=dict)
+	#: placement index -> (entry_bits, count_code, measured_from) for an
+	#: `indexed` region's offset table (section 9.3, decision 0024).
+	#:
+	#: The section has existed since indexed regions arrived and nothing
+	#: loaded it, so the walk could not ask whether `count * entry_bytes`
+	#: fits the frame -- the one check the four backends make about such a
+	#: table -- and deferred `validate` on every struct holding one. A
+	#: sqlite page declaring 2644 cells in a 46-byte frame was refused by
+	#: all four and clean here.
+	#:
+	#: `count_code` is `NONE` where the count could not be encoded, which
+	#: is still a deferral rather than a silent pass: a table whose size
+	#: nothing states cannot be bounds-checked by anybody.
+	indexes: dict[int, tuple[int, int, int]] = field(default_factory=dict)
 	#: Per recursive struct, `(depth, limit)`: what the format allows and
 	#: what the schema asks a reader to spend (0054). Absent for a struct
 	#: that does not name itself, which is nearly all of them -- so an
@@ -443,6 +457,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			enum_id, value, _pad = _struct.unpack_from(
 				"<IqI", blob, at + i * stride)
 			image.enum_values.setdefault(enum_id, set()).add(value)
+
+	if INDEXES in found:
+		at, records, stride = found[INDEXES]
+		for i in range(records):
+			where, entry_bits, count_code, base = _struct.unpack_from(
+				"<IIIB", blob, at + i * stride)
+			image.indexes[where] = (entry_bits, count_code, base)
 
 	if DEPTHS in found:
 		at, records, stride = found[DEPTHS]
