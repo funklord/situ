@@ -171,6 +171,21 @@ WIDTHS = """uint32_t bits = 0;
 			printf("refused\\n");
 		}"""
 
+#: A `tlv` region's item count and an `indexed` region's entry count -- the
+#: two `situ_walk_count` does not answer, being about a counted run. Both in
+#: one ask because a struct has at most one of them and the probe stays one
+#: line per member.
+REGION_COUNTS = """uint32_t n = 0;
+		if (situ_walk_tlv_count(&image, msg, len, shape, first + i, &n)
+				== SITU_WALK_OK) {
+			printf("tlv=%u\\n", n);
+		} else if (situ_walk_index_count(&image, msg, len, shape, first + i, &n)
+				== SITU_WALK_OK) {
+			printf("indexed=%u\\n", n);
+		} else {
+			printf("refused\\n");
+		}"""
+
 #: Where a member starts, in bytes. The width probe above cannot see this:
 #: a chain that overshoots a short frame and one that stops at it produce the
 #: same widths, and differ only in the offset they hand the member after.
@@ -337,6 +352,40 @@ def c_widths(tmp_path: Path, blob: bytes, message: bytes,
 def c_offsets(tmp_path: Path, blob: bytes, message: bytes,
 		shape: int = 0) -> list[str]:
 	return _drive(tmp_path, blob, message, OFFSETS, shape)
+
+
+def c_region_counts(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, REGION_COUNTS, shape)
+
+
+def python_region_counts(blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	"""The same two questions of the fifth column, in the same order.
+
+	`tlv` first and `indexed` second, because the C probe asks them that way
+	and a member is at most one of them -- so the order decides nothing
+	except that the two lists line up member for member.
+	"""
+	image = load(blob)
+	view  = acquire(image, message, shape)
+	found = []
+	for index in image.members(image.structs[shape]):
+		try:
+			found.append(f"tlv={walk.tlv_count(view, index)}")
+			continue
+		except (Refused, Unplaceable):
+			pass
+		table = image.indexes.get(index)
+		if table is None or table[1] == NONE:
+			found.append("refused")
+			continue
+		try:
+			here = offset_bits(view, index) // 8
+			found.append(f"indexed={walk._evaluate(view, table[1], here)}")
+		except (Refused, Unplaceable):
+			found.append("refused")
+	return found
 
 
 def python_offsets(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
@@ -1866,3 +1915,80 @@ def test_they_agree_that_an_index_table_has_to_fit_the_frame(
 			== python_verdict(blob, message, shape), f"count={count}"
 		assert c_verdict(tmp_path, blob, message, shape) == expected, \
 			f"count={count}"
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_tlv_region_s_item_count(tmp_path: Path) -> None:
+	"""Every one of section 9.5's four ways a value says where it ends, in
+	the C walker as well.
+
+	The Python walk gained this when the image learned to describe a `tlv`
+	region at all; this build had neither section loaded, so it answered
+	`refused` where the other four readers count. Two walkers, one design,
+	and the whole reason this file exists is that they must not drift.
+
+	The same vectors the five-reader test uses, for its reason: the random
+	draws reach counts of 0 and 1, which exercise the loop and none of the
+	rules.
+	"""
+	schema = ROOT / "example" / "protobuf" / "protobuf.situ"
+	blob   = image_for(schema)
+	shape  = shape_named(schema, "proto_message")
+
+	def leb(value: int) -> bytes:
+		out = bytearray()
+		while True:
+			group = value & 0x7F
+			value >>= 7
+			out.append(group | (0x80 if value else 0))
+			if not value:
+				return bytes(out)
+
+	varint   = leb(1 << 3 | 0) + leb(150)
+	prefixed = leb(2 << 3 | 2) + leb(3) + b"abc"
+	fixed    = leb(3 << 3 | 5) + b"\x01\x02\x03\x04"
+
+	for label, message, expected in (
+			("nothing at all",    b"",                            "tlv=0"),
+			("one varint",        varint,                         "tlv=1"),
+			("varint, prefixed",  varint + prefixed,              "tlv=2"),
+			("three, all kinds",  varint + prefixed + fixed,      "tlv=3"),
+			("wire 1, fixed 8",   leb(4 << 3 | 1) + bytes(8),     "tlv=1"),
+			("wire 3 is error",   leb(1 << 3 | 3) + bytes(1),     "tlv=0"),
+			("a length past the frame",
+			                      leb(2 << 3 | 2) + leb(9) + b"ab", "tlv=0"),
+			("a fixed 4 in two bytes",
+			                      leb(3 << 3 | 5) + b"ab",        "tlv=0")):
+		assert c_region_counts(tmp_path, blob, message, shape) \
+			== python_region_counts(blob, message, shape), label
+		assert c_region_counts(tmp_path, blob, message, shape) \
+			== [expected], label
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_an_index_table_s_entry_count(
+		tmp_path: Path) -> None:
+	"""An `indexed` region's entry count is an evaluation and not a walk --
+	the number is a program the image carries -- so the two walkers agree by
+	running the same bytecode rather than by two loops matching.
+
+	The count is what the message declares and is NOT clamped to the frame:
+	2644 cells in a 46-byte page is what `cell_count` says, and calling such
+	a message malformed is `validate`'s job. That is the same split the
+	generated `situ_btree_leaf_page_cells_count` makes, which reads the
+	field and nothing else.
+	"""
+	schema = ROOT / "example" / "sqlite" / "sqlite.situ"
+	blob   = image_for(schema)
+	shape  = shape_named(schema, "btree_leaf_page")
+
+	def page(count: int) -> bytes:
+		return bytes([13]) + bytes(2) + count.to_bytes(2, "big") + bytes(41)
+
+	for count in (0, 3, 19, 20, 2644):
+		message = page(count)
+		assert len(message) == 46
+		assert c_region_counts(tmp_path, blob, message, shape) \
+			== python_region_counts(blob, message, shape), f"count={count}"
+		assert c_region_counts(tmp_path, blob, message, shape)[-1] \
+			== f"indexed={count}", f"count={count}"

@@ -14,6 +14,8 @@
 #define TAG_CONSTRAINTS 15u
 #define TAG_ENUM_VALUES 16u
 #define TAG_VERSIONS   17u
+#define TAG_TLVS       10u
+#define TAG_TLV_RULES  24u
 #define TAG_INDEXES    11u
 #define TAG_DEPTHS     21u
 #define TAG_SKIPS      22u
@@ -38,6 +40,8 @@
 #define VERSION_READS    8u	/* `<II`: shape, version-field placement */
 #define DEPTH_READS     12u	/* `<III`: shape, depth, limit */
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
+#define TLV_READS       19u	/* to the tag's decode parameters */
+#define TLV_RULE_READS  23u	/* to the length's, likewise */
 #define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
 
 /* The image is little endian by declaration (`endian little` in
@@ -191,6 +195,20 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->regions       = image + offset;
 			out->region_count  = items;
 			out->region_stride = stride;
+		} else if (kind == TAG_TLVS) {
+			if (stride < TLV_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->tlvs       = image + offset;
+			out->tlv_count_ = items;
+			out->tlv_stride = stride;
+		} else if (kind == TAG_TLV_RULES) {
+			if (stride < TLV_RULE_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->tlv_rules       = image + offset;
+			out->tlv_rule_count  = items;
+			out->tlv_rule_stride = stride;
 		} else if (kind == TAG_INDEXES) {
 			if (stride < INDEX_READS) {
 				return SITU_WALK_MALFORMED;
@@ -609,6 +627,11 @@ static const uint8_t *varint_rules(const situ_walk_image *image,
 	                 image->varint_stride, index);
 }
 
+static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
+                                   uint32_t at, uint32_t max_bytes,
+                                   uint32_t terminal_bits, int big,
+                                   uint32_t *consumed, uint64_t *value);
+
 situ_walk_err situ_walk_varint(const situ_walk_image *image,
                                const uint8_t *message, uint32_t len,
                                uint32_t index, uint32_t at,
@@ -619,10 +642,22 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	const uint32_t max_bytes     = rules[8];
-	const uint32_t terminal_bits = rules[9];
-	const int      big           = (rules[10] & VARINT_BIG) != 0;
+	return decode_varint(message, len, at, rules[8], rules[9],
+	                     (rules[10] & VARINT_BIG) != 0, consumed, value);
+}
 
+/* `situ_walk_varint`'s loop, over parameters rather than a placement.
+ *
+ * Split out for a `tlv` region, whose tag and length varints belong to no
+ * placement: they are the region's grammar rather than members of it, so
+ * there is nothing to look `varint_rules` up by. `walk.py` is split the
+ * same way and for the same reason -- the arithmetic is one copy per
+ * language and this keeps it that. */
+static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
+                                   uint32_t at, uint32_t max_bytes,
+                                   uint32_t terminal_bits, int big,
+                                   uint32_t *consumed, uint64_t *value)
+{
 	if (at > len) {
 		return SITU_WALK_BOUNDS;
 	}
@@ -2013,6 +2048,193 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 	return read_at(message, len, &held, offset, held.size_bits, out);
 }
 
+/* `situ_walk_eval` with a tag in scope, for a `tlv` selector. Declared here
+ * because the counter below it is the only caller outside the evaluator. */
+static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
+                                 situ_walk_load load, void *ctx,
+                                 int64_t remaining, int have_tag, uint64_t tag,
+                                 int64_t *out);
+
+/* `image_tlv_rule.rule_kind` (9.5), this file's copy of a table `situc`
+ * also holds. The walker imports nothing from the compiler (0026), so the
+ * numbers are written twice on purpose. */
+#define TLV_FIXED           0u
+#define TLV_PREFIXED        1u
+#define TLV_SELF_DELIMITING 2u
+#define TLV_ERROR           3u
+
+/* The tag a `tlv` selector is evaluated over, carried to `ctx_load`'s
+ * neighbour. */
+situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t *out)
+{
+	const uint8_t *row = table_row(image->tlvs, image->tlv_count_,
+	                               image->tlv_stride, index);
+	const uint8_t *rules = table_row(image->tlv_rules, image->tlv_rule_count,
+	                                 image->tlv_rule_stride, index);
+	if (row == NULL || rules == NULL) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	const uint32_t selector     = u32_at(row + 12);
+	const uint32_t tag_bytes    = row[16];
+	const uint32_t tag_terminal = row[17];
+	const int      tag_big      = (row[18] & 2u) != 0;
+	if (selector == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	/* Back to the first row for this placement: `table_row` binary-searches
+	 * and lands on any of them. The rows are consecutive, which is what
+	 * lets a walk read them all without the record carrying a count. */
+	while (rules > image->tlv_rules
+	                && u32_at(rules - image->tlv_rule_stride) == index) {
+		rules -= image->tlv_rule_stride;
+	}
+
+	uint32_t from = 0u;
+	situ_walk_err err = situ_walk_offset_bits(image, message, len, shape,
+	                                          index, &from);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	uint32_t at    = from / 8u;
+	uint32_t count = 0u;
+
+	while (at < len) {
+		uint32_t used = 0u;
+		uint64_t tag  = 0u;
+		if (decode_varint(message, len, at, tag_bytes, tag_terminal,
+		                  tag_big, &used, &tag) != SITU_WALK_OK
+		                || used == 0u) {
+			break;
+		}
+		at += used;
+
+		walk_ctx ctx   = {image, message, len, shape, 0u};
+		int64_t  which = 0;
+		err = eval_tagged(image, selector, ctx_load, &ctx,
+		                  (int64_t)(len - at), 1, tag, &which);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+
+		/* The rule this selector names, or the `default` one. Walked in
+		 * declaration order, which is the order a selector is matched in. */
+		const uint8_t *found = NULL;
+		const uint8_t *fallback = NULL;
+		for (const uint8_t *one = rules;
+		     one < image->tlv_rules
+		           + (size_t)image->tlv_rule_count * image->tlv_rule_stride
+		     && u32_at(one) == index;
+		     one += image->tlv_rule_stride) {
+			if (one[13] != 0u) {
+				fallback = one;
+			} else if (i64_at(one + 4) == which) {
+				found = one;
+				break;
+			}
+		}
+		if (found == NULL) {
+			found = fallback;
+		}
+		if (found == NULL) {
+			break;
+		}
+
+		const uint32_t rule_kind = found[12];
+		const uint32_t fixed     = u32_at(found + 16);
+		const uint32_t len_bytes    = found[20];
+		const uint32_t len_terminal = found[21];
+		const int      len_big      = (found[22] & 2u) != 0;
+		uint32_t       size = 0u;
+
+		if (rule_kind == TLV_FIXED) {
+			size = fixed == SITU_WALK_NONE ? 0u : fixed;
+		} else if (rule_kind == TLV_SELF_DELIMITING) {
+			/* The value IS a varint, read with the TAG varint's parameters
+			 * -- which is what the generated C does. */
+			uint64_t held = 0u;
+			if (decode_varint(message, len, at, tag_bytes, tag_terminal,
+			                  tag_big, &size, &held) != SITU_WALK_OK
+			                || size == 0u) {
+				break;
+			}
+		} else if (rule_kind == TLV_PREFIXED) {
+			uint64_t length = 0u;
+			if (decode_varint(message, len, at, len_bytes, len_terminal,
+			                  len_big, &used, &length) != SITU_WALK_OK
+			                || used == 0u) {
+				break;
+			}
+			at += used;
+			if (length > (uint64_t)(len - at)) {
+				break;
+			}
+			size = (uint32_t)length;
+		} else {
+			/* `default: error`, and a kind this build does not know. Both
+			 * mean the same thing here -- where the value ends is not
+			 * knowable, so the count stops. */
+			break;
+		}
+
+		if (size > len - at) {
+			break;
+		}
+		at    += size;
+		count += 1u;
+	}
+
+	*out = count;
+	return SITU_WALK_OK;
+}
+
+/* How many entries an `indexed` region's offset table holds (9.3).
+ *
+ * The count is a program the image carries -- a literal or a field -- so
+ * this is an evaluation rather than a walk, which is the whole difference
+ * from the two above. */
+situ_walk_err situ_walk_index_count(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t *out)
+{
+	const uint8_t *row = table_row(image->indexes, image->index_count,
+	                               image->index_stride, index);
+	if (row == NULL) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	const uint32_t count_code = u32_at(row + 8);
+	if (count_code == SITU_WALK_NONE) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	uint32_t at = 0u;
+	situ_walk_err err = situ_walk_offset_bits(image, message, len, shape,
+	                                          index, &at);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	at /= 8u;
+
+	walk_ctx ctx   = {image, message, len, shape, 0u};
+	int64_t  count = 0;
+	err = situ_walk_eval(image, count_code, ctx_load, &ctx,
+	                     (int64_t)(at < len ? len - at : 0u), &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (count < 0 || count > 0xffffffff) {
+		return SITU_WALK_BOUNDS;
+	}
+	*out = (uint32_t)count;
+	return SITU_WALK_OK;
+}
+
 situ_walk_err situ_walk_count(const situ_walk_image *image,
                               const uint8_t *message, uint32_t len,
                               uint32_t shape, uint32_t index,
@@ -2957,12 +3179,31 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_COUNT 0x06u
 #define OP_ARG_FIELD 0x07u
 #define OP_FIELD_IN 0x08u
+#define OP_TAG 0x09u
 
 #define STACK_DEPTH 32u
+
+static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
+                                 situ_walk_load load, void *ctx,
+                                 int64_t remaining, int have_tag, uint64_t tag,
+                                 int64_t *out);
 
 situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
                              situ_walk_load load, void *ctx,
                              int64_t remaining, int64_t *out)
+{
+	/* No tag, which is every program but a `tlv` selector. `eval_tagged`
+	 * refuses `OP_TAG` in that case rather than substituting a value: a
+	 * selector evaluated without one would pick a rule, confidently, for
+	 * an item nobody read. */
+	return eval_tagged(image, at, load, ctx, remaining, 0, 0, out);
+}
+
+
+static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
+                                 situ_walk_load load, void *ctx,
+                                 int64_t remaining, int have_tag, uint64_t tag,
+                                 int64_t *out)
 {
 	int64_t  stack[STACK_DEPTH];
 	unsigned depth = 0u;
@@ -3015,6 +3256,18 @@ situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
 				return SITU_WALK_MALFORMED;
 			}
 			stack[depth++] = remaining;
+			continue;
+		}
+
+		/* The raw tag of the `tlv` item being measured (9.5). Ambient the
+		 * way `OP_REMAINING` is: a selector is arithmetic over the tag --
+		 * protobuf's is `tag & 0x7` -- and the tag is not a field anything
+		 * can be addressed by, so there is no index to load it through. */
+		if (op == OP_TAG) {
+			if (!have_tag || depth >= STACK_DEPTH) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			stack[depth++] = (int64_t)tag;
 			continue;
 		}
 

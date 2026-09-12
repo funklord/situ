@@ -133,6 +133,26 @@ typedef struct {
 	 * could not ask whether `count * entry_bytes` fits the frame -- the
 	 * one check every backend makes about such a table -- and the packer
 	 * marked any struct holding one unvalidatable. */
+	/* A `tlv` region's grammar (section 9.5): the selector's bytecode and
+	 * the tag varint's decoder parameters, and beside it one row per value
+	 * rule saying how far an item's value reaches.
+	 *
+	 * Neither section was read by this build, and until the rules existed
+	 * there was nothing in the first worth reading: the record said how to
+	 * find an item's TAG and nothing about its VALUE, so no walker could
+	 * count the items in one.
+	 *
+	 * `tlv_count_` has the trailing underscore because `situ_walk_count` is
+	 * already a function: a member of that name shadows nothing in C, but
+	 * the two reading alike in a diff is how the wrong one gets used. */
+	const uint8_t *tlvs;
+	uint32_t       tlv_count_;
+	uint32_t       tlv_stride;
+
+	const uint8_t *tlv_rules;
+	uint32_t       tlv_rule_count;
+	uint32_t       tlv_rule_stride;
+
 	const uint8_t *indexes;
 	uint32_t       index_count;
 	uint32_t       index_stride;
@@ -280,6 +300,32 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
  * SITU_WALK_UNSUPPORTED for a member that is not a run, and for a `while`
  * run -- how many elements one holds is whichever first fails the predicate,
  * which is a walk this build does not have. */
+/* How many items a `tlv` region holds (section 9.5), and how many entries
+ * an `indexed` region's offset table holds (9.3).
+ *
+ * Separate from `situ_walk_count`, which answers for a COUNTED run -- a
+ * declared count or a `size_code` program -- and whose refusals `walk.py`
+ * mirrors exactly. These two are different questions with different
+ * answers, and folding them in would have moved that function's population
+ * without moving the Python one.
+ *
+ * A `tlv` count is a walk: nothing in the region records one, so each
+ * item's tag is read, the selector decoded out of it, and the rule that
+ * selector names says how far the value reaches. An `indexed` count is an
+ * evaluation, the number being a program the image carries.
+ *
+ * SITU_WALK_UNSUPPORTED where the image does not describe the region --
+ * an image written before those sections carried a selector or a count. */
+situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t *out);
+
+situ_walk_err situ_walk_index_count(const situ_walk_image *image,
+                                    const uint8_t *message, uint32_t len,
+                                    uint32_t shape, uint32_t index,
+                                    uint32_t *out);
+
 situ_walk_err situ_walk_count(const situ_walk_image *image,
                                   const uint8_t *message, uint32_t len,
                                   uint32_t shape, uint32_t index,

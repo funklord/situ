@@ -27372,6 +27372,54 @@ and the two agree for protobuf because both are ten-byte leb128 and
 A `be128` tag would have separated them. It reads the tag's now, which is
 what the generated C does.
 
+### 26.344 The C walker's `tlv` and `indexed` counts
+
+**Two walkers, one design, and one of them could not answer.** 26.342 and
+26.343 gave `walk.py` a `tlv` region's item count and an `indexed`
+region's entry count; this build had the INDEXES section loaded and the
+two TLV sections not loaded at all, so it answered nothing for either.
+That is the drift `test_walker_c` exists to prevent, and it lasted
+exactly as long as nothing asked.
+
+**They are new entry points rather than a wider `situ_walk_count`.** That
+function answers for a COUNTED run -- a declared count, or a `size_code`
+program -- and `python_elements` mirrors its refusals exactly, member for
+member. Folding these in would have moved the C population without moving
+the Python one, and the probe that compares them would have gone on
+passing because both sides ask `situ_walk_count`. So
+`situ_walk_tlv_count` and `situ_walk_index_count`, and a probe that asks
+both.
+
+**A `tlv` count is a walk and an `indexed` count is an evaluation**, which
+is the whole difference between them: nothing in a `tlv` region records a
+count, while an indexed table's size is a program the image carries. So
+the two walkers agree about the second by running the same bytecode, and
+about the first by two loops written to the same generated C.
+
+`OP_TAG` went in beside `OP_REMAINING` for the selector, and
+`situ_walk_eval` keeps its signature: it calls an `eval_tagged` with no
+tag, which refuses `OP_TAG` rather than substituting one. A selector
+evaluated without a tag would pick a rule, confidently, for an item
+nobody read.
+
+**A sabotage that did not apply looks exactly like a check that cannot
+fail.** One of the three here was written with two tabs where the source
+has one, so it never landed and the test passed -- reported as "the check
+does not fire" until the substitution was asserted. All three fire now
+and name their case: `three, all kinds`, `a fixed 4 in two bytes`, and
+`count=0` for the index count read from the wrong field.
+
+**Found and not fixed: `situ_walk_count` refuses a `while` run for a
+reason that is no longer true.** Its comment says the count "is a walk
+this build does not have", and `while_walk` is a static function in the
+same file, four hundred lines above it, which returns exactly that count.
+Fixing it is one line here and one in `python_elements`, which mirrors
+the refusal -- so it moves a contract on both sides and is its own change
+rather than a rider on this one. The stale sentence is the interesting
+part: it was true when written, nothing brought it back together with the
+function that falsified it, and it reads as a design limit rather than as
+an out-of-date note.
+
 ### 26.330 Text encoding, scoped and named by the data
 
 **Two requests from the copyright holder, 2026-09-10, both about where an
