@@ -27303,15 +27303,74 @@ Twelve of the thirteen are answered now, and the one that is not is
 excused BY NAME in the population test rather than by silence -- so a
 second unanswered kind fails it rather than joining the gap.
 
-**TLV is a format change and not a walk, which is why it is separate.**
-`image_tlv` carries the tag varint, an ordered flag and two policies --
-and none of the value rules, so an image says how to read an item's tag
-and nothing about how far its value reaches. Counting items needs the
-rules (label, kind, fixed size or length varint) and the selector
-expression that picks one, which is arithmetic over the tag: protobuf's
-is `tag & 0x7`. So it wants a new section, a `TAG` opcode for the
-ambient value the way `REMAINING` is one, and the packer compiling a
-`TagPart.source` it currently only hands to the code backends.
+~~**TLV is a format change and not a walk, which is why it is
+separate.**~~ **Done in 26.343**, and it was a format change: the
+diagnosis below held and the cost was what it said.
+
+### 26.343 A `tlv` region's items, and the image that could not describe them
+
+**The last of the thirteen `count=` probes, and the only one that needed
+the image format to change.** `image_tlv` carried the tag varint, an
+ordered flag and two policies: enough to find an item's TAG and nothing
+about how far its VALUE reaches, so no walker could count items in one.
+Section 9.5 gives a value four ways to say where it ends -- a fixed size,
+a length prefix, self-delimiting, and `error` -- and an image stated none
+of them.
+
+**What went in.** `image_tlv` grew a `selector_code` and the tag varint's
+decoder parameters, 12 bytes to 20; a new `image_tlv_rule` section
+carries one row per rule, consecutive under the placement, which is the
+delimiter table's arrangement for its reason. A stride wider than a
+reader expects is how this format grows, so a build that stops at twelve
+is unaffected and `FORMAT_VERSION` does not move.
+
+**The selector is bytecode and not a (shift, mask) pair**, because a pair
+is an assumption about the shape of an expression the schema is free to
+write differently. protobuf's is `tag & 0x7`. That needed `Op.TAG` --
+ambient the way `Op.REMAINING` is, since the tag is not a field anything
+can be addressed by -- and the packer compiling a `TagPart.source` that
+`layout` had deliberately rendered to source and thrown the node away.
+The node is kept now: a code backend splices the source, and a walker
+cannot splice anything.
+
+**The varint indices in that record were never usable**, which the work
+turned up rather than assumed. `image_tlv.tag_varint` is documented as an
+index into the varint table and that table is keyed by PLACEMENT, while a
+`tlv` region's tag varint belongs to no placement -- so the field is
+`none` in every image this tree has ever written. The parameters are
+carried by value instead: three bytes against an indirection that
+resolves to nothing.
+
+**Five readers agree over every rule.** The seeded draws reach counts of
+0 and 1, which exercise the loop and none of the rules, so the vectors
+are hand-built to make each rule the one deciding:
+
+    wire 0   self_delimiting     the value is itself a varint
+    wire 2   prefixed            a length varint, then that many bytes
+    wire 5   fixed 4
+    wire 1   fixed 8
+    wire 3   default: error      where the value ends is not knowable
+    -        a length past the frame
+    -        a fixed 4 in two bytes
+
+**Three of the first sabotages passed, and each for the same reason: two
+branches covering one case.** Setting the `error` branch to count instead
+of refusing left the answer right, because an `else: break` for an
+unknown kind caught it too -- so that branch was dead and is folded into
+the `else` now, where sabotaging it fails and names `wire 3 is error`.
+Removing the length-past-the-frame check left the answer right, because
+the size bound after it catches the same message; C has both in the same
+order, so both stay, and the last vector above is the case only the
+second can catch. **A sabotage that passes is a finding about the code,
+not about the sabotage** -- twice here it meant a branch nothing could
+reach, and once it meant a test with no case for the branch.
+
+**And the self-delimiting rule was right by coincidence.** It read the
+value with the RULE's length parameters where C reads it with the TAG's,
+and the two agree for protobuf because both are ten-byte leb128 and
+`terminal_bits` is not consulted at all when the groups are little-first.
+A `be128` tag would have separated them. It reads the tag's now, which is
+what the generated C does.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -34,6 +34,15 @@ ARG_FIELD = 7
 #: the read lands at the right offset of the wrong struct, which is right
 #: only where the nested struct is at offset 0 (26.184).
 FIELD_IN = 8
+#: The raw tag of the `tlv` item being measured (section 9.5). Ambient, the
+#: way `REMAINING` is: a selector is arithmetic over the tag -- protobuf's is
+#: `tag & 0x7` -- and the tag is not a field anything can be addressed by, so
+#: there is no placement index to load it through.
+#:
+#: Only a selector program carries this, and `run` refuses it where no tag
+#: was supplied rather than substituting zero: a selector evaluated without
+#: one would pick a rule, confidently, for an item nobody read.
+TAG = 9
 ADD, SUB, MUL, DIV, MOD, AND, OR, XOR, SHL, SHR, NEG, NOT = range(0x10, 0x1C)
 EQ, NE, LT, LE, GT, GE, LAND, LOR = range(0x20, 0x28)
 MIN, MAX, ALIGN_UP = range(0x30, 0x33)
@@ -95,7 +104,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
         size_of: Callable[[int], int], offset_of: Callable[[int], int],
         count_of: Callable[[int], int], remaining: int,
         load_arg: Callable[[int, int], int] | None = None,
-        load_field_in: Callable[[int, int], int] | None = None) -> int:
+        load_field_in: Callable[[int, int], int] | None = None,
+        tag: int | None = None) -> int:
 	"""Evaluate the program starting at `at` and return its one value.
 
 	The callbacks are what ties an expression to a message: `load_field`
@@ -144,6 +154,12 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			continue
 		if op == REMAINING:
 			stack.append(remaining)
+			continue
+		if op == TAG:
+			if tag is None:
+				raise VmError("this program reads a `tlv` item's tag and "
+				              "no tag was supplied")
+			stack.append(tag)
 			continue
 		if op in (NEG, NOT):
 			if not stack:

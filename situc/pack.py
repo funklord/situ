@@ -53,7 +53,8 @@ WHITESPACE_BYTES = 8
 REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
-TLV_BYTES	= 12
+TLV_BYTES	= 20
+TLV_RULE_BYTES	= 24
 INDEX_BYTES	= 16
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
@@ -93,6 +94,7 @@ SECTION_REGIONS		= 7
 SECTION_CODECS		= 8
 SECTION_VARINTS		= 9
 SECTION_TLVS		= 10
+SECTION_TLV_RULES	= 24
 SECTION_INDEXES		= 11
 SECTION_MARKERS		= 14
 SECTION_CONSTRAINTS	= 15
@@ -179,6 +181,11 @@ class Op:
 	# nesting offset is static; where it is not, the expression is refused
 	# and reported in `Coverage.unencodable` rather than encoded wrongly.
 	FIELD_IN	= 0x08		# + u32 placement index, i32 byte base
+	# The raw tag of the `tlv` item being measured (9.5). Ambient like
+	# `REMAINING`: a selector is arithmetic over the tag and the tag is not
+	# a field anything can be addressed by, so there is no index to load it
+	# through. Only a selector program carries it.
+	TAG		= 0x09
 	ADD		= 0x10
 	SUB		= 0x11
 	MUL		= 0x12
@@ -620,6 +627,61 @@ def _policy(name: str | None) -> int:
 	        "first": 4, "last": 5}.get(name, 0)
 
 
+#: `image_tlv_rule.rule_kind`: section 9.5's four ways for a value to say
+#: where it ends, the last of them by refusing.
+TLV_RULE_KIND = {"fixed": 0, "prefixed": 1, "self_delimiting": 2, "error": 3}
+
+
+def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
+	"""A varint's decoder parameters: max bytes, terminal bits, flags.
+
+	Carried into the `tlv` records by value. The varint TABLE is keyed by
+	placement and a `tlv` region's tag varint belongs to no placement, so
+	the index field beside them is `none` in every image this tree writes
+	-- three bytes of parameters against an indirection that resolves to
+	nothing.
+	"""
+	if decl is None:
+		return 10, 7, 0
+	big = decl.encoding is ast.VarintEncoding.BE128
+	return (min(decl.max_bytes, 255), min(decl.terminal_bits, 255),
+	        2 if big else 0)
+
+
+def _compile_over_tag(program: "Program", expr: ast.Expr,
+		consts: dict[str, int]) -> None:
+	"""Compile a `tlv` selector, whose one free name is `tag` (9.5).
+
+	`Program.compile` resolves a bare name through a path resolver, and a
+	selector's `tag` is not a path -- it is the item being measured. So the
+	name is rewritten to `Op.TAG` here and everything else is the ordinary
+	compiler, which is what keeps the arithmetic one implementation.
+	"""
+	if isinstance(expr, ast.NameRef) and expr.name == "tag":
+		program.emit(Op.TAG)
+		return
+	if isinstance(expr, ast.Binary):
+		op = BINARY.get(expr.op)
+		if op is None:
+			raise PackError(f"binary `{expr.op}` in a tlv selector")
+		_compile_over_tag(program, expr.left, consts)
+		_compile_over_tag(program, expr.right, consts)
+		program.emit(op)
+		return
+	if isinstance(expr, ast.Unary):
+		_compile_over_tag(program, expr.operand, consts)
+		found = UNARY.get(expr.op, ...)
+		if found is ...:
+			raise PackError(f"unary `{expr.op}` in a tlv selector")
+		if found is not None:
+			program.emit(found)
+		return
+	# Anything left is tag-free -- a literal, a `const` -- so the ordinary
+	# compiler takes it, with a resolver that refuses every path: a selector
+	# reading a FIELD would be reading one of a message it is inside.
+	program.compile(expr, lambda path: None, consts)
+
+
 def _index_base(placement: Placement) -> int:
 	"""Where an `indexed` region's offsets are measured from (decision 0024)."""
 	table = placement.index_table
@@ -1004,6 +1066,47 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				program.emit(Op.FIELD, index)
 		program.emit(Op.END)
 		index_count_at[placement.path] = start
+		coverage.expressions += 1
+
+	# Which of a `tlv` region's value rules applies, as arithmetic over the
+	# raw tag (9.5). `TagPart.source` is schema source rather than a node --
+	# deliberately, so that every backend renders the arithmetic in its own
+	# language -- so it is parsed here and compiled against `Op.TAG`, which
+	# is the ambient tag the way `Op.REMAINING` is the ambient room.
+	#
+	# Without it the image said how to read an item's TAG and nothing about
+	# how far its VALUE reached, so no walker could count items in one. The
+	# record carried the tag varint and two policies and stopped there.
+	tlv_selector_at: dict[str, int] = {}
+	for owner, placement in rows:
+		grammar = placement.tlv_grammar
+		if grammar is None:
+			continue
+		part = next((one for one in grammar.tag_decode
+		             if one.name == grammar.selector), None)
+		if part is None:
+			coverage.unencodable[placement.path] = (
+				f"the tlv selector `{grammar.selector}` is not a part the "
+				f"tag decodes to")
+			continue
+		if part.value is None:
+			coverage.unencodable[placement.path] = (
+				"the tlv selector has no expression this image can carry")
+			continue
+		start = len(program.code)
+		try:
+			# `tag` is the one name a selector may read and it is NOT a
+			# field, so the resolver answers None for everything and the
+			# name is turned into `Op.TAG` on the way past. Resolving it
+			# like a path would bind it to whatever member happens to be
+			# called `tag`.
+			_compile_over_tag(program, part.value, consts)
+		except PackError as why:
+			del program.code[start:]
+			coverage.unencodable[placement.path] = str(why)
+			continue
+		program.emit(Op.END)
+		tlv_selector_at[placement.path] = start
 		coverage.expressions += 1
 
 	# -- the side tables, and the core strings a walk needs to function --
@@ -1545,6 +1648,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	ws_blob = bytearray()
 	regions_blob = bytearray()
 	tlvs_blob    = bytearray()
+	tlv_rules_blob = bytearray()
 	index_blob   = bytearray()
 	markers_blob = bytearray()
 
@@ -1636,12 +1740,37 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				_u32(codec_index.get(placement.codec or "")), flags)
 		if placement.tlv_grammar is not None:
 			regions = (1 if placement.tlv_ordered else 0)
+			tag_bytes, tag_terminal, tag_flags = _varint_params(
+				varint_decls.get(placement.tlv_tag_varint or ""))
 			tlvs_blob += _struct.pack(
-				"<IIBBBx", at,
+				"<IIBBBxIBBBx", at,
 				_u32(varint_index.get(placement.tlv_tag_varint or "")),
 				regions,
 				_policy(placement.tlv_unknown),
-				_policy(placement.tlv_duplicates))
+				_policy(placement.tlv_duplicates),
+				_u32(tlv_selector_at.get(placement.path)),
+				tag_bytes, tag_terminal, tag_flags)
+			# One row per rule, consecutive under this placement -- the
+			# delimiter table's arrangement, for its reason: the table is
+			# sorted by placement and binary-searched, so consecutive rows
+			# cost nothing and no row has to carry a count.
+			# `value_rule` and `rule_kind` rather than `rule` and `kind`:
+			# both are bound in this scope already, and shadowing them
+			# made the whole loop a type error rather than a wrong image.
+			for value_rule in placement.tlv_grammar.rules:
+				rule_kind = TLV_RULE_KIND.get(value_rule.kind)
+				if rule_kind is None:
+					coverage.unencodable[placement.path] = (
+						f"a tlv value rule of kind `{value_rule.kind}`")
+					continue
+				len_bytes, len_terminal, len_flags = _varint_params(
+					varint_decls.get(value_rule.length_type or ""))
+				tlv_rules_blob += _struct.pack(
+					"<IqBBxxIBBBx", at,
+					0 if value_rule.label is None else value_rule.label,
+					rule_kind, 1 if value_rule.label is None else 0,
+					_u32(value_rule.size),
+					len_bytes, len_terminal, len_flags)
 		if placement.index_table is not None:
 			entry_bytes = traverse.index_entry_bytes(placement)
 			index_blob += _struct.pack(
@@ -1769,6 +1898,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_CODECS, codecs_blob, CODEC_BYTES),
 			(SECTION_VARINTS, varints_blob, VARINT_BYTES),
 			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
+			(SECTION_TLV_RULES, tlv_rules_blob, TLV_RULE_BYTES),
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
 			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),

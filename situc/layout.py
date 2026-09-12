@@ -51,13 +51,21 @@ class BitPosition:
 class TagPart:
 	"""One part decoded out of a raw tag, as schema source over `tag`.
 
-	Source rather than a node, for the reason `Arm.source` and `discriminant`
-	are: the expression's shape is the schema's and identical in every target,
-	so what a backend needs is the arithmetic and its own name for the tag.
+	Source, for the reason `Arm.source` and `discriminant` are: the
+	expression's shape is the schema's and identical in every target, so
+	what a code backend needs is the arithmetic and its own name for the
+	tag -- each of the four splices `source` straight into its output.
+
+	AND the node, because a WALKER cannot splice anything. It reads an
+	image at run time and evaluates bytecode, so the packer has to compile
+	this expression rather than render it -- and re-parsing the rendered
+	source to get back what was thrown away here would be a second parser
+	for one grammar. `value` is None only where an image predates this.
 	"""
 
 	name: str
 	source: str
+	value: "ast.Expr | None"	= None
 
 
 @dataclass(frozen=True)
@@ -2985,7 +2993,9 @@ def _tlv_grammar(member: ast.Tlv) -> TlvGrammar:
 	length = member.argument("length_type")
 
 	return TlvGrammar(
-		tag_decode  = tuple(TagPart(part.name, unparse.expr_to_source(part.value))
+		tag_decode  = tuple(TagPart(part.name,
+		                            unparse.expr_to_source(part.value),
+		                            part.value)
 		                    for part in member.tag_decode),
 		selector    = member.value_size.selector if member.value_size else None,
 		rules       = tuple(_value_rule(case) for case in

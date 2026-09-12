@@ -177,11 +177,39 @@ def test_the_opcodes_match_the_packer() -> None:
 	walker (0026), so the opcode numbers are written twice on purpose. This
 	is what stops that being a licence to drift.
 	"""
-	for name in ("END", "PUSH", "FIELD", "REMAINING", "SIZE", "OFFSET",
-	             "COUNT", "ADD", "SUB", "MUL", "DIV", "MOD", "AND", "OR",
-	             "XOR", "SHL", "SHR", "NEG", "NOT", "EQ", "NE", "LT", "LE",
-	             "GT", "GE", "LAND", "LOR", "MIN", "MAX", "ALIGN_UP"):
+	shared = [name for name in vars(vm)
+	          if name.isupper() and not name.startswith("_")
+	          and isinstance(getattr(vm, name), int)
+	          and hasattr(packer.Op, name)]
+
+	for name in shared:
 		assert getattr(vm, name) == getattr(packer.Op, name), name
+
+	# Derived rather than listed, after `TAG` was added to both files and
+	# the hand-written list did not mention it -- so the test passed while
+	# saying nothing about the opcode that had just arrived. A quantifier
+	# is what this is for, and a list is not one.
+	for name in ("END", "PUSH", "FIELD", "REMAINING", "TAG", "FIELD_IN",
+	             "ADD", "ALIGN_UP"):
+		assert name in shared, f"{name} is not in both tables"
+	assert len(shared) >= 31, f"only {len(shared)} opcodes are shared"
+
+
+def test_the_tlv_rule_kinds_match_the_packer() -> None:
+	"""One more table written twice, and the same reason as the opcodes.
+
+	`image_tlv_rule.rule_kind` is a small integer and the walker must not
+	import `situc` (0026), so 9.5's four ways for a value to say where it
+	ends are numbered in both files. This reads both.
+	"""
+	from walker import walk as walking
+
+	assert packer.TLV_RULE_KIND == {
+		"fixed":            walking.TLV_FIXED,
+		"prefixed":         walking.TLV_PREFIXED,
+		"self_delimiting":  walking.TLV_SELF_DELIMITING,
+		"error":            walking.TLV_ERROR,
+	}
 
 
 def test_the_compiler_does_not_import_the_walker() -> None:
@@ -1170,7 +1198,10 @@ def test_every_count_the_differ_asks_is_one_the_walk_answers() -> None:
 	"""
 	from situc.codegen import differ
 
-	excused = {("protobuf.situ", "proto_message", "fields")}
+	# Empty since 26.343, and asserted empty below rather than deleted: an
+	# empty waiver list that cannot grow unnoticed is a guarantee where one
+	# nobody checks is a claim.
+	excused: set[tuple[str, str, str]] = set()
 	asked   = 0
 	missing = []
 
@@ -1214,6 +1245,89 @@ def test_every_count_the_differ_asks_is_one_the_walk_answers() -> None:
 				if local not in answers:
 					missing.append(f"{schema.name}:{struct.name}.{local}")
 
+	assert not excused, "nothing is waived now; say why before adding one"
 	assert asked >= 13, f"only {asked} count probes were examined"
 	assert not missing, f"the differ asks these `count=` and the walk is " \
 		f"silent: {missing}"
+
+
+def _leb128(value: int) -> bytes:
+	"""One protobuf varint, so the vectors below are readable as tags."""
+	out = bytearray()
+	while True:
+		group = value & 0x7F
+		value >>= 7
+		out.append(group | (0x80 if value else 0))
+		if not value:
+			return bytes(out)
+
+
+@pytest.mark.skipif(not COMPLETE, reason="a backend is missing")
+def test_a_tlv_region_is_counted_the_same_in_all_five(tmp_path: Path) -> None:
+	"""Every one of section 9.5's four ways a value says where it ends.
+
+	A `tlv` region records no count, so counting is a walk: read an item's
+	tag, decode the selector out of it -- protobuf's is `tag & 0x7` -- take
+	the rule that selector names, and let that rule say how far the value
+	reaches. Neither walker could do any of it until 26.343, because the
+	image described none of it: `image_tlv` carried the tag varint and two
+	policies, so a reader could find an item's TAG and nothing about its
+	VALUE.
+
+	The random draws the differential makes reach counts of 0 and 1, which
+	exercise the loop and none of the rules. These are hand-built so that
+	each rule is the one deciding the answer, the last two by REFUSING:
+
+	    wire 0   self_delimiting   the value is itself a varint
+	    wire 2   prefixed          a length varint, then that many bytes
+	    wire 5   fixed 4
+	    wire 1   fixed 8
+	    wire 3   default: error    where the value ends is not knowable
+	    -        a length past the frame
+
+	`three, all kinds` is the one that separates a correct walk from one
+	that miscounts a prefixed value: dropping the `at += used` that consumes
+	the length varint leaves it reading 2 where every backend reads 3, and
+	leaves every other case here right.
+	"""
+	schema  = ROOT / "example" / "protobuf" / "protobuf.situ"
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	varint    = _leb128(1 << 3 | 0) + _leb128(150)
+	prefixed  = _leb128(2 << 3 | 2) + _leb128(3) + b"abc"
+	fixed_four = _leb128(3 << 3 | 5) + b"\x01\x02\x03\x04"
+
+	cases = {
+		"nothing at all":    (b"",                              0),
+		"one varint":        (varint,                           1),
+		"varint, prefixed":  (varint + prefixed,                2),
+		"three, all kinds":  (varint + prefixed + fixed_four,   3),
+		"wire 1, fixed 8":   (_leb128(4 << 3 | 1) + bytes(8),   1),
+		"wire 3 is error":   (_leb128(1 << 3 | 3) + bytes(1),   0),
+		"a length past the frame":
+		                     (_leb128(2 << 3 | 2) + _leb128(9)
+		                      + b"ab",                          0),
+		# The one case only the SECOND bound catches. A `prefixed` value is
+		# refused by the length check above before this is reached, so
+		# without a fixed-size value the frame cannot hold, removing
+		# `size > view.limit - at` leaves every other case here right.
+		"a fixed 4 in two bytes":
+		                     (_leb128(3 << 3 | 5) + b"ab",       0),
+	}
+
+	for label, (packet, expected) in cases.items():
+		walked = _by_member(report.listing(image, packet))
+		assert walked.get(("proto_message", "fields")) \
+			== f"fields count={expected}", f"the walk, on {label}"
+
+		for backend, argv in command.items():
+			found = _by_member(answers(argv, packet, tmp_path))
+			assert found.get(("proto_message", "fields")) \
+				== f"fields count={expected}", f"{backend}, on {label}"

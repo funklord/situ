@@ -29,6 +29,7 @@ STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
 SKIPS                             = 22
 WHITESPACE                        = 23
+TLV_RULES                         = 24
 VARINTS, TLVS, INDEXES             = 9, 10, 11
 NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
@@ -268,6 +269,18 @@ class Image:
 	#: whether such a field is *wrong* cannot be asked until this says
 	#: whether it is *there*.
 	versions: dict[int, int]		= field(default_factory=dict)
+	#: placement index -> (tag_varint, selector_code) for a `tlv` region
+	#: (section 9.5). The section existed and nothing loaded it, and it
+	#: carried no selector to load: an image said how to read an item's TAG
+	#: and nothing about how far its VALUE reaches.
+	tlvs: dict[int, tuple[int, int, int, bool]] = field(default_factory=dict)
+	#: placement index -> [(label, kind, is_default, size, length_varint)],
+	#: in declaration order, which is the order a selector is matched in.
+	#: 9.5's four ways for a value to say where it ends, the last of them by
+	#: refusing.
+	tlv_rules: dict[int, list[tuple[int, int, int, int,
+	                                tuple[int, int, bool]]]] = \
+		field(default_factory=dict)
 	#: placement index -> (entry_bits, count_code, measured_from) for an
 	#: `indexed` region's offset table (section 9.3, decision 0024).
 	#:
@@ -457,6 +470,25 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			enum_id, value, _pad = _struct.unpack_from(
 				"<IqI", blob, at + i * stride)
 			image.enum_values.setdefault(enum_id, set()).add(value)
+
+	if TLVS in found:
+		at, records, stride = found[TLVS]
+		for i in range(records):
+			(where, _tag_index, _flags, _unknown, _dup, selector,
+			 tag_bytes, tag_terminal, tag_flags) = _struct.unpack_from(
+				"<IIBBBxIBBBx", blob, at + i * stride)
+			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
+			                     bool(tag_flags & 2))
+
+	if TLV_RULES in found:
+		at, records, stride = found[TLV_RULES]
+		for i in range(records):
+			(where, label, kind, default, size,
+			 len_bytes, len_terminal, len_flags) = _struct.unpack_from(
+				"<IqBBxxIBBBx", blob, at + i * stride)
+			image.tlv_rules.setdefault(where, []).append(
+				(label, kind, default, size,
+				 (len_bytes, len_terminal, bool(len_flags & 2))))
 
 	if INDEXES in found:
 		at, records, stride = found[INDEXES]

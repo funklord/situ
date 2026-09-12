@@ -28,7 +28,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
                          read_bytes, read_scalar,
                          _evaluate, _read_at, offset_bits, record_run_count,
                          scan, size_bits,
-                         struct_extent, varint, while_count)
+                         struct_extent, tlv_count, varint, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
@@ -345,6 +345,19 @@ def _record_runs(image: Image, struct_index: int) -> list[int]:
 	        and image.placements[index].type_struct != NONE
 	        and not image.placements[index].is_tag
 	        and index not in image.regions]
+
+
+def _tlv_runs(image: Image, struct_index: int) -> list[int]:
+	"""`tlv` regions whose grammar this image describes (9.5).
+
+	The differ asks these `count=` as well. The section existed and nothing
+	loaded it, and until 26.343 there was nothing in it worth loading: the
+	record said how to read an item's tag and nothing about how far its
+	value reaches.
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if index in image.tlvs and index in image.tlv_rules
+	        and image.tlvs[index][0] != NONE]
 
 
 def _indexed_runs(image: Image, struct_index: int) -> list[int]:
@@ -1136,6 +1149,13 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		local = _local(image, index)
 		try:
 			lines.append(f"{local} count={record_run_count(view, index)}")
+		except (Refused, Unplaceable):
+			continue
+
+	for index in _tlv_runs(image, struct_index):
+		local = _local(image, index)
+		try:
+			lines.append(f"{local} count={tlv_count(view, index)}")
 		except (Refused, Unplaceable):
 			continue
 

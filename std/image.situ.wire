@@ -19,7 +19,7 @@ endian little
 target buffer
 
 enum image_section_tag : u32 unknown=pass
-  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 names=12 vectors=13
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 names=12 vectors=13
 
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
@@ -157,13 +157,30 @@ struct image_struct size=16
   @0x0008   4         u32        size_bits  little
   @0x000c   4         u32        struct_flags  little
 
-struct image_tlv size=12
+struct image_tlv size=20
   @0x0000   4         u32        placement  little
   @0x0004   4         u32        tag_varint  little
   @0x0008   1         u8         tlv_flags
   @0x0009   1         u8         unknown_policy
   @0x000a   1         u8         duplicate_policy
   @0x000b   1         u8         tlv_pad
+  @0x000c   4         u32        selector_code  little
+  @0x0010   1         u8         tag_max_bytes
+  @0x0011   1         u8         tag_terminal_bits
+  @0x0012   1         u8         tag_varint_flags
+  @0x0013   1         u8         tag_pad
+
+struct image_tlv_rule size=24
+  @0x0000   4         u32        placement  little
+  @0x0004   8         i64        label  little
+  @0x000c   1         u8         rule_kind
+  @0x000d   1         u8         is_default
+  @0x000e   2         u8         rule_pad  little
+  @0x0010   4         u32        fixed_size  little
+  @0x0014   1         u8         length_max_bytes
+  @0x0015   1         u8         length_terminal_bits
+  @0x0016   1         u8         length_varint_flags
+  @0x0017   1         u8         length_pad
 
 struct image_varint size=12
   @0x0000   4         u32        placement  little

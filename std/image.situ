@@ -68,6 +68,7 @@ enum image_section_tag : u32 {
 	depths       = 21,     // how deep a recursive struct may nest (0054)
 	skips        = 22,     // the whitespace a member owns in front of it
 	whitespace   = 23,     // what `[trim]` removes, for the whole schema
+	tlv_rules    = 24,     // how a `tlv` item's value says where it ends
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -369,6 +370,52 @@ struct image_tlv {
 	u8   unknown_policy;
 	u8   duplicate_policy;
 	u8   tlv_pad;
+	// Which rule below applies, as arithmetic over the raw tag: protobuf's
+	// selector is `tag & 0x7`. Bytecode rather than a (shift, mask) pair,
+	// because a pair is an assumption about the shape of an expression the
+	// schema is free to write differently -- and `Op.tag` is the ambient
+	// value the way `Op.remaining` already is.
+	//
+	// This record was twelve bytes and carried the tag varint and the two
+	// policies: enough to read an item's TAG and nothing about how far its
+	// VALUE reaches, so a walker could not count items at all. A stride
+	// wider than a reader expects is how this format grows, so a build that
+	// stops at twelve is unaffected.
+	u32  selector_code;               // bytecode offset, or `none`
+	// The tag varint's decoder parameters, carried rather than referenced.
+	// `tag_varint` above is documented as an index into the varint table
+	// and is not usable as one: that table is keyed by PLACEMENT, and a
+	// `tlv` region's tag varint belongs to no placement -- so the field is
+	// `none` for every image this tree produces. The parameters are three
+	// bytes and the indirection was zero, which is the trade.
+	u8   tag_max_bytes;
+	u8   tag_terminal_bits;
+	u8   tag_varint_flags;            // bit 1: big-endian groups (be128)
+	u8   tag_pad;
+}
+
+// How one item's value says where it ends (section 9.5). One row per rule,
+// consecutive under the placement -- the delimiter table's arrangement and
+// for its reason: the table is sorted by placement and binary-searched, so
+// consecutive rows cost nothing and no row has to carry a count.
+//
+// `label` is the selector value this rule answers for, and `is_default`
+// marks the dispatch's `default` -- which cannot be spelled as a label,
+// since every 64-bit value is a legal one.
+struct image_tlv_rule {
+	u32  placement;
+	i64  label;                       // the selector value this matches
+	u8   rule_kind;                   // 0 fixed, 1 prefixed,
+	                                  // 2 self_delimiting, 3 error
+	u8   is_default;
+	u8   rule_pad[2];
+	u32  fixed_size;                  // bytes, for `fixed`
+	// A `prefixed` value's length varint, by its parameters rather than by
+	// an index, for the reason `image_tlv` gives above.
+	u8   length_max_bytes;
+	u8   length_terminal_bits;
+	u8   length_varint_flags;         // bit 1: big-endian groups (be128)
+	u8   length_pad;
 }
 
 // One thing `validate` checks. In placement order, because the first failure
@@ -523,6 +570,7 @@ require absolute_static(image_region);
 require absolute_static(image_codec);
 require absolute_static(image_varint);
 require absolute_static(image_tlv);
+require absolute_static(image_tlv_rule);
 require absolute_static(image_constraint);
 require absolute_static(image_pinned);
 require absolute_static(image_enum_value);
@@ -543,7 +591,8 @@ require size(image_skip) == 8;
 require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;
-require size(image_tlv) == 12;
+require size(image_tlv) == 20;
+require size(image_tlv_rule) == 24;
 require size(image_constraint) == 16;
 require size(image_pinned) == 32;
 require size(image_enum_value) == 16;

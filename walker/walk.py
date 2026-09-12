@@ -1051,9 +1051,20 @@ def varint(view: View, index: int) -> tuple[int, int]:
 	rules = view.image.varint_rules.get(index)
 	if rules is None:
 		raise Refused(f"placement {index} has no varint rules in this image")
-	max_bytes, terminal_bits, big = rules
 
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	return decode_varint(view, start, *rules)
+
+
+def decode_varint(view: View, start: int, max_bytes: int,
+		terminal_bits: int, big: bool) -> tuple[int, int]:
+	"""`varint`'s loop, over parameters rather than a placement.
+
+	Split out for a `tlv` region, whose tag and length varints belong to no
+	placement: they are the region's grammar rather than members of it, so
+	there is nothing to look up `varint_rules` by. The arithmetic is the
+	same and there is one copy of it, which is the point.
+	"""
 	avail = max(0, view.limit - start)
 	data  = view.buffer[start:start + min(avail, max_bytes)]
 
@@ -1226,6 +1237,119 @@ def parse_digits(view: View, index: int) -> int:
 def while_count(view: View, index: int) -> int:
 	"""How many elements a `while` run holds."""
 	return _while_walk(view, index)[0]
+
+
+#: `image_tlv_rule.rule_kind` (9.5), the walker's copy. One more table
+#: written twice on purpose -- this package imports nothing from `situc` --
+#: and `test_the_tlv_rule_kinds_match_the_packer` is what stops it drifting.
+TLV_FIXED, TLV_PREFIXED, TLV_SELF_DELIMITING, TLV_ERROR = 0, 1, 2, 3
+
+
+def tlv_count(view: View, index: int) -> int:
+	"""How many items a `tlv` region holds (section 9.5).
+
+	A walk, because nothing in the region records a count: read an item's
+	tag, decode the selector out of it, take the rule that selector names,
+	and that rule says how far the value reaches. Held to the generated C
+	item reader, whose refusals are the stopping conditions -- a tag varint
+	that does not fit, a value that runs past the frame, and a selector no
+	rule answers for, which is `default: error` and is a refusal rather
+	than a guess about where the value ends.
+
+	The image could not describe this until 26.343: `image_tlv` carried the
+	tag varint and two policies, so a reader could find an item's tag and
+	nothing about its value.
+	"""
+	grammar = view.image.tlvs.get(index)
+	rules   = view.image.tlv_rules.get(index)
+	if grammar is None or not rules:
+		raise Refused(f"placement {index} has no tlv grammar in this image")
+	selector_code, tag_bytes, tag_terminal, tag_big = grammar
+	if selector_code == NONE:
+		raise Refused(f"placement {index} has no tlv selector in this image")
+
+	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	count = 0
+
+	while at < view.limit:
+		try:
+			used, tag = decode_varint(view, at, tag_bytes, tag_terminal,
+			                          tag_big)
+		except Refused:
+			break
+		if used == 0:
+			break
+		at += used
+
+		which = vm.run(
+			view.image.code, selector_code,
+			load_field = lambda i: _value_of(view, i),
+			size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
+			offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
+			count_of   = lambda i: _count(view, i),
+			remaining  = max(0, view.limit - at),
+			tag        = tag)
+
+		found = next((one for one in rules
+		              if not one[2] and one[0] == which),
+		             next((one for one in rules if one[2]), None))
+		if found is None:
+			break
+		_label, kind, _default, fixed, length_rule = found
+
+		if kind == TLV_FIXED:
+			size = fixed if fixed != NONE else 0
+		elif kind == TLV_SELF_DELIMITING:
+			# The value IS a varint, so its own bytes say where it stops --
+			# and it is read with the TAG varint's parameters, which is what
+			# the generated C does: `situ_varint_get(..., max_tag, ...)`.
+			# This read `length_rule` first and agreed by coincidence, both
+			# being ten bytes of leb128 where `terminal_bits` is not
+			# consulted at all; a `be128` tag would have separated them.
+			try:
+				size, _held = decode_varint(view, at, tag_bytes,
+				                            tag_terminal, tag_big)
+			except Refused:
+				break
+			if size == 0:
+				break
+		elif kind == TLV_PREFIXED:
+			try:
+				used, length = decode_varint(view, at, *length_rule)
+			except Refused:
+				break
+			if used == 0:
+				break
+			at += used
+			if length > view.limit - at:
+				break
+			size = length
+		else:
+			# `default: error` (TLV_ERROR), and a kind this build does not
+			# know, which an image from a later situc may carry. Both mean
+			# the same thing here -- where the value ends is not knowable,
+			# so the count stops -- and C returns CONSTRAINT for the first,
+			# which is the same stopping point.
+			#
+			# ONE branch and not two. This was written with an explicit
+			# `if kind == TLV_ERROR: break` above the chain as well, and
+			# that branch was dead: the `else` caught the same case, so
+			# sabotaging either left the walk answering correctly and the
+			# test could not tell them apart.
+			break
+
+		# The second of two bounds on a `prefixed` value, and C has both in
+		# the same order. For that kind they catch the same message: the
+		# check above refuses a declared length past the frame, and this
+		# one refuses the size it became. Neither is dead -- this is the
+		# only bound `fixed` and `self_delimiting` get -- but a sabotage of
+		# the first alone does not show, and saying so here is cheaper than
+		# somebody re-deriving it.
+		if size > view.limit - at:
+			break
+		at    += size
+		count += 1
+	return count
 
 
 def record_run_count(view: View, index: int, depth: int = 0) -> int:
