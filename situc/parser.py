@@ -1439,6 +1439,8 @@ class Parser:
 				return self.parse_text_field()
 			if token.text == "endian_marker":
 				return self.parse_marker_field()
+			if token.text == "peek":
+				return self.parse_peek()
 			if token.text == "reserved":
 				return self.parse_reserved()
 			if token.text == "preamble":
@@ -2266,6 +2268,32 @@ class Parser:
 		                 repeat  = field.repeat,
 		                 radix   = radix,
 		                 scaled  = scaled,
+		                 located = field.located,
+		                 skip    = field.skip)
+
+	def parse_peek(self) -> ast.Field:
+		"""`peek u8 kind;` -- a member read at the cursor and not spent.
+
+		A prefix rather than a modifier after the name, because it says
+		what KIND of member this is, which is the slot `reserved`,
+		`preamble` and the radix keywords already occupy. What follows is
+		an ordinary field in every other respect.
+		"""
+		start = self.advance()
+		field = self.parse_field()
+
+		# Keywords, for `parse_text_field`'s reason: the positional form
+		# silently took an argument for whatever field was added most
+		# recently.
+		return ast.Field(self.span_from(start), field.name, field.type_ref,
+		                 array   = field.array,
+		                 pin     = field.pin,
+		                 attrs   = field.attrs,
+		                 until   = field.until,
+		                 repeat  = field.repeat,
+		                 radix   = field.radix,
+		                 scaled  = field.scaled,
+		                 peek    = True,
 		                 located = field.located,
 		                 skip    = field.skip)
 

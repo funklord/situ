@@ -67,6 +67,7 @@ def check(schema: ast.Schema) -> None:
 	check_byte_enums(schema)
 	check_token_sets(schema)
 	check_located_names(schema)
+	check_peeked_members(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
@@ -2491,6 +2492,110 @@ def _check_located(member: ast.Member, located: ast.Expr,
 			         "layout the solver is computing, and this is an input "
 			         "to it"],
 		)
+
+
+def check_peeked_members(schema: ast.Schema) -> None:
+	"""A peeked member is a discriminant, and the variant follows it (0057).
+
+	`peek` empties a member's extent so the arm owns the bytes it read.
+	That is a real thing to say about a discriminant and an odd thing to
+	say about anything else -- "this member and the next share bytes"
+	invites a length prefix that is also payload, which nothing here has
+	asked for. Refused rather than admitted quietly, so the general case
+	can arrive later by deleting a check rather than by discovering that
+	it already half worked.
+	"""
+	for struct in schema.structs():
+		members = list(struct.members)
+		for index, member in enumerate(members):
+			if not getattr(member, "peek", False):
+				continue
+			assert isinstance(member, ast.Field)
+			_check_one_peek(struct, member, members[index + 1:])
+
+
+def _check_one_peek(struct: ast.StructDecl, member: ast.Field,
+		rest: list[ast.Member]) -> None:
+	if member.array is not None:
+		raise error(
+			f"`{member.name}` is peeked and is a run",
+			member.span,
+			label = "an array here",
+			notes = ["a variant switches on one value, so a peeked member "
+			         "is a scalar",
+			         "a run whose bytes the next member also owns is not "
+			         "this construct (0057)"])
+
+	if member.until is not None or member.repeat is not None:
+		raise error(
+			f"`{member.name}` is peeked and is framed by the data",
+			member.span,
+			label = "a delimiter or a run condition here",
+			notes = ["a peeked member contributes nothing to the struct's "
+			         "extent, so framing it says where something ends that "
+			         "takes up no room",
+			         "a variant switches on a scalar read at the cursor"])
+
+	if member.located is not None:
+		raise error(
+			f"`{member.name}` is peeked and is placed by `at`",
+			member.span,
+			label = "two rules about where this member is",
+			notes = ["`peek` reads at the cursor and does not advance it; "
+			         "`at` reads where a field says and is measured from "
+			         "the message",
+			         "a member with both has two answers to one question "
+			         "(17.0)"])
+
+	if member.type_ref.scalar is None:
+		raise error(
+			f"`{member.name}` is peeked and is not a scalar",
+			member.type_ref.span,
+			label = f"`{member.type_ref.name}` is not one",
+			notes = ["a variant switches on a scalar, and a peeked member "
+			         "exists to be switched on"])
+
+	# The variant has to be NEXT, and it has to be this member's. A peeked
+	# member further up the struct would empty its extent for every member
+	# after it, which is the general overlap case rather than a dispatch.
+	#
+	# Three conditions rather than one, because they have three remedies:
+	# the first version folded them together and told a schema switching on
+	# the wrong field that no variant followed it, which is a diagnostic
+	# naming the wrong cause and sends a reader somewhere.
+	after = rest[0] if rest else None
+
+	if not isinstance(after, ast.Variant):
+		if any(isinstance(held, ast.Variant) for held in rest):
+			raise error(
+				f"`{member.name}` is peeked and the variant is not next",
+				member.span,
+				label = f"`{getattr(after, 'name', 'a member')}` is between "
+				        f"them",
+				notes = ["a peeked member gives its bytes to what comes "
+				         "NEXT, so anything between it and the variant "
+				         "would own them instead",
+				         "move the variant up against it, or drop `peek`"])
+		raise error(
+			f"`{member.name}` is peeked and no variant follows it",
+			member.span,
+			label = "nothing here switches on it",
+			notes = ["`peek` gives a member's bytes to what comes next, "
+			         "which is a thing to say about a discriminant and "
+			         "not about a member in general (0057)",
+			         "put the `variant` that switches on it immediately "
+			         "after it, or drop `peek`"])
+
+	named = getattr(after.discriminant, "name", None)
+	if named != member.name:
+		raise error(
+			f"`{member.name}` is peeked and the variant switches on "
+			f"something else",
+			member.span,
+			label = f"the variant below switches on `{named}`",
+			notes = ["a peeked member exists to be the discriminant of the "
+			         "variant that follows it",
+			         f"switch on `{member.name}`, or drop `peek`"])
 
 
 def check_checksum_codecs(schema: ast.Schema) -> None:

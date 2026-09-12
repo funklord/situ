@@ -4756,3 +4756,92 @@ def test_a_signed_text_number_at_the_full_width_compiles(
 		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
+
+
+PEEKED = """
+struct pair { u8 tag; u8 body; }
+struct value {
+	peek u8  kind;
+	variant held switch (kind) {
+		case 'a': pair  as_a;
+		default:  pair  as_b;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_peeked_discriminant_leaves_its_byte_to_the_arm(
+		tmp_path: Path) -> None:
+	"""0057, compiled and run.
+
+	`tag` is the SAME BYTE as `kind`, which is what makes this a test
+	rather than a demonstration: a backend placing the arm one byte late
+	reports a `tag` that is not the discriminant, and nothing about the
+	shape says so -- both are `u8` at what looks like the same offset.
+	"""
+	schema   = parse_text(PREAMBLE + PEEKED)
+	resolved = resolve(schema, solve(schema))
+	for name, text in dict(generate(schema, resolved, "unit").files()).items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+int main(void)
+{
+	const char *doc = "abc";
+	situ_msg_t msg;
+	situ_view_t view, arm;
+
+	msg.base = (uint8_t *)(uintptr_t)(const void *)doc;
+	msg.size = 3u;
+
+	if (situ_value_view(&msg, 0, &view) != SITU_OK) return 1;
+	if (situ_value_kind_get(view) != (uint8_t)'a') return 2;
+	if (situ_value_held_as_a_view(view, &arm) != SITU_OK) return 3;
+	/* The arm owns the byte it was chosen by. */
+	if (situ_pair_tag_get(arm) != situ_value_kind_get(view)) return 4;
+	if (situ_pair_body_get(arm) != (uint8_t)'b') return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_nested_delimited_text_number_compiles(tmp_path: Path) -> None:
+	"""It never had, and no schema had the shape until json's number.
+
+	The value helper a nested text number gets exists so an expression can
+	name `<outer>_<path>_value` to drive a length. A DELIMITED one has no
+	constant length to offer: both its scan accessor and its span helper
+	belong to the inner struct, so the helper emitted an undeclared
+	`situ_outer_held_n_len` and the header did not compile. Every text
+	driver in `example/` was delimited OR nested and none was both.
+	"""
+	body = ('struct inner { decimal u16 n until ","; u8 r[remaining]; }\n'
+	        "struct outer { u8 k; inner held; }")
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	for name, text in dict(generate(schema, resolved, "unit").files()).items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text(
+		'#include "unit.h"\nint main(void) { return 0; }\n', encoding="ascii")
+
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr

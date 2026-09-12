@@ -88,7 +88,18 @@ member		= field | reserved | marker_field | block | variant | tag_field
  * it occupies whatever that costs and shows nothing. *)
 pad		= "pad_to" "(" digits ")" ";" ;
 
-field		= [ radix ] type_ref ident [ array_spec ] [ skip ]
+(* Decision 0057. `peek u8 kind;` -- a member read at the cursor and not
+ * spent: it contributes nothing to the enclosing struct's extent, so the
+ * member after it begins where it began, and the arm of the variant it
+ * selects owns the byte it looked at. `before` for dispatch: a delimiter
+ * may belong to the member it ends or to neither side, and a discriminant
+ * has that problem one construct along.
+ *
+ * Refused anywhere but immediately before the `variant` that switches on
+ * it, and only on a scalar: a member whose extent is emptied and whose
+ * bytes the data frames is the general overlap case rather than a
+ * dispatch. *)
+field		= [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
 		  [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
 (* Section 8.6.8. A run of bytes that may precede the member and belongs to
  * it -- read before `until`, because the two are read in the order the bytes

@@ -1032,3 +1032,26 @@ struct measured {
 	scaled u16  positive  until " "  max 12;
 	u8          rest[remaining];
 }
+
+// A discriminant that is read and not spent, which is 0057's construct.
+//
+// `peek` empties the member's extent, so the arm begins where the
+// discriminant began and owns the byte it looked at. That is what json's
+// number needs and could not have: a variant switches on a field, a field
+// occupies its bytes, and the arm started one byte late.
+//
+// `tag` is the SAME BYTE as `kind`, which is what makes this differential
+// rather than decorative: a backend that places the arm one byte late
+// reports a `tag` that is not the discriminant, and the four disagree.
+// Nothing about the shape says so -- both members are `u8` at what looks
+// like the same offset -- so the check is the value rather than the map.
+struct kinded_a { u8  tag; u8   body; }
+struct kinded_b { u8  tag; u16  body; }
+
+struct kinded {
+	peek u8  kind;
+	variant held switch (kind) {
+		case 'a': kinded_a  as_a;
+		default:  kinded_b  as_b;
+	}
+}

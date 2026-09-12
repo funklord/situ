@@ -1753,7 +1753,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			| (2 if placement.trimmed else 0) \
 			| (4 if placement.case_insensitive else 0) \
 			| (8 if is_bcd else 0) \
-			| (16 if placement.scaled else 0)
+			| (16 if placement.scaled else 0) \
+			| (32 if placement.peek else 0)
 		placements_blob += _struct.pack(
 			"<BBBB",
 			_kind_of(placement),

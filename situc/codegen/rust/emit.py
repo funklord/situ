@@ -42,6 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	fixed_span_bits,
 	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
 	is_own_member,
@@ -2559,7 +2560,7 @@ class Emitter:
 		if chain is None:
 			return []
 
-		content = (str(placement.size_bits // BITS_PER_BYTE)
+		content = (str(fixed_span_bits(placement) // BITS_PER_BYTE)
 		           if placement.is_fixed_size else
 		           self._content_length_expression(struct, placement,
 		                                           running="at + lead"))

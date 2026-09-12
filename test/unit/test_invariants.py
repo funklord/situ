@@ -149,12 +149,17 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 
 #: Every variant-arm member in the corpus, by the two facts the four backends
 #: branch on: whether the member has a scalar type, and whether its type name
-#: resolves to a struct. Counted on 2026-09-03 over the committed schemas.
+#: resolves to a struct. Counted on 2026-09-03 over the committed schemas,
+#: and the fixed cell re-counted 2026-09-12 when `edges.kinded` added two
+#: arms to it -- 0057's corpus struct, whose `kinded_a` and `kinded_b` are
+#: fixed structs like the forty-five already there. An EXISTING cell moving
+#: is the benign half of what this test distinguishes; a new one would not
+#: have been a number to update.
 #:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                11,
-	("no-scalar", "struct", "fixed"):            45,
+	("no-scalar", "struct", "fixed"):            47,
 	("no-scalar", "struct", "unmeasurable"):     20,
 	("no-scalar", "not-struct", ""):              1,
 }

@@ -374,6 +374,15 @@ class Field(Member):
 	#: separate flag is what lets each of those be a deliberate decision
 	#: instead of an inherited one.
 	scaled: bool			= False
+	#: `peek u8 kind;` -- the member is read at the cursor and contributes
+	#: nothing to the enclosing struct's extent, so the member after it
+	#: begins where it began (0057).
+	#:
+	#: `before` for dispatch: a delimiter may belong to the member it ends
+	#: or to neither side, and a discriminant has that problem one
+	#: construct along -- it is read to choose, and the bytes belong to the
+	#: arm.
+	peek: bool			= False
 	#: `u8 pixels[n] at hdr.pixel_offset` -- the member sits where a field
 	#: says, measured from the start of the message rather than from the
 	#: member before it. Distinct from `pin`, which asserts the offset the

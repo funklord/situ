@@ -1926,3 +1926,82 @@ def test_an_at_expression_over_fields_and_constants_still_works() -> None:
 	             "struct s { u8 a; u8 b[4] at WHERE; u8 r[remaining]; }"):
 		schema = parse_text(body, path="s.situ")
 		assert schema.structs()
+
+
+# -- a non-consuming dispatch (0057) ----------------------------------------
+
+
+def _peeked(body: str) -> str:
+	return ("struct pair { u8 a; u8 b; }\n" + body)
+
+
+def test_a_peeked_discriminant_parses() -> None:
+	"""The construct: a member read at the cursor and not spent."""
+	schema = parse_text(_peeked(
+		"struct v { peek u8 k; variant b switch (k) "
+		"{ case 'a': pair x; default: pair y; } }"), path="s.situ")
+	member = schema.structs()[1].members[0]
+	assert isinstance(member, ast.Field) and member.peek
+
+
+def test_a_peeked_member_contributes_nothing_to_the_extent() -> None:
+	"""The whole of the construct, as the solver sees it.
+
+	The arm begins where the discriminant began, so the struct's members
+	still partition its bytes: a member contributing zero owns none of
+	them, and a partition admits an empty part.
+	"""
+	source = _peeked("struct v { peek u8 k; variant b switch (k) "
+	                 "{ case 'a': pair x; default: pair y; } }")
+	resolved = resolve(parse_text(source, path="s.situ"),
+	                   solve(parse_text(source, path="s.situ")))
+	entries = {entry.placement.path: entry.placement
+	           for entry in resolved.structs["v"].entries}
+
+	assert entries["v.k"].offset_bits == 0
+	# The arm starts where the discriminant did, not one byte later.
+	assert entries["v.b"].offset_bits == 0
+
+
+def test_a_peeked_member_needs_a_variant_after_it() -> None:
+	assert "no variant follows it" in rendered(
+		_peeked("struct v { peek u8 k; pair rest; }"))
+
+
+def test_a_peeked_member_needs_the_variant_next() -> None:
+	"""Anything between them would own the bytes instead.
+
+	A separate message from the one above, because it has a separate
+	remedy -- the first version folded the three cases together and told a
+	schema switching on the wrong field that no variant followed it.
+	"""
+	assert "the variant is not next" in rendered(
+		_peeked("struct v { peek u8 k; u8 other; variant b switch (k) "
+		        "{ case 'a': pair x; default: pair y; } }"))
+
+
+def test_a_peeked_member_must_be_the_one_switched_on() -> None:
+	assert "switches on something else" in rendered(
+		_peeked("struct v { u8 j; peek u8 k; variant b switch (j) "
+		        "{ case 'a': pair x; default: pair y; } }"))
+
+
+@pytest.mark.parametrize("body, says", [
+	("peek u8 k[2];", "is a run"),
+	('peek u8 k until ",";', "framed by the data"),
+	("peek pair k;", "is not a scalar"),
+])
+def test_a_peeked_member_is_a_scalar_read_at_the_cursor(
+		body: str, says: str) -> None:
+	"""Each of these would be a member whose extent is emptied and whose
+	bytes are the data's to frame, which is the general overlap case rather
+	than a dispatch."""
+	assert says in rendered(_peeked(
+		f"struct v {{ {body} variant b switch (k) "
+		"{ case 'a': pair x; default: pair y; } }"))
+
+
+def test_a_peeked_member_may_not_also_be_placed_by_at() -> None:
+	assert "is placed by `at`" in rendered(
+		_peeked("struct v { u8 n; peek u8 k at n; variant b switch (k) "
+		        "{ case 'a': pair x; default: pair y; } }"))

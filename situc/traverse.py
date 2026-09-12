@@ -773,6 +773,23 @@ def occupies_fixed_bytes(placement: Placement) -> bool:
 	return placement.is_fixed_size and not placement.skip
 
 
+def fixed_span_bits(placement: Placement) -> int:
+	"""How many bits this member adds to an offset chain.
+
+	The companion to `occupies_fixed_bytes`, and the same distinction one
+	construct further on. That predicate exists because a lead separated a
+	member SIZE from its SPAN; `peek` separates them again and in the other
+	direction -- a peeked member's size is its scalar's and its span is
+	nothing, because it is read at the cursor and not spent (0057).
+
+	So the three functions that add members up ask this rather than reading
+	`size_bits`, for the reason the predicate above gives: four backends
+	read all three, and a rule stated at two of them is a member placed on
+	top of another with nothing to report it.
+	"""
+	return 0 if placement.peek else placement.size_bits
+
+
 def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 		has_length: "Callable[[Placement], bool]") -> list[OffsetStep] | None:
 	"""How to resolve every dynamic offset in one pass, or None.
@@ -822,7 +839,7 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 			steps.append(OffsetStep("align", held, size=pad))
 			continue
 		if occupies_fixed_bytes(held):
-			pending += held.size_bits // BITS_PER_BYTE
+			pending += fixed_span_bits(held) // BITS_PER_BYTE
 			continue
 		if not has_length(held):
 			return None
@@ -1343,7 +1360,7 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 
 	for placement in own_members(struct):
 		if occupies_fixed_bytes(placement):
-			constant_bits += placement.size_bits
+			constant_bits += fixed_span_bits(placement)
 		else:
 			variable.append(placement)
 
@@ -1437,7 +1454,7 @@ def preceding_parts(struct: ResolvedStruct,
 		if other.path == placement.path:
 			break
 		if occupies_fixed_bytes(other):
-			bits += other.size_bits
+			bits += fixed_span_bits(other)
 			continue
 		if bits % BITS_PER_BYTE:
 			return None

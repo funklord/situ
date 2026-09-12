@@ -41,6 +41,7 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	fixed_span_bits,
 	NOT_A_MEMBER,
 	Check, arm_members, arm_of, byte_span, classify_check,
 	containment_order,
@@ -1544,7 +1545,24 @@ class Emitter:
 			# only for the struct's own members. The name was already right;
 			# nothing emitted the function, so the generated C called
 			# something that does not exist.
-			if placement.radix is not None and placement.offset_bits is not None:
+			#
+			# Not a DELIMITED one, though, and that is the half this
+			# missed. Its length is a scan, and both the scan accessor and
+			# the span helper belong to the inner struct -- so the helper
+			# emitted here named `situ_outer_held_n_len`, which nothing
+			# defines, and the header did not compile. No schema had the
+			# shape: every text driver in `example/` was delimited OR a
+			# member of a nested struct and none was both, until json's
+			# number became one.
+			#
+			# Nothing needs it. A caller reaches such a member through its
+			# own struct's view -- `situ_number_value_significand(num)` --
+			# and the helper exists only so an EXPRESSION can name
+			# `<outer>_<path>_value` to drive a length, which requires a
+			# constant offset the scan does not have.
+			if placement.radix is not None \
+					and placement.offset_bits is not None \
+					and not placement.delimiters:
 				return self._text_value_helper(struct, placement)
 			return []
 
@@ -3144,7 +3162,7 @@ class Emitter:
 		deep   = self._lead_needs_depth(placement)
 
 		if placement.is_fixed_size:
-			content = f"{placement.size_bits // BITS_PER_BYTE}u"
+			content = f"{fixed_span_bits(placement) // BITS_PER_BYTE}u"
 		else:
 			content = self._content_length_expression(
 				struct, placement, "view", running="at + lead",

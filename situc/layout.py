@@ -402,6 +402,10 @@ class Placement:
 	#: rather than instead of it: every span accessor and every delimiter
 	#: rule is the integer form's, and only the parse and the range differ.
 	scaled: bool			= False
+	#: `peek u8 kind;` -- read at the cursor and contributing nothing to
+	#: the enclosing struct's extent, so the member after it begins where
+	#: it began (0057). The arm owns the bytes; this only looked at them.
+	peek: bool			= False
 
 	@property
 	def extent_from_own_bytes(self) -> bool:
@@ -1905,6 +1909,7 @@ class Solver:
 			repeat_cap         = self._repeat_cap(member),
 			radix              = getattr(member, "radix", None),
 			scaled             = bool(getattr(member, "scaled", False)),
+			peek               = bool(getattr(member, "peek", False)),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
 			trim_set           = (_whitespace_of(self.schema, member.span)
@@ -1952,6 +1957,18 @@ class Solver:
 
 		if member.array is not None and isinstance(member.array.size, ast.Remaining):
 			state.closed_by = name
+
+		if getattr(member, "peek", False):
+			# A peeked member is read at the cursor and not spent (0057), so
+			# the member after it begins where it began. Same rule as the
+			# located member below -- do not advance -- and a different
+			# reason: that one is placed somewhere else, this one is placed
+			# here and costs nothing.
+			#
+			# The struct's members still partition its bytes: a member
+			# contributing zero owns none of them, and a partition admits an
+			# empty part.
+			return
 
 		if getattr(member, "located", None) is not None:
 			# A located member is a *reference*: it sits where a field says,

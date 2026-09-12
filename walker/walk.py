@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from walker import vm
-from walker.image import BIG, LITTLE, NATIVE, NONE, Image, Placement, Struct
+from walker.image import (BIG, LITTLE, NATIVE, NONE, PEEK, Image, Placement,
+                          Struct)
 
 #: What a walk may be handed. Read-only either way -- nothing here writes
 #: through it -- so the distinction is the caller's storage rather than the
@@ -197,9 +198,20 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 	The SPAN rather than the size, because this is what `chain_bits` sums:
 	a member's whitespace is part of what it occupies even though it is no
 	part of what it holds. `content_bits` is the member alone.
+
+	A PEEKED member's span is its lead and nothing else (0057): it is read
+	at the cursor and not spent, so the member after it begins where it
+	began -- and the whitespace in front of a discriminant is still the
+	discriminant's, or nobody would own it. Here rather than in the two
+	callers, because `chain_bits` and `struct_extent` both sum this and a
+	rule stated at one of them is a member placed on top of another. The
+	first version skipped the member in both and dropped its lead with it,
+	which a document beginning with whitespace showed at once.
 	"""
-	return lead_bytes(view, index) * BITS_PER_BYTE \
-		+ content_bits(view, index, depth)
+	lead = lead_bytes(view, index) * BITS_PER_BYTE
+	if view.image.placements[index].text_flags & PEEK:
+		return lead
+	return lead + content_bits(view, index, depth)
 
 
 def content_bits(view: View, index: int, depth: int = 0) -> int:

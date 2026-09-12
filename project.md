@@ -14432,9 +14432,12 @@ case's core.**
   *prefix that the positional case owns*. A variant switches on a field, and
   a field occupies bytes: `variant body switch (first)` classifies
   correctly, and hands the positional arm `ello` where the message said
-  `hello`. There is no peek -- every dispatch is dispatch-and-consume. This
-  is the single blocker for option grammars, and for text protocols
-  generally: HTTP's request line against its header lines is the same shape.
+  `hello`. ~~There is no peek -- every dispatch is dispatch-and-consume.
+  This is the single blocker for option grammars, and for text protocols
+  generally~~ -- there is one as of 0057 (26.336), and `peek u8 first;`
+  is it. The claim stood from 2026-08 to 2026-09-12 and was the reason
+  the construct got built: HTTP's request line against its header lines
+  is the same shape and is still unwritten.
 - **No mode switch.** `--` means "everything after me is positional
   whatever it looks like": the *interpretation* of later elements depends on
   an earlier element's content. A `while` condition can end a run on the
@@ -26574,14 +26577,14 @@ one option that was not available.
 
 **Still open:** `[minimal]` and `canonical`, the dissector's rendering of
 one, and the walker's INDEXES section -- all four in the register at
-26.335, re-measured. ~~Converting json's `number`~~ is not open and not
-done: it is blocked on a non-consuming dispatch, and 26.333 records the
-measurement. And the second-asker question stays
+26.335, re-measured. **Converting json's `number`** was blocked on a
+non-consuming dispatch, which is 0057 as of 2026-09-12; it is now blocked
+on the walker instead, and 26.337 says on what. And the second-asker question stays
 open in a way 0055's did not: json is the only schema here that asks, and
 the copyright holder's instruction is what stands in for 8.6.6's second
 protocol.
 
-### 26.333 The scaled number's only asker cannot use it
+### 26.333 The scaled number's only asker cannot use it (until 0057)
 
 **json's `number` cannot be a `scaled` member, and the reason is a
 language question rather than a gap in that schema.** Worth stating
@@ -26616,6 +26619,12 @@ discriminant's problem one construct along -- and 8.6.1 solved it for
 delimiters only. A non-consuming dispatch is its own decision record and
 not one to write while converting a schema.
 
+**It is 0057, written 2026-09-12** (26.336), and the sentence above was
+right about what it would be: `peek` is `before` for dispatch. The
+language obstacle this entry records is gone. json still does not use the
+construct, and 26.337 says why -- the reason moved from the language to
+the walker rather than going away.
+
 **What the conversion produced instead**: the measurement above, in
 `json.situ` where the next reader meets it, and two compiler crashes found
 while probing for a way round.
@@ -26643,6 +26652,12 @@ tests did. Worth the sentence because the mistake is invited by a
 well-named module-level helper doing an obvious thing.
 
 ### 26.334 A non-consuming dispatch: what is known before starting
+
+**Built as 0057 on 2026-09-12; 26.336 records what it cost and which
+of the questions below were already answered.** This entry is kept as
+written -- it is the fold that set the work up, and two of its open
+questions turned out to be answerable in one command each, which is
+the more useful thing about it.
 
 **The next piece of work, folded here so it can be picked up cold.**
 Everything below is measured on 2026-09-11 unless it says otherwise.
@@ -26741,10 +26756,11 @@ the date it was checked and each line was re-measured rather than recalled.
 
 **Built and not wired to anything that reads it.**
 
-- **`scaled` has a corpus schema and no worked example.** `edges.measured`
-  is the only schema in the tree with a `scaled` member; the only PROTOCOL
-  that wants one is json, and json cannot use it. Re-measured: the three
-  other matches for "scaled" in `example/` and `test/schema/` are prose.
+- **`scaled` has a corpus schema and no worked example**, and as of
+  2026-09-12 the reason has moved rather than gone. 0057 removed the
+  language obstacle; json's conversion now waits on the walker validating
+  a variant's arm under a permissive `default:`, which C does and the
+  walk does not. 26.337 has the measurements.
 - **The walker's INDEXES section is written and never loaded.** So the walk
   cannot check that an `indexed` region's offset table fits the frame, and
   defers on any struct holding one -- `btree_leaf_page` reports
@@ -26779,6 +26795,163 @@ encoding the data names.
 **And the whole vocabulary is phase two**, which 26.327 settles the order
 of: features first. `decimal`, `hex` and `scaled` now share one slot and
 the trio is an input to that pass rather than a thing to fix now.
+
+### 26.336 A dispatch that does not consume what it reads
+
+**0057, and the two questions 26.334 said it would turn on were both
+already answered by the tree.**
+
+**The construct.** `peek u8 kind;` reads a member at the cursor and
+contributes NOTHING to the enclosing struct's extent, so the member after
+it begins where it began. The arm owns the byte; the discriminant only
+looked at it.
+
+**`before` is the precedent and it decided the shape.** 8.6.1 has two
+spellings for a delimiter because one may belong to the member it ends or
+to neither side; a discriminant has that problem one construct along.
+The marker sits on the MEMBER rather than on the `variant`, because what
+changes is the member's extent -- a variant clause that retroactively
+emptied a member declared above it is action at a distance, and a reader
+computing offsets down the struct would have to look ahead to know what
+`kind` costs.
+
+**"Do a struct's members still partition its bytes exactly?"** 26.334
+called this the real question and expected the answer to be no. It is
+yes: a peeked member contributes zero bytes, and a partition admits an
+empty part. No byte belongs to two members because the peeked one owns
+none. json's bill leans on that sentence twice and both survive.
+
+**"What does the map say about an arm overlapping a member before it?"**
+What it already says, because **overlapping members are not new**:
+
+    struct s { u8 a; u8 b[4] at 0; u16 tail; }
+
+    struct s size=3
+      s.a     offset=AbsoluteStatic(0x00) size=Fixed(1)
+      s.b     offset=DataPlaced           size=Fixed(4)
+      s.tail  offset=AbsoluteStatic(0x01) size=Fixed(2)
+
+`b` reads bytes 0-3 and `tail` reads bytes 1-2, and the struct is three
+bytes rather than seven. A member's `size` is already "what this reads"
+while the struct's is "what its members contribute". Both questions were
+answerable in one command each, which is worth more than the answers:
+**the fold that recorded them as open was written without asking.**
+
+**The mechanism existed one construct over**, which is why the layout
+change is four lines. A located member "neither follows the member before
+it nor puts anything after it" -- `layout` returns without advancing the
+cursor. A peeked member is that rule with a different offset: placed at
+the cursor as usual, and not advancing it.
+
+**Then the offsets disagreed with the map, and only running it showed
+it.** The solver's answer was right immediately; the C backend re-derives
+offsets by summing STRIDES, and for a member with a lead it summed the
+discriminant's own byte. `  abc` gave the arm `bc` where the map said the
+arm began at 2. Python did the same. So the fix had to go where the
+summing happens, and that is shared:
+
+    occupies_fixed_bytes   whether this member contributes a CONSTANT
+    fixed_span_bits        how many bits that constant is        <- new
+
+The predicate's own docstring names the precedent exactly -- a lead
+separated a member's SIZE from its SPAN, "three shared functions do that
+and four backends read all three, which is why the fix is one predicate
+here rather than a condition in twelve places". `peek` separates them
+again in the other direction, and the companion says so in one place that
+all three summing functions and all four backends ask.
+
+**Four backends verified by VALUE, not by agreement.** `edges.kinded`
+makes the arm's first member the same byte as the discriminant, so a
+backend placing the arm one byte late reports a `tag` that is not the
+`kind` -- and nothing in the shape says so, both being `u8` at what looks
+like the same offset. The four-way differential agreed before any of that
+was checked, which is why each backend was also run against a known
+answer.
+
+**json's conversion was written and reverted**, which 26.337 records:
+`peek` gives its byte to every arm, json has seven, and the three that
+needed rewriting rewrote cleanly -- what stopped it is the walker, and
+that is not this construct's.
+
+**The other three backends are pinned by the differential and C is
+pinned by value**, which is the argument for not writing four
+near-identical value tests. Agreement between backends proves nothing on
+its own -- this run's own lesson -- so one of them has to be tied to a
+known answer, and the corpus struct ties the other three to it. Saying
+which is which is the part that matters: `test_codegen_c` asserts that
+the arm's `tag` IS the `kind`, and `edges.kinded` asserts the four agree
+about it.
+
+**`unparse` dropped the keyword, and the round-trip test caught it --
+again.** The same test caught `scaled` being written back as `decimal`
+two days ago. A member kind that lives in a prefix has to be rendered
+there, and the failure is silent in the worst way: the source written
+back parses, and describes a different layout.
+
+**One test asked to be looked at rather than updated, and was right to.**
+`ARM_SHAPES` is a census of the corpus's variant arms by shape, asserted
+so the population "cannot change in silence" -- and the message says a
+moved count is "a case somebody has to look at rather than a number to
+update". `kinded_a` and `kinded_b` are fixed structs, which is a cell
+that already held forty-five, so this was the benign half: an existing
+cell moving rather than a new one appearing. Updated with that reason
+beside it, which is the part a bare `47` would have lost.
+
+**And the dissector had never dissected a struct-typed variant arm.**
+`_variant`'s docstring said "every arm has a ProtoField"; `_field` returns
+"" for a struct-typed member, because a nested struct gets a subtree
+instead. So such an arm emitted `subtree:add(nil, ...)` -- a Lua error at
+the first packet. No schema in the tree had the shape until this corpus
+struct. The fix asks `_field` rather than repeating its predicate, the
+first version having repeated it.
+
+### 26.337 json's number: unblocked, and not converted
+
+**0057 removes the language obstacle and json still does not use it.**
+That is a finding rather than a shortfall, and the measurement is the
+point: the conversion was written, run, and reverted, and what it turned
+up is three gaps in a row that have nothing to do with `peek`.
+
+**The obstacle really is gone.** With `peek u8 kind skip;` the `number`
+struct sees `12.5` of `{"a":12.5}` where it saw `2.5`, and as a `scaled
+i64` it reads `125 x 10^-1`. Measured against the generated C. 26.333's
+blocker is answered.
+
+**But a peeked discriminant gives its byte to EVERY arm**, and json has
+seven. `object`, `array` and `text` each began after the brace, bracket
+or quote and now begin at it, so each needs a member to own it; the three
+literals become better for it -- `u8 word[4] [must_eq = "true"]` where
+they carried `[must_eq = "rue"]` precisely because the `t` had been
+eaten. That part is a clear improvement and it worked.
+
+**Two things then improved that nobody had asked about.** `struct value`
+drops from `size=2..` to `size=1..`, which is a CORRECTION: `0` is a
+one-byte JSON document and the schema had claimed two since it was
+written, because the discriminant really did occupy a byte the value also
+needed. And `repr` moves to `TextConverted`, which is the honest cost of
+parsing rather than handing back bytes.
+
+**What stopped it is the walker, three deep.** Each was invisible until
+json's conversion reached it:
+
+- A peeked member's SPAN is its lead and no more, and the walk sums spans
+  in two places. Fixed, and kept -- `edges.kinded` needs it.
+- **The walk never validates a variant's arm where the schema wrote
+  `default: <member>`.** `classify_check` calls that variant's check
+  NOTHING, so no `ARM_SELECTED` is packed, so nothing descends into the
+  selected arm. C validates it through a pass of its own. json is that
+  shape and has been since it was written: its `yes` arm carries a
+  `[must_eq]` and the walk accepts `txyz`. Invisible while the literal
+  arms were rare in a random draw, and constant once `default:` became
+  the arm almost every draw takes.
+- And with that declined, a `value` at a truncated frame's end stops
+  producing a sub-view the walk will make, where C makes a zero-length
+  one.
+
+**So json's conversion is blocked on the walker gaining what C has**,
+which is its own piece of work and is not `peek`'s. The schema is
+unchanged and the language obstacle is not there any more -- which is a
+better place than 26.333 recorded, and not the place 0056 wanted.
 
 ### 26.330 Text encoding, scoped and named by the data
 

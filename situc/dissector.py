@@ -1611,8 +1611,18 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	It showed nothing at all before -- `no bytes of its own` -- so a reader
 	saw the discriminant and not the bytes it discriminates, which is the half
-	that matters. Every arm has a `ProtoField`; which one is added is a
-	question about the packet.
+	that matters. Which arm is added is a question about the packet.
+
+	An arm whose type is a STRUCT has no `ProtoField` of its own: `_field`
+	returns "" for one, because a nested struct gets a subtree instead. This
+	said "every arm has a ProtoField" and added one anyway, so such an arm
+	emitted `subtree:add(nil, ...)` -- a Lua error at the first packet
+	rather than a wrong display. No schema in the tree had the shape until
+	0057's corpus struct, so nothing had ever run it.
+
+	Asked through `_field` rather than by repeating its predicate here: two
+	copies of one rule is a second thing to be wrong, and the first version
+	of this fix repeated it.
 	"""
 	held = _over_fields(struct, placement.discriminant or "", "0")
 	if held is None:
@@ -1635,12 +1645,20 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 		field = f"{_lua(struct.name)}_f.{name}"
 		test  = ("else" if arm.value is None
 		         else f"{'if' if first else 'elseif'} arm == {arm.value} then")
+		shown = bool(_field(resolved, struct, member))
 		lines.extend([
 			f"\t{test}" if arm.value is None else f"\t{test}",
 			f"\t\tlocal n = {length}",
-			"\t\tif n > 0 and tvb:len() >= at + n then",
-			f"\t\t\tsubtree:add({field}, tvb(at, n))",
-			"\t\tend",
+			*([
+				"\t\tif n > 0 and tvb:len() >= at + n then",
+				f"\t\t\tsubtree:add({field}, tvb(at, n))",
+				"\t\tend",
+			] if shown else [
+				f"\t\t-- `{member.name}` is a struct: its own Proto shows it,",
+				"\t\t-- so there is no field here to add. The bytes are",
+				"\t\t-- still stepped over, or every member after this one",
+				"\t\t-- would be placed on the wrong ones.",
+			]),
 			"\t\tat = at + n",
 		])
 		first = False

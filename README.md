@@ -477,6 +477,7 @@ struct cannot describe:
 | `struct name { ... }` | members in declaration order |
 | `positional { ... }` | a group whose offsets are asserted rather than accumulated |
 | `variant v switch (e) { case 1: ... default: error }` | one of several layouts, chosen by a field already read |
+| `peek u8 kind;` | a discriminant read at the cursor and not spent, so the arm it selects owns the byte |
 | `indexed (base = region) { ... }` | members reached through an offset table |
 | `tlv name (tag_decode = ..., value_size = ...)` | a run of tag-length-value items, with the item grammar declared |
 | `opaque name [ n ]` | bytes with no described interior |
@@ -593,6 +594,28 @@ variant body switch (type) {
 
 `default:` takes `error`, `opaque` or a member -- three different positions
 on an unknown discriminant, stated rather than implied.
+
+**A discriminant may be read without being spent.** A `variant` switches on
+a field, and a field occupies its bytes -- so an arm normally begins after
+the discriminant. Some formats need the byte to belong to the value it
+selects, and `peek` is how:
+
+```situ
+struct value {
+	peek u8  kind  skip;
+	variant body switch (kind) {
+		case '{':  object   as_object;
+		default:   number   as_number;
+	}
+}
+```
+
+The member is read at the cursor and contributes nothing to the struct's
+extent, so the arm begins where the discriminant began and owns the byte.
+It is `before` for dispatch: a delimiter may belong to the member it ends
+or to neither side, and this is that question one construct along. Without
+it `{"a":12.5}` hands the number arm `2.5`, because the `1` was spent
+choosing it (decision 0057).
 
 A `tlv` region describes a run of tag-length-value items by declaring the
 item grammar, which is what lets the compiler reason about a self-describing
@@ -1524,6 +1547,16 @@ today and which is a written-down design.
   already ended the member. All four backends generate it, and
   `test/schema/edges.situ` carries the corpus cases the four-way
   differential poses against them.
+
+- **A dispatch that does not consume what it reads** (decision 0057).
+  `peek u8 kind;` reads a discriminant at the cursor and contributes
+  nothing to the struct's extent, so the arm the variant selects begins
+  where the discriminant began and owns its byte. It is `before` for
+  dispatch. `example/json` is what it was built for -- a JSON number's
+  first character IS the byte that says it is a number, so the number arm
+  saw `2.5` of `12.5` -- and that schema has not adopted it yet, for a
+  reason recorded in `project.md` section 26.337 that is about the walker
+  rather than about this construct.
 
 **Proposed.**
 

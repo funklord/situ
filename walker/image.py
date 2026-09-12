@@ -39,6 +39,13 @@ PINNED_RUNS = 20
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 
+#: `image_placement.text_flags` bit 32 (0057): the member is read at the
+#: cursor and not spent, so it joins no offset chain -- the member after
+#: it begins where it began. Named here rather than in `report`, because
+#: `walk` is what sums spans and a second copy of the number is a second
+#: thing to be wrong.
+PEEK = 32
+
 #: `image_placement.flags`
 OFFSET_KNOWN, FRAME_RELATIVE, SIZE_FIXED, FRAME_BASE_DYNAMIC = 1, 2, 4, 8
 SIGNED, MARKER_GOVERNED, IS_TAG = 16, 32, 64

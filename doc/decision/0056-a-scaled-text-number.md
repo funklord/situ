@@ -160,11 +160,15 @@ hands the `number` struct `2.5`. A `scaled i64` there would report
 `(25, -1)` confidently for a document whose number is 12.5 -- a wrong
 value where there is now an honest byte run.
 
-26.253 already records the blocker, from an argv evaluation: "dispatch
-consumes; a text grammar needs it to keep". `before` is the shape of the
-answer and reaches only delimiters. So this construct ships with a corpus
-schema and no worked example, which is a weaker position than 0055's and
-should be said rather than left to be noticed.
+26.253 recorded the blocker, from an argv evaluation: "dispatch
+consumes; a text grammar needs it to keep". `before` was named there as
+the shape of the answer, and **0057 is that answer** -- `peek` being
+`before` for dispatch. The LANGUAGE obstacle is gone as of 2026-09-12 and
+json still does not use this construct: converting it needs the walker to
+validate a variant's arm under a permissive `default:`, which C does and
+the walk does not. 26.337 has the measurements. So this record still
+ships with a corpus schema and no worked example, for a reason that has
+moved from the language to a reader.
 
 **`[minimal]` is open and so is `canonical`.** A scaled number is
 NonCanonical today with no way to say otherwise, which is a real cost:
