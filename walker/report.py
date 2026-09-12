@@ -26,7 +26,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
-                         _read_at, offset_bits, scan, size_bits,
+                         _evaluate, _read_at, offset_bits, record_run_count,
+                         scan, size_bits,
                          struct_extent, varint, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
@@ -328,6 +329,34 @@ def _while_runs(image: Image, struct_index: int) -> list[int]:
 	return [index for index in image.members(image.structs[struct_index])
 	        if image.placements[index].repeat_code != NONE
 	        and image.placements[index].type_struct != NONE]
+
+
+def _record_runs(image: Image, struct_index: int) -> list[int]:
+	"""Runs of records that END at a terminator: `T x[] until "D"` (8.6.3).
+
+	The differ asks these `count=` and this walk answered nothing, so the
+	key was present on one side only and the comparison skipped it. That is
+	the quieter vacuous pass: not a check that examined nothing, but two
+	sides talking past each other -- which `_local`'s own docstring names
+	and which happened here anyway.
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if index in image.delimiters
+	        and image.placements[index].type_struct != NONE
+	        and not image.placements[index].is_tag
+	        and index not in image.regions]
+
+
+def _indexed_runs(image: Image, struct_index: int) -> list[int]:
+	"""`indexed` regions whose entry count this image states.
+
+	The differ asks these `count=` too. The section that says how many
+	entries the offset table holds was written by the packer as `none`
+	until 26.341 and loaded by nobody, so there was no count to give.
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if index in image.indexes
+	        and image.indexes[index][1] != NONE]
 
 
 def _varints(image: Image, struct_index: int) -> list[int]:
@@ -635,6 +664,42 @@ def _validate(image: Image, view: View, struct_index: int,
 		placed = image.placements[index]
 		if placed.fixed and not placed.offset_known:
 			if view.at * 8 + at + wide > view.limit * 8:
+				return fail(ERR_BOUNDS, index)
+
+		# An `indexed` region's offset table is `count` entries of
+		# `entry_bits` and has to fit the frame, which is the one check
+		# every backend makes about such a table:
+		#
+		#     if (situ_remaining_u32(view.limit, 8u) < count * 2u)
+		#             return SITU_ERR_BOUNDS;
+		#
+		# This walk could not ask it -- the image wrote an INDEXES section
+		# and nothing loaded it -- so the packer deferred `validate` on any
+		# struct holding one. A sqlite page declaring 2644 cells in a
+		# 46-byte frame was refused by all four backends and clean here,
+		# and had been since indexed regions arrived; no draw had reached
+		# it. The section is loaded now and carries the count's bytecode,
+		# which the packer had been writing as `none`.
+		#
+		# `NONE` in either field is still a deferral rather than a pass: a
+		# table whose entry width or whose size nothing states is one
+		# nobody can bounds-check.
+		table = image.indexes.get(index)
+		if table is not None:
+			entry_bits, count_code, _measured_from = table
+			if entry_bits == NONE or count_code == NONE:
+				return None
+			# `from_byte` is an offset WITHIN the view -- `_evaluate`
+			# computes `remaining` as `limit - at - from_byte` -- while
+			# `room` is measured between two absolute bytes. Passing the
+			# absolute one for both subtracts `view.at` twice, which is
+			# invisible for a top-level struct and wrong for every nested
+			# one.
+			here  = at // BITS_PER_BYTE
+			start = view.at + here
+			room  = view.limit - start if view.limit > start else 0
+			count = _evaluate(view, count_code, here)
+			if count < 0 or room < count * (entry_bits // BITS_PER_BYTE):
 				return fail(ERR_BOUNDS, index)
 
 		# A run whose length the message declares has to fit the frame.
@@ -1066,6 +1131,28 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			lines.append(f"{local} count={while_count(view, index)}")
 		except Refused:
 			continue
+
+	for index in _record_runs(image, struct_index):
+		local = _local(image, index)
+		try:
+			lines.append(f"{local} count={record_run_count(view, index)}")
+		except (Refused, Unplaceable):
+			continue
+
+	for index in _indexed_runs(image, struct_index):
+		local = _local(image, index)
+		try:
+			# `from_byte` is an offset within the view, which is what
+			# `_evaluate` measures `remaining` from -- the same pairing
+			# `_validate` makes for this section's bounds check.
+			here = offset_bits(view, index) // BITS_PER_BYTE
+		except (Refused, Unplaceable):
+			continue
+		try:
+			count = _evaluate(view, image.indexes[index][1], here)
+		except Refused:
+			continue
+		lines.append(f"{local} count={count}")
 
 	for index in _varints(image, struct_index):
 		local = _local(image, index)

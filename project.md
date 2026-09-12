@@ -27248,13 +27248,70 @@ line for that struct at all, so the differential's key intersection
 skipped it silently. It emits 38 over the seeded draws now, 9 of them
 BOUNDS.
 
-**What this did NOT do.** The walk still renders no `count=` line for an
-indexed region, and the differ asks C for one -- so that key is absent
-from one side and the comparison skips it, which is the same silence that
-hid the validate gap. `_runs` excludes the member because its element is a
-struct, and reaching element N needs the offset table read rather than an
-offset chain. That is a feature and not this gap, but it is the same shape
-and should not have to be rediscovered from a fuzz draw.
+~~**What this did NOT do.**~~ **Done in 26.342**, which found the same
+silence over two more kinds of run.
+
+### 26.342 The `count=` lines the walk was not answering
+
+**The differ asks thirteen members `count=` and the walk answered
+eight.** The silence is invisible from either side: `_by_member` keys
+both listings by `(struct, member)` and compares the INTERSECTION, so a
+line one side never emits is skipped and the test passes. `_local`'s own
+docstring names that failure -- "two lines that never meet, so the
+comparison skips them and passes" -- and it had happened to five of the
+thirteen anyway.
+
+    REPEAT_WHILE    8   answered
+    RECORD_RUN      3   silent   http x2, edges `kv_block`
+    TLV             1   silent   protobuf
+    INDEXED         1   silent   sqlite
+
+**Thirteen and not sixteen, which is worth recording because the first
+count was mine and wrong.** Counting resolved entries by
+`traverse.classify` gives sixteen and includes three flattened paths --
+`question.qname.labels`, and json's two arm-reached `entries` -- that no
+driver asks under those names. `differ.asks` is the authority on what is
+asked, and re-deriving it produced three false findings before the test
+was pointed at the source. A scope number nothing downstream re-derives
+is the one that stays wrong (`evidence.md`), and this one was a premise
+in the sentence above it.
+
+**Two of the three kinds are answered now.**
+
+`INDEXED` was ready: 26.341 put the entry count's bytecode in the image,
+so the line is an `_evaluate` of a program that was already there.
+
+`RECORD_RUN` needed a walk, and it is held to the generated C line for
+line because its two stopping conditions are not obvious and both are
+load-bearing -- a zero-extent element would walk for ever, and one
+running past the limit was never in the frame. The terminator only
+terminates where an element WOULD START; inside one it is that element's
+own byte, which is why the test is a match at `at` rather than a scan
+forward. That is 8.6.3's distinction between `until` and `while`, and it
+is why a record run can be empty where a `while` run never is.
+
+**The check is that the keys MEET, not that the suite is green**, since
+green is exactly what the old state produced. Over the seeded draws, per
+member, counting keys present on both sides:
+
+    sqlite   cells      both 11   C-only 0    e.g. count=56819 both
+    http     fields     both 22   C-only 0
+    edges    entries    both 12   C-only 0
+    protobuf fields     both  0   C-only 12   <- still TLV
+
+Twelve of the thirteen are answered now, and the one that is not is
+excused BY NAME in the population test rather than by silence -- so a
+second unanswered kind fails it rather than joining the gap.
+
+**TLV is a format change and not a walk, which is why it is separate.**
+`image_tlv` carries the tag varint, an ordered flag and two policies --
+and none of the value rules, so an image says how to read an item's tag
+and nothing about how far its value reaches. Counting items needs the
+rules (label, kind, fixed size or length varint) and the selector
+expression that picks one, which is arithmetic over the tag: protobuf's
+is `tag & 0x7`. So it wants a new section, a `TAG` opcode for the
+ambient value the way `REMAINING` is one, and the packer compiling a
+`TagPart.source` it currently only hands to the code backends.
 
 ### 26.330 Text encoding, scoped and named by the data
 

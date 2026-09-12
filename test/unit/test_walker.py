@@ -1142,3 +1142,78 @@ def test_the_walk_validates_the_arm_a_permissive_default_leaves_open() -> None:
 	# ...and an unknown discriminant is still no refusal, because the
 	# schema said so.
 	assert verdict(b"zzzz") == "validate 0"
+
+
+def test_every_count_the_differ_asks_is_one_the_walk_answers() -> None:
+	"""The population, because the intersection cannot see this.
+
+	`_by_member` keys both listings by `(struct, member)` and compares only
+	the keys BOTH sides have, so a line the walk never emits is skipped and
+	the differential passes. That is `_local`'s own documented failure --
+	"two lines that never meet, so the comparison skips them and passes" --
+	and it had happened to five of the thirteen: three record runs, one
+	`tlv` region and one `indexed` region, all of which C answers for.
+
+	Thirteen is `differ.asks`'s number and not a re-derivation of it.
+	Counting resolved entries through `traverse.classify` gives sixteen and
+	includes three flattened paths no driver asks under those names, which
+	is how the first version of this test reported three false findings.
+
+	So this asserts over the SCHEMA rather than over a run: every member the
+	differ would ask `count=` is one the walk has a list for. A green
+	differential is not evidence here and never was.
+
+	`tlv` is excused by name rather than by silence. Counting its items
+	needs value rules the image does not carry -- `image_tlv` holds the tag
+	varint and two policies -- so the honest state is a named exception that
+	fails the moment somebody adds a second one, not a quiet skip.
+	"""
+	from situc.codegen import differ
+
+	excused = {("protobuf.situ", "proto_message", "fields")}
+	asked   = 0
+	missing = []
+
+	for schema in SCHEMAS:
+		parsed   = parse_text(schema.read_text(encoding="ascii"))
+		resolved = resolve(parsed, solve(parsed))
+		blob, _  = packer.pack(parsed, resolved, metadata=True)
+		image    = load(blob)
+		names    = [image.struct_name(i) for i in range(len(image.structs))]
+		# Bytes enough for every struct's minimum, so a member that goes
+		# unrendered goes unrendered for the reason under test rather than
+		# because the frame was short. Text-shaped, so a delimited schema
+		# parses rather than refusing at its first member.
+		probe    = b"a: b\r\n" * 256
+
+		# Asked of `differ` rather than re-derived from `traverse`, because
+		# what matters is the question the DRIVER prints -- per struct, and
+		# under the local name it prints. Re-deriving it produced three
+		# false findings: `question.qname.labels` is a flattened path that
+		# no driver asks under that name.
+		for struct in resolved.structs.values():
+			wanted = {one.local for one in
+			          differ.asks(struct, set(resolved.structs), resolved.structs)
+			          if one.probe is differ.Probe.COUNT}
+			if not wanted or struct.name not in names:
+				continue
+			# The RENDERED listing and not the helper lists, because a
+			# helper that returns the right members and a `_members` that
+			# never calls it are indistinguishable from the lists. Written
+			# the other way first, and deleting either call site left this
+			# green -- "a correct function is not a working feature".
+			which   = names.index(struct.name)
+			view    = acquire(image, probe, which)
+			answers = {line.split(" ", 1)[0]
+			           for line in report._members(image, view, which)
+			           if " count=" in line}
+			for local in sorted(wanted):
+				asked += 1
+				if (schema.name, struct.name, local) in excused:
+					continue
+				if local not in answers:
+					missing.append(f"{schema.name}:{struct.name}.{local}")
+
+	assert asked >= 13, f"only {asked} count probes were examined"
+	assert not missing, f"the differ asks these `count=` and the walk is " \
+		f"silent: {missing}"

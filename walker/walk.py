@@ -1228,6 +1228,57 @@ def while_count(view: View, index: int) -> int:
 	return _while_walk(view, index)[0]
 
 
+def record_run_count(view: View, index: int, depth: int = 0) -> int:
+	"""How many records a run of them holds: `T x[] until "D"` (8.6.3).
+
+	`until` asks about the position BEFORE each element -- is the terminator
+	standing where the next one would start -- which is the whole difference
+	from `while`, that asks about the element just read. So a record run can
+	be empty and a `while` run never is.
+
+	The terminator only terminates where an element would start; inside one
+	it is that element's own byte, which is why this tests for a match at
+	`at` rather than scanning forward for one.
+
+	Held to the generated C line for line, because the two stopping
+	conditions below are not obvious and both are load-bearing: a
+	zero-extent element would walk here for ever, and one running past the
+	limit was never in this frame.
+	"""
+	placement = view.image.placements[index]
+	element   = placement.type_struct
+	if element == NONE:
+		raise Refused(f"placement {index} is not a run of records")
+	delims = view.image.delimiters.get(index)
+	if not delims:
+		raise Refused(f"placement {index} has no terminator in this image")
+
+	# C's loop guard is `at + delim_len <= view.limit`: below that there is
+	# no room for the terminator to stand, so there is nothing to ask.
+	room  = max(len(one) for one in delims)
+	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	count = 0
+
+	while at + room <= view.limit:
+		if any(view.buffer[at:at + len(one)] == one for one in delims):
+			break			# the terminator stands here
+		sub = View(view.image, view.buffer, element, at, view.limit)
+		try:
+			extent = struct_extent(sub, depth + 1)
+		except Unplaceable:
+			# The ceiling is a refusal about this walk and not about the
+			# message, so it travels rather than becoming a short count --
+			# `_while_walk`'s rule, for its reason.
+			raise
+		except Refused:
+			break
+		if extent <= 0 or at + extent > view.limit:
+			break
+		at    += extent
+		count += 1
+	return count
+
+
 def _while_walk(view: View, index: int,
 		depth: int = 0) -> tuple[int, int]:
 	"""How many elements a `while` run holds.
