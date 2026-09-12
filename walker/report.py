@@ -681,8 +681,10 @@ def _validate(image: Image, view: View, struct_index: int,
 			except Refused:
 				return fail(ERR_BOUNDS, index, TERMINATED)
 
-		if any(check == ARM_SELECTED for check, _ in held):
-			verdict = _arm_selects(image, view, index)
+		for check, against in held:
+			if check != ARM_SELECTED:
+				continue
+			verdict = _arm_selects(image, view, index, bool(against))
 			if verdict:
 				return verdict
 
@@ -894,13 +896,24 @@ CHECK_NAMES = {
 }
 
 
-def _arm_selects(image: Image, view: View, index: int) -> int:
-	"""Whether the discriminant names an arm that exists.
+def _arm_selects(image: Image, view: View, index: int,
+		permissive: bool = False) -> int:
+	"""Whether the discriminant names an arm, and whether that arm validates.
 
-	`default: error` is the refusal this asks about: a value naming no arm is
-	a message this build cannot read, which is `VERSION` and not
+	`default: error` is the refusal the first half asks about: a value naming
+	no arm is a message this build cannot read, which is `VERSION` and not
 	`CONSTRAINT`. The distinction is the schema's -- 14.5 makes refusing an
 	unknown discriminant the default rather than a choice.
+
+	`permissive` says the schema wrote `default: <member>`, so no value can
+	be wrong. **That is a statement about the first half only.** The arm the
+	discriminant selects still carries its own constraints, and the packer
+	used to omit this check entirely for that shape -- dropping the second
+	job with the first. json is that shape: its `yes` arm carries
+	`[must_eq = "rue"]` and the walk accepted `txyz`, silently, for as long
+	as the file has existed. Invisible while the literal arms were rare in a
+	random draw, and constant the moment `default:` became the arm almost
+	every draw takes.
 	"""
 	selects, arms = image.arms.get(index, (NONE, []))
 	if selects == NONE:
@@ -909,6 +922,9 @@ def _arm_selects(image: Image, view: View, index: int) -> int:
 		value = read_scalar(view, selects)
 	except Refused:
 		return ERR_BOUNDS
+	fallback = next((chosen for case, chosen, flags in arms if flags & 1),
+	                None)
+
 	for case, chosen, flags in arms:
 		if flags & 1:
 			continue		# the default arm names no case
@@ -951,7 +967,45 @@ def _arm_selects(image: Image, view: View, index: int) -> int:
 			             view.at + at // 8, view.limit)
 			return _validate(image, inner, arm_type) or OK
 		return OK
+
+	# No `case` matched. Where the schema wrote `default: <member>` that is
+	# not a refusal, and the member it selects is the one that has to
+	# validate -- the same descent as above, through the arm this value
+	# actually reaches.
+	if permissive and fallback is not None:
+		return _arm_validates(image, view, index, fallback)
+
 	return ERR_VERSION
+
+
+def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
+	"""The selected arm's own `validate`, through its own type.
+
+	Split out because the matched and the default paths reach it the same
+	way and a second copy would be a second thing to be wrong -- the rule
+	being the one this file states above it: an arm whose type cannot be
+	measured from its own bytes has no sub-view, so nothing asks whether it
+	fits either.
+	"""
+	if chosen == NONE:
+		return OK
+
+	arm_type = image.placements[chosen].type_struct
+	if arm_type == NONE or not image.structs[arm_type].measurable:
+		return OK
+
+	# Measured through the variant *member*, not the arm: an arm is not in
+	# the struct's member chain, so asking `offset_bits` for one refuses.
+	try:
+		at   = offset_bits(view, index)
+		wide = size_bits(view, index)
+	except Refused:
+		return ERR_BOUNDS
+	if view.at * 8 + at + wide > view.limit * 8:
+		return ERR_BOUNDS
+
+	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
+	return _validate(image, inner, arm_type) or OK
 
 
 def _members(image: Image, view: View, struct_index: int) -> list[str]:

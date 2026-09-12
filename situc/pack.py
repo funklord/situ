@@ -1042,7 +1042,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			if placement.kind == "indexed":
 				whole = False
 				continue
-			if kind is traverse.Check.NOTHING or at is None:
+			# A variant is let past, because `classify_check` answers the
+			# REFUSAL question -- does an unknown discriminant reject --
+			# and a permissive one still needs the arm it selects
+			# validated. Those are two jobs behind one answer, and taking
+			# NOTHING for both is what left json's `yes` arm, carrying a
+			# `[must_eq]`, checked by nobody for as long as that file has
+			# existed.
+			if at is None:
+				continue
+			if kind is traverse.Check.NOTHING and placement.kind != "variant":
 				continue
 			if kind is traverse.Check.RESERVED:
 				# Four policies (8.8), and only two are checks.
@@ -1399,7 +1408,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						constraints_blob += _struct.pack(
 							"<IqBxxx", at, int(held), code)
 				continue
-			if kind is traverse.Check.DISCRIMINANT:
+			if placement.kind == "variant":
 				# The only permissive shape is a `default:` arm that
 				# *selects a member*: netlink's `default: opaque rest[...]`
 				# takes any discriminant and hands back the bytes, so there
@@ -1418,10 +1427,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# whose default is unstated, one construct along, and it
 				# was found the same way: by asking what the four backends
 				# emit rather than what the AST happens to contain.
-				if any(arm.value is None and arm.member is not None
-				       for arm in placement.arm_cases):
-					continue
-				constraints_blob += _struct.pack("<IqBxxx", at, 0, 8)
+				# The operand says which of the two jobs is live: 1 where
+				# an unknown discriminant is permitted and only the arm
+				# has to validate, 0 where it is a refusal as well.
+				permissive = traverse.unmatched_values_pass(placement)
+				constraints_blob += _struct.pack(
+					"<IqBxxx", at, 1 if permissive else 0, 8)
 				# A struct-typed arm runs its own `validate` when it is
 				# the one selected, so this struct can answer only when
 				# each of those can. They join the fixed point below.

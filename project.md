@@ -26936,22 +26936,74 @@ json's conversion reached it:
 
 - A peeked member's SPAN is its lead and no more, and the walk sums spans
   in two places. Fixed, and kept -- `edges.kinded` needs it.
-- **The walk never validates a variant's arm where the schema wrote
-  `default: <member>`.** `classify_check` calls that variant's check
-  NOTHING, so no `ARM_SELECTED` is packed, so nothing descends into the
-  selected arm. C validates it through a pass of its own. json is that
-  shape and has been since it was written: its `yes` arm carries a
-  `[must_eq]` and the walk accepts `txyz`. Invisible while the literal
-  arms were rare in a random draw, and constant once `default:` became
-  the arm almost every draw takes.
+- ~~**The walk never validates a variant's arm where the schema wrote
+  `default: <member>`.**~~ Fixed; 26.338 has it. `classify_check` was
+  answering the refusal question and pack read it as "no check at all",
+  so nothing descended into the selected arm. json is that shape and has
+  been since it was written: its `yes` arm carries a `[must_eq]` and the
+  walk accepted `txyz`.
 - And with that declined, a `value` at a truncated frame's end stops
   producing a sub-view the walk will make, where C makes a zero-length
   one.
 
-**So json's conversion is blocked on the walker gaining what C has**,
-which is its own piece of work and is not `peek`'s. The schema is
-unchanged and the language obstacle is not there any more -- which is a
-better place than 26.333 recorded, and not the place 0056 wanted.
+**So json's conversion was blocked on the walker gaining what C has.**
+Two of the three are fixed now (26.338), and what remains is the third:
+for a truncated frame the walk refuses an offset past the limit where C
+clamps and hands back a zero-length view. The schema is unchanged, the
+language obstacle is gone, and the list is one item long.
+
+### 26.338 The walker validates the arm a variant selects
+
+**A variant's check answered two questions with one word, and a
+permissive default dropped both.** `classify_check` returns
+`Check.NOTHING` for a variant whose `default:` selects a member -- which
+is right about the REFUSAL, since no discriminant value can be wrong --
+and pack read that as "no check at all", so no `ARM_SELECTED` was packed
+and nothing ever descended into the arm.
+
+**json has that shape and has had it since it was written.** Its `yes`
+arm carries `[must_eq = "rue"]` and **the walk accepted `txyz`**.
+Invisible while the literal arms were rare in a random draw, and constant
+the moment 0057's conversion made `default:` the arm almost every draw
+takes -- which is how it surfaced.
+
+**The fix puts the two questions in one check with an operand saying
+which is live.** pack keys the branch on the member being a variant
+rather than on `classify_check`'s answer, and writes 1 where an unknown
+discriminant is permitted and 0 where it refuses; `_arm_selects` reads
+that and validates the selected arm either way. The descent already
+existed for a matched `case` -- what was missing is that nothing reached
+it, and that the default arm was skipped on the way past.
+
+Measured against C on the same eight documents rather than against
+agreement:
+
+    true  null  false  12,  [1]      both OK
+    txyz  nxyz  fxyzq                both CONSTRAINT
+
+**Two jobs behind one answer is the shape worth carrying.** The other
+instances this month were `occupies_fixed_bytes` (a member's size against
+its span) and `size_bits` in the walk (the same, one layer down). Each
+time the second job was invisible because the first had a good answer,
+and each time the fix was to name the two separately rather than to pick
+a better single one.
+
+**The regression test was watched failing.** `test_the_walk_validates_
+the_arm_a_permissive_default_leaves_open` builds a two-arm variant with a
+permissive default and a `[must_eq]` in the matched arm, and asserts three
+verdicts: the constraint caught, the constraint satisfied, and an unknown
+discriminant still not a refusal. With the fix stashed it fails; with it,
+it passes. A check added to a gate reports on other things, so its own
+silence reads as their success -- which is why the sabotage comes before
+the commit rather than after.
+
+**json is still not converted, and now for exactly one reason.** 26.337
+named three; the first two are fixed. What is left is that for a
+truncated frame the walk refuses an offset past the limit --
+`the frame does not reach this member` -- where C clamps and hands back a
+zero-length view, so `member.held` reads `ok=0` against C's `ok=1
+extent=0`. That is a bounds-policy difference between two readers and not
+a variant question; it is next.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -1096,3 +1096,49 @@ def test_a_pass_default_enum_carries_no_membership_check() -> None:
 	          if image.struct_name(i) == "S")
 	view = acquire(image, b"ZZ\x00\x00\x00\x01", si)
 	assert report.failed_check(image, view, si) == report.CLEAN
+
+
+PERMISSIVE_VARIANT = """
+target buffer;
+endian big;
+
+struct known   { u8  word[3]  [must_eq = "abc"]; }
+struct other   { u8  rest[remaining]; }
+
+struct tagged {
+	u8  kind;
+	variant body switch (kind) {
+		case 'k':  known  as_known;
+		default:   other  as_other;
+	}
+}
+"""
+
+
+def test_the_walk_validates_the_arm_a_permissive_default_leaves_open() -> None:
+	"""It did not, and json had the shape since it was written.
+
+	`classify_check` answers the REFUSAL question -- does an unknown
+	discriminant reject -- and returns NOTHING where the schema wrote
+	`default: <member>`, which is right about that and was read as "no
+	check at all". So no `ARM_SELECTED` was packed and nothing descended
+	into the selected arm: json's `yes` carries a `[must_eq]` and the walk
+	accepted `txyz`.
+
+	Two questions behind one answer. The check carries an operand now
+	saying which is live, and the arm validates either way.
+	"""
+	image = load(packed(PERMISSIVE_VARIANT))
+
+	def verdict(packet: bytes) -> str:
+		block = [part for part in report.listing(image, packet).split("-- ")
+		         if part.startswith("tagged")][0]
+		return next(line.strip() for line in block.splitlines()
+		            if line.startswith("validate") or line == "no-view")
+
+	# The matched arm's own constraint is checked...
+	assert verdict(b"kabc") == "validate 0"
+	assert verdict(b"kxyz") == "validate 2"
+	# ...and an unknown discriminant is still no refusal, because the
+	# schema said so.
+	assert verdict(b"zzzz") == "validate 0"
