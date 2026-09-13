@@ -27948,6 +27948,14 @@ refusal sites, through a scratch copy, ranked them in one run:
      8  a counted run whose element is neither a record nor sized
      2  four bytecode operations the walk does not implement
 
+**Those are FIRE counts, and 26.355 had to correct what they were read
+as.** A refusal unwinds through several sites, and the apparatus that
+produced this table read stderr for the whole image rather than per
+struct -- so it attributed to one struct the refusal of whichever ran
+before it. The ranking above is right about which sites fire and wrong
+about how many structs each one is the CAUSE for. Asking one struct per
+run is what separates the two.
+
 **The second was `arm_selected` and nothing else.** `CHECK_ARM_SELECTED`
 was not defined in the C walker at all -- not in the known-kinds list,
 not handled -- so every struct holding a variant was unanswerable to it
@@ -27989,6 +27997,65 @@ declined, none disagreeing. No check kind is among the refusals any more
 after it. What remains is one deliberate refusal and two structural gaps,
 named in the corpus test so the next reader starts from the measurement
 rather than from a guess.
+
+### 26.355 Two refusals left in the C walker, and one of them is the answer
+
+**The measurement that chose this piece also corrected it.** Reporting
+`__LINE__` at each refusal site over the corpus ranked them, and the first
+version of that apparatus was wrong in the way `evidence.md` warns about:
+it ran the driver over the whole image and read the FIRST `UNSUP` line out
+of stderr, so a struct was attributed the refusal of whichever struct ran
+before it. It put six structs on the bytecode site. Asking one struct per
+run -- an argv the driver did not have -- says the bytecode blocked
+**one**, `edges.coded_run`, and the other five were blocked by something
+else entirely. The apparatus is where the error usually is, and a scope
+number is what nothing downstream re-derives.
+
+**A region is not a run, and reading its size program as a count of
+elements is how it looked like one.** A member with a size program, no
+element width and no element type is a region -- `coded body(doubling) {
+u8 content[n]; }` has no elements at all -- and its program answers BYTES.
+`walk.py` gets this right without a branch for it: its element defaults to
+`BITS_PER_BYTE` where neither field says otherwise, so a byte count times
+one byte is that byte count. This walker refused instead, and five of
+`edges`' regions were walkable there and unanswerable here.
+
+**`size`, `offset` and `count` now evaluate.** They were refused by name
+in the bytecode evaluator, which meant any expression naming another
+member's size stopped the walk. Adding them needed the load callback to
+carry WHICH question is being asked rather than only a placement, because
+the caller already holds the message, the shape and the depth -- and a
+second callback per builtin would be three more chances to wire one to the
+wrong walk. `arg_field` stays refused by name: it reads the other message
+of a relation, and this build has no second view of one.
+
+**The units are the trap and they are worth stating.** `walker/vm.py`
+hands its evaluator `size_bits(view, i) // BITS_PER_BYTE`. A C walker
+answering in bits would evaluate every size expression eight times too
+large and agree with itself about it perfectly, which is why the enum says
+BYTES in as many words.
+
+**Both halves sabotaged, and they account for different structs.** With
+the bytecode refused again, `coded_run` alone declines. With the region
+default removed, all five do. `coded_run` needed both, which is why doing
+one without the other moved nothing.
+
+**And the agreement was checked against the BACKEND, not just the other
+walker.** Four of the five region structs answer OK for every random draw,
+so a comparison over draws alone is close to vacuous: hand-built vectors
+put both verdicts in. `02 01 02 03 04 05` holds a doubled two-byte body
+and a trailer and answers 0; one byte shorter answers 1; all three readers
+track each other across six vectors. The sixth is the seam this file
+already names -- a frame under the struct's minimum is refused when the
+BACKEND acquires the view and answers BOUNDS when a walker places members
+in it.
+
+**Where the two walkers stand**: 376 pairs compared and agreeing, 12
+declined, none disagreeing. One refusal site is left and it is a decision
+rather than a gap -- a member whose byte order is `native`, which no walker
+can answer because the capture and the machine reading it are different
+machines. Six structs sit in it: netlink's four, `tiff_header`, and
+`edges`' `marked`.
 
 ## 27. Questions, and how they were settled
 

@@ -909,10 +909,51 @@ static situ_walk_err read_based(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
-static situ_walk_err ctx_load(void *raw, uint32_t index, int32_t base,
-                              int64_t *out)
+static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
+                              int32_t base, int64_t *out)
 {
 	walk_ctx *ctx = (walk_ctx *)raw;
+
+	/* The three builtins that are not a value read. Each descends through
+	 * the same `depth` the ctx carries, for the reason the struct's own
+	 * comment gives: a callback that started the count again would be a
+	 * hole in the bound rather than a bound.
+	 *
+	 * BYTES, not bits, because that is what `walker/vm.py` hands its own
+	 * evaluator. The two walkers would otherwise disagree by a factor of
+	 * eight on every expression naming `size(...)`, each self-consistently.
+	 */
+	if (what == SITU_WALK_ASK_SIZE || what == SITU_WALK_ASK_OFFSET) {
+		uint32_t bits = 0u;
+		situ_walk_err err;
+
+		if (what == SITU_WALK_ASK_SIZE) {
+			err = size_bits_deep(ctx->image, ctx->message, ctx->len,
+			                     ctx->shape, index, ctx->depth, &bits);
+		} else {
+			err = offset_bits_deep(ctx->image, ctx->message, ctx->len,
+			                       ctx->shape, index, ctx->depth, &bits);
+		}
+
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = (int64_t)(bits / 8u);
+		return SITU_WALK_OK;
+	}
+	if (what == SITU_WALK_ASK_COUNT) {
+		uint32_t held = 0u;
+		const situ_walk_err err = situ_walk_count(ctx->image, ctx->message,
+		                                          ctx->len, ctx->shape,
+		                                          index, &held);
+
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = (int64_t)held;
+		return SITU_WALK_OK;
+	}
+
 	if (base != 0) {
 		return read_based(ctx->image, ctx->message, ctx->len, index, base,
 		                  out);
@@ -1700,33 +1741,48 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 	 * arrives wearing precisely that error. */
 	if (held.element_bits == SITU_WALK_NONE) {
 		if (held.type_struct == SITU_WALK_NONE) {
-			return SITU_WALK_UNSUPPORTED;	/* not a run of records */
-		}
-		if (from > len) {
-			return SITU_WALK_BOUNDS;
-		}
-
-		uint32_t at = from;
-		int64_t  i;
-
-		for (i = 0; i < count && at < len; i++) {
-			uint32_t extent = 0u;
-			err = struct_extent(image, message + at, len - at,
-			                    held.type_struct, depth + 1u, &extent);
-			if (err == SITU_WALK_UNSUPPORTED) {
-				return err;
+			/* Neither a record nor an element of known width, which is
+			 * what a REGION looks like from here: `coded body(doubling)
+			 * { ... }` has a size program and no elements at all, so
+			 * the program answers BYTES rather than a count of
+			 * anything. `walk.py` has always read it that way -- its
+			 * element defaults to `BITS_PER_BYTE` where neither field
+			 * says otherwise -- and this refused instead, so five of
+			 * `edges`' regions were walkable there and unanswerable
+			 * here.
+			 *
+			 * The default is what makes the two agree, not a guess
+			 * about the member: a program whose value is a byte count
+			 * times one byte is that byte count. */
+			held.element_bits = 8u;
+		} else {
+			if (from > len) {
+				return SITU_WALK_BOUNDS;
 			}
-			if (err != SITU_WALK_OK) {
-				break;
-			}
-			if (extent == 0u || extent > len - at) {
-				break;
-			}
-			at += extent;
-		}
 
-		*out = (at - from) * 8u;
-		return SITU_WALK_OK;
+			uint32_t at = from;
+			int64_t  i;
+
+			for (i = 0; i < count && at < len; i++) {
+				uint32_t extent = 0u;
+				err = struct_extent(image, message + at, len - at,
+				                    held.type_struct, depth + 1u,
+				                    &extent);
+				if (err == SITU_WALK_UNSUPPORTED) {
+					return err;
+				}
+				if (err != SITU_WALK_OK) {
+					break;
+				}
+				if (extent == 0u || extent > len - at) {
+					break;
+				}
+				at += extent;
+			}
+
+			*out = (at - from) * 8u;
+			return SITU_WALK_OK;
+		}
 	}
 
 	if ((uint64_t)count > 0xffffffffu / held.element_bits) {
@@ -3718,8 +3774,9 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
 			if (load == NULL) {
 				return SITU_WALK_UNSUPPORTED;
 			}
-			const situ_walk_err err = load(ctx, u32_at(image->code + pc),
-			                               0, &value);
+			const situ_walk_err err = load(ctx, SITU_WALK_ASK_VALUE,
+			                               u32_at(image->code + pc), 0,
+			                               &value);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
@@ -3761,8 +3818,8 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
 			int64_t value = 0;
 			const uint8_t *arg = image->code + pc;
 			const int32_t base = (int32_t)u32_at(arg + 4u);
-			const situ_walk_err err = load(ctx, u32_at(arg), base,
-			                               &value);
+			const situ_walk_err err = load(ctx, SITU_WALK_ASK_VALUE,
+			                               u32_at(arg), base, &value);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
@@ -3771,10 +3828,45 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
 			continue;
 		}
 
-		/* `size`, `offset`, `count` and `arg_field` need the walk this
-		 * build does not have yet. Refused by name rather than guessed. */
-		if (op == OP_SIZE || op == OP_OFFSET || op == OP_COUNT
-		                || op == OP_ARG_FIELD) {
+		/* `size(f)`, `offset(f)` and `count(f)`: section 10's builtins
+		 * over another member, each an index and each answered by the
+		 * same callback that reads a field. They were refused by name
+		 * here for as long as this walker has existed, and `size` alone
+		 * accounted for six of the corpus structs it could not answer --
+		 * `edges`' coded, split, marked, scrambled and unverified
+		 * regions, every one of which sizes something by another
+		 * member. */
+		if (op == OP_SIZE || op == OP_OFFSET || op == OP_COUNT) {
+			if (pc + 4u > image->code_len || depth >= STACK_DEPTH) {
+				return SITU_WALK_MALFORMED;
+			}
+			if (load == NULL) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			int64_t value = 0;
+			situ_walk_ask what = SITU_WALK_ASK_COUNT;
+
+			if (op == OP_SIZE) {
+				what = SITU_WALK_ASK_SIZE;
+			} else if (op == OP_OFFSET) {
+				what = SITU_WALK_ASK_OFFSET;
+			}
+			const situ_walk_err err = load(ctx, what,
+			                               u32_at(image->code + pc), 0,
+			                               &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = value;
+			pc += 4u;
+			continue;
+		}
+
+		/* `arg_field` reads the OTHER message of a relation, which this
+		 * build has no second view of. Refused by name rather than
+		 * guessed, which is the whole of what separates a walker that
+		 * declines from one that is wrong. */
+		if (op == OP_ARG_FIELD) {
 			return SITU_WALK_UNSUPPORTED;
 		}
 

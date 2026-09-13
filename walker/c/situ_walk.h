@@ -446,8 +446,28 @@ situ_walk_err situ_walk_validate(const situ_walk_image *image,
  * placement's own offset is within its own struct, so a field of a nested
  * struct needs the nesting offset too -- without it the read lands at the
  * right offset of the wrong struct (26.184). */
-typedef situ_walk_err (*situ_walk_load)(void *ctx, uint32_t index,
-                                            int32_t base, int64_t *out);
+/* What an expression is asking ABOUT a placement.
+ *
+ * Section 10's builtins are four questions of one member, and the bytecode
+ * has an opcode each. One callback answers all four because they differ only
+ * in the question: the caller already holds the message, the shape and the
+ * depth, and a second callback per question would be three more chances for
+ * one of them to be wired to the wrong walk.
+ *
+ * `SIZE` and `OFFSET` are in BYTES, which is what `walker/vm.py`'s callers
+ * pass -- `size_bits(view, i) // BITS_PER_BYTE`. Answering in bits here
+ * would be a walker that evaluates every size expression eight times too
+ * large and agrees with itself about it. */
+typedef enum {
+	SITU_WALK_ASK_VALUE  = 0,   /* the field's own value */
+	SITU_WALK_ASK_SIZE   = 1,   /* how many bytes it occupies */
+	SITU_WALK_ASK_OFFSET = 2,   /* where it starts, in bytes */
+	SITU_WALK_ASK_COUNT  = 3    /* how many elements a run holds */
+} situ_walk_ask;
+
+typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,
+                                            uint32_t index, int32_t base,
+                                            int64_t *out);
 
 situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
                                  situ_walk_load load, void *ctx,

@@ -995,6 +995,50 @@ def test_they_agree_about_which_arm_a_discriminant_selects(
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_region_sized_by_another_member(
+		tmp_path: Path) -> None:
+	"""A region's size program answers BYTES, not a count of elements.
+
+	`edges`' `coded_run` is `u8 n`, then `coded body(doubling) { u8
+	content[n]; }`, then a trailer. Two things had to hold before this
+	walker could answer for it, and it had neither:
+
+	`size(...)` had to evaluate. The bytecode's `OP_SIZE`, `OP_OFFSET` and
+	`OP_COUNT` were refused by name, so any expression naming another
+	member's size stopped the walk. This struct is the one in the corpus
+	that needs it.
+
+	And a region had to stop being read as a run. A member with a size
+	program, no element width and no element type is not a run of anything
+	-- it is a region, and its program is a byte count. `walk.py` has always
+	defaulted the element to one byte where neither field says otherwise,
+	which makes the arithmetic come out right; this walker refused instead,
+	and five of `edges`' regions were walkable there and unanswerable here.
+
+	Both verdicts appear, which is what stops this being a comparison of two
+	readers that both say OK. `02 01 02 03 04 05` holds a doubled two-byte
+	body and a trailer; one byte shorter is BOUNDS. The generated C backend
+	answers the same for all six, asked separately.
+	"""
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	blob  = image_for(edges)
+	shape = shape_named(edges, "coded_run")
+
+	# (message, expected verdict): 0 OK, 1 BOUNDS.
+	cases = [
+		(bytes.fromhex("020102030405"),           "0"),
+		(bytes.fromhex("0201020304"),             "1"),  # a byte short
+		(bytes.fromhex("0001"),                   "0"),  # empty body
+		(bytes.fromhex("050102030405060708090a0b"), "0"),
+		(bytes.fromhex("050102030405060708090a"),   "1"),  # a byte short
+	]
+	for message, want in cases:
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message
+		assert verdict == want, message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A
@@ -2216,13 +2260,18 @@ def test_they_agree_about_the_corpus_being_well_formed(
 	the number moving is visible.
 
 	What the C build declines has been measured rather than guessed at, by
-	reporting `__LINE__` at each of its refusal sites over the corpus. No
-	CHECK KIND is among them any more -- the pinned run was the last, and
-	`arm_selected` the one after that. Three sites are left: a member whose
-	byte order is `native`, which is a deliberate refusal rather than a gap
-	because a capture and the machine reading it are different machines; a
-	counted run whose element is neither a record nor of known width; and
-	four bytecode operations the walk does not implement.
+	reporting `__LINE__` at each of its refusal sites over the corpus, one
+	struct per run so the trace belongs to the struct that produced it.
+	**One site is left**: a member whose byte order is `native`, which is a
+	deliberate refusal rather than a gap, because a capture and the machine
+	reading it are different machines. Six structs are in it -- netlink's
+	four, `tiff_header` and `edges`' `marked`.
+
+	No check kind is among the refusals any more, and neither is the
+	bytecode: the pinned run went first, then `arm_selected`, then `size`,
+	`offset` and `count`. `arg_field` is still refused by name, and nothing
+	in the corpus reaches it -- it reads the other message of a relation,
+	which this build has no second view of.
 	"""
 	blob  = image_for(schema)
 	image = load(blob)
