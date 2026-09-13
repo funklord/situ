@@ -681,3 +681,111 @@ def test_it_records_that_a_text_number_is_scaled() -> None:
 	assert "radix=10 scaled" in signature(scaled)
 	assert "scaled" not in signature(decimal)
 	assert "breaking" in kinds(verdict(scaled, decimal))
+
+
+# -- a scoped text encoding (0058) ------------------------------------------
+
+
+SCOPED = ("tokens verb { helo = \"HELO\", ehlo = \"EHLO\" }\n"
+          "struct s [encoding = utf8] {\n"
+          "\tu8    name[16];\n"
+          "\tu8    raw[4]  [encoding = ascii];\n"
+          "\tverb  which   until \" \";\n"
+          "\tu16   sequence;\n"
+          "}\n")
+
+
+def test_a_struct_states_the_encoding_its_text_members_hold() -> None:
+	"""`endian` and `bit_order` have been "a file-level directive,
+	overridable per struct, overridable per field" since section 8.3 was
+	written. Encoding had a file directive meaning a different thing and a
+	per-field attribute, with nothing between them (0058).
+
+	Three behaviours in one signature, because they are one rule: the scope
+	reaches a member that states nothing, a member that states its own wins,
+	and a member that could not carry one by hand does not get one.
+	"""
+	found = signature(SCOPED)
+
+	assert "name  big encoding=utf8" in found
+	assert "raw  big encoding=ascii" in found		# its own wins
+	assert "sequence  big\n" in found			# a scalar takes none
+
+	# And "its own wins" by NOT BEING GIVEN a second one, which the rendered
+	# line cannot show: every consumer takes the first `encoding` attribute,
+	# so a member carrying both still renders its own and the signature
+	# looks right. Two encodings on one placement is a thing no schema can
+	# write, so the scope must not produce it.
+	schema   = parse_text(PREAMBLE + SCOPED, path="s.situ")
+	resolved = resolve(schema, solve(schema))
+	for struct in resolved.structs.values():
+		for entry in struct.entries:
+			stated = [one for one in entry.placement.attrs
+			          if one.name == "encoding"]
+			assert len(stated) <= 1, (
+				f"{entry.placement.path} carries {len(stated)} encodings")
+
+
+def test_a_scoped_encoding_reaches_a_token_set_member() -> None:
+	"""A token set's member has no brackets and is still a delimited run of
+	bytes -- "its type carries the run-ness that `u8 x[] until \\" \\"` writes
+	in the brackets" -- so `wellformed` lets one carry an encoding by hand
+	and the scope has to reach it for the same reason."""
+	assert "verb       which  encoding=utf8" in signature(SCOPED)
+
+
+def test_a_scope_only_produces_attributes_a_schema_could_write() -> None:
+	"""The invariant that makes the scope safe, and it is not obvious.
+
+	`wellformed` runs BEFORE the layout, and the scope resolves onto the
+	member during it -- so nothing re-checks what the scope produced. A
+	predicate wider than `wellformed`'s would put a member in the image that
+	a hand-written schema is refused for.
+
+	Measured: the first version gave `u16 sequence` `encoding=utf8`, which
+	writing by hand is refused for -- "a byte array or a delimited run -- a
+	single scalar has no encoding to state". So this asserts the two agree,
+	by writing out what the scope produced and checking `wellformed` accepts
+	it.
+	"""
+	from situc import ast, wellformed
+	from situc.layout import _takes_an_encoding
+	from situc.parser import parse_text as parse
+
+	schema = parse(PREAMBLE + SCOPED, path="s.situ")
+	tokens = {decl.name: decl for decl in schema.token_sets()}
+
+	scoped:  list[ast.Member] = []
+	refused: list[ast.Member] = []
+	for struct in schema.structs():
+		for member in struct.members:
+			if not hasattr(member, "attrs"):
+				continue
+			(scoped if _takes_an_encoding(member, tokens)
+			 else refused).append(member)
+
+	assert scoped and refused, "both halves need a case"
+
+	# Every member the scope would reach must survive `wellformed` carrying
+	# an encoding it did not write -- which is what the scope gives it.
+	for member in scoped:
+		one = PREAMBLE + (
+			"tokens verb { helo = \"HELO\", ehlo = \"EHLO\" }\n"
+			"struct one {\n\t"
+			+ _redeclare(member) + "\n}\n")
+		wellformed.check(parse(one, path="one.situ"))
+
+
+def _redeclare(member: object) -> str:
+	"""The member as a schema line, with an explicit `[encoding = utf8]`.
+
+	Rendered rather than unparsed because what is under test is whether
+	`wellformed` accepts the ATTRIBUTE on that shape of member, and the
+	shapes are three.
+	"""
+	name = getattr(member, "name", "x")
+	if getattr(member, "until", None) is not None:
+		return f"verb  {name}  until \" \" [encoding = utf8];"
+	array = getattr(member, "array", None)
+	size  = getattr(getattr(array, "size", None), "value", 4)
+	return f"u8  {name}[{size}]  [encoding = utf8];"

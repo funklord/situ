@@ -730,6 +730,15 @@ class Scope:
 
 	endian: ast.Endian | None	= None
 	bit_order: ast.BitOrder | None	= None
+	#: `[encoding = utf8]` on the struct: what its text members hold, where
+	#: they do not say for themselves (0058).
+	#:
+	#: Two levels and not three. The `encoding` DIRECTIVE is a different
+	#: question with a different arity -- what a character literal in this
+	#: schema means, stated as a list, decidable because a literal is
+	#: accepted only where every listed encoding agrees about it -- so
+	#: there is no file-level value for this to inherit.
+	encoding: str | None		= None
 	# Set by `[endian = from(marker)]`. Distinct from `endian` being None:
 	# the byte order is known, it is just not known until parse time.
 	marker: str | None		= None
@@ -738,6 +747,7 @@ class Scope:
 		endian    = self.endian
 		bit_order = self.bit_order
 		marker    = self.marker
+		encoding  = self.encoding
 
 		for attr in attrs:
 			if attr.name == "endian":
@@ -750,12 +760,77 @@ class Scope:
 					marker = None
 			elif attr.name == "bit_order":
 				bit_order = _attr_enum(attr, ast.BitOrder, "bit order")
+			elif attr.name == "encoding":
+				named = getattr(attr.value, "name", None)
+				if named is not None:
+					encoding = named
 
-		return Scope(endian, bit_order, marker)
+		# By keyword. Written positionally, inserting `encoding` above
+		# `marker` in the dataclass silently swapped the two -- a member
+		# carrying `[encoding = ascii]` came out with `endian-from=ascii`,
+		# which is a byte order taken from a field that does not exist.
+		return Scope(endian=endian, bit_order=bit_order, marker=marker,
+		             encoding=encoding)
 
 	@property
 	def has_byte_order(self) -> bool:
 		return self.endian is not None or self.marker is not None
+
+
+def _scoped_attrs(attrs: tuple[ast.Attr, ...], scope: Scope,
+		span: Span) -> tuple[ast.Attr, ...]:
+	"""A member's attributes, plus the struct's encoding where it has none.
+
+	The scope resolves onto the MEMBER rather than being consulted later,
+	which is the shape `pad_to` already uses for `must_be_zero`: "the policy
+	rides on the placement as an ordinary reserved attribute, so the
+	existing validation needs no pad special case". Everything that reads an
+	encoding reads `placement.attrs` -- the packer's `ENCODED_AS`
+	constraint, both walkers, all four backends -- so a scope that arrives
+	here costs nothing anywhere else (0058).
+
+	A member that states its own wins, which is what makes this a scope and
+	not a decree.
+	"""
+	if scope.encoding is None:
+		return attrs
+	if any(attr.name == "encoding" for attr in attrs):
+		return attrs
+	# The MEMBER's span, not the first attribute's: the common case is a
+	# member with no attributes at all, and taking a span from the list
+	# would have skipped exactly those.
+	return (*attrs, ast.Attr(span, "encoding",
+	                         ast.NameRef(span, scope.encoding)))
+
+
+def _takes_an_encoding(member: object,
+		tokens: dict[str, ast.TokensDecl]) -> bool:
+	"""Whether a scoped encoding is one this member could carry by hand.
+
+	**A scope must not produce an attribute combination a schema could not
+	have written**, and this resolves onto the member AFTER `wellformed`
+	has run -- so nothing downstream re-checks it. The condition is
+	therefore `_attr_place`'s own, read from it rather than invented: a
+	byte array or a delimited run (both have brackets), or a token-set
+	member, whose type carries the run-ness that `u8 x[] until " "` writes
+	in the brackets (0055).
+
+	Measured before it was narrowed: the first version gave `u16 sequence`
+	`encoding=utf8`, which `wellformed` refuses when a schema writes it --
+	"a byte array or a delimited run -- a single scalar has no encoding to
+	state" -- and which this path walked straight past.
+
+	A text NUMBER is the one deliberate narrowing. `decimal u16 code[3]`
+	could carry one by hand and a scope does not give it one: its bytes are
+	digits by 8.6.2, which `radix` already states, so the attribute would
+	add a claim the member does not need. A schema wanting it writes it.
+	"""
+	if getattr(member, "radix", None) is not None:
+		return False
+	if getattr(member, "array", None) is not None:
+		return True
+	named = getattr(member, "type_ref", None)
+	return named is not None and named.name in tokens
 
 
 def _endian_attr(attr: ast.Attr) -> ast.Endian | str:
@@ -1872,7 +1947,9 @@ class Solver:
 			endian         = local.endian,
 			bit_order      = local.bit_order,
 			span           = member.span,
-			attrs          = member.attrs,
+			attrs          = (_scoped_attrs(member.attrs, local, member.span)
+			                  if _takes_an_encoding(member, self.tokens)
+			                  else member.attrs),
 			marker         = local.marker,
 			varint         = (member.type_ref.name
 			                  if member.type_ref.name in self.varints else None),

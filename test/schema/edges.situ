@@ -106,6 +106,31 @@ struct labelled {
 }
 
 require size(labelled) == 22;
+
+// The same three members with the encoding said once, which is 0058's
+// construct. `endian` and `bit_order` have been "a file-level directive,
+// overridable per struct, overridable per field" since 8.3 was written, and
+// encoding had a file directive that means a different thing and a per-field
+// attribute with nothing between them.
+//
+// `raw` states its own and wins, which is what makes this a scope rather
+// than a decree. `sequence` is a `u16` and takes none: `[encoding]` says
+// what a span of TEXT holds, so stamping one on a scalar would put a claim
+// in the wire signature that the member does not make.
+//
+// No file-level default, and the reason is arity. `encoding ascii | utf8;`
+// above says what a character LITERAL in this file means -- a list, because
+// that is the strongest thing a schema can say about bytes whose encoding
+// the data does not carry, and decidable because a literal is accepted only
+// where every listed encoding agrees about it. `[encoding = utf8]` says
+// these bytes ARE that one. There is nothing for a scope to inherit.
+struct scoped_text [encoding = utf8] {
+	u8  name[16]  [nul_terminated];
+	u8  raw[4]    [encoding = ascii];
+	u16 sequence;
+}
+
+require size(scoped_text) == 22;
 require in_place(labelled.sequence);
 
 // Recorded rather than required: the trailing bytes are the cost of a

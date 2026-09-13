@@ -251,6 +251,11 @@ struct ranged_code size=1..
   @0x0000   until:20  u32        code  radix=10 cap=4 min=200 max=599
   ~         0..       u8         rest  sized-by=remaining
 
+struct scoped_text size=22
+  @0x0000   16        u8         name  big nul_terminated encoding=utf8
+  @0x0010   4         u8         raw  big encoding=ascii
+  @0x0014   2         u16        sequence  big
+
 struct scrambled size=7
   @0x0000   1         u8         head
   @0x0001   4         scramble   body  codec=scramble

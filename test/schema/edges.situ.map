@@ -261,6 +261,11 @@ struct ranged_code size=1.. access=Sequential mutate=Shifting address=Unstable r
   ranged_code.code                       offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   ranged_code.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct scoped_text size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  scoped_text.name                       offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  scoped_text.raw                        offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+  scoped_text.sequence                   offset=AbsoluteStatic(0x14) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
 struct scrambled size=7 repr=ValueConverted atomic=NonAtomic
   scrambled.head                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   scrambled.body                         offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic

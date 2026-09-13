@@ -27531,9 +27531,82 @@ encoding for what follows, and a refusal when the two disagree. That turns
 with a check against it -- which is what this project does with every other
 fact it cannot compute.
 
-**Both are design work and neither is started.** Recorded here so that the
-next pass has the constraint rather than rediscovering it, and because the
-existing refusal's reasoning is worth keeping when the door opens.
+~~**Both are design work and neither is started.**~~ **0058 settles both
+and builds the first; 26.347 has what the reading turned up.** The
+existing refusal's reasoning is kept and is about a different question --
+the DIRECTIVE, and character literals -- which nothing here touches.
+
+### 26.347 Encoding was the odd one out, and endian had solved both halves
+
+**26.330 recorded two requests as design work with nothing started, and
+reading the tree found most of the design already in it.** Both halves of
+what it asks for exist for `endian`, which is the sibling property.
+
+**Scoping.** Section 8.3 says `endian` and `bit_order` are "a file-level
+directive, overridable per struct, overridable per field", and that is
+`layout.Scope`. Measured rather than assumed -- `struct little_one
+[endian = little] { u16 a; u16 b [endian = big]; }` compiles today and
+gives `a` little and `b` big. Encoding had a file directive and a
+per-field attribute with nothing between, so it was the one of three
+without the middle. 0058 gives it the shape the other two have.
+
+**Naming it in the data.** `[endian = from(marker)]` is exact precedent:
+a property the data names, with `endian_marker` declaring the
+value-to-meaning mapping. So the shape for an encoding is
+`[encoding = from(charset)]` beside such a declaration, and 26.330's
+harder half is not a new idea in this language.
+
+**What is genuinely new is the one sentence that stops it being the same
+change twice.** `EndianMarkerDecl` says a marker "travels with the data,
+so exactly one encoding is valid once the marker is known -- and
+ENDIANNESS NEVER CHANGES EXTENT, so this costs nothing on the offset or
+size axes". An encoding does: 0044 settled that `[encoding = utf16]` on a
+`u16[length]` run states that `length` counts CODE UNITS. So a data-named
+endianness can be resolved after the layout is fixed and a data-named
+encoding cannot.
+
+**Which turns 26.330's rule into two rules, and it had one.** It recorded
+the length precedent -- a field may only govern bytes that follow it, so
+the circular case is a compile-time refusal -- and that is necessary and
+not sufficient. The second is that no member the encoding governs may
+have an extent that depends on it, or the size of the thing being read is
+a function of a value inside it. Decidable, because the compiler already
+knows whether a run's length is bytes or code units.
+
+**The arity point, which decides the first half's shape.** The word is
+overloaded: `encoding ascii | utf8;` is what a character LITERAL means,
+deliberately a list, decidable because a literal is accepted only where
+every listed encoding agrees about it; `[encoding = utf8]` is what the
+message's bytes ARE, exactly one. So a scope for the second cannot
+inherit a default from the first -- there is nothing to inherit -- and a
+file-level data encoding would be a third meaning for one word. Two
+levels, not three.
+
+**Three things the build turned up.**
+
+A scope resolves onto the member AFTER `wellformed` has run, so nothing
+re-checks what it produced. The first version gave `u16 sequence`
+`encoding=utf8`, which a schema WRITING that is refused for -- "a byte
+array or a delimited run -- a single scalar has no encoding to state".
+The predicate reads `_attr_place`'s condition rather than inventing one,
+and a test asserts the two agree by writing out what the scope produced
+and handing it back to `wellformed`.
+
+Inserting `encoding` into `Scope` above `marker` and constructing it
+positionally swapped the two: a member carrying `[encoding = ascii]` came
+out with `endian-from=ascii`, a byte order taken from a field that does
+not exist. By keyword now.
+
+And "a member's own wins" was carried by attribute ORDER rather than by
+the guard that implements it -- every consumer takes the first `encoding`
+attribute, so a member given both still rendered its own and the
+signature looked right. The test asserts the COUNT, because two encodings
+on one placement is another thing no schema can write. Sabotaging the
+guard passes against the rendered line and fails against the count.
+
+**And the `-k` filter that selected the sabotage run did not include the
+test under change**, so the first re-run reported green from two other
+tests. A sabotage is only evidence about the test it actually ran.
 
 ## 27. Questions, and how they were settled
 
