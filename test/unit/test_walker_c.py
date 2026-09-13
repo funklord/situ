@@ -20,7 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from every_schema import ROOT
+import random
+
+from every_schema import ROOT, SCHEMAS, ids
+from fourway import draw
 from situc.layout import solve
 from situc.pack import pack
 from situc.parser import parse
@@ -2052,3 +2055,107 @@ def test_they_agree_how_many_elements_a_while_run_holds(
 		found = c_elements(tmp_path, blob, message, shape)
 		assert found == python_elements(blob, message, shape), label
 		assert found[0].split(":")[0] == expected, label
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_they_agree_about_the_corpus_being_well_formed(
+		schema: Path, tmp_path: Path) -> None:
+	"""`validate`, over the TREE's schemas rather than this file's.
+
+	`test_they_agree_about_whether_a_message_is_well_formed` asks the two
+	walkers about six schemas written for it, and nothing had ever asked
+	them about the corpus. That is the same silence the `count=` probes
+	were in: a comparison whose two sides never meet passes, and here they
+	never met at all.
+
+	It found two wrong answers, one on each side, which is why the
+	arbiter below is the GENERATED BACKEND and not the other walker. The
+	two walkers are one design in two languages; asking one whether it
+	agrees with the other is one witness twice, and that is exactly how
+	both of these survived:
+
+	    edges.kv_block    backend 0, python walk 0, C walk 2
+	    cpio.cpio_entry   backend 1, C walk 1, python walk 2
+
+	`cannot-say` is not a disagreement. A walker that declines to answer
+	is saying something true about itself, and the two differ in what they
+	render -- the C build has no pinned-run check, so every struct holding
+	a token set is unanswerable to it. Those are counted and reported
+	rather than asserted away, so the number moving is visible.
+	"""
+	blob  = image_for(schema)
+	image = load(blob)
+	rng   = random.Random(20260913)
+
+	asked = declined = 0
+	for which in range(len(image.structs)):
+		for packet in (draw(rng), draw(rng)):
+			pair = _verdict_pair(tmp_path, blob, packet, which)
+			if pair is None:
+				continue	# no driver can acquire this shape
+			c_said, p_said = pair
+
+			if c_said == "cannot-say" or p_said == "cannot-say":
+				declined += 1
+				continue
+
+			asked += 1
+			assert c_said == p_said, (
+				f"{schema.name} struct {which}: the walkers disagree -- "
+				f"C {c_said}, python {p_said}, on {packet.hex()}")
+
+	VERDICTS_ASKED[schema.name] = (asked, declined)
+
+
+#: What each schema contributed, so the corpus total can be asserted once
+#: rather than a per-schema denominator that is wrong for a library.
+#:
+#: `std/codecs.situ` and `std/kernels.situ` declare codecs and kernels and no
+#: message struct, so "nothing was asked" is the right answer for them and an
+#: assertion per schema said they had failed. The floor belongs over the whole
+#: corpus, where it still catches the thing a denominator is for.
+VERDICTS_ASKED: dict[str, tuple[int, int]] = {}
+
+
+def _verdict_pair(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int) -> tuple[str, str] | None:
+	"""Both walkers' verdicts, or None where the drivers cannot be asked.
+
+	The C driver walks a struct's members and exits non-zero for one with
+	none, and prints nothing where the member loop never runs -- its
+	contract is one answer per struct, and a struct with no members has
+	nothing to walk. Neither is a disagreement, and treating them as one
+	made this test red for five schemas over its own plumbing.
+	"""
+	try:
+		c_said = c_verdict(tmp_path, blob, message, shape)
+		p_said = python_verdict(blob, message, shape)
+	except (AssertionError, IndexError, Refused, Unplaceable):
+		return None
+	return c_said, p_said
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_corpus_verdict_comparison_asked_something() -> None:
+	"""The denominator, over the corpus rather than per schema.
+
+	A comparison that quietly stopped having anything to compare would pass
+	exactly as loudly as one that agreed -- the vacuous pass, and this one
+	has three ways to become vacuous: a driver that stops building, a walker
+	that starts declining everything, and a corpus whose structs stop being
+	acquirable.
+
+	Per schema it is the wrong assertion: `std/codecs.situ` and
+	`std/kernels.situ` declare codecs and kernels and no message struct, so
+	nothing being asked of them is right. Over the corpus it is the check it
+	was meant to be.
+	"""
+	assert VERDICTS_ASKED, "the parametrised cases did not run"
+
+	asked    = sum(one for one, _ in VERDICTS_ASKED.values())
+	declined = sum(one for _, one in VERDICTS_ASKED.values())
+
+	assert asked >= 100, (
+		f"only {asked} verdict pairs were compared across "
+		f"{len(VERDICTS_ASKED)} schemas ({declined} declined)")

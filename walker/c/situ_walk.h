@@ -145,6 +145,18 @@ typedef struct {
 	 * `tlv_count_` has the trailing underscore because `situ_walk_count` is
 	 * already a function: a member of that name shadows nothing in C, but
 	 * the two reading alike in a diff is how the wrong one gets used. */
+	/* The byte runs a `[must_eq]` on a run pins, and a token set's arms
+	 * (0052, 0055): one row per alternative, consecutive under the
+	 * placement, in declaration order.
+	 *
+	 * This build had none, so `check_pinned_run` was a kind it did not
+	 * render -- which made every struct holding a token set unanswerable
+	 * to it while the Python walk answered. Honest, and it meant the two
+	 * could not be compared about `smtp`, `http` or `edges` at all. */
+	const uint8_t *pinned_runs;
+	uint32_t       pinned_run_count;
+	uint32_t       pinned_run_stride;
+
 	const uint8_t *tlvs;
 	uint32_t       tlv_count_;
 	uint32_t       tlv_stride;
@@ -189,6 +201,11 @@ typedef struct {
 	 * `radix_digits` is how many digits the schema declared, which is the
 	 * fixed-width form's width; the delimited form's comes from the scan. */
 	uint8_t  radix;
+	/* `image_placement.text_flags`. Bit 2 is `[case_insensitive]`, which
+	 * for a token set is a property of the SET rather than of the member
+	 * (0055) -- so a pinned-run check that ignored it refuses `helo` where
+	 * every other reader takes it. */
+	uint8_t  text_flags;
 	uint16_t radix_digits;
 	/* `max` on a `while` run: the ceiling the schema put on how many
 	 * elements one may hold, and zero where it stated none. */

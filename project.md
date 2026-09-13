@@ -27673,6 +27673,83 @@ encoding's own-wins guard. The rule is the same as the artifact rule one
 level down: a sabotage is evidence about the test that actually ran, and
 the filter decides which that is.
 
+### 26.349 Asking the two walkers about the corpus, and what it found
+
+**`validate` was compared between the walkers over six schemas written
+for the comparison, and never over the tree's own.** That is the silence
+the `count=` probes were in, one level up: a comparison whose two sides
+never meet passes, and here they never met at all. Over the corpus, 27
+of 190 struct-and-message pairs diverged. Twenty-five were honest
+`cannot-say` -- a walker declining is saying something true about itself
+-- and **two were wrong answers, one on each side**.
+
+**`cpio.cpio_entry`: backend 1, C walk 1, python walk 2.** The Python
+`_validate` never checked a struct's own minimum. That check lives in
+`acquire`, and a NESTED view is constructed directly, so nothing asked.
+The effect was not permissiveness but the wrong REFUSAL: 42 bytes of
+`cpio_entry` is BOUNDS in every other reader, and this descended into
+`cpio_header`, found its `magic` wrong and said CONSTRAINT. A short
+frame's members are not wrong, they are absent.
+
+**`edges.kv_block`: backend 0, python walk 0, C walk 2.** The C walker's
+`nested` condition had no delimiter exclusion, so `T x[] until "D"` -- a
+run of records that ENDS at a terminator -- was treated as one nested
+struct and element zero validated as though it were the member.
+`report._validate` has carried that exclusion all along with 8.6.3's
+distinction written beside it; the C side never got it.
+
+**Neither could have been found by comparing the walkers alone**, which
+is why the new test names the BACKEND's answer beside each: on one the
+Python walker was right and on the other the C walker was, so one
+witness twice would have picked a side and been wrong half the time.
+
+**The test's own first version failed for three reasons that were its
+own**, which is worth recording because a test that fails for its own
+plumbing is noise somebody will learn to ignore. The C driver exits
+non-zero for a struct with no members and prints nothing where the
+member loop never runs -- its contract is one answer per struct -- so
+those are skipped rather than counted as disagreements. And a per-schema
+denominator is wrong for `std/codecs.situ` and `std/kernels.situ`, which
+declare codecs and kernels and no message struct: "nothing was asked" is
+the right answer there, so the floor moved to a corpus-wide assertion
+where it still catches what a denominator is for.
+
+### 26.350 The C walker validates a token set, and the bug was upside down
+
+**`CHECK_PINNED_RUN` was a kind that build did not render**, so every
+struct holding a token set was unanswerable to it -- honest, and it meant
+the two walkers could not be compared about `smtp`, `http` or `edges` at
+all. The section is loaded now and the check mirrors the Python one,
+folding case where the SET says so (0055) rather than where the member
+does.
+
+**Loading the section was not enough, and the second half is the part
+worth keeping.** The check is answered in the loop that reads a member's
+SPAN, and the value loop after it skipped only `TERMINATED`,
+`NUL_TERMINATED`, `ENCODED_AS` and `ZERO_RUN`. A pinned row fell through
+to the value comparison, which has no value to read for a token-set
+member, and returned UNSUPPORTED.
+
+**So it refused correctly and declined on success.** `NOPE` answered 2
+and `HELO` answered `cannot-say`, because a failing arm returns before
+the second loop and a matching one carries on into it. A check that works
+only when it fails is indistinguishable from a working one if the inputs
+are mostly bad -- and a fuzz draw is mostly bad, which is why the first
+corpus case agreed immediately and looked like progress.
+
+**Measured after**: 342 of 373 struct-and-message pairs are compared
+and 31 declined. Not stated as a delta against the survey's 25, because
+that survey drew ONE packet per struct and this draws two -- the two
+numbers are not the same measurement, and subtracting them would be a
+figure nobody could re-derive.
+
+**What settled it was isolating on a four-line schema**, after two
+instrumentation attempts that silently failed to apply and one whose
+compile error was assumed rather than read. The minimal case made the
+pattern -- refuses right, declines on success -- visible in one line of
+output, where the corpus had shown one agreeing case and one declining
+one and no shape at all.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

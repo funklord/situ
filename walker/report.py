@@ -599,6 +599,28 @@ def _validate(image: Image, view: View, struct_index: int,
 	if not image.structs[struct_index].validatable:
 		return None
 
+	# The frame has to hold the struct's own minimum before anything in it
+	# is placed -- section 20.2's check, which `acquire` makes for the
+	# OUTERMOST struct and which a nested view never goes through: a nested
+	# `View` is constructed directly, so nothing asked.
+	#
+	# Both the C walker's `validate_deep` and every generated `check` test
+	# it first, and skipping it here did not make this walk more permissive
+	# -- it made it answer the WRONG REFUSAL. `cpio_entry` over 42 bytes is
+	# BOUNDS in all five other readers; this descended into `cpio_header`,
+	# found its `magic` wrong and said CONSTRAINT. A short frame's members
+	# are not wrong, they are absent.
+	#
+	# `size_bits` is `NONE` for a variable struct, which is the C walker's
+	# own condition: the image does not carry a minimum for one, so neither
+	# reader checks it and the four backends -- which have `SIZE_MIN` from
+	# the compiler -- can still refuse where these two cannot.
+	shape = image.structs[struct_index]
+	if shape.size_bits != NONE:
+		need = (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+		if view.limit - view.at < need:
+			return fail(ERR_BOUNDS)
+
 	for index in image.members(image.structs[struct_index]):
 		# A `[since]` member is there only in a message whose own version
 		# reaches it, and a field that is not there is not a field that is

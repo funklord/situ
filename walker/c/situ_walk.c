@@ -18,6 +18,7 @@
 #define TAG_TLV_RULES  24u
 #define TAG_INDEXES    11u
 #define TAG_DEPTHS     21u
+#define TAG_PINNED_RUNS 20u
 #define TAG_SKIPS      22u
 
 #define HEADER_BYTES  20u
@@ -43,6 +44,8 @@
 #define TLV_READS       15u	/* to the tag's decode parameters */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
 #define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
+#define PINNED_READS    32u	/* `<IB27s`: placement, length, octets */
+#define PINNED_OCTETS   27u
 
 /* The image is little endian by declaration (`endian little` in
  * image.situ): it is produced and consumed by the same toolchain, so there
@@ -230,6 +233,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->versions       = image + offset;
 			out->version_count  = items;
 			out->version_stride = stride;
+		} else if (kind == TAG_PINNED_RUNS) {
+			if (stride < PINNED_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->pinned_runs       = image + offset;
+			out->pinned_run_count  = items;
+			out->pinned_run_stride = stride;
 		} else if (kind == TAG_SKIPS) {
 			if (stride < SKIP_READS) {
 				return SITU_WALK_MALFORMED;
@@ -291,6 +301,7 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
 	out->located_code = u32_at(at + 32);
 	out->repeat_code  = u32_at(at + 36);
 	out->radix        = at[40];
+	out->text_flags   = at[41];
 	out->radix_digits = u16_at(at + 42);
 	out->repeat_cap   = u16_at(at + 46);
 	out->pad_to       = u16_at(at + 48);
@@ -327,6 +338,51 @@ static const uint8_t *table_row(const uint8_t *table, uint32_t count,
 		}
 	}
 	return NULL;
+}
+
+/* The first pinned row for a placement. `table_row` binary-searches and
+ * lands on any of them; the rows are consecutive, which is what lets a walk
+ * read them all without the record carrying an index. */
+static const uint8_t *first_pinned(const situ_walk_image *image,
+                                   uint32_t index)
+{
+	const uint8_t *at = table_row(image->pinned_runs,
+	                              image->pinned_run_count,
+	                              image->pinned_run_stride, index);
+	if (at == NULL) {
+		return NULL;
+	}
+	while (at > image->pinned_runs
+	                && u32_at(at - image->pinned_run_stride) == index) {
+		at -= image->pinned_run_stride;
+	}
+	return at;
+}
+
+/* One arm against the member's bytes, folded where the SET says so. */
+static int same_run(const uint8_t *arm, uint32_t arm_len,
+                    const uint8_t *data, uint32_t len, int fold)
+{
+	if (arm_len != len) {
+		return 0;
+	}
+	for (uint32_t i = 0u; i < len; i++) {
+		uint8_t a = arm[i];
+		uint8_t b = data[i];
+
+		if (fold) {
+			if (a >= 'A' && a <= 'Z') {
+				a = (uint8_t)(a - 'A' + 'a');
+			}
+			if (b >= 'A' && b <= 'Z') {
+				b = (uint8_t)(b - 'A' + 'a');
+			}
+		}
+		if (a != b) {
+			return 0;
+		}
+	}
+	return 1;
 }
 
 static const uint8_t *delimiter_rules(const situ_walk_image *image,
@@ -2358,6 +2414,10 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_NUL_TERMINATED 11u
 #define CHECK_ENCODED_AS     12u
 #define CHECK_ZERO_RUN       13u
+#define CHECK_PINNED_RUN     14u
+
+/* `text_flags` bit 2: the member compares case-insensitively (0055). */
+#define TEXT_CASE_INSENSITIVE 4u
 
 /* `[encoding = ...]`, as the packer numbers it (pack.ENCODING_CODE). */
 #define ENCODING_ASCII    0
@@ -2587,7 +2647,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_TERMINATED
 			                && kind != CHECK_NUL_TERMINATED
 			                && kind != CHECK_ENCODED_AS
-			                && kind != CHECK_ZERO_RUN) {
+			                && kind != CHECK_ZERO_RUN
+			                && kind != CHECK_PINNED_RUN) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 		}
@@ -2638,12 +2699,25 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 
 		/* One nested member, not a run of them and not a variant: a run gets
 		 * the repeated check rather than the nested one, and recursing into
-		 * it would validate element zero as though it were the member. */
+		 * it would validate element zero as though it were the member.
+		 *
+		 * A DELIMITED one is a run too, and this did not say so.
+		 * `T x[] until "D"` is a run of records that ENDS at a terminator,
+		 * not a member that ends at a delimiter -- 8.6.3's distinction, and
+		 * `report._validate` has carried the exclusion all along. Without
+		 * it this descended into `edges.kv_block`'s `entries` as though the
+		 * whole run were one `kv`, validated element zero's members against
+		 * the run's bytes, and answered CONSTRAINT where the four backends
+		 * and the Python walk all answer OK (26.349).
+		 *
+		 * Found by asking the two walkers about the CORPUS rather than
+		 * about six schemas written for the question. */
 		uint32_t on_arms = 0u;
 		const int nested = (held.type_struct != SITU_WALK_NONE
 		                    && held.repeat_code == SITU_WALK_NONE
 		                    && held.array_count == SITU_WALK_NONE
 		                    && held.size_code == SITU_WALK_NONE
+		                    && delimiter_rules(image, index) == NULL
 		                    && arm_rows(image, index, &on_arms) == NULL);
 
 		/* Every member is *placed*, not only the constrained ones: a struct
@@ -2792,7 +2866,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			for (uint32_t c = 0u; c < rows; c++) {
 				const uint8_t kind = checks[c * image->constraint_stride + 12];
 				if (kind == CHECK_NUL_TERMINATED || kind == CHECK_ENCODED_AS
-				                || kind == CHECK_ZERO_RUN) {
+				                || kind == CHECK_ZERO_RUN
+				                || kind == CHECK_PINNED_RUN) {
 					span += 1u;
 				}
 			}
@@ -2835,6 +2910,35 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 								bad = 1;
 							}
 						}
+					} else if (kind == CHECK_PINNED_RUN) {
+						/* A byte run pinned to one of several spellings
+						 * (0052), and a token set's arms (0055). `want` is
+						 * how many the packer wrote; a different number
+						 * found here means this walk misread the section,
+						 * which is an error about the IMAGE rather than a
+						 * refusal about the message -- the Python walk
+						 * raises there and this returns MALFORMED. */
+						const int64_t want = i64_at(row + 4);
+						uint32_t      seen = 0u;
+
+						bad = 1;
+						for (const uint8_t *one = first_pinned(image, index);
+						     one != NULL
+						     && one < image->pinned_runs
+						              + (size_t)image->pinned_run_count
+						                * image->pinned_run_stride
+						     && u32_at(one) == index;
+						     one += image->pinned_run_stride) {
+							seen += 1u;
+							if (same_run(one + 5, one[4], data, content,
+							             (held.text_flags
+							              & TEXT_CASE_INSENSITIVE) != 0u)) {
+								bad = 0;
+							}
+						}
+						if ((int64_t)seen != want) {
+							return SITU_WALK_MALFORMED;
+						}
 					} else if (kind == CHECK_ENCODED_AS) {
 						const int64_t how = i64_at(row + 4);
 
@@ -2872,7 +2976,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 
 			if (kind == CHECK_TERMINATED || kind == CHECK_NUL_TERMINATED
 			                || kind == CHECK_ENCODED_AS
-			                || kind == CHECK_ZERO_RUN) {
+			                || kind == CHECK_ZERO_RUN
+			                || kind == CHECK_PINNED_RUN) {
 				continue;	/* asked above, over the span rather than a value */
 			}
 
