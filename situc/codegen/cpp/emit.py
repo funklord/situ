@@ -6755,9 +6755,64 @@ class Emitter:
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
+		else:
+			lines.extend(self._declared_encoding_check(struct, placement,
+			                                           name, named))
 
 		lines.extend(self._text_number_check(struct, placement, name))
 		lines.extend(self._token_check(placement, name))
+		return lines
+
+	def _declared_encoding_check(self, struct: ResolvedStruct,
+			placement: Placement, name: str,
+			named: "ast.Attr | None") -> list[str]:
+		"""`[encoding = from(f)]`: the check the message's own field picks.
+
+		A token set is the mapping (0058) -- its arms are text keywords with
+		names, so the arm names ARE the encodings and the set's own `which`
+		selects the branch. `check_encoding_from` has already refused a set
+		whose arms are not all checkable at the element's width, so the
+		switch is total and the default is unreachable through a well-formed
+		message.
+		"""
+		from situc.wellformed import _encoding_source
+
+		source = _encoding_source(named) if named else None
+		if source is None:
+			return []
+
+		holder = next((one for one in struct.entries
+		               if one.placement.path.split(".")[-1] == source), None)
+		if holder is None:
+			return []
+		decl = self.tokens.get(holder.placement.type_name or "")
+		if decl is None:
+			return []
+
+		set_name = c_name(decl.name)
+		picked = (f"{set_name}::which(situ_base(raw_) + {source}_offset(), "
+		          f"{source}_len())")
+		lines = [
+			f"\t\t/* {placement.path} [encoding = from({source})] -- the arm",
+			f"\t\t * `{source}` names says which check this is (0058). */",
+			f"\t\tswitch ({picked}) {{",
+		]
+		for arm in self.resolved.layout.env.token_sets[decl.name]:
+			lines.extend([
+				f"\t\tcase {set_name}::{c_name(arm)}:",
+				f"\t\t\tif (!situ_{arm}_valid("
+				f"situ_base(raw_) + {name}_offset(), {name}_len())) {{",
+				"\t\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t\t}",
+				"\t\t\tbreak;",
+			])
+		lines.extend([
+			"\t\tdefault:",
+			"\t\t\t/* Unreachable through a well-formed message: the set's",
+			"\t\t\t * own membership check refuses an unknown arm. */",
+			"\t\t\tbreak;",
+			"\t\t}",
+		])
 		return lines
 
 	def _token_check(self, placement: Placement, name: str) -> list[str]:

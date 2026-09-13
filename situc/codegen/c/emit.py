@@ -7517,6 +7517,9 @@ class Emitter:
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t}",
 			])
+		else:
+			lines.extend(self._declared_encoding_check(struct, placement,
+			                                           local, named))
 
 		if placement.radix is not None:
 			lines.append("")
@@ -8262,6 +8265,67 @@ class Emitter:
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		]
+
+	def _declared_encoding_check(self, struct: ResolvedStruct,
+			placement: Placement, local: str,
+			named: ast.Attr | None) -> list[str]:
+		"""`[encoding = from(f)]`: the check the message's own field picks.
+
+		A token set is the mapping (0058): its arms are text keywords with
+		names, so the arm names ARE the encodings and the `_which` accessor
+		the set already generates is what selects the branch. Every arm is
+		an encoding situ validates and every arm reads the element's width
+		-- `check_encoding_from` refuses the set otherwise -- so the switch
+		is total and the default is unreachable through a well-formed
+		message.
+
+		Written as a switch rather than a chain of ifs because the arm
+		constants are what a reader checks this against: one line per arm,
+		in the set's declaration order.
+		"""
+		from situc.wellformed import _encoding_source
+
+		source = _encoding_source(named) if named else None
+		if source is None:
+			return []
+
+		holder = next((one for one in struct.entries
+		               if one.placement.path.split(".")[-1] == source), None)
+		if holder is None:
+			return []
+		set_name = holder.placement.type_name
+		arms = self.resolved.layout.env.token_sets.get(set_name or "")
+		if not arms:
+			return []
+
+		picked = (f"{ident(self.prefix, set_name, 'which')}("
+		          f"{ident(self.prefix, struct.name, source, 'ptr')}(view), "
+		          f"{ident(self.prefix, struct.name, source, 'len')}(view))")
+		lines = [
+			"",
+			f"\t/* {placement.path} [encoding = from({source})] -- the arm",
+			f"\t * `{source}` names says which check this is (0058). */",
+			f"\tswitch ({picked}) {{",
+		]
+		for arm in arms:
+			lines.extend([
+				f"\tcase {macro(self.prefix, set_name, arm)}:",
+				f"\t\tif (!situ_{arm}_valid("
+				f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
+				f"\t\t\t\t{ident(self.prefix, struct.name, local, 'len')}"
+				f"(view))) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				"\t\tbreak;",
+			])
+		lines.extend([
+			"\tdefault:",
+			"\t\t/* Unreachable through a well-formed message: the set's",
+			"\t\t * own membership check above refuses an unknown arm. */",
+			"\t\tbreak;",
+			"\t}",
+		])
+		return lines
 
 	def _encoding_check(self, struct: ResolvedStruct, placement: Placement,
 			scalar: ScalarType) -> list[str]:

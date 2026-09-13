@@ -5214,6 +5214,9 @@ class Emitter:
 				"\t\t\traise ConstraintError(",
 				f'\t\t\t\t"{placement.path} is not {spelling}")',
 			])
+		else:
+			lines.extend(self._declared_encoding_check(struct, placement,
+			                                           name, named))
 
 		if placement.radix_minimal:
 			# The *digits*, which is what the predicate reads. This passed
@@ -5235,6 +5238,48 @@ class Emitter:
 			# text number's `[min]` and `[max]` reached no backend.
 			lines.extend(self._attr_checks(struct, placement, f"self.{name}"))
 		lines.extend(self._token_check(placement, name))
+		return lines
+
+	def _declared_encoding_check(self, struct: ResolvedStruct,
+			placement: Placement, name: str,
+			named: "ast.Attr | None") -> list[str]:
+		"""`[encoding = from(f)]`: the check the message's own field picks.
+
+		A token set is the mapping (0058): its arms are text keywords with
+		names, so the arm names ARE the encodings and the set's own `which`
+		selects the branch. `check_encoding_from` refuses a set whose arms
+		are not all checkable at the element's width, so every arm has a
+		branch and the fall-through is unreachable through a well-formed
+		message.
+		"""
+		from situc.wellformed import _encoding_source
+
+		source = _encoding_source(named) if named else None
+		if source is None:
+			return []
+
+		holder = next((one for one in struct.entries
+		               if one.placement.path.split(".")[-1] == source), None)
+		if holder is None:
+			return []
+		decl = self.tokens.get(holder.placement.type_name or "")
+		if decl is None:
+			return []
+
+		held  = py_name(decl.name)
+		lines = [
+			f"\t\t# `{source}` says which check this is (0058).",
+			f"\t\t_said = {held}.which(self.{source}_raw)",
+		]
+		for index, arm in enumerate(
+				self.resolved.layout.env.token_sets[decl.name]):
+			branch = "if" if index == 0 else "elif"
+			lines.extend([
+				f"\t\t{branch} _said == {held}.{arm.upper()}:",
+				f"\t\t\tif not {arm}_valid(self.{name}_raw):",
+				"\t\t\t\traise ConstraintError(",
+				f'\t\t\t\t\t"{placement.path} is not {arm}")',
+			])
 		return lines
 
 	def _token_check(self, placement: Placement, name: str) -> list[str]:

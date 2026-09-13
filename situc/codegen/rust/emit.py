@@ -4301,9 +4301,60 @@ class Emitter:
 				"\t\t\treturn Err(Error::Constraint);",
 				"\t\t}",
 			])
+		else:
+			lines.extend(self._declared_encoding_checks(struct, placement,
+			                                            base, named))
 
 		lines.extend(self._text_number_checks(struct, placement, base))
 		lines.extend(self._token_checks(placement, base))
+		return lines
+
+	def _declared_encoding_checks(self, struct: ResolvedStruct,
+			placement: Placement, base: str,
+			named: "ast.Attr | None") -> list[str]:
+		"""`[encoding = from(f)]`: the check the message's own field picks.
+
+		A token set is the mapping (0058): its arms are text keywords with
+		names, so the arm names ARE the encodings and the set's own `which`
+		selects the branch. `check_encoding_from` refuses a set whose arms
+		are not all checkable at the element's width, so the match is total
+		and the wildcard is unreachable through a well-formed message.
+		"""
+		from situc.wellformed import _encoding_source
+
+		source = _encoding_source(named) if named else None
+		if source is None:
+			return []
+
+		holder = next((one for one in struct.entries
+		               if one.placement.path.split(".")[-1] == source), None)
+		if holder is None:
+			return []
+		decl = self.tokens.get(holder.placement.type_name or "")
+		if decl is None:
+			return []
+
+		picked = (f"{decl.name}::which(self."
+		          f"{_ident(f'{source}_raw')}())")
+		lines = [
+			f"\t\t// `{source}` says which check this is (0058).",
+			f"\t\tmatch {picked} {{",
+		]
+		for arm in self.resolved.layout.env.token_sets[decl.name]:
+			lines.extend([
+				f"\t\t\t{decl.name}::{arm.upper()} => {{",
+				f"\t\t\t\tif !situ_rt::{arm}_valid("
+				f"self.{_ident(f'{base}_raw')}()) {{",
+				"\t\t\t\t\treturn Err(Error::Constraint);",
+				"\t\t\t\t}",
+				"\t\t\t}",
+			])
+		lines.extend([
+			"\t\t\t// Unreachable through a well-formed message: the set's",
+			"\t\t\t// own membership check refuses an unknown arm.",
+			"\t\t\t_ => {}",
+			"\t\t}",
+		])
 		return lines
 
 	def _token_checks(self, placement: Placement, base: str) -> list[str]:
