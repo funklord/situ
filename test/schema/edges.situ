@@ -160,6 +160,36 @@ struct declared_text {
 	document_charset  says  until ";";
 	u8                body[]  until "\0"  [encoding = from(says)];
 }
+
+// The same claim over a member whose width the schema fixed, which is the
+// other half of the construct and the half nothing checked. The declared
+// form was reached only from the delimited branch in all four backends, and
+// the packer's fixed-count branch deferred the struct -- so this shape was
+// accepted by the front end and checked by nobody in any of the six
+// readings. Rule 2 of 0058 asks that every arm be checkable; this is that
+// rule one level up, on the member rather than on the set.
+//
+// `label` is a capacity rather than a length, so the check reads all
+// sixteen bytes. That is the same reading `[encoding = utf8]` on a fixed
+// run has always had and is what `canonical` exists to talk about (8.6.1),
+// not something this construct introduces.
+struct declared_fixed {
+	document_charset  kind  until ";";
+	u8                label[16]  [encoding = from(kind)];
+}
+
+// And the plain form of the same placement, which is how the four backends
+// were found disagreeing. `[encoding = ascii]` on a counted run needs a
+// count to name the bytes it scans and does not need a static OFFSET -- the
+// accessor answers wherever the member begins, and `validate` has refused a
+// frame too short for the run before the scan reads it. C++, Rust and
+// Python had always emitted it here; C asked for a static offset as well and
+// emitted nothing, and the packer took C's condition for the image's. No
+// schema in the tree had the shape, so nothing disagreed.
+struct dynamic_text {
+	u8  head[]  until ";";
+	u8  tag[4]  [encoding = ascii];
+}
 require in_place(labelled.sequence);
 
 // Recorded rather than required: the trailing bytes are the cost of a

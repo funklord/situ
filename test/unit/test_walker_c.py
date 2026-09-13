@@ -908,6 +908,45 @@ def test_they_agree_about_an_encoding_the_message_names(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_named_encoding_over_a_counted_run(
+		tmp_path: Path) -> None:
+	"""The same construct over a member whose width the schema fixed.
+
+	`edges`' `declared_fixed` is `document_charset kind until ";"` and then
+	`u8 label[16] [encoding = from(kind)]`. This shape was accepted by the
+	front end and checked by nobody in any of the six readings: all four
+	backends reached the declared-encoding emitter only from their delimited
+	branch, and the packer's fixed-count branch deferred the struct.
+
+	Neither walker needed a line for it. `encoded_from` reads whatever span
+	the member has, and a declared count is a span like any other -- which is
+	the argument for putting the check on the span rather than on the member
+	kind, made after the fact by its costing nothing.
+
+	`\xc3\xa9` is the vector that separates the arms: valid utf8, not ascii,
+	and refused under `us-ascii` alone. The short frame is BOUNDS in both,
+	which is the ordering claim -- the run has to be known present before
+	anything scans it, and every backend emits that check above this one.
+	"""
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	blob  = image_for(edges)
+	shape = shape_named(edges, "declared_fixed")
+
+	# (message, expected verdict): 0 OK, 1 BOUNDS, 2 CONSTRAINT.
+	cases = [
+		(b"utf-8;\xc3\xa9" + b"a" * 14,    "0"),
+		(b"utf-8;\xc3\x28" + b"a" * 14,    "2"),
+		(b"us-ascii;" + b"a" * 16,        "0"),
+		(b"us-ascii;\xc3\xa9" + b"a" * 14, "2"),  # valid utf8, not ascii
+		(b"utf-8;" + b"a" * 11,           "1"),  # the run does not fit
+	]
+	for message, want in cases:
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message
+		assert verdict == want, message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A

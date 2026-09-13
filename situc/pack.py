@@ -1430,16 +1430,27 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					continue
 
 				# `nul_terminated` and `encoding` carry a check only where
-				# the member has a static offset and a declared count: the
-				# check names the bytes it scans, and a run the message
-				# sizes has neither. That is C's own condition, so cpio's
-				# `name[header.namesize] [nul_terminated]` is unchecked and
-				# `edges`' `name[16]` is not.
+				# the member has a declared count: the check names the bytes
+				# it scans, and a run the message sizes has none. cpio's
+				# `name[header.namesize] [nul_terminated]` is unchecked for
+				# that reason and `edges`' `name[16]` is not.
+				#
+				# Where it has to START is the two checks' own business and
+				# they differ. `nul_terminated` wants a static offset, which
+				# is what C's `_nul_check` still asks for. An encoding does
+				# not: the offset accessor answers wherever the member
+				# begins, and `validate` has already refused a frame that
+				# does not hold the run, so the scan reads bytes that are
+				# known present. Three backends had always emitted it there
+				# and C had not; asking one question for both checks is what
+				# kept the image on the wrong side of that.
 				text_attrs = {a.name for a in placement.attrs}
 				if text_attrs & {"encoding", "nul_terminated"} \
-						and placement.offset_bits is not None \
 						and placement.array_count:
 					if "nul_terminated" in text_attrs:
+						if placement.offset_bits is None:
+							whole = False
+							continue
 						constraints_blob += _struct.pack(
 							"<IqBxxx", at, 0, 11)
 					encoding = next(
@@ -1449,11 +1460,28 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						spelling = getattr(encoding.value, "name", None)
 						code = (ENCODING_CODE.get(spelling)
 						        if spelling is not None else None)
-						if code is None:
+						source = _encoding_source(encoding)
+						if code is not None:
+							constraints_blob += _struct.pack(
+								"<IqBxxx", at, code, 12)
+						elif source is not None:
+							# The same two rows the delimited form writes.
+							# The mapping itself goes on the SOURCE and is
+							# written while the source is the member being
+							# processed, because a placement's rows have to
+							# be contiguous (26.351).
+							held_at = placement_index.get(
+								f"{name}.{source}")
+							mapping = _encoding_arms(resolved, rstruct,
+							                         source)
+							if held_at is None or mapping is None:
+								whole = False
+								continue
+							constraints_blob += _struct.pack(
+								"<IqBxxx", at, held_at, 15)
+						else:
 							whole = False
 							continue
-						constraints_blob += _struct.pack(
-							"<IqBxxx", at, code, 12)
 					continue
 				# A data-sized run at a static offset still carries its
 				# encoding (0044): a `u16 data[length]` states that `length`

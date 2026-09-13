@@ -27821,14 +27821,71 @@ went to 0 and `latin-1` stayed 2; with the C branch stubbed, the same. A
 control that failed through the membership check instead would have
 proved nothing about either.
 
-**What is still unchecked, and it is not the walkers' half.** A
-FIXED-COUNT governed member -- `u8 body[16] [encoding = from(says)]` --
-is accepted by the front end and checked by nothing in any of the five
-readings: all four backends call the declared-encoding emitter only from
-the delimited branch, and the packer's fixed-count branch defers the
-struct. Rule 2 of 0058 asks that every arm be checkable and this is that
-rule failing one level up, on the member rather than on the set. No
-schema in the corpus has the shape, which is why nothing disagreed.
+**A FIXED-COUNT governed member was checked by nobody**, in any of the
+six readings: all four backends reached the declared-encoding emitter
+only from their delimited branch, and the packer's fixed-count branch
+deferred the struct. Rule 2 of 0058 asks that every arm be checkable, and
+this was that rule failing one level up, on the member rather than on the
+set. No schema in the tree had the shape, which is why nothing
+disagreed. Closed in 26.352, which found two more things on the way in.
+
+### 26.352 The fixed-count half, and the two faults found reaching it
+
+**The gap 26.351 left open is closed and neither walker needed a line.**
+`encoded_from` reads whatever span the member has, and a declared count
+is a span like any other -- which is the argument for putting the check
+on the span rather than on the member kind, made after the fact by its
+costing nothing. All of the work was in the four backends and the packer.
+
+**One emitter, two callers, and the byte expressions passed in.** A
+delimited member names its bytes with `_ptr` and `_len`; a fixed-count
+one with a span accessor and a constant. Nothing else about the check
+differs, so the emitter takes them as arguments and each backend's
+fixed-count path calls the same code its delimited path already did.
+
+**`ast.Call` carries a `name` of its own, and that cost the first
+attempt.** The fixed-count branch decided whether an encoding was
+data-named by testing `getattr(value, "name", None) is None` -- and on
+`from(kind)` that answers `"from"`, not None. So the branch never fired,
+the generated C was byte-identical to before, and the member looked
+exactly like one carrying no encoding at all. `_encoding_source` is the
+predicate, because it is the thing that actually knows.
+
+It was found by reading the generated artifact rather than by trusting
+the edit, which is the only way it could have been: every test still
+passed, because the corpus had no schema with the shape. The two-step --
+add the case to `edges`, then read what four backends emit for it -- is
+what made the silence visible.
+
+**And a three-against-one divergence surfaced next to it, older than
+this work.** `[encoding = ascii]` on a COUNTED run needs a count to name
+the bytes it scans and does not need a static OFFSET: the accessor
+answers wherever the member begins, and `validate` refuses a frame too
+short for the run before anything scans it. C++, Rust and Python had
+always emitted it there. C asked for a static offset as well and emitted
+nothing, and the packer took C's condition for the image's -- so the
+walkers inherited it.
+
+26.348 recorded this as "no check in either C or the image" and that was
+exactly right; what nobody asked was what the other three did. Confirmed
+rather than asserted, by putting C's old guard back and regenerating:
+with it, C emits nothing for a counted run at a dynamic offset while the
+other three emit; without it, all four agree. The corpus now carries
+`dynamic_text` so the four-way differential holds them to each other,
+where before there was no schema in the tree with the shape.
+
+**The two checks' reach had to be split in the packer**, which is what
+had kept the image on the wrong side. `nul_terminated` still wants a
+static offset -- C's `_nul_check` asks for one -- and an encoding does
+not. Asking one question for both is how a condition that was true of
+one check got applied to the other.
+
+**Five vectors, and `\xc3\xa9` is the one that does the work**: valid
+utf8, not ascii, refused under `us-ascii` alone. So a reader picking a
+constant encoding, or reading the arms in the wrong order, fails rather
+than agrees. The short frame answers BOUNDS in both walkers and in C,
+which is the ordering claim -- the run has to be known present before
+anything reads it, and every backend emits that check above this one.
 
 ## 27. Questions, and how they were settled
 

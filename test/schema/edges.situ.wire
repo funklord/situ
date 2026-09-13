@@ -85,6 +85,10 @@ struct covered_tail size=8..12
   ~         4         u8         mac
   mac covers: body head flags seq
 
+struct declared_fixed size=17..
+  @0x0000   until:3b  document_charset kind
+  ~         16        u8         label  big encoding=from(kind)
+
 struct declared_text size=2..
   @0x0000   until:3b  document_charset says
   ~         until:00  u8         body  encoding=from(says)
@@ -96,6 +100,10 @@ struct derived size=13
   @0x0007   2         u16        sequence  big
   @0x0009   4         u8         tag
   tag covers: body sequence
+
+struct dynamic_text size=5..
+  @0x0000   until:3b  u8         head
+  ~         4         u8         tag  big encoding=ascii
 
 struct edges size=27
   @0x0000   5bit      i5         trim  msb_first

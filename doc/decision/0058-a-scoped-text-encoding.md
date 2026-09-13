@@ -2,8 +2,7 @@
 
 Status: accepted 2026-09-13; both halves built 2026-09-13 -- the struct
 scope, then `[encoding = from(f)]` in all four backends and both walkers
-(26.348, 26.351). A fixed-count member the encoding governs is still
-checked by nobody, which 26.351 records
+(26.348, 26.351), and over a fixed-count member too (26.352)
 Date: 2026-09-13
 Phase: raised by the copyright holder, 26.330
 
