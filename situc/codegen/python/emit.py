@@ -5215,8 +5215,8 @@ class Emitter:
 				f'\t\t\t\t"{placement.path} is not {spelling}")',
 			])
 		else:
-			lines.extend(self._declared_encoding_check(struct, placement,
-			                                           name, named))
+			lines.extend(self._declared_encoding_check(
+				struct, placement, named, f"self.{name}_raw"))
 
 		if placement.radix_minimal:
 			# The *digits*, which is what the predicate reads. This passed
@@ -5241,8 +5241,8 @@ class Emitter:
 		return lines
 
 	def _declared_encoding_check(self, struct: ResolvedStruct,
-			placement: Placement, name: str,
-			named: "ast.Attr | None") -> list[str]:
+			placement: Placement, named: "ast.Attr | None",
+			span: str) -> list[str]:
 		"""`[encoding = from(f)]`: the check the message's own field picks.
 
 		A token set is the mapping (0058): its arms are text keywords with
@@ -5251,6 +5251,12 @@ class Emitter:
 		are not all checkable at the element's width, so every arm has a
 		branch and the fall-through is unreachable through a well-formed
 		message.
+
+		`span` is the caller's, because the two forms name their bytes
+		differently -- a delimited member has a `_raw` property over the
+		content, a fixed-count one the run itself -- and nothing else about
+		the check differs. Taking it as an argument is what gave the
+		fixed-count form a check at all.
 		"""
 		from situc.wellformed import _encoding_source
 
@@ -5276,7 +5282,7 @@ class Emitter:
 			branch = "if" if index == 0 else "elif"
 			lines.extend([
 				f"\t\t{branch} _said == {held}.{arm.upper()}:",
-				f"\t\t\tif not {arm}_valid(self.{name}_raw):",
+				f"\t\t\tif not {arm}_valid({span}):",
 				"\t\t\t\traise ConstraintError(",
 				f'\t\t\t\t\t"{placement.path} is not {arm}")',
 			])
@@ -5671,6 +5677,8 @@ class Emitter:
 		if placement.sized_by is not None:
 			return []
 
+		from situc.wellformed import _encoding_source
+
 		count = placement.array_count or 0
 		lines: list[str] = []
 
@@ -5683,6 +5691,13 @@ class Emitter:
 						f"\t\t\traise ConstraintError("
 						f"\"{placement.path} is not {named}\")",
 					])
+				# `[encoding = from(f)]` over the same run. Asked of
+				# `_encoding_source` rather than of `named`, which is
+				# "from" here -- `ast.Call` carries a name of its own, so a
+				# `named is None` test reads a declared encoding as none.
+				elif _encoding_source(attr) is not None:
+					lines.extend(self._declared_encoding_check(
+						struct, placement, attr, f"self.{name}"))
 			if attr.name == "nul_terminated":
 				lines.extend([
 					f"\t\tif self.{name}_len >= {count}:",

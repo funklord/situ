@@ -7518,8 +7518,10 @@ class Emitter:
 				"\t}",
 			])
 		else:
-			lines.extend(self._declared_encoding_check(struct, placement,
-			                                           local, named))
+			lines.extend(self._declared_encoding_check(
+				struct, placement, named,
+				f"{ident(self.prefix, struct.name, local, 'ptr')}(view)",
+				f"{ident(self.prefix, struct.name, local, 'len')}(view)"))
 
 		if placement.radix is not None:
 			lines.append("")
@@ -8267,8 +8269,8 @@ class Emitter:
 		]
 
 	def _declared_encoding_check(self, struct: ResolvedStruct,
-			placement: Placement, local: str,
-			named: ast.Attr | None) -> list[str]:
+			placement: Placement, named: ast.Attr | None,
+			ptr: str, count: str) -> list[str]:
 		"""`[encoding = from(f)]`: the check the message's own field picks.
 
 		A token set is the mapping (0058): its arms are text keywords with
@@ -8282,6 +8284,14 @@ class Emitter:
 		Written as a switch rather than a chain of ifs because the arm
 		constants are what a reader checks this against: one line per arm,
 		in the set's declaration order.
+
+		`ptr` and `count` are the caller's, because the two forms name their
+		bytes differently and nothing else about the check differs: a
+		delimited member has `_ptr` and `_len`, and a fixed-count one has a
+		constant offset and a constant width. Taking them as arguments is
+		what stopped this being the delimited form's check only -- a
+		fixed-count member the encoding governs was accepted by the front
+		end and checked by nobody, in all six readings.
 		"""
 		from situc.wellformed import _encoding_source
 
@@ -8301,19 +8311,18 @@ class Emitter:
 		picked = (f"{ident(self.prefix, set_name, 'which')}("
 		          f"{ident(self.prefix, struct.name, source, 'ptr')}(view), "
 		          f"{ident(self.prefix, struct.name, source, 'len')}(view))")
+		source_is = f"{placement.path} [encoding = from({source})]"
 		lines = [
 			"",
-			f"\t/* {placement.path} [encoding = from({source})] -- the arm",
+			f"\t/* {source_is} -- the arm",
 			f"\t * `{source}` names says which check this is (0058). */",
 			f"\tswitch ({picked}) {{",
 		]
 		for arm in arms:
 			lines.extend([
 				f"\tcase {macro(self.prefix, set_name, arm)}:",
-				f"\t\tif (!situ_{arm}_valid("
-				f"{ident(self.prefix, struct.name, local, 'ptr')}(view),",
-				f"\t\t\t\t{ident(self.prefix, struct.name, local, 'len')}"
-				f"(view))) {{",
+				f"\t\tif (!situ_{arm}_valid({ptr},",
+				f"\t\t\t\t{count})) {{",
 				"\t\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t\t}",
 				"\t\tbreak;",
@@ -8338,14 +8347,22 @@ class Emitter:
 		"""
 		encoding = next((attr for attr in placement.attrs
 		                 if attr.name == "encoding"), None)
-		if encoding is None or placement.offset_bits is None:
+		if encoding is None:
+			return []
+		# A DECLARED count can be checked wherever the member starts: the
+		# offset accessor answers, and `validate` has already refused a frame
+		# that does not hold the run. A message-declared length still wants a
+		# static offset, which is the reach `[encoding = utf8]` has always
+		# had and is 26.348's recorded limit rather than something this
+		# widens.
+		if placement.offset_bits is None and placement.array_count is None:
 			return []
 		if scalar.bits % BITS_PER_BYTE != 0:
 			return []
 
+		from situc.wellformed import _encoding_source
+
 		named = getattr(encoding.value, "name", None)
-		if named not in ("ascii", "utf8", "utf16le", "utf16be"):
-			return []
 
 		# The validator scans bytes, so the count is bytes: a `u8` run is its
 		# element count, a `u16` utf16 run is twice it. A message-sized run
@@ -8356,10 +8373,29 @@ class Emitter:
 			count = f"{placement.array_count * width}u"
 		else:
 			count = self._length_expression(struct, placement)
+		ptr = ("(situ_base(view)) + "
+		       f"{self._base_expression(struct, placement)}")
+
+		# `[encoding = from(f)]` names no encoding here; the message does.
+		# Same bytes, same place in the order, one switch instead of one
+		# call -- and reaching it from here is what gives a FIXED-COUNT
+		# member the check. It had none in any of the six readings, because
+		# the declared form was called only from the delimited branch.
+		#
+		# Asked of `_encoding_source` rather than of the spelling, because
+		# `ast.Call` carries a `name` of its own: `getattr(value, "name")`
+		# on `from(kind)` answers "from", not None, so a `named is None`
+		# test here emitted nothing and looked exactly like a member with no
+		# encoding at all.
+		if _encoding_source(encoding) is not None:
+			return self._declared_encoding_check(struct, placement, encoding,
+			                                     ptr, count)
+		if named not in ("ascii", "utf8", "utf16le", "utf16be"):
+			return []
+
 		return [
 			f"\t/* {placement.path} [encoding = {named}] */",
-			f"\tif (!situ_{named}_valid((situ_base(view)) + {placement.offset_bytes}u,"
-			f" {count})) {{",
+			f"\tif (!situ_{named}_valid({ptr}, {count})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 		]

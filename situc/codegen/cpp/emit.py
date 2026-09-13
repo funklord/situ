@@ -6756,16 +6756,17 @@ class Emitter:
 				"\t\t}",
 			])
 		else:
-			lines.extend(self._declared_encoding_check(struct, placement,
-			                                           name, named))
+			lines.extend(self._declared_encoding_check(
+				struct, placement, named,
+				f"situ_base(raw_) + {name}_offset()", f"{name}_len()"))
 
 		lines.extend(self._text_number_check(struct, placement, name))
 		lines.extend(self._token_check(placement, name))
 		return lines
 
 	def _declared_encoding_check(self, struct: ResolvedStruct,
-			placement: Placement, name: str,
-			named: "ast.Attr | None") -> list[str]:
+			placement: Placement, named: "ast.Attr | None",
+			ptr: str, count: str) -> list[str]:
 		"""`[encoding = from(f)]`: the check the message's own field picks.
 
 		A token set is the mapping (0058) -- its arms are text keywords with
@@ -6774,6 +6775,12 @@ class Emitter:
 		whose arms are not all checkable at the element's width, so the
 		switch is total and the default is unreachable through a well-formed
 		message.
+
+		`ptr` and `count` are the caller's: a delimited member names its
+		bytes with `_offset()` and `_len()`, a fixed-count one with the span
+		accessor and a constant. Nothing else about the check differs, and
+		taking them as arguments is what let the fixed-count form have one
+		at all.
 		"""
 		from situc.wellformed import _encoding_source
 
@@ -6800,8 +6807,7 @@ class Emitter:
 		for arm in self.resolved.layout.env.token_sets[decl.name]:
 			lines.extend([
 				f"\t\tcase {set_name}::{c_name(arm)}:",
-				f"\t\t\tif (!situ_{arm}_valid("
-				f"situ_base(raw_) + {name}_offset(), {name}_len())) {{",
+				f"\t\t\tif (!situ_{arm}_valid({ptr}, {count})) {{",
 				"\t\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t\t}",
 				"\t\t\tbreak;",
@@ -7347,6 +7353,8 @@ class Emitter:
 		if scalar.bits != BITS_PER_BYTE:
 			return self._utf16_check(struct, placement)
 
+		from situc.wellformed import _encoding_source
+
 		name  = bare_name(local_name(struct, placement))
 		count = placement.array_count or 0
 		lines: list[str] = []
@@ -7362,6 +7370,15 @@ class Emitter:
 						"\t\t\treturn ::situ::rt::err::constraint;",
 						"\t\t}",
 					])
+				# `[encoding = from(f)]` over the same span. Asked of
+				# `_encoding_source` rather than of `named`, which is
+				# "from" here: `ast.Call` carries a name of its own, so a
+				# `named is None` test reads a declared encoding as no
+				# encoding at all.
+				elif _encoding_source(attr) is not None:
+					lines.extend(self._declared_encoding_check(
+						struct, placement, attr,
+						f"{name}().data()", f"{count}"))
 			if attr.name == "nul_terminated":
 				lines.extend([
 					f"\t\t/* {placement.path} [nul_terminated] */",

@@ -4302,16 +4302,17 @@ class Emitter:
 				"\t\t}",
 			])
 		else:
-			lines.extend(self._declared_encoding_checks(struct, placement,
-			                                            base, named))
+			lines.extend(self._declared_encoding_checks(
+				struct, placement, named,
+				f"self.{_ident(f'{base}_raw')}()"))
 
 		lines.extend(self._text_number_checks(struct, placement, base))
 		lines.extend(self._token_checks(placement, base))
 		return lines
 
 	def _declared_encoding_checks(self, struct: ResolvedStruct,
-			placement: Placement, base: str,
-			named: "ast.Attr | None") -> list[str]:
+			placement: Placement, named: "ast.Attr | None",
+			span: str) -> list[str]:
 		"""`[encoding = from(f)]`: the check the message's own field picks.
 
 		A token set is the mapping (0058): its arms are text keywords with
@@ -4319,6 +4320,12 @@ class Emitter:
 		selects the branch. `check_encoding_from` refuses a set whose arms
 		are not all checkable at the element's width, so the match is total
 		and the wildcard is unreachable through a well-formed message.
+
+		`span` is the caller's slice, because the two forms name their bytes
+		differently -- a delimited member has a `_raw` accessor over the
+		content, a fixed-count one a slice of the declared width -- and
+		nothing else about the check differs. Taking it as an argument is
+		what gave the fixed-count form a check at all.
 		"""
 		from situc.wellformed import _encoding_source
 
@@ -4343,8 +4350,7 @@ class Emitter:
 		for arm in self.resolved.layout.env.token_sets[decl.name]:
 			lines.extend([
 				f"\t\t\t{decl.name}::{arm.upper()} => {{",
-				f"\t\t\t\tif !situ_rt::{arm}_valid("
-				f"self.{_ident(f'{base}_raw')}()) {{",
+				f"\t\t\t\tif !situ_rt::{arm}_valid({span}) {{",
 				"\t\t\t\t\treturn Err(Error::Constraint);",
 				"\t\t\t\t}",
 				"\t\t\t}",
@@ -6734,6 +6740,8 @@ class Emitter:
 		if placement.scalar.bits != BITS_PER_BYTE:
 			return self._utf16_checks(struct, placement, placement.scalar)
 
+		from situc.wellformed import _encoding_source
+
 		count = placement.array_count
 		if count is None:
 			return checks
@@ -6747,6 +6755,13 @@ class Emitter:
 						"\t\t\treturn Err(Error::Constraint);",
 						"\t\t}",
 					])
+				# `[encoding = from(f)]` over the same slice. Asked of
+				# `_encoding_source` rather than of `named`, which is
+				# "from" here -- `ast.Call` carries a name of its own, so a
+				# `named is None` test reads a declared encoding as none.
+				elif _encoding_source(attr) is not None:
+					checks.extend(self._declared_encoding_checks(
+						struct, placement, attr, f"self.{name}()"))
 			if attr.name == "nul_terminated":
 				checks.extend([
 					f"\t\tif self.{name}_len() >= {count} {{",
