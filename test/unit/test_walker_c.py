@@ -504,9 +504,22 @@ def python_elements(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	for index in image.members(image.structs[shape]):
 		placement = image.placements[index]
 		try:
-			if placement.radix or placement.repeat_code != NONE:
-				raise Refused("not a counted run")
-			count = walk._count(view, index)
+			if placement.radix:
+				raise Refused("a text number's bracket is digits")
+			# A `while` run answers now, through the walk rather than
+			# through `_count` -- which knows a declared count and a
+			# `size_code` program and neither is what a `while` run has.
+			# `situ_walk_count` refused this until 26.345 and this mirrored
+			# the refusal, so the two agreed about a question neither
+			# answered.
+			#
+			# Not `_count` itself: that is what `OP_COUNT` resolves to, and
+			# the C evaluator refuses that opcode outright. Widening it here
+			# would move expression semantics on one side only.
+			if placement.repeat_code != NONE:
+				count = walk.while_count(view, index)
+			else:
+				count = walk._count(view, index)
 		except (Refused, Unplaceable):
 			found.append("refused")
 			continue
@@ -1992,3 +2005,50 @@ def test_they_agree_about_an_index_table_s_entry_count(
 			== python_region_counts(blob, message, shape), f"count={count}"
 		assert c_region_counts(tmp_path, blob, message, shape)[-1] \
 			== f"indexed={count}", f"count={count}"
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_how_many_elements_a_while_run_holds(
+		tmp_path: Path) -> None:
+	"""`situ_walk_count` answers for a `while` run now, and the number is
+	pinned to the generated backend rather than to the other walker.
+
+	It refused, saying the count "is a walk this build does not have", and
+	`while_walk` is four hundred lines above it in the same file returning
+	exactly that count -- used by `size_bits_deep` since a run of records
+	needed measuring. The sentence was true when written; nothing brought
+	it back together with the function that falsified it, so it read as a
+	design limit rather than a stale note.
+
+	`python_elements` mirrored the refusal, which is why the pair
+	differential was green throughout: the two walkers agreed about a
+	question neither of them answered. Agreement without a case that would
+	disagree is one witness twice.
+
+    Measured against `situ_name_labels_count` in the C `example/dnsname`:
+
+        00                          1   the root label alone
+        02 'hi' 00                  2
+        03 'www' 07 'example' 03 'com' 00   4
+
+	A `while` run is never empty -- the predicate is asked about the
+	element just read -- so the root label alone is one and not zero.
+	"""
+	schema = ROOT / "example" / "dnsname" / "dnsname.situ"
+	blob   = image_for(schema)
+	shape  = shape_named(schema, "name")
+
+	def name(*labels: bytes) -> bytes:
+		return b"".join(bytes([len(one)]) + one for one in labels) + b"\x00"
+
+	for label, message, expected in (
+			("the root label alone", name(),                       "1"),
+			("one label",            name(b"hi"),                  "2"),
+			("three labels",         name(b"www", b"example",
+			                              b"com"),                 "4")):
+		# `N:` and then one entry per element: a `while` run's elements are
+		# structs, so every read refuses on both sides and the count is what
+		# the line is about.
+		found = c_elements(tmp_path, blob, message, shape)
+		assert found == python_elements(blob, message, shape), label
+		assert found[0].split(":")[0] == expected, label

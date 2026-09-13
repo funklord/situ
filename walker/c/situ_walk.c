@@ -2252,11 +2252,22 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 	if (held.radix != 0u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
-	/* A `while` run's count is whichever element first fails the predicate,
-	 * which is a walk this build does not have. Named rather than
-	 * approximated. */
+	/* A `while` run's count is whichever element first fails the predicate.
+	 *
+	 * This refused, saying that was "a walk this build does not have", and
+	 * `while_walk` is four hundred lines above it and returns exactly that
+	 * count -- it has been used by `size_bits_deep` since a run of records
+	 * needed measuring. The sentence was true when it was written and
+	 * nothing ever brought it back together with the function that
+	 * falsified it, so it read as a design limit rather than a stale note
+	 * (26.345).
+	 *
+	 * Depth zero, because a caller asking a run for its count is entering
+	 * the walk rather than continuing one. */
 	if (held.repeat_code != SITU_WALK_NONE) {
-		return SITU_WALK_UNSUPPORTED;
+		uint32_t bytes = 0u;
+		return while_walk(image, message, len, shape, index, 0u, out,
+		                  &bytes);
 	}
 
 	if (held.array_count != SITU_WALK_NONE) {

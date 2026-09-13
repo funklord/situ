@@ -27409,16 +27409,49 @@ does not fire" until the substitution was asserted. All three fire now
 and name their case: `three, all kinds`, `a fixed 4 in two bytes`, and
 `count=0` for the index count read from the wrong field.
 
-**Found and not fixed: `situ_walk_count` refuses a `while` run for a
-reason that is no longer true.** Its comment says the count "is a walk
-this build does not have", and `while_walk` is a static function in the
-same file, four hundred lines above it, which returns exactly that count.
-Fixing it is one line here and one in `python_elements`, which mirrors
-the refusal -- so it moves a contract on both sides and is its own change
-rather than a rider on this one. The stale sentence is the interesting
-part: it was true when written, nothing brought it back together with the
-function that falsified it, and it reads as a design limit rather than as
-an out-of-date note.
+~~**Found and not fixed: `situ_walk_count` refuses a `while` run for a
+reason that is no longer true.**~~ **Done in 26.345.**
+
+### 26.345 A stale sentence that read as a design limit
+
+**`situ_walk_count` refused a `while` run because the count "is a walk
+this build does not have", and the build has had the walk for a long
+time.** `while_walk` is a static function four hundred lines above it in
+the same file, returning exactly that count, and `size_bits_deep` has
+called it since a run of records needed measuring. One line to fix.
+
+**What kept it is the shape worth recording, not the line.** The sentence
+was TRUE when it was written. Nothing in the ordinary course of work
+brings a refusal back together with the function that falsified it --
+they are in one file and nobody reads a file end to end -- so it aged
+into something that reads as a design limit. A reader meeting it has no
+reason to doubt it, and `evidence.md`'s answer applies exactly: a claim
+about the tree's own shape, in the present tense, that nothing re-derives.
+
+**And the differential could not see it, because both sides refused.**
+`python_elements` mirrors `situ_walk_count`'s refusals member for member
+-- deliberately, so the ELEMENTS probe compares like with like -- and it
+carried `repeat_code != NONE` straight across. So the two walkers agreed
+about a question neither of them answered, and the pair differential was
+green throughout. **Agreement is evidence only where a case exists that
+would disagree**, and there was none: the refusal was the agreement.
+
+**Pinned to the backend and not to the other walker**, which is what
+makes the new number mean anything. `situ_name_labels_count` in the
+generated C for `example/dnsname`:
+
+    00                                    1   the root label alone
+    02 'hi' 00                            2
+    03 'www' 07 'example' 03 'com' 00     4
+
+A `while` run is never empty -- the predicate is asked about the element
+just read -- so the root label alone is one and not zero.
+
+**`_count` is deliberately not widened.** It is what `OP_COUNT` resolves
+to in the Python evaluator, and the C evaluator refuses that opcode
+outright, so teaching it `while` runs would move expression semantics on
+one side only. The probe calls `while_count` instead, which is the
+function the four backends' `_count` accessor corresponds to.
 
 ### 26.330 Text encoding, scoped and named by the data
 

@@ -294,12 +294,12 @@ situ_walk_err situ_walk_read(const situ_walk_image *image,
                                  uint32_t shape, uint32_t index,
                                  uint64_t *out);
 
-/* How many elements a run holds: a declared count, or the `size_code`
- * program the message answers.
+/* How many elements a run holds: a declared count, the `size_code` program
+ * the message answers, or -- for a `while` run -- however many elements are
+ * there before one fails the predicate.
  *
- * SITU_WALK_UNSUPPORTED for a member that is not a run, and for a `while`
- * run -- how many elements one holds is whichever first fails the predicate,
- * which is a walk this build does not have. */
+ * SITU_WALK_UNSUPPORTED for a member that is not a run, and for a text
+ * number, whose bracket is digits rather than elements. */
 /* How many items a `tlv` region holds (section 9.5), and how many entries
  * an `indexed` region's offset table holds (9.3).
  *
