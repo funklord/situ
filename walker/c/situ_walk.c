@@ -40,7 +40,7 @@
 #define VERSION_READS    8u	/* `<II`: shape, version-field placement */
 #define DEPTH_READS     12u	/* `<III`: shape, depth, limit */
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
-#define TLV_READS       19u	/* to the tag's decode parameters */
+#define TLV_READS       15u	/* to the tag's decode parameters */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
 #define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
 
@@ -90,7 +90,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 4u) {
+	if (u16_at(image + 4) != 5u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {
@@ -2078,10 +2078,10 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	const uint32_t selector     = u32_at(row + 12);
-	const uint32_t tag_bytes    = row[16];
-	const uint32_t tag_terminal = row[17];
-	const int      tag_big      = (row[18] & 2u) != 0;
+	const uint32_t selector     = u32_at(row + 8);
+	const uint32_t tag_bytes    = row[12];
+	const uint32_t tag_terminal = row[13];
+	const int      tag_big      = (row[14] & 2u) != 0;
 	if (selector == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
 	}

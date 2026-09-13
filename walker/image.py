@@ -18,7 +18,7 @@ import struct as _struct
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 4
+FORMAT_VERSION	= 5
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
@@ -474,9 +474,9 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if TLVS in found:
 		at, records, stride = found[TLVS]
 		for i in range(records):
-			(where, _tag_index, _flags, _unknown, _dup, selector,
+			(where, _flags, _unknown, _dup, selector,
 			 tag_bytes, tag_terminal, tag_flags) = _struct.unpack_from(
-				"<IIBBBxIBBBx", blob, at + i * stride)
+				"<IBBBxIBBBx", blob, at + i * stride)
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
 			                     bool(tag_flags & 2))
 

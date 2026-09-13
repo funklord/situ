@@ -121,7 +121,7 @@ struct image_header {
 	// checked them, which is 14.5 in the schema that describes situ's own
 	// artifact.
 	u8   magic[4] [must_eq = "SITU"];
-	u16  format_version [must_eq = 4];
+	u16  format_version [must_eq = 5];
 	u16  flags;                       // bit 0: the metadata sections are present
 	u32  image_bytes;                 // the whole image, header included
 	u32  section_count;
@@ -365,7 +365,6 @@ struct image_varint {
 
 struct image_tlv {
 	u32  placement;
-	u32  tag_varint;                  // index into the varint table, or `none`
 	u8   tlv_flags;                   // bit 0: ordered
 	u8   unknown_policy;
 	u8   duplicate_policy;
@@ -383,11 +382,18 @@ struct image_tlv {
 	// stops at twelve is unaffected.
 	u32  selector_code;               // bytecode offset, or `none`
 	// The tag varint's decoder parameters, carried rather than referenced.
-	// `tag_varint` above is documented as an index into the varint table
-	// and is not usable as one: that table is keyed by PLACEMENT, and a
-	// `tlv` region's tag varint belongs to no placement -- so the field is
-	// `none` for every image this tree produces. The parameters are three
-	// bytes and the indirection was zero, which is the trade.
+	//
+	// A `u32 tag_varint` stood here, documented as an index into the varint
+	// table and never usable as one: that table is keyed by PLACEMENT, and
+	// a `tlv` region's tag varint belongs to no placement, so the field was
+	// `none` in every image this tree ever wrote. Three bytes of parameters
+	// against an indirection that resolved to nothing.
+	//
+	// Removing it moved every field after it, which is why the format
+	// version moves with it. `stride` makes a record extensible where it
+	// GREW -- a reader stops at the width it knows -- and a field taken out
+	// of the middle is not growth: an older image would be read at the new
+	// offsets and answer confidently.
 	u8   tag_max_bytes;
 	u8   tag_terminal_bits;
 	u8   tag_varint_flags;            // bit 1: big-endian groups (be128)
@@ -591,7 +597,7 @@ require size(image_skip) == 8;
 require size(image_region) == 16;
 require size(image_codec) == 4;
 require size(image_varint) == 12;
-require size(image_tlv) == 20;
+require size(image_tlv) == 16;
 require size(image_tlv_rule) == 24;
 require size(image_constraint) == 16;
 require size(image_pinned) == 32;

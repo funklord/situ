@@ -40,7 +40,7 @@ from situc.relation import plan as plan_relation
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 4
+FORMAT_VERSION	= 5
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
@@ -53,7 +53,7 @@ WHITESPACE_BYTES = 8
 REGION_BYTES	= 16
 CODEC_BYTES	= 4
 VARINT_BYTES	= 12
-TLV_BYTES	= 20
+TLV_BYTES	= 16
 TLV_RULE_BYTES	= 24
 INDEX_BYTES	= 16
 MARKER_BYTES	= 16
@@ -1743,8 +1743,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			tag_bytes, tag_terminal, tag_flags = _varint_params(
 				varint_decls.get(placement.tlv_tag_varint or ""))
 			tlvs_blob += _struct.pack(
-				"<IIBBBxIBBBx", at,
-				_u32(varint_index.get(placement.tlv_tag_varint or "")),
+				"<IBBBxIBBBx", at,
 				regions,
 				_policy(placement.tlv_unknown),
 				_policy(placement.tlv_duplicates),

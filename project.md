@@ -27453,6 +27453,39 @@ outright, so teaching it `while` runs would move expression semantics on
 one side only. The probe calls `while_count` instead, which is the
 function the four backends' `_count` accessor corresponds to.
 
+### 26.346 A field that was `none` in every image ever written
+
+**`image_tlv.tag_varint` was a `u32` documented as an index into the
+varint table, and that table is keyed by PLACEMENT.** A `tlv` region's
+tag varint belongs to no placement -- it is the region's grammar rather
+than a member of it -- so `varint_index.get(...)` found nothing and the
+field was `none` in every image this tree has ever produced. 26.343
+carried the decoder parameters by value beside it and left the field
+where it was; this removes it.
+
+**It moved the format version, and the schema's own words say why.**
+`image_section.stride` is carried "so that a walker can skip a section
+whose records GREW under it, which is what makes a record extensible
+without a format version" -- growth being an append a reader stops
+short of. A field taken out of the MIDDLE is not growth: it moves
+`selector_code` from offset 12 to 8 and the tag parameters with it, so a
+v4 image read by a v5 walker would be read at the new offsets and answer
+confidently. Version 4 to 5, in the four places that state it and the
+test that holds them together.
+
+**The bump is checked rather than assumed.** A freshly packed image with
+its version byte set back to 4 is refused by name -- "image format
+version 4, this walker reads 5" -- and the C walker returns MALFORMED at
+the same check. Without that, removing the field would have been a
+silent misread of any image already on a device.
+
+**And it is the second dead thing this record has turned up.** The first
+was the whole section, written and loaded by nobody (26.341); this is a
+field inside it that could never have been used. Both survived because
+nothing read the record: an unused table is where an unusable field hides
+indefinitely, and neither the packer nor a walker had any reason to
+notice.
+
 ### 26.330 Text encoding, scoped and named by the data
 
 **Two requests from the copyright holder, 2026-09-10, both about where an

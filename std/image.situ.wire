@@ -78,7 +78,7 @@ struct image_enum_value size=16
 
 struct image_header size=20
   @0x0000   4         u8         magic  little must_eq="SITU"
-  @0x0004   2         u16        format_version  little must_eq=4
+  @0x0004   2         u16        format_version  little must_eq=5
   @0x0006   2         u16        flags  little
   @0x0008   4         u32        image_bytes  little
   @0x000c   4         u32        section_count  little
@@ -157,18 +157,17 @@ struct image_struct size=16
   @0x0008   4         u32        size_bits  little
   @0x000c   4         u32        struct_flags  little
 
-struct image_tlv size=20
+struct image_tlv size=16
   @0x0000   4         u32        placement  little
-  @0x0004   4         u32        tag_varint  little
-  @0x0008   1         u8         tlv_flags
-  @0x0009   1         u8         unknown_policy
-  @0x000a   1         u8         duplicate_policy
-  @0x000b   1         u8         tlv_pad
-  @0x000c   4         u32        selector_code  little
-  @0x0010   1         u8         tag_max_bytes
-  @0x0011   1         u8         tag_terminal_bits
-  @0x0012   1         u8         tag_varint_flags
-  @0x0013   1         u8         tag_pad
+  @0x0004   1         u8         tlv_flags
+  @0x0005   1         u8         unknown_policy
+  @0x0006   1         u8         duplicate_policy
+  @0x0007   1         u8         tlv_pad
+  @0x0008   4         u32        selector_code  little
+  @0x000c   1         u8         tag_max_bytes
+  @0x000d   1         u8         tag_terminal_bits
+  @0x000e   1         u8         tag_varint_flags
+  @0x000f   1         u8         tag_pad
 
 struct image_tlv_rule size=24
   @0x0000   4         u32        placement  little
