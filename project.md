@@ -27936,6 +27936,60 @@ test -- it is what a fixed corpus of draws is: a sample, and a sample is
 evidence about the cases it holds. What changed the sample was unrelated
 work, which is the cheapest way it ever changes.
 
+### 26.354 The C walker learns which arm a discriminant selects
+
+**Measured rather than guessed at, which is what made it the right next
+piece.** The C walker declined 32 of 388 struct-and-message pairs over
+the corpus, and nothing said why. Reporting `__LINE__` at each of its 47
+refusal sites, through a scratch copy, ranked them in one run:
+
+    12  a member whose byte order is `native`
+    10  a check kind this build does not render
+     8  a counted run whose element is neither a record nor sized
+     2  four bytecode operations the walk does not implement
+
+**The second was `arm_selected` and nothing else.** `CHECK_ARM_SELECTED`
+was not defined in the C walker at all -- not in the known-kinds list,
+not handled -- so every struct holding a variant was unanswerable to it
+while the Python walk answered. Sixteen structs across the corpus. The
+arms section was already loaded and `variant_bits` already resolved an
+arm for SIZING; only the check was missing.
+
+**And the verdict it needs did not exist either.** An unmatched
+discriminant is VERSION and not CONSTRAINT -- a message this build cannot
+READ rather than one that breaks a rule, which is 14.5's distinction and
+the schema's. `situ_err_t` has carried the code all along and the four
+backends return it; the walker's own enum stopped at CONSTRAINT, and the
+test driver folded everything above BOUNDS into "2". **Adding the check
+without adding the code would have produced a wrong agreement at the one
+moment the two walkers finally had something to compare.** Sabotaged both
+ways afterwards, and they fail differently, which is the discrimination
+worth having: with the refusal removed C answers 0, with the rendering
+folded C answers 2, and the truth is 3.
+
+**The first draft was wrong in a way the corpus could not see.** Every
+arm has to fit the frame, whether or not it is a struct, and the draft
+returned early for an arm that was a plain run -- so `dnsname.label`
+declaring three bytes of text over one answered OK where the Python walk
+and the C backend both answer BOUNDS. The corpus comparison said zero
+disagreements throughout, honestly: its draws are 64 bytes long, and a
+short frame is precisely what this construct gets wrong. **A sample is
+evidence about the cases it holds**, and the case was found by writing
+eight vectors for one struct by hand.
+
+`dnsname.label` is the test because it documents itself and produces
+three of the four verdicts from one struct: `00` is a length and that
+many bytes of text, `11` a pointer, and `01` and `10` are reserved, which
+`default: error` refuses rather than guessing which of the two they
+resemble.
+
+**Where it leaves the two walkers**: 366 pairs compared and agreeing, 22
+declined, none disagreeing. No check kind is among the refusals any more
+-- the pinned run was the last before this and `arm_selected` the last
+after it. What remains is one deliberate refusal and two structural gaps,
+named in the corpus test so the next reader starts from the measurement
+rather than from a guess.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

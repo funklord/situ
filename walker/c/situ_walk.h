@@ -40,6 +40,15 @@ typedef enum {
 	SITU_WALK_OK          = 0,
 	SITU_WALK_BOUNDS      = 1,
 	SITU_WALK_CONSTRAINT  = 2,
+	/* A discriminant naming no arm, where the variant's default is `error`
+	 * (14.5). It is a message this build cannot READ rather than one that
+	 * breaks a rule, which is the schema's distinction and not this
+	 * walker's -- `situ_err_t` has carried the code all along and the four
+	 * backends return it. This walker had no spelling for it while it
+	 * declined every variant, and adding the check without adding the code
+	 * would have folded a VERSION answer into CONSTRAINT at the one moment
+	 * the two walkers finally had something to compare. */
+	SITU_WALK_VERSION     = 3,
 	SITU_WALK_MALFORMED   = 8,   /* the image is not one */
 	SITU_WALK_UNSUPPORTED = 9    /* a construct this build does not render */
 } situ_walk_err;

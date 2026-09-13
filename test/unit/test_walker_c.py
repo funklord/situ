@@ -947,6 +947,54 @@ def test_they_agree_about_a_named_encoding_over_a_counted_run(
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_which_arm_a_discriminant_selects(
+		tmp_path: Path) -> None:
+	"""`arm_selected`, which the C build declined for every struct holding a
+	variant until it had a spelling for the answer.
+
+	`dnsname`'s `label` is the case and it documents itself: the top two bits
+	of the first byte are the form -- `00` a length and that many bytes of
+	text, `11` a pointer, and `01` and `10` reserved, which `default: error`
+	refuses rather than guessing which of the two they resemble. So one
+	struct produces three of the four verdicts.
+
+	VERSION is the point of the `default: error` rows. An unmatched
+	discriminant is a message this build cannot READ, not one that breaks a
+	rule -- 14.5's distinction and the schema's, not the walker's. The C
+	walker had no `SITU_WALK_VERSION` while it declined every variant, and
+	adding the check without adding the code would have folded the answer
+	into CONSTRAINT at the one moment the two walkers finally had something
+	to compare.
+
+	The three short frames are not decoration. Every arm has to fit, whether
+	or not it is a struct, and a first draft returned early for an arm that
+	was a plain run -- so `03 41`, three bytes of text declared over one,
+	answered OK here while the Python walk and the C backend both answered
+	BOUNDS. Random draws had not found it and could not have: they were 64
+	bytes long, and a short frame is what this construct gets wrong.
+	"""
+	dns   = ROOT / "example" / "dnsname" / "dnsname.situ"
+	blob  = image_for(dns)
+	shape = shape_named(dns, "label")
+
+	# (message, expected verdict): 0 OK, 1 BOUNDS, 3 VERSION.
+	cases = [
+		(bytes([0x03, 0x41, 0x42, 0x43]), "0"),  # a length, and the text
+		(bytes([0x03, 0x41]),             "1"),  # three declared, one there
+		(bytes([0x03]),                   "1"),  # three declared, none there
+		(bytes([0xC0, 0x10]),             "0"),  # a pointer, and its low byte
+		(bytes([0xC0]),                   "1"),  # a pointer missing it
+		(bytes([0x40, 0x00, 0x00, 0x00]), "3"),  # reserved `01`
+		(bytes([0x80, 0x00, 0x00, 0x00]), "3"),  # reserved `10`
+		(bytes([0x00]),                   "0"),  # the root label
+	]
+	for message, want in cases:
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message
+		assert verdict == want, message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A
@@ -1356,7 +1404,8 @@ VERDICT = """situ_walk_err verdict = SITU_WALK_OK;
 		}
 		printf("%s\\n", e != SITU_WALK_OK ? "cannot-say"
 		       : (verdict == SITU_WALK_OK ? "0"
-		          : (verdict == SITU_WALK_BOUNDS ? "1" : "2")));"""
+		          : (verdict == SITU_WALK_BOUNDS ? "1"
+		             : (verdict == SITU_WALK_VERSION ? "3" : "2"))));"""
 
 
 def c_verdict(tmp_path: Path, blob: bytes, message: bytes,
@@ -2163,9 +2212,17 @@ def test_they_agree_about_the_corpus_being_well_formed(
 
 	`cannot-say` is not a disagreement. A walker that declines to answer
 	is saying something true about itself, and the two differ in what they
-	render -- the C build has no pinned-run check, so every struct holding
-	a token set is unanswerable to it. Those are counted and reported
-	rather than asserted away, so the number moving is visible.
+	render. Those are counted and reported rather than asserted away, so
+	the number moving is visible.
+
+	What the C build declines has been measured rather than guessed at, by
+	reporting `__LINE__` at each of its refusal sites over the corpus. No
+	CHECK KIND is among them any more -- the pinned run was the last, and
+	`arm_selected` the one after that. Three sites are left: a member whose
+	byte order is `native`, which is a deliberate refusal rather than a gap
+	because a capture and the machine reading it are different machines; a
+	counted run whose element is neither a record nor of known width; and
+	four bytecode operations the walk does not implement.
 	"""
 	blob  = image_for(schema)
 	image = load(blob)

@@ -2415,6 +2415,7 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_ENCODED_AS     12u
 #define CHECK_ZERO_RUN       13u
 #define CHECK_PINNED_RUN     14u
+#define CHECK_ARM_SELECTED   8u
 #define CHECK_ENCODED_FROM   15u
 #define CHECK_ENCODING_ARM   16u
 
@@ -2718,6 +2719,172 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
                                    uint32_t shape, uint32_t depth,
                                    situ_walk_err *verdict);
 
+/* The selected arm's own `validate`, through its own type.
+ *
+ * Split out because the matched and the default paths reach it the same way
+ * and a second copy would be a second thing to be wrong -- `report.
+ * _arm_validates` is the same split for the same reason.
+ *
+ * An arm whose type cannot be MEASURED from its own bytes has no sub-view,
+ * so nothing asks whether it fits the frame either: there is nothing to
+ * compare against. `packet.body.publish` is that arm, and measuring it
+ * anyway called a three-byte MQTT publish malformed where the four backends
+ * call it fine.
+ *
+ * Measured through the variant MEMBER rather than the arm, because an arm is
+ * not in the struct's member chain -- asking for an arm's offset refuses.
+ */
+static situ_walk_err arm_validates(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t chosen, uint32_t depth,
+                                   situ_walk_err *verdict)
+{
+	uint32_t            at   = 0u;
+	uint32_t            wide = 0u;
+	uint32_t            arm_type;
+	situ_walk_err       err;
+	situ_walk_placement arm;
+
+	if (chosen == SITU_WALK_NONE) {
+		return SITU_WALK_OK;
+	}
+
+	if (situ_walk_placement_at(image, chosen, &arm) != SITU_WALK_OK) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	arm_type = arm.type_struct;
+	/* An arm whose type cannot be measured from its own bytes has no
+	 * sub-view, so nothing asks whether it fits either -- there is nothing
+	 * to compare against. Every OTHER arm gets the fit check below,
+	 * including one that is a plain run rather than a struct: returning
+	 * early for those is what let `dnsname.label` declaring three bytes of
+	 * text over one answer OK here, where the Python walk and the C
+	 * backend both answer BOUNDS. */
+	if (arm_type != SITU_WALK_NONE
+	                && (arm_type >= image->struct_count
+	                    || (u32_at(image->structs
+	                               + arm_type * image->struct_stride + 12u)
+	                        & STRUCT_MEASURABLE) == 0u)) {
+		return SITU_WALK_OK;
+	}
+
+	err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+	if (err == SITU_WALK_UNSUPPORTED) {
+		return err;
+	}
+	if (err != SITU_WALK_OK) {
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+	err = situ_walk_size_bits(image, message, len, shape, index, &wide);
+	if (err == SITU_WALK_UNSUPPORTED) {
+		return err;
+	}
+	if (err != SITU_WALK_OK) {
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+	if (at / 8u > len || (at + wide + 7u) / 8u > len) {
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+
+	/* A struct-typed arm carries its own constraints and its own validator
+	 * is what knows them. A run has none beyond the fit just checked. */
+	if (arm_type == SITU_WALK_NONE) {
+		return SITU_WALK_OK;
+	}
+	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
+	                     depth + 1u, verdict);
+}
+
+
+/* Whether the discriminant names an arm, and whether that arm validates.
+ *
+ * `report._arm_selects` is what this mirrors, down to the two jobs behind
+ * one check. The FIRST is `default: error` (14.5): a value naming no arm is
+ * a message this build cannot read, which is VERSION and not CONSTRAINT.
+ * The SECOND is the arm itself -- whichever one the discriminant reaches
+ * carries its own constraints, and dropping that job with the first is how
+ * json's `yes` arm, which pins `[must_eq = "rue"]`, accepted `txyz`.
+ *
+ * `permissive` is the constraint's value: 1 where the schema wrote
+ * `default: <member>`, so no discriminant can be wrong, and 0 where an
+ * unmatched value is a refusal. It says nothing about the second job.
+ *
+ * This walker declined every struct holding a variant until now, because
+ * CHECK_ARM_SELECTED was a kind it did not render -- honest, and it meant
+ * the two walkers could not be compared about a variant at all. Sixteen
+ * structs across the corpus were in that state.
+ */
+static situ_walk_err arm_selects(const situ_walk_image *image,
+                                 const uint8_t *message, uint32_t len,
+                                 uint32_t shape, uint32_t index,
+                                 uint32_t depth, int permissive,
+                                 situ_walk_err *verdict)
+{
+	uint32_t       count = 0u;
+	const uint8_t *rows  = arm_rows(image, index, &count);
+	uint32_t       fallback = SITU_WALK_NONE;
+	uint32_t       selects;
+	uint64_t       value = 0u;
+	situ_walk_err  err;
+
+	if (rows == NULL || count == 0u) {
+		return SITU_WALK_OK;	/* no arms here: nothing to select */
+	}
+	selects = u32_at(rows + 16);
+	if (selects == SITU_WALK_NONE) {
+		return SITU_WALK_OK;	/* no discriminant in this image */
+	}
+
+	/* Unlike `variant_bits`, a refused read is NOT absorbed into zero
+	 * here. There it keeps a struct measurable, which is what the four
+	 * backends do; here the question is whether the message is well
+	 * formed, and a discriminant the frame does not reach is a short
+	 * frame. `report._arm_selects` answers BOUNDS for the same read. */
+	err = read_deep(image, message, len, shape, selects, depth + 1u,
+	                &value);
+	if (err == SITU_WALK_UNSUPPORTED) {
+		return err;
+	}
+	if (err != SITU_WALK_OK) {
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+
+	for (uint32_t i = 0u; i < count; i++) {
+		const uint8_t *row    = rows + i * image->arm_stride;
+		const uint32_t chosen = u32_at(row + 4);
+		const int64_t  when   = i64_at(row + 8);
+		const uint8_t  flags  = row[20];
+
+		if ((flags & ARM_DEFAULT) != 0u) {
+			if ((flags & ARM_ERROR) == 0u) {
+				fallback = chosen;
+			}
+			continue;	/* the default arm names no case */
+		}
+		if ((uint64_t)when != value) {
+			continue;
+		}
+		return arm_validates(image, message, len, shape, index, chosen,
+		                     depth, verdict);
+	}
+
+	/* No `case` matched. `default: <member>` is not a refusal, and the
+	 * member it selects is the one that has to validate. */
+	if (permissive && fallback != SITU_WALK_NONE) {
+		return arm_validates(image, message, len, shape, index, fallback,
+		                     depth, verdict);
+	}
+	*verdict = SITU_WALK_VERSION;
+	return SITU_WALK_OK;
+}
+
+
+
 situ_walk_err situ_walk_validate(const situ_walk_image *image,
                                  const uint8_t *message, uint32_t len,
                                  uint32_t shape, situ_walk_err *verdict)
@@ -2789,6 +2956,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_MUST_BE_ONE
 			                && kind != CHECK_ENUM_KNOWN
 			                && kind != CHECK_FITS_FRAME
+			                && kind != CHECK_ARM_SELECTED
 			                && kind != CHECK_DIGITS_VALID
 			                && kind != CHECK_DIGITS_MINIMAL
 			                && kind != CHECK_TERMINATED
@@ -3005,6 +3173,27 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 
+		/* Whether the discriminant names an arm, and whether that arm
+		 * validates. In the Python walk's order, which is the answer and
+		 * not just the verdict: after the terminator and before the text
+		 * number, because a member can be both and the first failure is
+		 * what a reader is told. */
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t *row = checks + c * image->constraint_stride;
+
+			if (row[12] != CHECK_ARM_SELECTED) {
+				continue;
+			}
+			err = arm_selects(image, message, len, shape, index, depth,
+			                  i64_at(row + 4) != 0, verdict);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (*verdict != SITU_WALK_OK) {
+				return SITU_WALK_OK;
+			}
+		}
+
 		/* The checks that read a *span* rather than a value, over the bytes
 		 * the schema called text. A delimited member's width is its content
 		 * plus its delimiter, because that is where the next member starts,
@@ -3148,7 +3337,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                || kind == CHECK_ZERO_RUN
 			                || kind == CHECK_PINNED_RUN
 			                || kind == CHECK_ENCODED_FROM
-			                || kind == CHECK_ENCODING_ARM) {
+			                || kind == CHECK_ENCODING_ARM
+			                || kind == CHECK_ARM_SELECTED) {
 				continue;	/* asked above, over the span rather than a value */
 			}
 
