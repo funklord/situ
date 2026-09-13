@@ -27887,6 +27887,55 @@ than agrees. The short frame answers BOUNDS in both walkers and in C,
 which is the ordering claim -- the run has to be known present before
 anything reads it, and every backend emits that check above this one.
 
+### 26.353 `tonumber` is Lua's rule, not situ's, and the clamp was one symptom
+
+**Found by a draw that moved.** Adding two structs to `edges` changed
+which buffer the dissector differential drew for `text_driver`, and the
+new one begins `"  12"` -- a `decimal u32 n[4]` whose first two bytes are
+spaces. The dissector read 12 and the walker read 0, which put `tail`
+twenty-four bytes apart.
+
+**Five readings to one, and the tie was broken by asking a third
+party rather than by reconciling the two.** C's generated accessor says
+what the others do, in a comment written when it was built: `validate`
+refuses a frame whose digits are not digits, `situ_parse_uint` returns at
+the first byte that is not one without writing its output, and the value
+accessor keeps the zero it started with -- "the same bargain every other
+accessor makes with the bounds check it did not do". So 0 is the answer
+and the dissector was wrong.
+
+**And the bug was already half-fixed, which is the part worth keeping.**
+`situ_digits` clamps a negative result, and the comment above it records
+why: `tonumber` reads a leading minus, four bytes of `"-26"` gave a
+length of -26 and an offset of -48, and Wireshark raised. That fix
+treated the one symptom that had bitten. `tonumber` also skips leading
+and trailing space, so the same gap was still open one step over --
+**a list of special cases only ever grows by being bitten**, and each
+entry makes the list look more complete than it is.
+
+The fix is to stop asking `tonumber` what a number is. Every byte is
+checked against the base first and a non-digit answers 0, which is
+`situ_parse_uint`'s own rule rather than a second opinion about it.
+Measured in Lua against the bare call:
+
+    "  12" base 10   ->  0   tonumber says 12
+    "12  " base 10   ->  0   tonumber says 12
+    "-26 " base 10   ->  0   tonumber says -26
+    "0012" base 10   -> 12   tonumber says 12
+    "00FF" base 16   -> 255  tonumber says 255
+
+**It is pre-existing and the schema change only exposed it.** Checked by
+running the committed schema against the same buffer: the walker answers
+0 there too, so nothing about the new structs is involved. Sabotaged back
+to the bare call, `edges` fails and the other thirty-nine schemas pass.
+
+**The differential earned its keep by being asked a new question.** It
+had run green over this corpus for as long as it has existed, because no
+draw had put a space in front of a digit. That is not a weakness of the
+test -- it is what a fixed corpus of draws is: a sample, and a sample is
+evidence about the cases it holds. What changed the sample was unrelated
+work, which is the cheapest way it ever changes.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
