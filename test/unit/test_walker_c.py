@@ -864,6 +864,50 @@ def test_they_agree_about_a_versioned_member(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_an_encoding_the_message_names(tmp_path: Path) -> None:
+	"""`[encoding = from(f)]`: the check the message's own field picks (0058).
+
+	`edges`' `declared_text` is the case -- `document_charset says until ";"`
+	and then `u8 body[] until "\0" [encoding = from(says)]` -- and the arms of
+	the set ARE the encodings, so `utf-8` selects the utf8 validator and
+	`us-ascii` the ascii one.
+
+	The vectors are built here rather than typed as hex for a reason that has
+	already cost this file a wrong finding: a shell quoting the same bytes
+	produced `c3 83` where `c3 28` was meant, and a non-existent utf-8 defect
+	was reported and chased.
+
+	Three of the six separate the two arms rather than merely exercising one.
+	`c3 a9` is valid utf8 and is refused under `us-ascii`; a plain ascii body
+	passes under both; and `c3 28` is refused under `utf-8` and would pass any
+	check that read the wrong arm. So a walk that picked a constant encoding,
+	or read the arms in the wrong order, fails here rather than agreeing.
+
+	The sixth is the ordering: `latin-1` is not an arm of the set, and the
+	answer is the set's own membership check rather than this one, because the
+	source is earlier in placement order. That is what lets the arm lookup
+	treat "no arm" as a silence instead of a verdict.
+	"""
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	blob  = image_for(edges)
+	shape = shape_named(edges, "declared_text")
+
+	# (message, expected verdict): 0 OK, 2 CONSTRAINT.
+	cases = [
+		(b"utf-8;hello\x00",      "0"),
+		(b"utf-8;\xc3\xa9\x00",   "0"),   # valid utf8
+		(b"utf-8;\xc3\x28\x00",   "2"),   # a continuation byte that is not one
+		(b"us-ascii;plain\x00",   "0"),
+		(b"us-ascii;\xc3\xa9\x00", "2"),  # valid utf8, and not ascii
+		(b"latin-1;plain\x00",    "2"),   # refused by the set, not by this
+	]
+	for message, want in cases:
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message
+		assert verdict == want, message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A

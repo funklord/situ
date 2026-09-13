@@ -519,10 +519,87 @@ FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
 DIGITS_VALID, DIGITS_MINIMAL = 9, 10
 NUL_TERMINATED, ENCODED_AS, ZERO_RUN = 11, 12, 13
 PINNED_RUN = 14
+#: `[encoding = from(f)]` (0058), and the mapping it reads. ENCODED_FROM sits
+#: on the governed member and its value is the SOURCE's placement; ENCODING_ARM
+#: sits on the source, one row per arm of the token set in declaration order,
+#: and is data rather than a check -- a walk skips it where it reads the rest.
+ENCODED_FROM, ENCODING_ARM = 15, 16
 
 #: `situ_err_t` again: an unknown discriminant is a message this build
 #: cannot read rather than one that breaks a rule.
 ERR_VERSION = 3
+
+
+def _span_bytes(image: Image, view: View, index: int) -> bytes:
+	"""The bytes a member spans, as the byte-run checks read them.
+
+	A delimited member's `size_bits` is content *plus* its delimiter, because
+	that is where the next member starts. What the schema called text is the
+	content, and that is what every backend passes to the check -- `_len`,
+	not `_span`.
+
+	Separate from the loop that uses it because `encoded_from` reads a
+	SECOND member's bytes: the encoding is whatever the source names, so the
+	check has to look where the governed member is not.
+	"""
+	start   = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	if index in image.delimiters:
+		content = scan(view, index)[0]
+	else:
+		content = size_bits(view, index) // BITS_PER_BYTE
+	data = bytes(view.buffer[start:start + content])
+	if len(data) != content:
+		raise Refused(f"placement {index}: {content} bytes wanted, "
+		              f"{len(data)} in the frame")
+	return data
+
+
+def _encoded_ok(data: bytes, code: int) -> bool:
+	"""Whether `data` is in the encoding `code` names.
+
+	Decoded rather than re-implemented. Each runtime validator --
+	`situ_utf8_valid`, `situ_utf16le_valid`, `situ_utf16be_valid` -- refuses
+	exactly the set Python's strict decoder does: an overlong form or
+	surrogate half for utf8, a lone surrogate or odd byte count for utf16
+	(0044). Restating the state machine here would be a second chance to get
+	it wrong. The codes match `pack.ENCODING_CODE`.
+	"""
+	if code == 0:
+		return not any(one > 0x7F for one in data)
+	codec = {1: "utf-8", 2: "utf-16-le", 3: "utf-16-be"}.get(code)
+	if codec is None:
+		return True
+	try:
+		data.decode(codec)
+	except UnicodeDecodeError:
+		return False
+	return True
+
+
+def _arm_encoding(image: Image, source: int, said: bytes) -> int | None:
+	"""Which encoding the source member's bytes name, or None for no arm.
+
+	Two tables meet here and neither was written for this. The pinned runs
+	are the token set's arms, written for its own membership check; the
+	ENCODING_ARM rows are the encoding each arm names, written in the same
+	declaration order. The arm is found by position in the first and read by
+	position in the second, so the mapping needs no third table and no name.
+
+	A set the packer could not write both halves for disowns the struct
+	rather than arriving here short, so a length mismatch is this walk
+	misreading the image rather than the message being wrong.
+	"""
+	arms  = image.pinned_runs.get(source, [])
+	codes = [value for check, value in image.constraints.get(source, ())
+	         if check == ENCODING_ARM]
+	if len(codes) != len(arms):
+		raise Refused(f"placement {source}: {len(arms)} arm(s) pinned, "
+		              f"{len(codes)} encoding(s) named")
+	folded = image.placements[source].text_flags & CASE_INSENSITIVE
+	for position, arm in enumerate(arms):
+		if said == arm or (folded and said.lower() == arm.lower()):
+			return codes[position]
+	return None
 
 
 def relate(image: Image, which: int, request: View, response: View) -> int:
@@ -848,22 +925,11 @@ def _validate(image: Image, view: View, struct_index: int,
 		# something the constraint has to carry.
 		span = [pair for pair in held
 		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN,
-		                       PINNED_RUN)]
+		                       PINNED_RUN, ENCODED_FROM)]
 		if span:
-			start = view.at + at // BITS_PER_BYTE
-			# A delimited member's `wide` is content *plus* its delimiter,
-			# because that is where the next member starts. What the schema
-			# called text is the content, and that is what every backend
-			# passes to the check -- `_len`, not `_span`.
-			if index in image.delimiters:
-				try:
-					content = scan(view, index)[0]
-				except Refused:
-					return fail(ERR_BOUNDS, index)
-			else:
-				content = wide // BITS_PER_BYTE
-			data = bytes(view.buffer[start:start + content])
-			if len(data) != content:
+			try:
+				data = _span_bytes(image, view, index)
+			except Refused:
 				return fail(ERR_BOUNDS, index)
 			for check, against in span:
 				if check == NUL_TERMINATED and 0 not in data:
@@ -897,23 +963,28 @@ def _validate(image: Image, view: View, struct_index: int,
 					if data not in arms:
 						return fail(ERR_CONSTRAINT, index, PINNED_RUN)
 					continue
+				if check == ENCODED_FROM:
+					# `[encoding = from(f)]` (0058): the encoding is not the
+					# schema's to state, so `against` is where the message
+					# states it. The source is earlier in placement order and
+					# carries the set's own membership check, so by the time
+					# this runs an unmatched source has already been refused
+					# -- which is why an arm that matches nothing here is a
+					# silence rather than a verdict, exactly as C's `default:`
+					# arm is.
+					try:
+						said = _span_bytes(image, view, against)
+					except Refused:
+						return fail(ERR_BOUNDS, against)
+					code = _arm_encoding(image, against, said)
+					if code is None:
+						continue
+					if not _encoded_ok(data, code):
+						return fail(ERR_CONSTRAINT, index, ENCODED_FROM)
+					continue
 				if check != ENCODED_AS:
 					continue
-				if against == 0:
-					if any(one > 0x7F for one in data):
-						return fail(ERR_CONSTRAINT, index, ENCODED_AS)
-					continue
-				# Decoded rather than re-implemented. Each runtime validator
-				# -- `situ_utf8_valid`, `situ_utf16le_valid`,
-				# `situ_utf16be_valid` -- refuses exactly the set Python's
-				# strict decoder does: an overlong form or surrogate half for
-				# utf8, a lone surrogate or odd byte count for utf16 (0044).
-				# Restating the state machine here would be a second chance to
-				# get it wrong. The codes match `pack.ENCODING_CODE`.
-				codec = {1: "utf-8", 2: "utf-16-le", 3: "utf-16-be"}[against]
-				try:
-					data.decode(codec)
-				except UnicodeDecodeError:
+				if not _encoded_ok(data, against):
 					return fail(ERR_CONSTRAINT, index, ENCODED_AS)
 
 
@@ -922,7 +993,8 @@ def _validate(image: Image, view: View, struct_index: int,
 		                                   ARM_SELECTED, DIGITS_VALID,
 		                                   DIGITS_MINIMAL, NUL_TERMINATED,
 		                                   ENCODED_AS, ZERO_RUN,
-		                                   PINNED_RUN)]
+		                                   PINNED_RUN, ENCODED_FROM,
+		                                   ENCODING_ARM)]
 		if not value_checks:
 			continue
 		try:

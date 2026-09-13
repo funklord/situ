@@ -27612,10 +27612,12 @@ tests. A sabotage is only evidence about the test it actually ran.
 
 **0058's second half, built as far as it can honestly go in one change.**
 `[encoding = from(f)]` parses, its rules are enforced, and no reader
-claims a check it does not make. What is not here is the runtime check --
-the image constraint, both walkers and four backends, twelve reader
-sites -- so `validate` defers, which is the state `[encoding = latin1]`
-has been in all along rather than a new kind of half-answer.
+claims a check it does not make. What was not here at the time was the
+runtime check -- the image constraint, both walkers and four backends,
+twelve reader sites -- so `validate` deferred, which is the state
+`[encoding = latin1]` had been in all along rather than a new kind of
+half-answer. The four backends landed next and the two walkers after
+them; 26.351 is where that finished, and what it left open.
 
 **The design got smaller than 0058 assumed, because the mapping already
 exists.** A token set is variable-width text keywords with names (0055),
@@ -27749,6 +27751,84 @@ compile error was assumed rather than read. The minimal case made the
 pattern -- refuses right, declines on success -- visible in one line of
 output, where the corpus had shown one agreeing case and one declining
 one and no shape at all.
+
+### 26.351 The encoding the message names, in both walkers
+
+**Two rows rather than one, because the question splits in two.** On the
+governed member, `encoded_from` (kind 15) whose value is WHERE the answer
+is -- the source's placement. On the source, one `encoding_arm` (kind 16)
+per arm of the token set in declaration order, whose value is what that
+arm MEANS. Nothing new had to be written to find which arm: the pinned
+runs are already there, written for the set's own membership check, so
+the arm is found by position in that table and read by position in this
+one. The mapping needs no third table and no name, and a second governed
+member reading the same set repeats nothing.
+
+**The kinds are additive and neither walker needed a format bump.** Both
+defer on a check kind they do not render rather than skipping it, which
+is what makes a new kind safe: an older walker says `cannot-say` where a
+newer one answers, and neither says OK for a message that breaks a rule.
+
+**The bug was in the packer and only one of the two walkers could see
+it.** Both walkers find a placement's rows the same way in principle, and
+not in practice: the C walk's `check_rows` searches the table and then
+walks OUTWARD from what it found, so a placement's rows have to be
+contiguous and in placement order, while the Python walk keys a dict and
+does not care. Writing the source's row while processing the governed
+member put it after -- placements 22, 23, then 22 again -- and the C walk
+could not see it. It answered **OK for a body that is not in the encoding
+its own message named**, which is the one wrong answer indistinguishable
+from a right one.
+
+**The Python walker agreed with itself throughout and could not have
+found this.** It is the same shape as a document corroborating its own
+author: two readings of one table, one of them tolerant of exactly the
+fault. What found it was the test that asks the C driver, on the first
+run, with a verdict the Python side had already got right.
+
+The fix is a pre-pass per struct -- which placements another member reads
+its encoding from -- so the rows are written while the SOURCE is the
+member being processed. The source is placed before the member it governs
+by rule 1 of 0058, so placement order and dependency order agree here by
+construction.
+
+**The invariant is asserted now, over the corpus, and it was held by
+nobody.** A placement's rows are contiguous and the placements ascend --
+the property `check_rows` needs and the only one that makes the two
+walkers comparable at all. It could not be asked of `image.constraints`,
+because a dict gathers a placement's rows wherever they are and reports
+first appearances in order for exactly the table that broke: 22, 23, 22
+has first appearances 22, 23, which is sorted. So the loader records the
+table's own order beside the dict, which is one field and makes the thing
+the C walk actually reads observable. Sabotaged back to the broken write
+order, the test names the fault -- *placement 22 has rows in two runs* --
+and the other thirty-nine schemas pass, so it is failing on the fault and
+not on everything.
+
+**Six vectors, and three of them separate the two arms** rather than
+exercising one. `c3 a9` is valid utf8 and is refused under `us-ascii`; a
+plain body passes under both; `c3 28` is refused under `utf-8` and would
+pass any check reading the wrong arm. So a walk picking a constant
+encoding, or reading the arms in the wrong order, fails rather than
+agrees. The sixth is the ordering: `latin-1` is not an arm, and the
+refusal is the SET's membership check rather than this one, because the
+source is earlier in placement order -- which is what lets "no arm" be a
+silence here instead of a verdict, as C's generated `default:` arm is.
+
+**Both sides sabotaged separately and watched through the check under
+test.** With the Python branch stubbed, `c3 28` and the ascii high byte
+went to 0 and `latin-1` stayed 2; with the C branch stubbed, the same. A
+control that failed through the membership check instead would have
+proved nothing about either.
+
+**What is still unchecked, and it is not the walkers' half.** A
+FIXED-COUNT governed member -- `u8 body[16] [encoding = from(says)]` --
+is accepted by the front end and checked by nothing in any of the five
+readings: all four backends call the declared-encoding emitter only from
+the delimited branch, and the packer's fixed-count branch defers the
+struct. Rule 2 of 0058 asks that every arm be checkable and this is that
+rule failing one level up, on the member rather than on the set. No
+schema in the corpus has the shape, which is why nothing disagreed.
 
 ## 27. Questions, and how they were settled
 

@@ -272,6 +272,50 @@ def test_every_schema_packs_and_reads_back(path: Path,
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_constraint_table_is_written_in_placement_order(
+		path: Path) -> None:
+	"""A placement's rows are contiguous, and the placements ascend.
+
+	Both walkers find a member's checks by placement, and only one of them
+	would notice this being false. The C walk's `check_rows` searches the
+	table and then walks OUTWARD from what it found, so it sees a run of
+	adjacent rows and nothing else; the Python walk keys a dict and does not
+	care where the rows are. So an out-of-order row is invisible to the
+	walker that would have to agree with the other one.
+
+	That is not hypothetical: `[encoding = from(f)]` writes a row on the
+	SOURCE member, and writing it while the GOVERNED member was being
+	processed put it after -- placements 22, 23, then 22 again. The C walk
+	could not see it and answered OK for a body that is not in the encoding
+	its own message named, which is the one wrong answer indistinguishable
+	from a right one (26.351).
+
+	Asserted over the corpus rather than over the one schema that found it,
+	because what is being checked is a property of the packer's writing order
+	and any construct can break it. The rows are read back through the image
+	accessors, not out of the packer's blob, so this is a claim about the
+	artifact.
+	"""
+	schema, resolved = _resolved(path.read_text(encoding="ascii"))
+	blob, _          = packer.pack(schema, resolved, metadata=True)
+	image            = image_reader.load(blob)
+
+	# Asking `image.constraints` would be asking the reader that tolerates
+	# the fault: a dict gathers a placement's rows wherever they are, so a
+	# split run is invisible to it. `constraint_order` is the table's own
+	# order, which is the thing the C walk actually reads.
+	seen: list[int] = []
+	for at in image.constraint_order:
+		if seen and seen[-1] == at:
+			continue
+		assert at not in seen, (
+			f"{path.name}: placement {at} has rows in two runs, and the "
+			f"C walk's `check_rows` can only see one of them")
+		seen.append(at)
+	assert seen == sorted(seen), f"{path.name}: placements do not ascend"
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_packing_is_deterministic(path: Path) -> None:
 	"""Two runs over one schema produce one image.
 

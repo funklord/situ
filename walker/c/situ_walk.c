@@ -2415,6 +2415,8 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_ENCODED_AS     12u
 #define CHECK_ZERO_RUN       13u
 #define CHECK_PINNED_RUN     14u
+#define CHECK_ENCODED_FROM   15u
+#define CHECK_ENCODING_ARM   16u
 
 /* `text_flags` bit 2: the member compares case-insensitively (0055). */
 #define TEXT_CASE_INSENSITIVE 4u
@@ -2566,6 +2568,151 @@ static int enum_admits(const situ_walk_image *image, uint32_t which,
 	return 0;
 }
 
+/* The encoding another member of this message names (0058).
+
+ * `[encoding = from(f)]` puts two rows in the image and this reads both.
+ * CHECK_ENCODED_FROM, on the governed member, says WHERE the answer is --
+ * `source` is that placement. CHECK_ENCODING_ARM, on the source, says what
+ * each arm MEANS, one row per arm of the token set in declaration order.
+ * Two tables meet here and neither was written for this: the pinned runs are
+ * the set's arms, written for its own membership check, and the arm is found
+ * by position in that table and read by position in this one. So the mapping
+ * needs no third table and no name.
+ *
+ * `*found` stays 0 where the source's bytes match no arm. That is
+ * unreachable through a well-formed message -- the source is earlier in
+ * placement order and carries the membership check, so an unmatched source
+ * has already been refused -- and it is a silence rather than a verdict for
+ * the same reason C's generated `default:` arm is.
+ *
+ * A set the packer could not write both halves for disowns the struct rather
+ * than arriving here short, so a count that does not match is this walk
+ * misreading the image rather than the message being wrong. */
+/* Whether a span is in the encoding `how` names. -1 for a code this build
+ * does not know, which makes the struct unanswerable rather than clean. */
+static int encoded_ok(const uint8_t *data, uint32_t len, int64_t how)
+{
+	if (how == ENCODING_ASCII) {
+		for (uint32_t d = 0u; d < len; d++) {
+			if (data[d] > 0x7fu) {
+				return 0;
+			}
+		}
+		return 1;
+	}
+	if (how == ENCODING_UTF8) {
+		return utf8_valid(data, len);
+	}
+	if (how == ENCODING_UTF16LE) {
+		return utf16_valid(data, len, 0);
+	}
+	if (how == ENCODING_UTF16BE) {
+		return utf16_valid(data, len, 1);
+	}
+	return -1;
+}
+
+
+static situ_walk_err declared_encoding(const situ_walk_image *image,
+                                       const uint8_t *message, uint32_t len,
+                                       uint32_t shape, uint32_t source,
+                                       int *found, int *cut, int64_t *how)
+{
+	situ_walk_placement held;
+	situ_walk_err       err;
+	uint32_t            at   = 0u;
+	uint32_t            wide = 0u;
+	uint32_t            content;
+	uint32_t            rows = 0u;
+	uint32_t            arms = 0u;
+	uint32_t            named = 0u;
+	uint32_t            position = 0u;
+	int                 matched = -1;
+	const uint8_t      *checks;
+	const uint8_t      *said;
+	const uint8_t      *one;
+
+	*found = 0;
+	*cut   = 0;
+
+	err = situ_walk_placement_at(image, source, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	err = situ_walk_offset_bits(image, message, len, shape, source, &at);
+	if (err == SITU_WALK_UNSUPPORTED) {
+		return err;
+	}
+	if (err != SITU_WALK_OK) {
+		*cut = 1;
+		return SITU_WALK_OK;
+	}
+	err = situ_walk_size_bits(image, message, len, shape, source, &wide);
+	if (err == SITU_WALK_UNSUPPORTED) {
+		return err;
+	}
+	if (err != SITU_WALK_OK) {
+		*cut = 1;
+		return SITU_WALK_OK;
+	}
+
+	content = wide / 8u;
+	if (delimiter_rules(image, source) != NULL) {
+		int      terminated = 0;
+		uint32_t took       = 0u;
+
+		err = situ_walk_scan(image, message, len, source, at / 8u,
+		                     &content, &terminated, &took);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			*cut = 1;
+			return SITU_WALK_OK;
+		}
+	}
+	if (at / 8u > len || content > len - at / 8u) {
+		*cut = 1;
+		return SITU_WALK_OK;
+	}
+	said = message + at / 8u;
+
+	for (one = first_pinned(image, source);
+	     one != NULL
+	     && one < image->pinned_runs
+	              + (size_t)image->pinned_run_count * image->pinned_run_stride
+	     && u32_at(one) == source;
+	     one += image->pinned_run_stride) {
+		if (matched < 0
+		                && same_run(one + 5, one[4], said, content,
+		                            (held.text_flags
+		                             & TEXT_CASE_INSENSITIVE) != 0u)) {
+			matched = (int)arms;
+		}
+		arms += 1u;
+	}
+
+	checks = check_rows(image, source, &rows);
+	for (uint32_t c = 0u; c < rows; c++) {
+		const uint8_t *row = checks + c * image->constraint_stride;
+
+		if (row[12] != CHECK_ENCODING_ARM) {
+			continue;
+		}
+		if (matched >= 0 && position == (uint32_t)matched) {
+			*how   = i64_at(row + 4);
+			*found = 1;
+		}
+		position += 1u;
+		named    += 1u;
+	}
+	if (named != arms) {
+		return SITU_WALK_MALFORMED;
+	}
+	return SITU_WALK_OK;
+}
+
+
 static situ_walk_err validate_deep(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
@@ -2648,7 +2795,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_NUL_TERMINATED
 			                && kind != CHECK_ENCODED_AS
 			                && kind != CHECK_ZERO_RUN
-			                && kind != CHECK_PINNED_RUN) {
+			                && kind != CHECK_PINNED_RUN
+			                && kind != CHECK_ENCODED_FROM
+			                && kind != CHECK_ENCODING_ARM) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 		}
@@ -2867,7 +3016,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				const uint8_t kind = checks[c * image->constraint_stride + 12];
 				if (kind == CHECK_NUL_TERMINATED || kind == CHECK_ENCODED_AS
 				                || kind == CHECK_ZERO_RUN
-				                || kind == CHECK_PINNED_RUN) {
+				                || kind == CHECK_PINNED_RUN
+				                || kind == CHECK_ENCODED_FROM) {
 					span += 1u;
 				}
 			}
@@ -2940,23 +3090,42 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 							return SITU_WALK_MALFORMED;
 						}
 					} else if (kind == CHECK_ENCODED_AS) {
-						const int64_t how = i64_at(row + 4);
+						const int ok = encoded_ok(data, content,
+						                          i64_at(row + 4));
 
-						if (how == ENCODING_ASCII) {
-							for (uint32_t d = 0u; d < content; d++) {
-								if (data[d] > 0x7fu) {
-									bad = 1;
-								}
-							}
-						} else if (how == ENCODING_UTF8) {
-							bad = !utf8_valid(data, content);
-						} else if (how == ENCODING_UTF16LE) {
-							bad = !utf16_valid(data, content, 0);
-						} else if (how == ENCODING_UTF16BE) {
-							bad = !utf16_valid(data, content, 1);
-						} else {
+						if (ok < 0) {
 							return SITU_WALK_UNSUPPORTED;
 						}
+						bad = !ok;
+					} else if (kind == CHECK_ENCODED_FROM) {
+						/* The schema did not name the encoding, so the
+						 * message does (0058). `want` is where it says
+						 * so -- another placement in this same struct --
+						 * and the arm it selects is what to check. */
+						const int64_t want  = i64_at(row + 4);
+						int           found = 0;
+						int           cut   = 0;
+						int64_t       how   = 0;
+						int           ok;
+
+						err = declared_encoding(image, message, len, shape,
+						                        (uint32_t)want, &found, &cut,
+						                        &how);
+						if (err != SITU_WALK_OK) {
+							return err;
+						}
+						if (cut) {
+							*verdict = SITU_WALK_BOUNDS;
+							return SITU_WALK_OK;
+						}
+						if (!found) {
+							continue;
+						}
+						ok = encoded_ok(data, content, how);
+						if (ok < 0) {
+							return SITU_WALK_UNSUPPORTED;
+						}
+						bad = !ok;
 					} else {
 						continue;
 					}
@@ -2977,7 +3146,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (kind == CHECK_TERMINATED || kind == CHECK_NUL_TERMINATED
 			                || kind == CHECK_ENCODED_AS
 			                || kind == CHECK_ZERO_RUN
-			                || kind == CHECK_PINNED_RUN) {
+			                || kind == CHECK_PINNED_RUN
+			                || kind == CHECK_ENCODED_FROM
+			                || kind == CHECK_ENCODING_ARM) {
 				continue;	/* asked above, over the span rather than a value */
 			}
 

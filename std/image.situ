@@ -473,6 +473,21 @@ enum image_check : u8 {
 	                      // scalar form is `must_be_zero`; this is the one
 	                      // whose length the message computes, which is why
 	                      // it cannot be a value comparison
+	encoded_from = 15,    // `[encoding = from(f)]`: the bytes are in the
+	                      // encoding *another member of this message* names
+	                      // (0058). `value` is that member's placement, and
+	                      // the arm it selects is read from the pinned runs
+	                      // the token set already writes -- so this row says
+	                      // where to look and `encoding_arm` says what each
+	                      // arm means
+	encoding_arm = 16,    // one per arm of the token set a member holds, in
+	                      // declaration order, `value` being the encoding
+	                      // code an `encoded_as` would carry. Rows on the
+	                      // SOURCE member rather than the governed one: the
+	                      // mapping belongs to the set, and a second governed
+	                      // member reading the same set repeats nothing.
+	                      // Not a check -- a walk skips these where it reads
+	                      // the others
 	default      = error,
 }
 

@@ -1,7 +1,9 @@
 # 0058: a text encoding that a scope states
 
-Status: accepted 2026-09-13; the struct scope is built, the data-named
-half is specified and refused for a reason recorded below
+Status: accepted 2026-09-13; both halves built 2026-09-13 -- the struct
+scope, then `[encoding = from(f)]` in all four backends and both walkers
+(26.348, 26.351). A fixed-count member the encoding governs is still
+checked by nobody, which 26.351 records
 Date: 2026-09-13
 Phase: raised by the copyright holder, 26.330
 

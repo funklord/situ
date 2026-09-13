@@ -38,6 +38,7 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.relation import Refused as RelationRefused
 from situc.relation import plan as plan_relation
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.wellformed import _encoding_source
 
 MAGIC		= b"SITU"
 FORMAT_VERSION	= 5
@@ -704,6 +705,32 @@ def _measurable(resolved: ResolvedSchema, struct: ResolvedStruct) -> bool:
 		or traverse.has_computable_extent(resolved.structs, struct)
 
 
+def _encoding_arms(resolved: ResolvedSchema, struct: ResolvedStruct,
+		source: str | None) -> tuple[int, ...] | None:
+	"""The encoding each arm of `source`'s token set names, in order.
+
+	A token set is the mapping (0058): its arms are text keywords with names,
+	and the arm names ARE the encodings, so nothing else declares the
+	correspondence. `check_encoding_from` has already refused a set whose arms
+	do not all name an encoding situ validates -- this returns None rather
+	than trusting that, because the packer's job is to disown a check it
+	cannot write rather than to write a wrong one.
+	"""
+	if source is None:
+		return None
+	holder = next((one for one in struct.entries
+	               if one.placement.path.split(".")[-1] == source), None)
+	if holder is None:
+		return None
+	arms = resolved.layout.env.token_sets.get(holder.placement.type_name or "")
+	if not arms:
+		return None
+	codes = tuple(ENCODING_CODE.get(arm) for arm in arms)
+	if any(code is None for code in codes):
+		return None
+	return tuple(code for code in codes if code is not None)
+
+
 def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
 	"""Header, directory, then the section bodies in directory order.
 
@@ -1146,6 +1173,21 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	nests: dict[str, set[str]] = {}
 	for name, rstruct in order:
 		whole = True
+		# Which placements another member reads its encoding from, and what
+		# each of their arms names. Gathered before the loop because the
+		# source is placed BEFORE the member that reads it -- it has to be,
+		# or the encoding could not be known when the body is scanned -- and
+		# a placement's rows have to be written contiguously.
+		encoding_arms: dict[int, tuple[int, ...]] = {}
+		for entry in traverse.own_entries(rstruct):
+			spoken = next((a for a in entry.placement.attrs
+			               if a.name == "encoding"), None)
+			source = _encoding_source(spoken) if spoken else None
+			held_at = (placement_index.get(f"{name}.{source}")
+			           if source else None)
+			codes = _encoding_arms(resolved, rstruct, source)
+			if held_at is not None and codes is not None:
+				encoding_arms[held_at] = codes
 		for entry in traverse.own_entries(rstruct):
 			placement = entry.placement
 			at = placement_index.get(placement.path)
@@ -1473,18 +1515,19 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 								f"<IB{PINNED_OCTETS}s", at, len(run), run)
 						constraints_blob += _struct.pack(
 							"<IqBxxx", at, len(arms), 14)
+						# And, where another member reads its encoding from
+						# this one, what each arm means: one row per arm in
+						# declaration order, beside the runs a walk matches
+						# them against. The two tables are read by position
+						# and neither was written for the other -- the runs
+						# are the set's own membership check -- so the
+						# mapping needs no third table and no name.
+						for arm_code in encoding_arms.get(at, ()):
+							constraints_blob += _struct.pack(
+								"<IqBxxx", at, arm_code, 16)
 
 				# The delimiter has to be there, and for a plain delimited
 				# member that is the whole of it.
-				#
-				# `[encoding = ascii]` adds nothing here, which is worth
-				# saying because it looks like it should. The check needs a
-				# static offset and a declared count to name the bytes it
-				# would scan, and a member that runs to a delimiter has
-				# neither -- so no backend emits one, and `http`'s
-				# `method[] until " " [encoding = ascii]` is checked for its
-				# terminator and not for its characters. Deferring over it
-				# gave up six structs for a check nothing makes.
 				#
 				# A text number carries two more. Its bytes have to parse
 				# in its radix and fit the scalar's domain -- C calls the
@@ -1518,11 +1561,40 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				if spelled is not None:
 					how = getattr(spelled.value, "name", None)
 					code = ENCODING_CODE.get(how) if how is not None else None
-					if code is None:
+					source = _encoding_source(spelled)
+					if code is not None:
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, code, 12)
+					elif source is not None:
+						# `[encoding = from(f)]`: the arm `f` holds says
+						# which check this is (0058). Two rows carry it,
+						# because the question splits in two -- where to
+						# look, and what each arm means. This is the first,
+						# on the governed member, and its value is where
+						# the answer lives rather than what it is. The
+						# second is written above, on the SOURCE, because
+						# both walkers find a placement's rows by looking
+						# for a CONTIGUOUS run of them -- `check_rows` in
+						# the C walk searches and then walks outward from
+						# what it found. Writing the source's row from here
+						# put it after the governed member's and the search
+						# could not see it: the C walk answered OK for a
+						# body that is not in the encoding its own message
+						# named, which is the one wrong answer that reads
+						# like a right one.
+						# The guard is the mapping's existence rather than
+						# its contents: the rows themselves are written
+						# above, beside the source's own pinned runs.
+						held_at = placement_index.get(f"{name}.{source}")
+						mapping = _encoding_arms(resolved, rstruct, source)
+						if held_at is None or mapping is None:
+							whole = False
+							continue
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, held_at, 15)
+					else:
 						whole = False
 						continue
-					constraints_blob += _struct.pack(
-						"<IqBxxx", at, code, 12)
 
 				# In C's order, which is the answer and not just the
 				# verdict: the terminator first, then the spelling, then

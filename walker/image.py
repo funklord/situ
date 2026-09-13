@@ -262,6 +262,14 @@ class Image:
 	#: placement index -> [(check, value)], in declaration order. The order
 	#: is the answer: the first failure is what `validate` returns.
 	constraints: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
+	#: The placement each constraint row names, in the order the table
+	#: holds them. The dict above cannot answer this: it gathers a
+	#: placement's rows wherever they are, and the C walk's `check_rows`
+	#: searches the table and walks OUTWARD from what it finds, so it sees
+	#: one contiguous run and nothing else. An out-of-order row is therefore
+	#: invisible to the reader that tolerates it and fatal to the one that
+	#: does not, which is how a wrong OK got past the Python walk (26.351).
+	constraint_order: list[int] = field(default_factory=list)
 	#: enum id -> the values it names.
 	enum_values: dict[int, set[int]]	= field(default_factory=dict)
 	#: struct index -> the placement holding its version number. A `[since]`
@@ -463,6 +471,7 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			where, value, check = _struct.unpack_from(
 				"<IqB", blob, at + i * stride)
 			image.constraints.setdefault(where, []).append((check, value))
+			image.constraint_order.append(where)
 
 	if ENUM_VALUES in found:
 		at, records, stride = found[ENUM_VALUES]

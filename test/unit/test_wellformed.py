@@ -2079,24 +2079,46 @@ def test_arms_of_differing_code_unit_width_are_refused() -> None:
 	assert "is a 16-bit encoding on a 8-bit element" in text
 
 
-def test_a_declared_encoding_does_not_claim_a_check_nobody_makes() -> None:
-	"""The property that makes this safe to ship before the readers have it.
+def test_a_declared_encoding_is_carried_as_two_rows() -> None:
+	"""The image says where the encoding is named and what each arm means.
 
-	The packer cannot express a runtime-resolved encoding yet, and a struct
-	is flagged validatable only where EVERY check `traverse` says it makes is
-	one the image carries. So the struct defers -- which is the state
-	`[encoding = latin1]` has been in all along, rather than a new kind of
-	half-answer.
+	This test used to assert the opposite -- that the struct DEFERS, because
+	the packer could not express a runtime-resolved encoding and a struct is
+	flagged validatable only where every check `traverse` says it makes is
+	one the image carries. That was the honest state while the readers were
+	being built and it stopped being true when they landed (26.351), so the
+	assertion is rewritten rather than deleted: the same question, answered
+	the other way.
+
+	Two rows, because the question splits in two. `encoded_from` on the
+	governed member says WHERE the answer is; `encoding_arm` on the source
+	says what each arm MEANS, one per arm of the set in declaration order.
+	The arms themselves are the pinned runs the set already wrote for its own
+	membership check, so the mapping is read by position and needs no name.
 	"""
 	from situc import pack as packer
 	from situc.layout import solve
 	from situc.resolve import resolve
 	from walker.image import load
+	from walker.report import ENCODED_FROM, ENCODING_ARM, PINNED_RUN
 
 	schema   = parse_text(BUFFER + DECLARED, path="s.situ")
 	resolved = resolve(schema, solve(schema))
 	image    = load(packer.pack(schema, resolved, metadata=True)[0])
 
 	which = image.struct_names.index("doc")
-	assert not image.structs[which].validatable, (
-		"the struct claims every check is carried, and the encoding is not")
+	shape = image.structs[which]
+	assert shape.validatable, "every check this struct makes is in the image"
+
+	said, body = image.members(shape)
+	assert [value for check, value in image.constraints[body]
+	        if check == ENCODED_FROM] == [said], (
+		"the governed member names the placement that says the encoding")
+	assert [value for check, value in image.constraints[said]
+	        if check == ENCODING_ARM] == [1, 0], (
+		"utf8 then ascii, which is the set's declaration order")
+	assert image.pinned_runs[said] == [b"utf-8", b"us-ascii"], (
+		"and the arms they are read by position against")
+	assert any(check == PINNED_RUN
+	           for check, _ in image.constraints[said]), (
+		"the membership check the arm lookup relies on having run first")
