@@ -85,6 +85,10 @@ struct covered_tail size=8..12
   ~         4         u8         mac
   mac covers: body head flags seq
 
+struct declared_text size=2..
+  @0x0000   until:3b  document_charset says
+  ~         until:00  u8         body  encoding=from(says)
+
 struct derived size=13
   @0x0000   2         u16        total  big
   @0x0002   1         u8         a

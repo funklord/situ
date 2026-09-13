@@ -131,6 +131,35 @@ struct scoped_text [encoding = utf8] {
 }
 
 require size(scoped_text) == 22;
+
+// An encoding the DATA names, which is 0058's second half. `[endian =
+// from(marker)]` is the precedent -- a property the message carries rather
+// than the schema -- and what separates the two is one sentence in
+// `EndianMarkerDecl`: a marker travels with the data "and ENDIANNESS NEVER
+// CHANGES EXTENT, so this costs nothing on the offset or size axes". An
+// encoding can.
+//
+// The mapping needs no construct of its own. A token set is already
+// variable-width text keywords with names (0055), which is exactly what a
+// charset declaration is -- so the arm names ARE the encodings and nothing
+// else has to declare the correspondence.
+//
+// Three rules make it decidable, and `check_encoding_from` refuses each by
+// name. `declared` comes first, because an encoding read from the bytes it
+// governs could not be read at all. Every arm names an encoding situ
+// validates, because which one the message picks is not the schema's to
+// know. And every arm reads the same width as the element -- utf8 and
+// ascii are both 8-bit, so adding `utf16le` here is refused rather than
+// making this member's extent a function of a value inside it.
+tokens document_charset {
+	utf8   = "utf-8",
+	ascii  = "us-ascii",
+}
+
+struct declared_text {
+	document_charset  says  until ";";
+	u8                body[]  until "\0"  [encoding = from(says)];
+}
 require in_place(labelled.sequence);
 
 // Recorded rather than required: the trailing bytes are the cost of a

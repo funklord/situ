@@ -79,6 +79,7 @@ def check(schema: ast.Schema) -> None:
 	check_imported_directives(schema)
 	check_skips(schema)
 	check_text_numbers(schema)
+	check_encoding_from(schema)
 	check_no_recursive_types(schema)
 	check_depth_bounds(schema)
 	check_delimiters(schema)
@@ -2132,6 +2133,22 @@ ENCODING_ELEMENT_BITS: dict[str, int] = {
 }
 
 
+def _encoding_source(attr: ast.Attr) -> str | None:
+	"""The field `[encoding = from(f)]` names, or None for a plain one.
+
+	`_endian_attr` in the layout is the same shape and the precedent: a
+	property the DATA names rather than the schema. The two differ in what
+	it costs, which is 0058's subject -- a byte order never changes extent
+	and an encoding can.
+	"""
+	value = attr.value
+	if (isinstance(value, ast.Call) and value.name == "from"
+			and len(value.args) == 1
+			and isinstance(value.args[0], ast.NameRef)):
+		return value.args[0].name
+	return None
+
+
 def check_encoding_element_width(schema: ast.Schema) -> None:
 	"""`[encoding]` has to name the width its element actually is.
 
@@ -2822,6 +2839,11 @@ def _check_attr_list(attrs: tuple[ast.Attr, ...]) -> None:
 			)
 
 		if attr.name == "encoding":
+			# `[encoding = from(f)]` names a field rather than an encoding
+			# (0058). Its own rules are `check_encoding_from`; here it is
+			# only not-a-spelling-mistake.
+			if _encoding_source(attr) is not None:
+				continue
 			named = getattr(attr.value, "name", None)
 			if named not in TEXT_ENCODINGS:
 				# `utf16` alone names no byte order, and a default would be a
@@ -4257,3 +4279,129 @@ def _recursion_error(cycle: list[str], structs: Structs,
 			f"`[depth = 8]` over {chain} admits eight nested structs",
 		]),
 	)
+
+
+def check_encoding_from(schema: ast.Schema) -> None:
+	"""`[encoding = from(f)]`: the three rules that make it decidable (0058).
+
+	An encoding the DATA names -- MIME's `charset=`, an XML declaration --
+	where `[endian = from(marker)]` is the precedent. What separates the two
+	is one sentence in `EndianMarkerDecl`: a marker "travels with the data,
+	so exactly one encoding is valid once the marker is known -- and
+	ENDIANNESS NEVER CHANGES EXTENT, so this costs nothing on the offset or
+	size axes". An encoding can change extent, so a data-named one needs
+	rules a data-named byte order does not.
+
+	The mapping needs no construct of its own: a token set is already
+	variable-width text keywords with names (0055), which is exactly what a
+	charset declaration is. So `f` names a token-set member and the ARM
+	NAMES are the encodings.
+
+	1. **`f` is declared before the member it governs.** The
+	   no-forward-reference rule expressions already have, and what makes
+	   the circular case a refusal rather than a surprise: an encoding read
+	   from bytes it governs cannot be read at all.
+	2. **Every arm names an encoding that has a check.** A schema declaring
+	   an encoding and getting no check "would be worse off than one
+	   declaring nothing" -- the rule the static form is already refused by,
+	   and here it has to hold for every arm, since which one the message
+	   picks is not the schema's to know.
+	3. **Every arm reads the same width as the member's element**, which is
+	   what "the extent must not depend on the encoding" comes to once it is
+	   made concrete. `[encoding = utf16le]` on a `u8` run "validates
+	   something other than what the schema means" (0044) -- and a set
+	   mixing utf8 with utf16le would do that for half the messages.
+	"""
+	tokens = {decl.name: decl for decl in schema.token_sets()}
+
+	for struct in schema.structs():
+		seen: set[str] = set()
+		for member in _walk_members(struct.members):
+			named = getattr(member, "name", None)
+			encoding = next((attr for attr in getattr(member, "attrs", ())
+			                 if attr.name == "encoding"), None)
+			source = _encoding_source(encoding) if encoding else None
+			if encoding is None or source is None:
+				if named:
+					seen.add(named)
+				continue
+
+			_check_one_encoding_from(struct, member, encoding, source,
+			                         seen, tokens)
+			if named:
+				seen.add(named)
+
+
+def _check_one_encoding_from(struct: ast.StructDecl, member: ast.Member,
+		attr: ast.Attr, source: str, seen: set[str],
+		tokens: dict[str, ast.TokensDecl]) -> None:
+	"""One `[encoding = from(f)]`, against the three rules above."""
+	declared = {getattr(one, "name", None)
+	            for one in _walk_members(struct.members)}
+
+	if source not in declared:
+		raise error(
+			f"`{source}` is not a member of `{struct.name}`",
+			attr.span,
+			label = "no such field",
+			notes = ["`from(f)` names the field that says what the encoding "
+			         "is, and it has to be a field of this struct"],
+		)
+
+	# Rule 1, and the reason is not style: an encoding read from bytes it
+	# governs cannot be read at all.
+	if source not in seen:
+		raise error(
+			f"`{source}` is declared after the member it governs",
+			attr.span,
+			label = "read before it is written",
+			notes = ["a field may only be named by what comes after it, "
+			         "which is the rule every size expression has",
+			         "an encoding that governed its own bytes would have to "
+			         "be read before it could be read"],
+		)
+
+	holder = next((one for one in _walk_members(struct.members)
+	               if getattr(one, "name", None) == source), None)
+	kind   = getattr(getattr(holder, "type_ref", None), "name", None)
+	arms   = tokens.get(kind or "")
+	if arms is None:
+		raise error(
+			f"`{source}` is not a token set",
+			attr.span,
+			label = "not a set of names",
+			notes = ["a token set is already text keywords with names "
+			         "(0055), which is what a charset declaration is -- so "
+			         "the arm names are the encodings and nothing else has "
+			         "to declare the mapping",
+			         f"give `{source}` a `tokens` type whose arms are named "
+			         f"for the encodings they spell"],
+		)
+
+	want = _declared_bits(member)
+	for arm in arms.members:
+		bits = ENCODING_ELEMENT_BITS.get(arm.name)
+		if bits is None:
+			# Rule 2.
+			raise error(
+				f"`{arm.name}` is not an encoding situ validates",
+				attr.span,
+				label = f"arm `{arm.name}` of `{kind}`",
+				notes = ["every arm has to be checkable, because which one "
+				         "the message names is not the schema's to know",
+				         "section 8.6 names `ascii` and `utf8`; decision "
+				         "0044 adds `utf16le` and `utf16be`"],
+			)
+		if want is not None and bits != want:
+			# Rule 3.
+			raise error(
+				f"`{arm.name}` is a {bits}-bit encoding on a "
+				f"{want}-bit element",
+				attr.span,
+				label = f"arm `{arm.name}` of `{kind}`",
+				notes = [f"`{arm.name}` reads {bits // 8}-byte code units "
+				         f"and this member's element is {want} bits",
+				         "the extent must not depend on which arm the "
+				         "message names, or the size of what is being read "
+				         "is a function of a value inside it (0058)"],
+			)

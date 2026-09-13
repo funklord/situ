@@ -2005,3 +2005,98 @@ def test_a_peeked_member_may_not_also_be_placed_by_at() -> None:
 	assert "is placed by `at`" in rendered(
 		_peeked("struct v { u8 n; peek u8 k at n; variant b switch (k) "
 		        "{ case 'a': pair x; default: pair y; } }"))
+
+
+# -- an encoding the data names (0058) --------------------------------------
+
+
+DECLARED = ("tokens charset { utf8 = \"utf-8\", ascii = \"us-ascii\" }\n"
+            "struct doc {\n"
+            "\tcharset  d     until \";\";\n"
+            "\tu8       body[]  until \"\\0\"  [encoding = from(d)];\n"
+            "}\n")
+
+
+def test_an_encoding_the_data_names_is_accepted() -> None:
+	"""`[encoding = from(f)]`, where a token set is the mapping: its arms are
+	text keywords with names (0055), which is what a charset declaration is,
+	so the arm names are the encodings and nothing else declares it."""
+	parse_text(BUFFER + DECLARED, path="s.situ")
+
+
+def test_an_encoding_naming_a_field_that_follows_it_is_refused() -> None:
+	"""An encoding read from the bytes it governs could not be read at all.
+
+	The no-forward-reference rule every size expression has, which is what
+	turns 26.330's circularity into a compile-time refusal rather than a
+	surprise at run time.
+	"""
+	text = rendered(BUFFER + "tokens charset { utf8 = \"utf-8\" }\n"
+	                "struct doc {\n"
+	                "\tu8       body[4]  [encoding = from(d)];\n"
+	                "\tcharset  d        until \";\";\n"
+	                "}\n")
+	assert "declared after the member it governs" in text
+
+
+def test_an_encoding_naming_something_that_is_not_a_token_set_is_refused(
+		) -> None:
+	"""The mapping has to be a set of NAMES. A `u8` says a number, and
+	nothing in the schema would say which encoding the number means."""
+	text = rendered(BUFFER + "struct doc {\n\tu8  d;\n"
+	                "\tu8  body[4]  [encoding = from(d)];\n}\n")
+	assert "is not a token set" in text
+
+
+def test_every_arm_of_a_declared_encoding_must_be_checkable() -> None:
+	"""Which arm the message names is not the schema's to know, so an arm
+	with no validator is a hole rather than a gap: half the messages would
+	carry a claim nobody tests.
+
+	`latin1` is the case, and it is in `TEXT_ENCODINGS` -- every byte is
+	valid latin1, so there is nothing to check and no code for it.
+	"""
+	text = rendered(BUFFER
+	                + "tokens charset { utf8 = \"utf-8\", latin1 = \"l1\" }\n"
+	                "struct doc {\n\tcharset  d  until \";\";\n"
+	                "\tu8  body[4]  [encoding = from(d)];\n}\n")
+	assert "`latin1` is not an encoding situ validates" in text
+
+
+def test_arms_of_differing_code_unit_width_are_refused() -> None:
+	"""0058's second rule, made concrete: the extent must not depend on which
+	arm the message names.
+
+	`ENCODING_ELEMENT_BITS` already answers it -- utf16le reads two-byte code
+	units and utf8 one -- so a set mixing them over a `u8` run would validate
+	something other than what the schema means for half the messages, which
+	is 0044's reason for refusing `utf16le` on a `u8` run outright.
+	"""
+	text = rendered(BUFFER
+	                + "tokens charset { utf8 = \"utf-8\", utf16le = \"u16\" }\n"
+	                "struct doc {\n\tcharset  d  until \";\";\n"
+	                "\tu8  body[4]  [encoding = from(d)];\n}\n")
+	assert "is a 16-bit encoding on a 8-bit element" in text
+
+
+def test_a_declared_encoding_does_not_claim_a_check_nobody_makes() -> None:
+	"""The property that makes this safe to ship before the readers have it.
+
+	The packer cannot express a runtime-resolved encoding yet, and a struct
+	is flagged validatable only where EVERY check `traverse` says it makes is
+	one the image carries. So the struct defers -- which is the state
+	`[encoding = latin1]` has been in all along, rather than a new kind of
+	half-answer.
+	"""
+	from situc import pack as packer
+	from situc.layout import solve
+	from situc.resolve import resolve
+	from walker.image import load
+
+	schema   = parse_text(BUFFER + DECLARED, path="s.situ")
+	resolved = resolve(schema, solve(schema))
+	image    = load(packer.pack(schema, resolved, metadata=True)[0])
+
+	which = image.struct_names.index("doc")
+	assert not image.structs[which].validatable, (
+		"the struct claims every check is carried, and the encoding is not")

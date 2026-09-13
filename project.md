@@ -27608,6 +27608,71 @@ guard passes against the rendered line and fails against the count.
 test under change**, so the first re-run reported green from two other
 tests. A sabotage is only evidence about the test it actually ran.
 
+### 26.348 An encoding the data names: the rules, and the readers still to come
+
+**0058's second half, built as far as it can honestly go in one change.**
+`[encoding = from(f)]` parses, its rules are enforced, and no reader
+claims a check it does not make. What is not here is the runtime check --
+the image constraint, both walkers and four backends, twelve reader
+sites -- so `validate` defers, which is the state `[encoding = latin1]`
+has been in all along rather than a new kind of half-answer.
+
+**The design got smaller than 0058 assumed, because the mapping already
+exists.** A token set is variable-width text keywords with names (0055),
+which is exactly what a charset declaration is -- so the arm names ARE
+the encodings and nothing has to declare the correspondence. That
+removes a whole declaration form, its parser, its image section and its
+checks, which is what the `endian_marker` parallel would have cost.
+
+    tokens charset { utf8 = "utf-8", ascii = "us-ascii" }
+
+    struct doc {
+            charset  d       until ";";
+            u8       body[]  until "\0"  [encoding = from(d)];
+    }
+
+**And rule 2 turned out to be decidable through a check that existed.**
+0058 stated it as prose -- no member the encoding governs may have an
+extent that depends on it -- and concretely it is: every arm reads the
+same code-unit width as the member's element, which
+`ENCODING_ELEMENT_BITS` answers. That same table is exactly the four
+encodings with a validator, so ONE rule gives both "a check exists for
+every arm" and "the widths agree". A set mixing utf8 with utf16le over a
+`u8` run would validate something other than what the schema means for
+half the messages, which is 0044's reason for refusing utf16le on a `u8`
+run outright.
+
+Five refusals, each with its own message and each watched failing:
+
+    `nope` is not a member of `doc`
+    `d` is declared after the member it governs
+    `d` is not a token set
+    `latin1` is not an encoding situ validates
+    `utf16le` is a 16-bit encoding on a 8-bit element
+
+**A side finding, and the correction to it is the more useful half.**
+`[encoding = X]` on a COUNTED run at a dynamic offset, and on a
+`[remaining]` run, produces no check in either C or the image -- read off
+both artifacts for a static `[encoding = utf8]`, where the static-offset
+case does emit `situ_utf8_valid`. A delimited run at a dynamic offset IS
+checked, so it is not "dynamic offsets" generally.
+
+The first attempt to size that across the corpus reported eleven
+disagreements and **every one was the instrument**. The probe matched
+only C's `..._ptr(view)` call shape and missed the
+`situ_base(view) + N` form a fixed-width array uses, and it read a
+flattened path as unchecked where the nested struct's own `validate`
+checks it. The real count of demonstrated corpus disagreements is zero.
+`evidence.md`'s calibration held exactly: when a result surprises you,
+the apparatus is where the error usually is.
+
+**And twice in this run a `-k` filter selected a sabotage run that did
+not include the test under change**, reporting green from other tests
+both times -- once here for the width rule, once for the scoped
+encoding's own-wins guard. The rule is the same as the artifact rule one
+level down: a sabotage is evidence about the test that actually ran, and
+the filter decides which that is.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
