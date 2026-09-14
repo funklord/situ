@@ -833,7 +833,7 @@ soft-decision decoders are tier 1, where the caller owns the buffer and
 situ checks the contract. Section 13.4 of `project.md` records the boundary
 and the one case that is a trap rather than a gap.
 
-`std/kernels.situ` carries 39 of them: 15 polynomial (13 CRCs and 2
+`std/kernels.situ` carries 42 of them: 18 polynomial (16 CRCs and 2
 Reed-Solomon codes), 8 table, 7 shift_register (two scramblers, the two NRZI
 conventions, SONET, USB 3.0, PRBS23), 6 stuffing, 1 linear_block -- a
 Hamming(7, 4) -- 1 permutation, and 1 ones_complement, which is RFC 1071's

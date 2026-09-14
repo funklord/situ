@@ -179,7 +179,7 @@ bitfield	= "bit" ;		(* single bit; uN < 8 also bit-packed *)
 
 codec_decl	= "codec" ident "{" { codec_prop ";" } "}" ;
 codec_prop	= "length_preserving"
-	| "expansion" "=" ( "+" digits | "unbounded" | ratio )
+	| "expansion" "=" ( added | "unbounded" | ratio )
 	| "granularity" "=" granularity
 	| [ "not" ] "seekable" [ "=" seekable ]
 	| "authenticated" | "invertible" | "deterministic"
@@ -305,7 +305,11 @@ capability_expr	= ident "(" expr { "," expr } ")" | expr ;
  * expanding -- a frame delimiter, for COBS and the escape-stuffed byte
  * codes -- so a consumer sizes a buffer as `len * a / b + k`. Omitted
  * means zero, which is what every declaration written before 0048 says. *)
-ratio		= ratio_form "(" digits "," digits ")" [ "+" digits ] ;
+(* Decision 0046. `bits` for a code whose growth is not a whole number
+ * of bytes -- a five-bit CRC adds five. Bytes are the default and
+ * what every code written before 0046 says. *)
+added		= "+" digits [ "bits" ] ;
+ratio		= ratio_form "(" digits "," digits ")" [ added ] ;
 ratio_form	= "ratio_exact" | "ratio_padded" | "ratio_bounded" ;
 ident		= letter { letter | digit | "_" } ;
 digits		= digit { digit | "_" } ;

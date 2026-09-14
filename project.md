@@ -603,7 +603,7 @@ bitfield      = "bit" ;               (* single bit; uN < 8 also bit-packed *)
 
 codec_decl    = "codec" ident "{" { codec_prop ";" } "}" ;
 codec_prop    = "length_preserving"
-              | "expansion" "=" ( "+" digits | "unbounded" | ratio )
+              | "expansion" "=" ( added | "unbounded" | ratio )
               | "granularity" "=" granularity
               | [ "not" ] "seekable" [ "=" seekable ]
               | "authenticated" | "invertible" | "deterministic"
@@ -613,7 +613,8 @@ codec_prop    = "length_preserving"
 granularity   = "byte" | "stream" | "bit" "(" digits ")"
               | "symbol" "(" digits ")" | "block" "(" digits ")" ;
 seekable      = "linear" | "permuted" | "blockwise" "(" digits ")" ;
-ratio         = ratio_form "(" digits "," digits ")" [ "+" digits ] ;
+added         = "+" digits [ "bits" ] ;        (* 0046 *)
+ratio         = ratio_form "(" digits "," digits ")" [ added ] ;
 ratio_form    = "ratio_exact" | "ratio_padded" | "ratio_bounded" ;
 
 requirement   = ( "require" | "assert" ) capability_expr ";" ;
@@ -28293,6 +28294,124 @@ declaring it would state what the generated code cannot test. The two
 policies that survive are the two that were already spelled --
 `must_be_zero` and `[unknown]` -- and the sender's obligation to use a
 random source is the caller's, beside the AEAD primitive.
+
+### 26.360 0046's cost, re-measured before building it
+
+**The record prices the bytes assumption at four places and there are
+six.** The fifth reaches the image format and the sixth is the gate that
+decides whether an implementation is emitted at all. 0046 says "the
+bytes assumption is not one line, and it was measured rather than
+guessed", and lists `layout._expand`, the C emitter's `_covered_spans`,
+the generated coverage accessor in four backends, and the runtime's
+`(data, len)` helpers. Traced rather than read, a fifth turns up:
+
+`traverse.region_extent` hands an additive codec's growth to
+`pack.py` as `rule.add`, which emits it into the image's BYTECODE as a
+`PUSH` of a byte count, and both walkers evaluate that program to size a
+coded region. **A region's size program is byte-valued**, so a code that
+grows by five bits cannot be expressed in one at all -- and the walkers
+inherit the assumption from the image rather than from any of the four
+places the record names.
+
+That matters for planning rather than for the decision. The decision is
+unchanged and remains the right one; what changes is that widening the
+mechanism touches the image format, which is the thing 0046's own
+consequences say wants "the same treatment as any wire or interface
+change".
+
+**And the front-end cost is wider than one line too.** `expansion_add`
+is byte-valued at 26 sites in ten files -- seven in the front end, one
+backend, two test modules -- and it is the first thing a sub-byte
+polynomial kernel meets: `_polynomial` derives `expansion_add = width //
+8`, which for a five-bit CRC is zero. Shipping that would publish a
+codec whose declared growth is nothing, which is 0048's defect exactly,
+a month after 0048 was built to remove it.
+
+**The sixth is `codegen/kernel_math.crc_width`**, which returns None for
+any width that is not a multiple of eight and is shared by all four
+backends. It is not the refusal 0046 names: `kernels._polynomial` is the
+one that diagnoses, and this one silently declines to emit, so a width
+past the first refusal would have produced a declaration in the header
+and no definition in the object. Found by the linker rather than by
+reading.
+
+**So the order the work wants is the opposite of the record's list.**
+The record opens with `_polynomial`'s width rule, which is one condition
+and looks like the obvious first step; it cannot land alone without
+publishing a codec whose declared growth is zero. What has to come first
+is the expansion axis going bit-valued -- which is what 26.361 did -- and
+only then the width rule, `place_tag`, bit coverage, and `example/usb`.
+
+**The published check values are fetched and recorded here so the next
+attempt does not have to.** From the CRC RevEng catalogue, which is where
+this tree's other CRC parameters were transcribed from -- so they are
+transcription evidence and not a second implementation, which is what
+`test_every_polynomial_codec_is_checked_or_excused` already says about
+the ones it holds:
+
+    CRC-5/USB   width=5  poly=0x05   init=0x1f   refin=true  refout=true
+                xorout=0x1f   check=0x19   residue=0x06     confirmed
+    CRC-7/MMC   width=7  poly=0x09   init=0x00   refin=false refout=false
+                xorout=0x00   check=0x75   residue=0x00     academic
+    CRC-15/CAN  width=15 poly=0x4599 init=0x0000 refin=false refout=false
+                xorout=0x0000 check=0x059e residue=0x0000   academic
+
+The class is the catalogue's own label and CRC-5/USB is the only
+confirmed one of the three, which is worth keeping beside the numbers: a
+check value's whole job here is catching a wrong poly, init, xorout or
+reflect, and two of these have less behind them than the others.
+
+### 26.361 Expansion in bits, and two of the three sub-byte codes
+
+**0046's first stage, which is the one its own list puts last.** Additive
+expansion is bit-valued now: `expansion_add` holds bits, `+N` on the
+surface still means bytes and renders back that way, and `+N bits` is the
+spelling a code whose growth is not a whole number of them needs. A
+five-bit CRC adds five, where `width // 8` made it zero -- a codec
+publishing no growth at all, which is 0048's defect in a new place a
+month after 0048 removed it.
+
+**The migration carried a proof and the proof was controlled.** No
+codec's actual expansion changes, so every committed `.map` must be
+byte-identical: 40 of 40, unchanged. Then the same sweep with the
+rendering deliberately left in bits moves 8 of them, which is what says
+the proof could have failed. A mechanical change over ten files is worth
+exactly as much as the invariant somebody checked.
+
+**`BITS_PER_BYTE` moved to `types.py` and is re-exported.** `unparse`
+needs it to render `+N`, and `layout` imports `unparse`, so asking
+`layout` for it is a cycle. The re-export keeps every
+`from situc.layout import BITS_PER_BYTE` in the tree working, spelled
+`as` so that it is explicit rather than incidental.
+
+**Two of the three codes 0046 names now derive and are checked.**
+`crc5_usb` and `crc15_can` produce their published check values from the
+generated implementation. `crc7_mmc` does not, and is excused by name
+rather than by silence: a NON-reflected code narrower than the byte it
+consumes needs the register left-aligned inside that byte, a table built
+from a shifted polynomial, and the result shifted back at the end --
+three changes in four backends. The reflected form has no such trouble at
+any width, which is why the five-bit one works and the seven-bit one does
+not.
+
+**The sixth place the bytes assumption lives was found by the linker.**
+`codegen/kernel_math.crc_width` returns None for any width that is not a
+multiple of eight, and all four backends share it. It is not the refusal
+0046 names -- `kernels._polynomial` is the one that diagnoses, and this
+one declines silently -- so relaxing the first without the second
+produced a declaration in the header and no definition in the object.
+An undefined symbol, which is the loudest way that could have gone and
+better than the alternative.
+
+**The check values are the catalogue's and they catch a transcription.**
+Flipping one bit of `crc5_usb`'s polynomial, `0x05` to `0x07`, fails the
+check value -- which is the whole of what a published value is for here,
+and why the tree's own note says it is not a second implementation.
+
+**What is left of 0046**: `place_tag` accepting a sub-byte scalar, the
+coverage span going bit-valued through four backends and the runtime
+helpers, `crc7_mmc`'s loop, and `example/usb`. The authenticated rule
+does not move: no AEAD produces five bits.
 
 ## 27. Questions, and how they were settled
 

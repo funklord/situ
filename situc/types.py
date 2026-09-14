@@ -10,6 +10,13 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+
+#: A byte, in bits. Here rather than in `layout` because `unparse` needs it
+#: and `layout` imports `unparse` -- so asking `layout` for it is a cycle.
+#: `layout` re-exports the name, which is where the rest of the tree reads
+#: it from and where it has always read it from.
+BITS_PER_BYTE = 8
+
 MAX_WIDTH = 64
 
 

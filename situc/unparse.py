@@ -12,7 +12,7 @@ starting point for `situc doc`.
 from __future__ import annotations
 
 from situc import ast, namespaces
-from situc.types import pinned_shown
+from situc.types import BITS_PER_BYTE, pinned_shown
 
 # Loosest first, matching parser.PRECEDENCE. A child is parenthesised only when
 # it binds more loosely than its parent, so the output stays readable and still
@@ -255,11 +255,23 @@ def _kernel_to_source(kernel: ast.Kernel) -> str:
 	return f"{kernel.family.value}({_args_to_source(kernel.args)})"
 
 
+def _added_to_source(bits: int) -> str:
+	"""`+2` or `+5 bits`, whichever the growth is a whole number of.
+
+	Bytes wherever they work, so every codec written before 0046 round-trips
+	to the text it was written as. `+N bits` is the spelling a sub-byte code
+	needs and nothing else writes.
+	"""
+	if bits % BITS_PER_BYTE == 0:
+		return f"+{bits // BITS_PER_BYTE}"
+	return f"+{bits} bits"
+
+
 def codec_expansion(decl: ast.CodecDecl) -> str:
 	if decl.expansion is ast.Expansion.PRESERVING:
 		return "length_preserving"
 	if decl.expansion is ast.Expansion.FIXED_ADD:
-		return f"expansion = +{decl.expansion_add}"
+		return f"expansion = {_added_to_source(decl.expansion_add)}"
 	if decl.expansion is ast.Expansion.UNBOUNDED:
 		return "expansion = unbounded"
 
@@ -268,7 +280,8 @@ def codec_expansion(decl: ast.CodecDecl) -> str:
 	# and then appends `k` bytes says both, and a consumer sizes a buffer as
 	# `len * a / b + k`. Omitted where it is zero, which is what every
 	# declaration written before this one means.
-	added = f" + {decl.expansion_add}" if decl.expansion_add else ""
+	added = (f" {_added_to_source(decl.expansion_add)}"
+	         if decl.expansion_add else "")
 	return (f"expansion = {decl.expansion.value}"
 	        f"({decl.ratio[0]}, {decl.ratio[1]}){added}")
 

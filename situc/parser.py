@@ -17,6 +17,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from situc import ast, kernels, namespaces, wellformed
+from situc.types import BITS_PER_BYTE
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
 from situc.types import TEXT_ENCODINGS, WidthError, lookup, literal_bytes
@@ -35,7 +36,7 @@ class _CodecProperties:
 	"""
 
 	expansion: ast.Expansion	= ast.Expansion.PRESERVING
-	expansion_add: int		= 0
+	expansion_add: int		= 0	# BITS, per 0046
 	ratio: tuple[int, int] | None	= None
 	seekable: ast.Seekable		= ast.Seekable.NONE
 	granularity: ast.Granularity	= ast.Granularity.STREAM
@@ -1084,8 +1085,16 @@ class Parser:
 			value = evaluate_literal(self.parse_expr())
 			if value is None or value < 0:
 				raise error("`expansion = +N` needs a literal byte count", token.span)
-			properties.expansion     = ast.Expansion.FIXED_ADD
-			properties.expansion_add = value
+			properties.expansion = ast.Expansion.FIXED_ADD
+			# `+5 bits` for a code whose growth is not a whole number of
+			# them (0046): a five-bit CRC adds five, and there is no byte
+			# count that says so. Bytes stay the default because every code
+			# written before this one adds a whole number of them.
+			if self.current.is_ident("bits"):
+				self.advance()
+				properties.expansion_add = value
+			else:
+				properties.expansion_add = value * BITS_PER_BYTE
 			return
 
 		token = self.expect_ident("an expansion form")
@@ -1136,7 +1145,7 @@ class Parser:
 						         "and then a constant: a consumer sizes a "
 						         "buffer as `len * 255 / 254 + 1` (0048)"],
 					)
-				properties.expansion_add = added
+				properties.expansion_add = added * BITS_PER_BYTE
 			return
 
 		raise error(

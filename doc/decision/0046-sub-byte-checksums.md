@@ -1,6 +1,15 @@
 # 0046: a checksum narrower than a byte, and where the bytes assumption lives
 
-Status: accepted 2026-09-04; not yet built
+Status: accepted 2026-09-04; part built 2026-09-14. The cost was
+re-measured first (26.360) and this record's four places are six: a coded
+region's size program is byte-valued, through `traverse.region_extent`
+and `pack.py` into the image's bytecode; and `codegen/kernel_math.
+crc_width` silently declines any width that is not a multiple of eight,
+for all four backends. The expansion axis went bit-valued in 26.361 and
+`crc5_usb` and `crc15_can` derive and are checked against their published
+values. Still to do: `place_tag` on a sub-byte scalar, bit-valued
+coverage through four backends and the runtime, `crc7_mmc`'s loop, and
+`example/usb`
 Date: 2026-09-01
 Phase: unscheduled; found while making USB expressible (26.146, 26.148)
 

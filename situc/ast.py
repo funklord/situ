@@ -1279,6 +1279,15 @@ class CodecDecl(Decl):
 	span: Span
 	name: str
 	expansion: Expansion		= Expansion.PRESERVING
+	#: How many BITS a code adds beyond its ratio, or by itself for the
+	#: `+N` form. Bits rather than bytes since 0046: a five-bit CRC adds
+	#: five, and `width // 8` for one is zero -- a codec publishing no
+	#: growth at all, which is 0048's defect in a new place.
+	#:
+	#: The surface stays in bytes where it can be: `+2` is sixteen here and
+	#: renders back as `+2`. `+N bits` is the spelling for a width that is
+	#: not a whole number of bytes, and nothing but a sub-byte code writes
+	#: one.
 	expansion_add: int		= 0
 	ratio: tuple[int, int] | None	= None
 	seekable: Seekable		= Seekable.NONE

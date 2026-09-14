@@ -61,7 +61,11 @@ def test_defaults_claim_nothing() -> None:
 
 @pytest.mark.parametrize(("source", "expansion", "extra"), [
 	("length_preserving;", ast.Expansion.PRESERVING, None),
-	("expansion = +4;", ast.Expansion.FIXED_ADD, 4),
+	# `expansion_add` is BITS since 0046 and the surface stays bytes, so
+	# `+4` is 32. `+N bits` is the spelling for a growth no byte count
+	# says -- a five-bit CRC adds five -- and nothing else writes one.
+	("expansion = +4;", ast.Expansion.FIXED_ADD, 32),
+	("expansion = +5 bits;", ast.Expansion.FIXED_ADD, 5),
 	("expansion = unbounded;", ast.Expansion.UNBOUNDED, None),
 	("expansion = ratio_exact(2, 1);", ast.Expansion.RATIO_EXACT, (2, 1)),
 	("expansion = ratio_bounded(3, 2);", ast.Expansion.RATIO_BOUNDED, (3, 2)),

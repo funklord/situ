@@ -39,6 +39,7 @@ from situc import __version__
 from math import lcm
 
 from situc import ast
+from situc.layout import BITS_PER_BYTE
 from situc.codegen.c.derived import DIGEST_FAMILIES, pair_of
 from situc.traverse import decode_counts_bits, extern_symbol,\
 	table_is_padded
@@ -221,7 +222,8 @@ def _expected_length(codec: ast.CodecDecl) -> str | None:
 	if codec.expansion is ast.Expansion.PRESERVING:
 		return "in_len"
 	if codec.expansion is ast.Expansion.FIXED_ADD:
-		return f"in_len + {codec.expansion_add}u"
+		# The generated test counts BYTES; `expansion_add` is bits (0046).
+		return f"in_len + {codec.expansion_add // BITS_PER_BYTE}u"
 	if codec.expansion is ast.Expansion.RATIO_EXACT:
 		assert codec.ratio is not None
 		a, b = codec.ratio
@@ -715,7 +717,7 @@ def _derived_length(codec: ast.CodecDecl, encode: str, unit: str,
 	if codec.expansion is ast.Expansion.PRESERVING:
 		expect = "in_len{unit}"
 	elif codec.expansion is ast.Expansion.FIXED_ADD:
-		expect = f"in_len{{unit}} + {codec.expansion_add}u"
+		expect = f"in_len{{unit}} + {codec.expansion_add // BITS_PER_BYTE}u"
 	elif codec.expansion is ast.Expansion.RATIO_EXACT and codec.ratio:
 		expect = f"in_len{{unit}} * {codec.ratio[0]}u / {codec.ratio[1]}u"
 	elif codec.expansion is ast.Expansion.RATIO_PADDED and codec.ratio:

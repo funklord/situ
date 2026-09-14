@@ -87,20 +87,35 @@ def _codec_lines(schema: ast.Schema) -> list[str]:
 	return lines
 
 
+def _added_shown(bits: int) -> str:
+	"""A code's additive growth, in the unit it is a whole number of.
+
+	`expansion_add` is BITS since 0046, because a five-bit CRC adds five and
+	`width // 8` for one is zero. The surface stays in bytes wherever it can
+	be -- every code written before 0046 adds a whole number of them, and a
+	map that started saying `+16` where it said `+2` would be a change to
+	every reader for the sake of one construct.
+	"""
+	if bits % BITS_PER_BYTE == 0:
+		return f"+{bits // BITS_PER_BYTE}"
+	return f"+{bits} bits"
+
+
 def _codec_properties(codec: ast.CodecDecl) -> list[str]:
 	shown = []
 
 	if codec.expansion is ast.Expansion.PRESERVING:
 		shown.append("length_preserving")
 	elif codec.expansion is ast.Expansion.FIXED_ADD:
-		shown.append(f"expansion=+{codec.expansion_add}")
+		shown.append(f"expansion={_added_shown(codec.expansion_add)}")
 	elif codec.expansion is ast.Expansion.UNBOUNDED:
 		shown.append("expansion=unbounded")
 	elif codec.ratio is not None:
 		# Both terms, which this rendered one or the other of and never
 		# both (0048). A consumer sizes from this line, so a ratio shown
 		# without its addend is a buffer short by the addend.
-		added = f"+{codec.expansion_add}" if codec.expansion_add else ""
+		added = (_added_shown(codec.expansion_add).replace(" ", "")
+		         if codec.expansion_add else "")
 		shown.append(f"expansion={codec.expansion.value}"
 		             f"({codec.ratio[0]},{codec.ratio[1]}){added}")
 

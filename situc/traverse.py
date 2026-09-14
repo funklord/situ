@@ -605,8 +605,21 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 	if name == "length_preserving":
 		return RegionExtent(constant, tuple(variable), "preserving")
 	if name == "fixed_add":
+		# A region's size program is BYTE-valued: `pack.py` emits this as a
+		# `PUSH` of a byte count and both walkers evaluate it that way. So a
+		# code that grows by a number of bits no byte holds has no closed
+		# form here and defers, which is the path a region with no
+		# computable extent already takes (0046).
+		#
+		# `expansion_add` is bits since 0046 -- a five-bit CRC adds five,
+		# where `width // 8` made it zero -- and this is the one place the
+		# unit has to come back to bytes, because it is the boundary the
+		# image lies on.
+		bits = getattr(codec, "expansion_add", 0) or 0
+		if bits % BITS_PER_BYTE:
+			return None
 		return RegionExtent(constant, tuple(variable), "add",
-		                    add=getattr(codec, "expansion_add", 0) or 0)
+		                    add=bits // BITS_PER_BYTE)
 	if name == "ratio_exact" and ratio is not None:
 		return RegionExtent(constant, tuple(variable), "ratio",
 		                    out=ratio[0], into=ratio[1])

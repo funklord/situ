@@ -66,7 +66,9 @@ def test_a_polynomial_kernel_derives_a_crc_signature() -> None:
 	decl = only("codec crc32 { kernel = polynomial(width = 32, poly = 0x04C11DB7); }")
 
 	assert decl.expansion is ast.Expansion.FIXED_ADD
-	assert decl.expansion_add == 4
+	# BITS since 0046, because a five-bit CRC adds five and `width // 8` for
+	# one is zero. A 32-bit CRC adds 32, and the map still renders `+4`.
+	assert decl.expansion_add == 32
 	assert decl.systematic
 	assert decl.seekable is ast.Seekable.LINEAR
 	assert not decl.invertible		# a digest cannot be undone
@@ -290,9 +292,29 @@ def test_the_argument_vocabulary_covers_every_kernel_in_the_tree() -> None:
 		f"as loudly as a real one")
 
 
-def test_a_polynomial_width_must_be_a_whole_number_of_bytes() -> None:
-	rendered = refusal("codec c { kernel = polynomial(width = 12, poly = 3); }")
-	assert "not a whole number of bytes" in rendered
+def test_a_polynomial_width_may_be_any_width_a_word_holds() -> None:
+	"""Whole bytes only until 0046, and the refusal said "a checksum is
+	appended as bytes".
+
+	That is true of a code applied to a REGION and not of the algorithm, and
+	the two are different questions: `traverse.region_extent` carries the
+	bytes rule now, because a region's size program is byte-valued. USB's
+	five-bit CRC, CAN's fifteen and MMC's seven were all refused by a rule
+	about appending.
+	"""
+	decl = only("codec c { kernel = polynomial(width = 12, poly = 3); }")
+	assert decl.expansion_add == 12		# bits, and not a whole byte count
+
+
+def test_a_polynomial_wider_than_a_word_is_refused() -> None:
+	"""The ceiling that replaced it, and it is not theoretical: `accumulator`
+	picks the next word up from 8, 16, 32 and 64, so a wider one has nothing
+	to hold it and would have raised at generation time rather than here.
+
+	It caught a fixture in this very file -- `polynomial(width = 256)` named
+	`rs`, standing in for Reed-Solomon, which no register holds."""
+	rendered = refusal("codec c { kernel = polynomial(width = 65, poly = 3); }")
+	assert "wider than 64 bits" in rendered
 
 
 def test_an_unknown_kernel_family_lists_the_ones_there_are() -> None:
@@ -334,7 +356,13 @@ def test_a_declaration_that_agrees_with_its_kernel_is_accepted() -> None:
 # -- pipelines (13.4) -------------------------------------------------------
 
 
-PIPELINE = """codec rs { kernel = polynomial(width = 256); }
+# `rs` is an actual Reed-Solomon now. It was `polynomial(width = 256)` --
+# a 256-bit CRC wearing the name -- which no register holds: `accumulator`
+# picks the next word up from 8, 16, 32, 64 and would have raised on it, so
+# the fixture was only ever safe because nothing generated from it. 0046's
+# width ceiling caught it. The parity is 32 bytes either way, so every
+# number these tests assert is unchanged.
+PIPELINE = """codec rs { kernel = polynomial(field = 256, n = 255, k = 223); }
 codec inter { kernel = permutation(span = 16); }
 codec manchester { kernel = table(input_bits = 1, output_bits = 2); }
 codec framed = rs |> inter |> manchester;
@@ -368,12 +396,15 @@ def test_appended_parity_is_scaled_by_what_follows_it() -> None:
 	all of it, so the composed expansion is 2:1 *and* 64 bytes. Section 13.2
 	offers those as alternatives; a pipeline needs both at once
 	(doc/decision/0016-composed-expansion.md).
+
+	Counted in BITS since 0046: 256 of parity, doubled to 512, which is the
+	same 64 bytes the map renders and has always rendered.
 	"""
 	framed = codecs(PIPELINE)["framed"]
 
 	assert framed.expansion is ast.Expansion.RATIO_EXACT
 	assert framed.ratio == (2, 1)
-	assert framed.expansion_add == 64
+	assert framed.expansion_add == 512		# bits: 64 bytes
 
 
 def test_a_bounded_ratio_anywhere_makes_the_pipeline_bounded() -> None:

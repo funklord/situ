@@ -27,7 +27,11 @@ from situc.invariant import paths_in
 from situc.types import (BITS_PER_DIGIT, NUMERIC_BOUNDS, ScalarType,
                          lookup)
 
-BITS_PER_BYTE = 8
+# Re-exported so that every `from situc.layout import BITS_PER_BYTE` in
+# the tree keeps working; `types` is the home because `unparse` needs it
+# and this module imports `unparse`. The `as` spelling is what makes it
+# an explicit re-export rather than an incidental one.
+from situc.types import BITS_PER_BYTE as BITS_PER_BYTE
 
 
 @dataclass(frozen=True)
@@ -3062,7 +3066,7 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 		return interior
 
 	if codec.expansion is ast.Expansion.FIXED_ADD:
-		added = codec.expansion_add * BITS_PER_BYTE
+		added = codec.expansion_add	# already bits (0046)
 		return Interval(interior.lo + added,
 		                None if interior.hi is None else interior.hi + added)
 
@@ -3076,7 +3080,7 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 	# (doc/decision/0016-composed-expansion.md).
 	assert codec.ratio is not None
 	numerator, denominator = codec.ratio
-	added = codec.expansion_add * BITS_PER_BYTE
+	added = codec.expansion_add	# already bits (0046)
 
 	def scale(bits: int) -> int:
 		return -(-bits * numerator // denominator) + added	# ceil, then the addend

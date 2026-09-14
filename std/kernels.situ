@@ -34,6 +34,44 @@ codec crc16_ccitt {
 }
 impl crc16_ccitt derived;
 
+// Three codes narrower than a byte, which situ refused until 0046. USB's
+// token packets carry a five-bit CRC over an eleven-bit field, CAN 2.0 a
+// fifteen-bit one, and MMC and SD seven bits in every command -- none of
+// them exotic, and none of them describable here.
+//
+// The register is held in the next word up and masked after every shift,
+// which is what the widths between the C word sizes already do. What a
+// sub-byte code cannot do is size a REGION: a region's size program is
+// byte-valued, so `traverse.region_extent` declines one and any coded
+// region using it defers. As a checksum FIELD nothing is appended and the
+// question does not arise.
+//
+// Parameters and check values are the CRC RevEng catalogue's, which is
+// where every other set in this file came from. The check value catches a
+// wrong poly, init, xorout or reflect and is not a second implementation --
+// `test_every_polynomial_codec_is_checked_or_excused` says so in as many
+// words. CRC-5/USB is the catalogue's only `confirmed` one of the three;
+// the other two are `academic`, which is worth knowing beside the numbers.
+
+// check=0x19 over "123456789", residue=0x06.
+codec crc5_usb {
+	kernel = polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F,
+	                    reflect);
+}
+impl crc5_usb derived;
+
+// check=0x75, residue=0x00. Alias CRC-7 in the catalogue.
+codec crc7_mmc {
+	kernel = polynomial(width = 7, poly = 0x09, init = 0x00);
+}
+impl crc7_mmc derived;
+
+// check=0x059E, residue=0x0000. Alias CRC-15.
+codec crc15_can {
+	kernel = polynomial(width = 15, poly = 0x4599, init = 0x0000);
+}
+impl crc15_can derived;
+
 codec crc16_modbus {
 	kernel = polynomial(width = 16, poly = 0x8005, init = 0xFFFF, reflect);
 }

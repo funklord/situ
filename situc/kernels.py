@@ -30,6 +30,7 @@ from math import lcm
 from dataclasses import dataclass, replace
 
 from situc import ast
+from situc.types import BITS_PER_BYTE
 from situc.diagnostics import error
 
 # Properties a derived signature sets. Anything absent from a family's result
@@ -46,7 +47,7 @@ class Derived:
 	"""What a kernel implies, in the vocabulary of 13.2."""
 
 	expansion: ast.Expansion        = ast.Expansion.PRESERVING
-	expansion_add: int              = 0
+	expansion_add: int              = 0	# BITS, per 0046
 	ratio: tuple[int, int] | None   = None
 	seekable: ast.Seekable          = ast.Seekable.NONE
 	granularity: ast.Granularity    = ast.Granularity.STREAM
@@ -323,18 +324,32 @@ def _polynomial(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		return _reed_solomon(decl, kernel)
 
 	width = _positive(kernel, "width", decl)
-	if width % 8:
+	# Any width up to 64, not only a multiple of eight (0046). USB's token
+	# packets carry a five-bit CRC, CAN 2.0 a fifteen-bit one, and MMC and
+	# SD seven bits in every command; none of the three was describable
+	# here. The register is held in the next word up and masked after every
+	# shift, which is what the generated code already does for the widths
+	# between the C word sizes -- 24 for BLE and 40 for GSM.
+	#
+	# The refusal this replaces said "a checksum is appended as bytes", and
+	# that is true of a code applied to a REGION rather than of the
+	# algorithm: `traverse.region_extent` is where it now lives, because a
+	# region's size program is byte-valued and a five-bit growth has no
+	# closed form in one. The arithmetic and the appending are different
+	# questions and only the second has a bytes rule.
+	if width > 64:
 		raise error(
 			f"`{decl.name}` has a {width}-bit polynomial kernel",
 			kernel.span,
-			label = "not a whole number of bytes",
-			notes = ["a checksum is appended as bytes; a width that is not a "
-			         "multiple of eight has no byte string to append"],
+			label = "wider than 64 bits",
+			notes = ["the register is held in a machine word, so a width "
+			         "past 64 has nothing to hold it",
+			         "every polynomial code in use is 64 bits or narrower"],
 		)
 
 	return Derived(
 		expansion        = ast.Expansion.FIXED_ADD,
-		expansion_add    = width // 8,
+		expansion_add    = width,	# BITS (0046)
 		seekable         = ast.Seekable.LINEAR,
 		granularity      = ast.Granularity.BLOCK,
 		granularity_size = None,
@@ -384,7 +399,7 @@ def _ones_complement(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 
 	return Derived(
 		expansion        = ast.Expansion.FIXED_ADD,
-		expansion_add    = width // 8,
+		expansion_add    = width,	# BITS (0046)
 		seekable         = ast.Seekable.LINEAR,
 		granularity      = ast.Granularity.BLOCK,
 		granularity_size = None,
@@ -438,7 +453,7 @@ def _reed_solomon(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 
 	return Derived(
 		expansion        = ast.Expansion.FIXED_ADD,
-		expansion_add    = (n - k) * symbol_bits // BITS_PER_SYMBOL,
+		expansion_add    = (n - k) * symbol_bits,	# BITS (0046)
 		seekable         = ast.Seekable.LINEAR,
 		granularity      = ast.Granularity.BLOCK,
 		granularity_size = n,
@@ -656,7 +671,8 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	# there the signature is all there is.
 	return Derived(
 		expansion        = ast.Expansion.RATIO_BOUNDED,
-		expansion_add    = actual[2] if actual is not None else 0,
+		expansion_add    = ((actual[2] if actual is not None else 0)
+		                    * BITS_PER_BYTE),
 		ratio            = (worst, over),
 		seekable         = ast.Seekable.NONE,
 		granularity      = granularity,
