@@ -28057,6 +28057,72 @@ can answer because the capture and the machine reading it are different
 machines. Six structs sit in it: netlink's four, `tiff_header`, and
 `edges`' `marked`.
 
+### 26.356 One byte has no byte order, and one question that is not mine
+
+**The last refusal site was two things wearing one guard.** The C walker
+refuses a whole-byte read whose declared order is neither little nor big,
+under a comment about `native`: "the capture and the machine reading it
+are different machines". That argument is about a MULTI-byte read and the
+guard covered every width -- which is 26.264's shape, in the same
+function, met again: a justification for a narrow case written over a
+guard for a wide one. The comment even names the other case where the
+question does not arise, the bit-packed read, and stops one short.
+
+**A single byte has no ends to put in an order.** Both loops produce
+`message[at]` for `width == 1`. `edges`' `marked` is what the guard cost:
+its order comes from a marker, so the image records the order as UNSTATED
+rather than as either end, and the only value `validate` reads is `n [max
+= 4]`, a `u8`. Unanswerable here, answered everywhere else. Checked
+against the generated backend over six buffers with the marker written
+both ways round and then as neither -- because the point is that it does
+not matter -- and all three readers agree, `n = 5` breaking `[max = 4]`
+included.
+
+**What is left is one site and two causes, and only one of them is
+settled.** A `native` multi-byte read is netlink's four structs. An
+unstated order is the marker construct, which is `tiff_header`: this
+build does not resolve a marker, so it declines rather than picking an
+end, and that is the right refusal for a reason the `native` comment does
+not give.
+
+**The open question: should a walker answer for `endian native` at
+all?** The two walkers answer it differently today and nothing puts them
+side by side.
+
+    walk.py          `_order` returns `sys.byteorder`   answers
+    situ_walk.c      refuses a multi-byte native read   declines
+    the dissector    refuses, 26.268                    declines
+    four backends    compiled into the reading machine  answer
+
+Measured rather than argued: over a netlink header holding `10 00 00 00`,
+`walk.py` reads `nlmsg_len` as 16 and validates OK on this machine, and
+the same bytes are 268435456 read the other way -- a length no 16-byte
+frame holds, so the verdict is a property of the machine running the
+walker. The C walker says `cannot-say`.
+
+**Neither position is obviously wrong, which is why this is recorded
+rather than resolved.** A generated backend is compiled into the program
+that produced or consumes the message, so `native` means something there;
+netlink.situ's own comment calls it "the trade `endian native` makes and
+the reason it has to be declared". A dissector reads a capture, where it
+means nothing. A walker is the case that has not been decided -- and the
+two implementations have each taken the position that fits the other's
+deployment, the embedded one refusing and the tooling one answering.
+
+**A third option neither of them is**, offered with its cost because the
+choice is not the implementer's: the walker's caller could state the
+order to assume, defaulting to refusing. An embedded walk on the
+producing machine passes its own; a tooling walk passes what the capture
+says, or nothing and gets today's refusal. That is the shape this project
+already uses for the problem -- 26.81 records that the `endian_marker`
+construct exists "precisely because `native` is a promise about the
+reader rather than about the bytes" -- moved one layer out, from the
+schema to the caller. It costs a parameter on `situ_walk_open` and a
+decision about what the default is.
+
+**Whose decision**: the copyright holder's, because it changes what a
+walker promises rather than how it computes anything.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

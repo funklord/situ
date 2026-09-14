@@ -2035,11 +2035,29 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
 			for (uint32_t i = 0u; i < width; i++) {
 				value = (value << 8) | message[at + i];
 			}
+		} else if (width <= 1u) {
+			/* One byte has no ends to put in an order, so neither
+			 * `native` nor an unstated order decides anything here: both
+			 * loops above produce `message[at]` for `width == 1`, and a
+			 * zero-width read produces nothing either way.
+			 *
+			 * The refusal below is about a MULTI-byte read and its
+			 * comment says so; it was written over a guard covering every
+			 * width, which is 26.264's shape in the same function -- a
+			 * justification for a narrow case above a guard for a wide
+			 * one. It even names the other case where the question does
+			 * not arise, the bit-packed read, and stops one short. */
+			for (uint32_t i = 0u; i < width; i++) {
+				value = (value << 8) | message[at + i];
+			}
 		} else {
-			/* `native` has no answer a walker can give for a whole-byte
+			/* `native` has no answer a walker can give for a MULTI-byte
 			 * read: the capture and the machine reading it are different
-			 * machines. A bit-packed one is answered above, where the
-			 * question does not arise. */
+			 * machines. An unstated order is the marker construct, whose
+			 * whole point is that the message decides -- and this build
+			 * does not resolve a marker, so it declines rather than
+			 * picking an end. A bit-packed read is answered above, and so
+			 * is a single byte, where the question does not arise. */
 			return SITU_WALK_UNSUPPORTED;
 		}
 	}

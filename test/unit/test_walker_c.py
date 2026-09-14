@@ -1039,6 +1039,50 @@ def test_they_agree_about_a_region_sized_by_another_member(
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_one_byte_has_no_byte_order_to_decline_over(tmp_path: Path) -> None:
+	"""A single byte has no ends to put in an order.
+
+	The C walker refuses a whole-byte read whose declared order is neither
+	little nor big, under a comment about `native`: "the capture and the
+	machine reading it are different machines". That argument is about a
+	MULTI-byte read, and the guard covered every width -- 26.264's shape in
+	the same function, a justification for a narrow case written over a
+	guard for a wide one. The comment even names the other case where the
+	question does not arise, the bit-packed read, and stops one short.
+
+	`edges`' `marked` is the struct it cost. Its order comes from a marker,
+	so the image records the order as UNSTATED rather than as either end,
+	and the only value `validate` reads is `n [max = 4]` -- a `u8`, where
+	both loops produce the same byte. It was unanswerable here and answered
+	everywhere else.
+
+	The marker is written both ways round and then as neither, because the
+	point is that it does not matter: nothing this struct validates depends
+	on which end anything starts at. The generated C backend was asked the
+	same six buffers separately and agrees, including that `n = 5` breaks
+	`[max = 4]` -- so the check is live rather than the comparison being two
+	readers that both say OK.
+	"""
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	blob  = image_for(edges)
+	shape = shape_named(edges, "marked")
+
+	# (message, expected verdict): 0 OK, 1 BOUNDS, 2 CONSTRAINT.
+	cases = [
+		(bytes.fromhex("1234020000000000000000"), "0"),
+		(bytes.fromhex("1234050000000000000000"), "2"),  # `n` over `[max]`
+		(bytes.fromhex("1234000000"),             "0"),  # n = 0
+		(bytes.fromhex("123404"),                 "1"),  # the frame stops
+		(bytes.fromhex("3412020000000000000000"), "0"),  # marker the other way
+		(bytes.fromhex("0000020000000000000000"), "0"),  # no marker at all
+	]
+	for message, want in cases:
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message
+		assert verdict == want, message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A
@@ -2262,10 +2306,16 @@ def test_they_agree_about_the_corpus_being_well_formed(
 	What the C build declines has been measured rather than guessed at, by
 	reporting `__LINE__` at each of its refusal sites over the corpus, one
 	struct per run so the trace belongs to the struct that produced it.
-	**One site is left**: a member whose byte order is `native`, which is a
-	deliberate refusal rather than a gap, because a capture and the machine
-	reading it are different machines. Six structs are in it -- netlink's
-	four, `tiff_header` and `edges`' `marked`.
+	**One site is left** and it covers two different things. A `native`
+	MULTI-byte read is a deliberate refusal rather than a gap, because a
+	capture and the machine reading it are different machines: netlink's
+	four structs are there. An UNSTATED order is the marker construct,
+	whose point is that the message decides -- and this build does not
+	resolve a marker, so it declines rather than picking an end, which is
+	`tiff_header`. The two are worth telling apart, because only the first
+	is settled: whether a walker should answer for `native` at all is a
+	question about what a walker IS, and the two walkers currently answer
+	it differently. See `project.md` 26.356.
 
 	No check kind is among the refusals any more, and neither is the
 	bytecode: the pinned run went first, then `arm_selected`, then `size`,
