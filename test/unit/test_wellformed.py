@@ -2017,6 +2017,52 @@ DECLARED = ("tokens charset { utf8 = \"utf-8\", ascii = \"us-ascii\" }\n"
             "}\n")
 
 
+# -- pad_random, decision 0045 ---------------------------------------------
+
+PAD = "target buffer;\nendian big;\nbit_order msb_first;\n\nstruct s {\n\tu8 n;\n"
+
+
+def test_a_pad_with_its_bounds_the_wrong_way_round_is_refused() -> None:
+	"""The bounds are inclusive, so `pad_random(0, 64)` admits an empty pad
+	and one of sixty-four bytes -- and no length satisfies `(64, 0)`."""
+	text = rendered(PAD + "\tpad_random(64, 0) u8[remaining];\n}\n")
+	assert "has a minimum above its maximum" in text
+	assert "no length satisfies both" in text
+
+
+def test_a_pad_with_a_negative_bound_is_refused() -> None:
+	"""Each bound says which it is, rather than one message for both: a
+	reader who wrote one of them wrong should be told which."""
+	low  = rendered(PAD + "\tpad_random(-1, 64) u8[remaining];\n}\n")
+	high = rendered(PAD + "\tpad_random(0, -4) u8[remaining];\n}\n")
+	assert "literal minimum of zero or more" in low
+	assert "literal maximum of zero or more" in high
+
+
+def test_a_pad_bound_the_compiler_cannot_see_is_refused() -> None:
+	"""`pad_random(0, n)` names a field. The bounds are what a reader checks
+	a pad's length against, so both have to be numbers the compiler can
+	see -- the same rule `pad_to(n)`'s alignment is held to."""
+	text = rendered(PAD + "\tpad_random(0, n) u8[remaining];\n}\n")
+	assert "literal maximum" in text
+
+
+def test_a_pad_needs_a_scalar_run_like_any_reserved_one() -> None:
+	"""A pad is a reserved run and takes the same shape. Its length comes
+	from where a reserved run's already comes from -- the remainder of the
+	frame, or a field -- because the construct adds the bounds and not a
+	new way to size a run."""
+	text = rendered(PAD + "\tpad_random(0, 64) s[remaining];\n}\n")
+	assert "needs a scalar type" in text
+
+
+def test_a_pad_with_equal_bounds_is_accepted() -> None:
+	"""The control, and it is not a formality: `pad_random(8, 8)` is a pad of
+	exactly eight bytes, which is a thing somebody means. A refusal keyed on
+	`min >= max` rather than `min > max` would take it."""
+	parse_text(PAD + "\tpad_random(8, 8) u8[remaining];\n}\n", path="s.situ")
+
+
 def test_an_encoding_the_data_names_is_accepted() -> None:
 	"""`[encoding = from(f)]`, where a token set is the mapping: its arms are
 	text keywords with names (0055), which is what a charset declaration is,

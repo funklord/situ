@@ -1083,6 +1083,49 @@ def test_one_byte_has_no_byte_order_to_decline_over(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_pad_s_declared_bounds(tmp_path: Path) -> None:
+	"""`pad_random(min, max)`, which is 14.7's construct minus what situ
+	cannot generate (0045).
+
+	A random pad LENGTH is the sender's choice at send time and this compiler
+	writes readers, so `pad_random` is not "emit a padder" -- it is a claim
+	checked on parse, and the claim is the bounds. They are the part nothing
+	else expresses: `[max = N]` is refused on an array because an array has
+	no single value to bound, and there is no minimum at all.
+
+	`edges`' `padded_frame` declares `pad_random(2, 6) u8[remaining]`, so a
+	two-byte body leaves a pad of whatever the frame has left. Both arms of
+	the bound appear, which is what stops this passing on a check that only
+	ever refuses one way.
+
+	The length is what is LEFT of the frame, not the member's `size_bits`. A
+	`[remaining]` run carries no size program, so `size_bits` answers the
+	static minimum -- and the minimum is one of the bounds, so a walk
+	comparing it against them accepted every pad of every length. Both
+	walkers measure it the way the four backends do.
+	"""
+	edges = ROOT / "test" / "schema" / "edges.situ"
+	blob  = image_for(edges)
+	shape = shape_named(edges, "padded_frame")
+
+	# `n` = 2, two body bytes, then the pad. (pad length, verdict).
+	cases = [
+		(0, "2"),   # below the minimum
+		(1, "2"),
+		(2, "0"),   # the minimum exactly
+		(4, "0"),
+		(6, "0"),   # the maximum exactly
+		(7, "2"),   # above it
+		(9, "2"),
+	]
+	for pad, want in cases:
+		message = bytes([2, 0xAA, 0xBB]) + bytes(pad)
+		verdict = c_verdict(tmp_path, blob, message, shape=shape)
+		assert verdict == python_verdict(blob, message, shape=shape), message
+		assert verdict == want, message
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_a_variable_member_is_refused_rather_than_guessed(
 		tmp_path: Path) -> None:
 	"""udp's payload has no constant extent, and this build says so. A

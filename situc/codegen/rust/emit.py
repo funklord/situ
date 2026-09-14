@@ -6388,6 +6388,8 @@ class Emitter:
 				# one-byte reserved is the odd one out, so send a pad the
 				# long way.
 				if pad_alignment(placement) is not None:
+					checks.extend(
+						self._pad_bounds_checks(struct, placement))
 					checks.extend(self._reserved_checks(struct, placement))
 					continue
 				policy = _reserved_policy(placement.attrs)
@@ -6638,6 +6640,41 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _pad_bounds_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`pad_random(min, max)`: the pad's length falls within its bounds.
+
+		See the C backend for why it is a check rather than only an extent:
+		a schema stating what the generated code does not enforce is what
+		17.0 refuses, which is 0045's own argument against a `random`
+		content policy.
+		"""
+		bounds = placement.pad_bounds
+		if bounds is None or placement.array_count is not None:
+			return []
+		count = self._length_expression(struct, placement)
+		if count is None:
+			return []
+
+		low, high = bounds
+		# `low == 0` admits every length, and `n < 0` on an unsigned value
+		# is a warning rather than a check.
+		test = f"n > {high}" if low == 0 else f"n < {low} || n > {high}"
+		return [
+			f"\t\t// {placement.path} pad_random({low}, {high})",
+			"\t\t{",
+			# `-D unused-parens` rejects a parenthesised assigned value, and
+			# the length expression arrives parenthesised -- the same strip
+			# `_reserved_checks` does one function down, and the reason this
+			# backend is the one that catches it: no other reader compiles
+			# its own output with warnings as errors.
+			f"\t\t\tlet n = {self._unparen(count)};",
+			f"\t\t\tif {test} {{",
+			"\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _reserved_checks(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Reserved bytes hold their pattern, however many of them there are.
@@ -6730,7 +6767,8 @@ class Emitter:
 			name: str) -> list[str]:
 		checks: list[str] = []
 		if placement.kind == "reserved":
-			return self._reserved_checks(struct, placement)
+			return [*self._pad_bounds_checks(struct, placement),
+			        *self._reserved_checks(struct, placement)]
 
 		if placement.scalar is None:
 			return checks

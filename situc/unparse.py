@@ -431,7 +431,14 @@ def member_to_source(member: ast.Member) -> str:
 			        f"{_array_to_source(member.array)} = "
 			        f'"{pinned_shown(member.pinned)}"'
 			        f"{_attrs_to_source(member.attrs)};")
-		return (f"reserved {member.type_ref.name}{_array_to_source(member.array)}"
+		# And a pad prints as what it was written as, for the same reason
+		# one line up (0045): `reserved` would round-trip to a run with no
+		# bounds, which is the schema saying one thing and the tree another.
+		# The bounds are the whole of what the construct adds.
+		keyword = ("reserved" if member.bounds is None
+		           else f"pad_random({member.bounds[0]}, {member.bounds[1]})")
+		return (f"{keyword} {member.type_ref.name}"
+		        f"{_array_to_source(member.array)}"
 		        f"{_attrs_to_source(member.attrs)};")
 
 	if isinstance(member, ast.TagField):

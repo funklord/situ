@@ -480,6 +480,15 @@ enum image_check : u8 {
 	                      // the token set already writes -- so this row says
 	                      // where to look and `encoding_arm` says what each
 	                      // arm means
+	pad_length_min = 17,  // `pad_random(min, max)`: the pad's length in BYTES
+	pad_length_max = 18,  // against its bounds (0045). Two rows because a
+	                      // constraint carries one value, and the length is
+	                      // the run's own rather than a field's -- so these
+	                      // are span checks like the byte-run ones and not
+	                      // value comparisons, which have no value to read.
+	                      // A pad that hides length must still be bounded,
+	                      // or a peer claims a megabyte of padding inside a
+	                      // frame and a reader has no ceiling to check
 	encoding_arm = 16,    // one per arm of the token set a member holds, in
 	                      // declaration order, `value` being the encoding
 	                      // code an `encoded_as` would carry. Rows on the

@@ -524,6 +524,11 @@ PINNED_RUN = 14
 #: sits on the source, one row per arm of the token set in declaration order,
 #: and is data rather than a check -- a walk skips it where it reads the rest.
 ENCODED_FROM, ENCODING_ARM = 15, 16
+#: `pad_random(min, max)` (0045): the pad's length in BYTES against its
+#: bounds. Span checks rather than value comparisons -- the length is the
+#: run's own and a run has no value to read, which is the distinction a
+#: pinned row falling into the value loop already cost once (26.350).
+PAD_LENGTH_MIN, PAD_LENGTH_MAX = 17, 18
 
 #: `situ_err_t` again: an unknown discriminant is a message this build
 #: cannot read rather than one that breaks a rule.
@@ -923,6 +928,24 @@ def _validate(image: Image, view: View, struct_index: int,
 		# value, which is what separates them from the comparisons below
 		# -- and why the capacity is the member's own size and not
 		# something the constraint has to carry.
+		# The pad's length against its bounds, before the byte-run checks:
+		# a pad of the wrong length is wrong whatever its bytes are.
+		#
+		# Measured the way the four backends measure it -- what is left of
+		# the frame from where the pad starts -- rather than from
+		# `size_bits`. A `[remaining]` run carries no size program, so
+		# `size_bits` answers the static MINIMUM, which for this member is
+		# one of the bounds being checked: comparing a bound against itself
+		# accepted every pad of every length.
+		if any(pair[0] in (PAD_LENGTH_MIN, PAD_LENGTH_MAX) for pair in held):
+			start = view.at + at // BITS_PER_BYTE
+			length = max(0, view.limit - start)
+			for check, against in held:
+				if check == PAD_LENGTH_MIN and length < against:
+					return fail(ERR_CONSTRAINT, index, check)
+				if check == PAD_LENGTH_MAX and length > against:
+					return fail(ERR_CONSTRAINT, index, check)
+
 		span = [pair for pair in held
 		        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN,
 		                       PINNED_RUN, ENCODED_FROM)]
@@ -994,7 +1017,8 @@ def _validate(image: Image, view: View, struct_index: int,
 		                                   DIGITS_MINIMAL, NUL_TERMINATED,
 		                                   ENCODED_AS, ZERO_RUN,
 		                                   PINNED_RUN, ENCODED_FROM,
-		                                   ENCODING_ARM)]
+		                                   ENCODING_ARM, PAD_LENGTH_MIN,
+		                                   PAD_LENGTH_MAX)]
 		if not value_checks:
 			continue
 		try:

@@ -190,6 +190,28 @@ struct dynamic_text {
 	u8  head[]  until ";";
 	u8  tag[4]  [encoding = ascii];
 }
+
+// A bounded pad, which is what 14.7's `pad_random` comes to once the parts
+// situ cannot generate are taken out (0045). A random pad LENGTH is the
+// sender's choice at send time and this compiler writes readers, so the
+// construct is not "emit a padder" -- it is a claim checked on parse, and
+// the claim is the bounds.
+//
+// The bounds are the part nothing else expresses: `[max = N]` is refused on
+// an array because an array has no single value to bound, and there is no
+// minimum at all. Without them a peer can claim a megabyte of padding
+// inside a frame and a reader has no ceiling to check against.
+//
+// `[unknown]` because a pad hiding length has no reason to be zero, and the
+// content policy is whatever the attributes say -- `random` is not one of
+// them, and 0045 removed it from 14.7: a pad of random bytes and a pad of
+// any other bytes are the same bytes, so declaring it would state what no
+// reader can test.
+struct padded_frame {
+	u8  n;
+	u8  body[n];
+	pad_random(2, 6) u8[remaining] [unknown];
+}
 require in_place(labelled.sequence);
 
 // Recorded rather than required: the trailing bytes are the cost of a

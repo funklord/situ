@@ -495,7 +495,9 @@ struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
 member        = field | reserved | marker_field | block | variant
               | tag_field | pad ;
-pad           = "pad_to" "(" digits ")" ";" ;        (* section 8.4 *)
+pad           = "pad_to" "(" digits ")" ";"        (* section 8.4 *)
+              | "pad_random" "(" digits "," digits ")" scalar_type
+                [ array_spec ] [ attrs ] ";" ;    (* 14.7, 0045 *)
 
 field         = [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
                 [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
@@ -3402,13 +3404,14 @@ own record.
   byte string up to `KEY_MAX_BYTES = 32` where it does not, compared with
   `memcmp` and never hashed at any width. 26.130 carries the build.
 
-**And one now half-built.** 14.7 gives `pad_to(n)` and `pad_random(min,
-max)` for traffic-analysis resistance. `pad_to(n)` is built (0043): the
-alignment padding the parser used to refuse, one member now, `<pad>` in the
-map and `pad-to=n` in the wire signature. `pad_random(min, max)` stays
-refused and deferred -- length hiding rather than alignment, which 0043
-holds out as a different thing, and not a detail for a protocol whose threat
-model includes an observer.
+~~**And one now half-built.**~~ **Both built.** 14.7 gives `pad_to(n)` and
+`pad_random(min, max)` for traffic-analysis resistance. `pad_to(n)` came
+first (0043): the alignment padding the parser used to refuse, one member
+now, `<pad>` in the map and `pad-to=n` in the wire signature.
+`pad_random(min, max)` followed in 26.359 and takes the same shape one rung
+along -- `<pad>` in the map with its ceiling as the extent, and
+`pad-random=min..max` in the wire signature, because a peer padding to
+different bounds disagrees about what lengths are legal.
 
 **The question this survey opened as unknown, now measured -- and the first
 measurement of it was wrong.** It reported that QUIC-style header protection
@@ -15708,8 +15711,10 @@ greps and one parse.
   14.5's rule and not a new one. Not yet built. It proposes
   that `pad_random(min, max)` be bounds and a name, and that 14.7's
   `random` content policy be dropped as unenforceable -- a schema cannot
-  state what the generated code cannot test. Accepting or refusing it is
-  the decision; nothing waits on code.
+  state what the generated code cannot test. ~~Not yet built.~~ **Built
+  2026-09-14 (26.359)**: the bounds cap the extent, `validate` checks the
+  pad's length in four backends and both walkers, and the `random` policy
+  was not added.
 - ~~**0017's Rust question, narrowed.**~~ **Answered 2026-09-04: yes, for
   `derived` and only for `derived`.** "One implementation beats four nearly
   correct ones" is an argument about a hand-written algorithm; a `derived`
@@ -28236,6 +28241,58 @@ productions section 7 has not absorbed, and does -- sixteen of them, which
 is the arrangement its header describes. What the new check refuses is the
 two files declaring one production and disagreeing about it, over the 65
 they share.
+
+### 26.359 A bounded pad, and the floor that was not a placement
+
+**0045 built.** `pad_random(min, max) u8[remaining];` parses, places,
+narrows the extent to its ceiling, renders in both artifacts and is
+checked by four backends and both walkers.
+
+**It is a third spelling on `Reserved`, not a node.** `preamble` is
+already the second, on the rule that a separate node "would have
+duplicated placement, layout and every backend's no-accessor rule to say
+so". A pad is a reserved run too -- anonymous, therefore no accessor,
+checked on validate -- and what it adds is bounds. So the syntax carries
+its own run rather than inventing a way to size one, which is what 0045
+means by "the construct adds the bounds, not a new way to size a run".
+
+**The ceiling narrows the extent; the floor deliberately does not, and
+that took a measurement to get right.** Narrowing both looked obviously
+symmetrical. With the floor raised, a three-byte frame made the C walk
+answer BOUNDS where the four backends answer CONSTRAINT: the pad's
+minimum had stopped fitting *as a placement*, and a member the frame does
+not reach is a different claim from a pad that is too short. For a run
+that is whatever is left, the frame always reaches it. The minimum is a
+length rule and `validate` is where a length rule lives. 0045's own
+argument is entirely about the ceiling -- "a peer can claim a megabyte of
+padding inside a frame and a reader that trusts it has no ceiling to
+check against" -- and a ceiling nothing carries is not one, which is why
+the maximum narrows and appears in the map as `Bounded(0, 64)`.
+
+**The length is what is LEFT, not `size_bits`.** A `[remaining]` run
+carries no size program, so `size_bits` answers the static MINIMUM -- and
+for this member the minimum is one of the bounds being checked. The first
+Python walk compared a bound against itself and accepted every pad of
+every length, silently, while looking like a working check. Both walkers
+measure it the way the four backends do: the frame's remainder from where
+the pad starts.
+
+**Two sabotages, and they are distinguishable**, which is what says where
+a fault would be. Removing the C walk's check diverges C alone; removing
+the packer's rows diverges both walkers together. The first is a reader
+being wrong, the second is the image not saying -- and the corpus
+comparison reports them differently.
+
+**The grammar was updated in the same commit this time.** 26.358 is the
+record of not doing that, one commit earlier, and the new check there is
+what would have caught it.
+
+**What 0045 refused stays refused.** No `random` content policy: a pad of
+random bytes and a pad of any other bytes are the same bytes, so a schema
+declaring it would state what the generated code cannot test. The two
+policies that survive are the two that were already spelled --
+`must_be_zero` and `[unknown]` -- and the sender's obligation to use a
+random source is the caller's, beside the AEAD primitive.
 
 ## 27. Questions, and how they were settled
 

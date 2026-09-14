@@ -2492,6 +2492,8 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 #define CHECK_ARM_SELECTED   8u
 #define CHECK_ENCODED_FROM   15u
 #define CHECK_ENCODING_ARM   16u
+#define CHECK_PAD_LENGTH_MIN 17u
+#define CHECK_PAD_LENGTH_MAX 18u
 
 /* `text_flags` bit 2: the member compares case-insensitively (0055). */
 #define TEXT_CASE_INSENSITIVE 4u
@@ -3039,7 +3041,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                && kind != CHECK_ZERO_RUN
 			                && kind != CHECK_PINNED_RUN
 			                && kind != CHECK_ENCODED_FROM
-			                && kind != CHECK_ENCODING_ARM) {
+			                && kind != CHECK_ENCODING_ARM
+			                && kind != CHECK_PAD_LENGTH_MIN
+			                && kind != CHECK_PAD_LENGTH_MAX) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 		}
@@ -3268,6 +3272,35 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 		}
 
+		/* `pad_random(min, max)`: the pad's length against its bounds
+		 * (0045), before the byte-run checks -- a pad of the wrong length
+		 * is wrong whatever its bytes are.
+		 *
+		 * Measured as what is left of the frame from where the pad starts,
+		 * which is what the four backends emit. NOT from `size_bits`: a
+		 * `[remaining]` run carries no size program, so that answers the
+		 * static MINIMUM, and for this member the minimum is one of the
+		 * bounds being checked -- comparing a bound against itself accepts
+		 * every pad of every length, which is what the Python walk did
+		 * until it was measured against the backend. */
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t *row  = checks + c * image->constraint_stride;
+			const uint8_t  kind = row[12];
+			const int64_t  want = i64_at(row + 4);
+			uint32_t       length;
+
+			if (kind != CHECK_PAD_LENGTH_MIN && kind != CHECK_PAD_LENGTH_MAX) {
+				continue;
+			}
+			length = (at / 8u < len) ? len - at / 8u : 0u;
+			if ((kind == CHECK_PAD_LENGTH_MIN && (int64_t)length < want)
+			                || (kind == CHECK_PAD_LENGTH_MAX
+			                    && (int64_t)length > want)) {
+				*verdict = SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
+
 		/* The checks that read a *span* rather than a value, over the bytes
 		 * the schema called text. A delimited member's width is its content
 		 * plus its delimiter, because that is where the next member starts,
@@ -3412,7 +3445,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                || kind == CHECK_PINNED_RUN
 			                || kind == CHECK_ENCODED_FROM
 			                || kind == CHECK_ENCODING_ARM
-			                || kind == CHECK_ARM_SELECTED) {
+			                || kind == CHECK_ARM_SELECTED
+			                || kind == CHECK_PAD_LENGTH_MIN
+			                || kind == CHECK_PAD_LENGTH_MAX) {
 				continue;	/* asked above, over the span rather than a value */
 			}
 

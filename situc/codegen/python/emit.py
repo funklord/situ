@@ -5502,7 +5502,8 @@ class Emitter:
 			# reaching for one crashed the compiler. For a whole-byte scalar
 			# the byte comparison says the same thing in either byte order.
 			if placement.offset_bits is None:
-				return self._reserved_check(struct, placement)
+				return [*self._pad_bounds_check(struct, placement),
+				        *self._reserved_check(struct, placement)]
 			policy = _reserved_policy(placement.attrs)
 			if policy not in ("must_be_zero", "must_be_one"):
 				return []
@@ -5614,6 +5615,30 @@ class Emitter:
 			f'{{{held}!r}}, must_eq {shown}")',
 		]
 
+	def _pad_bounds_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`pad_random(min, max)`: the pad's length falls within its bounds.
+
+		See the C backend for why it is a check rather than only an extent.
+		"""
+		bounds = placement.pad_bounds
+		if bounds is None or placement.array_count is not None:
+			return []
+		count = self._length_expression(struct, placement)
+		if count is None:
+			return []
+
+		low, high = bounds
+		test = (f"_pad > {high}" if low == 0
+		        else f"not {low} <= _pad <= {high}")
+		return [
+			f"\t\t# {placement.path} pad_random({low}, {high})",
+			f"\t\t_pad = {count}",
+			f"\t\tif {test}:",
+			f"\t\t\traise ConstraintError("
+			f"\"{placement.path} is outside pad_random({low}, {high})\")",
+		]
+
 	def _reserved_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Reserved bytes hold their pattern, however many of them there are.
@@ -5666,7 +5691,8 @@ class Emitter:
 		if placement.kind == "reserved":
 			if scalar.bits != BITS_PER_BYTE:
 				return []
-			return self._reserved_check(struct, placement)
+			return [*self._pad_bounds_check(struct, placement),
+			        *self._reserved_check(struct, placement)]
 
 		# utf16's code unit is two bytes, so a `u16` run is validated over a
 		# byte slice of the message rather than the parsed values (0044). A

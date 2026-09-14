@@ -644,6 +644,68 @@ def test_a_width_with_no_value_is_refused() -> None:
 	assert "`[bits]` needs a width" in text
 
 
+# -- pad_random, decision 0045 ----------------------------------------------
+
+
+def test_a_bounded_pad_carries_its_bounds_and_a_name() -> None:
+	"""`pad_random(min, max)` is a reserved run with bounds and a name.
+
+	The name is not decoration: `<reserved0>` says nothing about intent, and
+	a reviewer who cannot see that a field is padding cannot see that
+	removing it changes what an observer learns. `pad_to` earned `<pad>` for
+	that reason and this earns it for the same one.
+	"""
+	placed = {p.name: p for p in
+	          layout("struct S { u8 n; u8 body[n]; "
+	                 "pad_random(2, 6) u8[remaining] [unknown]; }")
+	          .structs["S"].placements}
+	assert placed["<pad>"].pad_bounds == (2, 6)
+	assert placed["<pad>"].kind == "reserved"
+
+
+def test_a_bounded_pad_caps_the_extent_and_does_not_raise_its_floor() -> None:
+	"""The ceiling is the point and the floor deliberately is not.
+
+	0045's argument for the bounds is entirely about the ceiling -- without
+	one "a peer can claim a megabyte of padding inside a frame and a reader
+	that trusts it has no ceiling to check against" -- so the maximum
+	narrows the extent and a reader gets the bound from it.
+
+	Raising the FLOOR would say something else: that the frame must reach the
+	pad's minimum, which for a run that is whatever is left is not a
+	placement fact at all. Measured while building this: with the floor
+	raised, a three-byte frame made the C walk answer BOUNDS where the four
+	backends answer CONSTRAINT, because the pad's minimum stopped fitting as
+	a placement. The minimum is a length rule and `validate` is where it
+	lives.
+	"""
+	placed = {p.name: p for p in
+	          layout("struct S { u8 n; u8 body[n]; "
+	                 "pad_random(2, 6) u8[remaining] [unknown]; }")
+	          .structs["S"].placements}
+	assert placed["<pad>"].size_max_bits == 6 * BITS_PER_BYTE
+	assert placed["<pad>"].size_bits == 0
+
+
+def test_a_pad_tighter_than_its_bounds_keeps_the_tighter_answer() -> None:
+	"""A declared count inside the bounds is the extent; the bounds do not
+	widen it. They are a ceiling, not a size."""
+	placed = {p.name: p for p in
+	          layout("struct S { pad_random(0, 64) u8[4] [unknown]; }")
+	          .structs["S"].placements}
+	assert placed["<pad>"].size_bits == 4 * BITS_PER_BYTE
+	assert placed["<pad>"].size_max_bits == 4 * BITS_PER_BYTE
+
+
+def test_a_pad_whose_run_cannot_fit_its_bounds_is_refused() -> None:
+	"""Two halves of one construct disagreeing, which is 17.0's rule and the
+	one `[size = N]` is already held to: an eight-byte run inside a two-byte
+	pad describes a message that cannot validate."""
+	text = rendered("struct S { pad_random(0, 2) u8[8] [unknown]; }")
+	assert "cannot hold this run" in text
+	assert "at most 2" in text
+
+
 # -- pad_to, decision 0043 --------------------------------------------------
 
 

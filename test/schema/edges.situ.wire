@@ -229,6 +229,11 @@ struct packed_driver size=3..63
   @0x0001   0..60     u32        d  sized-by=n
   ~         2         u16        tail  big
 
+struct padded_frame size=1..262
+  @0x0000   1         u8         n
+  @0x0001   0..255    u8         body  sized-by=n
+  ~         0..6      u8         <pad>  sized-by=remaining pad-random=2..6
+
 struct piece size=1..256
   @0x0000   1         u8         len
   @0x0001   0..255    u8         body  sized-by=len

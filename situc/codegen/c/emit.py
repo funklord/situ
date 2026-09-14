@@ -7981,7 +7981,8 @@ class Emitter:
 				     or data_sized(placement)
 				     or (placement.offset_bits is None
 				         and not scalar.is_bit_packed)):
-			return self._reserved_array_check(struct, placement, scalar)
+			return [*self._pad_bounds_check(struct, placement),
+			        *self._reserved_array_check(struct, placement, scalar)]
 
 		# `[encoding]` is a claim about what the bytes are. Section 8.6 offers
 		# it, and it was accepted and dropped on the floor until now: a schema
@@ -8543,6 +8544,51 @@ class Emitter:
 			"\t}",
 			f"\t*out = {codec}_spans({head} situ_base(view) + at, n,"
 			f" {ahead} + (hole_at - at), hole_n, {filler:#04x}u);",
+		])
+		return lines
+
+	def _pad_bounds_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`pad_random(min, max)`: the pad's length falls within its bounds.
+
+		The bounds are the part of 14.7 nothing else expresses, and the whole
+		reason for them is that a pad hiding length must still be bounded --
+		otherwise a peer claims a megabyte of padding inside a frame and a
+		reader has no ceiling to check against (0045). So this is the check
+		that makes the declaration mean something; without it the schema
+		would state what the generated code does not enforce, which is what
+		17.0 refuses and what 0045 refused a `random` content policy for.
+
+		Emitted only where the length is a runtime value. A fixed count is a
+		constant the layout has already held against the bounds, so a test
+		here would be dead code that reads like a check.
+		"""
+		bounds = placement.pad_bounds
+		if bounds is None or placement.array_count is not None:
+			return []
+		if placement.offset_bits is None \
+				and self._offset_blocker(struct, placement) is not None:
+			return []		# no offset function was emitted to read from
+
+		low, high = bounds
+		count = self._length_expression(struct, placement)
+		lines = [
+			f"\t/* {placement.path} pad_random({low}, {high}): a pad that",
+			"\t * hides length is still bounded, or a peer can claim a",
+			"\t * megabyte of padding and a reader has no ceiling. */",
+			"\t{",
+			f"\t\tconst uint32_t n = {count};",
+			"",
+		]
+		# `low == 0` admits every length a `uint32_t` holds, so the lower
+		# test would be `n < 0u` -- always false, and a warning on every
+		# build that takes warnings seriously.
+		test = f"n > {high}u" if low == 0 else f"n < {low}u || n > {high}u"
+		lines.extend([
+			f"\t\tif ({test}) {{",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t}",
+			"\t}",
 		])
 		return lines
 

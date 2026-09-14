@@ -1420,6 +1420,24 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					continue
 
 				if placement.kind == "reserved":
+					# `pad_random(min, max)`: the pad's length against its
+					# bounds (0045). Written before the content policy
+					# because a pad the wrong length is the wrong length
+					# whatever its bytes are -- and `[unknown]` returns
+					# below, which would have dropped the bounds with the
+					# content check.
+					#
+					# Two rows because a constraint carries one value, and
+					# a fixed count needs neither: the layout has already
+					# refused a run whose width cannot satisfy the bounds,
+					# so a check would be comparing two constants.
+					if placement.pad_bounds is not None \
+							and placement.array_count is None:
+						low, high = placement.pad_bounds
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, low, 17)
+						constraints_blob += _struct.pack(
+							"<IqBxxx", at, high, 18)
 					policies = {a.name for a in placement.attrs}
 					if policies & {"preserve", "unknown"}:
 						continue

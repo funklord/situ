@@ -86,7 +86,9 @@ member		= field | reserved | marker_field | block | variant | tag_field
 
 (* Section 8.4, decision 0043. Aligns the offset to the next multiple of n;
  * it occupies whatever that costs and shows nothing. *)
-pad		= "pad_to" "(" digits ")" ";" ;
+pad		= "pad_to" "(" digits ")" ";"
+	| "pad_random" "(" digits "," digits ")" scalar_type
+	  [ array_spec ] [ attrs ] ";" ;
 
 (* Decision 0057. `peek u8 kind;` -- a member read at the cursor and not
  * spent: it contributes nothing to the enclosing struct's extent, so the

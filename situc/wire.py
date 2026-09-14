@@ -299,6 +299,13 @@ def _constraints(placement: Placement) -> list[str]:
 	# multiple disagrees about where the next field starts, so it is contract.
 	if placement.pad_to is not None:
 		facts.append(f"pad-to={placement.pad_to}")
+	# And the bounds one promises (0045), for the same reason one rung along:
+	# a peer padding to different bounds disagrees about what lengths are
+	# legal, which is as wire-visible as disagreeing about where the next
+	# field starts.
+	if placement.pad_bounds is not None:
+		facts.append(f"pad-random={placement.pad_bounds[0]}"
+		             f"..{placement.pad_bounds[1]}")
 	if placement.radix is not None:
 		facts.append(f"radix={placement.radix}")
 	if placement.scaled:

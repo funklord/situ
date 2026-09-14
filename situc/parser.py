@@ -1474,6 +1474,8 @@ class Parser:
 				return self.parse_preamble()
 			if token.text == "pad_to":
 				return self.parse_pad()
+			if token.text == "pad_random":
+				return self.parse_pad_random()
 			if token.text == "positional":
 				return self.parse_positional()
 			if token.text == "variant":
@@ -2156,6 +2158,75 @@ class Parser:
 				         "(section 8.4)"],
 			)
 		return ast.Pad(self.span_from(start), value, attrs)
+
+	def parse_pad_random(self) -> ast.Reserved:
+		"""`pad_random(0, 64) u8[remaining];` -- a bounded pad (0045).
+
+		A reserved run with length bounds and a name, which is all situ can
+		make of 14.7's construct: a random pad LENGTH is a sender's choice
+		made at send time, and this compiler generates readers. It has no
+		random source and 14.6 puts the caller's primitives outside it on
+		purpose, so `pad_random` cannot mean "emit a padder". What it can
+		mean is a claim checked on parse, and the claim is the bounds.
+
+		It carries its own run rather than inventing a way to size one: the
+		length comes from where a reserved run's already comes from, the
+		remainder of the frame or a field. So `pad_random(a, b)` reads as
+		`reserved` with bounds, which is what it is.
+		"""
+		start = self.advance()
+		self.expect_symbol("(", "before the bounds")
+		low_at = self.current
+		low    = evaluate_literal(self.parse_expr())
+		self.expect_symbol(",", "between the bounds")
+		high_at = self.current
+		high    = evaluate_literal(self.parse_expr())
+		self.expect_symbol(")", "after the bounds")
+
+		if low is None or low < 0:
+			raise error(
+				"`pad_random(min, max)` needs a literal minimum of zero or "
+				"more",
+				low_at.span,
+				label = "not a non-negative integer literal",
+				notes = ["the bounds are what a reader checks a pad's length "
+				         "against, so both have to be numbers the compiler "
+				         "can see (section 14.7)"],
+			)
+		if high is None or high < 0:
+			raise error(
+				"`pad_random(min, max)` needs a literal maximum of zero or "
+				"more",
+				high_at.span,
+				label = "not a non-negative integer literal",
+				notes = ["a pad that hides length must still be bounded, or "
+				         "a peer can claim a megabyte of padding inside a "
+				         "frame and a reader has no ceiling to check"],
+			)
+		if low > high:
+			raise error(
+				f"`pad_random({low}, {high})` has a minimum above its maximum",
+				self.span_from(start),
+				label = "no length satisfies both",
+				notes = ["the bounds are inclusive, so `pad_random(0, 64)` "
+				         "admits an empty pad and one of sixty-four bytes"],
+			)
+
+		type_ref = self.parse_type_ref()
+		if not type_ref.is_scalar:
+			raise error(
+				f"`pad_random` needs a scalar type, found `{type_ref.name}`",
+				type_ref.span,
+				label = "not a scalar type",
+				notes = ["a pad is a reserved run and takes the same shape: "
+				         "`pad_random(0, 64) u8[remaining];`"],
+			)
+
+		array = self.parse_array_spec()
+		attrs = self.parse_attrs()
+		self.expect_symbol(";", "after the pad declaration")
+		return ast.Reserved(self.span_from(start), type_ref, array, attrs,
+		                    bounds = (low, high))
 
 	def parse_reserved(self) -> ast.Reserved:
 		start    = self.advance()

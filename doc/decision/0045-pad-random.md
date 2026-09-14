@@ -1,6 +1,9 @@
 # 0045: `pad_random` is bounds and a name, and not a content policy
 
-Status: accepted 2026-09-04; not yet built
+Status: accepted 2026-09-04; built 2026-09-14 (26.359). The ceiling
+narrows the extent and the floor does not -- raising it made a short frame
+answer BOUNDS where the backends answer CONSTRAINT, because a pad's
+minimum is a length rule rather than a placement
 Date: 2026-08-27
 Phase: after 0043, which built `pad_to` and deferred this
 

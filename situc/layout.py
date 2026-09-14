@@ -233,6 +233,11 @@ class Placement:
 	# a backend reads this rather than a `size_expr`. `kind` is "reserved", so
 	# the must_be_zero validation applies unchanged.
 	pad_to: int | None		= None
+	# `pad_random(min, max)` -- the inclusive byte bounds a length-hiding pad
+	# must fall within (14.7, decision 0045). `kind` is "reserved" and the
+	# content policy is whatever the attributes say, so everything except the
+	# length check is the reserved path unchanged.
+	pad_bounds: tuple[int, int] | None	= None
 	# Set when the field's type is a varint, which the propagation table reads
 	# to attach the right reasons.
 	varint: str | None		= None
@@ -1885,6 +1890,13 @@ class Solver:
 		# the synthesised name can never clash with a real one.
 		if isinstance(member, ast.Field):
 			name = member.name
+		elif getattr(member, "bounds", None) is not None:
+			# `pad_random` earns `<pad>` for the reason `pad_to` did (0043):
+			# a reviewer who cannot see that a field is padding cannot see
+			# that removing it changes what an observer learns. `<reserved0>`
+			# says nothing about intent, and padding for traffic analysis is
+			# the case where intent is the whole point.
+			name = "<pad>"
 		else:
 			name = f"<reserved{layout.reserved_count}>"
 			layout.reserved_count += 1
@@ -1926,6 +1938,51 @@ class Solver:
 		if pinned is not None:
 			total = pinned
 
+		# `pad_random(min, max)` narrows the extent to its bounds (0045).
+		#
+		# The construct does not SIZE the run -- the length still comes from
+		# `[remaining]` or a field, which is what its record means by "not a
+		# new way to size a run" -- but a bound that narrows nothing is not a
+		# ceiling. The whole reason the bounds exist is that "a peer can
+		# claim a megabyte of padding inside a frame and a reader that trusts
+		# it has no ceiling to check against", and a reader gets that ceiling
+		# from the extent: without this the map still reports Unbounded and
+		# the bounds reach only `validate`.
+		#
+		# The CEILING only, and the minimum deliberately not. The record's
+		# argument is entirely about the ceiling -- "a peer can claim a
+		# megabyte of padding inside a frame and a reader that trusts it has
+		# no ceiling to check against" -- and raising the floor says
+		# something different: that the frame must REACH the pad's minimum,
+		# which for a run that is whatever is left is not a placement fact
+		# at all. Measured: with the floor raised, a three-byte frame made
+		# the C walk answer BOUNDS where the four backends answer
+		# CONSTRAINT, because the pad's minimum stopped fitting as a
+		# placement. The minimum is a length rule and `validate` is where a
+		# length rule belongs.
+		#
+		# Intersected rather than replacing, so a pad whose run is already
+		# tighter than its bounds keeps the tighter answer.
+		bounds = getattr(member, "bounds", None)
+		if bounds is not None:
+			low  = total.lo
+			high = bounds[1] * BITS_PER_BYTE
+			if total.hi is not None:
+				high = min(total.hi, high)
+			if low > high:
+				raise error(
+					f"`pad_random({bounds[0]}, {bounds[1]})` cannot hold this "
+					"run",
+					member.span,
+					label = f"the run is at least {total.lo // BITS_PER_BYTE} "
+					        f"bytes and the pad admits at most {bounds[1]}",
+					notes = ["a pad whose two halves disagree describes a "
+					         "message that cannot validate, which is 17.0's "
+					         "rule and the one `[size = N]` is already held "
+					         "to"],
+				)
+			total = Interval(low, high)
+
 		self.check_alignment(decl, member, scalar, cursor, element)
 		position = self.bit_position(scalar, local, cursor, element)
 
@@ -1943,6 +2000,7 @@ class Solver:
 			size_max_bits  = total.hi,
 			pinned_bits    = pinned.lo if pinned is not None else None,
 			pinned_runs    = self._pinned_runs(member),
+			pad_bounds     = getattr(member, "bounds", None),
 			scalar         = scalar,
 			endian         = local.endian,
 			bit_order      = local.bit_order,

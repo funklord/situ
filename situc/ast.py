@@ -419,6 +419,22 @@ class Reserved(Member):
 	#: node would have duplicated placement, layout and every backend's
 	#: no-accessor rule to say so.
 	pinned: bytes | None		= None
+	#: `pad_random(min, max) u8[remaining];` -- the inclusive byte bounds a
+	#: length-hiding pad must fall within (14.7, decision 0045).
+	#:
+	#: A third spelling on this node for `pinned`'s reason, and it is the
+	#: same reason: a pad is a reserved run, anonymous and therefore without
+	#: an accessor, checked on validate. What it adds is BOUNDS, which
+	#: nothing else expresses -- `[max = N]` is refused on an array because
+	#: an array has no single value to bound, and there is no minimum at
+	#: all. Without them a peer can claim a megabyte of padding inside a
+	#: frame and a reader has no ceiling to check it against.
+	#:
+	#: The content policy is not here: it is whatever the attributes say,
+	#: `must_be_zero` or nothing. 0045 refused a `random` policy outright --
+	#: a pad of random bytes and a pad of any other bytes are the same
+	#: bytes, so declaring it would state what no reader can test.
+	bounds: tuple[int, int] | None	= None
 
 
 @dataclass(frozen=True)

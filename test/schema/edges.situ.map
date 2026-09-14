@@ -233,6 +233,11 @@ struct packed_driver size=3..63 mutate=Shifting address=Unstable repr=ValueConve
   packed_driver.d                        offset=AbsoluteStatic(0x01) size=Bounded(0, 60) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
   packed_driver.tail                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct padded_frame size=1..262 mutate=Shifting address=Unstable canonical=NonCanonical
+  padded_frame.n                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  padded_frame.body                      offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  padded_frame.<pad>                     offset=Dynamic size=Bounded(0, 6) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable canonical=NonCanonical
+
 struct piece size=1..256 mutate=Shifting
   piece.len                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   piece.body                             offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

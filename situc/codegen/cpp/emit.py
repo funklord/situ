@@ -7139,7 +7139,8 @@ class Emitter:
 			# the byte loop says the same thing -- zero is zero in either
 			# byte order -- so the two cases share one emitter.
 			if placement.offset_bits is None:
-				return self._reserved_checks(struct, placement)
+				return [*self._pad_bounds_checks(struct, placement),
+				        *self._reserved_checks(struct, placement)]
 			policy = _reserved_policy(placement.attrs)
 			if policy in ("must_be_zero", "must_be_one"):
 				want = "0" if policy == "must_be_zero" \
@@ -7289,6 +7290,35 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _pad_bounds_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`pad_random(min, max)`: the pad's length falls within its bounds.
+
+		See the C backend for why this exists rather than leaving the bounds
+		to the extent: without it the schema states what the generated code
+		does not enforce, which is 17.0's rule and the one 0045 refused a
+		`random` content policy for.
+		"""
+		bounds = placement.pad_bounds
+		if bounds is None or placement.array_count is not None:
+			return []
+		count = self._length_expression(struct, placement)
+		if count is None:
+			return []
+
+		low, high = bounds
+		# `low == 0` admits every length, so the lower test is always false.
+		test = f"n > {high}" if low == 0 else f"n < {low} || n > {high}"
+		return [
+			f"\t\t/* {placement.path} pad_random({low}, {high}) */",
+			"\t\t{",
+			f"\t\t\tconst std::uint32_t n = {count};",
+			f"\t\t\tif ({test}) {{",
+			"\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _reserved_checks(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Reserved bytes hold their pattern, however many of them there are.
@@ -7345,7 +7375,8 @@ class Emitter:
 		if placement.kind == "reserved":
 			if scalar.bits != BITS_PER_BYTE:
 				return []
-			return self._reserved_checks(struct, placement)
+			return [*self._pad_bounds_checks(struct, placement),
+			        *self._reserved_checks(struct, placement)]
 
 		# utf16's code unit is two bytes, so a `u16` run is validated over a
 		# byte view taken here rather than through the u8-only span accessor
