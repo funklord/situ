@@ -97,8 +97,12 @@ def _codec_properties(codec: ast.CodecDecl) -> list[str]:
 	elif codec.expansion is ast.Expansion.UNBOUNDED:
 		shown.append("expansion=unbounded")
 	elif codec.ratio is not None:
+		# Both terms, which this rendered one or the other of and never
+		# both (0048). A consumer sizes from this line, so a ratio shown
+		# without its addend is a buffer short by the addend.
+		added = f"+{codec.expansion_add}" if codec.expansion_add else ""
 		shown.append(f"expansion={codec.expansion.value}"
-		             f"({codec.ratio[0]},{codec.ratio[1]})")
+		             f"({codec.ratio[0]},{codec.ratio[1]}){added}")
 
 	shown.append(f"seekable={codec.seekable.value}")
 	granularity = codec.granularity.value

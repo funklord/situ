@@ -264,7 +264,13 @@ def codec_expansion(decl: ast.CodecDecl) -> str:
 		return "expansion = unbounded"
 
 	assert decl.ratio is not None
-	return f"expansion = {decl.expansion.value}({decl.ratio[0]}, {decl.ratio[1]})"
+	# The addend rides with the ratio (0048): a code that expands by `a/b`
+	# and then appends `k` bytes says both, and a consumer sizes a buffer as
+	# `len * a / b + k`. Omitted where it is zero, which is what every
+	# declaration written before this one means.
+	added = f" + {decl.expansion_add}" if decl.expansion_add else ""
+	return (f"expansion = {decl.expansion.value}"
+	        f"({decl.ratio[0]}, {decl.ratio[1]}){added}")
 
 
 def codec_granularity(decl: ast.CodecDecl) -> str:

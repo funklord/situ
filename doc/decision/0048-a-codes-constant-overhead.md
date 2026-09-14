@@ -1,6 +1,8 @@
 # 0048: a stuffing code's overhead is a ratio and a constant
 
-Status: accepted 2026-09-04; not yet built
+Status: accepted 2026-09-04; built 2026-09-14 (26.357). Rendering both
+terms turned up a fourth under-reported codec, the `framed` pipeline,
+whose addend the arithmetic already carried
 Date: 2026-09-04
 Phase: raised by 26.147, settled by the copyright holder with the other open
 items

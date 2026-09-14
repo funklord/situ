@@ -19,7 +19,7 @@ codec aes_ctr_256 unbound length_preserving seekable=linear granularity=byte inv
 codec aes_gcm_128 unbound length_preserving seekable=linear granularity=byte authenticated invertible deterministic
 codec chacha20 unbound length_preserving seekable=linear granularity=byte invertible deterministic
 codec chacha20_poly1305 unbound length_preserving seekable=linear granularity=byte authenticated invertible deterministic
-codec cobs unbound expansion=ratio_bounded(255,254) seekable=none granularity=stream invertible deterministic
+codec cobs unbound expansion=ratio_bounded(255,254)+1 seekable=none granularity=stream invertible deterministic
 codec code_4b5b unbound expansion=ratio_exact(5,4) seekable=linear granularity=symbol(4) invertible deterministic
 codec code_8b10b unbound expansion=ratio_exact(10,8) seekable=linear granularity=symbol(8) invertible deterministic
 codec crc16_ccitt unbound expansion=+2 seekable=linear granularity=block systematic deterministic

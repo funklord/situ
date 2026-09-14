@@ -441,8 +441,13 @@ impl ppp_async_framing derived;
 // A pipeline, composing pointwise and conservatively.
 //
 // Seekable only if every stage is, systematic only if every stage is, and the
-// expansion is the product -- so this one is 2:1 with 32 bytes of parity
-// doubled to 64, and permuted rather than linear because the interleaver is.
+// expansion is the product -- so this one is 2:1 with crc32's four bytes of
+// parity doubled to eight, and permuted rather than linear because the
+// interleaver is.
+//
+// The map renders that addend now and did not before (0048), which is what
+// made this sentence's own arithmetic checkable: it said "32 bytes of parity
+// doubled to 64", which is reed-solomon's parity and not this pipeline's.
 // ---------------------------------------------------------------------------
 
 codec framed = crc32 |> interleave_16 |> manchester_802_3;

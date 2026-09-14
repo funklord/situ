@@ -18,7 +18,7 @@ codec base16_lower derived expansion=ratio_exact(8,4) seekable=linear granularit
 codec base32 derived expansion=ratio_padded(8,5) seekable=linear granularity=block(5) invertible deterministic
 codec base64 derived expansion=ratio_padded(8,6) seekable=linear granularity=block(3) invertible deterministic
 codec base64url derived expansion=ratio_padded(8,6) seekable=linear granularity=block(3) invertible deterministic
-codec cobs derived expansion=ratio_bounded(255,254) seekable=none granularity=stream invertible deterministic
+codec cobs derived expansion=ratio_bounded(255,254)+1 seekable=none granularity=stream invertible deterministic
 codec code_4b5b derived expansion=ratio_exact(5,4) seekable=linear granularity=symbol(4) invertible deterministic
 codec crc16_ccitt derived expansion=+2 seekable=linear granularity=block systematic deterministic
 codec crc16_kermit derived expansion=+2 seekable=linear granularity=block systematic deterministic
@@ -33,7 +33,7 @@ codec crc40_gsm derived expansion=+5 seekable=linear granularity=block systemati
 codec crc64_xz derived expansion=+8 seekable=linear granularity=block systematic deterministic
 codec crc8_maxim derived expansion=+1 seekable=linear granularity=block systematic deterministic
 codec crc8_smbus derived expansion=+1 seekable=linear granularity=block systematic deterministic
-codec framed unbound expansion=ratio_exact(2,1) seekable=permuted granularity=block deterministic
+codec framed unbound expansion=ratio_exact(2,1)+8 seekable=permuted granularity=block deterministic
 codec hamming_7_4 derived expansion=ratio_exact(7,4) seekable=linear granularity=bit(4) systematic invertible deterministic
 codec hdlc_bit_stuffing derived expansion=ratio_bounded(6,5) seekable=none granularity=bit(1) invertible deterministic
 codec interleave_16 derived length_preserving seekable=permuted granularity=byte invertible deterministic
@@ -42,13 +42,13 @@ codec manchester_802_3 derived expansion=ratio_exact(2,1) seekable=linear granul
 codec manchester_thomas derived expansion=ratio_exact(2,1) seekable=linear granularity=bit(1) invertible deterministic
 codec nrzi_transition_on_one derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
 codec nrzi_transition_on_zero derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
-codec ppp_async_framing derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
+codec ppp_async_framing derived expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec prbs23 derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec reed_solomon_255_223 derived expansion=+32 seekable=linear granularity=block(255) systematic invertible deterministic error_propagating
 codec reed_solomon_64_56 derived expansion=+8 seekable=linear granularity=block(64) systematic invertible deterministic error_propagating
 codec scrambler_additive derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec scrambler_multiplicative derived length_preserving seekable=none granularity=bit(1) invertible deterministic error_propagating
-codec slip_framing derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
+codec slip_framing derived expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec smtp_dot_stuffing derived expansion=ratio_bounded(4,3) seekable=none granularity=stream invertible deterministic
 codec sonet_scrambler derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec usb3_scrambler derived length_preserving seekable=linear granularity=bit(1) invertible deterministic

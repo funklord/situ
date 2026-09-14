@@ -1110,6 +1110,33 @@ class Parser:
 				"ratio_bounded": ast.Expansion.RATIO_BOUNDED,
 			}[token.text]
 			properties.ratio = (first, second)
+
+			# `ratio_bounded(255, 254) + 1`: a code that expands by a ratio
+			# and then appends a constant number of bytes (0048). COBS, SLIP
+			# and PPP each append a frame delimiter, so a consumer sizing
+			# from the ratio alone overruns by one on every encode -- and
+			# the arithmetic for it was already here, `_expand` applying
+			# `expansion_add` beside a ratio for a composed pipeline (0016).
+			# What was missing was a way to SAY it.
+			#
+			# Spelled as the sum rather than as a third argument, because
+			# the sum is what a consumer computes: `len * a / b + k`. A
+			# third term inside something called a ratio would read as part
+			# of the ratio.
+			if self.current.is_symbol("+"):
+				self.advance()
+				where = self.current
+				added = evaluate_literal(self.parse_expr())
+				if added is None or added < 0:
+					raise error(
+						"an expansion addend needs a literal byte count",
+						where.span,
+						label = "not a non-negative integer literal",
+						notes = ["`ratio_bounded(255, 254) + 1` is a ratio "
+						         "and then a constant: a consumer sizes a "
+						         "buffer as `len * 255 / 254 + 1` (0048)"],
+					)
+				properties.expansion_add = added
 			return
 
 		raise error(

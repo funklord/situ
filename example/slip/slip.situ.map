@@ -13,7 +13,7 @@
 
 # codecs. `trusted` means the properties are declared and
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
-codec slip derived expansion=ratio_bounded(2,1) seekable=none granularity=byte invertible deterministic
+codec slip derived expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 
 struct frame size=1.. access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
   frame.datagram                         offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead

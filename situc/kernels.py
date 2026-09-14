@@ -619,7 +619,7 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	# is all there is and nothing can disagree with it.
 	named = _name_of(kernel.argument("code"))
 	actual = STUFFING_BOUNDS.get(named or "")
-	if actual is not None and (worst, over) != actual:
+	if actual is not None and (worst, over) != actual[:2]:
 		raise error(
 			f"`{decl.name}` declares an overhead `{named}` does not have",
 			kernel.span,
@@ -649,8 +649,14 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 
 	granularity, size = STUFFING_UNITS[unit]
 
+	# The addend is the code's, so it comes from the table rather than from
+	# the schema -- which is the same rule the ratio follows one line down,
+	# and the reason `worst_case` and `per` are checked against it above. A
+	# code this build does not generate has no row and no addend, because
+	# there the signature is all there is.
 	return Derived(
 		expansion        = ast.Expansion.RATIO_BOUNDED,
+		expansion_add    = actual[2] if actual is not None else 0,
 		ratio            = (worst, over),
 		seekable         = ast.Seekable.NONE,
 		granularity      = granularity,
@@ -661,7 +667,7 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	)
 
 
-#: What each generated stuffing code costs, as `(worst_case, per)`.
+#: What each generated stuffing code costs, as `(worst_case, per, added)`.
 #:
 #: One entry per code this build implements, and `traverse.DERIVED_STUFFING`
 #: is its key set rather than a second list -- that list has already been
@@ -675,13 +681,24 @@ def _stuffing(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 #: escape-stuffed byte codes can double a payload that is nothing but the
 #: delimiter. Adding a code means adding its implementation and its row
 #: together.
-STUFFING_BOUNDS: dict[str, tuple[int, int]] = {
-	"cobs":      (255, 254),
-	"hdlc":      (6, 5),
-	"ppp_async": (2, 1),
-	"slip":      (2, 1),
-	"smtp_dot":  (4, 3),
-	"usb":       (7, 6),
+#:
+#: The third term is the constant the encoder appends after expanding, which
+#: for COBS, SLIP and PPP is the frame delimiter (0048). It was missing from
+#: this table and from the signature for as long as the codes have existed,
+#: so a consumer sizing a buffer from `ratio_bounded` alone overran by one on
+#: every encode -- and nothing could catch it from the declaration side,
+#: because every schema declared the ratio this table declared and both
+#: disagreed with the object file. It took measuring the encoder.
+#:
+#: It is the CODE's rather than the schema's, exactly as the ratio is: a
+#: schema names a code and the overhead comes with it.
+STUFFING_BOUNDS: dict[str, tuple[int, int, int]] = {
+	"cobs":      (255, 254, 1),
+	"hdlc":      (6, 5, 0),
+	"ppp_async": (2, 1, 1),
+	"slip":      (2, 1, 1),
+	"smtp_dot":  (4, 3, 0),
+	"usb":       (7, 6, 0),
 }
 
 

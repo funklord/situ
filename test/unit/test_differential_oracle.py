@@ -670,19 +670,20 @@ STUFFING_MEASURED: dict[str, tuple[bytes, int, tuple[int, int], int]] = {
 	"usb":       (b"\xff" * 3,    24, (7, 6),     0),
 }
 
-#: The codes whose generated encoder appends a frame delimiter, so that its
-#: output is one byte longer than the `ratio_bounded` its signature declares.
+#: The codes whose generated encoder appends a frame delimiter after
+#: expanding, so that its output is one byte longer than its ratio predicts.
 #:
-#: Named here rather than repaired, because the repair is not one thing. The
-#: signature could gain the constant -- the layout arithmetic already carries
-#: a ratio with an addend, `_expand` in `layout.py`, for a pipeline that
-#: appends parity before expanding -- or the delimiter could be held to be
-#: framing rather than the codec's, since section 20.3 makes framing its own
-#: concept and a COBS block in the literature does not carry it. The two lead
-#: to different code and the choice is not this guard's to make; what is not
-#: acceptable is that neither is chosen and the map keeps saying the shorter
-#: number. See project.md 26.147.
-DELIMITER_NOT_IN_THE_SIGNATURE = frozenset({"cobs", "ppp_async", "slip"})
+#: This was once a list of an unrepaired defect, kept because the repair was
+#: a fork this guard could not settle: either the signature gains the
+#: constant, or the delimiter is framing and three encoders stop writing it.
+#: 0048 took the first -- the encoder must emit what its own decoder
+#: consumes, so a COBS encoder that omitted the delimiter would produce
+#: output its decoder cannot bound.
+#:
+#: So the list is now a *claim about which codes carry a constant*, checked
+#: against the table and against the object file below. It is the same three
+#: and it means the opposite thing.
+DELIMITER_IN_THE_SIGNATURE = frozenset({"cobs", "ppp_async", "slip"})
 
 
 def test_every_stuffing_code_expands_by_the_amount_it_is_measured_at(
@@ -730,9 +731,12 @@ def test_every_stuffing_code_expands_by_the_amount_it_is_measured_at(
 		data, units, ratio, adds = STUFFING_MEASURED[code]
 		worst, per = ratio
 
-		assert STUFFING_BOUNDS[code] == ratio, (
+		# Ratio AND addend, which is what a consumer sizes from (0048).
+		# Comparing the ratio alone is what let three codes publish a bound
+		# one byte short of what their encoder writes.
+		assert STUFFING_BOUNDS[code] == (worst, per, adds), (
 			f"{code}: the bounds table says {STUFFING_BOUNDS[code]} and the "
-			f"generated encoder follows {ratio}")
+			f"generated encoder follows {ratio} plus {adds}")
 
 		fn = getattr(kernel_library, f"situ_{name}_encode")
 		fn.restype  = ctypes.c_uint32
@@ -748,12 +752,13 @@ def test_every_stuffing_code_expands_by_the_amount_it_is_measured_at(
 			f"{worst} for {per} plus {adds} predicts "
 			f"{units * worst // per + adds}")
 
-		# The constant is what the signature does not carry, so which codes
-		# have one is asserted rather than merely recorded: a sixth code that
-		# appends a delimiter joins the defect and must join the list.
-		assert (adds > 0) == (code in DELIMITER_NOT_IN_THE_SIGNATURE), (
+		# Which codes carry a constant is asserted rather than merely
+		# recorded: a sixth code that appends a delimiter must join the list
+		# and the table together, or its signature is short by the addend
+		# and nothing says so.
+		assert (adds > 0) == (code in DELIMITER_IN_THE_SIGNATURE), (
 			f"{code}: adds {adds} bytes beyond its ratio and is "
-			f"{'not ' if code not in DELIMITER_NOT_IN_THE_SIGNATURE else ''}"
+			f"{'not ' if code not in DELIMITER_IN_THE_SIGNATURE else ''}"
 			f"listed as one that does")
 
 
