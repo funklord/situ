@@ -299,8 +299,11 @@ index_args	= index_arg { "," index_arg } ;
 index_arg	= "base" "=" ( "region" | "message" | ident )
 	| attr ;
 capability_expr	= ident "(" expr { "," expr } ")" | expr ;
-ratio		= "ratio_exact" "(" digits "," digits ")"
-	| "ratio_padded" "(" digits "," digits ")"
-	| "ratio_bounded" "(" digits "," digits ")" ;
+(* Decision 0048. The addend is the constant a code appends after
+ * expanding -- a frame delimiter, for COBS and the escape-stuffed byte
+ * codes -- so a consumer sizes a buffer as `len * a / b + k`. Omitted
+ * means zero, which is what every declaration written before 0048 says. *)
+ratio		= ratio_form "(" digits "," digits ")" [ "+" digits ] ;
+ratio_form	= "ratio_exact" | "ratio_padded" | "ratio_bounded" ;
 ident		= letter { letter | digit | "_" } ;
 digits		= digit { digit | "_" } ;

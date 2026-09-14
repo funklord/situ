@@ -40,6 +40,72 @@ def test_every_production_in_section_7_is_in_the_extracted_grammar() -> None:
 		f"{sorted(declared - extracted)}")
 
 
+def _productions(src: str) -> dict[str, str]:
+	"""Every production in an EBNF block, as name -> right-hand side.
+
+	Comments go first, because they wrap differently in the two files and
+	one of them aligns with tabs -- so whitespace is normalised after, and
+	what is left is the grammar rather than its typesetting. A production
+	runs from a name at column zero to the `;` that closes it.
+	"""
+	src = re.sub(r"\(\*.*?\*\)", " ", src, flags=re.S)
+	return {m.group(1): re.sub(r"\s+", " ", m.group(2)).strip()
+	        for m in re.finditer(r"^([a-z_][a-z0-9_]*)\s*=(.*?);\s*$",
+	                             src, re.M | re.S)}
+
+
+def test_the_two_grammars_agree_about_every_shared_production() -> None:
+	"""The axis the containment check above cannot see.
+
+	`test_every_production_in_section_7_is_in_the_extracted_grammar` compares
+	NAMES, so a production can be in both files and say different things in
+	each -- and did. Measured when this was written: five of the shared
+	productions had drifted, every one of them in the direction of section 7
+	trailing the parser, for constructs that are built and shipped.
+
+	    decl        no namespace, tokens, endian_marker or register_block
+	    member      no marker_field
+	    field       no `peek` (0057) and no `at` (0042)
+	    radix       no `scaled` (0056)
+	    codec_prop  no `kernel =`, which is how a derived codec is declared
+
+	Section 7 is the authoritative one, so each of those was a false
+	statement about the language in the document that defines it:
+	`radix = "decimal" | "hex"` says those are the radixes, and there are
+	three.
+
+	This is the file's own concern one level down. Its header says two
+	documents agreeing are one witness if the same hand wrote both, and adds
+	the enums as a third -- but an enum only covers a spelling that IS an
+	enum member. `peek`, `at` and `kernel =` are none of them, so nothing
+	held them.
+
+	The asymmetry stays deliberate: `doc/grammar.ebnf` may declare
+	productions section 7 has not absorbed, and does -- sixteen of them. What
+	this refuses is the two files declaring one production and disagreeing
+	about it.
+	"""
+	declared  = _productions(section_7())
+	extracted = _productions(
+		(ROOT / "doc/grammar.ebnf").read_text(encoding="ascii"))
+
+	assert declared, "section 7's grammar block did not parse"
+	assert extracted, "doc/grammar.ebnf did not parse"
+
+	shared = sorted(set(declared) & set(extracted))
+	assert len(shared) >= 60, (
+		f"only {len(shared)} productions are in both files; the extractor "
+		"has probably stopped matching one of them")
+
+	differ = {name: (declared[name], extracted[name])
+	          for name in shared if declared[name] != extracted[name]}
+	assert not differ, (
+		"section 7 and doc/grammar.ebnf declare the same production and "
+		"disagree about it: "
+		+ "; ".join(f"{name}: section 7 says {a!r}, the extracted grammar "
+		            f"says {b!r}" for name, (a, b) in differ.items()))
+
+
 #: The enums whose members are surface keywords inside an *enumerated*
 #: production. `attr = ident [ "=" expr ]` is deliberately generic, so the
 #: attribute vocabulary is not here -- the grammar does not claim to list it,
