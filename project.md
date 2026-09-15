@@ -28522,6 +28522,49 @@ the cheapest evidence that it is sensitive enough to be worth having.
 held out by name, 21 declined. The verdict comparison is unmoved at 380
 agreeing and none differing, which is the property that had to survive.
 
+### 26.364 The editor says which field the schema refuses over
+
+**0051's first consumer, and the channel was already there.** 26.232
+closed with "the knowledge is now usable and nothing uses it yet -- and
+the consumers are the next one". `editor/document.py`'s `Field` carries a
+`note` that reaches every frontend, and a document that will not validate
+now says which member is why, without a frontend that knows the format.
+
+The CHECK's name rather than a sentence. A sentence a schema wrote is
+`when`'s and is not built; `max` is a rendering of an identity, which is
+0051's own split -- a consumer keys on the id and a person reads the word.
+
+**Appended rather than replacing.** A field can be unreadable AND be the
+one the schema refuses over, and a note that dropped either half answers a
+question nobody asked.
+
+**And it immediately found four check kinds with no name.** The note read
+`refused: bounds` for a pad outside its bounds, because `CHECK_NAMES` had
+no entry for `pad_length_max` -- nor for `pad_length_min`, `encoded_from`
+or `encoding_arm`. Each was added as a kind by whoever built the construct
+and none of them was named, so every refusal through one rendered as
+`bounds`.
+
+**Which is the same word a refusal with NO identity renders as**, and that
+is what made it invisible: an unnamed kind and an unrecorded refusal are
+the same string to a reader. The four had been that way since the day each
+construct landed -- `encoded_from` for a day, the pad checks for hours --
+and nothing in either differential could see it, because both compare
+answers rather than the words a reader would be shown.
+
+A population fixes it rather than vigilance: `report.ALL_CHECKS` is
+checked against `image_check` in `std/image.situ`, parsed from the schema
+rather than listed, so a kind added there joins the test without anybody
+remembering. With one name removed it names the kind.
+
+**What this consumer is not.** `situ verify` already reports an identity
+of a sort -- the Python backend's exception text, `"declared_fixed.label
+is not ascii"` -- and that is precisely the "text with no identity" 0051's
+alternatives rejected: it cannot be localised, every embedded target
+carries the strings, and a consumer has nothing stable to match on. Giving
+the generated code an ID is the half 0046-style work in three more
+backends, and it is not this.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

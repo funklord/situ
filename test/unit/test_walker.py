@@ -14,6 +14,7 @@ rendering no lines at all -- is closed.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +48,39 @@ def packed(text: str) -> bytes:
 # ---------------------------------------------------------------------------
 # The image round-trips into a walk
 # ---------------------------------------------------------------------------
+
+def test_every_check_kind_the_image_declares_has_a_name() -> None:
+	"""`std/image.situ`'s `image_check` is the contract; `CHECK_NAMES` is how
+	a reader renders it. A kind in one and not the other is silent both ways.
+
+	An UNNAMED kind renders as `bounds`, which is also what a refusal with no
+	identity at all renders as -- so a check added without a name reports the
+	same word as a check that recorded nothing, and neither is true. Four
+	kinds were in that state when this was written: `encoded_from`,
+	`encoding_arm` and the two pad lengths, each added as a kind by whoever
+	built the construct and each rendering as `bounds` until the editor
+	showed one.
+
+	Read from the schema rather than from a list here, so a kind added to
+	`image_check` joins this test without anybody remembering.
+	"""
+	text = (ROOT / "std" / "image.situ").read_text(encoding="ascii")
+	body = text[text.index("enum image_check"):]
+	body = body[:body.index("}")]
+	declared = {int(value) for _, value in
+	            re.findall(r"^\t([a-z_]+)\s*=\s*(\d+),", body, re.M)}
+
+	assert len(declared) >= 15, (
+		f"only {len(declared)} check kinds parsed out of `image_check`; the "
+		"enum's shape has probably moved")
+	assert declared == report.ALL_CHECKS, (
+		"`image_check` and `report.ALL_CHECKS` disagree -- "
+		f"image only: {sorted(declared - report.ALL_CHECKS)}, "
+		f"report only: {sorted(report.ALL_CHECKS - declared)}")
+	unnamed = sorted(report.ALL_CHECKS - set(report.CHECK_NAMES))
+	assert not unnamed, (
+		f"check kinds with no name, which render as `bounds`: {unnamed}")
+
 
 def test_a_scalar_is_read_at_the_offset_the_image_gives() -> None:
 	"""The smallest whole claim: a big-endian u16 at a constant offset."""

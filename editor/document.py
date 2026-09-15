@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from walker.image import NONE, Image, load
 from walker.owned import decode
+from walker import report
 from walker.report import FIELD, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
                          offset_bits, size_bits, write_bytes, write_scalar)
@@ -112,6 +113,20 @@ class Document:
 		held  = self._values(view)
 		rows: list[Field] = []
 
+		# Which member the schema refuses this message over, if any (0051).
+		# `report.failed_check` is the identity half, built in 26.231 and
+		# recorded there as "usable and nothing uses it yet"; this is a
+		# consumer, and the channel it uses is the `note` the frontends
+		# already render.
+		#
+		# The CHECK's name rather than a sentence, because a sentence a
+		# schema wrote is `when`'s and is not built. `max` is a rendering of
+		# an identity rather than the identity itself, which is the split
+		# 0051 takes: a consumer keys on the id, a person reads the word.
+		refused = report.failed_check(image, view, self.struct)
+		blamed  = refused[0] if isinstance(refused, tuple) else None
+		because = refused[1] if isinstance(refused, tuple) else ""
+
 		for index in image.members(image.structs[self.struct]):
 			placement = image.placements[index]
 			if placement.kind not in (FIELD, RESERVED):
@@ -134,6 +149,12 @@ class Document:
 			note  = "" if value is not None else "cannot be read"
 			if placement.type_struct != NONE:
 				note = "a nested struct; open it as its own document"
+			if local == blamed:
+				# Appended rather than replacing: a field can be unreadable
+				# AND be the one the schema refuses over, and a note that
+				# dropped either half would answer a question nobody asked.
+				note = f"{note}; refused: {because}" if note \
+				       else f"refused: {because}"
 
 			rows.append(Field(local, at, wide, value, note,
 			                  mutate = image.capability_of(index, "mutate"),

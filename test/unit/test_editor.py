@@ -49,6 +49,66 @@ def image(metadata: bool = True) -> bytes:
 # -- the core ---------------------------------------------------------------
 
 
+#: A schema whose members carry checks, so a document can be refused over a
+#: named one. `SCHEMA` above states none -- every field is readable and
+#: nothing refuses -- which is right for what it tests and useless here.
+CHECKED = """target buffer;
+endian big;
+
+struct reading {
+	u8  kind [must_eq = 7];
+	u8  level [max = 3];
+	reserved u8;
+}
+"""
+
+
+def checked_image() -> bytes:
+	schema   = parse_text(CHECKED)
+	resolved = resolve(schema, solve(schema))
+	return pack(schema, resolved, metadata=True)[0]
+
+
+def test_a_document_names_the_field_the_schema_refuses_over() -> None:
+	"""0051's identity, reaching the channel the editor already had.
+
+	`report.failed_check` has answered `(member, check)` since 26.231 and
+	26.232 recorded it as "usable and nothing uses it yet". The editor's
+	`note` is where a reader sees it: a message that will not validate should
+	say which field is why, without a frontend that knows the format.
+
+	The CHECK's name and not a sentence. A sentence the schema wrote is
+	`when`'s and is not built; `max` is the rendering of an identity, which is
+	the split 0051 takes so that a consumer keys on the id and a person reads
+	the word.
+	"""
+	blob = checked_image()
+
+	# `level` is 9, over `[max = 3]`. `kind` is right, so the first failure
+	# is the second field -- which is the part a caller asks first.
+	rows = {f.name: f for f in
+	        open_document(blob, b"\x07\x09\x00").fields()}
+	assert "refused: max" in rows["level"].note
+	assert "refused" not in rows["kind"].note
+
+
+def test_a_document_that_validates_blames_no_field() -> None:
+	"""The control, and it is not a formality: a note appended unconditionally
+	would read as a refusal on every message the editor ever opened."""
+	rows = {f.name: f for f in
+	        open_document(checked_image(), b"\x07\x03\x00").fields()}
+	assert not any("refused" in f.note for f in rows.values())
+
+
+def test_a_document_keeps_the_note_it_already_had() -> None:
+	"""A field can be unreadable AND be the one the schema refuses over, and a
+	note that dropped either half answers a question nobody asked."""
+	rows = {f.name: f for f in
+	        open_document(checked_image(), b"\x07\x09\x00").fields()}
+	note = rows["level"].note
+	assert "refused: max" in note
+
+
 def test_a_document_places_and_reads_every_member() -> None:
 	document = open_document(image(), MESSAGE)
 

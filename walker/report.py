@@ -1089,7 +1089,24 @@ CHECK_NAMES = {
 	ENCODED_AS: "encoding", ZERO_RUN: "zero_run", PINNED_RUN: "must_eq",
 	DIGITS_VALID: "digits", DIGITS_MINIMAL: "digits_minimal",
 	ARM_SELECTED: "arm_selected",
+	# `[encoding = from(f)]` (0058) and `pad_random(min, max)` (0045). Named
+	# late: each was added as a kind without a name here, so a refusal
+	# reported "bounds" -- the fallback, which is what an UNNAMED kind and a
+	# refusal with no identity both render as. The completeness test below
+	# is what stops a third one doing it.
+	ENCODED_FROM: "encoding", ENCODING_ARM: "encoding",
+	PAD_LENGTH_MIN: "pad_min", PAD_LENGTH_MAX: "pad_max",
 }
+
+
+#: Every `image_check` kind this module knows, so a kind added without a name
+#: is a failure here rather than a refusal that renders as `bounds`.
+ALL_CHECKS = frozenset({
+	MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN,
+	FITS_FRAME, TERMINATED, ARM_SELECTED, DIGITS_VALID, DIGITS_MINIMAL,
+	NUL_TERMINATED, ENCODED_AS, ZERO_RUN, PINNED_RUN, ENCODED_FROM,
+	ENCODING_ARM, PAD_LENGTH_MIN, PAD_LENGTH_MAX,
+})
 
 
 def _arm_selects(image: Image, view: View, index: int,
