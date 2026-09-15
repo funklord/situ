@@ -28413,6 +28413,56 @@ coverage span going bit-valued through four backends and the runtime
 helpers, `crc7_mmc`'s loop, and `example/usb`. The authenticated rule
 does not move: no AEAD produces five bits.
 
+### 26.362 `--define`, and why it edits the source rather than the tree
+
+**0050's cheap half, which the record calls most of the real cases.** A
+declared `const` can be set at generation: `situc map --define block=8192`.
+No lattice change, no new syntax, and the layout is as static afterwards
+as before -- `trailer` keeps an absolute offset either way and only the
+number moves. `const` has parsed and scoped since the beginning with no
+way to set one from outside, so even the easiest external argument had no
+spelling.
+
+**It splices the SOURCE, at the const value's own span, and that is the
+whole design decision.** The obvious implementation rewrites the parsed
+tree. It would have been silently wrong: every command re-parses its
+source, `build` alone several times for the backends and the relation and
+frame layers, so the rewritten tree is thrown away by the next
+`parse(source)` and what is generated disagrees with what was resolved --
+about a constant, which is the kind of disagreement nothing downstream
+trips over. Splicing at the span means every later parse sees it, the
+offsets come from the parse rather than from a pattern over text that
+looks like a declaration, and a diagnostic still points at a line
+somebody can read.
+
+**Every command that reads a schema takes it, and the test derives that
+population rather than listing it.** Sixteen of them. A flag half the
+commands honour is worse than one none of them do: `map` and `build`
+disagreeing about a constant puts a committed artifact out of step with
+the code beside it and nothing says why. The test walks the parser's own
+subcommands, so one added later joins the population without anybody
+remembering -- and with `map`'s flag removed it names `map`.
+
+**What it refuses**: a name the schema declares no const for, listing
+what it does declare; a value that is not an integer; and a `--define`
+with no `=`. A define nobody reads is a deployment that thinks it
+configured something.
+
+**What it is not** is `parameter`, the other half of 0050 -- a run-time
+argument, a member of zero width, and the half that has to answer what a
+moving member costs the descriptions that walk a cursor. Nothing here
+touches that.
+
+**One thing worth knowing rather than fixing.** A map generated under
+`--define` records the layout it was given and does not record the
+define, which is what 0050's "no artefact change" asks for. Two maps of
+one schema can therefore differ with nothing in either saying why, and
+`map --check` compares against whatever defines the checker passes. That
+is inherent to a generation-time constant rather than a defect, and the
+record's own answer for the run-time case is the opposite -- the wire
+signature names every `parameter` -- so the asymmetry is deliberate and
+worth a reader knowing before they meet it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

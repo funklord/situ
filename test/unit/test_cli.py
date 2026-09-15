@@ -187,6 +187,124 @@ def test_build_writes_the_generated_pair(
 	assert "wrote" in capsys.readouterr().err
 
 
+# -- `--define`, decision 0050 ----------------------------------------------
+
+DEFINED = """target buffer;
+endian big;
+
+const block = 4096;
+
+struct volume {
+	u32  magic;
+	u8   payload[block];
+	u16  trailer;
+}
+"""
+
+
+def _defined(tmp_path: Path) -> str:
+	path = tmp_path / "blocks.situ"
+	path.write_text(DEFINED, encoding="ascii")
+	return str(path)
+
+
+def test_a_define_moves_the_layout(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""The cheap half of 0050: a deployment constant fixed before the code is
+	generated. `const` has parsed and scoped since the beginning with no way
+	to set one from outside, so even this case had no spelling.
+
+	The layout is as static afterwards as it was before -- `trailer` keeps an
+	absolute offset either way, and only the number moves. That is what makes
+	this the half with no lattice change behind it.
+	"""
+	schema = _defined(tmp_path)
+
+	assert main(["map", schema]) == 0
+	assert "AbsoluteStatic(0x1004)" in capsys.readouterr().out
+
+	assert main(["map", "--define", "block=8192", schema]) == 0
+	assert "AbsoluteStatic(0x2004)" in capsys.readouterr().out
+
+
+def test_a_define_reaches_the_generated_code(tmp_path: Path) -> None:
+	"""Not only the map. Every command re-parses its source -- `build` alone
+	does it several times, for the backends and the relation and frame
+	layers -- so this is applied to the SOURCE, by splicing at the const
+	value's own span. A tree rewritten once would have been thrown away by
+	the next `parse(source)`, leaving a resolved schema and a generated
+	module that disagree about a constant.
+	"""
+	schema = _defined(tmp_path)
+	out    = tmp_path / "out"
+	out.mkdir()
+
+	assert main(["build", "--target", "c", "--define", "block=64",
+	             "--out", str(out), schema]) == 0
+	header = (out / "blocks.h").read_text(encoding="ascii")
+	assert "#define SITU_VOLUME_SIZE_FIXED 70u" in header	# 4 + 64 + 2
+
+
+def test_a_define_naming_no_const_is_refused(tmp_path: Path) -> None:
+	"""Refused rather than ignored. A define nobody reads is a deployment
+	that thinks it configured something, and the message lists what the
+	schema does declare so the typo is visible."""
+	with pytest.raises(SystemExit) as caught:
+		main(["map", "--define", "nosuch=1", _defined(tmp_path)])
+	assert "declares no `const` by that name" in str(caught.value)
+	assert "it declares: block" in str(caught.value)
+
+
+def test_a_define_that_is_not_a_number_is_refused(tmp_path: Path) -> None:
+	with pytest.raises(SystemExit) as caught:
+		main(["map", "--define", "block=wibble", _defined(tmp_path)])
+	assert "not an integer literal" in str(caught.value)
+
+
+def test_a_define_without_a_value_is_refused(tmp_path: Path) -> None:
+	with pytest.raises(SystemExit) as caught:
+		main(["map", "--define", "block", _defined(tmp_path)])
+	assert "wants `name=value`" in str(caught.value)
+
+
+def test_a_define_takes_any_integer_spelling(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""`0x1000` is 4096, which is what `int(text, 0)` buys and what a
+	deployment constant is as likely to be written as."""
+	assert main(["map", "--define", "block=0x1000", _defined(tmp_path)]) == 0
+	assert "AbsoluteStatic(0x1004)" in capsys.readouterr().out
+
+
+def test_every_command_that_reads_a_schema_takes_a_define() -> None:
+	"""The quantifier, derived rather than listed.
+
+	A flag that half the commands honour is worse than one none of them do:
+	`situc map` and `situc build` disagreeing about a constant would put a
+	committed artifact out of step with the code generated beside it, and
+	nothing would say why. So the population is every subparser with a
+	`schema` positional, taken from the parser itself -- a command added
+	later joins it without anybody remembering.
+	"""
+	parser  = build_parser()
+	actions = [action for action in parser._actions
+	           if isinstance(action, argparse._SubParsersAction)]
+	assert actions, "the parser grew no subcommands"
+
+	wanted  = {}
+	for name, sub in actions[0].choices.items():
+		options = {opt for action in sub._actions for opt in action.option_strings}
+		takes   = any(action.dest == "schema" and not action.option_strings
+		              for action in sub._actions)
+		if takes:
+			wanted[name] = "--define" in options
+
+	assert wanted, "no subcommand takes a schema, so this checked nothing"
+	missing = sorted(name for name, has in wanted.items() if not has)
+	assert not missing, (
+		f"{len(wanted)} command(s) read a schema and these do not take "
+		f"`--define`: {missing}")
+
+
 def test_map_command_emits_the_map(capsys: pytest.CaptureFixture[str]) -> None:
 	assert main(["map", HEADER]) == 0
 	assert capsys.readouterr().out.startswith("# situ capability map")

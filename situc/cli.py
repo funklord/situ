@@ -11,6 +11,8 @@ import argparse
 import difflib
 import json
 import sys
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from situc import __version__, ast, capmap, requirements
@@ -150,11 +152,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 	dump_cmd = sub.add_parser("dump-ast", help="print the parsed AST")
 	dump_cmd.add_argument("schema", type=Path)
+	dump_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	dump_cmd.add_argument("--format", choices=("tree", "source"), default="tree",
 	                      help="structural dump, or the AST rendered back to situ source")
 
 	build_cmd = sub.add_parser("build", help="generate accessor code")
 	build_cmd.add_argument("schema", type=Path)
+	build_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	build_cmd.add_argument("--out", type=Path, default=Path("."),
 	                       help="output directory (default: the current one)")
 	build_cmd.add_argument("--target", choices=("c", "cpp", "python", "rust"),
@@ -198,6 +208,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 	tests_cmd = sub.add_parser("gen-tests", help="generate golden-vector tests")
 	tests_cmd.add_argument("schema", type=Path)
+	tests_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	tests_cmd.add_argument("vectors", type=Path)
 	tests_cmd.add_argument("--out", type=Path, default=Path("."))
 	tests_cmd.add_argument("--prefix", default="situ")
@@ -205,12 +219,20 @@ def build_parser() -> argparse.ArgumentParser:
 	codec_cmd = sub.add_parser(
 		"gen-codec-tests", help="generate property tests from codec signatures")
 	codec_cmd.add_argument("schema", type=Path)
+	codec_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	codec_cmd.add_argument("--out", type=Path, default=Path("."))
 	codec_cmd.add_argument("--prefix", default="situ")
 
 	tamper_cmd = sub.add_parser(
 		"gen-tamper", help="generate the harness that watches a tag's gate refuse")
 	tamper_cmd.add_argument("schema", type=Path)
+	tamper_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	tamper_cmd.add_argument("--out", type=Path, default=Path("."))
 	tamper_cmd.add_argument("--prefix", default="situ")
 
@@ -225,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
 	derived_cmd = sub.add_parser(
 		"gen-derived", help="generate implementations from kernel descriptions")
 	derived_cmd.add_argument("schema", type=Path)
+	derived_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	derived_cmd.add_argument("--out", type=Path, default=Path("."))
 	derived_cmd.add_argument("--prefix", default="situ")
 	derived_cmd.add_argument("--target", choices=("c", "rust", "python"),
@@ -234,12 +260,20 @@ def build_parser() -> argparse.ArgumentParser:
 		"gen-checks",
 		help="generate tests holding the accessors to the capability map")
 	checks_cmd.add_argument("schema", type=Path)
+	checks_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	checks_cmd.add_argument("--out", type=Path, default=Path("."))
 	checks_cmd.add_argument("--prefix", default="situ")
 
 	doc_cmd = sub.add_parser(
 		"doc", help="RFC-style byte-layout diagrams and a field reference")
 	doc_cmd.add_argument("schema", type=Path)
+	doc_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	doc_cmd.add_argument("--format", choices=("ascii", "markdown"), default="ascii",
 	                     help="plain text, or markdown with fenced diagrams")
 	doc_cmd.add_argument("--out", type=Path, default=None,
@@ -251,11 +285,19 @@ def build_parser() -> argparse.ArgumentParser:
 	dissector_cmd = sub.add_parser(
 		"gen-dissector", help="generate a Wireshark dissector in Lua")
 	dissector_cmd.add_argument("schema", type=Path)
+	dissector_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	dissector_cmd.add_argument("--out", type=Path, default=None,
 	                           help="write to a file in this directory instead of stdout")
 
 	fuzz_cmd = sub.add_parser("gen-fuzz", help="generate a fuzz harness")
 	fuzz_cmd.add_argument("schema", type=Path)
+	fuzz_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	fuzz_cmd.add_argument("--out", type=Path, default=Path("."))
 	fuzz_cmd.add_argument("--prefix", default="situ")
 	# C++ is the other memory-unsafe backend and had no harness at all until
@@ -269,6 +311,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 	advise_cmd = sub.add_parser("advise", help="ranked, costed schema suggestions")
 	advise_cmd.add_argument("schema", type=Path)
+	advise_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	advise_cmd.add_argument("--format", choices=("text", "json"), default="text")
 
 	diff_cmd = sub.add_parser("diff", help="capability changes between two revisions")
@@ -279,12 +325,20 @@ def build_parser() -> argparse.ArgumentParser:
 	wire_cmd = sub.add_parser(
 		"wire", help="emit the byte-level contract, or check the committed one")
 	wire_cmd.add_argument("schema", type=Path)
+	wire_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	wire_cmd.add_argument("--check", action="store_true",
 	                      help="compare against the committed .situ.wire and "
 	                           "classify what changed")
 
 	map_cmd = sub.add_parser("map", help="emit the capability map")
 	map_cmd.add_argument("schema", type=Path)
+	map_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	map_cmd.add_argument("--format", choices=("text", "summary"), default="text",
 	                     help="the committable map, or a per-struct digest")
 	map_cmd.add_argument("--check", action="store_true",
@@ -294,6 +348,10 @@ def build_parser() -> argparse.ArgumentParser:
 	pack_cmd = sub.add_parser(
 		"pack", help="emit the packed layout image a walker reads")
 	pack_cmd.add_argument("schema", type=Path)
+	pack_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	pack_cmd.add_argument("-o", "--out", type=Path,
 	                      help="write here rather than to stdout, which is "
 	                           "binary and should not be piped by accident")
@@ -307,11 +365,19 @@ def build_parser() -> argparse.ArgumentParser:
 	verify_cmd = sub.add_parser(
 		"verify", help="check that real bytes conform to the schema")
 	verify_cmd.add_argument("schema", type=Path)
+	verify_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	verify_cmd.add_argument("vectors", type=Path)
 
 	explain_cmd = sub.add_parser(
 		"explain", help="one path's capability vector and its blame chains")
 	explain_cmd.add_argument("schema", type=Path)
+	explain_cmd.add_argument(
+		"--define", action="append", metavar="NAME=VALUE",
+		help="set a declared `const` before the layout is solved "
+		     "(decision 0050)")
 	explain_cmd.add_argument("path", help="a struct or field path, e.g. Header.seq")
 
 	for name in sorted(FUTURE_COMMANDS):
@@ -329,10 +395,70 @@ def read_source(path: Path) -> Source:
 	return Source(str(path), text)
 
 
-def analyse(path: Path) -> tuple[Source, ResolvedSchema, list[requirements.Outcome]]:
+def apply_defines(source: Source, defines: Sequence[str] | None) -> Source:
+	"""`--define name=value`: a declared `const` set at generation (0050).
+
+	The cheap half of external arguments, and most of the real cases: a
+	deployment constant -- this product uses 4 KiB blocks -- fixed before the
+	code is generated. No lattice change, no new syntax, and the layout is as
+	static afterwards as it was before, because a const is what it already
+	was and only its value moved.
+
+	`const` has parsed and scoped since the beginning with no way to set one
+	from outside, so even this case had no spelling. What it is NOT is a
+	run-time argument: that is `parameter`, the half of 0050 this does not
+	build, and the half that has to answer what a moving member costs the
+	descriptions that walk a cursor.
+
+	A name that is not a declared const is refused rather than ignored. A
+	define nobody reads is a deployment that thinks it configured something.
+
+	Applied to the SOURCE rather than to the tree, by splicing at the value's
+	own span. Every command re-parses its source -- `build` alone does it
+	eight times, for the backends and the relation and frame layers -- so a
+	tree rewritten once would have been a tree the next `parse(source)` threw
+	away, silently, leaving a resolved schema and a generated module that
+	disagree about a constant. The span comes from the parse, so this is
+	exact rather than a substitution over text that looks like a
+	declaration, and what every later stage reads is real source: a
+	diagnostic still points at a line somebody can read.
+	"""
+	if not defines:
+		return source
+
+	named = {decl.name: decl for decl in parse(source).consts()}
+	edits: list[tuple[int, int, str]] = []
+	for entry in defines:
+		name, sep, text = entry.partition("=")
+		if not sep or not name:
+			raise SystemExit(
+				f"situc: --define wants `name=value`, found `{entry}`")
+		if name not in named:
+			known = ", ".join(sorted(named)) or "none"
+			raise SystemExit(
+				f"situc: --define {name}: the schema declares no `const` by "
+				f"that name (it declares: {known})")
+		try:
+			value = int(text, 0)
+		except ValueError:
+			raise SystemExit(
+				f"situc: --define {name}={text}: not an integer literal"
+			) from None
+		span = named[name].value.span
+		edits.append((span.start, span.end, str(value)))
+
+	# Back to front, so an earlier edit does not move a later one's offsets.
+	rewritten = source.text
+	for start, end, text in sorted(edits, reverse=True):
+		rewritten = rewritten[:start] + text + rewritten[end:]
+	return Source(source.path, rewritten)
+
+
+def analyse(path: Path, defines: Sequence[str] | None = None
+		) -> tuple[Source, ResolvedSchema, list[requirements.Outcome]]:
 	"""Parse, solve, resolve and discharge. The common front half of every
 	command that needs more than an AST."""
-	source   = read_source(path)
+	source   = apply_defines(read_source(path), defines)
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 	outcomes = requirements.discharge(schema, resolved)
@@ -340,7 +466,8 @@ def analyse(path: Path) -> tuple[Source, ResolvedSchema, list[requirements.Outco
 
 
 def cmd_dump_ast(args: argparse.Namespace) -> int:
-	schema = parse(read_source(args.schema))
+	schema = parse(apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None)))
 	output = unparse(schema) if args.format == "source" else dump(schema)
 	sys.stdout.write(output)
 	return 0
@@ -356,7 +483,8 @@ def cmd_pack(args: argparse.Namespace) -> int:
 	"""
 	from situc import pack as packer
 
-	source   = read_source(args.schema)
+	source   = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 	image, coverage = packer.pack(schema, resolved, metadata=args.metadata)
@@ -397,7 +525,8 @@ def cmd_wire(args: argparse.Namespace) -> int:
 	"""
 	from situc import wire
 
-	source   = read_source(args.schema)
+	source   = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 	current  = wire.render(schema, resolved, source.path)
@@ -448,7 +577,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 	"""
 	from situc import verify
 
-	source   = read_source(args.schema)
+	source   = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 
@@ -460,7 +590,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_map(args: argparse.Namespace) -> int:
-	source   = read_source(args.schema)
+	source   = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 
@@ -527,7 +658,7 @@ def cmd_advise(args: argparse.Namespace) -> int:
 	"""
 	from situc import advise
 
-	_, resolved, outcomes = analyse(args.schema)
+	_, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	suggestions = advise.suggest(resolved)
 
 	if args.format == "json":
@@ -586,7 +717,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 	from situc.codegen.c import generate
 	from situc.codegen.cpp import generate as generate_cpp
 
-	source, resolved, outcomes = analyse(args.schema)
+	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 
 	# A recursive type generated for every target since 0054's second half:
 	# the extent carries a depth and the run's span passes it on, so the
@@ -832,7 +963,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 def cmd_gen_tests(args: argparse.Namespace) -> int:
 	from situc.codegen.c import vectors
 
-	source, resolved, outcomes = analyse(args.schema)
+	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	cases = vectors.parse_vectors(read_source(args.vectors))
 
 	name = args.schema.stem
@@ -861,7 +992,8 @@ def cmd_gen_tamper(args: argparse.Namespace) -> int:
 	"""
 	from situc.codegen.c import tamper
 
-	source   = read_source(args.schema)
+	source   = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 	name     = args.schema.stem
@@ -889,7 +1021,8 @@ def cmd_gen_codec_tests(args: argparse.Namespace) -> int:
 	"""
 	from situc.codegen.c import codectests
 
-	source = read_source(args.schema)
+	source = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema = parse(source)
 	name   = args.schema.stem
 	text   = codectests.generate(schema, name, args.prefix)
@@ -971,7 +1104,8 @@ def cmd_gen_derived(args: argparse.Namespace) -> int:
 		from situc.codegen.c import derived as backend       # type: ignore[no-redef]
 		suffix = "c"
 
-	source = read_source(args.schema)
+	source = apply_defines(read_source(args.schema),
+	                          getattr(args, "define", None))
 	schema = parse(source)
 	name   = args.schema.stem
 	text   = backend.generate(schema, name, args.prefix)
@@ -996,7 +1130,7 @@ def cmd_gen_checks(args: argparse.Namespace) -> int:
 	"""
 	from situc.codegen.c import checks
 
-	source, resolved, outcomes = analyse(args.schema)
+	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
 	text = checks.generate(parse(source), resolved, name, args.prefix)
 
@@ -1018,7 +1152,7 @@ def cmd_doc(args: argparse.Namespace) -> int:
 	"""
 	from situc import doc
 
-	source, resolved, _ = analyse(args.schema)
+	source, resolved, _ = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
 	text = doc.render(parse(source), resolved, name, args.format)
 
@@ -1056,7 +1190,7 @@ def cmd_gen_dissector(args: argparse.Namespace) -> int:
 	"""
 	from situc import dissector
 
-	source, resolved, _ = analyse(args.schema)
+	source, resolved, _ = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
 	text = dissector.generate(parse(source), resolved, name)
 
@@ -1074,7 +1208,7 @@ def cmd_gen_dissector(args: argparse.Namespace) -> int:
 def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	from situc.codegen.c import fuzz
 
-	source, resolved, outcomes = analyse(args.schema)
+	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
 
 	if args.target == "cpp":
@@ -1114,7 +1248,7 @@ def cmd_explain(args: argparse.Namespace) -> int:
 	blame chain for every axis not at its strongest value (section 18.2)."""
 	from situc.capability import DOMAINS
 
-	_, resolved, _ = analyse(args.schema)
+	_, resolved, _ = analyse(args.schema, getattr(args, "define", None))
 
 	entry = resolved.find(args.path)
 	if entry is None:

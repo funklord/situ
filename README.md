@@ -182,6 +182,10 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 
 ## What it generates
 
+Every command that reads a schema takes `--define name=value`, which sets a
+declared `const` before the layout is solved -- a deployment constant, fixed
+at generation (decision 0050).
+
 | Command | Artifact |
 |---|---|
 | `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), the shape they take (`--owned`, `--materialize`, `--single-file`), what pumps the rung-6 state machine (`--driver`), and whether a declaration reaching no code fails the build (`--refuse-ungenerated`) |
@@ -1516,11 +1520,14 @@ today and which is a written-down design.
 
 **Designed and accepted, not yet built.**
 
-- **External arguments** (decision 0050). A format whose shape follows a
-  fact the message does not carry -- a negotiated cipher suite, a card
-  class, a block size. `prefix(...)` was already the precedent that a caller
-  may know something the message does not. The spelling is a `parameter`
-  declaration and a `--define` flag.
+- **External arguments** (decision 0050), half built. A format whose shape
+  follows a fact the message does not carry -- a negotiated cipher suite, a
+  card class, a block size. `prefix(...)` was already the precedent that a
+  caller may know something the message does not. The spelling is a
+  `parameter` declaration and a `--define` flag; `--define name=value` sets
+  a declared `const` before the layout is solved and every command that
+  reads a schema takes it, while `parameter` -- the run-time half, a member
+  of zero width -- is not built.
 - **Messages a schema carries** (decision 0051). A schema should be able to
   say what a violation *means*, not only that one happened: today every
   bound collapses into `SITU_ERR_CONSTRAINT` and generated code carries no
