@@ -28463,6 +28463,65 @@ record's own answer for the run-time case is the opposite -- the wire
 signature names every `parameter` -- so the asymmetry is deliberate and
 worth a reader knowing before they meet it.
 
+### 26.363 Asking the two walkers WHY, and the BCD the C walk never had
+
+**0051's identity half, from the reader that had neither end of it.**
+`report.failed_check` has answered `(member, check)` since 26.231 and the
+generated C has named the member since 26.232; this walk answered neither,
+so there was nothing to hold it against. `situ_walk_failed_check` answers
+it now -- `validate` untouched, same signature and same short circuit,
+because the identity is a second question about the same call.
+
+**Recorded on the way out, twenty sites.** The same design 26.231 argued
+for: a second pass that re-ran the checks would be a second implementation
+of an order the schema owns, free to disagree with the first.
+
+**The completeness sweep was wrong, and the comparison is what said so.**
+A syntactic check over `*verdict = SITU_WALK_(BOUNDS|CONSTRAINT|VERSION)`
+reported every site covered. Three assignments are not of a literal -- two
+TERNARIES and one propagated `inner` -- and the regex could not see them,
+so the terminator check and a refused value read recorded nothing while the
+sweep said 20 of 20. The corpus comparison found 55 disagreements on its
+first run. **A proof over the shape of a line is a proof about lines that
+have that shape**, and the population it silently omitted is the one the
+independent reader found.
+
+**And the population was the wrong one twice.** The first sweep scanned
+`validate_deep` alone and reported every refusal covered; five more live in
+the arm helpers, which refuse too. Coextensiveness is the test, not
+plausibility: every refusal the WALK can make, not every refusal in the
+function being edited.
+
+**Then a guard wider than the other walker's.** C refused a message-sized
+run at a placement check where `report._validate` reaches `fits_frame` --
+Python's guard is the pair `fixed and not offset_known` and its comment
+says the two cases "do not overlap", while C knew only the offset half and
+had no name for `SIZE_FIXED` at all. Verdicts agreed throughout, which is
+why nothing had seen it.
+
+**The find worth the whole exercise: the C walker had no BCD.** It read a
+`bcd2 seconds` holding `0x3E` as 62 where the four backends, the Python
+walk and `situ_bcd_decode` all answer 44. Both walkers answered CONSTRAINT
+for the buffer that found it -- one because 62 breaks `[max = 59]`, the
+other at a `must_be_zero` two members later -- so the verdict comparison
+could not see it and the member comparison could not either. Only *which
+check* separated them.
+
+That is the third time packed decimal has hidden behind a comparison that
+could not reach it: 26.222 records `codegen/differ` skipping a BCD member
+outright, so C's side never mentioned one. A construct that keeps falling
+out of differentials is worth suspecting the differential over.
+
+**What is left apart is named**: `pickle_wstring` and `png.chunk`, where
+`size_bits` refuses on an overflowing count and the Python walk clamps.
+The C walker's own comment already called that "the half still apart", so
+the comparison rediscovered a divergence the tree had recorded -- which is
+the cheapest evidence that it is sensitive enough to be worth having.
+
+**Standing**: 197 refusals compared for their identity and agreeing, 4
+held out by name, 21 declined. The verdict comparison is unmoved at 380
+agreeing and none differing, which is the property that had to survive.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

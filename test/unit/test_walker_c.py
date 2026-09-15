@@ -1527,6 +1527,45 @@ def test_they_agree_about_a_run_element_by_element(tmp_path: Path) -> None:
 #: for the struct at all. The two are different questions: the verdict is
 #: about the message and the refusal is about the walker, and folding them
 #: together would report a struct whose rules are not carried as well-formed.
+#: Which check refused, beside the verdict (0051). `validate` is untouched
+#: and this is a second question about the same call -- the walk records the
+#: identity on its way out, so the two cannot disagree about which check
+#: answered.
+WHY = """situ_walk_err verdict = SITU_WALK_OK;
+		situ_walk_why why;
+		const situ_walk_err e = situ_walk_failed_check(&image, msg, len, shape,
+		                                               &verdict, &why);
+		if (i > 0) {
+			continue;	/* one answer per struct, not per member */
+		}
+		if (e != SITU_WALK_OK) {
+			printf("cannot-say\\n");
+		} else if (verdict == SITU_WALK_OK) {
+			printf("clean\\n");
+		} else {
+			printf("%u %u\\n", why.placement, (unsigned)why.check);
+		}"""
+
+
+def c_why(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> tuple[str, str] | str:
+	"""The C walk's `(member, check)`, spelled the Python walk's way.
+
+	`_drive` splits on whitespace, so a refusal comes back as two fields and
+	`clean` or `cannot-say` as one -- which is the same three-way answer
+	`report.failed_check` gives, and is why this renders the ids rather than
+	the names: the names are a rendering and the ids are the contract.
+	"""
+	said = _drive(tmp_path, blob, message, WHY, shape)
+	if len(said) == 1:
+		return report.CLEAN if said[0] == "clean" else report.CANNOT_SAY
+
+	placement, check = int(said[0]), int(said[1])
+	image  = load(blob)
+	member = report._local(image, placement) if placement != NONE else "?"
+	return member, report.CHECK_NAMES.get(check, "bounds")
+
+
 VERDICT = """situ_walk_err verdict = SITU_WALK_OK;
 		const situ_walk_err e = situ_walk_validate(&image, msg, len, shape,
 		                                           &verdict);
@@ -2388,6 +2427,117 @@ def test_they_agree_about_the_corpus_being_well_formed(
 				f"C {c_said}, python {p_said}, on {packet.hex()}")
 
 	VERDICTS_ASKED[schema.name] = (asked, declined)
+
+
+#: The one class where the two walkers refuse for the same reason and name a
+#: different check, and it is a divergence this tree already knew about.
+#:
+#: `size_bits` in the C walk REFUSES on an overflowing count where the Python
+#: walk clamps: its own comment says so -- "the overflow arm above is left
+#: refusing rather than saturating ... it stays a refusal and is recorded as
+#: the half still apart". Both answer BOUNDS for the same member; C stops at
+#: the size read and Python reaches `fits_frame`.
+#:
+#: Named rather than papered over, and named by SCHEMA AND STRUCT rather than
+#: by loosening the comparison: a fifth schema joining this class has to be
+#: added here, which is the difference between a known gap and a weakened
+#: test.
+IDENTITY_APART = frozenset({
+	("pickle.situ", "pickle_wstring"),
+	("png.situ", "chunk"),
+})
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_two_walkers_agree_about_which_check_refused(
+		schema: Path, tmp_path: Path) -> None:
+	"""Not that they refused -- WHY (0051).
+
+	The verdict comparison beside this one has been green for a while, and it
+	cannot see two walkers that agree on `2` and disagree about which check
+	produced it. That is the same silence the `count=` probes were in and the
+	same silence the corpus verdict comparison was in before 26.349: a
+	question nobody asked reads exactly like a question answered.
+
+	Asked the moment the C walk could answer it. `report.failed_check` has
+	named `(member, check)` since 26.231 and the generated C has named the
+	member since 26.232; this walk answered neither until now, so there was
+	nothing to compare it against.
+
+	It paid on the first run. Fifty-five pairs disagreed, in two classes:
+	five refusals in the C walk recorded no identity at all -- including the
+	terminator check, whose assignment is a TERNARY that the completeness
+	sweep's own regex could not see -- and one guard was wider than the
+	Python walk's, refusing a message-sized run at a placement check where
+	the other reaches `fits_frame`. Both are fixed; `IDENTITY_APART` names
+	what is left and why.
+	"""
+	blob  = image_for(schema)
+	image = load(blob)
+	rng   = random.Random(20260913)
+
+	# `image_for` packs without metadata, so that blob carries no names --
+	# which is what `shape_named` exists to work around. The held-out set is
+	# keyed by name because an index moves when somebody adds a struct.
+	named = [struct.name for struct in parse(
+		Source(str(schema), schema.read_text(encoding="ascii"))).structs()]
+
+	asked = 0
+	for which in range(len(image.structs)):
+		if which < len(named) \
+				and (schema.name, named[which]) in IDENTITY_APART:
+			continue
+		for packet in (draw(rng), draw(rng)):
+			try:
+				view = acquire(image, packet, which)
+			except (Refused, Unplaceable):
+				continue
+			try:
+				p_said = report.failed_check(image, view, which)
+			except (Refused, Unplaceable):
+				continue
+			if p_said in (report.CLEAN, report.CANNOT_SAY):
+				continue
+
+			try:
+				c_said = c_why(tmp_path, blob, packet, which)
+			except (AssertionError, IndexError):
+				continue	# no driver can acquire this shape
+			if c_said in (report.CLEAN, report.CANNOT_SAY):
+				continue
+
+			asked += 1
+			assert c_said == p_said, (
+				f"{schema.name} struct {which}: the walkers agree that the "
+				f"message is refused and disagree about which check did it "
+				f"-- C {c_said}, python {p_said}, on {packet.hex()}")
+
+	IDENTITY_ASKED[schema.name] = asked
+
+
+#: The denominator for the identity comparison, over the corpus rather than
+#: per schema -- `std/codecs.situ` and `std/kernels.situ` declare no message
+#: struct, so nothing being asked of them is right.
+IDENTITY_ASKED: dict[str, int] = {}
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_identity_comparison_asked_something() -> None:
+	"""A comparison that quietly stopped having anything to compare would
+	pass exactly as loudly as one that agreed. It has three ways to go
+	vacuous: both walkers reporting `clean` for every draw, the C driver
+	failing to build, and `IDENTITY_APART` growing until it covers the
+	corpus."""
+	assert IDENTITY_ASKED, "the parametrised cases did not run"
+
+	asked = sum(IDENTITY_ASKED.values())
+	assert asked >= 120, (
+		f"only {asked} refusals were compared for their identity across "
+		f"{len(IDENTITY_ASKED)} schemas; it was 197 when written")
+	assert len(IDENTITY_APART) <= 4, (
+		f"{len(IDENTITY_APART)} schemas are held out of the identity "
+		"comparison; each one is a divergence nobody is looking at")
 
 
 #: What each schema contributed, so the corpus total can be asserted once

@@ -233,6 +233,14 @@ typedef struct {
  * signed element unsigned and reported a disagreement that was not there,
  * which is what a missing accessor looks like from outside. */
 #define SITU_WALK_OFFSET_KNOWN 0x01u
+/* The member's size is a constant the schema fixed, rather than one the
+ * message declares. It travels with `OFFSET_KNOWN` as a PAIR: a member whose
+ * size is fixed and whose offset is not was never bounds-checked by the
+ * acquisition, so the walk checks it -- and a member that declares its own
+ * length is the `fits_frame` case instead, never fixed-size, so the two do
+ * not overlap. This walker knew only the offset half and refused both at the
+ * first guard, which agreed on the verdict and named the wrong check. */
+#define SITU_WALK_SIZE_FIXED   0x04u
 #define SITU_WALK_SIGNED       0x10u
 /* A `tag` or `checksum` member (decision 0035). A caller asks `present=`
  * of it rather than for a value -- `situ_walk_bytes` answers, since its
@@ -438,6 +446,35 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 situ_walk_err situ_walk_validate(const situ_walk_image *image,
                                      const uint8_t *message, uint32_t len,
                                      uint32_t shape, situ_walk_err *verdict);
+
+/* Which check refused, beside the verdict (0051).
+ *
+ * `report.failed_check` answers this in the Python walk and has since
+ * 26.231; the generated C names the member from `check(view, &which)` since
+ * 26.232. This walk answered neither, so the two walkers could agree on a
+ * verdict while disagreeing about WHY -- which the corpus comparison could
+ * not see, because it compared only the code.
+ *
+ * `placement` is SITU_WALK_NONE and `check` is SITU_WALK_NO_CHECK where the
+ * struct validates, and where the refusal is the struct's own minimum: a
+ * frame too short for the whole struct has no member that broke it, which is
+ * the same answer the generated `check` gives with its no-check sentinel.
+ *
+ * Recorded on the way OUT rather than reconstructed by a second pass. The
+ * order the checks are asked in is part of the schema's meaning -- the first
+ * failure is the answer -- and a second walk would be a second
+ * implementation of that order, free to disagree with the first. */
+typedef struct {
+	uint32_t placement;
+	uint8_t  check;			/* an `image_check` kind */
+} situ_walk_why;
+
+#define SITU_WALK_NO_CHECK 0xffu
+
+situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, situ_walk_err *verdict,
+                                     situ_walk_why *why);
 
 /* Evaluate a section 10 program. `field` reads a placement's value for the
  * expression, and is the only thing tying this to a message. */

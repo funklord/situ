@@ -1983,6 +1983,13 @@ static situ_walk_err chain_bits_deep(const situ_walk_image *image,
  * end its bytes start at. That is also why `endian native` -- refused for a
  * whole-byte read, the capture not recording which machine wrote it -- is
  * answerable for this one. */
+/* `text_flags` bit 3: the value is packed decimal, a digit per nibble.
+ * Above the read rather than beside `TEXT_CASE_INSENSITIVE` further down,
+ * because the read is earlier in the file and one definition is the whole
+ * point -- a second copy of what a flag means is how two readers of one
+ * attribute start disagreeing. */
+#define TEXT_BCD 8u
+
 static situ_walk_err read_at(const uint8_t *message, uint32_t len,
                              const situ_walk_placement *held,
                              uint32_t start_bits, uint32_t width_bits,
@@ -2060,6 +2067,33 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
 			 * is a single byte, where the question does not arise. */
 			return SITU_WALK_UNSUPPORTED;
 		}
+	}
+
+
+	/* Packed decimal, before the sign: `situ_bcd_decode` verbatim, which is
+	 * what the four backends and `walk.py` do.
+	 *
+	 * This walker had no BCD at all -- it read a `bcd2 seconds` holding 0x3E
+	 * as 62 where every other reader answers 44 -- and neither the verdict
+	 * comparison nor the member comparison could see it: on the buffer that
+	 * found it both walkers answered CONSTRAINT, one because 62 breaks
+	 * `[max = 59]` and the other at a `must_be_zero` two members later. The
+	 * identity comparison is what separated them.
+	 *
+	 * Including what it does with a nibble above nine: the runtime
+	 * multiplies out whatever the nibbles hold, so `0x2F` at two digits is
+	 * 35 rather than a refusal. 26.222 is the record of that argument being
+	 * had and settled -- a fifth description inventing its own answer for
+	 * malformed input is the defect, not the remedy. */
+	if ((held->text_flags & TEXT_BCD) != 0u) {
+		const uint32_t digits = held->radix_digits;
+		uint64_t       packed = 0u;
+		uint32_t       shift;
+
+		for (shift = digits; shift > 0u; shift--) {
+			packed = packed * 10u + ((value >> (4u * (shift - 1u))) & 0xFu);
+		}
+		value = packed;
 	}
 
 	if ((held->flags & FLAG_SIGNED) != 0u && width_bits < 64u) {
@@ -2793,7 +2827,24 @@ static situ_walk_err declared_encoding(const situ_walk_image *image,
 static situ_walk_err validate_deep(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
-                                   situ_walk_err *verdict);
+                                   situ_walk_err *verdict,
+                                   situ_walk_why *why);
+
+/* `why` may be NULL, and one sink rather than a guard at every refusal: that
+ * is the shape the generated `check` already uses for its `which`, and it is
+ * what keeps each of the twenty refusals below one `record` call.
+ *
+ * Twenty rather than the fifteen in `validate_deep`: the arm helpers refuse
+ * too, and a first sweep that checked only `validate_deep` reported every
+ * site covered. The population is every refusal the walk can make, not every
+ * refusal in the function being edited. */
+static void record(situ_walk_why *why, uint32_t placement, uint8_t check)
+{
+	if (why != NULL) {
+		why->placement = placement;
+		why->check     = check;
+	}
+}
 
 /* The selected arm's own `validate`, through its own type.
  *
@@ -2814,7 +2865,8 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t index,
                                    uint32_t chosen, uint32_t depth,
-                                   situ_walk_err *verdict)
+                                   situ_walk_err *verdict,
+                                   situ_walk_why *why)
 {
 	uint32_t            at   = 0u;
 	uint32_t            wide = 0u;
@@ -2850,6 +2902,7 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return err;
 	}
 	if (err != SITU_WALK_OK) {
+		record(why, index, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
@@ -2858,10 +2911,12 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return err;
 	}
 	if (err != SITU_WALK_OK) {
+		record(why, index, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
 	if (at / 8u > len || (at + wide + 7u) / 8u > len) {
+		record(why, index, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
@@ -2872,7 +2927,7 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
-	                     depth + 1u, verdict);
+	                     depth + 1u, verdict, why);
 }
 
 
@@ -2898,7 +2953,8 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
                                  const uint8_t *message, uint32_t len,
                                  uint32_t shape, uint32_t index,
                                  uint32_t depth, int permissive,
-                                 situ_walk_err *verdict)
+                                 situ_walk_err *verdict,
+                                 situ_walk_why *why)
 {
 	uint32_t       count = 0u;
 	const uint8_t *rows  = arm_rows(image, index, &count);
@@ -2926,6 +2982,7 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
 		return err;
 	}
 	if (err != SITU_WALK_OK) {
+		record(why, index, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
@@ -2946,15 +3003,16 @@ static situ_walk_err arm_selects(const situ_walk_image *image,
 			continue;
 		}
 		return arm_validates(image, message, len, shape, index, chosen,
-		                     depth, verdict);
+		                     depth, verdict, why);
 	}
 
 	/* No `case` matched. `default: <member>` is not a refusal, and the
 	 * member it selects is the one that has to validate. */
 	if (permissive && fallback != SITU_WALK_NONE) {
 		return arm_validates(image, message, len, shape, index, fallback,
-		                     depth, verdict);
+		                     depth, verdict, why);
 	}
+	record(why, index, CHECK_ARM_SELECTED);
 	*verdict = SITU_WALK_VERSION;
 	return SITU_WALK_OK;
 }
@@ -2965,13 +3023,29 @@ situ_walk_err situ_walk_validate(const situ_walk_image *image,
                                  const uint8_t *message, uint32_t len,
                                  uint32_t shape, situ_walk_err *verdict)
 {
-	return validate_deep(image, message, len, shape, 0u, verdict);
+	return validate_deep(image, message, len, shape, 0u, verdict, NULL);
+}
+
+situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, situ_walk_err *verdict,
+                                     situ_walk_why *why)
+{
+	/* Poisoned before the walk rather than after it: a refusal that records
+	 * nothing and a struct that validates must not read alike, which is what
+	 * `SITU_WALK_NONE` and the no-check sentinel say. */
+	if (why != NULL) {
+		why->placement = SITU_WALK_NONE;
+		why->check     = SITU_WALK_NO_CHECK;
+	}
+	return validate_deep(image, message, len, shape, 0u, verdict, why);
 }
 
 static situ_walk_err validate_deep(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
-                                   situ_walk_err *verdict)
+                                   situ_walk_err *verdict,
+                                   situ_walk_why *why)
 {
 	if (shape >= image->struct_count) {
 		return SITU_WALK_BOUNDS;
@@ -2997,6 +3071,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 	 * that happened to fit. */
 	const uint32_t fixed = u32_at(entry + 8);
 	if (fixed != SITU_WALK_NONE && len < (fixed + 7u) / 8u) {
+		record(why, SITU_WALK_NONE, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
@@ -3084,6 +3159,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (err != SITU_WALK_OK) {
 				/* The frame does not reach the version field: BOUNDS, as
 				 * the Python walk answers when the read is refused. */
+				record(why, index, SITU_WALK_NO_CHECK);
 				*verdict = SITU_WALK_BOUNDS;
 				return SITU_WALK_OK;
 			}
@@ -3125,6 +3201,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			return err;
 		}
 		if (err != SITU_WALK_OK) {
+			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
@@ -3133,6 +3210,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			return err;
 		}
 		if (err != SITU_WALK_OK) {
+			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
@@ -3144,7 +3222,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * Python walk and every backend leave that one unchecked, so a second
 		 * reader that flagged it would be the one out of six that disagreed. */
 		if ((held.flags & SITU_WALK_OFFSET_KNOWN) == 0u
+		                && (held.flags & SITU_WALK_SIZE_FIXED) != 0u
 		                && (at / 8u > len || (wide + 7u) / 8u > len - at / 8u)) {
+			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
@@ -3195,6 +3275,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				 * is signed, which is the same guard `report`'s
 				 * `count < 0` makes on the other side. */
 				if (how_many < 0) {
+					record(why, index, SITU_WALK_NO_CHECK);
 					*verdict = SITU_WALK_BOUNDS;
 					return SITU_WALK_OK;
 				}
@@ -3203,6 +3284,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				 * would say a table fits that does not. */
 				if ((uint64_t)how_many * (entry_bits / 8u)
 				                > (uint64_t)room) {
+					record(why, index, SITU_WALK_NO_CHECK);
 					*verdict = SITU_WALK_BOUNDS;
 					return SITU_WALK_OK;
 				}
@@ -3217,11 +3299,16 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		if (nested) {
 			situ_walk_err inner = SITU_WALK_OK;
 			err = validate_deep(image, message + at / 8u, len - at / 8u,
-			                    held.type_struct, depth + 1u, &inner);
+			                    held.type_struct, depth + 1u, &inner, why);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
 			if (inner != SITU_WALK_OK) {
+				/* The inner walk recorded its own identity through the
+				 * same `why`; overwriting it here would name the member
+				 * that CONTAINS the refusal rather than the one that
+				 * made it, which is not what `report.failed_check`
+				 * answers -- it takes the last recorded, innermost. */
 				*verdict = inner;
 				return SITU_WALK_OK;
 			}
@@ -3243,6 +3330,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
 			}
+			record(why, index, CHECK_TERMINATED);
 			*verdict = (err != SITU_WALK_OK) ? SITU_WALK_BOUNDS
 			                                 : SITU_WALK_CONSTRAINT;
 			if (err == SITU_WALK_OK && terminated) {
@@ -3263,7 +3351,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				continue;
 			}
 			err = arm_selects(image, message, len, shape, index, depth,
-			                  i64_at(row + 4) != 0, verdict);
+			                  i64_at(row + 4) != 0, verdict, why);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
@@ -3296,6 +3384,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if ((kind == CHECK_PAD_LENGTH_MIN && (int64_t)length < want)
 			                || (kind == CHECK_PAD_LENGTH_MAX
 			                    && (int64_t)length > want)) {
+				record(why, index, kind);
 				*verdict = SITU_WALK_CONSTRAINT;
 				return SITU_WALK_OK;
 			}
@@ -3328,11 +3417,13 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 						return err;
 					}
 					if (err != SITU_WALK_OK) {
+						record(why, index, SITU_WALK_NO_CHECK);
 						*verdict = SITU_WALK_BOUNDS;
 						return SITU_WALK_OK;
 					}
 				}
 				if (at / 8u > len || content > len - at / 8u) {
+					record(why, index, SITU_WALK_NO_CHECK);
 					*verdict = SITU_WALK_BOUNDS;
 					return SITU_WALK_OK;
 				}
@@ -3411,6 +3502,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 							return err;
 						}
 						if (cut) {
+							record(why, (uint32_t)want,
+							       SITU_WALK_NO_CHECK);
 							*verdict = SITU_WALK_BOUNDS;
 							return SITU_WALK_OK;
 						}
@@ -3427,6 +3520,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					}
 
 					if (bad) {
+						record(why, index, kind);
 						*verdict = SITU_WALK_CONSTRAINT;
 						return SITU_WALK_OK;
 					}
@@ -3462,6 +3556,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					return err;
 				}
 				if ((held_bits + 7u) / 8u > len - at / 8u) {
+					record(why, index, kind);
 					*verdict = SITU_WALK_BOUNDS;
 					return SITU_WALK_OK;
 				}
@@ -3474,8 +3569,19 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				return err;
 			}
 			if (err != SITU_WALK_OK) {
-				*verdict = (kind == CHECK_DIGITS_VALID
-				            || kind == CHECK_DIGITS_MINIMAL)
+				/* The kind only where the CHECK is what refused. For a
+				 * text number a read that fails is the digits failing, so
+				 * the check names it; for any other member the READ
+				 * failed and no check was reached -- naming whichever row
+				 * the loop happened to be on would attribute a bounds
+				 * refusal to a `[min]` that never ran, which is what the
+				 * Python walk records as no check at all. */
+				const int digits_failed = (kind == CHECK_DIGITS_VALID
+				                           || kind == CHECK_DIGITS_MINIMAL);
+
+				record(why, index,
+				       digits_failed ? kind : SITU_WALK_NO_CHECK);
+				*verdict = digits_failed
 				         ? SITU_WALK_CONSTRAINT : SITU_WALK_BOUNDS;
 				return SITU_WALK_OK;
 			}
@@ -3528,6 +3634,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					return err;
 				}
 				if (err != SITU_WALK_OK) {
+					record(why, index, kind);
 					*verdict = SITU_WALK_CONSTRAINT;
 					return SITU_WALK_OK;
 				}
@@ -3550,6 +3657,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 
 			if (broken) {
+				record(why, index, kind);
 				*verdict = SITU_WALK_CONSTRAINT;
 				return SITU_WALK_OK;
 			}
