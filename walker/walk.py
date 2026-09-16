@@ -929,8 +929,10 @@ def read_bytes(view: View, index: int) -> bytes:
 	"""A member's bytes, for the runs and arrays that have no scalar value."""
 	start = offset_bits(view, index)
 	width = content_bits(view, index)
-	if start % BITS_PER_BYTE or width % BITS_PER_BYTE:
+	if start % BITS_PER_BYTE:
 		raise Refused("a byte run that does not start on a byte")
+	if width % BITS_PER_BYTE:
+		raise Refused("a byte run that is not a whole number of bytes")
 	first = view.at + start // BITS_PER_BYTE
 	last  = first + width // BITS_PER_BYTE
 	if last > view.limit:
@@ -958,8 +960,10 @@ def write_bytes(view: View, index: int, value: bytes) -> None:
 	"""
 	start = offset_bits(view, index)
 	width = content_bits(view, index)
-	if start % BITS_PER_BYTE or width % BITS_PER_BYTE:
+	if start % BITS_PER_BYTE:
 		raise Refused("a byte run that does not start on a byte")
+	if width % BITS_PER_BYTE:
+		raise Refused("a byte run that is not a whole number of bytes")
 
 	first = view.at + start // BITS_PER_BYTE
 	last  = first + width // BITS_PER_BYTE

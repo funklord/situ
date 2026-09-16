@@ -1143,7 +1143,9 @@ def _since_of(member: ast.Member) -> int | None:
 			raise error(
 				"`since` takes a version number, counting from 1",
 				attr.span,
-				label = "expected a literal",
+				label = (f"version {attr.value.value} is before the first"
+				         if isinstance(attr.value, ast.IntLiteral)
+				         else "not a literal version number"),
 				notes = ["`[since = 2]`: the version this member arrived in"],
 			)
 		return attr.value.value

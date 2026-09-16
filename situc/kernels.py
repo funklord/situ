@@ -421,11 +421,16 @@ def _reed_solomon(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 	n     = _positive(kernel, "n", decl)
 	k     = _positive(kernel, "k", decl)
 
+	# `field = 2` is the one value both halves disagree about: it IS a power
+	# of two, and GF(2) is a bit rather than a symbol field, so a label
+	# reading "not a power of two" is false for exactly the value somebody
+	# reasoning "binary code" reaches for first (26.366).
 	if field & (field - 1) or field < 4:
 		raise error(
 			f"`{decl.name}` has a field of {field} elements",
 			kernel.span,
-			label = "not a power of two",
+			label = ("not a power of two" if field & (field - 1)
+			         else "a power of two, but GF(2) is a bit, not a symbol"),
 			notes = ["GF(2^m) has 2^m elements; `field = 256` is the byte-wide "
 			         "field every practical code uses"],
 		)

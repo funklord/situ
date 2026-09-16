@@ -464,6 +464,11 @@ class Parser:
 		if self.accept_symbol("@") is not None:
 			token   = self.current
 			address = evaluate_literal(self.parse_expr())
+			# `address < 0` cannot fire: `evaluate_literal` folds nothing,
+			# so `@ -4` is a unary expression and arrives as None like any
+			# other non-literal. The message is right for every input that
+			# reaches it, which is why producing it is what settled this
+			# and reading it was not (26.366).
 			if address is None or address < 0:
 				raise error("a register address must be a literal", token.span,
 				            label="expected a number such as `0x00`")
@@ -856,7 +861,9 @@ class Parser:
 				raise error(
 					"an enum's element count is a positive literal",
 					span,
-					label = "expected a number here",
+					label = (f"a count of {size.value}"
+					         if isinstance(size, ast.IntLiteral)
+					         else "not a literal number"),
 					notes = ["the count fixes how wide one value of this "
 					         "enum is, so it cannot be computed"])
 			if backing.name != "u8":
@@ -1295,7 +1302,8 @@ class Parser:
 					raise error(
 						"`max_bytes` must be a literal from 1 to 10",
 						token.span,
-						label = "out of range",
+						label = ("out of range" if max_bytes is not None
+						         else "not a literal"),
 					)
 			elif prop.text == "max_bits":
 				self.expect_symbol("=", "after `max_bits`")
@@ -1305,7 +1313,8 @@ class Parser:
 					raise error(
 						"`max_bits` must be a literal from 1 to 64",
 						token.span,
-						label = "out of range",
+						label = ("out of range" if max_bits is not None
+						         else "not a literal"),
 					)
 			else:
 				raise error(

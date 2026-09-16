@@ -28672,6 +28672,69 @@ assertion reads the label line only, and with the stale label it fails
 naming the missing form. A control has to fail through the check under
 test, and this one was being saved by the sentence underneath it.
 
+### 26.366 One refusal, two doors, and a label that knew one of them
+
+**The message line was right every time and the line under the caret was
+not.** A diagnostic here has three parts: what is wrong, a label under the
+caret saying what is wrong with THIS text, and notes. The label is the one
+a reader checks their own writing against, and in seven places it described
+one half of a condition written `A or B` while the author had done B.
+
+    `[since = 0]`           "expected a literal"      -- they wrote one
+    `enum e : u8 [0]`       "expected a number here"  -- they wrote one
+    `max_bits = n`          "out of range"            -- it has no range
+    `max_bytes = n`         "out of range"
+    `field = 2`             "not a power of two"      -- 2 is one
+    `offset_type = 16`      "an `indexed` region needs `offset_type`"
+    `offset_type = nope`    "`nope` is not a whole-byte scalar"
+
+**`field = 2` is the sharpest and the last two are the worst.**
+Reed-Solomon is a code over GF(2^m) and the guard reads
+`field & (field - 1) or field < 4`, so the one value the two halves
+disagree about is 2 -- a power of two, refused by a message saying it is
+not, and the value somebody reasoning "binary code" reaches for first. The
+`indexed` pair tells an author that a thing they wrote is missing, and that
+a name the schema has never heard of has the wrong width: both send the
+reader to check something that is not the fault.
+
+**An eighth candidate dissolved on production, which is why each was
+produced.** `register r @ -4` looked like the same thing: the guard is
+`address is None or address < 0` and the message says "must be a literal".
+But `evaluate_literal` folds nothing, so `-4` is a unary expression and
+arrives as `None` like any other non-literal -- the second disjunct cannot
+fire, and the message is right for every input that reaches it. Reading
+would have "confirmed" the defect; writing the schema refused it. The site
+carries a comment saying so, because the next reader will have the same
+thought.
+
+**Found by a query and settled one at a time.** Every `if A or B:` whose
+body raises `error(...)` with a literal label, which is 28 sites; the other
+twenty are labels true of the whole condition -- "not a positive integer
+literal" covers a path and a zero alike. `and`-conditions were swept with
+them and are clean, which is not luck: a conjunction narrows, so a label
+describing it describes every case that reaches it.
+
+**Two more in the walker, corrected rather than pinned.** `read_bytes` and
+its writing twin refuse `start % 8 or width % 8` with "a byte run that does
+not start on a byte", which is false for a run that starts on one and is
+not a whole number of them. Both are defensive against a malformed image --
+the compiler refuses a misaligned byte run, so no schema reaches either --
+so there is no test, and saying that is better than engineering an image to
+claim one.
+
+**Both doors are pinned, not one.** The test enters each refusal twice and
+asserts what each says, because pinning the branch that was wrong leaves
+the other free to grow into it, and a label that is merely *different* from
+its sibling can still be wrong. With the old wording restored, seven
+parametrised cases fail, each naming its own.
+
+**The shape is not confined to diagnostics.** A condition with two causes
+and one explanation is a check whose pass includes the failure, seen from
+the reporting side rather than the deciding side. The code was right in
+every one of them; what was wrong is the sentence that said why, and
+nothing downstream can notice that, because the only consumer is somebody
+who is already confused.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

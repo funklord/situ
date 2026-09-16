@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from situc.diagnostics import Diagnostic, Label, Severity, Source, Span, error
+from situc.diagnostics import (Diagnostic, Label, Severity, SituError, Source,
+                               Span, error)
+from situc.layout import solve
 from situc.parser import parse_text
+from situc.resolve import resolve
 
 SOURCE = Source("packet.situ", "struct Message {\n\tu8 opts[hdr.length];\n}\n")
 
@@ -147,3 +150,67 @@ def test_width_error_points_at_the_type() -> None:
 	rendered = caught.value.diagnostic.render()	# type: ignore[attr-defined]
 	assert "u65" in rendered
 	assert "widths run from 1 to 64" in rendered
+
+
+# -- one refusal, two doors --------------------------------------------------
+
+
+def refused_label(source: str) -> str:
+	"""The text under the caret, which is where a diagnostic says what is
+	wrong with what the author wrote."""
+	with pytest.raises(SituError) as caught:
+		schema = parse_text(source, path="s.situ")
+		resolve(schema, solve(schema))
+
+	rendered = caught.value.diagnostic.render()
+	carets   = next(line for line in rendered.splitlines() if "^" in line)
+	return carets.split("^")[-1].strip()
+
+
+VARINT   = "endian big;\nvarint_type v {{ encoding = leb128; {0} }}\n"
+VERSION  = "endian big;\nstruct s [version = v] {{ u8 v; u16 a [since = {0}]; }}\n"
+KERNEL   = "endian big;\ncodec c {{ kernel = polynomial(field = {0}, n = 3, k = 2); }}\n"
+INDEXED  = ("endian big;\nstruct r {{ u8 a; }}\n"
+            "struct s {{ u16 n; indexed({0}count = n) {{ r entries[]; }} }}\n")
+
+#: A refusal reached by two different mistakes, and what each must say.
+#:
+#: Every one is a condition written `A or B` where the label described A and
+#: the author had done B -- `[since = 0]` answering "expected a literal" to
+#: somebody who wrote one, `field = 2` answering "not a power of two" about a
+#: power of two. The message line stayed true throughout; what was wrong is
+#: the line under the caret, which is the one a reader checks their own text
+#: against (26.366).
+TWO_DOORS = [
+	("an enum's element count",
+	 "endian big;\nenum e : u8 [0] { A = 1; }\n",     "a count of 0",
+	 "endian big;\nenum e : u8 [wide] { A = 1; }\n",  "not a literal number"),
+	("`max_bytes`",
+	 VARINT.format("max_bits = 32; max_bytes = 99;"), "out of range",
+	 VARINT.format("max_bits = 32; max_bytes = n;"),  "not a literal"),
+	("`max_bits`",
+	 VARINT.format("max_bits = 99;"), "out of range",
+	 VARINT.format("max_bits = n;"),  "not a literal"),
+	("`since`",
+	 VERSION.format("0"), "version 0 is before the first",
+	 VERSION.format("n"), "not a literal version number"),
+	("a Reed-Solomon field",
+	 KERNEL.format("3"), "not a power of two",
+	 KERNEL.format("2"), "a power of two, but GF(2) is a bit, not a symbol"),
+	("`offset_type`",
+	 INDEXED.format("offset_type = 16, "), "expected a type name such as `u16`",
+	 INDEXED.format(""),                   "expected `offset_type = u16` or similar"),
+	("an offset type that is not a type",
+	 INDEXED.format("offset_type = nope, "), "no type of this name",
+	 INDEXED.format("offset_type = u4, "),   "invalid offset type"),
+]
+
+
+@pytest.mark.parametrize(("named", "first", "says_first", "second", "says_second"),
+                         TWO_DOORS, ids=[row[0] for row in TWO_DOORS])
+def test_each_door_into_a_refusal_says_which_one_was_taken(
+		named: str, first: str, says_first: str,
+		second: str, says_second: str) -> None:
+	"""Both halves, because pinning one leaves the other free to describe it."""
+	assert refused_label(first)  == says_first,  named
+	assert refused_label(second) == says_second, named

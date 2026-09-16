@@ -1574,6 +1574,15 @@ class Solver:
 		element  = member.members[0]
 
 		offset_type = member.argument("offset_type")
+		if offset_type is not None and not isinstance(offset_type, ast.NameRef):
+			raise error(
+				"`offset_type` names a type, not a value",
+				offset_type.span,
+				label = "expected a type name such as `u16`",
+				notes = ["the table's entry width decides how far the region "
+				         "can reach; `offset_type = u16` says it in the "
+				         "vocabulary the rest of the schema uses"],
+			)
 		if offset_type is None or not isinstance(offset_type, ast.NameRef):
 			raise error(
 				"an `indexed` region needs `offset_type`",
@@ -1584,7 +1593,15 @@ class Solver:
 			)
 
 		width = lookup(offset_type.name)
-		if width is None or width.is_bit_packed:
+		if width is None:
+			raise error(
+				f"unknown type `{offset_type.name}`",
+				offset_type.span,
+				label = "no type of this name",
+				notes = ["`offset_type` takes a whole-byte scalar: `u8`, "
+				         "`u16`, `u32`"],
+			)
+		if width.is_bit_packed:
 			raise error(
 				f"`{offset_type.name}` is not a whole-byte scalar",
 				offset_type.span,
