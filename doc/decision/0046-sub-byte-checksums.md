@@ -11,9 +11,11 @@ values. `crc7_mmc`'s left-aligned loop is built (26.369), so every
 polynomial width from 1 to 64 derives in all four backends and all three
 sub-byte codes are checked against their published values. `place_tag`
 takes a sub-byte `checksum` since 26.371 and `usb_token` is in the
-corpus, so the packet this record was written for has a layout and a
-map. Still to do: the bit-addressed accessor for such a field, bit-valued
-coverage through four backends and the runtime, and `example/usb`
+corpus, so the packet this record was written for has a layout, a map,
+and a value accessor in all four backends -- the four-way differential
+compares USB's five-bit CRC and the two walkers agree with it. Still to
+do: bit-valued COVERAGE through four backends and the runtime, which is
+what `compute` and `check` wait on, and `example/usb`
 Date: 2026-09-01
 Phase: unscheduled; found while making USB expressible (26.146, 26.148)
 

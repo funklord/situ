@@ -22,7 +22,7 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	arm_members, bit_addressed_tag, data_sized, has_computable_extent,
+	arm_members, data_sized, has_computable_extent,
 	indexed_elements, own_entries,
 )
 
@@ -564,12 +564,6 @@ def _reads(struct: ResolvedStruct, prefix: str,
 	for entry in own_entries(struct):
 		placement = entry.placement
 		if placement.kind == "reserved":
-			continue
-
-		# A sub-byte checksum has no accessor to drive: it is one value five
-		# bits wide and no backend addresses one yet, so the harness named
-		# `_get` and the generated C did not compile (26.371).
-		if bit_addressed_tag(placement):
 			continue
 
 		local = c_name(placement.path[len(struct.name) + 1 :])

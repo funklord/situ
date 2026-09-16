@@ -28998,6 +28998,36 @@ from finding out the same way.
 run. That is four defects from corpus entries in three days, and every one
 was unreachable rather than unnoticed.
 
+**And then the field became readable, which is what the entry above was
+about before the accessors turned out to be the work.** A sub-byte
+checksum is ONE VALUE, so it reads the way every other sub-byte field
+does -- the bit load already in each runtime, the same one `endpoint`
+beside it uses. All four backends emit it now:
+
+    c     situ_bits_get_msb(situ_base(view), 11u, 5u)
+    c++   situ_bits_get_msb(situ_base(raw_), 11, 5)
+    rust  situ_rt::read_bits(self.bytes, 11, 5, true)
+    py    self._bits(11, 5, msb=True, signed=False)
+
+**The one-line fix was in the wrong place and the suite said so.**
+`classify` returning `Member.SCALAR` for it routed the accessor to the
+right emitter in all four at once -- and took the dirty bit, the covered
+span and the codec helpers with it, because three of the four emit those
+inside `_tag`. C++'s driver asked for `crc_is_dirty` and the header no
+longer had one. The accessor's SHAPE is what varies; the tag machinery
+around it is the tag's, so each `_tag` chooses the shape and keeps the
+rest.
+
+**Two more consumers, and the second is the one worth having.** The
+four-way driver's TAG probe asks `present=`, which is a question about a
+pointer, and a value has no pointer: it asks for the VALUE now, so the
+differential compares USB's CRC across four languages rather than
+skipping it. And the Python walker rendered `present=` where C rendered
+`crc 30` -- a difference in what was asked rather than in what was
+answered, which is the failure `report.py`'s own docstring warns about.
+Both agree now, which makes the five readings of a five-bit field one
+reading.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

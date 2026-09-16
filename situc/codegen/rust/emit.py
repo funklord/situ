@@ -42,6 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
+	bit_addressed_tag,
 	fixed_span_bits,
 	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
@@ -1254,7 +1255,25 @@ class Emitter:
 		# so its offset is a sum of lengths the message chose, and slicing
 		# past the end panics -- an abort in `no_std` (26.27).
 		fits  = self._fits(struct, placement, count)
-		lines = [
+		# A sub-byte checksum is one VALUE: USB's five-bit CRC sits at bit 11
+		# and reads with the bit load every other sub-byte field here uses.
+		# Only the accessor changes -- the covered span and the dirty bit
+		# below belong to the tag and stay (26.371).
+		if bit_addressed_tag(placement) and placement.scalar is not None:
+			lines = [
+				"",
+				f"\t/// `{placement.path}`: {placement.size_bits} bits, read"
+				" as a value.",
+				"\t/// The algorithm is the caller's to run -- situ says which"
+				" bytes it",
+				"\t/// covers and when the result has gone stale.",
+				f"\tpub fn {name}(&self) ->"
+				f" {self._rust_type(placement.scalar)} {{",
+				f"\t\t{self._load(placement, placement.scalar)}",
+				"\t}",
+			]
+		else:
+			lines = [
 			"",
 			f"\t/// `{placement.path}`: {count} bytes. The algorithm is the",
 			"\t/// caller's to run -- situ says which bytes it covers and when",

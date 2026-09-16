@@ -103,7 +103,14 @@ def _scalars(image: Image, struct_index: int) -> list[int]:
 			continue
 		if placement.radix:
 			continue			# a text number: digits, not bits
-		if placement.is_tag:
+		# ...unless it is one value rather than a byte string. A sub-byte
+		# checksum -- USB's five-bit CRC -- is read by every backend with
+		# the bit load a plain sub-byte field uses, so the differential
+		# compares the VALUE and this has to render one. Rendering
+		# `present=` against C's `crc 30` is a difference in what was
+		# asked, which is the failure this file's own docstring warns
+		# about (26.371).
+		if placement.is_tag and placement.size_bits % 8 == 0:
 			continue			# asked `present=`, not for a value
 		if placement.since:
 			continue			# `[since]`: present only from a
@@ -321,6 +328,7 @@ def _tags(image: Image, struct_index: int) -> list[int]:
 	# offset anyway would answer `present=1` about bytes nobody can find.
 	return [index for index in image.members(image.structs[struct_index])
 	        if image.placements[index].is_tag
+	        and image.placements[index].size_bits % 8 == 0
 	        and _offset_computable(image, struct_index, index)]
 
 

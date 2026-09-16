@@ -45,6 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	bit_addressed_tag,
 	fixed_span_bits,
 	byte_span,
 	declared_depth, depth_limit, invalidating_members,
@@ -5847,8 +5848,41 @@ class Emitter:
 		# so its offset is a sum of lengths the message chose -- and a span
 		# with a length is what lets this answer safely at all, where C has
 		# only a pointer and returns NULL (26.27).
+		# A sub-byte checksum is one VALUE, not a byte string: USB's five-bit
+		# CRC sits at bit 11 and is read with the bit load every other
+		# sub-byte field here uses. Handing out `bytes` for it described
+		# bytes that are not the value, and the count they carry is zero.
+		# Only the accessor changes -- the dirty bit, the covered span and
+		# the codec helpers below are the tag's and stay (26.371).
+		if bit_addressed_tag(placement) and placement.scalar is not None:
+			base = f"situ_base(raw_) + {placement.offset_bytes}"
+			lines = [
+				"",
+				f"\t/* {placement.path}: {placement.size_bits} bits, read as"
+				" a value.",
+				"\t * The algorithm is the caller's to run -- situ says which"
+				" bytes it",
+				"\t * covers and when the result has gone stale, not how to"
+				" compute it. */",
+				f"\t[[nodiscard]] {self._ctype(placement.scalar)} {name}()"
+				" const noexcept",
+				"\t{",
+				f"\t\treturn {self._raw_load(placement.scalar, placement, base)};",
+				"\t}",
+			]
+		else:
+			lines = self._tag_bytes_accessor(struct, placement, name, count)
+
+		lines.extend(self._tag_prefix(struct, placement))
+		return lines + self._tag_rest(struct, placement, name)
+
+	def _tag_bytes_accessor(self, struct: ResolvedStruct, placement: Placement,
+			name: str, count: int) -> list[str]:
+		"""A tag's bytes: the byte-string form, which is every tag but one."""
+		start = self._offset_expression(struct, placement)
+		assert start is not None
 		fits = self._fits(struct, placement, count)
-		lines = [
+		return [
 			"",
 			f"\t/* {placement.path}: {count} bytes. The algorithm is the",
 			"\t * caller's to run -- situ says which bytes it covers and when",
@@ -5872,8 +5906,16 @@ class Emitter:
 			"\t}",
 		]
 
-		lines.extend(self._tag_prefix(struct, placement))
+	def _tag_rest(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""The dirty bit, the covered span and the codec helpers.
 
+		Split out when a sub-byte checksum took the other accessor: these
+		belong to the TAG rather than to its shape, and returning early for
+		the scalar form took them with it -- the C++ driver asked for
+		`crc_is_dirty` and the header no longer had one (26.371).
+		"""
+		lines: list[str] = []
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run

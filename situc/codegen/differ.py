@@ -435,14 +435,15 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				                 max(8, scalar.bits), scalar.signed,
 				                 scaled=placement.scaled))
 		elif kind is Member.TAG:
-			# The probe reads the tag's bytes through `_ptr`, and a sub-byte
-			# checksum has none: it is one value five bits wide, which no
-			# backend addresses until 0046's bit-addressed form lands. The
-			# driver asked anyway and its C did not compile -- the sixth
-			# generator to disagree with the emitters about what exists,
-			# and the one no backend comparison reaches, because a driver
-			# is not a backend (26.371).
-			if not bit_addressed_tag(placement):
+			# A sub-byte checksum is one value and every backend reads it
+			# with its own bit load, so the driver COMPARES it rather than
+			# asking whether a pointer is null: the TAG probe reads `_ptr`,
+			# which none of the four emits for a five-bit field (26.371).
+			if bit_addressed_tag(placement) and scalar is not None:
+				found.append(Ask(Probe.SCALAR, local,
+				                 bits=max(8, scalar.bits),
+				                 signed=scalar.signed))
+			else:
 				found.append(Ask(Probe.TAG, local, placement.array_count))
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))

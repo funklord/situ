@@ -40,6 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
+	bit_addressed_tag,
 	fixed_span_bits,
 	byte_span, declared_depth, depth_limit, invalidating_members,
 	is_recursive,
@@ -1494,6 +1495,28 @@ class Emitter:
 			return ["", f"\t# {placement.path}: this backend cannot resolve"
 			        " where the tag sits."]
 
+		# A sub-byte checksum is one VALUE: USB's five-bit CRC sits at bit 11
+		# and reads with the bit load every other sub-byte field here uses.
+		# Only the accessor changes -- the covered span and the dirty bit
+		# below belong to the tag and stay (26.371).
+		if bit_addressed_tag(placement) and placement.scalar is not None:
+			lines = [
+				"",
+				# A property, like every other scalar here: the four-way
+				# driver reads `view.crc` and a bare method gave it a bound
+				# method where a number was wanted.
+				"\t@property",
+				f"\tdef {name}(self) -> int:",
+				f'\t\t"""{placement.path}: {placement.size_bits} bits, read'
+				' as a value.',
+				"",
+				"\t\tThe algorithm is the caller's to run -- situ says which",
+				"\t\tbytes it covers and when the result has gone stale.",
+				'\t\t"""',
+				f"\t\treturn {self._raw_load(placement, placement.scalar)}",
+			]
+			return lines + self._tag_rest(struct, placement, name)
+
 		lines = [
 			"",
 			"\t@property",
@@ -1516,6 +1539,16 @@ class Emitter:
 			f"\t\treturn self._msg.buffer[start:start + {count}]",
 		]
 
+		return lines + self._tag_rest(struct, placement, name)
+
+	def _tag_rest(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
+		"""The covered span, the dirty bit and the codec helpers.
+
+		Split out when a sub-byte checksum took the other accessor: these
+		belong to the TAG rather than to its shape (26.371).
+		"""
+		lines: list[str] = []
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run

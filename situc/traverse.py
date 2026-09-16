@@ -273,6 +273,14 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	# Before the region check, like the rest: a tag answered REGION and three
 	# backends emitted their fallthrough note for it, while emitting the dirty
 	# bit it sets and the setters that mark it.
+	#
+	# A sub-byte checksum stays TAG, and the reason is worth keeping: the
+	# ACCESSOR wants the scalar shape, and the dirty bit, the covered span
+	# and the codec helpers around it are the tag's. Answering SCALAR here
+	# handed the accessor to the right emitter and took the rest away with
+	# it -- C++'s driver asked for `crc_is_dirty` and the header no longer
+	# had one. So each `_tag` chooses the accessor's shape with
+	# `bit_addressed_tag` and keeps everything else (26.371).
 	if placement.kind in ("tag", "checksum"):
 		return Member.TAG
 

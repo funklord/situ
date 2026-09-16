@@ -1675,15 +1675,15 @@ class Emitter:
 			# which gcc refuses outright. The bit-addressed getter is the
 			# rest of 0046; until it exists the field places, the map
 			# describes it, and this says so (26.371).
+			# A sub-byte checksum is one value, not a byte string, so it
+			# reads the way every other sub-byte field does -- the bit load
+			# the runtime already has, which is what `endpoint` beside it
+			# gets. `_array` is for the byte-string form and its arithmetic
+			# divides by the element's byte width: `crc_count` came out as
+			# `crc_len(view) / 0u`, which gcc refuses outright (26.371).
 			if bit_addressed_tag(placement):
-				return lines + [
-					f"/* No accessor for `{placement.name}`: it is"
-					f" {placement.size_bits} bits, and this backend",
-					" * addresses a checksum's bytes. The bit-addressed form"
-					" is 0046's",
-					" * remaining work; the layout and the map carry it"
-					" already. */",
-				]
+				lines.extend(self._scalar_get(struct, entry))
+				return lines
 			lines.extend(self._array(struct, entry))
 			return lines
 
