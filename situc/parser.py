@@ -387,13 +387,19 @@ class Parser:
 
 		handler = handlers.get(token.text)
 		if handler is None:
+			# Spelled from the table rather than written out beside it. The
+			# hand-written list had gone nine declarations stale -- it named
+			# neither `codec` nor `impl` nor `register`, so an author asking
+			# the compiler what it takes was told a subset of it, which is
+			# what an unproduced diagnostic loses (26.215).
+			spelled = ", ".join(
+				f"`{name}`"
+				for name in sorted({*handlers, "register_block"}))
 			raise error(
 				f"unknown declaration `{token.text}`",
 				token.span,
 				label = "not a declaration keyword",
-				notes = ["expected `target`, `endian`, `bit_order`, `encoding`, `import`, `const`, "
-				         "`enum`, `tokens`, `struct`, `require`, `assert`, `invariant` or "
-				         "`relation`"],
+				notes = [f"expected one of {spelled}"],
 			)
 
 		return handler()
@@ -1151,8 +1157,14 @@ class Parser:
 		raise error(
 			f"unknown expansion form `{token.text}`",
 			token.span,
-			label = "expected `+N`, `unbounded`, `ratio_exact(a, b)`, "
-			        "`ratio_padded(a, b)` or `ratio_bounded(a, b)`",
+			label = "expected `+N`, `+N bits`, `unbounded`, "
+			        "`ratio_exact(a, b)`, `ratio_padded(a, b)` or "
+			        "`ratio_bounded(a, b)`",
+			notes = ["a ratio may carry an addend -- "
+			         "`ratio_bounded(255, 254) + 1` is a code that expands "
+			         "and then appends a constant (0048)",
+			         "`+N bits` is for a growth no byte count says, which "
+			         "is a code narrower than a byte (0046)"],
 		)
 
 	def _named(self, enum: type[EnumT], described: str,

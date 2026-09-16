@@ -544,9 +544,43 @@ def test_positional_block_is_accepted() -> None:
 	assert len(member.members) == 2
 
 
-def test_unknown_declaration_rejected() -> None:
-	with pytest.raises(SituError, match="unknown declaration"):
+# Every keyword `parse_decl` dispatches on. The refusal below is checked
+# against this rather than against a frozen string, and the list is checked
+# against the parser by the probe beside it -- so a declaration the parser
+# takes and the message does not name fails here.
+DECLARATION_KEYWORDS = (
+	"namespace", "register", "register_block", "target", "endian",
+	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
+	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
+	"impl", "require", "assert", "invariant", "relation",
+)
+
+
+@pytest.mark.parametrize("keyword", DECLARATION_KEYWORDS)
+def test_every_declaration_keyword_dispatches(keyword: str) -> None:
+	"""A keyword with nothing after it is refused for what is missing, never
+	as an unknown declaration. That is the liveness half: without it the list
+	above could name words the parser has never heard of and the check below
+	would still pass."""
+	with pytest.raises(SituError) as caught:
+		parse_text(keyword + "\n")
+
+	rendered = caught.value.diagnostic.render()
+	assert "unknown declaration" not in rendered, rendered
+
+
+def test_unknown_declaration_names_every_keyword_that_dispatches() -> None:
+	"""This asserted that a refusal happened and said nothing about what it
+	said, which is the half that rots (26.215) -- and it had: the note listed
+	thirteen declarations of twenty-two, so a schema author who met it was
+	told that `codec`, `impl` and `register` are not declarations."""
+	with pytest.raises(SituError) as caught:
 		parse_text("gadget Foo { }")
+
+	rendered = caught.value.diagnostic.render()
+	assert "unknown declaration `gadget`" in rendered
+	for keyword in DECLARATION_KEYWORDS:
+		assert f"`{keyword}`" in rendered, f"the note omits `{keyword}`"
 
 
 def test_declaration_must_start_with_a_keyword() -> None:

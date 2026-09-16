@@ -114,6 +114,79 @@ def test_a_ratio_needs_positive_literals() -> None:
 	assert "two positive literals" in rejected("codec c { expansion = ratio_exact(0, 1); }")
 
 
+# Every expansion form the parser takes: as the refusal below spells it, and
+# as a schema writes it. The refusal is asserted against this table rather
+# than against a frozen string, and the table is asserted against the parser
+# and against the lattice -- so a form that parses and is not named in the
+# message fails here rather than being discovered by whoever wrote a schema
+# from the message (26.215).
+EXPANSION_FORMS = {
+	"`+N`":                  "+4",
+	"`+N bits`":             "+5 bits",
+	"`unbounded`":           "unbounded",
+	"`ratio_exact(a, b)`":   "ratio_exact(2, 1)",
+	"`ratio_padded(a, b)`":  "ratio_padded(2, 1)",
+	"`ratio_bounded(a, b)`": "ratio_bounded(3, 2)",
+}
+
+
+@pytest.mark.parametrize("source", sorted(EXPANSION_FORMS.values()))
+def test_every_form_in_the_table_is_one_the_parser_takes(source: str) -> None:
+	"""The table has to be the parser's list and not the message's, or the
+	check below compares the message against itself."""
+	parse_text(PREAMBLE + f"codec c {{ expansion = {source}; }}")
+
+
+def test_every_expansion_the_lattice_carries_is_a_form_or_a_property() -> None:
+	"""And the other direction, so that a seventh expansion arrives as a
+	failure addressed to whoever added it rather than being absorbed."""
+	assert "`+N`" in EXPANSION_FORMS and "`+N bits`" in EXPANSION_FORMS
+
+	for member in ast.Expansion:
+		if member is ast.Expansion.PRESERVING:
+			continue	# a property of its own: `length_preserving;`
+		if member is ast.Expansion.FIXED_ADD:
+			continue	# spelled `+N`, not by its value
+		assert (f"`{member.value}`" in EXPANSION_FORMS
+		        or f"`{member.value}(a, b)`" in EXPANSION_FORMS), \
+			f"`{member.value}` parses and the table does not carry it"
+
+
+def test_an_unknown_expansion_form_names_every_form_that_parses() -> None:
+	"""What a diagnostic no test produces loses is not the refusal but the
+	wording (26.215), and this one had lost it: `+N bits` arrived with 0046
+	and the label went on listing the five forms it knew, so a schema author
+	who asked the compiler what to write was told the wrong set.
+
+	Against the LABEL rather than against the whole rendering: the note below
+	it glosses `+N bits` too, so a check reading the report passes with the
+	label stale -- which is the state this test was written for."""
+	report = rejected("codec c { expansion = wibble; }")
+	label  = next(line for line in report.splitlines() if "^" in line)
+
+	assert "unknown expansion form `wibble`" in report
+	for spelling in EXPANSION_FORMS:
+		assert spelling in label, f"the label does not name {spelling}"
+
+
+def test_an_expansion_addend_needs_a_literal_byte_count() -> None:
+	"""0048's addend is a literal because a consumer sizes a buffer from it
+	before reading anything: `len * 255 / 254 + 1`. A path would make the
+	size depend on the data it is sizing."""
+	report = rejected("codec c { expansion = ratio_bounded(255, 254) + hdr.n; }")
+
+	assert "an expansion addend needs a literal byte count" in report
+	assert "not a non-negative integer literal" in report
+	assert "len * 255 / 254 + 1" in report
+
+
+def test_an_expansion_addend_may_not_be_negative() -> None:
+	"""A code that expands appends no bytes at worst, and `+ -1` is what a
+	typo for a shrinking code looks like."""
+	assert "an expansion addend needs a literal byte count" in rejected(
+		"codec c { expansion = ratio_bounded(255, 254) + -1; }")
+
+
 # -- impl bindings ----------------------------------------------------------
 
 

@@ -28565,6 +28565,67 @@ carries the strings, and a consumer has nothing stable to match on. Giving
 the generated code an ID is the half 0046-style work in three more
 backends, and it is not this.
 
+### 26.365 Reading the diagnostics nobody produces
+
+**26.215 counted 93 unproduced `error(...)` sites and said which half
+rots: not the refusal but the WORDING.** A check that stops firing is
+noticed downstream; one that fires with a message that has stopped
+describing its own case is noticed by nobody, because the only reader is
+whoever typed the mistake and they have no second opinion.
+
+**A deliberately loose proxy, and its looseness was the point.** The
+sweep listed every diagnostic whose wording appears nowhere under
+`test/` -- 199, of which 47 are the parser's. A phrase-level search
+over-reports here by construction: a message split across two string
+literals, or reworded since the test was written, reads as unproduced. It
+over-reports in the direction that costs reading rather than the one that
+hands back a comfortable zero.
+
+**Both suspects were PRODUCED rather than assumed, and the first was
+wrong.** A top-level typo looked like it would report an incomplete set;
+running it showed a complete message. Reporting it would have been a
+defect that does not exist, and the cost of checking was one command.
+
+**The second was real and was mine.** `expansion = wibble` answered with
+a label naming `+N`, `unbounded` and the three ratios -- the five forms
+that existed before 0046 added `+N bits`. A schema author who asked the
+compiler what to write was told a set that had been wrong for a day.
+
+**Then the first suspect was right after all, by a lens that was not
+looking at it.** Having fixed one enumeration, the same question was put
+to every label in `situc` that lists alternatives: `buffer, mmio or
+file`, `big, little or native`, `strict or lenient`, `msb_first or
+lsb_first`, `error or pass`, `derived or extern`, the varint properties,
+`feedback = input or output`, the stuffing units, `after or before`.
+**Every one matched its table exactly.** The one that did not was
+`unknown declaration`, whose note named thirteen declarations of
+twenty-two -- missing `codec`, `impl`, `register`, `register_block`,
+`namespace`, `whitespace`, `strictness`, `endian_marker` and
+`varint_type`.
+
+That is the frame error worth keeping. The first probe asked whether the
+message named `tokens`, it did, and the message was recorded as complete:
+**one member present is not the set**, and a list is exactly the kind of
+claim that is right about whatever you happened to check.
+
+**The fix is not a longer list but a derived one.** The note is now
+spelled from the dispatch table it is raised beside, so a declaration
+added to the table joins the message with nobody remembering. The
+expansion-form label cannot be derived that way -- `+N` is not an enum
+value and the ratios carry `(a, b)` -- so it is pinned from both
+directions instead: every form in the test's table is parsed, and every
+member of `ast.Expansion` that is not `length_preserving` or `+N` must
+have an entry, so a seventh expansion fails as a message addressed to
+whoever added it.
+
+**And the first control passed with the bug reinstated.** Checking the
+forms against the rendered diagnostic found `+N bits` -- in the NOTE
+below the label, which glosses it. The refusal names the form somewhere
+and the list a reader is told to choose from was still five long. The
+assertion reads the label line only, and with the stale label it fails
+naming the missing form. A control has to fail through the check under
+test, and this one was being saved by the sentence underneath it.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
