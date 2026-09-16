@@ -28786,6 +28786,17 @@ beside it: `"split_coverage" has no attribute "sum_covered"`. That is
 worth more than an assertion about generated text, because it holds for
 every backend gate that already exists and for any that arrives later.
 
+**A FIFTH site, found by the corpus entry within the hour.** `gen-checks`
+writes a suite that calls `<tag>_covered` to prove the span covers what
+the map says, and it called it for `split_coverage` too -- so the
+generated check suite did not compile and `make test-c` went red. It is
+not a backend, so the four-way comparison cannot see it, and it is not a
+schema, so the map and wire gates cannot either. What found it was
+putting the shape in `edges.situ`, one gate run after that was written
+-- and the same commit that added it was pushed on a red gate, because
+the push command read the log for the wrong thing. The entry is here
+rather than the push being quietly amended.
+
 **"C was alone" is what this entry said for an hour, and it was wrong.**
 C++ guards the ACCESSOR with `if run is not None` and emits the codec
 helpers outside that guard -- so reading the guard answered a question

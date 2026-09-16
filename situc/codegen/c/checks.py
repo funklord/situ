@@ -40,7 +40,7 @@ from situc.propagate import Resolved
 from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	invalidating_members,
+	covered_run, invalidating_members,
 	Obligation, data_sized, enclosing_arm, has_computable_extent,
 	indexed_elements, obligations, own_members, local_name,
 )
@@ -2861,6 +2861,16 @@ def _span_check(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 	last  = max((placement.offset_bits or 0) + placement.size_bits
 	            for placement in known)
 	if first % BITS_PER_BYTE or last % BITS_PER_BYTE:
+		return
+
+	# And only where the accessor it calls was emitted. A coverage with no
+	# single byte range gets none, so this check called a function nothing
+	# defines and the generated suite did not compile -- the fifth site of
+	# one defect, and the one no backend comparison reaches, because the
+	# check generator is not a backend (26.367).
+	held = next((entry.placement for entry in struct.entries
+	             if entry.placement.name == tag), None)
+	if held is None or covered_run(struct, held) is None:
 		return
 
 	begins = first // BITS_PER_BYTE
