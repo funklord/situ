@@ -1593,10 +1593,36 @@ class Emitter:
 						f" `{placement.name}`: they run over the",
 						"\t# covered span, and this one has no single range.",
 					])
+			elif placement.tag_codec in self._unimplemented_codecs():
+				lines.extend([
+					"",
+					f"\t# No {placement.tag_codec} helpers for"
+					f" `{placement.name}`: this backend does not",
+					"\t# write that kernel, and there is no linker here to"
+					" supply it.",
+				])
 			else:
 				lines.extend(self._checksum_codec(placement, name))
 
 		return lines
+
+	def _unimplemented_codecs(self) -> frozenset[str]:
+		"""Codecs named by a checksum that this backend cannot write a body
+		for.
+
+		`derived.generate`, the standalone path, has emitted a note for one
+		since it was written. This path asserted instead, so a schema naming
+		`crc7_mmc` -- a codec in situ's own standard library -- crashed the
+		compiler rather than being declined. Python inlines the
+		implementation, so unlike C there is no linker to supply it: the
+		helpers that would call it have to go with it (26.368).
+		"""
+		from situc.codegen.python import derived as kernels
+
+		return frozenset(
+			decl.name for decl in self.schema.codecs()
+			if decl.kernel is not None
+			and kernels._for_kernel(decl, "situ") is None)
 
 	def _derived_codecs(self) -> list[str]:
 		"""The implementations a `checksum ... is <codec>` needs, inline.
@@ -1626,9 +1652,22 @@ class Emitter:
 			if decl.name not in wanted:
 				continue
 			body = kernels._for_kernel(decl, "situ")
-			assert body is not None, (
-				f"{decl.name}: wellformed admits only `derived` codecs here, "
-				f"and this backend generates every family that can reach it")
+			if body is None:
+				# What `derived.generate` says on the same condition, and
+				# not what the assertion here claimed: `crc7_mmc` IS
+				# derived, and what was declined is its WIDTH -- a
+				# non-reflected code narrower than a byte needs a
+				# left-aligned loop no backend writes yet (0046, 26.368).
+				assert decl.kernel is not None
+				lines.extend([
+					"",
+					f"# No implementation for `{decl.name}`: a "
+					f"{decl.kernel.family.value} kernel is described",
+					"# but not yet generated in Python. Its properties are",
+					"# derived and correct, and the checksum helpers that",
+					"# would call it are not emitted either.",
+				])
+				continue
 			lines.extend(body)
 		return lines
 

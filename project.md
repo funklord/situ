@@ -28822,6 +28822,56 @@ Until then the schema places, the map describes it, and the backend
 declines in a sentence that says which of two things is wrong -- which
 is the answer a wrong span was hiding.
 
+### 26.368 A codec the compiler describes, declines, and then names anyway
+
+**`crc7_mmc` is situ's own.** `std/kernels.situ` declares it, and
+`kernel_math.crc_width` declines to generate it: a NON-reflected code
+narrower than a byte needs the register left-aligned inside the byte, the
+table built from a shifted polynomial and the result shifted back, which
+is 0046's remaining work. The declining is right. What every backend did
+next was not.
+
+    rust    AssertionError out of the generator -- the compiler crashed
+    python  AssertionError, same
+    c       header calls `situ_crc7_mmc`, which nothing will define
+    c++     declares the symbol and calls it
+
+**A compiler that raises `AssertionError` on a schema out of its own
+standard library is the worst of the four**, and the assertion's message
+was wrong about the cause: "wellformed admits only `derived` codecs
+here", when `crc7_mmc` IS derived and what was declined is its width. The
+standalone `gen-derived` path had emitted a correct note on the same
+condition since it was written; the single-file path, which Rust and
+Python use because they inline the implementation, asserted instead.
+
+**And a checksum may only name a DERIVED codec** -- `wellformed` refuses
+an `extern` one -- so a kernel situ declines to write has exactly one
+possible provider, `gen-derived`, which declines it too. The symbol has
+nobody, in any of the four. That is what makes withholding right in C and
+C++ as well, where a call would otherwise be the linker's problem at the
+far end of somebody's build: the division of labour C's emitter describes
+("leave it to `gen-derived` and the linker") holds only while
+`gen-derived` will write it.
+
+**C++ kept a declaration after its call was withheld**, in the `extern
+"C"` prologue that lists every codec the file binds. Harmless to a linker
+while nothing calls it, and a promise the header cannot keep, so the
+prologue is filtered by the same set.
+
+**`edges.situ` carries `mmc_command`**, for `split_coverage`'s reason one
+entry along: with the fix reverted, `test_every_schema_generates`,
+`test_every_schema_imports` and `test_every_generated_module_type_checks`
+fail on edges -- three existing gates rather than one written for the
+occasion. The schema builds cleanly WITH the fix, which is the property
+that made the corpus entry possible at all: nothing calls the symbol, so
+there is nothing to link.
+
+**What this is not.** It does not implement CRC-7/MMC. 0046 still owns
+the left-aligned loop, and `crc5_usb` (reflected, five bits) and
+`crc15_can` (fifteen) already derive and are checked against their
+published values -- so the gate declines exactly one shape, and now says
+so in four languages instead of crashing in two.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

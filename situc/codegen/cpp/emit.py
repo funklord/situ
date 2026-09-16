@@ -3468,9 +3468,15 @@ class Emitter:
 		# and the same rule sends the declaration here: the first version
 		# put it inside the class, where a linkage specification is not
 		# allowed -- which this function's own docstring already said.
+		# Not the ones no helper calls any more. A codec the schema asks
+		# situ to derive and that nothing writes had its declaration here
+		# and its call withheld below, which advertises a symbol with no
+		# provider -- harmless to the linker while nothing calls it, and a
+		# promise the header cannot keep (26.368).
 		checksums = sorted({
 			held.tag_codec for struct in self.resolved.structs.values()
-			for held in own_members(struct) if held.tag_codec})
+			for held in own_members(struct) if held.tag_codec}
+			- self._underivable_codecs())
 
 		if not wanted and not tier_one and not checksums:
 			return []
@@ -5964,6 +5970,13 @@ class Emitter:
 					f" `{placement.name}`: they run over the covered",
 					"\t * span, and this one has no single range. */",
 				])
+		elif placement.tag_codec in self._underivable_codecs():
+			lines.extend([
+				f"\t/* No {placement.tag_codec} helpers for"
+				f" `{placement.name}`: the schema asks for a derived",
+				"\t * implementation and that kernel is not one situ writes,",
+				"\t * so the symbol would have no provider. */",
+			])
 		else:
 			lines.extend(self._checksum_codec(struct, placement, name))
 
@@ -6154,6 +6167,28 @@ class Emitter:
 		if held is None or not held.layout.is_fixed_size:
 			return None
 		return held.layout.size_bytes
+
+	def _underivable_codecs(self) -> frozenset[str]:
+		"""Codecs the schema asks situ to DERIVE and that nothing will write.
+
+		`impl crc7_mmc derived;` is the schema saying "you write it", and
+		`gen-derived` declines a non-reflected code narrower than a byte --
+		its loop needs the register left-aligned in the byte (0046). So the
+		symbol has no provider: not this header, not `gen-derived`, and no
+		`extern` binding either, because the impl did not name one. Calling
+		it anyway is a link error at the far end of a build (26.368).
+
+		An `extern` impl is the other case and stays: there the symbol is
+		the caller's to supply and naming it is the whole point.
+		"""
+		from situc.codegen.c import derived as kernels
+
+		derived = {impl.codec for impl in self.schema.impls()
+		           if impl.kind is ast.ImplKind.DERIVED}
+		return frozenset(
+			decl.name for decl in self.schema.codecs()
+			if decl.name in derived and decl.kernel is not None
+			and kernels._for_kernel(decl, "situ") is None)
 
 	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
 			name: str) -> list[str]:

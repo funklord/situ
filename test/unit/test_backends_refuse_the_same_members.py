@@ -177,6 +177,59 @@ def four_ways(text: str) -> dict[str, str]:
 	}
 
 
+#: A checksum over a codec situ cannot write, and one it can. `crc7_mmc` is
+#: `std/kernels.situ`'s own: a non-reflected code narrower than a byte, whose
+#: loop needs the register left-aligned in the byte (0046). `crc_width`
+#: declines it correctly; what happened next did not (26.368).
+UNDERIVABLE = """endian big;
+bit_order msb_first;
+codec crc7_mmc { kernel = polynomial(width = 7, poly = 0x09); }
+impl crc7_mmc derived;
+struct S {
+	authenticated body { u8 a; u8 b; }
+	checksum u8 c[2] covers(body) is crc7_mmc;
+}
+"""
+
+DERIVABLE = """endian big;
+bit_order msb_first;
+codec crc16 { kernel = polynomial(width = 16, poly = 0x8005, reflect); }
+impl crc16 derived;
+struct S {
+	authenticated body { u8 a; u8 b; }
+	checksum u8 c[2] covers(body) is crc16;
+}
+"""
+
+
+def test_no_backend_names_a_codec_nothing_will_write() -> None:
+	"""A checksum may only name a DERIVED codec -- wellformed refuses an
+	`extern` one -- so a kernel situ declines to write has exactly one
+	possible provider, `gen-derived`, which declines it too. The symbol has
+	nobody.
+
+	Rust and Python crashed rather than declining: an `assert body is not
+	None` whose message blamed the wrong thing, since `crc7_mmc` IS derived
+	and what was declined is its width. A compiler that raises
+	`AssertionError` on a schema out of its own standard library is the worst
+	of the four answers. C and C++ declared the symbol and called it, which
+	is a link error at the far end of somebody's build.
+
+	Both halves. The derivable schema is what says these four can bind a
+	codec at all, without which the other assertion passes for any backend
+	that has stopped emitting checksum helpers entirely.
+	"""
+	for backend, text in four_ways(DERIVABLE).items():
+		assert "crc16(" in text, (
+			f"{backend} no longer binds a codec it can write, so the case "
+			f"below would pass for the wrong reason")
+
+	for backend, text in four_ways(UNDERIVABLE).items():
+		assert "crc7_mmc(" not in text, (
+			f"{backend} names `crc7_mmc`, which the schema asks situ to "
+			f"derive and nothing writes")
+
+
 def test_no_backend_calls_a_covered_accessor_it_did_not_emit() -> None:
 	"""`compute` and `check` read the span through `_covered`, and all four
 	emitted them whether or not that helper existed. The call is then to

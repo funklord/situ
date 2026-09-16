@@ -223,6 +223,12 @@ struct messy size=3..
   @0x0000   until:3a  u8         name  fold-case
   ~         until:0d0a u8         value  big trim=2009
 
+struct mmc_command size=6
+  @0x0000   1         u8         index
+  @0x0001   4         u32        argument  big
+  @0x0005   1         u8         crc
+  crc covers: argument command index
+
 struct packed_driver size=3..63
   @0x0000   4bit      u4         hi  msb_first
   @0x0000:4 4bit      u4         n  msb_first

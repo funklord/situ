@@ -717,10 +717,38 @@ class Emitter:
 				f"/* No {placement.tag_codec} helpers for `{name}`: they run",
 				" * over the covered span, and this one has no single range. */",
 			] if placement.tag_codec is not None else [])
+		elif placement.tag_codec in self._underivable_codecs():
+			lines.extend([
+				f"/* No {placement.tag_codec} helpers for `{name}`: the schema",
+				" * asks for a derived implementation and that kernel is not",
+				" * one situ writes, so the symbol would have no provider. */",
+			])
 		else:
 			lines.extend(self._checksum_codec(struct, placement, local))
 
 		return lines
+
+	def _underivable_codecs(self) -> frozenset[str]:
+		"""Codecs the schema asks situ to DERIVE and that nothing will write.
+
+		`impl crc7_mmc derived;` is the schema saying "you write it", and
+		`gen-derived` declines a non-reflected code narrower than a byte --
+		its loop needs the register left-aligned in the byte (0046). So the
+		symbol has no provider: not this header, not `gen-derived`, and no
+		`extern` binding either, because the impl did not name one. Calling
+		it anyway is a link error at the far end of a build (26.368).
+
+		An `extern` impl is the other case and stays: there the symbol is
+		the caller's to supply and naming it is the whole point.
+		"""
+		from situc.codegen.c import derived as kernels
+
+		derived = {impl.codec for impl in self.schema.impls()
+		           if impl.kind is ast.ImplKind.DERIVED}
+		return frozenset(
+			decl.name for decl in self.schema.codecs()
+			if decl.name in derived and decl.kernel is not None
+			and kernels._for_kernel(decl, "situ") is None)
 
 	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
 			local: str) -> list[str]:

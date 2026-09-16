@@ -1186,3 +1186,24 @@ struct split_coverage {
 	authenticated second { u16 b; }
 	checksum u8   sum[2] covers(first, second) is summing;
 }
+
+// A checksum over a kernel situ describes correctly and does not write:
+// CRC-7/MMC, from this project's own `std/kernels.situ`. A non-reflected
+// code narrower than a byte needs the register left-aligned inside the byte
+// and the result shifted back, which is 0046's remaining work -- so
+// `crc_width` declines it, and every backend has to decline with it.
+//
+// Rust and Python did not: they asserted, so a schema naming a codec out of
+// the standard library crashed the compiler. C and C++ declared the symbol
+// and called it, which is a link error at the far end of somebody's build.
+// The declining is right and what happened next was not (26.368).
+//
+// Here rather than only in a test, for `split_coverage`'s reason: the four
+// compile and type-check gates already read every schema in this tree.
+codec crc7_mmc { kernel = polynomial(width = 7, poly = 0x09, init = 0x00); }
+impl crc7_mmc derived;
+
+struct mmc_command {
+	authenticated command { u8 index; u32 argument; }
+	checksum u8   crc[1] covers(command) is crc7_mmc;
+}
