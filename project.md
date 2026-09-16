@@ -29068,6 +29068,49 @@ beside it, and `require size(mmc_command) == 6` is the format's own number.
 So the corpus carries the shape, the four compile gates read it, and the
 four-way differential compares the value.
 
+### 26.373 One bit at a time, checked three ways
+
+**A span that is not a whole number of bytes has no byte length.** USB's
+token is eleven bits and its CRC covers all of them, so `crc5_usb(data,
+len)` cannot say what the algorithm runs over -- which is why the coverage
+accessor refuses such a span rather than rounding it (26.367). The entry
+point that can is `<codec>_bits(data, bit_at, bit_len)`, and every
+polynomial codec now emits one in C, Rust and Python.
+
+**One bit at a time rather than a second table.** The table exists to make
+a long run fast, and the case this is for is at most a byte's worth of bits
+beside a run the table already did. The loop is the code's own definition:
+shift the register, feed the next bit, xor the polynomial when the bit that
+fell out disagrees -- least significant first where the code is reflected,
+most significant first where it is not.
+
+**Three checks, and the third is the one that reaches the case.**
+
+    agrees with the table   at every whole-byte length, both directions,
+                            widths 5, 7, 8, 15, 16 and 32
+    the published RESIDUE   0x06 for CRC-5/USB over four different
+                            eleven-bit tokens and their check bits,
+                            0x00 for CRC-7/MMC over CMD0 and its seven
+    a real card command     CRC-7/MMC over CMD0's forty bits is 0x4A
+
+The first is agreement with an implementation the catalogue already
+checked, so it is not two readings of one witness -- but it can only ever
+ask about whole bytes. **The residue is what asks about eleven bits**: it
+is a second published constant, and a reversed polynomial or a mis-ordered
+final xor lands on some other value. The catalogue publishes it beside the
+check value and `std/kernels.situ` records both.
+
+**And the three languages agree with each other.** C, Rust and Python each
+write their own loop from the same parameters, and over the same
+eleven-bit span all three answer 0x1A for CRC-5/USB, 0x0B for CRC-7/MMC,
+0x57AB for CRC-15/CAN and 0x86A7DC66 for CRC-32. Three implementations
+rather than one copied three times.
+
+**What this does not do yet** is wire the accessor. `covered_run` still
+refuses a span that starts or ends inside a byte, so USB's token still has
+no `compute`: the bit-valued coverage accessor is the last of 0046 and this
+is the arithmetic it needs.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.kernel_math import (accumulator, crc_register, crc_shift,
-                                       crc_start, crc_table, crc_width, number)
+                                       crc_start, crc_table, crc_width, number,
+                                       reverse)
 from situc import __version__
 
 
@@ -263,7 +264,64 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		 else f"\tcrc ^ 0x{xorout:0{digits}X}"),
 		"}",
 	])
+	lines.extend(_polynomial_bits(decl, name, width, poly, init, xorout,
+	                              reflect, digits))
 	return lines
+
+
+def _polynomial_bits(decl: ast.CodecDecl, name: str, width: int, poly: int,
+		init: int, xorout: int, reflect: bool, digits: int) -> list[str]:
+	"""The same code over a span that is not a whole number of bytes.
+
+	USB's token is eleven bits and its CRC covers all of them, so a
+	byte-length entry point cannot say what the algorithm runs over (0046).
+	One bit at a time rather than a second table, and checked against the
+	table function at every whole-byte length (26.373).
+	"""
+	word = f"u{accumulator(width)}"
+	mask = (1 << width) - 1
+	if reflect:
+		started = reverse(init, width)
+		taken   = ("\t\tlet bit = (data[(i >> 3) as usize]"
+		           " >> (i & 7)) & 1;")
+		body    = [
+			f"\t\tlet low = (crc ^ {word}::from(bit)) & 1;",
+			"\t\tcrc >>= 1;",
+			"\t\tif low != 0 {",
+			f"\t\t\tcrc ^= 0x{reverse(poly, width):0{digits}X};",
+			"\t\t}",
+		]
+	else:
+		started = init
+		taken   = ("\t\tlet bit = (data[(i >> 3) as usize]"
+		           " >> (7 - (i & 7))) & 1;")
+		body    = [
+			f"\t\tlet fire = ((crc >> {width - 1}) ^ {word}::from(bit)) & 1;",
+			f"\t\tcrc = (crc << 1) & 0x{mask:X};",
+			"\t\tif fire != 0 {",
+			f"\t\t\tcrc ^= 0x{poly:0{digits}X};",
+			"\t\t}",
+		]
+
+	return [
+		"",
+		f"/// `{decl.name}` over `bit_len` bits from `bit_at`, for a span that",
+		"/// is not a whole number of bytes. The bits are taken in the order",
+		"/// the code runs them: least significant first where it is",
+		"/// reflected, most significant first where it is not.",
+		"#[must_use]",
+		f"pub fn {name}_bits(data: &[u8], bit_at: u32, bit_len: u32)"
+		f" -> {word} {{",
+		f"\tlet mut crc: {word} = 0x{started:0{digits}X};",
+		"",
+		"\tfor i in bit_at..bit_at + bit_len {",
+		taken,
+		*body,
+		"\t}",
+		"",
+		f"\t(crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
+		"}",
+	]
 
 
 def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:

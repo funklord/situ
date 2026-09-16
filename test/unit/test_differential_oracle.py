@@ -430,6 +430,94 @@ def test_a_generated_crc_matches_an_independent_implementation(
 			f"{name}: situ and the standard library disagree at {length} bytes")
 
 
+def _crc_bits(lib: ctypes.CDLL, name: str, ctype: type) -> object:
+	"""The same CRC over a span of bits rather than of bytes."""
+	fn = getattr(lib, f"situ_{name}_bits")
+	fn.restype  = ctype
+	fn.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+	               ctypes.c_uint32]
+	return fn
+
+
+@pytest.mark.parametrize("name", sorted(CRC_CHECK_VALUES))
+def test_the_bit_span_form_agrees_with_the_table(
+		name: str, kernel_library: ctypes.CDLL) -> None:
+	"""A span that is not a whole number of bytes has no byte length, so
+	USB's eleven-bit token needs an entry point that counts bits -- and one
+	bit at a time is a second implementation of the same code (0046).
+
+	The table-driven one is checked against the catalogue above; this holds
+	the bit loop to it at every whole-byte length, which is where the two
+	are required to agree. Both directions and every width in the library
+	go through here, so a reflected code fed most-significant-first, or a
+	register shifted the wrong way, disagrees at one byte (26.373).
+	"""
+	ctype, _ = CRC_CHECK_VALUES[name]
+	whole    = _crc(kernel_library, name, ctype)
+	bits     = _crc_bits(kernel_library, name, ctype)
+
+	data = b"123456789"
+	for length in range(len(data) + 1):
+		buf = (ctypes.c_uint8 * max(1, length))(*data[:length] or b"\0")
+		assert whole(buf, length) == bits(buf, 0, length * 8), (    # type: ignore[operator]
+			f"{name}: the bit span and the table disagree at {length} bytes")
+
+
+#: The value a code leaves in its register after a correct codeword, which
+#: the catalogue publishes beside the check value. It is the one property
+#: that can be asked of a SUB-BYTE span: the check value is nine bytes, and
+#: a span of eleven bits has no byte length to compute it over.
+CRC_RESIDUES = {
+	"crc5_usb": (5, 11, 0x06),
+	"crc7_mmc": (7, 40, 0x00),
+}
+
+
+@pytest.mark.parametrize("name", sorted(CRC_RESIDUES))
+def test_a_sub_byte_span_leaves_the_published_residue(
+		name: str, kernel_library: ctypes.CDLL) -> None:
+	"""Run the code over a message and its own check bits, and what comes
+	out is the residue whatever the message was.
+
+	`std/kernels.situ` records both numbers beside each codec. This is the
+	only outside evidence available for a span the check value cannot
+	reach, and it is a different question from "does the arithmetic agree
+	with itself": a reversed polynomial or a mis-ordered final xor lands on
+	some other constant (26.373).
+	"""
+	ctype, width, expected = (CRC_CHECK_VALUES[name][0], *CRC_RESIDUES[name][1:])
+	bits    = _crc_bits(kernel_library, name, ctype)
+	reflect = name == "crc5_usb"
+	xorout  = 0x1F if reflect else 0x00
+	span    = CRC_RESIDUES[name][1]
+	code    = CRC_RESIDUES[name][0]
+
+	for message in (0x715, 0x000, 0x7FF, 0x2A3):
+		frame = bytearray((span + code + 7) // 8)
+		for index in range(span):
+			if (message >> (index % 32)) & 1:
+				if reflect:
+					frame[index >> 3] |= 1 << (index & 7)
+				else:
+					frame[index >> 3] |= 1 << (7 - (index & 7))
+
+		buf = (ctypes.c_uint8 * len(frame))(*frame)
+		sum_ = bits(buf, 0, span)                                  # type: ignore[operator]
+		for index in range(code):
+			bit = (sum_ >> index) & 1 if reflect \
+				else (sum_ >> (code - 1 - index)) & 1
+			if bit:
+				at = span + index
+				frame[at >> 3] |= (1 << (at & 7)) if reflect \
+					else (1 << (7 - (at & 7)))
+
+		buf = (ctypes.c_uint8 * len(frame))(*frame)
+		left = bits(buf, 0, span + code) ^ xorout                  # type: ignore[operator]
+		assert left == expected, (
+			f"{name}: a correct codeword left {left:#x} where the catalogue "
+			f"publishes a residue of {expected:#x}")
+
+
 @pytest.mark.parametrize("name", sorted(CRC_CHECK_VALUES))
 def test_a_generated_crc_produces_its_published_check_value(
 		name: str, kernel_library: ctypes.CDLL) -> None:

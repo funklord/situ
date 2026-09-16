@@ -578,7 +578,81 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	lines.append("{")
 	lines.append(f"\treturn {name}_holed(data, len, 0, 0, 0);")
 	lines.append("}")
+	lines.extend(_polynomial_bits(decl, name, word, width, poly, init,
+	                              xorout, reflect, digits))
 	return lines
+
+
+def _polynomial_bits(decl: ast.CodecDecl, name: str, word: str, width: int,
+		poly: int, init: int, xorout: int, reflect: bool,
+		digits: int) -> list[str]:
+	"""The same code over a span that is not a whole number of bytes.
+
+	USB's token packet is eleven bits and its CRC covers all of them, so a
+	byte-length entry point cannot express what the algorithm runs over
+	(0046). One bit at a time rather than a second table: the table exists
+	to make the common case fast, and this case is at most a byte's worth
+	of bits beside a run the table already did.
+
+	Checked three ways rather than asserted. It agrees with the table
+	function above at every whole-byte length, for both directions and
+	every width in the standard library; over a sub-byte span it produces
+	the catalogue's RESIDUE -- 0x06 for CRC-5/USB over an eleven-bit token
+	and its five-bit check, 0x00 for CRC-7/MMC over a command and its
+	seven; and CRC-7/MMC over MMC's own CMD0 is the 0x4A that card
+	expects (26.373).
+	"""
+	mask = (1 << width) - 1
+	if reflect:
+		started = reverse(init, width)
+		stepped = [
+			f"\t\tconst {word} low = ({word})((crc ^ ({word})bit) & 1u);",
+			"",
+			f"\t\tcrc = ({word})(crc >> 1);",
+			"\t\tif (low) {",
+			f"\t\t\tcrc = ({word})(crc ^ (({word})0x"
+			f"{reverse(poly, width):0{digits}X}u));",
+			"\t\t}",
+		]
+		taken = ("\t\tconst uint8_t bit = (uint8_t)"
+		         "((data[i >> 3] >> (i & 7u)) & 1u);")
+	else:
+		started = init
+		stepped = [
+			f"\t\tconst {word} fire = ({word})"
+			f"((({word})(crc >> {width - 1}) ^ ({word})bit) & 1u);",
+			"",
+			f"\t\tcrc = ({word})(({word})(crc << 1) & 0x{mask:X}u);",
+			"\t\tif (fire) {",
+			f"\t\t\tcrc = ({word})(crc ^ (({word})0x{poly:0{digits}X}u));",
+			"\t\t}",
+		]
+		taken = ("\t\tconst uint8_t bit = (uint8_t)"
+		         "((data[i >> 3] >> (7u - (i & 7u))) & 1u);")
+
+	return [
+		"",
+		f"/* {decl.name} over `bit_len` bits starting at `bit_at`, for a span",
+		" * that is not a whole number of bytes. The bits are taken in the"
+		" order",
+		" * the code runs: least significant first where it is reflected,"
+		" most",
+		" * significant first where it is not. */",
+		f"{word} {name}_bits(const uint8_t *data, uint32_t bit_at,"
+		" uint32_t bit_len)",
+		"{",
+		f"\t{word} crc = ({word})0x{started:0{digits}X}u;",
+		"\tuint32_t i;",
+		"",
+		"\tfor (i = bit_at; i < bit_at + bit_len; i++) {",
+		taken,
+		*stepped,
+		"\t}",
+		"",
+		f"\treturn ({word})(crc ^ ({word})0x{xorout:0{digits}X}u)"
+		f"{f' & 0x{mask:X}u' if width < 64 else ''};",
+		"}",
+	]
 
 
 # ---------------------------------------------------------------------------

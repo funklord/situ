@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from situc import ast
 from situc.codegen.kernel_math import (crc_register, crc_shift, crc_start,
-                                       crc_table, crc_width, number)
+                                       crc_table, crc_width, number, reverse)
 from situc.codegen.python.emit import py_name
 from situc import __version__
 
@@ -263,7 +263,57 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"",
 		f"\treturn ({held} ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
 	])
+	lines.extend(_polynomial_bits(decl, name, width, poly, init, xorout,
+	                              reflect, digits))
 	return lines
+
+
+def _polynomial_bits(decl: ast.CodecDecl, name: str, width: int, poly: int,
+		init: int, xorout: int, reflect: bool, digits: int) -> list[str]:
+	"""The same code over a span that is not a whole number of bytes.
+
+	USB's token is eleven bits and its CRC covers all of them, so a
+	byte-length entry point cannot say what the algorithm runs over (0046).
+	One bit at a time rather than a second table, and checked against the
+	table function at every whole-byte length (26.373).
+	"""
+	mask = (1 << width) - 1
+	if reflect:
+		started = reverse(init, width)
+		taken   = "\t\tbit = (data[index >> 3] >> (index & 7)) & 1"
+		body    = [
+			"\t\tlow = (crc ^ bit) & 1",
+			"\t\tcrc >>= 1",
+			"\t\tif low:",
+			f"\t\t\tcrc ^= 0x{reverse(poly, width):0{digits}X}",
+		]
+	else:
+		started = init
+		taken   = "\t\tbit = (data[index >> 3] >> (7 - (index & 7))) & 1"
+		body    = [
+			f"\t\tfire = ((crc >> {width - 1}) ^ bit) & 1",
+			f"\t\tcrc = (crc << 1) & 0x{mask:X}",
+			"\t\tif fire:",
+			f"\t\t\tcrc ^= 0x{poly:0{digits}X}",
+		]
+
+	return [
+		"",
+		"",
+		f"def {name}_bits(data: bytes, bit_at: int, bit_len: int) -> int:",
+		f'\t"""The {decl.name} of `bit_len` bits from `bit_at`.',
+		"",
+		"\tFor a span that is not a whole number of bytes. The bits are",
+		"\ttaken in the order the code runs them: least significant first",
+		'\twhere it is reflected, most significant first where it is not."""',
+		f"\tcrc = 0x{started:0{digits}X}",
+		"",
+		"\tfor index in range(bit_at, bit_at + bit_len):",
+		taken,
+		*body,
+		"",
+		f"\treturn (crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
+	]
 
 
 def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
