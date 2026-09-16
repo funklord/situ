@@ -187,6 +187,13 @@ def declarations(schema: ast.Schema, prefix: str) -> list[str]:
 				"(const uint8_t *a, uint32_t alen, const uint8_t *b,"
 				" uint32_t blen, uint32_t hole_at, uint32_t hole_len,"
 				" uint8_t fill);",
+				# A span of BITS, for a coverage that is not whole bytes --
+				# USB's eleven-bit token (26.373). Declared beside the rest
+				# for the reason the hole is: a header is read by callers
+				# this schema does not know about.
+				f"uint{accumulator(width)}_t "
+				f"{ident(prefix, decl.name, 'bits')}"
+				"(const uint8_t *data, uint32_t bit_at, uint32_t bit_len);",
 			])
 		elif decl.kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 			lines.extend([

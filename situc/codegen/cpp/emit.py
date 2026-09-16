@@ -45,7 +45,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	bit_addressed_tag,
+	bit_addressed_tag, covered_bit_span,
 	fixed_span_bits,
 	byte_span,
 	declared_depth, depth_limit, invalidating_members,
@@ -3513,6 +3513,9 @@ class Emitter:
 				"(const std::uint8_t *data, std::uint32_t len,"
 				" std::uint32_t hole_at, std::uint32_t hole_len,"
 				" std::uint8_t fill);",
+				f"{self._codec_word(name)} situ_{c_name(name)}_bits"
+				"(const std::uint8_t *data, std::uint32_t bit_at,"
+				" std::uint32_t bit_len);",
 				# The third tier, and the only one a `prefix(...)` can
 				# reach: `_spans` takes two buffers, so the prefix the
 				# caller built is summed before the message's own bytes
@@ -5916,6 +5919,30 @@ class Emitter:
 		`crc_is_dirty` and the header no longer had one (26.371).
 		"""
 		lines: list[str] = []
+
+		# A span that is not whole bytes -- USB's eleven-bit token -- which
+		# `covered_run` refuses rather than truncating (26.367, 26.374).
+		bitspan = covered_bit_span(struct, placement)
+		if bitspan is not None:
+			span_at, span_bits = bitspan
+			lines.extend([
+				"",
+				f"\t/* The BITS `{placement.name}` covers. Bits rather than",
+				"\t * bytes: it is not a whole number of them, so a byte",
+				"\t * range would be short at one end. */",
+				f"\t[[nodiscard]] ::situ::rt::err {placement.name}"
+				"_covered_bits(std::uint32_t &offset,",
+				"\t\t\tstd::uint32_t &len) const noexcept",
+				"\t{",
+				f"\t\tif (({span_at} + {span_bits} + 7) / 8 > raw().limit) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+				f"\t\toffset = {span_at};",
+				f"\t\tlen    = {span_bits};",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			])
+
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run
@@ -6005,7 +6032,7 @@ class Emitter:
 		# `compute` and `check` read the span through `_covered`, which is
 		# not emitted where the coverage has no single range -- so the call
 		# was to a member nothing declares (26.367).
-		if covered_run(struct, placement) is None:
+		if covered_run(struct, placement) is None and bitspan is None:
 			if placement.tag_codec is not None:
 				lines.extend([
 					f"\t/* No {placement.tag_codec} helpers for"
@@ -6149,6 +6176,11 @@ class Emitter:
 		codec  = f"::situ_{c_name(placement.tag_codec)}"
 		filler = _self_as(placement.attrs)
 		before = placement.tag_prefix
+		# A bit span: the offset is in bits and the codec counts them, so
+		# the base is the view's own rather than a byte inside it (26.374).
+		if covered_bit_span(struct, placement) is not None:
+			return [f"\t\tout = {codec}_bits(raw().base, at, n);"]
+
 		if filler is None and before is None:
 			return [f"\t\tout = {codec}(raw().base + at, n);"]
 
@@ -6288,6 +6320,7 @@ class Emitter:
 			stored = "std::uint32_t{raw().base[crc_at]}"
 		else:
 			stored = f"{read_word(order, width)}(raw().base + crc_at)"
+		spanning = covered_bit_span(struct, placement) is not None
 		spanned = (max(1, -(-(((placement.offset_bits or 0) % BITS_PER_BYTE)
 		                      + (placement.size_bits or 0)) // BITS_PER_BYTE))
 		           if (placement.size_bits or 0) % BITS_PER_BYTE else width)
@@ -6303,7 +6336,9 @@ class Emitter:
 			"std::uint32_t &out) const noexcept",
 			"\t{",
 			"\t\tstd::uint32_t at = 0, n = 0;",
-			f"\t\tconst ::situ::rt::err e = {name}_covered(at, n);",
+			(f"\t\tconst ::situ::rt::err e = {name}_covered_bits(at, n);"
+			 if spanning else
+			 f"\t\tconst ::situ::rt::err e = {name}_covered(at, n);"),
 			"",
 			"\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\treturn e;",

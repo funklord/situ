@@ -916,6 +916,56 @@ def covered_run(struct: "ResolvedStruct",
 	return run
 
 
+def covered_bit_span(struct: "ResolvedStruct",
+		tag: Placement) -> tuple[int, int] | None:
+	"""What a tag covers, in BITS, where a byte range cannot say it.
+
+	`covered_run` answers in whole bytes and refuses a span that starts or
+	ends inside one, because every backend derives byte expressions from it
+	and the arithmetic truncates (26.367). USB's token is eleven bits, and
+	that refusal is why its checksum had no `compute` at all.
+
+	`None` where the span is not statically placed or not fixed: a bit
+	offset the message decides is a sum this does not compute, and the
+	byte-valued path has the machinery for dynamic ends. So this answers
+	exactly the case the other one cannot -- a static, contiguous, sub-byte
+	span -- and the two do not overlap (26.374).
+	"""
+	regions = [entry.placement for entry in struct.entries
+	           if entry.placement.name in tag.tag_covers
+	           and entry.placement.kind in ("authenticated", "sealed")]
+	if not regions:
+		return None
+
+	ordered = sorted(regions, key=lambda p: struct.layout.placements.index(p))
+	for earlier, later in zip(ordered, ordered[1:]):
+		if (earlier.offset_bits is None or later.offset_bits is None
+				or not earlier.is_fixed_size
+				or earlier.offset_bits + earlier.size_bits != later.offset_bits):
+			return None
+
+	first, last = ordered[0], ordered[-1]
+	if first.offset_bits is None or last.offset_bits is None \
+			or not last.is_fixed_size:
+		return None
+
+	# And only where the algorithm can count bits. A polynomial code
+	# consumes one bit at a time by definition and every backend emits a
+	# `_bits` entry point for one (26.373); a one's-complement sum adds
+	# sixteen-bit words and has no meaning over eleven bits. Emitting the
+	# accessor anyway made `compute` call `situ_ic_bits`, which nothing
+	# writes (26.374).
+	if tag.tag_codec is not None and not tag.tag_codec_counts_bits:
+		return None
+
+	start = first.offset_bits
+	end   = last.offset_bits + last.size_bits
+	if start % BITS_PER_BYTE == 0 and end % BITS_PER_BYTE == 0:
+		return None			# the byte-valued accessor says it
+
+	return start, end - start
+
+
 def covered_run_refusal(struct: "ResolvedStruct", tag: Placement) -> str | None:
 	"""Why there is no single range, in words a backend can put in a comment.
 

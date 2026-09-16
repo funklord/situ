@@ -70,6 +70,7 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 		_check_required_alignment(decl, struct_layout)
 		_check_secret_is_not_layout_bearing(decl, struct_layout)
 		_check_transform_tag_order(decl, struct_layout)
+		_check_bit_coverage_direction(decl, struct_layout, codecs)
 
 		entries = [
 			apply(_context(placement, decl, structs, enums, codecs, lenient,
@@ -373,6 +374,87 @@ def _check_transform_tag_order(decl: ast.StructDecl,
 				notes = ["`after` puts the transform on top of the tag,"
 				         " `before` puts it underneath (14.1b)"],
 			)
+
+
+def _check_bit_coverage_direction(decl: ast.StructDecl, layout: StructLayout,
+		codecs: dict[str, ast.CodecDecl]) -> None:
+	"""A coverage that is not whole bytes has to be counted the way the code
+	reads it.
+
+	A span of eleven bits is eleven bit POSITIONS, and which bits those are
+	depends on the direction: the schema numbers them by its `bit_order`, and
+	a polynomial code consumes them least-significant-first when it is
+	reflected and most-significant-first when it is not. Where the two
+	disagree, "bits 0 to 10" names one set of bits to the layout and another
+	to the algorithm, and the two overlap the check field itself.
+
+	Measured rather than reasoned: USB's token written `bit_order msb_first`
+	computed a CRC over three of its own check bits, stored it, and then
+	refused its own message -- the only reason it was caught is that `check`
+	recomputes. USB is least-significant-first on the wire, which is what the
+	packet says when it is written down correctly, and then every token
+	verifies (26.374).
+
+	Whole-byte coverage is not affected and is not asked about: a code
+	defines its own order within a byte, and every byte of the span is
+	whole.
+	"""
+	for placement in layout.placements:
+		if placement.kind not in ("tag", "checksum") or not placement.tag_covers:
+			continue
+		if placement.size_bits is None or placement.offset_bits is None:
+			continue
+
+		covered = [held for held in layout.placements
+		           if held.name in placement.tag_covers
+		           and held.kind in ("authenticated", "sealed")
+		           and held.offset_bits is not None]
+		if not covered:
+			continue
+
+		# A span with no fixed end is not a bit span: ICMP's checksum covers
+		# a region whose extent the message decides, and `max()` over no
+		# fixed member raised a ValueError out of the compiler -- an
+		# internal error where section 17 asks for a diagnostic, in a guard
+		# whose whole subject is a condition standing for two causes.
+		fixed = [held for held in covered if held.is_fixed_size]
+		if not fixed:
+			continue
+
+		start = min(held.offset_bits or 0 for held in covered)
+		end   = max((held.offset_bits or 0) + held.size_bits for held in fixed)
+		if start % BITS_PER_BYTE == 0 and end % BITS_PER_BYTE == 0:
+			continue
+
+		codec = codecs.get(placement.tag_codec or "")
+		if codec is None or codec.kernel is None:
+			continue
+		if codec.kernel.family is not ast.KernelFamily.POLYNOMIAL:
+			continue
+
+		reflected = codec.kernel.flag("reflect")
+		wanted    = (ast.BitOrder.LSB_FIRST if reflected
+		             else ast.BitOrder.MSB_FIRST)
+		if placement.bit_order is wanted:
+			continue
+
+		direction = ("reflected, so it consumes each byte least significant "
+		             "bit first" if reflected else
+		             "not reflected, so it consumes each byte most "
+		             "significant bit first")
+		raise error(
+			f"`{placement.name}` covers {end - start} bits and "
+			f"`{placement.tag_codec}` reads them the other way round",
+			placement.span,
+			label = (f"this schema is `bit_order "
+			         f"{(placement.bit_order or wanted).value}`"),
+			notes = [f"`{placement.tag_codec}` is {direction}",
+			         "a span of whole bytes does not raise this: the code "
+			         "decides the order inside a byte, and every byte of "
+			         "such a span is whole",
+			         f"write the struct `bit_order {wanted.value}`, which is "
+			         "the order the wire carries (0046)"],
+		)
 
 
 def _check_secret_is_not_layout_bearing(decl: ast.StructDecl,

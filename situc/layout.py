@@ -324,6 +324,17 @@ class Placement:
 	# Setting `endian` instead put `big` on a `u8[2]` in eight committed wire
 	# signatures, describing an order the member does not have.
 	tag_codec_endian: ast.Endian | None	= None
+	#: Whether the codec computing this tag can run over a span of BITS.
+	#:
+	#: A polynomial code consumes one bit at a time by definition, and every
+	#: backend emits a `_bits` entry point for one (26.373). A
+	#: one's-complement sum adds sixteen-bit words and has no meaning over
+	#: eleven bits, so a coverage that is not whole bytes has no accessor
+	#: under one -- and emitting it anyway made `compute` call a function
+	#: nothing writes. Carried here rather than asked of the codec table by
+	#: each consumer, which is how the placement already carries
+	#: `tag_codec_endian` (26.374).
+	tag_codec_counts_bits: bool		= False
 	# For a `coded` placement: the sibling regions its transform also runs
 	# over, beyond its own extent (section 14.1a). Unlike `tag_covers` this is
 	# never inferred -- empty means the region covers only itself.
@@ -1452,6 +1463,12 @@ class Solver:
 				held, tag_covers=coverage_of(tag, regions),
 				tag_prefix=tag.prefix)
 
+	def _codec_counts_bits(self, codec: str | None) -> bool:
+		"""Whether `codec` can run over a span that is not whole bytes."""
+		decl = self.codecs.get(codec or "")
+		return (decl is not None and decl.kernel is not None
+		        and decl.kernel.family is ast.KernelFamily.POLYNOMIAL)
+
 	def place_tag(self, member: ast.TagField, scope: Scope, layout: StructLayout,
 			prefix: str, state: Walk) -> None:
 		"""An authentication tag or a checksum (section 14.1).
@@ -1523,6 +1540,7 @@ class Solver:
 			endian        = None,
 			tag_codec     = member.codec,
 			tag_codec_endian = scope.endian if member.codec else None,
+			tag_codec_counts_bits = self._codec_counts_bits(member.codec),
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			attrs         = member.attrs,

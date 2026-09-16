@@ -62,7 +62,11 @@ PREFIXES = frozenset({"clear", "dirty", "recompute", "set", "trigger", "with"})
 #: `span_from` both appear -- because the check below matches a whole affix
 #: rather than a prefix of one.
 SUFFIXES = frozenset({
-	"at", "big", "count", "covered", "decode", "decode_spans", "decoded_max",
+	# `bits` is the codec entry point over a span that is not whole bytes,
+	# and `covered_bits` the accessor that names such a span -- USB's
+	# eleven-bit token (26.373, 26.374).
+	"at", "big", "bits", "count", "covered", "covered_bits", "decode",
+	"decode_spans", "decoded_max",
 	"digits", "encode_spans", "eq",
 	"extent", "finalize", "find", "first", "from", "gate", "host", "index",
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",

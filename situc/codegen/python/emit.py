@@ -40,7 +40,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.traverse import (
-	bit_addressed_tag,
+	bit_addressed_tag, covered_bit_span,
 	fixed_span_bits,
 	byte_span, declared_depth, depth_limit, invalidating_members,
 	is_recursive,
@@ -1515,6 +1515,21 @@ class Emitter:
 				'\t\t"""',
 				f"\t\treturn {self._raw_load(placement, placement.scalar)}",
 			]
+			if placement.offset_bits is not None:
+				msb = placement.bit_order is not ast.BitOrder.LSB_FIRST
+				lines.extend([
+					"",
+					f"\tdef {name}_store(self, value: int) -> None:",
+					f'\t\t"""Put a computed {placement.tag_codec or "sum"}'
+					f' into `{placement.name}`.',
+					"",
+					"\t\tThe byte-string form is written through its own",
+					"\t\tslice; this one is bits. Writing the tag does not",
+					"\t\tmark it dirty -- that is what `finalize` says it no",
+					'\t\tlonger is."""',
+					f"\t\tself._set_bits({placement.offset_bits},"
+					f" {placement.size_bits}, value, msb={msb})",
+				])
 			return lines + self._tag_rest(struct, placement, name)
 
 		lines = [
@@ -1600,6 +1615,27 @@ class Emitter:
 				"		return at, n",
 			])
 
+		# A span that is not whole bytes -- USB's eleven-bit token -- which
+		# `covered_run` refuses rather than truncating (26.367, 26.374).
+		bitspan = covered_bit_span(struct, placement)
+		if bitspan is not None:
+			at, extent = bitspan
+			lines.extend([
+				"",
+				f"\tdef {name}_covered_bits(self) -> tuple[int, int]:",
+				f'\t\t"""The BITS {placement.name} covers:'
+				f' {", ".join(placement.tag_covers)}.',
+				"",
+				"\t\tA span of this many bits rather than of bytes: it is",
+				"\t\tnot a whole number of them, so a byte range would be",
+				'\t\tshort at one end or the other."""',
+				f"\t\tif self._at * 8 + {at + extent} > len("
+				"self._msg.buffer) * 8:",
+				"\t\t\traise BoundsError("
+				f'"{placement.path}: the frame does not hold the span")',
+				f"\t\treturn {at}, {extent}",
+			])
+
 		held = obligation(self.schema, struct, placement.name)
 		if held is not None:
 			bit = f"self.DIRTY_{py_name(placement.name).upper()}"
@@ -1618,7 +1654,7 @@ class Emitter:
 			# is not emitted where the coverage has no single range. Python
 			# is the quietest of the four about it: the call type-checks and
 			# raises `AttributeError` the first time somebody asks (26.367).
-			if covered_run(struct, placement) is None:
+			if covered_run(struct, placement) is None and bitspan is None:
 				if placement.tag_codec is not None:
 					lines.extend([
 						"",
@@ -1645,7 +1681,7 @@ class Emitter:
 					"\t# and the bit load needs a static one.",
 				])
 			else:
-				lines.extend(self._checksum_codec(placement, name))
+				lines.extend(self._checksum_codec(struct, placement, name))
 
 		return lines
 
@@ -1758,7 +1794,8 @@ class Emitter:
 			lines.append(f"\tPREFIX_BYTES_{upper} = {size}")
 		return lines
 
-	def _checksum_codec(self, placement: Placement, name: str) -> list[str]:
+	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
+			name: str) -> list[str]:
 		"""`is crc32` -- compute the sum, and compare it (0053).
 
 		The implementation is defined in this module by `_derived_codecs`,
@@ -1845,12 +1882,23 @@ class Emitter:
 					f" {hole}, hole_n, {filler:#04x})",
 				]
 
+		# A span of BITS, which is USB's token: the codec counts them and
+		# the offset is measured from the message's first bit (26.373).
+		if covered_bit_span(struct, placement) is not None:
+			call  = [f"\t\treturn {codec}_bits("
+			         "bytes(self._msg.buffer[self._at:]), at, n)"]
+			guard = []
+			reads = f"the BITS `{name}_covered_bits` names"
+			asks  = f"\t\tat, n = self.{name}_covered_bits()"
+		else:
+			reads = f"the bytes `{name}_covered` names"
+			asks  = f"\t\tat, n = self.{name}_covered()"
+
 		return [
 			"",
 			f"\tdef {name}_compute({taken}) -> int:",
-			f'\t\t"""{placement.tag_codec} over the bytes'
-			f' `{name}_covered` names."""',
-			f"\t\tat, n = self.{name}_covered()",
+			f'\t\t"""{placement.tag_codec} over {reads}."""',
+			asks,
 			*guard,
 			*call,
 			"",

@@ -13,9 +13,10 @@ sub-byte codes are checked against their published values. `place_tag`
 takes a sub-byte `checksum` since 26.371 and `usb_token` is in the
 corpus, so the packet this record was written for has a layout, a map,
 and a value accessor in all four backends -- the four-way differential
-compares USB's five-bit CRC and the two walkers agree with it. Still to
-do: bit-valued COVERAGE through four backends and the runtime, which is
-what `compute` and `check` wait on, and `example/usb`
+compares USB's five-bit CRC and the two walkers agree with it. Bit-valued
+coverage landed in 26.374: `usb_token` computes, stores, checks and
+validates its own CRC in all four backends, over the eleven bits it
+covers. What remains of this record is `example/usb` itself
 Date: 2026-09-01
 Phase: unscheduled; found while making USB expressible (26.146, 26.148)
 

@@ -42,7 +42,7 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	bit_addressed_tag,
+	bit_addressed_tag, covered_bit_span,
 	fixed_span_bits,
 	codec_entry_point, declared_depth, depth_limit, is_recursive,
 	declared_value_bounds, pinned_bytes, pinned_runs,
@@ -533,6 +533,34 @@ class Emitter:
 		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):
+			# Where a caller puts a computed sub-byte checksum. A byte-string
+			# tag is written through its slice; a five-bit one has no slice,
+			# so `compute` would hand back a value with nowhere to put it and
+			# a message could be read and never assembled. It does NOT mark
+			# the tag dirty: writing the tag is what discharges the
+			# obligation rather than incurring it (26.374).
+			if bit_addressed_tag(entry.placement) \
+					and entry.placement.offset_bits is not None \
+					and entry.placement.scalar is not None:
+				tag_local = c_name(local_name(struct, entry.placement))
+				lines.extend([
+					"",
+					f"\t/// Store a computed"
+					f" {entry.placement.tag_codec or 'checksum'} into"
+					f" `{entry.placement.name}`.",
+					"\t///",
+					"\t/// Writing the tag does not mark it dirty -- that is",
+					f"\t/// what `{tag_local}_finalize` says it no longer"
+					" is.",
+					f"\tpub fn {tag_local}_store(&mut self, value:"
+					f" {self._rust_type(entry.placement.scalar)}) {{",
+					"\t\tsitu_rt::write_bits(self.bytes,"
+					f" {entry.placement.offset_bits},"
+					f" {entry.placement.size_bits},"
+					f" {'false' if entry.placement.bit_order is ast.BitOrder.LSB_FIRST else 'true'},"
+					" u64::from(value))",
+					"\t}",
+				])
 			lines.extend(self._setter(struct, entry))
 			# Here rather than beside the getter: erasing is a WRITE, and
 			# the read-only view's `bytes` is a `&[u8]`. Putting it on the
@@ -1294,6 +1322,27 @@ class Emitter:
 			"\t}",
 		]
 
+		# A span that is not whole bytes -- USB's eleven-bit token -- which
+		# `covered_run` refuses rather than truncating (26.367, 26.374).
+		bitspan = covered_bit_span(struct, placement)
+		if bitspan is not None:
+			span_at, span_bits = bitspan
+			lines.extend([
+				"",
+				f"\t/// The BITS `{placement.name}` covers:"
+				f" `{'`, `'.join(placement.tag_covers)}`.",
+				"\t///",
+				"\t/// Bits rather than bytes: it is not a whole number of",
+				"\t/// them, so a byte range would be short at one end.",
+				f"\tpub fn {name}_covered_bits(&self) -> Result<(u32, u32)> {{",
+				f"\t\tif ({span_at} + {span_bits} + 7) / 8"
+				" > self.bytes.len() {",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+				f"\t\tOk(({span_at}, {span_bits}))",
+				"\t}",
+			])
+
 		run = covered_run(struct, placement)
 		if run is not None:
 			first, last = run
@@ -1364,7 +1413,7 @@ class Emitter:
 			# `compute` and `check` read the span through `_covered`,
 			# which is not emitted where the coverage has no single range
 			# -- so the call was to a method nothing defines (26.367).
-			if covered_run(struct, placement) is None:
+			if covered_run(struct, placement) is None and bitspan is None:
 				if placement.tag_codec is not None:
 					lines.extend([
 						f"\t/// No {placement.tag_codec} helpers for"
@@ -1485,6 +1534,7 @@ class Emitter:
 		read   = ("from_le_bytes" if placement.tag_codec_endian
 		          is ast.Endian.LITTLE else "from_be_bytes")
 
+		spanning = covered_bit_span(struct, placement) is not None
 		msb     = ("false" if placement.bit_order is ast.BitOrder.LSB_FIRST
 		           else "true")
 		spanned = max(1, -(-(((placement.offset_bits or 0) % BITS_PER_BYTE)
@@ -1501,8 +1551,11 @@ class Emitter:
 			"\t/// names. Not called by validate: the coverage may run to the",
 			"\t/// end of the message.",
 			"\tpub fn " + f"{name}_compute(&self{taken}) -> Result<u32> {{",
-			f"\t\tlet (at, n) = self.{name}_covered()?;",
-			*self._codec_call(placement, codec, name),
+			(f"\t\tlet (at, n) = self.{name}_covered_bits()?;" if spanning
+			 else f"\t\tlet (at, n) = self.{name}_covered()?;"),
+			*(["\t\tOk(u32::from("
+			   f"{codec}_bits(self.bytes, at, n)))"] if spanning
+			  else self._codec_call(placement, codec, name)),
 			"\t}",
 			"",
 			f"\t/// Whether the stored {placement.tag_codec} matches. Not",

@@ -361,9 +361,9 @@ struct unverified size=19
   mac covers: body seq
 
 struct usb_token size=2
-  @0x0000   7bit      u7         address  msb_first
-  @0x0000:7 4bit      u4         endpoint  msb_first
-  @0x0001:3 5bit      u5         crc  msb_first
+  @0x0000   7bit      u7         address  lsb_first
+  @0x0000:7 4bit      u4         endpoint  lsb_first
+  @0x0001:3 5bit      u5         crc  lsb_first
   crc covers: address body endpoint
 
 struct utf16 size=17

@@ -1238,7 +1238,12 @@ codec crc5_usb {
 }
 impl crc5_usb derived;
 
-struct usb_token [allow_straddle] {
+// `bit_order = lsb_first` because that is how USB sends a token, and
+// because a reflected code consumes each byte least significant bit first:
+// with the file's `msb_first` the eleven covered bits and the five the
+// algorithm reads are not the same eleven, and the schema is refused rather
+// than summed the wrong way (26.374).
+struct usb_token [allow_straddle, bit_order = lsb_first] {
 	authenticated body {
 		u7  address;
 		u4  endpoint;

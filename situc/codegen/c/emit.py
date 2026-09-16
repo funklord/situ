@@ -48,7 +48,8 @@ from situc.traverse import (
 	pinned_runs,
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
-	bit_addressed_tag, coded_spans, covered_run, covered_run_refusal,
+	bit_addressed_tag, coded_spans, covered_bit_span, covered_run,
+	covered_run_refusal,
 	data_sized, dynamic_frame_owner,
 	declared_depth, depth_limit, invalidating_members, is_own_member,
 	is_recursive,
@@ -666,7 +667,33 @@ class Emitter:
 		if placement.tag_prefix is not None:
 			lines.extend(self._tag_prefix(struct, placement, local))
 
-		if spans is None:
+		bitspan = covered_bit_span(struct, placement)
+		if spans is None and bitspan is not None:
+			# A span that is not whole bytes, which is USB's token: eleven
+			# bits, so a byte range cannot say it and `covered_run` refuses
+			# rather than truncating (26.367). The algorithm runs over bits
+			# here and the codec has an entry point that counts them
+			# (26.373).
+			at, extent = bitspan
+			lines.extend([
+				f"static inline situ_err_t "
+				f"{ident(self.prefix, struct.name, local, 'covered_bits')}"
+				"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+				"{",
+				f"\tconst uint32_t start = {at}u;",
+				f"\tconst uint32_t bits  = {extent}u;",
+				"",
+				f"\tif (!situ_in_bounds(view, start / 8u,"
+				f" ({at % BITS_PER_BYTE} + bits + 7u) / 8u)) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"",
+				"\t*offset = start;",
+				"\t*len    = bits;",
+				"\treturn SITU_OK;",
+				"}",
+			])
+		elif spans is None:
 			lines.extend([
 				f"/* No covered-span accessor for `{name}`:",
 				f" * {covered_run_refusal(struct, placement)},",
@@ -713,11 +740,23 @@ class Emitter:
 		# defines: C and C++ do not compile, Rust does not compile, and
 		# Python raises `AttributeError` the first time a caller asks
 		# (26.367).
-		if spans is None:
+		if spans is None and bitspan is None:
 			lines.extend([
 				f"/* No {placement.tag_codec} helpers for `{name}`: they run",
 				" * over the covered span, and this one has no single range. */",
 			] if placement.tag_codec is not None else [])
+		elif bitspan is not None and (_self_as(placement.attrs) is not None
+				or placement.tag_prefix is not None):
+			# `[self_as]` punches a hole in the span and `prefix(...)` puts
+			# bytes ahead of it, and both are byte machinery: the codec's
+			# bit entry point takes neither. No schema asks for both, and
+			# saying so is better than summing the wrong thing (26.374).
+			lines.extend([
+				f"/* No {placement.tag_codec} helpers for `{name}`: its span",
+				" * is bit-valued and it carries a hole or a prefix, which"
+				" are",
+				" * byte machinery. */",
+			])
 		elif placement.tag_codec in self._underivable_codecs():
 			lines.extend([
 				f"/* No {placement.tag_codec} helpers for `{name}`: the schema",
@@ -761,6 +800,46 @@ class Emitter:
 			if decl.name in derived and decl.kernel is not None
 			and kernels._for_kernel(decl, "situ") is None)
 
+	def _sub_byte_tag_store(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Where a caller puts the result, for a checksum that is not bytes.
+
+		A byte-string tag is written through `_ptr`: the caller runs the
+		algorithm and copies the digest in. A five-bit one has no pointer
+		to write through, so `compute` would hand back a value with nowhere
+		to put it and a message could be read and never assembled.
+
+		It takes the message rather than the view, like every other write
+		that touches a covered member -- but it does NOT mark the tag
+		dirty, because writing the tag is what discharges the obligation
+		rather than incurring it. `finalize` clears the bit (26.374).
+		"""
+		if placement.scalar is None or placement.offset_bits is None:
+			return []
+
+		local = c_name(self._local(struct, placement))
+		order = ("lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST
+		         else "msb")
+		return [
+			"",
+			f"/** Store a computed {placement.tag_codec or 'checksum'} into"
+			f" `{placement.name}`.",
+			" *",
+			" * The byte-string form is written through its pointer; this one",
+			" * is bits, so it is written here. Writing the tag does not mark",
+			" * it dirty -- that is what",
+			f" * {ident(self.prefix, struct.name, local, 'finalize')}() says"
+			" it no longer is. */",
+			f"static inline void "
+			f"{ident(self.prefix, struct.name, local, 'store')}"
+			f"(situ_view_t view, {self._ctype(placement.scalar)} value)",
+			"{",
+			f"\tsitu_bits_set_{order}(situ_base(view),"
+			f" {placement.offset_bits}u, {placement.size_bits}u,"
+			" (uint64_t)value);",
+			"}",
+		]
+
 	def _checksum_codec(self, struct: ResolvedStruct, placement: Placement,
 			local: str) -> list[str]:
 		"""`is crc32` -- compute the sum, and compare it (0053).
@@ -779,7 +858,12 @@ class Emitter:
 		if placement.tag_codec is None:
 			return []
 
-		covered = ident(self.prefix, struct.name, local, "covered")
+		# Whichever accessor this tag got. A span of eleven bits has no
+		# byte range, so `compute` reads it in bits and calls the codec's
+		# bit entry point (26.373, 26.374).
+		spanning = covered_bit_span(struct, placement) is not None
+		covered = ident(self.prefix, struct.name, local,
+		                "covered_bits" if spanning else "covered")
 		compute = ident(self.prefix, struct.name, local, "compute")
 		check   = ident(self.prefix, struct.name, local, "check")
 		codec   = ident(self.prefix, placement.tag_codec)
@@ -1699,6 +1783,7 @@ class Emitter:
 			# `crc_len(view) / 0u`, which gcc refuses outright (26.371).
 			if bit_addressed_tag(placement):
 				lines.extend(self._scalar_get(struct, entry))
+				lines.extend(self._sub_byte_tag_store(struct, placement))
 				return lines
 			lines.extend(self._array(struct, entry))
 			return lines
@@ -8584,6 +8669,14 @@ class Emitter:
 		"""
 		filler = _self_as(placement.attrs)
 		before = placement.tag_prefix
+		# A bit span: the offset is in bits and the codec counts them, so
+		# the base is the view's own rather than a byte inside it. Neither
+		# `[self_as]` nor a prefix has met one -- both are byte machinery,
+		# and a schema that asks for both is refused below rather than
+		# silently summed the wrong way (26.374).
+		if covered_bit_span(struct, placement) is not None:
+			return [f"\t*out = {codec}_bits(situ_base(view), at, n);"]
+
 		if filler is None and before is None:
 			return [f"\t*out = {codec}(situ_base(view) + at, n);"]
 
