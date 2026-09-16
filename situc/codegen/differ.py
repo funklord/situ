@@ -99,7 +99,7 @@ from situc.capability import Axis
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	invalidating_members,
+	bit_addressed_tag, invalidating_members,
 	Member, arm_members, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, local_name, own_entries,
 	own_members, unmeasurable_inside,
@@ -435,7 +435,15 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				                 max(8, scalar.bits), scalar.signed,
 				                 scaled=placement.scaled))
 		elif kind is Member.TAG:
-			found.append(Ask(Probe.TAG, local, placement.array_count))
+			# The probe reads the tag's bytes through `_ptr`, and a sub-byte
+			# checksum has none: it is one value five bits wide, which no
+			# backend addresses until 0046's bit-addressed form lands. The
+			# driver asked anyway and its C did not compile -- the sixth
+			# generator to disagree with the emitters about what exists,
+			# and the one no backend comparison reaches, because a driver
+			# is not a backend (26.371).
+			if not bit_addressed_tag(placement):
+				found.append(Ask(Probe.TAG, local, placement.array_count))
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:

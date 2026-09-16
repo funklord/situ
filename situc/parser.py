@@ -1689,13 +1689,40 @@ class Parser:
 		name     = self.optional_region_name(start.text)
 		array    = self.parse_array_spec()
 
-		if array is None:
+		# A sub-byte checksum IS its scalar: `checksum u5 crc covers(token)`.
+		# USB's token packet carries a five-bit CRC over eleven bits, and a
+		# run of five-bit checksums is not something anybody writes -- so a
+		# length is required exactly where it says something, which is a byte
+		# string, and refused where it would be noise (0046).
+		# A CHECKSUM only. A sub-byte `tag` is not a narrow spelling of
+		# anything -- it is illegal, because 14.3 hands a region's interior
+		# out on that tag and no AEAD produces five bits -- and `place_tag`
+		# says so in those terms. Keying this on the scalar alone answered
+		# `tag u3[16]` with "a sub-byte tag is one value, not a run", which
+		# is true of the length and silent about the real fault (0046).
+		narrow = (kind is ast.TagKind.CHECKSUM
+		          and type_ref.scalar is not None
+		          and type_ref.scalar.is_bit_packed)
+
+		if array is None and not narrow:
 			raise error(
 				f"`{start.text}` needs a length",
 				self.current.span,
 				label = f"expected `[N]` after the type",
 				notes = [f"a {start.text} is a byte string, so its width is part of "
-				         "the declaration: `tag u8[16];`"],
+				         "the declaration: `tag u8[16];`",
+				         "a sub-byte one is written without a length, the type "
+				         "being the width: `checksum u5 crc covers(token)` (0046)"],
+			)
+
+		if array is not None and narrow:
+			assert type_ref.scalar is not None
+			raise error(
+				f"a sub-byte {start.text} is one value, not a run",
+				array.span,
+				label = "remove the length",
+				notes = [f"`{type_ref.name}` is {type_ref.scalar.bits} bits, "
+				         "which is the whole of it (0046)"],
 			)
 
 		covers = self.parse_covers()

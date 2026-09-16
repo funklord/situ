@@ -48,7 +48,8 @@ from situc.traverse import (
 	pinned_runs,
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
-	coded_spans, covered_run, covered_run_refusal, data_sized, dynamic_frame_owner,
+	bit_addressed_tag, coded_spans, covered_run, covered_run_refusal,
+	data_sized, dynamic_frame_owner,
 	declared_depth, depth_limit, invalidating_members, is_own_member,
 	is_recursive,
 	must_be_terminated,
@@ -722,6 +723,17 @@ class Emitter:
 				f"/* No {placement.tag_codec} helpers for `{name}`: the schema",
 				" * asks for a derived implementation and that kernel is not",
 				" * one situ writes, so the symbol would have no provider. */",
+			])
+		elif (placement.size_bits or 0) % BITS_PER_BYTE:
+			# `check` reads the stored value with a byte helper, and there is
+			# none for five bits: the width lands on `situ_get_be0`. The
+			# bit-addressed read is the rest of 0046 and the field places
+			# without it, so the layout is describable before the code is.
+			lines.extend([
+				f"/* No {placement.tag_codec} helpers for `{name}`: the stored",
+				f" * value is {placement.size_bits} bits, and reading it needs"
+				" the bit-addressed",
+				" * form 0046 has not built. */",
 			])
 		else:
 			lines.extend(self._checksum_codec(struct, placement, local))
@@ -1656,6 +1668,22 @@ class Emitter:
 				if blocker is not None:
 					return lines + self._unresolvable_offset(placement, blocker)
 				lines.extend(self._offset_function(struct, placement))
+			# A tag is normally a byte string and `_array` gives it `len`,
+			# `ptr` and `count` in bytes. A sub-byte checksum is one value
+			# five bits wide, and that arithmetic divides by its element's
+			# byte width: `crc_count` came out as `crc_len(view) / 0u`,
+			# which gcc refuses outright. The bit-addressed getter is the
+			# rest of 0046; until it exists the field places, the map
+			# describes it, and this says so (26.371).
+			if bit_addressed_tag(placement):
+				return lines + [
+					f"/* No accessor for `{placement.name}`: it is"
+					f" {placement.size_bits} bits, and this backend",
+					" * addresses a checksum's bytes. The bit-addressed form"
+					" is 0046's",
+					" * remaining work; the layout and the map carry it"
+					" already. */",
+				]
 			lines.extend(self._array(struct, entry))
 			return lines
 

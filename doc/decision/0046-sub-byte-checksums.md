@@ -9,9 +9,11 @@ for all four backends. The expansion axis went bit-valued in 26.361 and
 `crc5_usb` and `crc15_can` derive and are checked against their published
 values. `crc7_mmc`'s left-aligned loop is built (26.369), so every
 polynomial width from 1 to 64 derives in all four backends and all three
-sub-byte codes are checked against their published values. Still to do:
-`place_tag` on a sub-byte scalar, bit-valued coverage through four
-backends and the runtime, and `example/usb`
+sub-byte codes are checked against their published values. `place_tag`
+takes a sub-byte `checksum` since 26.371 and `usb_token` is in the
+corpus, so the packet this record was written for has a layout and a
+map. Still to do: the bit-addressed accessor for such a field, bit-valued
+coverage through four backends and the runtime, and `example/usb`
 Date: 2026-09-01
 Phase: unscheduled; found while making USB expressible (26.146, 26.148)
 

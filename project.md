@@ -28949,6 +28949,55 @@ worked example does. That is the argument for putting a construct in the
 corpus rather than in a test, stated three times by measurement rather
 than once by preference.
 
+### 26.371 A checksum narrower than a byte, and seven generators
+
+**USB's token packet has a layout now**: `u7 address`, `u4 endpoint`, and
+a five-bit CRC over the eleven bits they make, in two bytes altogether.
+`place_tag` refused it -- "a checksum must be a whole-byte scalar type" --
+so the packet 0046 was written for could not be described at all.
+
+**The rule that moves and the one that does not.** A `checksum` may be any
+width; a `tag` may not. No AEAD produces five bits and 14.3 hands a
+region's interior out on that tag, so the mechanism widens and the
+cryptographic rule stays. The refusal that survives says which of the two
+it is.
+
+**The length is absent because the type IS the width.** `checksum u5 crc`
+rather than `crc[1]`: a run of five-bit checksums is not a thing anybody
+writes, so `[N]` is required where it says something -- a byte string --
+and refused where it would be noise. Both directions are diagnostics, and
+the first version of the refusal keyed on the SCALAR rather than the kind,
+so `tag u3[16]` was answered "a sub-byte tag is one value, not a run":
+true of the length and silent about the real fault, which is that a tag
+may not be sub-byte at all.
+
+**And then seven generators had to agree about what exists.** The field
+places and no backend can address it -- reading five bits at bit 11 needs
+the bit-addressed form 0046 still owes -- and every generator that hands
+out a member's bytes had to learn that, each in its own way:
+
+    c/emit       `_count` divided by the element's byte width: gcc refused
+                 `crc_len(view) / 0u` outright
+    c/emit       `check` read the stored value with `situ_get_be0`
+    cpp, rust,   already declined a ValueConverted element, and needed the
+    python       codec helpers withheld for the same reason
+    c/checks     asks the covered span through an accessor
+    differ       the four-way driver read the tag through `_ptr`
+    c/fuzz       the harness drove it through `_get`
+
+**Three of those found out by failing to compile, one after another**, and
+that is the finding rather than any one of them. The question "does this
+member have an accessor" is decided in the emitters and re-derived by
+every consumer, so each consumer discovers a new answer the hard way and
+in whatever order the corpus happens to reach it. `traverse.bit_addressed_
+tag` is one predicate that all of them ask, which is what keeps the eighth
+from finding out the same way.
+
+**The corpus is what found them, again.** `usb_token` went into
+`edges.situ` and `make test-c` named the next generator each time it was
+run. That is four defects from corpus entries in three days, and every one
+was unreachable rather than unnoticed.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

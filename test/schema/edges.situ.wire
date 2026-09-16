@@ -359,6 +359,12 @@ struct unverified size=19
   @0x0003   16        u8         mac
   mac covers: body seq
 
+struct usb_token size=2
+  @0x0000   7bit      u7         address  msb_first
+  @0x0000:7 4bit      u4         endpoint  msb_first
+  @0x0001:3 5bit      u5         crc  msb_first
+  crc covers: address body endpoint
+
 struct utf16 size=17
   @0x0000   8         u16        be  big encoding=utf16be
   @0x0008   8         u16        le  big encoding=utf16le

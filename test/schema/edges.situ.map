@@ -13,6 +13,7 @@
 
 # codecs. `trusted` means the properties are declared and
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec crc5_usb derived expansion=+5 bits seekable=linear granularity=block systematic deterministic
 codec crc7_mmc derived expansion=+7 bits seekable=linear granularity=block systematic deterministic
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
@@ -376,6 +377,12 @@ struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic 
   unverified.body                        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.body.seq                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.mac                         offset=AbsoluteStatic(0x03) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
+struct usb_token size=2 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  usb_token.body                         offset=AbsoluteStatic(0x00) size=Fixed(11bit) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)
+  usb_token.address                      offset=AbsoluteStatic(0x00) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  usb_token.endpoint                     offset=AbsoluteStatic(0x00:7) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  usb_token.crc                          offset=AbsoluteStatic(0x01:3) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
 
 struct utf16 size=17 repr=ValueConverted atomic=NonAtomic
   utf16.be                               offset=AbsoluteStatic(0x00) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic

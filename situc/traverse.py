@@ -868,6 +868,28 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 	return steps
 
 
+def bit_addressed_tag(placement: Placement) -> bool:
+	"""A `tag` or `checksum` whose value is not a whole number of bytes.
+
+	0046 let a checksum be a sub-byte scalar so that USB's token packet has
+	a layout -- a five-bit CRC over eleven bits -- and no backend addresses
+	one yet: reading five bits at bit 11 needs the bit-addressed form that
+	record still owes. Until then the field places, the map describes it,
+	and every generator that would hand out its bytes says so.
+
+	Here rather than in each of them because seven asked the question and
+	each answered it in its own words: four emitters, the check generator,
+	the differential driver and the fuzz harness. C's `_count` divided by
+	the element's byte width and gcc refused the header outright; the
+	driver and the harness named accessors nothing had emitted. One
+	predicate is what keeps the eighth from finding out the same way
+	(26.371).
+	"""
+	return (placement.kind in ("tag", "checksum")
+	        and placement.scalar is not None
+	        and placement.scalar.is_bit_packed)
+
+
 def covered_run(struct: "ResolvedStruct",
 		tag: Placement) -> tuple[Placement, Placement] | None:
 	"""The first and last region a tag authenticates, if they are contiguous.

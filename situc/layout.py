@@ -1465,25 +1465,43 @@ class Solver:
 		cursor = state.cursor
 		scalar = member.type_ref.scalar
 
-		if scalar is None or scalar.is_bit_packed:
+		# 0046: a PARITY field may be any width and an AUTHENTICATION tag may
+		# not. No AEAD produces five bits, and 14.3's stage gate hands a
+		# region's interior out on that tag -- so the mechanism goes sub-byte
+		# and the cryptographic rule does not move.
+		narrow = scalar is not None and scalar.is_bit_packed
+
+		if scalar is None or (narrow and member.kind is not ast.TagKind.CHECKSUM):
 			raise error(
 				f"a {member.kind.value} must be a whole-byte scalar type",
 				member.type_ref.span,
-				label = f"`{member.type_ref.name}` is not",
+				label = (f"`{member.type_ref.name}` is {scalar.bits} bits"
+				         if scalar is not None
+				         else f"`{member.type_ref.name}` is not a scalar type"),
 				notes = ["a tag is a byte string produced by an algorithm, so it "
 				         "has no bit-level structure to describe",
-				         "`tag u8[16];` for a 128-bit tag"],
+				         "`tag u8[16];` for a 128-bit tag",
+				         "a `checksum` may be any width, because a parity field "
+				         "is not what a region's interior is handed out on "
+				         "(0046)"],
 			)
 
-		count = interval_of(member.array.size, env) if member.array.size else Interval(0, 0)
-		if not count.is_point or count.lo <= 0:
-			raise error(
-				f"a {member.kind.value} needs a constant length",
-				member.array.span,
-				label = f"length is {count.render()}",
-				notes = ["the algorithm fixes the tag width, so a data-dependent "
-				         "one describes no algorithm at all"],
-			)
+		if member.array is None:
+			# A sub-byte checksum is one value and its type is the width. The
+			# parser refuses a length here and requires one everywhere else,
+			# so this is the only way to arrive without one.
+			count = Interval(1, 1)
+		else:
+			count = (interval_of(member.array.size, env)
+			         if member.array.size else Interval(0, 0))
+			if not count.is_point or count.lo <= 0:
+				raise error(
+					f"a {member.kind.value} needs a constant length",
+					member.array.span,
+					label = f"length is {count.render()}",
+					notes = ["the algorithm fixes the tag width, so a "
+					         "data-dependent one describes no algorithm at all"],
+				)
 
 		bits = count.lo * scalar.bits
 
@@ -1508,7 +1526,7 @@ class Solver:
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			attrs         = member.attrs,
-			array_count   = count.lo,
+			array_count   = count.lo if member.array is not None else None,
 			element_bits  = scalar.bits,
 			regions       = state.regions,
 			dynamic_cause      = state.cause[0] if state.cause else None,

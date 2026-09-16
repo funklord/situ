@@ -1601,6 +1601,15 @@ class Emitter:
 					"\t# write that kernel, and there is no linker here to"
 					" supply it.",
 				])
+			elif (placement.size_bits or 0) % BITS_PER_BYTE:
+				lines.extend([
+					"",
+					f"\t# No {placement.tag_codec} helpers for"
+					f" `{placement.name}`: the stored value is",
+					f"\t# {placement.size_bits} bits, and reading it needs the"
+					" bit-addressed",
+					"\t# form 0046 has not built.",
+				])
 			else:
 				lines.extend(self._checksum_codec(placement, name))
 

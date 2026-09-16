@@ -853,7 +853,13 @@ class TagField(Member):
 	span: Span
 	name: str
 	type_ref: TypeRef
-	array: ArraySpec
+	#: None for a sub-byte checksum, where the type IS the width:
+	#: `checksum u5 crc covers(token) is crc5_usb;`. USB's token packet
+	#: carries a five-bit CRC and a run of five-bit checksums is not
+	#: something anybody writes, so the length is required exactly where it
+	#: says something -- a byte string -- and refused where it would be
+	#: noise (0046).
+	array: ArraySpec | None
 	covers: tuple[str, ...]		= ()
 	kind: TagKind			= TagKind.TAG
 	attrs: tuple[Attr, ...]		= ()

@@ -149,6 +149,51 @@ def test_a_bit_packed_tag_is_refused() -> None:
 	assert "whole-byte scalar" in rendered
 
 
+def test_a_sub_byte_checksum_places_without_a_length() -> None:
+	"""USB's token packet: `u7` and `u4` covered by a five-bit CRC, sixteen
+	bits altogether. `place_tag` refused a sub-byte checksum until 0046, so
+	this layout could not be described at all (26.371).
+
+	The type is the width, so there is no `[N]` -- a run of five-bit
+	checksums is not something anybody writes."""
+	held = {path: entry.placement for path, entry in entries(
+		"""struct token [allow_straddle] {
+			authenticated body { u7 address; u4 endpoint; }
+			checksum u5 crc covers(body);
+		}
+		""", preamble=PREAMBLE + "bit_order msb_first;\n").items()}
+
+	crc = held["token.crc"]
+	assert (crc.offset_bits, crc.size_bits) == (11, 5)
+	assert crc.array_count is None, (
+		"a sub-byte checksum is one value, and `array_count` says it is a "
+		"run -- a false 1 has cost this tree an access axis before")
+	assert held["token.body"].size_bits == 11
+
+
+def test_a_sub_byte_tag_is_still_refused() -> None:
+	"""The mechanism widens and the cryptographic rule does not: no AEAD
+	produces five bits, and 14.3 hands a region's interior out on that tag.
+	The refusal that survives says which of the two it is."""
+	rendered = failure("""struct S {
+		authenticated body { u8 a; }
+		tag u5 t covers(body);
+	}
+	""")
+	assert "needs a length" in rendered or "whole-byte scalar" in rendered
+
+
+def test_a_sub_byte_checksum_refuses_a_length() -> None:
+	"""Required where it says something, refused where it would be noise."""
+	rendered = failure("""struct S {
+		authenticated body { u8 a; }
+		checksum u5 c[1] covers(body);
+	}
+	""")
+	assert "one value, not a run" in rendered
+	assert "remove the length" in rendered
+
+
 def test_a_data_dependent_tag_length_is_refused() -> None:
 	rendered = failure("""struct S {
 		u8 n;

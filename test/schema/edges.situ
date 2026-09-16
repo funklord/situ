@@ -1204,3 +1204,36 @@ struct mmc_command {
 	authenticated command { u8 index; u32 argument; }
 	checksum u8   crc[1] covers(command) is crc7_mmc;
 }
+
+// USB's token packet, which is the schema 0046 exists for: a five-bit CRC
+// over an eleven-bit field, in sixteen bits altogether. `place_tag` refused
+// a sub-byte `checksum` until now -- "a checksum must be a whole-byte
+// scalar type" -- so this layout could not be described at all.
+//
+// The length is absent because the type IS the width. A run of five-bit
+// checksums is not something anybody writes, so `[N]` is required where it
+// says something, which is a byte string, and refused where it would be
+// noise.
+//
+// A `tag` still may not be sub-byte, and that is the cryptographic rule
+// staying put while the mechanism widens: no AEAD produces five bits, and
+// 14.3 hands a region's interior out on that tag.
+//
+// What no backend emits yet is an accessor for the field: reading five bits
+// at bit 11 needs the bit-addressed form that is 0046's remaining work, so
+// each says so where the accessor would be (26.371).
+codec crc5_usb {
+	kernel = polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F,
+	                    reflect);
+}
+impl crc5_usb derived;
+
+struct usb_token [allow_straddle] {
+	authenticated body {
+		u7  address;
+		u4  endpoint;
+	}
+	checksum u5  crc covers(body) is crc5_usb;
+}
+
+require size(usb_token) == 2;
