@@ -29111,6 +29111,101 @@ refuses a span that starts or ends inside a byte, so USB's token still has
 no `compute`: the bit-valued coverage accessor is the last of 0046 and this
 is the arithmetic it needs.
 
+### 26.375 The bit order two backends read the other way
+
+**Reported by a schema that could not exist until today.** 26.223 found the
+walker reading `lsb_first` fields most-significant-first and fixed it, and
+recorded why nothing else could have: **`example/register` is the one schema
+in the tree that declares the axis, and a register is a bus transaction
+rather than bytes off a wire, so both differentials exclude it by
+construction.** `usb_token` is the first `lsb_first` MESSAGE, and it arrived
+because USB sends a token least significant bit first (26.374).
+
+**Over the same two bytes, two answers.** `u7 a; u4 b; u5 c;` over `15 EF`:
+
+    c, walker          21, 14, 29
+    python, rust       21, 11, 29
+
+Only `b` differs, and `b` is the one field that CROSSES a byte. Within one
+byte all four agree, which is why project.md's own worked example -- `u3
+low; u5 high;` over `0xAB`, giving 3 and 21 -- could not see it.
+
+**C's own comment is the rule.** `situ_bits_get_lsb` assembles the spanning
+bytes downward: *"earlier bytes carry the less significant bits"*. Python
+and Rust read them big-endian whichever direction the numbering runs, which
+is the same byte within one byte and the wrong one across two. The fix is
+one word in each runtime -- the assembly order follows `msb` -- and it goes
+in the writer as well, because a writer assembling one way and a reader the
+other round-trips and is still wrong on the wire, which is 26.223's own
+finding.
+
+**And a sixth reading, found the same way.** The Lua dissector declares a
+bit field with a mask and lets Wireshark apply it -- big-endian, whichever
+direction the numbering runs -- so it showed `usb_token.endpoint` as 4
+where every other reading says 14. `add_le` is the fix, and the
+dissector-against-walker differential is what reported it, one run after
+the schema existed. That is six readings of one field: C, C++, Rust,
+Python, the walker and the dissector, and three of them were wrong about a
+straddling `lsb_first` field until a protocol needed one.
+
+**What makes this worth more than the fix.** Both gates that would have
+caught it were working: the four-way differential compares every backend
+over every schema, and the walker comparison runs beside it. What they
+lacked was a schema. That is the fourth time in four days a corpus entry
+has named a defect no gate could reach, and the first where the record
+already said the corpus could not reach it -- 26.223 wrote that down as a
+limit and nobody could close it until a protocol needed the axis for its
+own reasons.
+
+### 26.374 The span a byte range cannot say
+
+**USB's token packet computes its own CRC now, in four languages.** The
+coverage is eleven bits, which `covered_run` refuses rather than truncating
+(26.367), so the checksum had a layout and a value and no way to compute
+one. `covered_bit_span` answers exactly the case the byte-valued accessor
+cannot -- a static, contiguous, sub-byte span -- and the two do not overlap:
+where one answers the other returns `None`.
+
+    situ_usb_token_crc_covered_bits(view, &at, &n)   ->  at = 0, n = 11
+    situ_crc5_usb_bits(situ_base(view), at, n)       ->  the sum
+
+**A checksum needs somewhere to put the result.** A byte-string tag is
+written through its pointer; a five-bit one has no pointer, so `compute`
+would have handed back a value with nowhere to go and a message could be
+read and never assembled. `<tag>_store` writes the bits, and it does NOT
+mark the tag dirty -- writing the tag is what discharges the obligation
+rather than incurring it, which is what `finalize` then says.
+
+**Three refusals came out of building it, and each is a case that would
+otherwise have computed something plausible.**
+
+A coverage whose codec cannot count bits: a one's-complement sum adds
+sixteen-bit words and has no meaning over eleven, so the accessor is not
+emitted and `compute` does not call `situ_ic_bits`, which nothing writes.
+The placement carries `tag_codec_counts_bits` for the same reason it
+carries `tag_codec_endian` -- so that four consumers ask rather than each
+deriving it.
+
+A span with no fixed end: ICMP's checksum covers a region whose extent the
+message decides, and `max()` over no fixed member raised a `ValueError` out
+of the compiler. An internal error where section 17 asks for a diagnostic,
+in a guard whose whole subject is a condition standing for two causes.
+
+**And the one that is a language rule rather than a gap.** A span of eleven
+bits is eleven bit POSITIONS, and which bits those are depends on the
+direction: the schema numbers them by `bit_order`, and a polynomial code
+consumes them least-significant-first when reflected and
+most-significant-first when not. Where the two disagree, "bits 0 to 10"
+names one set to the layout and another to the algorithm -- and they
+overlap the check field itself. Written `bit_order msb_first`, USB's token
+computed a CRC over three of its own check bits, stored it, and then
+refused its own message. It is refused at resolve time now, naming which of
+the two orders the schema said and which the code reads.
+
+**What it cost to find**: the only reason it surfaced is that `check`
+recomputes rather than trusting `compute`. A schema that only ever computed
+would have written a wrong CRC onto the wire and passed every gate here.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

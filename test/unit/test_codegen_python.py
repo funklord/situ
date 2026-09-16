@@ -1967,6 +1967,52 @@ def test_an_array_of_wide_scalars_gets_an_indexed_getter(tmp_path: Path) -> None
 		held.samples(4)
 
 
+def test_an_lsb_first_field_across_a_byte_reads_the_way_c_reads_it(
+		tmp_path: Path) -> None:
+	"""`bit_order lsb_first` numbers bits from the least significant bit of
+	the first byte, so earlier bytes carry the LESS significant bits -- which
+	is what `situ_bits_get_lsb` says in C and what this runtime did not do.
+
+	It only shows on a field that CROSSES a byte: within one byte the two
+	assemblies are the same byte, and project.md's own worked example
+	(`u3 low; u5 high;` over `0xAB`) is inside one. A four-bit field at bit 7
+	of `15 EF` read 11 here and 14 in C.
+
+	The corpus could not produce it either. `example/register` is the one
+	schema that declares the axis, and a register is excluded from both
+	differentials by construction -- 26.223 says so in as many words, having
+	fixed the same fault in the walker (26.375).
+	"""
+	module = load(tmp_path, (
+		"bit_order lsb_first;\n"
+		"struct t [allow_straddle] { u7 a; u4 b; u5 c; }\n"))
+
+	held = module.t.at(module.Message(bytearray(b"\x15\xef")), 0)
+	assert (held.a, held.b, held.c) == (21, 14, 29), (
+		"the bytes of a straddling lsb_first field are assembled in the "
+		"direction the bit numbering runs, and C reads these as 21, 14, 29")
+
+
+def test_an_lsb_first_field_across_a_byte_writes_what_it_reads(
+		tmp_path: Path) -> None:
+	"""Both ends of the same rule. A writer assembling one way and a reader
+	the other round-trips and is still wrong on the wire, which is the shape
+	26.223 records for the walker."""
+	module = load(tmp_path, (
+		"bit_order lsb_first;\n"
+		"struct t [allow_straddle] { u7 a; u4 b; u5 c; }\n"))
+
+	buffer = bytearray(2)
+	held = module.t.at(module.Message(buffer), 0)
+	held.a = 21
+	held.b = 14
+	held.c = 29
+
+	assert bytes(buffer) == b"\x15\xef", (
+		f"wrote {bytes(buffer).hex()}, and C writes 15ef for the same three "
+		f"values")
+
+
 # -- the module a caller type-checks (26.35) --------------------------------
 
 #: `python3 -m mypy` rather than a `mypy` on the path: that is how `make check`

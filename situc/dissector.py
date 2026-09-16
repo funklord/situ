@@ -1045,7 +1045,18 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if data_sized(placement) or placement.array_count is not None:
 		return _repeated(resolved, struct, placement, field, seek)
 
-	add  = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
+	# A bit field whose numbering runs from the least significant bit reads
+	# its container the other way round: earlier bytes carry the less
+	# significant bits, so the mask below applies to a LITTLE-endian
+	# assembly. `add` reads big-endian and showed `usb_token.endpoint` --
+	# four bits across a byte boundary -- as 4 where every other reading
+	# says 14. Only a straddling field is affected: within one byte the two
+	# assemblies are the same byte (26.375).
+	if placement.bit_order is ast.BitOrder.LSB_FIRST \
+			and (placement.size_bits or 0) % BITS_PER_BYTE:
+		add = "add_le"
+	else:
+		add = "add_le" if placement.endian is ast.Endian.LITTLE else "add"
 	span = byte_span(placement)
 
 	# The note the module docstring has promised since this backend was

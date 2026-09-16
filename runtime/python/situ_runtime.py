@@ -61,7 +61,7 @@ Buffer = bytes | bytearray | memoryview
 
 import enum
 import sys
-from typing import Final, TypeVar
+from typing import Final, Literal, TypeVar
 
 #: The enum a generated getter hands back, or the integer where the
 #: value is not one the schema names (8.7).
@@ -263,13 +263,29 @@ class View:
 
 	def _bits(self, offset_bits: int, width: int, *, msb: bool,
 			signed: bool) -> int:
-		"""A bit-packed field, read through the bytes it lives in."""
+		"""A bit-packed field, read through the bytes it lives in.
+
+		The bytes are assembled in the direction the bit numbering runs:
+		big-endian where bit 0 is the most significant bit of the first
+		byte, LITTLE-endian where it is the least significant one --
+		"earlier bytes carry the less significant bits", which is what
+		`situ_bits_get_lsb` says in C and what this did not do.
+
+		It only shows on a field that CROSSES a byte, which is why it
+		survived: within one byte the two assemblies are the same byte. A
+		four-bit field at bit 7 of `15 EF` read 11 here and 14 in C, and
+		the corpus had no `lsb_first` message for either differential to
+		compare -- `example/register` is the one schema that declares the
+		axis and a register is excluded from both by construction
+		(26.223, 26.375).
+		"""
 		self._check()
 		first = offset_bits // 8
 		last  = (offset_bits + width - 1) // 8
 		span  = (last - first + 1) * 8
 		raw   = int.from_bytes(
-			self._msg.buffer[self._at + first:self._at + last + 1], "big")
+			self._msg.buffer[self._at + first:self._at + last + 1],
+			"big" if msb else "little")
 
 		skip  = offset_bits - first * 8
 		shift = span - skip - width if msb else skip
@@ -285,8 +301,12 @@ class View:
 		first = offset_bits // 8
 		last  = (offset_bits + width - 1) // 8
 		span  = (last - first + 1) * 8
+		# Both ends of the same rule: a writer that assembled one way and
+		# a reader the other would round-trip and still be wrong on the
+		# wire, which is the shape 26.223 records for the walker.
+		order: Literal["big", "little"] = "big" if msb else "little"
 		raw   = int.from_bytes(
-			self._msg.buffer[self._at + first:self._at + last + 1], "big")
+			self._msg.buffer[self._at + first:self._at + last + 1], order)
 
 		skip  = offset_bits - first * 8
 		shift = span - skip - width if msb else skip
@@ -294,7 +314,7 @@ class View:
 		raw   = (raw & ~mask) | ((value & ((1 << width) - 1)) << shift)
 
 		self._msg.buffer[self._at + first:self._at + last + 1] = \
-			raw.to_bytes(last - first + 1, "big")
+			raw.to_bytes(last - first + 1, order)
 
 
 def acquire(cls: type, msg: Message, at: int, length: int) -> View:

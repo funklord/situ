@@ -287,7 +287,17 @@ pub fn read_bits(bytes: &[u8], offset_bits: usize, width: usize, msb: bool) -> u
 	let first = offset_bits / 8;
 	let last = (offset_bits + width - 1) / 8;
 	let span = (last - first + 1) * 8;
-	let raw = read_be(bytes, first, last - first + 1);
+	// Assembled in the direction the bit numbering runs: earlier bytes carry
+	// the LESS significant bits where bit 0 is the least significant bit of
+	// the first byte, which is what `situ_bits_get_lsb` says in C. Reading
+	// them big-endian either way is right within one byte and wrong across
+	// two: a four-bit field at bit 7 of `15 EF` read 11 here and 14 in C
+	// (26.223, 26.375).
+	let raw = if msb {
+		read_be(bytes, first, last - first + 1)
+	} else {
+		read_le(bytes, first, last - first + 1)
+	};
 
 	let skip = offset_bits - first * 8;
 	let shift = if msb { span - skip - width } else { skip };
@@ -301,13 +311,21 @@ pub fn write_bits(bytes: &mut [u8], offset_bits: usize, width: usize, msb: bool,
 	let last = (offset_bits + width - 1) / 8;
 	let span = (last - first + 1) * 8;
 	let count = last - first + 1;
-	let raw = read_be(bytes, first, count);
+	// Both ends of the same rule: a writer assembling one way and a reader
+	// the other round-trips and is still wrong on the wire.
+	let raw = if msb { read_be(bytes, first, count) }
+	          else { read_le(bytes, first, count) };
 
 	let skip = offset_bits - first * 8;
 	let shift = if msb { span - skip - width } else { skip };
 	let mask = ((1u64 << width) - 1) << shift;
 
-	write_be(bytes, first, count, (raw & !mask) | ((value & ((1u64 << width) - 1)) << shift));
+	let held = (raw & !mask) | ((value & ((1u64 << width) - 1)) << shift);
+	if msb {
+		write_be(bytes, first, count, held);
+	} else {
+		write_le(bytes, first, count, held);
+	}
 }
 
 /// Sign-extend a `width`-bit value held in the low bits of `raw`.
