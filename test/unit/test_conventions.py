@@ -640,6 +640,66 @@ def test_every_documented_make_target_exists() -> None:
 				f"rule for")
 
 
+#: Suffixes worth reading for a cross-reference. Anything else in the tree
+#: is generated, binary, or has no prose to carry one.
+CITING_SUFFIXES = frozenset({".py", ".c", ".h", ".cpp", ".hpp", ".rs", ".md",
+                             ".lua", ".ebnf", ".toml"})
+
+
+def project_headings() -> tuple[set[str], set[str]]:
+	"""Every numbered heading in project.md, and the top-level ones."""
+	headings: set[str] = set()
+	top:      set[str] = set()
+	for line in document("project.md").splitlines():
+		found = re.match(r"(#{2,5}) (\d+(?:\.\d+)*)", line)
+		if not found:
+			continue
+		headings.add(found.group(2))
+		if len(found.group(1)) == 2:
+			top.add(found.group(2))
+	return headings, top
+
+
+def test_every_section_this_tree_cites_exists() -> None:
+	"""A citation is a pointer, and a dangling one costs a reader the wrong
+	look rather than no look at all.
+
+	`test_walker.py` cited 26.252 for why its probe is 128 bytes long, and
+	26.252 was never written -- the single gap in a run of 366 entries, and
+	invisible to everything here, because the checks in this file ask
+	whether what a document names EXISTS in the tree and none of them asked
+	whether what the tree names exists in the document.
+
+	`example/` is excluded: those schemas cite the specifications they
+	implement, and MQTT's section 3.3.1 is not this document's. So is
+	section 0, which has no subsections and would read every decimal
+	fraction in the tree as a citation of one.
+	"""
+	headings, top = project_headings()
+	records = {path.name.split("-")[0]
+	           for path in (ROOT / "doc" / "decision").glob("*.md")}
+	assert len(records) > 40 and "26" in top, "the population moved"
+
+	listed = subprocess.run(["git", "ls-files"], cwd=ROOT, check=True,
+	                        capture_output=True, text=True).stdout.split()
+	dangling = []
+	for name in listed:
+		path = ROOT / name
+		if path.suffix not in CITING_SUFFIXES or name.startswith("example/"):
+			continue
+		for number, line in enumerate(
+				path.read_text(encoding="utf-8").splitlines(), 1):
+			for cited in re.findall(r"\((\d{1,2}\.\d+(?:\.\d+)?)\)", line):
+				if cited.split(".")[0] in top - {"0"} \
+						and cited not in headings:
+					dangling.append(f"{name}:{number}: section {cited}")
+			for cited in re.findall(r"\((00\d\d)\)", line):
+				if cited not in records:
+					dangling.append(f"{name}:{number}: decision {cited}")
+
+	assert not dangling, "cited and not written:\n" + "\n".join(dangling)
+
+
 def test_the_documented_check_names_what_check_runs() -> None:
 	"""`make check` is the one a contributor is told to run before a commit,
 	so what it is said to run has to be what it runs.

@@ -21318,6 +21318,52 @@ first vector suite for this schema at all: `sqlite` had prose in
 `vectors.txt` and nothing machine-checked, so its accessors had never been
 held to bytes another implementation wrote.
 
+### 26.252 The entry a test cited and nobody wrote
+
+**Cited from `test_walker.py` and never written.** The comment above the
+differential's probe explains why it is 128 bytes long and refers the
+reasoning to 26.252, which did not exist: the single gap in a run of 366
+entries, left by whoever wrote 26.251 and meant to write the next one.
+
+**Nothing here could see it, and the reason is a direction.** This tree
+checks a document against the tree in several ways -- every make target
+project.md names has a rule, every module the layout section lists is a
+module, every schema the build lists is a schema. All of them ask whether
+what the DOCUMENT names exists in the tree. Nothing asked the other way,
+and a citation is the tree naming the document. It is checked now, for
+section numbers and decision records alike, over every tracked file that
+carries prose.
+
+**What the missing entry was for.** The probe is the buffer the walker is
+asked to render, and the overlap between what C asks and what the walker
+answers is the differential's coverage. That number is a property of the
+probe as much as of either description. At 96 bytes it was 87%: SQLite's
+file header is 100 bytes, a struct longer than the probe cannot be
+acquired at all, so the walker rendered nothing for it and a measurement
+that could not see a struct was read as a coverage loss.
+
+**And the length is not the whole of it, which is the part the comment
+did not know.** Re-measured while writing this entry: 96 bytes gives 594
+members, 100 gives 613, and 128 gives **612** -- longer and worse. The
+probe is `(index % 251) + 1`, which has no zero byte anywhere in it, so a
+delimited scan never terminates: at 128 bytes `dnsname`'s name eats the
+whole buffer and its `question` fields fall off the end, losing two, while
+`cpio`'s header needs the length and gains one.
+
+So the coverage moves with the probe's CONTENT and not only with its
+length, and a single buffer answers for a single shape of input. It is a
+union over three now -- one with no zero byte, one with a terminator every
+sixteen, and one of all zeros -- which is 617 of 681, and the floors go
+with it. They had been 505 and 88%, more than a hundred members below what
+the suite was actually comparing: a floor that far under the truth cannot
+catch the regression it exists for.
+
+**A probe chosen for one property is a probe that has the others by
+accident.** The 251 cycle was chosen so a field read at the wrong offset
+finds the wrong value, and it is right for that. Having no zero byte was
+not a decision anybody made, and it decided which members the differential
+can compare.
+
 ### 26.253 `remaining` reached the contract and not the code
 
 Reported by respec, reproduced here: `situc wire` accepts

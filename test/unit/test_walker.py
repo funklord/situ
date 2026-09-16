@@ -982,6 +982,28 @@ def test_a_located_run_is_sized_from_the_nested_field() -> None:
 NOT_A_MEMBER = frozenset({"validate", "no-view"})
 
 
+#: The buffers the walker is asked to render over, and the overlap below is
+#: their union.
+#:
+#: More than one because the number moves with the probe's CONTENT and not
+#: only with its length (26.252). The length is load-bearing -- a struct
+#: longer than the probe cannot be acquired, so the walker renders nothing
+#: for it and the overlap falls with nothing wrong on either side; 96 bytes
+#: could not see SQLite's 100-byte file header and took the share from 91%
+#: to 87%. But a buffer with no zero byte in it cannot terminate a delimited
+#: scan either, so at 128 bytes `dnsname`'s name eats the whole probe and
+#: its `question` fields fall off the end that `cpio` needed the length for.
+#: One buffer answers for one shape of input.
+#:
+#: Non-repeating within a 251 cycle so a field read at the wrong offset is
+#: unlikely to find the value it should have.
+PROBES = (
+	bytes((index % 251) + 1 for index in range(128)),
+	bytes(((index % 251) + 1) if index % 16 else 0 for index in range(128)),
+	bytes(128),
+)
+
+
 def compared_members() -> tuple[int, int, int]:
 	"""What C is asked, what the walker renders, and the overlap.
 
@@ -1002,23 +1024,15 @@ def compared_members() -> tuple[int, int, int]:
 
 		blob, _ = packer.pack(parsed, resolved, metadata=True)
 		image   = load(blob)
-		walked, where = set(), ""
-		# 128 bytes, and the length is load-bearing rather than arbitrary: a
-		# struct longer than the probe cannot be acquired, so the walker
-		# renders nothing for it and the overlap falls without anything
-		# being wrong with the walker. It was 96, and SQLite's 100-byte file
-		# header took the share from 91% to 87% -- a measurement that could
-		# not see the struct, reported as a coverage loss (26.252).
-		#
-		# Non-repeating within a 251 cycle so a field read at the wrong
-		# offset is unlikely to find the value it should have.
-		probe = bytes((index % 251) + 1 for index in range(128))
-		for line in report.listing(image, probe).split("\n"):
-			if line.startswith("-- "):
-				where = line[3:]
-				continue
-			if line.strip() and line.split()[0] not in NOT_A_MEMBER:
-				walked.add((where, line.split()[0]))
+		walked  = set()
+		for probe in PROBES:
+			where = ""
+			for line in report.listing(image, probe).split("\n"):
+				if line.startswith("-- "):
+					where = line[3:]
+					continue
+				if line.strip() and line.split()[0] not in NOT_A_MEMBER:
+					walked.add((where, line.split()[0]))
 
 		asked_total  += len(asked)
 		walked_total += len(walked)
@@ -1049,12 +1063,12 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	"""
 	asked, walked, both = compared_members()
 
-	assert both >= 505, (
-		f"the differential compares {both} members, down from 509; "
+	assert both >= 610, (
+		f"the differential compares {both} members, down from 617; "
 		f"C asks about {asked} and the walker renders {walked}")
-	assert both * 100 >= asked * 88, (
+	assert both * 100 >= asked * 89, (
 		f"only {100 * both // asked}% of what C asks is compared, "
-		f"down from 91%")
+		f"down from 90%")
 
 
 def test_the_walk_checks_a_pinned_byte_run() -> None:
