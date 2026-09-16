@@ -17,6 +17,7 @@ codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=by
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
 codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
+codec summing derived expansion=+2 seekable=linear granularity=block systematic deterministic
 
 struct arithmetic size=14..43 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   arithmetic.units                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
@@ -323,6 +324,14 @@ struct shadowing size=20 repr=ValueConverted atomic=NonAtomic
 struct signed_number size=2..9 access=Sequential mutate=Shifting address=Unstable repr=TextConverted
   signed_number.offset                   offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
   signed_number.tail                     offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable
+
+struct split_coverage size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(sum)
+  split_coverage.first                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sum)
+  split_coverage.a                       offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(sum)
+  split_coverage.between                 offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  split_coverage.second                  offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sum)
+  split_coverage.b                       offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord auth=Covered(sum)
+  split_coverage.sum                     offset=AbsoluteStatic(0x06) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
 struct spoken size=3.. access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
   spoken.opening                         offset=AbsoluteStatic(0x00) size=Bounded(1, 16) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical

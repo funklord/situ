@@ -1581,7 +1581,20 @@ class Emitter:
 				f'\t\t"""Say it does again, once it has been recomputed."""',
 				f"\t\tself._msg.clear_dirty({bit})",
 			])
-			lines.extend(self._checksum_codec(placement, name))
+			# `compute` and `check` read the span through `_covered`, which
+			# is not emitted where the coverage has no single range. Python
+			# is the quietest of the four about it: the call type-checks and
+			# raises `AttributeError` the first time somebody asks (26.367).
+			if covered_run(struct, placement) is None:
+				if placement.tag_codec is not None:
+					lines.extend([
+						"",
+						f"\t# No {placement.tag_codec} helpers for"
+						f" `{placement.name}`: they run over the",
+						"\t# covered span, and this one has no single range.",
+					])
+			else:
+				lines.extend(self._checksum_codec(placement, name))
 
 		return lines
 

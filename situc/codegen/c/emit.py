@@ -48,7 +48,7 @@ from situc.traverse import (
 	pinned_runs,
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
-	coded_spans, covered_run, data_sized, dynamic_frame_owner,
+	coded_spans, covered_run, covered_run_refusal, data_sized, dynamic_frame_owner,
 	declared_depth, depth_limit, invalidating_members, is_own_member,
 	is_recursive,
 	must_be_terminated,
@@ -667,9 +667,9 @@ class Emitter:
 
 		if spans is None:
 			lines.extend([
-				f"/* No covered-span accessor for `{name}`: the regions it covers are",
-				" * not contiguous in this struct, so there is no single range to",
-				" * hand out. Cover a contiguous run of regions instead. */",
+				f"/* No covered-span accessor for `{name}`:",
+				f" * {covered_run_refusal(struct, placement)},",
+				" * so there is no single range to hand out. */",
 			])
 		else:
 			first, last = spans
@@ -706,7 +706,19 @@ class Emitter:
 			f"\tsitu_msg_clear_dirty(msg, {self._tag_bit(struct, name)});",
 			"}",
 		])
-		lines.extend(self._checksum_codec(struct, placement, local))
+		# `compute` and `check` read the span through `_covered`, so neither
+		# can be emitted where that helper was not. All four backends
+		# emitted them anyway, and the result is a call to something nothing
+		# defines: C and C++ do not compile, Rust does not compile, and
+		# Python raises `AttributeError` the first time a caller asks
+		# (26.367).
+		if spans is None:
+			lines.extend([
+				f"/* No {placement.tag_codec} helpers for `{name}`: they run",
+				" * over the covered span, and this one has no single range. */",
+			] if placement.tag_codec is not None else [])
+		else:
+			lines.extend(self._checksum_codec(struct, placement, local))
 
 		return lines
 

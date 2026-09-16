@@ -1161,3 +1161,28 @@ struct kinded {
 		default:  kinded_b  as_b;
 	}
 }
+
+// A checksum whose coverage has NO single byte range, which is the shape
+// nothing in this tree had: two covered regions with a member between them
+// AND an `is <codec>` clause naming something to compute.
+//
+// Every backend emitted `compute` and `check` over a `_covered` accessor it
+// had already declined to write, so the generated code called a function
+// nothing defines -- C, C++ and Rust would not compile and Python raised
+// `AttributeError` when asked. Both gates that would have caught it were
+// working: the C and Rust suites compile every schema here and the Python
+// one type-checks every module. Neither could see a combination no schema
+// wrote (26.367).
+//
+// So it is here rather than only in a test. This file is where a construct
+// no worked example carries goes, and the four compile gates are worth more
+// than an assertion about generated text.
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct split_coverage {
+	authenticated first  { u16 a; }
+	u16           between;
+	authenticated second { u16 b; }
+	checksum u8   sum[2] covers(first, second) is summing;
+}

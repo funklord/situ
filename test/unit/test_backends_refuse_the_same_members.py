@@ -139,6 +139,65 @@ def refused(text: str, paths: set[str]) -> set[str]:
 	return found
 
 
+#: A checksum whose coverage has no single byte range, and the same schema
+#: with one. Two regions with a member between them, which no committed
+#: schema has together with an `is <codec>` clause -- so nothing generated
+#: this until 26.367 went looking.
+GAPPED = """endian big;
+bit_order msb_first;
+codec ic { kernel = ones_complement(width = 16); }
+impl ic derived;
+struct S {
+	authenticated one { u8 a; }
+	u8 gap;
+	authenticated two { u8 b; }
+	checksum u8 c[2] covers(one, two) is ic;
+}
+"""
+
+CONTIGUOUS = """endian big;
+bit_order msb_first;
+codec ic { kernel = ones_complement(width = 16); }
+impl ic derived;
+struct S {
+	authenticated body { u8 a; u8 b; }
+	checksum u8 c[2] covers(body) is ic;
+}
+"""
+
+
+def four_ways(text: str) -> dict[str, str]:
+	schema   = parse(Source("<gap>", text))
+	resolved = resolve(schema, solve(schema))
+	return {
+		"c":      generate_c(schema, resolved, "u").header,
+		"cpp":    generate_cpp(schema, resolved, "u").header,
+		"python": generate_py(schema, resolved, "u").module,
+		"rust":   generate_rs(schema, resolved, "u").module,
+	}
+
+
+def test_no_backend_calls_a_covered_accessor_it_did_not_emit() -> None:
+	"""`compute` and `check` read the span through `_covered`, and all four
+	emitted them whether or not that helper existed. The call is then to
+	something nothing defines: C, C++ and Rust do not compile, and Python
+	raises `AttributeError` the first time a caller asks.
+
+	Both halves, because the first alone passes for a backend that emits
+	nothing at all -- the contiguous schema is what says the four can write
+	these helpers, and the gapped one that none of them writes half of them.
+	"""
+	for backend, text in four_ways(CONTIGUOUS).items():
+		assert "c_covered" in text, (
+			f"{backend} no longer emits a covered accessor, so the gapped "
+			f"case below would pass for the wrong reason")
+
+	for backend, text in four_ways(GAPPED).items():
+		assert "c_covered" not in text, (
+			f"{backend} names `c_covered` for a coverage with no single "
+			f"range, and does not define it")
+
+
 def emitted(path: Path) -> tuple[dict[str, str], set[str]]:
 	"""Each backend's output, and every member path the schema declares."""
 	source   = Source(str(path), path.read_text(encoding="ascii"))

@@ -1342,7 +1342,19 @@ class Emitter:
 				f"DIRTY_{name.upper()})",
 				"\t}",
 			])
-			lines.extend(self._checksum_codec(struct, placement, name))
+			# `compute` and `check` read the span through `_covered`,
+			# which is not emitted where the coverage has no single range
+			# -- so the call was to a method nothing defines (26.367).
+			if covered_run(struct, placement) is None:
+				if placement.tag_codec is not None:
+					lines.extend([
+						f"\t/// No {placement.tag_codec} helpers for"
+						f" `{placement.name}`: they run over the",
+						"\t/// covered span, and this one has no single"
+						" range.",
+					])
+			else:
+				lines.extend(self._checksum_codec(struct, placement, name))
 
 		return lines
 

@@ -28735,6 +28735,82 @@ every one of them; what was wrong is the sentence that said why, and
 nothing downstream can notice that, because the only consumer is somebody
 who is already confused.
 
+### 26.367 A coverage span that was short, and one that was not there
+
+**Two defects in the same six lines, both reachable on master, neither
+ever generated.** Found while making 0046's sub-byte checksum place: the
+layout accepted it, and the C that came out was wrong rather than absent.
+
+**A byte range from a bit-valued span, by truncation.** Every backend
+derives its coverage expressions from `traverse.covered_run`, and the
+arithmetic is `offset_bytes + size_bits // BITS_PER_BYTE`. An eleven-bit
+authenticated region came back as `start = 0, end = 1` -- **one byte** --
+so three bits of it were never handed to the algorithm. It compiles, it
+runs, and it agrees with itself in every differential this tree has,
+because the generator wrote both sides (the gate-against-its-generator
+case in `evidence.md`). It needs no sub-byte checksum to reach: a plain
+`checksum u8 c[2] covers(body)` over a region ending mid-byte does it,
+and has always been able to.
+
+**And a helper calling one that was never emitted.** `compute` and
+`check` read the span through `_covered`, and **all four backends**
+emitted them whether or not that helper existed -- so a checksum naming
+a codec over coverage with a gap produces a call to something nothing
+defines. C, C++ and Rust do not compile; Python type-checks and raises
+`AttributeError` the first time a caller asks, which is the quietest of
+the four. No schema in the tree has the shape that reaches it: two
+covered regions with something between them AND an `is <codec>` clause.
+A suite that compiles every committed schema cannot catch a shape none
+of them has.
+
+**And the fix for a condition standing for two causes contained one.**
+The first refusal read `first.offset_bits is None or first.offset_bits %
+BITS_PER_BYTE`, and `None` there does not mean "starts inside a byte" --
+it means the offset is not statically known. A region behind a
+variable-length member has a perfectly good byte start, which the
+backend writes as a call, so the refusal withdrew a working accessor
+from every tag over a dynamic region. **The suite caught it**, through a
+test whose own subject is this defect class: a tag over a dynamic region
+naming a function nothing emits, pinned when that was a real bug. One
+condition, two causes, written into the fix that was about exactly that.
+
+**A schema carries the shape now, not only a test.** Both gates that
+would have caught the original were working and blind for the same
+reason: the C and Rust suites compile every schema in the tree and the
+Python one type-checks every module, and no schema had a gapped coverage
+with an `is <codec>` clause. `test/schema/edges.situ` is where a
+construct no worked example carries belongs, so `split_coverage` lives
+there. With the guards reverted it is the COMPILE gate that fails --
+`implicit declaration of situ_split_coverage_sum_covered` -- and mypy
+beside it: `"split_coverage" has no attribute "sum_covered"`. That is
+worth more than an assertion about generated text, because it holds for
+every backend gate that already exists and for any that arrives later.
+
+**"C was alone" is what this entry said for an hour, and it was wrong.**
+C++ guards the ACCESSOR with `if run is not None` and emits the codec
+helpers outside that guard -- so reading the guard answered a question
+about the accessor and was taken for an answer about the section. A
+probe then agreed, because it was pointed at the sub-byte schema, where
+C++ declines for an unrelated reason. **Two witnesses, one mistake**:
+the reading chose the probe, and the probe could not contradict it. What
+settled it was generating the gapped schema in each backend and counting
+the mentions of the accessor's name.
+
+**The fix is one place, because the decision is one place.**
+`covered_run` already returns `None` for a gap and every backend already
+handles that, so a span that starts or ends inside a byte returns `None`
+too. What it did not have was a REASON: the C note said "not contiguous
+in this struct", which would have been the wrong cause for the new case
+-- 26.366's fault, one day old, in the code that was about to acquire
+it. `covered_run_refusal` returns the words and C quotes them.
+
+**What this does NOT do is make the sub-byte case work**, and saying so
+is the point of the entry. USB's token packet needs a bit-valued
+coverage accessor and a bit-addressed CRC, which is the rest of 0046.
+Until then the schema places, the map describes it, and the backend
+declines in a sentence that says which of two things is wrong -- which
+is the answer a wrong span was hiding.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

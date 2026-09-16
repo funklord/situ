@@ -69,6 +69,58 @@ def compile_generated(tmp_path: Path, body: str, preamble: str = PREAMBLE,
 	assert result.returncode == 0, result.stderr
 
 
+# A checksum whose coverage has no single byte range. Two shapes reach it,
+# and neither had ever been generated: a gap between covered regions, and a
+# region that does not end on a byte (26.367).
+SUMMED  = ("codec ic { kernel = ones_complement(width = 16); }\n"
+           "impl ic derived;\n")
+GAPPED  = ("struct S {\n"
+           "\tauthenticated one { u8 a; }\n"
+           "\tu8 gap;\n"
+           "\tauthenticated two { u8 b; }\n"
+           "\tchecksum u8 c[2] covers(one, two) is ic;\n}\n")
+STRADDLED = ("struct S [allow_straddle] {\n"
+             "\tauthenticated body { u7 a; u4 b; }\n"
+             "\treserved u5 [must_be_zero];\n"
+             "\tchecksum u8 c[2] covers(body) is ic;\n}\n")
+
+
+def test_a_coverage_with_no_single_range_emits_no_codec_helpers(
+		tmp_path: Path) -> None:
+	"""`compute` and `check` read the span through `_covered`, so neither can
+	be emitted where that helper was not -- and C emitted them anyway, so the
+	header called a function nothing defined. It did not compile, and nothing
+	saw it: no schema in the tree covers two regions with a gap AND names a
+	codec, and the other three backends withhold the whole tag section.
+
+	Compiled rather than matched, because the defect was a missing definition
+	and a grep for the call site finds it in both the broken and the fixed
+	header."""
+	compile_generated(tmp_path, GAPPED, preamble=PREAMBLE + SUMMED)
+
+	header, _ = emit(GAPPED, preamble=PREAMBLE + SUMMED)
+	assert "_covered(" not in header
+	assert "No ic helpers for `c`" in header
+
+
+def test_a_coverage_that_ends_inside_a_byte_has_no_byte_range(
+		tmp_path: Path) -> None:
+	"""An eleven-bit authenticated region came back as `start = 0, end = 1`:
+	`offset_bytes + size_bits // 8` truncates, so three bits of it were never
+	handed to the algorithm. That is worse than the refusal, because it
+	compiles and every differential agrees -- the generator wrote both sides.
+
+	The reason is pinned as well as the refusal. A comment naming the wrong
+	one of two causes sends a reader to check something that is not the
+	fault (26.366)."""
+	compile_generated(tmp_path, STRADDLED, preamble=PREAMBLE + SUMMED)
+
+	header, _ = emit(STRADDLED, preamble=PREAMBLE + SUMMED)
+	assert "_covered(" not in header
+	assert "it ends inside a byte" in header
+	assert "not contiguous" not in header
+
+
 # -- structure --------------------------------------------------------------
 
 

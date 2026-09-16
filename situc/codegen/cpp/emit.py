@@ -5954,7 +5954,18 @@ class Emitter:
 				f"\t\towner.clear_dirty(dirty_{name});",
 				"\t}",
 			])
-		lines.extend(self._checksum_codec(struct, placement, name))
+		# `compute` and `check` read the span through `_covered`, which is
+		# not emitted where the coverage has no single range -- so the call
+		# was to a member nothing declares (26.367).
+		if covered_run(struct, placement) is None:
+			if placement.tag_codec is not None:
+				lines.extend([
+					f"\t/* No {placement.tag_codec} helpers for"
+					f" `{placement.name}`: they run over the covered",
+					"\t * span, and this one has no single range. */",
+				])
+		else:
+			lines.extend(self._checksum_codec(struct, placement, name))
 
 		return lines
 

@@ -882,11 +882,30 @@ def covered_run(struct: "ResolvedStruct",
 	backend's, because `view.limit` and `self.bytes.len()` are the same fact
 	spelled four ways.
 	"""
+	run, _ = _covered_run(struct, tag)
+	return run
+
+
+def covered_run_refusal(struct: "ResolvedStruct", tag: Placement) -> str | None:
+	"""Why there is no single range, in words a backend can put in a comment.
+
+	`None` where there is one. It is here rather than in the backend that
+	prints it because the reason is a property of the layout, and a comment
+	naming the wrong one of two causes sends a reader to check something
+	that is not the fault.
+	"""
+	_, reason = _covered_run(struct, tag)
+	return reason
+
+
+def _covered_run(struct: "ResolvedStruct", tag: Placement
+		) -> tuple[tuple[Placement, Placement] | None, str | None]:
+	"""The run and the reason there is not one, decided together."""
 	regions = [entry.placement for entry in struct.entries
 	           if entry.placement.name in tag.tag_covers
 	           and entry.placement.kind in ("authenticated", "sealed")]
 	if not regions:
-		return None
+		return None, "it covers no region this struct places"
 
 	ordered = sorted(regions, key=lambda p: struct.layout.placements.index(p))
 
@@ -894,9 +913,34 @@ def covered_run(struct: "ResolvedStruct",
 		if (earlier.offset_bits is None or later.offset_bits is None
 				or not earlier.is_fixed_size
 				or earlier.offset_bits + earlier.size_bits != later.offset_bits):
-			return None
+			return None, ("the regions it covers are not contiguous in this "
+			              "struct")
 
-	return ordered[0], ordered[-1]
+	first, last = ordered[0], ordered[-1]
+
+	# A BYTE range needs byte ends, and every backend derives its expressions
+	# from this one answer by integer division -- which truncates in silence.
+	# An eleven-bit authenticated region came back as `start = 0, end = 1`,
+	# so three bits of it were never handed to the algorithm, and a checksum
+	# computed over the short span agrees with itself on both sides of every
+	# differential this tree has: the generator wrote both (26.367).
+	#
+	# The coverage 0046 needs is bit-valued, and until that is emitted this
+	# is a refusal rather than a wrong number.
+	# `offset_bits is None` is NOT this condition: it means the offset is not
+	# statically known, and a region behind a variable-length member has a
+	# perfectly good byte start that the backend writes as a call. Refusing
+	# on it withdrew a working accessor from every tag over a dynamic region
+	# -- one condition standing for two causes, written into the fix that
+	# was about exactly that (26.367).
+	if first.offset_bits is not None and first.offset_bits % BITS_PER_BYTE:
+		return None, "it starts inside a byte, so there is no byte to start at"
+
+	if (last.is_fixed_size and last.offset_bits is not None
+			and (last.offset_bits + last.size_bits) % BITS_PER_BYTE):
+		return None, "it ends inside a byte, so a byte range would be short"
+
+	return (first, last), None
 
 
 def coded_spans(struct: "ResolvedStruct",
