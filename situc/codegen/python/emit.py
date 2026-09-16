@@ -1634,14 +1634,15 @@ class Emitter:
 					"\t# write that kernel, and there is no linker here to"
 					" supply it.",
 				])
-			elif (placement.size_bits or 0) % BITS_PER_BYTE:
+			elif (placement.size_bits or 0) % BITS_PER_BYTE \
+					and placement.offset_bits is None:
 				lines.extend([
 					"",
 					f"\t# No {placement.tag_codec} helpers for"
 					f" `{placement.name}`: the stored value is",
-					f"\t# {placement.size_bits} bits, and reading it needs the"
-					" bit-addressed",
-					"\t# form 0046 has not built.",
+					f"\t# {placement.size_bits} bits at an offset the message"
+					" decides,",
+					"\t# and the bit load needs a static one.",
 				])
 			else:
 				lines.extend(self._checksum_codec(placement, name))
@@ -1859,7 +1860,14 @@ class Emitter:
 			"\t\tNot a `TagError`: that one means a cryptographic gate",
 			"\t\trefused, and this means the message is corrupt or",
 			'\t\ttruncated."""',
-			f"\t\tstored = int.from_bytes(bytes(self.{name}), \"{order}\")",
+			# A value narrower than a byte is the accessor's own answer: it
+			# is an int rather than a memoryview, and `bytes(an int)` is
+			# that many zero bytes -- which compared 0 against the sum and
+			# called every message corrupt. MMC's seven-bit CRC is the
+			# shape that produced it (26.372).
+			(f"\t\tstored = self.{name}"
+			 if (placement.size_bits or 0) % BITS_PER_BYTE else
+			 f"\t\tstored = int.from_bytes(bytes(self.{name}), \"{order}\")"),
 			f"\t\tfound  = self.{name}_compute({passed})",
 			"\t\tif stored != found:",
 			f"\t\t\traise ChecksumError("

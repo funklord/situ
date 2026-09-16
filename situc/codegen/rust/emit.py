@@ -1379,13 +1379,14 @@ class Emitter:
 					"\t/// write that kernel, and there is no linker here to"
 					" supply it.",
 				])
-			elif (placement.size_bits or 0) % BITS_PER_BYTE:
+			elif (placement.size_bits or 0) % BITS_PER_BYTE \
+					and placement.offset_bits is None:
 				lines.extend([
 					f"\t/// No {placement.tag_codec} helpers for"
 					f" `{placement.name}`: the stored value is",
-					f"\t/// {placement.size_bits} bits, and reading it needs"
-					" the bit-addressed form",
-					"\t/// 0046 has not built.",
+					f"\t/// {placement.size_bits} bits at an offset the"
+					" message decides, and the",
+					"\t/// bit load needs a static one.",
 				])
 			else:
 				lines.extend(self._checksum_codec(struct, placement, name))
@@ -1484,6 +1485,12 @@ class Emitter:
 		read   = ("from_le_bytes" if placement.tag_codec_endian
 		          is ast.Endian.LITTLE else "from_be_bytes")
 
+		msb     = ("false" if placement.bit_order is ast.BitOrder.LSB_FIRST
+		           else "true")
+		spanned = max(1, -(-(((placement.offset_bits or 0) % BITS_PER_BYTE)
+		                     + (placement.size_bits or 0)) // BITS_PER_BYTE)) \
+		          if (placement.size_bits or 0) % BITS_PER_BYTE else width
+
 		taken  = self._prefix_param(placement)
 		passed = self._prefix_arg(placement)
 
@@ -1504,11 +1511,19 @@ class Emitter:
 			f"\tpub fn {name}_check(&self{taken}) -> Result<()> {{",
 			f"\t\tlet want = self.{name}_compute({passed})?;",
 			f"\t\tlet at = ({start}) as usize;",
-			f"\t\tif at + {width} > self.bytes.len() {{",
+			f"\t\tif at + {spanned} > self.bytes.len() {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			f"\t\tlet held = u{width * 8}::{read}("
-			f"self.bytes[at..at + {width}].try_into().unwrap());",
+			# A value narrower than a byte is read with the bit load the
+			# getter uses: `u0::from_be_bytes(&bytes[at..at + 0])` is not a
+			# type and not a slice, and MMC's seven-bit CRC is the shape
+			# that produced it (26.372).
+			(f"\t\tlet held = situ_rt::read_bits(self.bytes,"
+			 f" {placement.offset_bits}, {placement.size_bits}, {msb})"
+			 f" as {self._rust_type_for_bits(placement.size_bits or 8)};"
+			 if (placement.size_bits or 0) % BITS_PER_BYTE else
+			 f"\t\tlet held = u{width * 8}::{read}("
+			 f"self.bytes[at..at + {width}].try_into().unwrap());"),
 			f"\t\tif u32::from(held) == want {{ Ok(()) }}"
 			" else { Err(Error::Checksum) }",
 			"\t}",

@@ -724,16 +724,15 @@ class Emitter:
 				" * asks for a derived implementation and that kernel is not",
 				" * one situ writes, so the symbol would have no provider. */",
 			])
-		elif (placement.size_bits or 0) % BITS_PER_BYTE:
-			# `check` reads the stored value with a byte helper, and there is
-			# none for five bits: the width lands on `situ_get_be0`. The
-			# bit-addressed read is the rest of 0046 and the field places
-			# without it, so the layout is describable before the code is.
+		elif (placement.size_bits or 0) % BITS_PER_BYTE \
+				and placement.offset_bits is None:
+			# The bit load needs a static bit offset, and a checksum behind
+			# a variable-length member has none. Every other shape reads.
 			lines.extend([
 				f"/* No {placement.tag_codec} helpers for `{name}`: the stored",
-				f" * value is {placement.size_bits} bits, and reading it needs"
-				" the bit-addressed",
-				" * form 0046 has not built. */",
+				f" * value is {placement.size_bits} bits at an offset the"
+				" message decides,",
+				" * and the bit load needs a static one. */",
 			])
 		else:
 			lines.extend(self._checksum_codec(struct, placement, local))
@@ -796,8 +795,21 @@ class Emitter:
 		# beside it already say this, and the checksum path is the third
 		# site. No schema in the tree had a one-byte checksum until
 		# `mmc_command`, and CRC-7 is exactly that (26.370).
-		stored  = (f"(uint32_t)situ_base(view)[crc_at]" if width == 1
-		           else f"situ_get_{order}{width * 8}(situ_base(view) + crc_at)")
+		# ...and a value narrower than a byte is read with the bit load the
+		# getter above uses. MMC's command is exactly this shape -- a
+		# seven-bit CRC over whole bytes -- so `check` compares five or
+		# seven bits rather than the byte they sit in (26.372).
+		assembly = ("lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST
+		            else "msb")
+		spanned  = max(1, -(-(((placement.offset_bits or 0) % BITS_PER_BYTE)
+		                      + (placement.size_bits or 0)) // BITS_PER_BYTE))
+		if (placement.size_bits or 0) % BITS_PER_BYTE:
+			stored = (f"(uint32_t)situ_bits_get_{assembly}(situ_base(view),"
+			          f" {placement.offset_bits}u, {placement.size_bits}u)")
+		elif width == 1:
+			stored = "(uint32_t)situ_base(view)[crc_at]"
+		else:
+			stored = f"situ_get_{order}{width * 8}(situ_base(view) + crc_at)"
 		where   = self._base_expression(struct, placement)
 
 		return [
@@ -846,7 +858,11 @@ class Emitter:
 			# the checksum at a constant.
 			f"\tconst uint32_t crc_at = {where};",
 			"",
-			f"\tif (!situ_in_bounds(view, crc_at, {width}u)) {{",
+			# The bytes the value SPANS, not `size_bits // 8`, which is
+			# zero for a sub-byte field: a seven-bit CRC in byte 5 asked
+			# whether zero bytes at offset 5 were in the frame, which is a
+			# question with no wrong answer (26.372).
+			f"\tif (!situ_in_bounds(view, crc_at, {spanned}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			f"\treturn {stored} == want",

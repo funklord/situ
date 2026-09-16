@@ -6019,13 +6019,14 @@ class Emitter:
 				"\t * implementation and that kernel is not one situ writes,",
 				"\t * so the symbol would have no provider. */",
 			])
-		elif (placement.size_bits or 0) % BITS_PER_BYTE:
+		elif (placement.size_bits or 0) % BITS_PER_BYTE \
+				and placement.offset_bits is None:
 			lines.extend([
 				f"\t/* No {placement.tag_codec} helpers for"
 				f" `{placement.name}`: the stored value is",
-				f"\t * {placement.size_bits} bits, and reading it needs the"
-				" bit-addressed form",
-				"\t * 0046 has not built. */",
+				f"\t * {placement.size_bits} bits at an offset the message"
+				" decides, and the",
+				"\t * bit load needs a static one. */",
 			])
 		else:
 			lines.extend(self._checksum_codec(struct, placement, name))
@@ -6271,8 +6272,25 @@ class Emitter:
 		# A single byte has no byte order, and the runtime spells no
 		# `situ_get_be8` -- C's index read and length read already say so,
 		# and a one-byte checksum is the third site (26.370).
-		stored = ("std::uint32_t{raw().base[crc_at]}" if width == 1
-		          else f"{read_word(order, width)}(raw().base + crc_at)")
+		# ...and a value narrower than a byte is read with the bit load the
+		# getter uses. MMC's command is that shape -- a seven-bit CRC over
+		# whole bytes -- and the byte read landed on `situ_get_be0` (26.372).
+		assembly = ("lsb" if placement.bit_order is ast.BitOrder.LSB_FIRST
+		            else "msb")
+		if (placement.size_bits or 0) % BITS_PER_BYTE:
+			# A cast rather than braces: `situ_bits_get_*` returns
+			# `uint64_t`, and brace initialisation of a narrower type is a
+			# narrowing conversion, which this tree builds as an error.
+			stored = (f"static_cast<std::uint32_t>(situ_bits_get_{assembly}("
+			          f"situ_base(raw_), {placement.offset_bits},"
+			          f" {placement.size_bits}))")
+		elif width == 1:
+			stored = "std::uint32_t{raw().base[crc_at]}"
+		else:
+			stored = f"{read_word(order, width)}(raw().base + crc_at)"
+		spanned = (max(1, -(-(((placement.offset_bits or 0) % BITS_PER_BYTE)
+		                      + (placement.size_bits or 0)) // BITS_PER_BYTE))
+		           if (placement.size_bits or 0) % BITS_PER_BYTE else width)
 		where = self._offset_expression(struct, placement) or "0"
 		return [
 			"",
@@ -6310,7 +6328,7 @@ class Emitter:
 			# The stored sum's own offset, dynamic whenever the coverage is:
 			# PNG's crc follows a chunk whose length the message decides.
 			f"\t\tconst std::uint32_t crc_at = ({where});",
-			f"\t\tif (!situ_in_bounds(raw(), crc_at, {width}u)) {{",
+			f"\t\tif (!situ_in_bounds(raw(), crc_at, {spanned}u)) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			f"\t\treturn {stored} == want",

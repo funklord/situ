@@ -29028,6 +29028,46 @@ answered, which is the failure `report.py`'s own docstring warns about.
 Both agree now, which makes the five readings of a five-bit field one
 reading.
 
+### 26.372 The stored value of a checksum narrower than a byte
+
+**MMC's command is the shape this unlocks.** Eight bits of index, thirty-two
+of argument, a seven-bit CRC-7 over the five bytes they make, and a stop
+bit -- so the COVERAGE is byte-aligned and only the stored value is not.
+That is a different case from USB's, where the coverage is eleven bits, and
+it is the common one: a sub-byte check field over whole bytes.
+
+**`check` reads seven bits now rather than the byte they sit in.** The read
+is the bit load 26.371 gave the getter; what was missing is that `check`
+computed its own, and `size_bits // 8` is zero for seven bits. Each backend
+spelled the same absence differently:
+
+    c     situ_get_be0(...)
+    c++   situ_get_be0(...), then a narrowing brace initialisation
+    rust  u0::from_be_bytes(&self.bytes[at..at + 0])
+    py    int.from_bytes(bytes(self.crc), "big") -- on an int, so zeroes
+
+**Python's is the one worth reading twice**, because it compiles and runs.
+`bytes(5)` is five zero bytes, so `stored` was 0, and every message of that
+shape was reported corrupt. The other three do not build.
+
+**And the bounds check asked a question with no wrong answer.**
+`situ_in_bounds(view, crc_at, 0u)` -- zero bytes at offset 5 -- because the
+length came from the same `size_bits // 8`. It asks for the bytes the value
+SPANS now, which is one for a seven-bit field in byte 5 and two for a value
+that straddles.
+
+**Verified against a real card command rather than a constructed one.**
+CMD0 is `40 00 00 00 00 95`, and 0x95 is the CRC-7 0x4A shifted up by the
+stop bit. C computes 0x4A over the covered five bytes, reads 0x4A out of
+the seven bits at bit 40, and `check` returns OK; flipping one bit of the
+argument returns `SITU_ERR_CHECKSUM`. Python agrees, digit for digit.
+
+**`mmc_command` in `edges.situ` is that command now**, where it was a
+byte-wide approximation of it before -- the field is `u7` with the stop bit
+beside it, and `require size(mmc_command) == 6` is the format's own number.
+So the corpus carries the shape, the four compile gates read it, and the
+four-way differential compares the value.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

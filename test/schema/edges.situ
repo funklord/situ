@@ -1200,10 +1200,20 @@ struct split_coverage {
 codec crc7_mmc { kernel = polynomial(width = 7, poly = 0x09, init = 0x00); }
 impl crc7_mmc derived;
 
-struct mmc_command {
-	authenticated command { u8 index; u32 argument; }
-	checksum u8   crc[1] covers(command) is crc7_mmc;
+struct mmc_command [allow_straddle] {
+	authenticated command {
+		u8   index;
+		u32  argument;
+	}
+	checksum u7   crc covers(command) is crc7_mmc;
+	reserved u1   [must_be_one];
 }
+
+// CMD0, the one every card sees first: 0x40 00 00 00 00 0x95, where 0x95
+// is the CRC-7 (0x4A) shifted up by the stop bit. `check` compares seven
+// bits at bit 40, which is why the field is `u7` rather than the byte it
+// sits in (26.372).
+require size(mmc_command) == 6;
 
 // USB's token packet, which is the schema 0046 exists for: a five-bit CRC
 // over an eleven-bit field, in sixteen bits altogether. `place_tag` refused

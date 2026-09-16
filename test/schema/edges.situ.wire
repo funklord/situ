@@ -226,7 +226,8 @@ struct messy size=3..
 struct mmc_command size=6
   @0x0000   1         u8         index
   @0x0001   4         u32        argument  big
-  @0x0005   1         u8         crc
+  @0x0005   7bit      u7         crc  msb_first
+  @0x0005:7 1bit      u1         <reserved0>  msb_first must_be_one
   crc covers: argument command index
 
 struct packed_driver size=3..63
