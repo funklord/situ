@@ -85,6 +85,26 @@ STRADDLED = ("struct S [allow_straddle] {\n"
              "\tchecksum u8 c[2] covers(body) is ic;\n}\n")
 
 
+def test_a_one_byte_checksum_reads_the_byte_rather_than_a_word(
+		tmp_path: Path) -> None:
+	"""`check` reads the stored sum with `situ_get_be<width * 8>`, and at one
+	byte that spells `situ_get_be8`, which the runtime does not have and
+	never will: a single byte has no byte order. The index read and the
+	length read beside it already say so; this was the third site and the
+	only one no schema reached, because nothing in the tree had a one-byte
+	checksum until CRC-7 arrived (26.370)."""
+	body = ("codec crc7 { kernel = polynomial(width = 7, poly = 0x09); }\n"
+	        "impl crc7 derived;\n"
+	        "struct S {\n"
+	        "\tauthenticated body { u8 a; u8 b; }\n"
+	        "\tchecksum u8 c[1] covers(body) is crc7;\n}\n")
+	compile_generated(tmp_path, body)
+
+	header, _ = emit(body)
+	assert "situ_get_be8" not in header
+	assert "situ_base(view)[crc_at]" in header
+
+
 def test_a_coverage_with_no_single_range_emits_no_codec_helpers(
 		tmp_path: Path) -> None:
 	"""`compute` and `check` read the span through `_covered`, so neither can

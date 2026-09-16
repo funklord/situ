@@ -6214,7 +6214,15 @@ class Emitter:
 		# caught only because compute had already matched a published value.
 		order = ("le" if placement.tag_codec_endian is ast.Endian.LITTLE
 		         else "be")
-		read  = f"situ_get_{order}{width * 8}"
+
+		def read_word(order: str, width: int) -> str:
+			return f"situ_get_{order}{width * 8}"
+
+		# A single byte has no byte order, and the runtime spells no
+		# `situ_get_be8` -- C's index read and length read already say so,
+		# and a one-byte checksum is the third site (26.370).
+		stored = ("std::uint32_t{raw().base[crc_at]}" if width == 1
+		          else f"{read_word(order, width)}(raw().base + crc_at)")
 		where = self._offset_expression(struct, placement) or "0"
 		return [
 			"",
@@ -6255,8 +6263,7 @@ class Emitter:
 			f"\t\tif (!situ_in_bounds(raw(), crc_at, {width}u)) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\treturn {read}(raw().base + crc_at)"
-			" == want",
+			f"\t\treturn {stored} == want",
 			"\t\t       ? ::situ::rt::err::ok : ::situ::rt::err::checksum;",
 			"\t}",
 		]

@@ -1187,19 +1187,16 @@ struct split_coverage {
 	checksum u8   sum[2] covers(first, second) is summing;
 }
 
-// A checksum over a kernel situ describes correctly and does not write:
-// CRC-7/MMC, from this project's own `std/kernels.situ`. A non-reflected
-// code narrower than a byte needs the register left-aligned inside the byte
-// and the result shifted back, which is 0046's remaining work -- so
-// `crc_width` declines it, and every backend has to decline with it.
-//
-// Rust and Python did not: they asserted, so a schema naming a codec out of
-// the standard library crashed the compiler. C and C++ declared the symbol
-// and called it, which is a link error at the far end of somebody's build.
-// The declining is right and what happened next was not (26.368).
+// CRC-7/MMC: a NON-reflected code narrower than the byte it consumes, which
+// runs left-aligned at the top of one -- the polynomial, the table and the
+// initial value shifted up, the result shifted back before the final xor.
+// It is the only shape `crc_width` used to decline, and the reason this
+// struct arrived a day before the loop that computes it (26.368, 26.369).
 //
 // Here rather than only in a test, for `split_coverage`'s reason: the four
-// compile and type-check gates already read every schema in this tree.
+// compile and type-check gates already read every schema in this tree, and
+// the generated code is checked against the catalogue's 0x75 by
+// `test_a_generated_crc_produces_its_published_check_value`.
 codec crc7_mmc { kernel = polynomial(width = 7, poly = 0x09, init = 0x00); }
 impl crc7_mmc derived;
 

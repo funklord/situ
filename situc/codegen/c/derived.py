@@ -30,8 +30,8 @@ from situc.codegen.c.names import ident, macro
 from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
 from situc.traverse import table_is_padded
 from situc.codegen.kernel_math import (WORD_WIDTHS, accumulator,
-                                       crc_start, crc_table, crc_width,
-                                       number, reverse)
+                                       crc_register, crc_shift, crc_start,
+                                       crc_table, crc_width, number, reverse)
 from situc.layout import BITS_PER_BYTE
 from situc import __version__
 
@@ -494,11 +494,17 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return None
 
 	table  = crc_table(width, poly, reflect)
-	held   = accumulator(width)
+	held   = crc_register(width, reflect)
 	word   = f"uint{held}_t"
 	name   = ident(prefix, decl.name)
 	mask   = (1 << width) - 1
 	digits = width // 4
+	# A non-reflected code narrower than a byte runs LEFT-ALIGNED at the top
+	# of one: the table and the initial value are written in the register's
+	# digits rather than the code's, the loop is the width-8 loop, and the
+	# result comes back down before the final xor (26.369).
+	shift  = crc_shift(width, reflect)
+	holds  = held // 4
 
 	# A width narrower than the word it is held in has to be masked back after
 	# every shift, or the bits above it survive into the next lookup and the
@@ -518,7 +524,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	]
 
 	for row in range(0, 256, 4):
-		entries = ", ".join(f"0x{table[row + column]:0{digits}X}u"
+		entries = ", ".join(f"0x{table[row + column]:0{holds}X}u"
 		                    for column in range(4))
 		lines.append(f"\t{entries},")
 
@@ -535,7 +541,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	             " const uint8_t *b, uint32_t blen,"
 	             " uint32_t hole_at, uint32_t hole_len, uint8_t fill)")
 	lines.append("{")
-	lines.append(f"\t{word} crc = ({word})0x{started:0{digits}X}u;")
+	lines.append(f"\t{word} crc = ({word})0x{started:0{holds}X}u;")
 	lines.append("\tconst uint32_t len = alen + blen;")
 	lines.append("\tuint32_t i;")
 	lines.append("")
@@ -547,7 +553,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	if reflect:
 		lines.append(f"\t\tcrc = ({word})(({name}_table[(crc ^ byte) & 0xFFu]"
 		             f" ^ (crc >> 8)){narrow});")
-	elif width == 8:
+	elif width == 8 or shift:
 		lines.append(f"\t\tcrc = {name}_table[crc ^ byte];")
 	else:
 		lines.append(f"\t\tcrc = ({word})(({name}_table"
@@ -556,7 +562,8 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	lines.append("\t}")
 	lines.append("")
-	lines.append(f"\treturn ({word})(crc ^ ({word})0x{xorout:0{digits}X}u)"
+	lowered = f"({word})(crc >> {shift})" if shift else "crc"
+	lines.append(f"\treturn ({word})({lowered} ^ ({word})0x{xorout:0{digits}X}u)"
 	             f"{f' & 0x{mask:X}u' if width < 64 else ''};")
 	lines.append("}")
 	lines.append("")

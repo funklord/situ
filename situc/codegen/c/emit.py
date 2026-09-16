@@ -779,7 +779,13 @@ class Emitter:
 		# caught, because compute had already matched the published value.
 		order   = ("le" if placement.tag_codec_endian is ast.Endian.LITTLE
 		           else "be")
-		read    = f"situ_get_{order}{width * 8}"
+		# A single byte has no byte order, and the runtime has no
+		# `situ_get_be8` to spell one -- the index read and the length read
+		# beside it already say this, and the checksum path is the third
+		# site. No schema in the tree had a one-byte checksum until
+		# `mmc_command`, and CRC-7 is exactly that (26.370).
+		stored  = (f"(uint32_t)situ_base(view)[crc_at]" if width == 1
+		           else f"situ_get_{order}{width * 8}(situ_base(view) + crc_at)")
 		where   = self._base_expression(struct, placement)
 
 		return [
@@ -831,7 +837,7 @@ class Emitter:
 			f"\tif (!situ_in_bounds(view, crc_at, {width}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\treturn {read}(situ_base(view) + crc_at) == want",
+			f"\treturn {stored} == want",
 			"\t       ? SITU_OK : SITU_ERR_CHECKSUM;",
 			"}",
 		]

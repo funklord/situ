@@ -15,8 +15,8 @@ correct, and an `extern` impl supplies the code.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.kernel_math import (accumulator, crc_start, crc_table,
-                                       crc_width, number)
+from situc.codegen.kernel_math import (accumulator, crc_register, crc_shift,
+                                       crc_start, crc_table, crc_width, number)
 from situc import __version__
 
 
@@ -157,15 +157,23 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	xorout  = number(decl, "xorout")
 
 	table  = crc_table(width, poly, reflect)
-	held   = accumulator(width)
+	# A non-reflected code narrower than a byte runs left-aligned at the top
+	# of one, so its register is a byte whatever the code's width and its
+	# table and initial value are written in the register's digits (26.369).
+	held   = crc_register(width, reflect)
+	shift  = crc_shift(width, reflect)
 	word   = f"u{held}"
 	name   = _ident(prefix, decl.name)
 	mask   = (1 << width) - 1
 	digits = width // 4
+	holds  = held // 4
 
 	# A width narrower than the word holding it is masked back after every
 	# shift, or the bits above it survive into the next lookup.
-	narrow = f" & 0x{mask:X}" if held != width else ""
+	# Not where the register IS the word: a left-aligned code's register is
+	# a whole byte and masking it to the code's width takes the top bits off
+	# mid-loop. `crc7_mmc` came out as 0x1F that way, against 0x75 (26.369).
+	narrow = f" & 0x{mask:X}" if held != width and not shift else ""
 
 	lines = [
 		"",
@@ -178,7 +186,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		f"static {name.upper()}_TABLE: [{word}; 256] = [",
 	]
 	for row in range(0, 256, 4):
-		entries = ", ".join(f"0x{table[row + column]:0{digits}X}"
+		entries = ", ".join(f"0x{table[row + column]:0{holds}X}"
 		                    for column in range(4))
 		lines.append(f"\t{entries},")
 	lines.extend(["];", ""])
@@ -210,7 +218,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"#[must_use]",
 		f"pub fn {name}_spans(a: &[u8], b: &[u8], hole_at: usize,"
 		f" hole_len: usize, fill: u8) -> {word} {{",
-		f"\tlet mut crc: {word} = 0x{started:0{digits}X};",
+		f"\tlet mut crc: {word} = 0x{started:0{holds}X};",
 		"\tlet len = a.len() + b.len();",
 		"",
 		"\tfor i in 0..len {",
@@ -226,7 +234,16 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	# correct, because `crc >> 8` on a `uint8_t` promotes to `int` and
 	# evaluates to zero. Rust does not promote: `u8 >> 8` is a compile-time
 	# overflow, and rustc refused the tree's one reflected eight-bit CRC.
-	if width == 8:
+	# Keyed on the REGISTER's width rather than the code's, which is the
+	# fact the shift term depends on: at eight bits `crc >> 8` and
+	# `crc << 8` are both zero, so the expression reduces to one lookup
+	# whichever direction the code runs. C emits the shift anyway and is
+	# correct, because `crc >> 8` on a `uint8_t` promotes to `int`. Rust
+	# does not promote and rustc refuses it as an overflow -- which it did
+	# for `crc5_usb`, a reflected five-bit code, so the one CRC 0046 says
+	# derives and is checked did not compile in this backend at all. The
+	# check-value test reaches it through C (26.369).
+	if held == 8:
 		step = f"{name.upper()}_TABLE[(crc ^ byte) as usize]"
 	elif reflect:
 		step = (f"{name.upper()}_TABLE"
@@ -241,7 +258,8 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	lines.extend([
 		"\t}",
 		"",
-		(f"\t(crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}" if held != width
+		(f"\t((crc >> {shift}) ^ 0x{xorout:0{digits}X}) & 0x{mask:X}" if shift
+		 else f"\t(crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}" if held != width
 		 else f"\tcrc ^ 0x{xorout:0{digits}X}"),
 		"}",
 	])

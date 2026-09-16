@@ -32,8 +32,8 @@ concatenation, so nothing here allocates a copy of what it is summing.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.kernel_math import (crc_start, crc_table, crc_width,
-                                       number)
+from situc.codegen.kernel_math import (crc_register, crc_shift, crc_start,
+                                       crc_table, crc_width, number)
 from situc.codegen.python.emit import py_name
 from situc import __version__
 
@@ -175,6 +175,12 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	name   = _ident(prefix, decl.name)
 	mask   = (1 << width) - 1
 	digits = width // 4
+	# A left-aligned register is a byte wide whatever the code's width, so
+	# its table entries and its initial value are written in the REGISTER's
+	# digits rather than the code's: `crc7_mmc`'s table holds 8-bit values
+	# and `width // 4` would print them one digit short (26.369).
+	shift  = crc_shift(width, reflect)
+	holds  = crc_register(width, reflect) // 4
 
 	# The table is module-private and underscored, which keeps it out of a
 	# `from <module> import *` as well as saying so: the function is the
@@ -193,7 +199,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		f"{label}: list[int] = [",
 	]
 	for row in range(0, 256, 4):
-		entries = ", ".join(f"0x{table[row + column]:0{digits}X}"
+		entries = ", ".join(f"0x{table[row + column]:0{holds}X}"
 		                    for column in range(4))
 		lines.append(f"\t{entries},")
 	lines.append("]")
@@ -229,7 +235,7 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\truns over first (14.2a). `hole_at` is measured against the two",
 		"\ttaken together, and neither is copied.",
 		'\t"""',
-		f"\tcrc = 0x{started:0{digits}X}",
+		f"\tcrc = 0x{started:0{holds}X}",
 		"",
 		"\tfor index in range(len(a) + len(b)):",
 		"\t\tbyte = _span_byte(a, b, index, hole_at, hole_len, fill)",
@@ -241,17 +247,21 @@ def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	if reflect:
 		lines.append(f"\t\tcrc = ({label}[(crc ^ byte) & 0xFF]"
 		             f" ^ (crc >> 8)) & 0x{mask:X}")
-	elif width == 8:
+	elif width == 8 or shift:
 		# The index is already a byte and the table holds bytes, so this one
-		# cannot leave the width even without a mask.
+		# cannot leave the width even without a mask. A left-aligned register
+		# runs the identical loop, which is the whole point of aligning it.
 		lines.append(f"\t\tcrc = {label}[crc ^ byte]")
 	else:
 		lines.append(f"\t\tcrc = ({label}[((crc >> {width - 8}) ^ byte) & 0xFF]"
 		             f" ^ (crc << 8)) & 0x{mask:X}")
 
+	# And back down to the code's own width before the final xor, which the
+	# catalogue's value is written in.
+	held = f"(crc >> {shift})" if shift else "crc"
 	lines.extend([
 		"",
-		f"\treturn (crc ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
+		f"\treturn ({held} ^ 0x{xorout:0{digits}X}) & 0x{mask:X}",
 	])
 	return lines
 

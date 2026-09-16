@@ -177,21 +177,30 @@ def four_ways(text: str) -> dict[str, str]:
 	}
 
 
-#: A checksum over a codec situ cannot write, and one it can. `crc7_mmc` is
-#: `std/kernels.situ`'s own: a non-reflected code narrower than a byte, whose
-#: loop needs the register left-aligned in the byte (0046). `crc_width`
-#: declines it correctly; what happened next did not (26.368).
-UNDERIVABLE = """endian big;
+#: A checksum over a codec, and the codec's name. Reed-Solomon is a
+#: polynomial over an extension field: the parity is symbols rather than a
+#: digest and it comes back, so it is a different code from a CRC.
+#:
+#: This was `crc7_mmc` when the guard was written and 26.369 implemented that
+#: loop the next day, which is the hazard a fixture like this carries -- a
+#: test whose subject acquires an implementation stops asking its question in
+#: silence. The check below no longer depends on the fixture being
+#: underivable: it asks each backend whether it CAN write the codec and holds
+#: the output to that answer, so a backend that learns a family is covered
+#: rather than being reported as a divergence.
+CODEC_CASES = (
+	("rs_255_223", """endian big;
 bit_order msb_first;
-codec crc7_mmc { kernel = polynomial(width = 7, poly = 0x09); }
-impl crc7_mmc derived;
+codec rs_255_223 {
+	kernel = polynomial(width = 8, poly = 0x11D, field = 256, n = 255, k = 223);
+}
+impl rs_255_223 derived;
 struct S {
 	authenticated body { u8 a; u8 b; }
-	checksum u8 c[2] covers(body) is crc7_mmc;
+	checksum u8 c[2] covers(body) is rs_255_223;
 }
-"""
-
-DERIVABLE = """endian big;
+"""),
+	("crc16", """endian big;
 bit_order msb_first;
 codec crc16 { kernel = polynomial(width = 16, poly = 0x8005, reflect); }
 impl crc16 derived;
@@ -199,35 +208,48 @@ struct S {
 	authenticated body { u8 a; u8 b; }
 	checksum u8 c[2] covers(body) is crc16;
 }
-"""
+"""),
+)
+
+#: Whose `_for_kernel` decides for each backend. C++ calls the C
+#: implementation `gen-derived` emits, which is why it reads C's: the two
+#: cannot disagree without C++ calling something no file defines.
+WRITES_THE_KERNEL = {
+	"c":      "situc.codegen.c.derived",
+	"cpp":    "situc.codegen.c.derived",
+	"python": "situc.codegen.python.derived",
+	"rust":   "situc.codegen.rust.derived",
+}
 
 
-def test_no_backend_names_a_codec_nothing_will_write() -> None:
+def test_a_backend_names_a_codec_only_if_it_writes_it() -> None:
 	"""A checksum may only name a DERIVED codec -- wellformed refuses an
-	`extern` one -- so a kernel situ declines to write has exactly one
-	possible provider, `gen-derived`, which declines it too. The symbol has
-	nobody.
+	`extern` one -- so a kernel a backend declines to write has no other
+	provider, and naming it anyway is a call to nothing. Rust and Python
+	crashed instead, on an `assert body is not None` whose message blamed
+	the wrong thing; C and C++ declared the symbol and called it, which is a
+	link error at the far end of somebody's build (26.368).
 
-	Rust and Python crashed rather than declining: an `assert body is not
-	None` whose message blamed the wrong thing, since `crc7_mmc` IS derived
-	and what was declined is its width. A compiler that raises
-	`AssertionError` on a schema out of its own standard library is the worst
-	of the four answers. C and C++ declared the symbol and called it, which
-	is a link error at the far end of somebody's build.
-
-	Both halves. The derivable schema is what says these four can bind a
-	codec at all, without which the other assertion passes for any backend
-	that has stopped emitting checksum helpers entirely.
+	Asked as a relationship rather than as two lists, because the backends
+	genuinely differ: C writes every kernel family and Rust and Python write
+	polynomial and ones-complement only. A fixture that is underivable
+	everywhere does not exist, and one that is underivable *today* stops
+	testing anything the day somebody implements it.
 	"""
-	for backend, text in four_ways(DERIVABLE).items():
-		assert "crc16(" in text, (
-			f"{backend} no longer binds a codec it can write, so the case "
-			f"below would pass for the wrong reason")
+	from importlib import import_module
 
-	for backend, text in four_ways(UNDERIVABLE).items():
-		assert "crc7_mmc(" not in text, (
-			f"{backend} names `crc7_mmc`, which the schema asks situ to "
-			f"derive and nothing writes")
+	for codec, source in CODEC_CASES:
+		schema = parse(Source("<codec>", source))
+		decl   = next(held for held in schema.codecs() if held.name == codec)
+
+		for backend, text in four_ways(source).items():
+			writes = import_module(WRITES_THE_KERNEL[backend])._for_kernel(
+				decl, "situ") is not None
+			named  = f"{codec}(" in text
+			assert named == writes, (
+				f"{backend} {'names' if named else 'does not name'} "
+				f"`{codec}` and {'writes' if writes else 'does not write'} "
+				f"it: a backend may name a codec only if it writes it")
 
 
 def test_no_backend_calls_a_covered_accessor_it_did_not_emit() -> None:
