@@ -1,0 +1,38 @@
+# Golden vectors for USB's token packet.
+#
+# PROVENANCE. The PID bytes are `include/linux/usb/hcd.h`'s, cited in the
+# schema beside the enum. The address and the endpoint are chosen. The CRC-5
+# is the one the catalogue's parameters produce over the eleven bits between
+# them, and it is not situ agreeing with itself: `crc5_usb` is checked
+# against the published check value 0x19 over "123456789", and its RESIDUE --
+# 0x06 over a token and its own check bits, which is the only property a
+# sub-byte span can be held to -- is asserted over four different tokens in
+# `test_a_sub_byte_span_leaves_the_published_residue` (26.373).
+#
+# Read the bytes as the bus carries them, least significant bit first: the
+# second byte is the low seven bits of the address plus the endpoint's first
+# bit, and the third carries the rest of the endpoint and the five-bit check.
+
+# SETUP to address 21, endpoint 14. `2D` is USB_PID_SETUP (hcd.h:38).
+token setup_21_14  2D 15 EF
+	pid      = 0x2D
+	address  = 21
+	endpoint = 14
+	crc      = 0x1D
+
+# IN from address 0, endpoint 0: the default pipe every device answers on
+# before it is addressed. `69` is USB_PID_IN (hcd.h:33).
+token in_default   69 00 10
+	pid      = 0x69
+	address  = 0
+	endpoint = 0
+	crc      = 0x02
+
+# OUT to address 127, endpoint 15 -- both fields at their maximum, which is
+# what `devmap` being 128 wide and `& 0xf` bound them to. `E1` is
+# USB_PID_OUT (hcd.h:25).
+token out_max      E1 FF 47
+	pid      = 0xE1
+	address  = 127
+	endpoint = 15
+	crc      = 0x08

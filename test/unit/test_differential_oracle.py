@@ -1186,6 +1186,14 @@ UNORACLED = {
 	             "walker/c, which is also ours -- so it finds disagreement "
 	             "and not shared error, which is the distinction this file "
 	             "exists to make",
+	# A bus transaction rather than bytes off a network, which is
+	# `register`'s reason in a second shape: the host tooling that exists
+	# reads usbmon URBs -- what a HOST controller hands the kernel -- and a
+	# token PID never reaches that layer. `tshark`'s USB dissectors start
+	# above it. What CAN be oracled is oracled: the CRC-5 against the
+	# catalogue's check value and its residue (26.373), and every constant
+	# cited from a header in the tree rather than recalled.
+	"usb":       "wire-level bus packets; host tooling reads URBs, not PIDs",
 	"codecs":    "codec property signatures, not a message format",
 	"kernels":   "as codecs -- and the codecs it derives are exactly what the "
 	             "CRC and base-N oracles above compare against zlib, "

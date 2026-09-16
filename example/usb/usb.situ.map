@@ -1,0 +1,23 @@
+# situ capability map v1
+# schema: usb.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+# codecs. `trusted` means the properties are declared and
+# unverified: run `situc gen-codec-tests` to falsify a lying one.
+codec crc5_usb derived expansion=+5 bits seekable=linear granularity=block systematic deterministic
+
+struct token size=3 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  token.pid                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  token.addressed                        offset=AbsoluteStatic(0x01) size=Fixed(11bit) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)
+  token.address                          offset=AbsoluteStatic(0x01) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  token.endpoint                         offset=AbsoluteStatic(0x01:7) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+  token.crc                              offset=AbsoluteStatic(0x02:3) size=Fixed(5bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable

@@ -1,0 +1,30 @@
+# situ wire signature v1
+# schema: usb.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order lsb_first
+endian little
+target buffer
+
+enum packet_id : u8 unknown=error
+  out=225 in=105 setup=45 sof=165
+
+struct token size=3
+  @0x0000   1         packet_id  pid
+  @0x0001   7bit      u7         address  lsb_first max=127
+  @0x0001:7 4bit      u4         endpoint  lsb_first
+  @0x0002:3 5bit      u5         crc  lsb_first
+  crc covers: address addressed endpoint

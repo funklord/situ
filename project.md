@@ -29206,6 +29206,57 @@ the two orders the schema said and which the code reads.
 recomputes rather than trusting `compute`. A schema that only ever computed
 would have written a wrong CRC onto the wire and passed every gate here.
 
+### 26.376 example/usb, and what three bytes took
+
+**The last item in 0046, and the packet the record was written for.** A USB
+token is a PID byte and eleven bits of address and endpoint under a five-bit
+CRC: three bytes, in which neither the check field nor the span it covers is
+a whole number of bytes. Every part of it was refused by something when 0046
+was accepted -- `place_tag` refused a sub-byte checksum, `covered_run`
+refused a span that is not whole bytes, `crc_width` refused the loop, and no
+codec had an entry point that counts bits.
+
+    SETUP addr=21 ep=14  ->  2D 15 EF
+    crc=0x1D  check=OK  validate=OK  dirty cleared
+    one flipped address bit -> SITU_ERR_CHECKSUM
+
+**Cited rather than recalled, which is 26.32's rule and the reason this
+example is the shape it is.** The eight-bit PIDs are
+`include/linux/usb/hcd.h:24-40` on this machine, each nibble beside its
+complement; the address is seven bits because `usb_pipedevice` masks `0x7f`
+(`include/linux/usb.h:1980`) and `devmap` is 128 wide (`usb.h:471`); the
+endpoint is four because `usb_pipeendpoint` masks `0xf` (`usb.h:1981`). The
+CRC-5 parameters are the catalogue's, as `std/kernels.situ` carries them.
+
+**What could not be cited was left out.** The SOF packet is the same eleven
+bits carrying a frame number instead of an address, and this machine has no
+header that says the frame number is eleven bits wide -- so the example is
+the token packet and says so, rather than asserting a width from memory. A
+worked example is a claim; the way to keep it true is to write down less.
+
+**`bit_order lsb_first` is the fact the example exists to carry.** USB sends
+a token least significant bit first and a reflected code consumes each byte
+the same way, so the two agree and situ accepts the schema. Written
+`msb_first` it is refused (26.374), which is a rule that did not exist a day
+ago and was written because this packet broke it.
+
+**Three vectors, and what makes them evidence.** The PID bytes are cited and
+the addresses chosen, so the only derived number is the CRC -- and it is not
+situ agreeing with itself: `crc5_usb` is held to the catalogue's check value
+over "123456789", and to its RESIDUE over a token and its own check bits,
+which is the one property a sub-byte span can be held to. The vectors are
+compiled into a cmocka suite by `make test-c` like every other example's.
+
+**The cost, stated plainly.** Three bytes needed: a sub-byte `place_tag`
+(26.371), a bit-valued coverage accessor and a `_store` (26.374), a
+bit-counting entry point in three languages (26.373), a left-aligned CRC
+loop (26.369), and a bit-order rule. On the way it found seven generators
+disagreeing about what an accessor is, a one-byte checksum reading
+`situ_get_be0`, and three of six readings assembling a straddling
+`lsb_first` field the other way round -- which 26.223 had recorded as a
+fault the corpus could not reach, and which stayed unreachable until a
+protocol needed the axis for its own reasons.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

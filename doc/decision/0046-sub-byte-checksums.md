@@ -1,6 +1,6 @@
 # 0046: a checksum narrower than a byte, and where the bytes assumption lives
 
-Status: accepted 2026-09-04; part built 2026-09-14. The cost was
+Status: accepted 2026-09-04; built 2026-09-16. The cost was
 re-measured first (26.360) and this record's four places are six: a coded
 region's size program is byte-valued, through `traverse.region_extent`
 and `pack.py` into the image's bytecode; and `codegen/kernel_math.
@@ -16,7 +16,8 @@ and a value accessor in all four backends -- the four-way differential
 compares USB's five-bit CRC and the two walkers agree with it. Bit-valued
 coverage landed in 26.374: `usb_token` computes, stores, checks and
 validates its own CRC in all four backends, over the eleven bits it
-covers. What remains of this record is `example/usb` itself
+covers. `example/usb` is written (26.376), with vectors compiled into the
+C suite, so this record is built
 Date: 2026-09-01
 Phase: unscheduled; found while making USB expressible (26.146, 26.148)
 

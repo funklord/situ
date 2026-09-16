@@ -1,0 +1,91 @@
+// USB 2.0's token packet: the three bytes that open every transfer.
+//
+// SOURCE. Every constant and every width here is read out of a tree on this
+// machine and cited by file and line rather than recalled, which is 26.32's
+// rule -- a worked example is a claim, and a constant nobody read makes it a
+// false one:
+//
+//   include/linux/usb/hcd.h:24-40   the eight-bit packet IDs, each nibble
+//                                   beside its complement
+//   include/linux/usb.h:1980        usb_pipedevice: `(pipe >> 8) & 0x7f`,
+//                                   so a device address is seven bits
+//   include/linux/usb.h:1981        usb_pipeendpoint: `& 0xf`, four bits
+//   include/linux/usb.h:471         DECLARE_BITMAP(devmap, 128): the whole
+//                                   address space is 128 wide
+//
+// The CRC-5 parameters are the RevEng catalogue's, as `std/kernels.situ`
+// carries them: poly 0x05, init 0x1F, xorout 0x1F, reflected, check value
+// 0x19 over "123456789" and residue 0x06. CRC-5/USB is the only one of that
+// file's three sub-byte codes the catalogue classes `confirmed`.
+//
+// WHY THIS ONE. It is the packet decision 0046 was written for, and it could
+// not be described here at all until that record was built out: the check
+// field is five bits, it covers eleven, and neither number is a whole number
+// of bytes. `place_tag` refused a sub-byte checksum (26.371), the coverage
+// accessor refused a span that is not whole bytes (26.367), and the codec had
+// no entry point that counts bits (26.373). All three are why this file is
+// three bytes long and took a decision record to write.
+//
+// WHAT IT COST. `bit_order lsb_first` is not decoration: USB sends a token
+// least significant bit first, and a reflected code consumes each byte the
+// same way. Written `msb_first` the eleven bits the schema covers and the
+// eleven the algorithm reads are not the same eleven -- they overlap the
+// check field itself -- so situ refuses the schema rather than computing a
+// CRC over three of its own check bits (26.374). Writing this example is
+// what found that, and what found three readings of a straddling bit field
+// disagreeing with the other three (26.375).
+
+target buffer;
+endian little;
+bit_order lsb_first;
+
+// hcd.h:24-40. The whole byte, not the nibble: a PID is four bits followed
+// by its own complement, so the bus can reject a corrupted one without a
+// check field. `default = error` because a byte that is not one of these is
+// not a token -- and a handshake or a data packet is a different shape, so
+// reading one as a token would place two bytes that are not there.
+enum packet_id : u8 {
+	out    = 0xE1,          // hcd.h:25  USB_PID_OUT
+	in     = 0x69,          // hcd.h:33  USB_PID_IN
+	setup  = 0x2D,          // hcd.h:38  USB_PID_SETUP
+	sof    = 0xA5,          // hcd.h:29  USB_PID_SOF
+	default = error,
+}
+
+// The catalogue's CRC-5/USB, declared here rather than imported for the
+// reason png declares its own CRC-32: an example is read on its own.
+codec crc5_usb {
+	kernel = polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F,
+	                    reflect);
+}
+impl crc5_usb derived;
+
+// `[allow_straddle]` because the endpoint crosses the byte boundary: seven
+// bits of address, then four of endpoint at bit 7. That is the shape ipv4's
+// `u13` needs for the same reason, and here it is the whole packet.
+struct token [allow_straddle] {
+	packet_id  pid;
+
+	// The eleven bits the CRC covers, named so that `covers(addressed)`
+	// can say it. A region rather than two members, because the span is
+	// what the algorithm runs over and a schema that named the members
+	// separately would be describing the same eleven bits twice.
+	authenticated addressed {
+		u7  address   [max = 127];     // usb.h:1980, and devmap is 128 wide
+		u4  endpoint;                  // usb.h:1981
+	}
+
+	// Five bits over eleven. `is crc5_usb` is what makes this computable
+	// rather than a comment: all four backends emit a `crc_compute` over
+	// the bit span, a `crc_store` to put the result back, and a
+	// `crc_check` that recomputes and compares (0046, 26.374).
+	checksum u5  crc covers(addressed) is crc5_usb;
+}
+
+// Three bytes: the PID, and sixteen bits of address, endpoint and check.
+require size(token) == 3;
+
+// The packet is what a host writes into a buffer and a bus reads back, so
+// every field is at a constant offset and the whole thing is addressable.
+require absolute_static(token.address);
+require absolute_static(token.crc);
