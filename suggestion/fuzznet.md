@@ -1122,3 +1122,31 @@ because the refusal message is good and someone converting a format with a
 
 Nothing needed back. These came out of really running situc over nine layouts,
 which is the evidence you would want over our reading of the grammar.
+
+# The two nested layouts converted via `import`, which narrows the ask again (2026-09-17)
+
+The nine above were flat or singly-variable. The two we held back are nested:
+our chain is a header and up to eight hops, and our provisioning card carries
+both a hop and a prekey record. `import` handled both cleanly. `chain.situ`
+imports `hop.situ` and references `fzn_chain_hop`; `provision.situ` imports both
+`hop.situ` and `prekey.situ` and references `fzn_chain_hop` and
+`fzn_prekey_record`. There is now one encoding of a hop and one of a prekey, and
+neither a chain nor a card can drift from it -- which is the whole reason we
+came to situ.
+
+`situc map` matched both against our hand-written constants with no fudging: the
+chain is 2..1434 (our `FZN_CHAIN_MAX_LEN`) with the hops nested at offset 2, and
+the card is 423 (`FZN_PROVISION_LEN_TOTAL`) with the hop at 34 and the prekey at
+213. `advise` found nothing to improve on either.
+
+Why this is a data point for the derived-in-memory-form request above, and not
+just a success report: `import` already composes layouts across files, so a
+struct that nests another is expressed by reference rather than by re-declaring
+the inner one. A derived-form generator would inherit that for free -- the
+in-memory form of a card is the in-memory form of a hop and a prekey placed in a
+struct, composed exactly the way the schemas compose. So the generator does not
+have to solve nesting; `import` has solved it. That shrinks the feature to
+generating the flat, member-name-matched form for one struct and letting `import`
+handle the rest, which is a smaller thing than it looked when we first asked.
+
+Nothing needed back.
