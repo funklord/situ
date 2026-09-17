@@ -27,6 +27,8 @@ from pathlib import Path
 import pytest
 
 from situc.codegen.c import generate as generate_c
+from situc.codegen.c.names import c_name
+from situc.codegen.cpp.names import class_name
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.python import generate as generate_py
 from situc.codegen.rust import generate as generate_rs
@@ -572,7 +574,14 @@ def test_no_backend_compares_a_bcd_bound_against_the_packed_nibbles() -> None:
 BODY = {
 	"c":      r"situ_err_t situ_\w+_check\(situ_view_t view, uint32_t \*which\)"
 	          r"\n\{(.*?)\n\}",
-	"cpp":    r"err validate\(\) const noexcept\n\t\{(.*?)\n\t\}",
+	# C++ follows C: where a struct has a member to name, the checks live in
+	# `check` and `validate` is a one-line wrapper over it. Both spellings
+	# are matched, and the wrapper is excluded by a lookahead -- counted, it
+	# is a body with no floor and would report every such struct as
+	# unguarded.
+	"cpp":    r"err (?:check\(std::uint32_t \*which_\)|validate\(\))"
+	          r" const noexcept\n\t\{(?!\n\t\treturn check\(nullptr\);)"
+	          r"(.*?)\n\t\}",
 	"rust":   r"pub fn validate\(&self\) -> Result<\(\)> \{(.*?)\n\t\}",
 	"python": r"def validate\(self\) -> None:(.*?)(?=\n\t*(?:def |@)|\Z)",
 }
@@ -805,3 +814,103 @@ def test_the_four_backends_number_a_message_the_same_way() -> None:
 			           else name.lower()
 			assert shape.format(spelling, at) in text, (
 				f"{target} does not number {name} {at}")
+
+
+# ---------------------------------------------------------------------------
+# Which member refused, numbered the same way (26.231's half)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_c_and_cpp_name_the_same_members_in_the_same_order(
+		path: Path) -> None:
+	"""The id is the contract, so the two that publish one must agree.
+
+	Not only about the numbering: about the POPULATION. Which members
+	`validate` can refuse over is a fact about what each backend emits, not
+	about the schema, so there is no schema-level answer to share -- which
+	is why the two derive it separately and this compares the results. A
+	backend that stopped emitting one member's check would renumber every
+	id after it, silently, and an id is a small integer that reads the same
+	whatever it means.
+
+	Rust and Python publish no ids yet, so they are not here. When they do
+	they join this list rather than getting a test of their own: four
+	separate comparisons is three chances for two of them to agree with
+	each other and not with the rest.
+	"""
+	if "STATUS: needs phase" in path.read_text(encoding="ascii"):
+		pytest.skip("declares itself unbuildable")
+
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	# The struct's own name is stripped by NAMING it rather than by splitting
+	# the macro on underscores. Both halves carry them -- `udp_header` has a
+	# member `length`, and `SITU_UDP_HEADER_LENGTH_CHECK` splits four ways --
+	# so a regex that guesses the boundary reports a disagreement that is its
+	# own. It did, on 29 of 41 schemas, before the struct names were read.
+	held = sorted((f"SITU_{c_name(name).upper()}_", c_name(name))
+	              for name in resolved.structs)
+	in_c: dict[str, list[tuple[str, str]]] = {}
+	for spelled, at in re.findall(
+			r"#define (SITU_\w+_CHECK) (\d+)u",
+			generate_c(schema, resolved, path.stem).header):
+		prefix, owner = max(
+			((one, name) for one, name in held if spelled.startswith(one)),
+			key=lambda pair: len(pair[0]), default=("", ""))
+		assert prefix, f"{path.name}: {spelled} names no struct"
+		in_c.setdefault(owner, []).append(
+			(spelled[len(prefix):-len("_CHECK")].lower(), at))
+
+	# Bucketed by class, because the two emit their structs in different
+	# orders -- png puts `png_signature` first in C and last in C++ -- and a
+	# flat comparison reports that as a disagreement about ids. It did, on
+	# 14 schemas, which is this test's own instrument being the thing wrong
+	# rather than either backend.
+	in_cpp: dict[str, list[tuple[str, str]]] = {}
+	renamed_back = {class_name(struct): c_name(name)
+	                for name, struct in resolved.structs.items()}
+	owner = ""
+	for line in generate_cpp(schema, resolved, path.stem).header.splitlines():
+		opened = re.match(r"class (\w+)", line)
+		if opened:
+			owner = opened.group(1)
+			continue
+		one = re.match(
+			r"\tstatic constexpr std::uint32_t check_(\w+) = (\d+)u;", line)
+		if one:
+			in_cpp.setdefault(owner, []).append((one.group(1), one.group(2)))
+
+	# A class C++ had to rename -- `framed` becomes `framed_` where a member
+	# takes the class's own name -- is keyed back under the schema's name,
+	# or the two dictionaries disagree about a struct they agree about.
+	for name in list(in_cpp):
+		schema_name = renamed_back.get(name, name)
+		if schema_name != name:
+			in_cpp[schema_name] = in_cpp.pop(name)
+
+	# One divergence is held out, and the carve-out names the MECHANISM
+	# rather than the symptoms -- a list of symptoms is how a gate acquires
+	# an ignore list and stops being one.
+	#
+	# C groups over every entry it walks and C++ over the struct's own
+	# members, so wherever those differ the two number different
+	# populations: C names each arm of a variant that can refuse
+	# (`body_read_coils`) where C++ names the variant, and C names an
+	# `authenticated` region where C++ names what is inside it. Both are
+	# defensible and they are different granularities, so agreeing is a
+	# decision rather than a fix. 26.383 records it open.
+	#
+	# Everything else is compared: measured across this repository, 27
+	# schemas whole and 174 of 200 structs. The two constructs are named
+	# rather than the eight schemas that showed the symptom, because a list
+	# of symptoms is how a gate acquires an ignore list and stops being one.
+	apart = {c_name(name) for name, struct in resolved.structs.items()
+	         if any(entry.placement.kind in ("variant", "authenticated")
+	                for entry in struct.entries)}
+	for name in apart:
+		in_c.pop(name, None)
+		in_cpp.pop(name, None)
+
+	assert in_c == in_cpp, path.name

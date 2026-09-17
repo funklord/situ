@@ -91,7 +91,14 @@ _NO_CHECK = "0xFFFFFFFFu"
 #: "nothing refused" -- the two halves of one result contradicting each
 #: other, and the member identity 0051 asks for lost exactly where a
 #: caller most wants it.
-_REFUSES = re.compile(r"\s*return (?:SITU_ERR_\w+|e);\s*$")
+#:
+#: `err` is the same case in a second spelling, and it was missed: a nested
+#: member propagates its own `situ_err_t err`, so `header.flags` -- a struct
+#: whose nested `validate` can refuse -- was grouped as having no refusal
+#: and got no id. Found by the test comparing the ids C and C++ publish,
+#: which is the instrument this class of fault needs: the C header alone
+#: looks complete, because what is missing is a macro nobody named.
+_REFUSES = re.compile(r"\s*return (?:SITU_ERR_\w+|e|err);\s*$")
 
 
 @dataclass

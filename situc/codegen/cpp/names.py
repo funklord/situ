@@ -50,13 +50,17 @@ STRUCTURAL = frozenset({
 	# a container asks an element for.
 	"at", "size_bytes", "size_min", "framed", "required", "validate",
 	"extent", "dirty_mask",
+	# `check` is `validate` naming the member that refused, and `no_check`
+	# the id it reports when none did (0051, 26.231's half).
+	"check", "no_check",
 	# Registers (section 15): the word type, the two bus transactions, the
 	# address and width constants, and the pointer behind them.
 	"word", "read", "write", "address", "width", "block_",
 })
 
 #: What the emitter puts in front of a member's name.
-PREFIXES = frozenset({"clear", "dirty", "recompute", "set", "trigger", "with"})
+PREFIXES = frozenset({"check", "clear", "dirty", "recompute", "set",
+                      "trigger", "with"})
 
 #: What it puts after one. Some of these are halves of others -- `span` and
 #: `span_from` both appear -- because the check below matches a whole affix

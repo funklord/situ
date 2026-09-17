@@ -3186,3 +3186,112 @@ int main()
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Which member refused (26.231's half, outside C)
+# ---------------------------------------------------------------------------
+
+CHECKED = """struct reading {
+	u8  kind [must_eq = 7];
+	u8  level [max = 3];
+}
+"""
+
+
+def test_a_struct_that_can_refuse_publishes_an_id_per_member() -> None:
+	"""The identity C has had since 26.231, in C++ (0051).
+
+	`validate` collapses every constraint into one code, so a caller that
+	wants to say WHICH field is wrong writes that knowledge itself -- in a
+	language situ does not describe, which is the sixth description this
+	whole record exists to remove.
+	"""
+	header = emit(CHECKED)
+
+	assert "static constexpr std::uint32_t check_kind = 0u;" in header
+	assert "static constexpr std::uint32_t check_level = 1u;" in header
+	assert "::situ::rt::err check(std::uint32_t *which_) const noexcept" \
+		in header
+
+
+def test_a_struct_that_cannot_refuse_gets_no_check() -> None:
+	"""An id nothing can report means "did not happen" and "has no name" at
+	once, so a struct with nothing to refuse over keeps `validate` alone --
+	which is what C does and is what makes the two comparable."""
+	header = emit("struct S { u8 a; u8 b; }")
+
+	assert "err validate() const noexcept" in header
+	assert "check(std::uint32_t" not in header
+	assert "no_check" not in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host compiler")
+def test_check_names_the_member_that_refused(tmp_path: Path) -> None:
+	"""Run, not read. Three properties, and the second is the one a reader
+	of the header would get wrong: `*which_` is written on a CLEAN walk too,
+	so a caller must not expect its own value to survive the call."""
+	schema   = parse_text(PREAMBLE + CHECKED)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text("""
+#include "unit.hpp"
+
+static ::situ::rt::err verdict(std::uint8_t kind, std::uint8_t level,
+		std::uint32_t *which)
+{
+	std::uint8_t raw[2] = { kind, level };
+	situ::rt::message msg(raw, sizeof raw);
+	situ::reading held;
+	if (situ::reading::at(msg, 0, held) != ::situ::rt::err::ok) {
+		return ::situ::rt::err::stage;
+	}
+	return held.check(which);
+}
+
+int main()
+{
+	std::uint32_t which = 0xabcdu;
+
+	/* Clean: OK, and the identity is the sentinel rather than the
+	 * 0xabcd this caller put there. */
+	if (verdict(7u, 3u, &which) != ::situ::rt::err::ok) return 1;
+	if (which != situ::reading::no_check) return 2;
+
+	/* `kind` is wrong, and is named. */
+	if (verdict(9u, 3u, &which) != ::situ::rt::err::constraint) return 3;
+	if (which != situ::reading::check_kind) return 4;
+
+	/* `kind` is right, so the first failure is the second field. */
+	if (verdict(7u, 9u, &which) != ::situ::rt::err::constraint) return 5;
+	if (which != situ::reading::check_level) return 6;
+
+	/* nullptr asks for the verdict alone. */
+	if (verdict(9u, 3u, nullptr) != ::situ::rt::err::constraint) return 7;
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host compiler")
+def test_a_member_called_which_does_not_shadow_the_parameter(
+		tmp_path: Path) -> None:
+	"""The parameter carries the trailing underscore this class already uses
+	for what is its own rather than the schema's.
+
+	Not hypothetical: `which` is an ordinary member name and two schemas in
+	this tree have one. With the parameter spelled `which`, `is_known(which())`
+	reads as calling a pointer and the header does not compile at all.
+	"""
+	result = compiles(tmp_path, "struct S { u8 which [max = 3]; }")
+	assert result.returncode == 0, result.stderr

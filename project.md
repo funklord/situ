@@ -29552,6 +29552,65 @@ reaching a construct written three days after it.
 per-member constraints outside C, which is 26.231's half rather than this
 record's construct.
 
+### 26.383 Which member refused, in C++ -- and what comparing two backends found
+
+**26.231's half, one backend further.** A C++ view now publishes
+`check_<member>` per member `validate` can refuse over, a `no_check`
+sentinel, and `check(std::uint32_t *which_)`; `validate` becomes a one-line
+wrapper over it, which is the shape C has had since 26.231.
+
+**The parameter carries a trailing underscore and that is not style.** A
+member called `which` is legal, generates a `which()` accessor, and a
+parameter of that name shadows it -- `is_known(which())` then reads as
+calling a pointer, and two schemas in this tree have such a member, so the
+header did not compile at all. `raw_` is the same convention: the trailing
+underscore marks what belongs to the class rather than to the schema.
+
+**The test comparing the two backends' ids found a defect in each, and the
+one in C is the better find.** C's `_REFUSES` matched `return e;` --
+recorded there as a case it had already paid for -- and not `return err;`,
+which is what a NESTED member's check propagates. So `header.flags`, whose
+nested `validate` can refuse, was grouped as having no refusal, got no id,
+and `situ_header_check` returned refused while leaving `*which` at the
+sentinel its own header documents as "nothing refused". The two halves of
+one result contradicting each other, which is what the `e` case was fixed
+for, in a second spelling nobody swept for.
+
+C++ then reproduced the `e` fault exactly, by inheriting the pattern and
+not the list. Both are fixed, and both are held by sabotage: removing
+either spelling turns the comparison red.
+
+**The instrument was wrong twice before it was right, and neither error
+looked like an instrument error.** A regex splitting `SITU_UDP_HEADER_LENGTH_CHECK`
+into struct and member guessed the boundary and reported 29 of 41 schemas
+as disagreeing -- the struct is `udp_header` and the member is `length`,
+and the name carries underscores on both sides of a boundary nothing marks.
+Then a flat comparison reported 14 more, because C emits png's
+`png_signature` first and C++ emits it last: a disagreement about ORDER OF
+STRUCTS read as a disagreement about ids. Both were the sweep's own
+apparatus, which is where the error usually is when a result surprises you.
+
+**One divergence is real and is held open.** C groups over every entry it
+walks and C++ over the struct's own members, so C names each ARM of a
+variant that can refuse -- `body_read_coils` -- where C++ names the variant,
+and C names an `authenticated` region where C++ names what is inside it.
+Both are defensible and they are different granularities, so making them
+agree is a decision rather than a fix. The test holds out structs carrying
+either construct, naming the two CONSTRUCTS rather than the eight schemas
+that showed the symptom -- a list of symptoms is how a gate acquires an
+ignore list and stops being one. Measured: 27 schemas compared whole, and
+174 of 200 structs.
+
+**Rust and Python each need their own piece of work first, and the reasons
+differ.** Rust builds its checks in one flat loop over entries rather than
+in a per-entry helper, so grouping them by member is a restructure -- and
+the proof that carries it is byte-identity of the generated module across
+every schema, before and after. Python's `validate` RAISES rather than
+returning a code, so the identity belongs on the exception, and 52 of its
+342 raise statements span more than one line: appending an argument means
+balancing parentheses forward from the `raise`, with an assertion that the
+balance closed. Neither is hard and neither is this entry.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

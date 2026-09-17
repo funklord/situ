@@ -77,6 +77,25 @@ from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
+#: A refusal that names no member -- a member noted rather than walked, or a
+#: struct that validates. Distinguished from any real id, because "nothing
+#: refused" and "something refused with no name" are two different states.
+_NO_CHECK_CPP = "0xFFFFFFFFu"
+
+#: A line that leaves `validate` with a refusal, so `*which_` is written on
+#: the line above it. C's copy carries the reasoning, and `return e;` is in
+#: it for the reason C's says: a digit check propagates the accessor's own
+#: status rather than naming a constant, so a pattern that matched only the
+#: constants grouped such a member as having no id -- and `check` then
+#: returned refused while leaving `*which_` at the sentinel its own comment
+#: documents as "nothing refused".
+#:
+#: C paid for that once and this backend reproduced it exactly. What found
+#: it was the test comparing the two backends' published ids: cpio_header
+#: came out with two members in C++ and ten in C.
+_REFUSES = re.compile(
+	r"\s*return (?:::situ::rt::err::(?!ok\b)\w+|e);\s*$")
+
 WORD_WIDTHS = (8, 16, 32, 64)
 
 
@@ -6846,19 +6865,89 @@ class Emitter:
 			"\t\t}",
 		]
 
-	def _validate(self, struct: ResolvedStruct) -> list[str]:
-		checks: list[str] = []
+	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
+		"""One group per member that `validate` says anything about.
 
+		C's copy carries the reasoning, and this is deliberately its shape
+		rather than a shared helper: whether a member CAN refuse is a fact
+		about what this backend emits, not about the schema, so there is no
+		schema-level answer to put in `traverse`. What must not diverge is
+		the NUMBERING, and that is held by a test comparing the ids the four
+		backends publish -- the same instrument the message ids get.
+		"""
+		groups: list[tuple[str, list[str]]] = []
+		depth = self._depth_checks(struct)
+		if depth:
+			# Named for the struct rather than a member: the nesting is a
+			# property of the whole thing and has no field to name.
+			groups.append(("", depth))
 		for entry in own_entries(struct):
-			checks.extend(self._check(struct, entry))
+			lines = self._check(struct, entry)
+			if not any(_REFUSES.match(one) for one in lines):
+				groups.append(("", lines))
+				continue
+			groups.append((bare_name(local_name(struct, entry.placement)),
+			               lines))
+		return groups
 
-		lines = [
-			*self._nesting_probe(struct),
-			"",
-			"\t/* Every constraint the schema declares, on parse. */",
-			"\t[[nodiscard]] ::situ::rt::err validate() const noexcept",
-			"\t{",
-		]
+	def _validate(self, struct: ResolvedStruct) -> list[str]:
+		groups = self._check_groups(struct)
+		ids    = [member for member, _ in groups if member]
+
+		checks: list[str] = []
+		for member, group in groups:
+			for one in group:
+				if member and ids and _REFUSES.match(one):
+					indent = one[:len(one) - len(one.lstrip("\t"))]
+					checks.append(f"{indent}*which_ = check_{member};")
+				checks.append(one)
+
+		lines = [*self._nesting_probe(struct), ""]
+		if ids:
+			lines.extend([
+				"\t/* The ids `check` reports, one per member `validate` can",
+				"\t * refuse over. The id is the contract and the name is a",
+				"\t * constant, so nothing here costs a string (0051). */",
+				f"\tstatic constexpr std::uint32_t no_check = {_NO_CHECK_CPP};",
+			])
+			lines.extend(
+				f"\tstatic constexpr std::uint32_t check_{member} = {at}u;"
+				for at, member in enumerate(ids))
+			lines.extend([
+				"",
+				"\t/* Every constraint the schema declares, naming the member",
+				"\t * that refused. `*which_` is `no_check` when nothing did",
+				"\t * -- it is written either way, so a caller must not",
+				"\t * expect its own value to survive the call. nullptr asks",
+				"\t * for the verdict alone.",
+				"\t *",
+				"\t * The parameter carries the trailing underscore this",
+				"\t * class uses for what is its own rather than the",
+				"\t * schema's; `raw_` is the other one. A member named",
+				"\t * `which` is legal and generates a `which()` accessor,",
+				"\t * which a parameter of that name shadows -- so",
+				"\t * `is_known(which())` read as calling a pointer, in two",
+				"\t * of this tree's own schemas. */",
+				"\t[[nodiscard]] ::situ::rt::err check(std::uint32_t *which_)"
+				" const noexcept",
+				"\t{",
+				"\t\t/* One place rather than a guard at every refusal: a",
+				"\t\t * caller that does not want the identity passes"
+				" nullptr,", "\t\t * and the refusals below stay one line"
+				" each. */",
+				"\t\tstd::uint32_t sink;",
+				"",
+				"\t\tif (which_ == nullptr) {",
+				"\t\t\twhich_ = &sink;",
+				"\t\t}",
+				f"\t\t*which_ = no_check;",
+			])
+		else:
+			lines.extend([
+				"\t/* Every constraint the schema declares, on parse. */",
+				"\t[[nodiscard]] ::situ::rt::err validate() const noexcept",
+				"\t{",
+			])
 
 		# Before any field is read. Every check below reaches a member at an
 		# offset the layout gives, and a view shorter than the struct cannot
@@ -6870,6 +6959,11 @@ class Emitter:
 		if struct.layout.size_bytes and struct.layout.register is None:
 			lines.extend([
 				f"\t\tif (raw_.limit < {struct.layout.size_bytes}u) {{",
+				# The whole struct is short, so no member is the one that
+				# broke it -- and `check`'s contract is that every refusal
+				# sets `*which` on the line above it, whatever it was set to
+				# on entry.
+				*(["\t\t\t*which_ = no_check;"] if ids else []),
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
 			])
@@ -6879,11 +6973,21 @@ class Emitter:
 				         and struct.layout.register is None):
 			lines.append("\t\t/* Nothing in this struct is constrained. */")
 		lines.extend(checks)
-		lines.extend(self._refuse_checks(struct))
+		lines.extend(self._refuse_checks(struct, bool(ids)))
 		lines.extend(["\t\treturn ::situ::rt::err::ok;", "\t}"])
+		if ids:
+			lines.extend([
+				"",
+				"\t/* The verdict alone, which is what most callers want. */",
+				"\t[[nodiscard]] ::situ::rt::err validate() const noexcept",
+				"\t{",
+				"\t\treturn check(nullptr);",
+				"\t}",
+			])
 		return lines
 
-	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
+	def _refuse_checks(self, struct: ResolvedStruct,
+			named: bool = False) -> list[str]:
 		"""A `refuse` makes a message illegal, so `validate` says so (0051).
 
 		Last, after every member check, which is where the other four
@@ -6902,6 +7006,7 @@ class Emitter:
 			lines.extend([
 				f"\t\tif ({self._over_fields(struct, local)}) {{",
 				f"\t\t\t/* {when.name} */",
+				*(["\t\t\t*which_ = no_check;"] if named else []),
 				"\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t}",
 			])
