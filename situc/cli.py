@@ -187,6 +187,12 @@ def build_parser() -> argparse.ArgumentParser:
 	                            "index over each capped run, so reaching an "
 	                            "element is arithmetic rather than a walk "
 	                            "(decision 0022)")
+	build_cmd.add_argument("--messages", action="store_true",
+	                       help="also emit the default rendering of each "
+	                            "`when` beside its id. The id is always "
+	                            "emitted and costs a small integer; the text "
+	                            "needs a locale and a flash budget situ "
+	                            "cannot choose (decision 0051)")
 	build_cmd.add_argument("--layer", choices=LAYERS, default="view",
 	                       help="how much of the schema becomes code. Each rung "
 	                            "emits everything below it: `view` is accessors "
@@ -828,7 +834,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 	else:
 		parsed   = parse(source)
 		emitted  = generate(parsed, resolved, args.schema.stem,
-		                    args.prefix, materialize=args.materialize)
+		                    args.prefix, materialize=args.materialize,
+		                    messages=args.messages)
 		files    = emitted.files()
 		warnings = emitted.warnings
 

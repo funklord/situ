@@ -4917,3 +4917,190 @@ def test_a_nested_delimited_text_number_compiles(tmp_path: Path) -> None:
 		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
+
+
+# ---------------------------------------------------------------------------
+# The messages sibling (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """struct S {
+	u8  ver;
+	u16 length;
+}
+
+when S.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when S.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+
+when S.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`";
+"""
+
+
+def test_a_message_gets_an_id_and_no_string() -> None:
+	"""Without `--messages` the identity is emitted and the text is not.
+
+	The split fixed point already takes: a scale is a macro and the
+	conversion is the caller's, because text needs a locale, a log format
+	and a flash budget situ cannot choose for a target it has never seen
+	(0051). So a default build carries no sentence at all -- which is the
+	property worth asserting, since a string that leaked in would cost
+	flash on every embedded target and nothing would report it.
+	"""
+	header, source = emit(SAYS)
+
+	assert "#define SITU_S_ZERO_VERSION_MSG 0u" in header
+	assert "#define SITU_S_OVERSIZED_MSG 1u" in header
+	assert "#define SITU_S_LEGACY_FRAMING_MSG 2u" in header
+	assert "version 0 was never shipped" not in header + source
+	assert "situ_S_message_text" not in header + source
+
+
+def test_the_text_arrives_only_when_it_is_asked_for() -> None:
+	"""`--messages`, and the ids are the same ids: a consumer with its own
+	catalogue and one without are reading the same contract."""
+	schema    = parse_text(PREAMBLE + SAYS)
+	resolved  = resolve(schema, solve(schema))
+	generated = generate(schema, resolved, "unit", messages=True)
+
+	assert "const char *situ_S_message_text(uint32_t id);" in generated.header
+	assert "#define SITU_S_ZERO_VERSION_MSG 0u" in generated.header
+	assert '"version 0 was never shipped"' in generated.source
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_messages_sibling_reports_every_message_that_holds(
+		tmp_path: Path) -> None:
+	"""Run, not read. Three properties at once, and the third is why this is
+	a sibling rather than part of `validate`.
+
+	The ids are the schema's, in declaration order. A frame satisfying none
+	reports none -- the control, without which a function returning
+	everything it carries passes every other case. And a frame satisfying
+	two reports both, where `validate` would have stopped at the first
+	because for a verdict the first failure is the answer.
+	"""
+	schema    = parse_text(PREAMBLE + SAYS)
+	resolved  = resolve(schema, solve(schema))
+	generated = generate(schema, resolved, "unit", messages=True)
+	(tmp_path / "unit.h").write_text(generated.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(generated.source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include <string.h>
+#include "unit.h"
+
+static situ_err_t open_it(uint8_t *raw, situ_msg_t *msg, situ_view_t *view,
+		uint8_t ver, uint16_t length)
+{
+	raw[0] = ver;
+	raw[1] = (uint8_t)(length >> 8);
+	raw[2] = (uint8_t)length;
+	situ_msg_init(msg, raw, 3u);
+	return situ_S_view(msg, 0, view);
+}
+
+int main(void)
+{
+	uint8_t     raw[3];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    ids[4];
+	size_t      count;
+
+	if (open_it(raw, &msg, &view, 0u, 10u) != SITU_OK)       return 1;
+	situ_S_messages(view, ids, 4u, &count);
+	if (count != 1u)                                        return 2;
+	if (ids[0] != SITU_S_ZERO_VERSION_MSG)                  return 3;
+
+	/* The control: nothing holds, so nothing is reported. */
+	if (open_it(raw, &msg, &view, 2u, 10u) != SITU_OK)       return 4;
+	count = 99u;
+	situ_S_messages(view, ids, 4u, &count);
+	if (count != 0u)                                        return 5;
+
+	/* Two at once, and no short circuit. */
+	if (open_it(raw, &msg, &view, 0u, 9000u) != SITU_OK)     return 6;
+	situ_S_messages(view, ids, 4u, &count);
+	if (count != 2u)                                        return 7;
+	if (ids[0] != SITU_S_ZERO_VERSION_MSG)                  return 8;
+	if (ids[1] != SITU_S_OVERSIZED_MSG)                     return 9;
+
+	/* The text is the default rendering of the id. */
+	if (strcmp(situ_S_message_text(SITU_S_OVERSIZED_MSG),
+	           "longer than any early reader was written to hold") != 0)
+		return 10;
+	if (situ_S_message_text(77u) != NULL)                   return 11;
+
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_full_buffer_still_reports_how_many_held(tmp_path: Path) -> None:
+	"""`*count` is how many hold, which may exceed `cap`.
+
+	The alternative -- stopping at `cap` and reporting `cap` -- makes
+	truncation invisible: a caller with a one-element buffer would be told
+	one message held when two did, and would have no way to find out. So the
+	count is the answer and the buffer is what was room for, which is the
+	shape a caller compares.
+	"""
+	schema    = parse_text(PREAMBLE + SAYS)
+	resolved  = resolve(schema, solve(schema))
+	generated = generate(schema, resolved, "unit")
+	(tmp_path / "unit.h").write_text(generated.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(generated.source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t     raw[3];
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    ids[1];
+	size_t      count;
+
+	raw[0] = 0u;
+	raw[1] = 0x23u;
+	raw[2] = 0x28u;
+	situ_msg_init(&msg, raw, 3u);
+	if (situ_S_view(&msg, 0, &view) != SITU_OK)              return 1;
+
+	situ_S_messages(view, ids, 1u, &count);
+	if (count != 2u)                                        return 2;
+	if (ids[0] != SITU_S_ZERO_VERSION_MSG)                   return 3;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
+	"""A function nobody can call is dead code in a header a person reads
+	before trusting it -- the same rule the dissector's helpers follow."""
+	header, source = emit("struct S { u8 a; }")
+	assert "situ_S_messages" not in header + source

@@ -1153,6 +1153,32 @@ def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
 	return found
 
 
+def messages(schema: Schema, struct_name: str) -> list[ast.When]:
+	"""Every `when` this struct owns, in declaration order (0051).
+
+	Here rather than in a backend because five descriptions are about to ask
+	it and the answer must be one answer: the id a `messages` sibling emits,
+	the expert info a dissector registers and the record an image packs are
+	the same message, and they are keyed on its position in this list.
+	`obligations` above exists for exactly that reason -- two backends
+	numbered dirty bits from different lists and disagreed about one schema.
+
+	A `when` is a predicate over ONE message, which `wellformed.check_whens`
+	holds it to, so the owner is whichever struct its paths name and there
+	is exactly one. A predicate over two structs is a relation and 0030 owns
+	that.
+	"""
+	from situc.invariant import paths_in
+
+	found = []
+	for when in schema.whens():
+		for path in sorted(paths_in(when.expr)):
+			if path.partition(".")[0] == struct_name:
+				found.append(when)
+				break
+	return found
+
+
 def obligation(schema: Schema, struct: ResolvedStruct,
 		label: str) -> Obligation | None:
 	"""The obligation a `covered_by` entry names, or None if it names none."""

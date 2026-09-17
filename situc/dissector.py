@@ -35,7 +35,6 @@ import re
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.invariant import paths_in
 from situc.relation import conversation_key
 from situc.names import (
 	expand_calls, lua_spelling, over_fields, render_delimiter,
@@ -47,6 +46,7 @@ from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
 	extent_parts, is_counted_run, local_name, own_members, pinned_bytes,
 )
+from situc.traverse import messages as messages_of
 
 #: Widths Wireshark has a `ProtoField.uintN` for. Unlike C it has a 24-bit one,
 #: so a three-byte scalar is read whole here and bit-assembled there.
@@ -298,12 +298,10 @@ def _message_setup(schema: ast.Schema, resolved: ResolvedSchema) -> None:
 	`situc gen-dissector` emitted none.
 	"""
 	_MESSAGES.clear()
-	for when in schema.whens():
-		for path in sorted(paths_in(when.expr)):
-			owner = path.partition(".")[0]
-			if owner in resolved.structs:
-				_MESSAGES.setdefault(owner, []).append(when)
-				break
+	for name in resolved.structs:
+		held = messages_of(schema, name)
+		if held:
+			_MESSAGES[name] = held
 
 
 def _conversation_setup(schema: ast.Schema,

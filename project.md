@@ -29417,6 +29417,52 @@ write anything.
 a `refuse` needs before it can change a verdict, and the identity on
 existing per-member constraints.
 
+### 26.380 The messages sibling, in C
+
+**0051's `messages` function, and the first of the four backends.** A
+struct that states a `when` gains
+
+    void situ_S_messages(situ_view_t view, uint32_t *ids, size_t cap,
+    		size_t *count);
+
+beside `validate` rather than inside it, for the reason the record gives:
+`validate` short-circuits because for a verdict the first failure is the
+answer, and a caller asking what a message SAYS wants all of it. A caller
+who wants none never links this.
+
+**`*count` is how many hold, not how many fitted.** The alternative makes
+truncation invisible: a caller with a one-element buffer would be told one
+message held when two did, with no way to find out. So the count is the
+answer and `cap` is what there was room for, and a caller that cares
+compares them. That is a two-halves-of-one-result shape -- the buffer and
+the count -- written so neither half can be quoted alone.
+
+**The id is always emitted and the text only under `--messages`.** The
+split fixed point already takes: the scale is a macro and the conversion is
+the caller's, because text needs a locale, a log format and a flash budget
+situ cannot choose for a target it has never seen. A default build carries
+no sentence at all, which is what the test asserts -- a string that leaked
+in would cost flash on every embedded target and nothing would report it.
+
+**The owner rule moved to `traverse`.** Which struct a `when` belongs to is
+now `traverse.messages`, beside `obligations`, and the dissector asks it
+too. The reason is `obligations`' own: the id a sibling emits, the expert
+info a dissector registers and the record an image packs are the same
+message keyed on its position in one list, and two backends numbering from
+two lists is how the dirty-bit disagreement happened.
+
+**A continuation line in generated C is indented with tabs.** The first
+version aligned the second line of the signature under the open paren,
+which is right inside a function and wrong at file scope -- there are no
+indent tabs for the spaces to follow, and `style_gate` said so about two
+lines of `edges.h` and `edges.c`. The generator's own existing wrapped
+signature uses two tabs; this now matches it.
+
+**Still to do**: the same sibling in C++, Rust and Python, then the
+`refuse` half -- which has to land in all five descriptions at once, since
+the walk is held to the four compiled backends over the same bytes -- and
+the identity on existing per-member constraints outside C.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

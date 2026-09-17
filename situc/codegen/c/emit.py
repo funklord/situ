@@ -40,6 +40,7 @@ from situc.names import c_spelling, expand_calls, over_fields, render_delimiter
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
+from situc import traverse
 from situc.traverse import (
 	fixed_span_bits,
 	NOT_A_MEMBER,
@@ -107,7 +108,8 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ", materialize: bool = False) -> Generated:
+		prefix: str = "situ", materialize: bool = False,
+		messages: bool = False) -> Generated:
 	# Before anything is emitted: two constructs that flatten to one C
 	# identifier would otherwise surface as a redefinition error in generated
 	# code, naming a function nobody wrote.
@@ -116,7 +118,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		*(("enum", decl.name, decl.span) for decl in schema.enums()),
 	])
 
-	emitter = Emitter(schema, resolved, basename, prefix, materialize)
+	emitter = Emitter(schema, resolved, basename, prefix, materialize,
+	                  messages)
 	return Generated(
 		header   = emitter.header(),
 		source   = emitter.source(),
@@ -127,7 +130,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str, prefix: str, materialize: bool = False) -> None:
+			basename: str, prefix: str, materialize: bool = False,
+			messages: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
@@ -163,6 +167,12 @@ class Emitter:
 		#: schema that picked would put a deployment decision in the file that
 		#: defines the wire contract.
 		self.materialize = materialize
+		#: Emit the default rendering of each message beside its id (0051).
+		#: The same shape of choice as `materialize`: the identity is the
+		#: contract and costs a small integer, while the text needs a locale,
+		#: a log format and a flash budget situ cannot choose for a target it
+		#: has never seen.
+		self.messages = messages
 		self.structs  = {decl.name: decl for decl in schema.structs()}
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.tokens   = {decl.name: decl for decl in schema.token_sets()}
@@ -471,6 +481,7 @@ class Emitter:
 		lines.extend(self._covered_setters(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate_decl(struct))
+		lines.extend(self._messages_decl(struct))
 		return lines
 
 	# -- invariants (open question 3) -----------------------------------
@@ -7805,6 +7816,97 @@ class Emitter:
 			for at, member in enumerate(ids))
 		return lines
 
+	def _messages_decl(self, struct: ResolvedStruct) -> list[str]:
+		"""The sibling that reports every message this struct states (0051).
+
+		Beside `validate` rather than inside it, and the reason is
+		`validate`'s short circuit: order matters there because the first
+		failure is the answer, which is right for a verdict and wrong for
+		collecting messages. A caller who wants none never links this.
+
+		The id is emitted always and the text only under `--messages`. Text
+		needs a locale, a log format and a flash budget situ cannot choose,
+		so the split is the one fixed point already takes -- the scale is a
+		macro and the conversion is the caller's.
+		"""
+		held = traverse.messages(self.schema, struct.name)
+		if not held:
+			return []
+
+		named = ident(self.prefix, struct.name, "messages")
+		lines = [
+			"",
+			"/* Every message this schema states about a frame whose",
+			" * predicate holds, in declaration order and without stopping",
+			" * at the first. Writes at most `cap` ids and sets `*count` to",
+			" * how many hold -- which may exceed `cap`, so a caller that",
+			" * cares about truncation compares the two rather than",
+			" * trusting that its buffer was big enough (0051). */",
+			f"void {named}(situ_view_t view, uint32_t *ids, size_t cap,",
+			"\t\tsize_t *count);",
+		]
+		lines.extend(
+			f"#define {macro(self.prefix, struct.name, when.name, 'MSG')} {at}u"
+			for at, when in enumerate(held))
+
+		if self.messages:
+			lines.extend([
+				"",
+				"/* The default rendering of one id, or NULL for an id this",
+				" * struct does not state. A consumer with its own catalogue",
+				" * keys on the id and never calls this. */",
+				f"const char *{ident(self.prefix, struct.name, 'message_text')}"
+				"(uint32_t id);",
+			])
+		return lines
+
+	def _messages_body(self, struct: ResolvedStruct) -> list[str]:
+		"""`messages`, and its text table where one was asked for."""
+		held = traverse.messages(self.schema, struct.name)
+		if not held:
+			return []
+
+		named = ident(self.prefix, struct.name, "messages")
+		lines = [
+			"",
+			f"void {named}(situ_view_t view, uint32_t *ids, size_t cap,",
+			"\t\tsize_t *count)",
+			"{",
+			"	size_t held = 0;",
+			"",
+		]
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"	/* {when.severity.value} {when.name} */",
+				f"	if ({self._over_fields(struct, local, 'view')}) {{",
+				"		if (held < cap) {",
+				f"			ids[held] = "
+				f"{macro(self.prefix, struct.name, when.name, 'MSG')};",
+				"		}",
+				"		held++;",
+				"	}",
+			])
+		lines.extend(["", "	*count = held;", "}"])
+
+		if self.messages:
+			text = ident(self.prefix, struct.name, "message_text")
+			lines.extend([
+				"",
+				f"const char *{text}(uint32_t id)",
+				"{",
+				"	switch (id) {",
+			])
+			for when in held:
+				escaped = when.text.replace("\\", "\\\\").replace('"', '\\"')
+				lines.extend([
+					f"	case {macro(self.prefix, struct.name, when.name, 'MSG')}:",
+					f'		return "{escaped}";',
+				])
+			lines.extend(["	default:", "		return NULL;", "	}", "}"])
+		return lines
+
 	def source(self) -> str:
 		lines = [
 			*self._banner(),
@@ -7815,6 +7917,7 @@ class Emitter:
 		for struct in self.resolved.structs.values():
 			if struct.layout.is_byte_sized:
 				lines.extend(self._validate_body(struct))
+				lines.extend(self._messages_body(struct))
 
 		return "\n".join(lines) + "\n"
 
