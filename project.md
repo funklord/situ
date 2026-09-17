@@ -29938,6 +29938,45 @@ bytes still carries its axes, or the branch would have swallowed the
 ordinary case and the assertion about `S.n` would pass for a map that said
 nothing about anything.
 
+### 26.391 The wire signature names an argument, and one question it raises
+
+**0050 asks for this in as many words**, for 0048's reason: two peers that
+disagree about an argument disagree about the bytes, so a contract that
+does not mention it is a contract that cannot be checked.
+
+**And it was not silent either -- it was wrong, in the same way the map
+was.** The signature printed
+
+    @0x0000   1         u8         n
+
+for a member occupying nothing, at the same offset as the member after it.
+That is the one description whose whole purpose is to state where the bytes
+are, stating it falsely. The line is now
+
+    parameter -         u8         n [stream]
+
+**`[stream]` is part of the contract rather than a note beside it**: it is
+what says the argument may decide POSITION, so a peer reading the signature
+learns whether the layout below moves with the argument or only its meaning
+does.
+
+**An open question, found by asking the comparison rather than the
+renderer.** Dropping `[stream]` from a parameter that decides meaning only
+is legal at the front end, and `situc wire --check` classifies it through
+the generic attribute rule:
+
+    forward: mode drops `[stream]`; an old receiver may refuse a message a
+    new sender legitimately produces
+
+That is the wrong hazard. `[stream]` says the argument is fixed for a
+stream; dropping it means the argument may now vary per message, so the
+danger is an old peer that CACHED it and goes on using a stale value --
+accepting a message and reading it wrongly, rather than refusing a good
+one. Whether that is `breaking` and what the sentence should say depends on
+how the argument is actually passed, which is 0050's unbuilt half. Recorded
+rather than answered, so the next pass decides it deliberately instead of
+inheriting a verdict nobody chose.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

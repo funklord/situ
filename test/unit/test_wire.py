@@ -789,3 +789,56 @@ def _redeclare(member: object) -> str:
 	array = getattr(member, "array", None)
 	size  = getattr(getattr(array, "size", None), "value", 4)
 	return f"u8  {name}[{size}]  [encoding = utf8];"
+
+
+# ---------------------------------------------------------------------------
+# An argument is part of the contract (0050)
+# ---------------------------------------------------------------------------
+
+PARAMETERISED = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct frame {
+	parameter u8 n [stream];
+	u8        body[n];
+	u8        tail;
+}
+"""
+
+
+def test_the_signature_names_a_parameter_rather_than_placing_it() -> None:
+	"""0048's reason, applied to 0050's construct.
+
+	Two peers that disagree about an argument disagree about the bytes, so
+	a contract that does not mention it cannot be checked. And it is NAMED
+	rather than placed: the signature said `@0x0000 1 u8 n` for a member
+	occupying nothing -- the same offset as the member after it -- which is
+	the one description that must not make a false claim about where the
+	bytes are making one.
+	"""
+	rendered = signature(PARAMETERISED, preamble="")
+
+	row = next(one for one in rendered.splitlines()
+	           if one.strip().startswith("parameter"))
+	assert row.split() == ["parameter", "-", "u8", "n", "[stream]"], row
+
+	# The member it sizes still carries its own position, so the branch has
+	# not swallowed the ordinary case.
+	body = next(one for one in rendered.splitlines()
+	            if one.strip().startswith("@") and "body" in one)
+	assert "sized-by=n" in body
+
+
+def test_stream_is_part_of_the_contract() -> None:
+	"""It says the argument may decide POSITION rather than only meaning, so
+	a peer reading the signature learns whether the layout below moves with
+	the argument. A `[stream]` dropped here would leave two peers agreeing
+	about a name and disagreeing about what it can do."""
+	plain = signature(PARAMETERISED.replace(
+		"parameter u8 n [stream];\n\tu8        body[n];",
+		"parameter u8 n;\n\tu8        body[4];"), preamble="")
+
+	row = next(one for one in plain.splitlines()
+	           if one.strip().startswith("parameter"))
+	assert "[stream]" not in row, row

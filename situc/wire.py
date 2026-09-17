@@ -231,6 +231,26 @@ def _version_field(struct: ResolvedStruct) -> str | None:
 
 def _member(placement: Placement) -> str:
 	"""One member's contract, as one line so a diff points at one thing."""
+	# A parameter is an argument the caller supplies rather than bytes
+	# (0050), and it is named here for 0048's reason: two peers that
+	# disagree about an argument disagree about the bytes, so a contract
+	# that does not mention it is a contract that cannot be checked.
+	#
+	# Named rather than placed. The signature said `@0x0000 1 u8 n` for a
+	# member occupying nothing -- the same offset as the member after it --
+	# which is the wire contract making a false claim about where the bytes
+	# are, and this file exists to be the one description that does not.
+	#
+	# `[stream]` is part of the contract and not a note beside it: it is
+	# what says the argument may decide POSITION, so a peer reading this
+	# learns whether the layout below moves with the argument or only its
+	# meaning does.
+	if placement.parameter:
+		stream = " [stream]" if any(one.name == "stream"
+		                            for one in placement.attrs) else ""
+		return (f"{'parameter'.ljust(9)} {'-'.ljust(9)} "
+		        f"{placement.type_name.ljust(10)} {placement.name}{stream}")
+
 	parts = [
 		_position(placement).ljust(9),
 		_width(placement).ljust(9),
