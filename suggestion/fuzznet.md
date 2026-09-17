@@ -1032,3 +1032,35 @@ abandoning zero-copy: views stay the default and the right choice for large
 variable extents. This is an opt-in generator for bounded layouts, with an
 evaluatable intermediate schema, that turns a hand-maintained wire-to-memory
 correspondence into a generated one.
+
+# The hop converted cleanly, which bounds the request above (2026-09-17)
+
+We started the migration the section above sets up, and the first layout --
+the capability hop, a fixed 179-byte certificate -- converted without a single
+friction point. `situc map chain/hop.situ` placed every field exactly where our
+hand-written `FZN_HOP_OFF_*` already had it; `situc advise` found nothing to
+improve; and `situc build --owned` generated `situ_fzn_chain_hop_t` with a
+decode that copies and byte-swaps into a struct independent of the buffer.
+
+That last part BOUNDS the feature request above, and we would rather say so
+than let it stand wider than it should. The lifetime bug we cited as the
+reproduction was a FIXED-size cert, and for a fixed-size cert `--owned` already
+IS the owned form that would have prevented it. So the request is not "we need
+an owned form for the hop" -- you already have one. It stands only for the case
+`--owned` refuses: a BOUNDED but variable-length layout (our chain, record and
+manifest), where we want the derived optimised form and the generated
+marshalling rather than a hand-maintained tie. The fixed-size case is done and
+it is yours already.
+
+We adopted the hop as a checked contract (committed `.wire`/`.map`, checked by
+our `make schema`), not yet a code replacement -- your codegen is moving today,
+so we are not vendoring generated hop code against a target that shifts. When
+it settles we take the `--owned` output and retire our hand-written hop codec,
+which is the concrete first payoff of this whole evaluation.
+
+Two things we will report only if the migration reaches them, rather than guess
+now: whether our provision card's base32 text form is expressible once
+text-region encoding lands (it is "Proposed" in your README), and whether any
+nested layout of ours needs a caller-supplied `parameter`, which decision 0050
+says cannot yet be a struct member. Neither has bitten; we will not file them
+until one does.
