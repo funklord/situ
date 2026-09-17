@@ -32,6 +32,7 @@ the caller's, per 14.6, and no generated test can reach them.
 
 from __future__ import annotations
 
+from situc.codegen import refuse_parameters
 from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import Placement
@@ -54,6 +55,12 @@ def _is_fixed(resolved_struct: ResolvedStruct) -> bool:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> dict[str, str]:
 	"""The tamper header, or nothing where no struct carries a tag."""
+	# A parameter is an argument the caller supplies and no view carries
+	# one yet (0050). Refused here for the reason the four backends refuse
+	# it: what would be emitted reads the buffer at the parameter's offset,
+	# which is where the member after it begins.
+	refuse_parameters(schema)
+
 	ready = [(name, struct) for name, struct in sorted(resolved.structs.items())
 	         if _tags(struct)]
 	if not ready:

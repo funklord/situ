@@ -29898,6 +29898,46 @@ with no `when` must produce no severity line at all; and changing the
 schema's sentence must change the report, which is what shows the words
 are not the module's.
 
+### 26.390 Refusing four backends left the fifth description emitting it
+
+**26.387 refused a `parameter` in the four backends and the packer, and
+that was not the population.** `situc gen-dissector` accepted one and
+emitted:
+
+    local body_n = situ_uint(tvb, 0, 1, false)
+
+Byte 0 of the capture, which is `body`'s OWN first byte -- the identical
+wrong read the backends were refused for, in the description the four-way
+comparison does not cover. Found by asking every command what it did with
+a parameter rather than by asking the four I had just changed, which is
+the difference between checking a population and checking the set I was
+looking at.
+
+**Seven generators refuse now**, each at its own `generate`: the
+dissector, the fuzz harness, the check suite, the tamper header, the
+four-way differ, and the derived-codec emitters in C, Rust and Python.
+`gen-tests` already refused for its own reason.
+
+**And `situc map` was not silent, it was wrong.** It printed
+
+    S.n   offset=AbsoluteStatic(0x00) size=Fixed(1) ...
+
+for a member occupying no bytes -- the same offset as the member after it,
+which a reader comparing two maps would read as an overlap. A map claiming
+a property the code does not have is the one thing this project says a map
+must never do.
+
+The row is `S.n   parameter` now: **named rather than dropped**, because
+0050 asks for exactly that. The layout below it is static only GIVEN the
+argument, and a map that omitted the argument would claim a static layout
+under an assumption it does not mention -- the same silence `prefix`
+exists to break for a checksum's input.
+
+**The map's control is the row beside it.** A member that does occupy
+bytes still carries its axes, or the branch would have swallowed the
+ordinary case and the assertion about `S.n` would pass for a map that said
+nothing about anything.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

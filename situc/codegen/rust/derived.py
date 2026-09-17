@@ -14,6 +14,7 @@ correct, and an `extern` impl supplies the code.
 
 from __future__ import annotations
 
+from situc.codegen import refuse_parameters
 from situc import ast
 from situc.codegen.kernel_math import (accumulator, crc_register, crc_shift,
                                        crc_start, crc_table, crc_width, number,
@@ -88,6 +89,11 @@ def span_byte_helper() -> list[str]:
 
 def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	"""Emit every derived implementation the schema binds, as Rust."""
+	# A parameter is an argument the caller supplies and no view carries
+	# one yet (0050); a derived codec implementation is generated against
+	# the same accessors the four backends refuse to emit.
+	refuse_parameters(schema)
+
 	bound = {impl.codec for impl in schema.impls()
 	         if impl.kind is ast.ImplKind.DERIVED}
 

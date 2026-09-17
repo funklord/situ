@@ -13,6 +13,7 @@ plain compiler -- a harness nobody can build is the other way this rots.
 
 from __future__ import annotations
 
+from situc.codegen import refuse_parameters
 from situc import __version__
 
 from collections.abc import Mapping
@@ -29,6 +30,12 @@ from situc.traverse import (
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> str:
+	# A parameter is an argument the caller supplies and no view carries
+	# one yet (0050). Refused here for the reason the four backends refuse
+	# it: what would be emitted reads the buffer at the parameter's offset,
+	# which is where the member after it begins.
+	refuse_parameters(schema)
+
 	# A register is a bus transaction, not bytes off a wire: it has no view,
 	# no `validate`, and its accessors take a device handle rather than one.
 	# `gen-dissector` has excluded them since it was written and this did not,

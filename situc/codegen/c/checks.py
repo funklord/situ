@@ -24,6 +24,7 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
+from situc.codegen import refuse_parameters
 from situc import __version__
 
 import re
@@ -73,6 +74,12 @@ class Suite:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> str:
+	# A parameter is an argument the caller supplies and no view carries
+	# one yet (0050). Refused here for the reason the four backends refuse
+	# it: what would be emitted reads the buffer at the parameter's offset,
+	# which is where the member after it begins.
+	refuse_parameters(schema)
+
 	suite = Suite()
 
 	for name in sorted(resolved.structs):

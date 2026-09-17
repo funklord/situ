@@ -29,6 +29,7 @@ bytes with a note rather than guessed at.
 
 from __future__ import annotations
 
+from situc.codegen import refuse_parameters
 from situc import __version__
 
 import re
@@ -60,6 +61,17 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	struct names, and Wireshark abbrevs are already namespaced by the protocol
 	they hang off.
 	"""
+	# A parameter is an argument the caller supplies (0050), and a
+	# dissector has nowhere to take one from -- a Wireshark preference is
+	# the shape 0050 names for a `[stream]` one and it is not built.
+	#
+	# Refused rather than emitted, because what it emitted was
+	# `situ_uint(tvb, 0, 1, false)`: a parameter occupies nothing, so it
+	# sits at the offset of the member after it and the read measured that
+	# member's own first byte. The same silence the four backends were
+	# refused for, in the fifth description.
+	refuse_parameters(schema)
+
 	_CONSTS.clear()
 	_CONSTS.update(resolved.layout.env.consts)
 

@@ -90,6 +90,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from situc.codegen import refuse_parameters
 from situc import ast
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.codegen.rust.emit import _ident as rust_ident
@@ -825,6 +826,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
 	refused. The four drivers print the same text for the same bytes, or one
 	of them is wrong.
 	"""
+	# A parameter is an argument the caller supplies and no view carries
+	# one yet (0050). Refused here for the reason the four backends refuse
+	# it: what would be emitted reads the buffer at the parameter's offset,
+	# which is where the member after it begins.
+	refuse_parameters(schema)
+
 	renderer = {
 		"c": _c, "cpp": _cpp, "rust": _rust, "python": _python,
 	}[target]

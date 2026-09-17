@@ -23,7 +23,7 @@ from pathlib import PurePath
 
 from situc import ast, layers
 from situc.capability import DOMAINS, Axis, Value, Vector
-from situc.layout import BITS_PER_BYTE, StructLayout
+from situc.layout import BITS_PER_BYTE, StructLayout, Placement
 from situc.resolve import ResolvedSchema
 
 FORMAT_VERSION = 1
@@ -217,12 +217,27 @@ def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
 	lines = [f"{kind} {name}{extra} size={size} "
 	         f"{_axes(struct.vector, core=False)}".rstrip()]
 	for entry in struct.entries:
-		lines.append(_entry(entry.placement.path, entry.vector))
+		lines.append(_entry(entry.placement, entry.vector))
 	return lines
 
 
-def _entry(path: str, vector: Vector) -> str:
-	return f"  {path.ljust(PATH_WIDTH)} {_axes(vector)}".rstrip()
+def _entry(placement: Placement, vector: Vector) -> str:
+	# A parameter is an argument the caller supplies rather than bytes
+	# (0050), so its axes describe nothing in the buffer. Printed as what it
+	# is: the map said `offset=AbsoluteStatic(0x00) size=Fixed(1)` for a
+	# member occupying no bytes at all -- the same offset as the member
+	# after it, which a reader comparing two maps would have taken for an
+	# overlap.
+	#
+	# Named rather than dropped, because the layout below it is described
+	# GIVEN this argument and a reader needs to know that (0050). A map that
+	# omitted it would claim a static layout that is static only under an
+	# assumption the map does not mention, which is the silence `prefix`
+	# exists to break for a checksum's input.
+	if placement.parameter:
+		return f"  {placement.path.ljust(PATH_WIDTH)} parameter"
+
+	return f"  {placement.path.ljust(PATH_WIDTH)} {_axes(vector)}".rstrip()
 
 
 def _axes(vector: Vector, core: bool = True) -> str:

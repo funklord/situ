@@ -2402,3 +2402,75 @@ def test_the_descriptions_that_need_no_view_still_work() -> None:
 
 	assert "S" in resolved.structs
 	assert "parameter u8 n [stream];" in unparse(schema)
+
+
+#: Every generator that emits code reading bytes, by the module the CLI
+#: reaches for. Listed rather than discovered, because what is being asserted
+#: is that each has the refusal -- and a list derived from "modules with a
+#: `generate`" would grow a new one already exempt.
+GENERATORS = [
+	("situc.dissector", ("schema", "resolved", "name")),
+	("situc.codegen.c.fuzz", ("schema", "resolved", "name")),
+	("situc.codegen.c.checks", ("schema", "resolved", "name")),
+	("situc.codegen.c.tamper", ("schema", "resolved", "name")),
+	("situc.codegen.c.derived", ("schema", "name")),
+	("situc.codegen.rust.derived", ("schema", "name")),
+	("situc.codegen.python.derived", ("schema", "name")),
+]
+
+
+@pytest.mark.parametrize("module,shape", GENERATORS,
+                         ids=[one for one, _ in GENERATORS])
+def test_every_generator_refuses_a_parameter(module: str,
+		shape: tuple[str, ...]) -> None:
+	"""The four backends and the packer were refused first, and that left
+	the other generators emitting what the backends would not.
+
+	`situc gen-dissector` was the one that mattered: it emitted
+	`situ_uint(tvb, 0, 1, false)` for a `[stream]` parameter sizing a
+	member, reading that member's own first byte -- a parameter occupies
+	nothing, so it sits at the offset of the member after it. Refusing four
+	backends and leaving the fifth description is the divergence the
+	four-way comparison exists to prevent, arriving in the one description
+	that comparison does not cover.
+	"""
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+	held     = {"schema": schema, "resolved": resolved, "name": "unit"}
+
+	generate = __import__(module, fromlist=["generate"]).generate
+	with pytest.raises(SituError) as refused:
+		generate(*[held[one] for one in shape])
+
+	assert "parameter n" in str(refused.value)
+
+
+def test_the_map_names_a_parameter_rather_than_placing_it() -> None:
+	"""A parameter's axes describe nothing in the buffer, so printing them
+	is the map making a false claim -- the one thing a map must not do.
+
+	It said `offset=AbsoluteStatic(0x00) size=Fixed(1)` for a member
+	occupying no bytes: the same offset as the member after it, which a
+	reader comparing two maps would have read as an overlap.
+
+	Named rather than dropped, because the layout below it is described
+	GIVEN this argument (0050). A map that omitted it would claim a layout
+	that is static only under an assumption the map does not mention.
+	"""
+	from situc import capmap
+
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; u8 tail; }")
+	resolved = resolve(schema, solve(schema))
+	rendered = capmap.render(schema, resolved, "unit.situ")
+
+	row = next(one for one in rendered.splitlines()
+	           if one.strip().startswith("S.n"))
+	assert row.split() == ["S.n", "parameter"], row
+
+	# And the members that DO occupy bytes still carry their axes, so the
+	# branch has not swallowed the ordinary case.
+	body = next(one for one in rendered.splitlines()
+	            if one.strip().startswith("S.body"))
+	assert "offset=" in body and "size=" in body
