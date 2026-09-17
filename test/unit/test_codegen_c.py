@@ -5310,6 +5310,67 @@ def test_an_arithmetic_size_over_an_argument_reads_the_right_bytes(
 	        " uint8_t arg_n)" in header)
 
 
+LOCATED_SHAPES = pytest.mark.parametrize("body, why", [
+	("struct S { u8 off; u8 pad[4]; u8 m at off; }",
+	 "a scalar located by a bare local member"),
+	("struct S { u8 off; u8 pad[4]; u8 m[4] at off; }",
+	 "a fixed run located by one"),
+	("struct S { u8 off; u8 pad[4]; u8 m at 2; }",
+	 "located at a constant, which reads nothing from the frame"),
+	("struct S { u8 off; u8 pad[4]; u8 m[4] at 2; }",
+	 "a fixed run at a constant"),
+])
+
+
+@LOCATED_SHAPES
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_located_member_generates_a_header_that_compiles(
+		tmp_path: Path, body: str, why: str) -> None:
+	"""`situc build` reported success and emitted C that `cc` refused.
+
+	Two faults, one family, both about a member `at` says where to find:
+
+	  * `check` called `situ_S_m_offset(view)`, which a located member never
+	    gets -- by design, because its offset is measured from the MESSAGE
+	    and a view does not know where the message begins. That call was not
+	    merely undefined, it was unaskable: `situ_in_bounds(view, ...)` asks
+	    whether the FRAME contains the member, and `check` takes a view and
+	    no message. Its own accessor bounds-checks against the message on
+	    every call instead.
+	  * An `at` over a constant reads nothing from the frame, so `view` was
+	    an unused parameter and `-Wunused-parameter` under `-Werror` refused
+	    it.
+
+	Parametrised over the shapes rather than the one that was reported: the
+	constant case was found only by running the family, and it is older than
+	the one that started the hunt.
+
+	The corpus could not have caught either. One schema places a member this
+	way -- `example/bmp`'s `at file.pixel_offset` -- and it is a nested path
+	with a declared length, which takes neither route.
+	"""
+	compile_generated(tmp_path, body)
+
+
+def test_a_located_member_says_why_check_cannot_contain_it() -> None:
+	"""The note, not just the absence.
+
+	Dropping the check silently would leave a reader asking why a member
+	with a data-driven offset has no containment check when every other one
+	does. It says that the offset is the message's and that the accessor
+	asks on every call.
+	"""
+	_, source = emit("struct S { u8 off; u8 pad[4]; u8 m at off; }")
+
+	assert "located at `off` from the start of" in source
+	assert "this view can answer" in source
+	# The control: a member whose offset IS a sum of frame lengths still
+	# gets the real check, so a note emitted for everything fails here.
+	_, other = emit("struct S { u8 n; u8 body[n]; u8 tag[2]; }")
+	assert "situ_in_bounds(view," in other
+	assert "this view can answer" not in other
+
+
 def test_the_invalidation_note_does_not_send_a_caller_to_a_setter() -> None:
 	"""A parameter drives a length and cannot be written (0050).
 

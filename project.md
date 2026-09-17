@@ -30309,20 +30309,21 @@ can pass one yet" -- directly above the return that now generates. A claim
 that outlived its subject, in the one place a reader goes to find out what
 the backend does with a parameter.
 
-### 26.399 A generated header that does not compile, found in passing
+### 26.399 A generated header that did not compile, found in passing
 
-**Not a parameter fault, and not this arc's.** Reproduced with no
-`parameter` anywhere:
+**Not a parameter fault, and not this arc's** -- found by the worker
+building the C view, reproduced with no `parameter` anywhere, and fixed
+separately:
 
 ```
 struct frame { u8 off; u8 pad[4]; u8 marker at off; }
 ```
 
-`situc build --target c` succeeds. The generated `situ_frame_check` calls
-`situ_frame_marker_offset(view)`, and a located member never emits an
-`_offset` function, so `cc` refuses the output with *implicit declaration
-of function*. A build command that reports success and emits code that
-does not compile.
+`situc build --target c` SUCCEEDED, and the generated `situ_frame_check`
+called `situ_frame_marker_offset(view)` -- a function a located member
+never emits, so `cc` refused the output with *implicit declaration of
+function*. A build command reporting success and emitting code that does
+not compile.
 
 **How it survived is the corpus lesson again.** One schema in the tree
 places a member this way -- `example/bmp`'s `u8 pixels[info.image_size] at
@@ -30332,8 +30333,34 @@ constant offset and takes a different route. The uncovered shape is `at
 carry is one no gate can fail on, which is what put the `parameter` struct
 on this arc's list in the first place.
 
-Recorded rather than fixed: it is a separate defect from 0050 and belongs
-in its own commit rather than entangled with this one.
+**Fixed, and the check is not merely restored -- it is retired, because it
+was never askable.** `situ_in_bounds(view, ...)` asks whether the FRAME
+contains the member, and a located member's offset is not measured from
+the frame; `check` takes a view and no message, so the question is not
+expressible in its signature. The accessor asks it instead, against the
+message, on every call -- which is what `offset = DataPlaced` in the map
+is telling a reader it costs. `check` now carries a note saying so, rather
+than a silent absence a reader would have to account for.
+
+**Running the family found an older second fault the report had not.**
+`u8 m at 2;` -- located at a CONSTANT -- reads nothing from the frame, so
+`view` was an unused parameter and `-Wunused-parameter` under `-Werror`
+refused it. The emitter had grown a `(void)view;` for this during the
+parameter work (26.397) and guarded it on the struct taking an argument,
+which was the conservative choice while that work was in flight and is
+exactly what left the older case broken: a schema with no parameter cannot
+reach the argument branch. The condition is the rendered text alone now --
+an expression that uses the view necessarily spells it.
+
+**Four shapes, and the sabotages separate them.** Disabling the
+check-skip fails all four; disabling `(void)view;` fails only the two
+constant ones. So the parametrisation is load-bearing rather than
+decorative, and the case that was reported is not the case that found the
+second fault.
+
+Zero churn on the corpus, measured the same way as 26.397 -- 41 schemas,
+164 generations, 328 files, identical against `HEAD` -- with the
+comparison controlled by perturbing one captured file.
 
 ### 26.404 `situc explain` places a member that occupies nothing
 

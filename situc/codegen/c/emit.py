@@ -6106,12 +6106,23 @@ class Emitter:
 			f"\tconst uint32_t n  = (uint32_t)({length});",
 			"",
 			*self._argument_unused(struct, taken, offset, length),
-			# An `at` over an argument alone reads nothing from the frame,
-			# which leaves the view unused. Guarded on the struct having an
-			# argument as well as on the text, so a schema without one
-			# cannot reach a line it never had.
-			*(["\t(void)view;"] if self._arguments(struct)
-			  and "view" not in f"{offset}{length}" else []),
+			# An `at` that reads nothing from the frame leaves the view
+			# unused, and `-Wunused-parameter` under `-Werror` refuses that.
+			# Two ways in: an `at` over an argument alone (0050), and the
+			# older `u8 m at 2;` -- a constant offset with a fixed length,
+			# which named neither the view nor anything in it and so has
+			# never compiled. `situc build` reported success either way.
+			#
+			# The text is the whole condition. This was additionally guarded
+			# on the struct taking an argument, which was the conservative
+			# choice while the parameter work was in flight and is what left
+			# the constant case broken: a schema with no parameter cannot
+			# reach the argument branch, and its `at 2` still had an unused
+			# view. Asking whether the rendered expressions mention the view
+			# answers both, and cannot answer wrongly -- an expression that
+			# uses the view necessarily spells it.
+			*(["\t(void)view;"]
+			  if "view" not in f"{offset}{length}" else []),
 			"\tif (n > msg->size || at > msg->size - n) {",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
@@ -6216,6 +6227,32 @@ class Emitter:
 			# mistake the accessor block above documents, one function along.
 			if self._offset_blocker(struct, placement) is not None:
 				return []
+			# A LOCATED member is the third way into that same fault, and it
+			# is not about a blocker: `at off` has no `_offset` function by
+			# design, because its offset is the MESSAGE's rather than this
+			# view's. `_base_expression` renders one anyway, so
+			# `u8 marker at off;` produced a `check` naming
+			# `situ_frame_marker_offset(view)` and a header that would not
+			# compile -- from a `situc build` that reported success.
+			#
+			# And the check could not be written here even with the function
+			# in hand. `situ_in_bounds(view, ...)` asks whether the FRAME
+			# contains the member, and a located member's offset is not
+			# measured from the frame; `check` takes a view and no message,
+			# so the question it would need to ask is not expressible in its
+			# signature. Its accessor asks it instead, on every call, which
+			# is what `offset = DataPlaced` in the map costs.
+			if placement.located is not None:
+				return [
+					f"\t/* {placement.path}: located at `{placement.located}`"
+					" from the start of",
+					"\t * the MESSAGE, so whether the frame contains it is not"
+					" a question",
+					"\t * this view can answer -- and `check` has no message."
+					" Its own",
+					"\t * accessor bounds-checks against the message on every"
+					" call. */",
+				]
 			return [
 				f"\t/* {placement.path}: its offset is a sum of lengths the"
 				" message",
