@@ -70,6 +70,23 @@ from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
 from situc import __version__
 
+#: The id `check` reports when nothing refused. Distinguished from any real
+#: id, because "nothing refused" and "something refused with no name" are two
+#: different states.
+_NO_CHECK_RS = "0xFFFF_FFFF"
+
+#: A line that leaves `validate` with a refusal, so `*which` is written on
+#: the line above it.
+#:
+#: Two spellings, and the second is the one C and C++ each had to learn
+#: late. A nested member propagates rather than naming a variant -- there
+#: `return err;`, here `self.flags()?.validate()?;` -- and a pattern that
+#: matched only the explicit returns grouped such a member as having no id,
+#: so `check_which` returned refused with `*which` still at the sentinel its
+#: own doc comment calls "nothing refused". In Rust the `?` IS the return,
+#: which is why the propagating form has no `return` to match on.
+_REFUSES = re.compile(r"\s*(?:return Err\(.*\);|.*\?;)\s*$")
+
 WORD_WIDTHS = (8, 16, 32, 64)
 
 
@@ -6443,202 +6460,43 @@ class Emitter:
 
 	# -- validation ----------------------------------------------------
 
+	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
+		"""One group per member that `validate` says anything about.
+
+		C's copy carries the reasoning, and this is deliberately its shape
+		rather than a shared helper: whether a member CAN refuse is a fact
+		about what this backend emits, not about the schema, so there is no
+		schema-level answer to put in `traverse`. What must not diverge is
+		the numbering, and that is held by a test comparing the ids the
+		backends publish.
+		"""
+		groups: list[tuple[str, list[str]]] = []
+		for entry in own_entries(struct):
+			lines = self._member_checks(struct, entry)
+			if not any(_REFUSES.match(one) for one in lines):
+				groups.append(("", lines))
+				continue
+			# `c_name`, which is what C and C++ name theirs with, rather
+			# than `_ident`: that escapes a Rust keyword as `r#type` and
+			# would spell the constant `CHECK_R#TYPE`, and a constant is
+			# SCREAMING_SNAKE_CASE where no keyword can reach. It also has
+			# to flatten a reserved member's `<reserved0>`, whose angle
+			# brackets rustc read as chained comparisons.
+			groups.append((c_name(local_name(struct, entry.placement)), lines))
+		return groups
+
 	def _validate(self, struct: ResolvedStruct) -> list[str]:
-		from situc.expr import evaluate
+		groups = self._check_groups(struct)
+		ids    = [member for member, _ in groups if member]
 
 		checks: list[str] = []
-
-		for entry in own_entries(struct):
-			placement = entry.placement
-			scalar    = placement.scalar
-			name      = _ident(local_name(struct, placement))
-
-			check = classify_check(struct, placement, self.structs)
-
-			# The bounds question first, and it does not replace the rest: a
-			# member can be both outside the frame and constrained, and
-			# `continue` here left `[must_eq]` unchecked for every
-			# dynamically placed field.
-			checks.extend(self._fits_check(struct, placement))
-
-			# 0052: a byte run pinned to a literal is one comparison, above
-			# the dispatch because `classify_check` calls it an array.
-			pinned = pinned_runs(placement)
-			if pinned is not None:
-				checks.extend(self._pinned_run_check(struct, placement,
-				                                    name, pinned))
-				continue
-
-			# A variant, before the `NOTHING` test below, because the two
-			# questions are not one: "does the discriminant need checking"
-			# and "do the arms need validating" have different answers, and
-			# nesting the second inside the first meant a variant whose
-			# discriminant is already covered got no arm validation at all.
-			# `classify_check` answers NOTHING for `json`'s `value.body`, so
-			# Rust validated none of its four arms while the other three
-			# validated all of them -- invisible until an arm refused, which
-			# took a guard added elsewhere to produce (26.322).
-			if placement.kind == "variant":
-				if check is Check.DISCRIMINANT:
-					checks.extend(self._discriminant_check(struct, placement))
-				# Each arm in declaration order, which is where the other
-				# three emit theirs: `own_entries` drops a dotted path, so an
-				# arm member never reaches this loop on its own.
-				for _, member in arm_members(struct, placement):
-					if member is not None:
-						checks.extend(self._arm_fits_check(struct, member))
-						checks.extend(self._arm_validation(struct, member))
-				continue
-
-			if check is Check.NOTHING:
-				continue
-			if check is Check.DISCRIMINANT:
-				checks.extend(self._discriminant_check(struct, placement))
-				for _, member in arm_members(struct, placement):
-					if member is not None:
-						checks.extend(self._arm_fits_check(struct, member))
-						checks.extend(self._arm_validation(struct, member))
-				continue
-			if check is Check.DELIMITED:
-				checks.extend(self._delimiter_checks(struct, placement))
-				continue
-			if check is Check.REPEATED:
-				checks.extend(self._array_checks(struct, placement, name))
-				continue
-			if check is Check.NESTED:
-				# Only where the accessor exists.
-				inner = self.resolved.structs.get(placement.type_name or "")
-				if inner is not None and not inner.layout.is_fixed_size \
-						and not has_computable_extent(
-							self.resolved.structs, inner):
-					checks.append(f"\t\t// {placement.path}: no accessor to"
-					              " validate through.")
-					continue
-				# Two questions rather than one: the frame may not contain
-				# the member at all, which the accessor refuses now (26.31),
-				# and the member may be there and malformed. `?` carries both
-				# out, in that order.
-				checks.append(f"\t\tself.{name}()?.validate()?;")
-				continue
-
-			assert scalar is not None
-
-			# The same offset the accessor uses. A member after a
-			# variable-length one is placed at run time, and the validator
-			# reads it the same way the getter does.
-			offset = (None if placement.offset_bits is not None
-			          else self._offset_expression(struct, placement))
-			assert not (placement.offset_bits is None
-			            and scalar.is_bit_packed), \
-				f"{placement.path}: bit-packed at a dynamic offset"
-			if placement.offset_bits is None and offset is None:
-				continue
-
-			if check is Check.RESERVED:
-				# A pad is a *run* of 0..n-1 bytes, not a single scalar
-				# (0043); the scalar read below would check one byte where
-				# the pad is empty, which is C++ and Python already route
-				# through `_reserved_checks`. Rust's fast path for a
-				# one-byte reserved is the odd one out, so send a pad the
-				# long way.
-				if pad_alignment(placement) is not None:
-					checks.extend(
-						self._pad_bounds_checks(struct, placement))
-					checks.extend(self._reserved_checks(struct, placement))
-					continue
-				policy = _reserved_policy(placement.attrs)
-				if policy in ("must_be_zero", "must_be_one"):
-					want = 0 if policy == "must_be_zero" else (1 << scalar.bits) - 1
-					checks.extend([
-						f"\t\tif {self._raw_load(placement, scalar, offset)} != {want} {{",
-						"\t\t\treturn Err(Error::Constraint);",
-						"\t\t}",
-					])
-				continue
-
-			# Rust reads the bytes rather than calling the getter, so unlike C
-			# and C++ it compiled -- and checked a member the message does not
-			# carry. A `[must_eq]` behind a `[since = 2]` was enforced against
-			# whatever a v1 message has at that offset, which is the next
-			# message's bytes or none at all. Invariant 27: silence is worse
-			# than a crash, and this was the silent one of the four.
-			versioned = placement.since is not None \
-			            and placement.version_field is not None
-			mine: list[str] = []
-
-			# The parsed value, not the bytes. This backend reads a member's
-			# raw load everywhere else, which for a text number is its digits
-			# as an integer -- so `[min = 70701]` on cpio's magic compared
-			# 0x303730373031 against 70701 and refused GNU cpio's own header.
-			# The bits-versus-values distinction the walkers keep meeting,
-			# arriving here the moment the shared classifier stopped calling a
-			# text number an array.
-			if check is Check.TEXT_NUMBER:
-				mine.extend(self._text_number_checks(
-					struct, placement, _ident(local_name(struct, placement))))
-				read = f"self.{_ident(local_name(struct, placement))}_value()"
-			elif scalar.is_bcd:
-				# The same bits-versus-values fault as the text number above,
-				# in the other conversion, and it was not carried across when
-				# that one was fixed. `[max = 12]` on a `bcd2 month` compared
-				# the raw byte, so December -- 0x12, which this backend's own
-				# getter reads as 12 -- was refused by its own validator.
-				# Measured against C over 0x01, 0x09, 0x10, 0x12, 0x13 and
-				# 0x99: the two agreed on four and disagreed on 0x10 and
-				# 0x12, both of them valid months Rust alone refused.
-				#
-				# Spelled as the decode rather than as `self.name()` so the
-				# versioned arm below, which matches on the getter, does not
-				# end up calling it inside a match on itself.
-				read = (f"situ_rt::bcd_decode("
-				        f"{self._raw_load(placement, scalar, offset)},"
-				        f" {scalar.digits})")
-			else:
-				read = self._raw_load(placement, scalar, offset)
-
-			if scalar.is_bcd:
-				mine.extend([
-					f"\t\tif !situ_rt::bcd_valid("
-					f"{self._raw_load(placement, scalar, offset)},"
-					f" {scalar.digits}) {{",
-					"\t\t\treturn Err(Error::Constraint);",
-					"\t\t}",
-				])
-
-			enum = self.enums.get(placement.type_name or "")
-			if enum is not None \
-					and enum.effective_default is ast.EnumDefault.ERROR:
-				mine.extend([
-					f"\t\tif !{_pascal(enum.name)}::is_known("
-					f"{read} as {self._rust_type(scalar)}) {{",
-					"\t\t\treturn Err(Error::Constraint);",
-					"\t\t}",
-				])
-
-			mine.extend(self._attr_checks(struct, placement, read))
-
-			if versioned and mine:
-				# The accessor answers whether the field is *there*; the raw
-				# load below answers what it holds, which is how every other
-				# check in this function reads a member. Binding the accessor's
-				# value instead would drag in its return shape -- an enum
-				# getter hands back `Option<Kind>`, which is not what
-				# `is_known` takes.
-				checks.extend([
-					f"\t\t// {placement.path} arrives in version"
-					f" {placement.since}. A message older",
-					"\t\t// than that does not carry it, and a field that is not",
-					"\t\t// there is not a field that is wrong.",
-					f"\t\tmatch self.{name}() {{",
-					"\t\t\tOk(_) => {",
-					*[f"\t\t{line}" for line in mine],
-					"\t\t\t}",
-					"\t\t\tErr(Error::Version) => {}",
-					"\t\t\tErr(other) => return Err(other),",
-					"\t\t}",
-				])
-			else:
-				checks.extend(mine)
+		for member, group in groups:
+			for one in group:
+				if member and ids and _REFUSES.match(one):
+					indent = one[:len(one) - len(one.lstrip("\t"))]
+					checks.append(
+						f"{indent}*which = Self::CHECK_{member.upper()};")
+				checks.append(one)
 
 		depth = self._depth_checks(struct)
 
@@ -6657,17 +6515,51 @@ class Emitter:
 
 		refusals = self._refuse_checks(struct)
 
-		return [
-			*self._nesting_probe(struct),
-			"",
-			"\t/// Every constraint the schema declares, on parse.",
-			"\tpub fn validate(&self) -> Result<()> {",
+		body = [
 			*floor,
 			*depth,
 			*(checks or refusals or ([] if depth or floor else
 			             ["\t\t// Nothing in this struct is constrained."])),
 			*(refusals if checks else []),
 			"\t\tOk(())",
+			"\t}",
+		]
+		if not ids:
+			return [
+				*self._nesting_probe(struct),
+				"",
+				"\t/// Every constraint the schema declares, on parse.",
+				"\tpub fn validate(&self) -> Result<()> {",
+				*body,
+			]
+
+		return [
+			*self._nesting_probe(struct),
+			"",
+			"\t/// The id `check` reports when nothing refused.",
+			f"\tpub const NO_CHECK: u32 = {_NO_CHECK_RS};",
+			*(f"\tpub const CHECK_{member.upper()}: u32 = {at};"
+			  for at, member in enumerate(ids)),
+			"",
+			"\t/// Every constraint the schema declares, naming the member",
+			"\t/// that refused. `*which` is `NO_CHECK` where nothing did --",
+			"\t/// it is written either way, so a caller must not expect its",
+			"\t/// own value to survive the call.",
+			"\t///",
+			"\t/// C and C++ call this `check` and Rust cannot: `cpio_header`",
+			"\t/// has a member called `check`, so the accessor takes that",
+			"\t/// name, and Rust has no overloading to resolve the two. The",
+			"\t/// same hazard already reaches `validate`, `extent` and",
+			"\t/// `required` here and has never fired, no schema having such",
+			"\t/// a member; this one would have fired on the first build.",
+			"\tpub fn check_which(&self, which: &mut u32) -> Result<()> {",
+			"\t\t*which = Self::NO_CHECK;",
+			*body,
+			"",
+			"\t/// The verdict alone, which is what most callers want.",
+			"\tpub fn validate(&self) -> Result<()> {",
+			"\t\tlet mut sink = Self::NO_CHECK;",
+			"\t\tself.check_which(&mut sink)",
 			"\t}",
 		]
 
@@ -7108,6 +7000,211 @@ class Emitter:
 	def _rust_type(self, scalar: ScalarType) -> str:
 		width = _storage_width(scalar.bits)
 		return f"i{width}" if scalar.signed else f"u{width}"
+
+	def _member_checks(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""Everything `validate` says about one member.
+
+		Lifted out of `validate`'s loop so that the lines belonging to one
+		member can be grouped under it -- which is what naming the member
+		that refused needs, and what C and C++ already had. The loop's
+		`continue` is this function's `return` and nothing else moved: the
+		generated module is byte-identical across every schema in the
+		repository, which is the proof a mechanical change carries."""
+		from situc.expr import evaluate
+
+		out: list[str] = []
+		placement = entry.placement
+		scalar    = placement.scalar
+		name      = _ident(local_name(struct, placement))
+
+		check = classify_check(struct, placement, self.structs)
+
+		# The bounds question first, and it does not replace the rest: a
+		# member can be both outside the frame and constrained, and
+		# `continue` here left `[must_eq]` unchecked for every
+		# dynamically placed field.
+		out.extend(self._fits_check(struct, placement))
+
+		# 0052: a byte run pinned to a literal is one comparison, above
+		# the dispatch because `classify_check` calls it an array.
+		pinned = pinned_runs(placement)
+		if pinned is not None:
+			out.extend(self._pinned_run_check(struct, placement,
+			                                    name, pinned))
+			return out
+
+		# A variant, before the `NOTHING` test below, because the two
+		# questions are not one: "does the discriminant need checking"
+		# and "do the arms need validating" have different answers, and
+		# nesting the second inside the first meant a variant whose
+		# discriminant is already covered got no arm validation at all.
+		# `classify_check` answers NOTHING for `json`'s `value.body`, so
+		# Rust validated none of its four arms while the other three
+		# validated all of them -- invisible until an arm refused, which
+		# took a guard added elsewhere to produce (26.322).
+		if placement.kind == "variant":
+			if check is Check.DISCRIMINANT:
+				out.extend(self._discriminant_check(struct, placement))
+			# Each arm in declaration order, which is where the other
+			# three emit theirs: `own_entries` drops a dotted path, so an
+			# arm member never reaches this loop on its own.
+			for _, member in arm_members(struct, placement):
+				if member is not None:
+					out.extend(self._arm_fits_check(struct, member))
+					out.extend(self._arm_validation(struct, member))
+			return out
+
+		if check is Check.NOTHING:
+			return out
+		if check is Check.DISCRIMINANT:
+			out.extend(self._discriminant_check(struct, placement))
+			for _, member in arm_members(struct, placement):
+				if member is not None:
+					out.extend(self._arm_fits_check(struct, member))
+					out.extend(self._arm_validation(struct, member))
+			return out
+		if check is Check.DELIMITED:
+			out.extend(self._delimiter_checks(struct, placement))
+			return out
+		if check is Check.REPEATED:
+			out.extend(self._array_checks(struct, placement, name))
+			return out
+		if check is Check.NESTED:
+			# Only where the accessor exists.
+			inner = self.resolved.structs.get(placement.type_name or "")
+			if inner is not None and not inner.layout.is_fixed_size \
+					and not has_computable_extent(
+						self.resolved.structs, inner):
+				out.append(f"\t\t// {placement.path}: no accessor to"
+				              " validate through.")
+				return out
+			# Two questions rather than one: the frame may not contain
+			# the member at all, which the accessor refuses now (26.31),
+			# and the member may be there and malformed. `?` carries both
+			# out, in that order.
+			out.append(f"\t\tself.{name}()?.validate()?;")
+			return out
+
+		assert scalar is not None
+
+		# The same offset the accessor uses. A member after a
+		# variable-length one is placed at run time, and the validator
+		# reads it the same way the getter does.
+		offset = (None if placement.offset_bits is not None
+		          else self._offset_expression(struct, placement))
+		assert not (placement.offset_bits is None
+		            and scalar.is_bit_packed), \
+			f"{placement.path}: bit-packed at a dynamic offset"
+		if placement.offset_bits is None and offset is None:
+			return out
+
+		if check is Check.RESERVED:
+			# A pad is a *run* of 0..n-1 bytes, not a single scalar
+			# (0043); the scalar read below would check one byte where
+			# the pad is empty, which is C++ and Python already route
+			# through `_reserved_checks`. Rust's fast path for a
+			# one-byte reserved is the odd one out, so send a pad the
+			# long way.
+			if pad_alignment(placement) is not None:
+				out.extend(
+					self._pad_bounds_checks(struct, placement))
+				out.extend(self._reserved_checks(struct, placement))
+				return out
+			policy = _reserved_policy(placement.attrs)
+			if policy in ("must_be_zero", "must_be_one"):
+				want = 0 if policy == "must_be_zero" else (1 << scalar.bits) - 1
+				out.extend([
+					f"\t\tif {self._raw_load(placement, scalar, offset)} != {want} {{",
+					"\t\t\treturn Err(Error::Constraint);",
+					"\t\t}",
+				])
+			return out
+
+		# Rust reads the bytes rather than calling the getter, so unlike C
+		# and C++ it compiled -- and checked a member the message does not
+		# carry. A `[must_eq]` behind a `[since = 2]` was enforced against
+		# whatever a v1 message has at that offset, which is the next
+		# message's bytes or none at all. Invariant 27: silence is worse
+		# than a crash, and this was the silent one of the four.
+		versioned = placement.since is not None \
+		            and placement.version_field is not None
+		mine: list[str] = []
+
+		# The parsed value, not the bytes. This backend reads a member's
+		# raw load everywhere else, which for a text number is its digits
+		# as an integer -- so `[min = 70701]` on cpio's magic compared
+		# 0x303730373031 against 70701 and refused GNU cpio's own header.
+		# The bits-versus-values distinction the walkers keep meeting,
+		# arriving here the moment the shared classifier stopped calling a
+		# text number an array.
+		if check is Check.TEXT_NUMBER:
+			mine.extend(self._text_number_checks(
+				struct, placement, _ident(local_name(struct, placement))))
+			read = f"self.{_ident(local_name(struct, placement))}_value()"
+		elif scalar.is_bcd:
+			# The same bits-versus-values fault as the text number above,
+			# in the other conversion, and it was not carried across when
+			# that one was fixed. `[max = 12]` on a `bcd2 month` compared
+			# the raw byte, so December -- 0x12, which this backend's own
+			# getter reads as 12 -- was refused by its own validator.
+			# Measured against C over 0x01, 0x09, 0x10, 0x12, 0x13 and
+			# 0x99: the two agreed on four and disagreed on 0x10 and
+			# 0x12, both of them valid months Rust alone refused.
+			#
+			# Spelled as the decode rather than as `self.name()` so the
+			# versioned arm below, which matches on the getter, does not
+			# end up calling it inside a match on itself.
+			read = (f"situ_rt::bcd_decode("
+			        f"{self._raw_load(placement, scalar, offset)},"
+			        f" {scalar.digits})")
+		else:
+			read = self._raw_load(placement, scalar, offset)
+
+		if scalar.is_bcd:
+			mine.extend([
+				f"\t\tif !situ_rt::bcd_valid("
+				f"{self._raw_load(placement, scalar, offset)},"
+				f" {scalar.digits}) {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
+
+		enum = self.enums.get(placement.type_name or "")
+		if enum is not None \
+				and enum.effective_default is ast.EnumDefault.ERROR:
+			mine.extend([
+				f"\t\tif !{_pascal(enum.name)}::is_known("
+				f"{read} as {self._rust_type(scalar)}) {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
+
+		mine.extend(self._attr_checks(struct, placement, read))
+
+		if versioned and mine:
+			# The accessor answers whether the field is *there*; the raw
+			# load below answers what it holds, which is how every other
+			# check in this function reads a member. Binding the accessor's
+			# value instead would drag in its return shape -- an enum
+			# getter hands back `Option<Kind>`, which is not what
+			# `is_known` takes.
+			out.extend([
+				f"\t\t// {placement.path} arrives in version"
+				f" {placement.since}. A message older",
+				"\t\t// than that does not carry it, and a field that is not",
+				"\t\t// there is not a field that is wrong.",
+				f"\t\tmatch self.{name}() {{",
+				"\t\t\tOk(_) => {",
+				*[f"\t\t{line}" for line in mine],
+				"\t\t\t}",
+				"\t\t\tErr(Error::Version) => {}",
+				"\t\t\tErr(other) => return Err(other),",
+				"\t\t}",
+			])
+		else:
+			out.extend(mine)
+		return out
 
 
 def _storage_width(bits: int) -> int:

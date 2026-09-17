@@ -6,9 +6,9 @@ image, the walker and the editor 2026-09-17 (26.378); the
 dissector's expert info 2026-09-17 (26.379); the `messages` sibling
 in all four backends 2026-09-17 (26.380, 26.381); the `refuse` half,
 in all six descriptions, 2026-09-17 (26.382). Still to do: the
-identity on existing per-member constraints in Rust and Python --
-26.231's half rather than this record's construct; C++ has it as of
-2026-09-17 (26.383)
+identity on existing per-member constraints in Python --
+26.231's half rather than this record's construct; C++ and Rust have
+it as of 2026-09-17 (26.383, 26.384)
 Date: 2026-09-04
 Phase: raised by the copyright holder, after 0050
 

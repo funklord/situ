@@ -29611,6 +29611,53 @@ returning a code, so the identity belongs on the exception, and 52 of its
 balancing parentheses forward from the `raise`, with an assertion that the
 balance closed. Neither is hard and neither is this entry.
 
+### 26.384 The same identity in Rust, and a fault the comparison found twice more
+
+**26.231's half in the third backend**, and it needed a restructure first.
+Rust built its checks in one flat loop over entries where C and C++ have a
+per-entry helper, so there was nothing to group by member. The loop's body
+moved into `_member_checks` with `continue` becoming `return`, and nothing
+else changed -- **proved by regenerating all 41 schemas and diffing: the
+modules are byte-identical.** That is the proof a mechanical change carries,
+and it is what made the rest safe to build on.
+
+**The method cannot be called `check`, and the reason is a real schema.**
+`cpio_header` has a member named `check`, so the accessor takes that name,
+and Rust has no overloading: the module had duplicate definitions and did
+not compile. It is `check_which`. The same hazard already reaches
+`validate`, `extent` and `required` in this backend and has never fired, no
+schema having such a member -- the difference is that this one fired on the
+first build of the corpus rather than waiting for somebody's schema.
+
+**Two more naming faults, both caught by rustc rather than by reading.**
+`_ident` escapes a keyword as `r#type`, which upper-cased is
+`CHECK_R#TYPE`; a constant is SCREAMING_SNAKE_CASE where no keyword can
+reach, so the escape is wrong there. And a reserved member's local name is
+`<reserved0>`, whose angle brackets rustc reads as chained comparisons.
+`c_name` -- what C and C++ already name theirs with -- answers both.
+
+**The comparison has now found the same fault in all three backends, which
+is what makes it worth more than any of them.** A member whose check
+PROPAGATES rather than naming a refusal was grouped as having no id, so
+`check` returned refused while leaving `*which` at the sentinel its own
+documentation calls "nothing refused":
+
+    C      return err;                       a nested member's status
+    C++    return e;                         the same, one language over
+    Rust   self.flags()?.validate()?;        the `?` IS the return
+
+Three spellings of one thing, and none was visible from inside its own
+backend: what is missing is a constant nobody named, so the header looks
+complete. Only a second description asking the same question found it --
+which is `evidence.md`'s corroboration rule earning its place, since the
+three were written separately and agree about everything else.
+
+**Python remains.** Its `validate` raises rather than returning a code, so
+the identity belongs on the exception, and 52 of its 342 raise statements
+span more than one line -- appending an argument means balancing
+parentheses forward from the `raise`, with an assertion that the balance
+closed.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

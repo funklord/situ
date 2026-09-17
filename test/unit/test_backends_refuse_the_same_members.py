@@ -29,6 +29,7 @@ import pytest
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
+from situc.codegen.rust.emit import _pascal
 from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.python import generate as generate_py
 from situc.codegen.rust import generate as generate_rs
@@ -582,7 +583,12 @@ BODY = {
 	"cpp":    r"err (?:check\(std::uint32_t \*which_\)|validate\(\))"
 	          r" const noexcept\n\t\{(?!\n\t\treturn check\(nullptr\);)"
 	          r"(.*?)\n\t\}",
-	"rust":   r"pub fn validate\(&self\) -> Result<\(\)> \{(.*?)\n\t\}",
+	# Rust follows C and C++: where a struct has a member to name, the
+	# checks live in `check_which` and `validate` is a wrapper over it. The
+	# lookahead drops the wrapper, which is a body with no floor.
+	"rust":   r"pub fn (?:check_which\(&self, which: &mut u32\)"
+	          r"|validate\(&self\)) -> Result<\(\)> \{"
+	          r"(?!\n\t\tlet mut sink)(.*?)\n\t\}",
 	"python": r"def validate\(self\) -> None:(.*?)(?=\n\t*(?:def |@)|\Z)",
 }
 
@@ -821,7 +827,7 @@ def test_the_four_backends_number_a_message_the_same_way() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
-def test_c_and_cpp_name_the_same_members_in_the_same_order(
+def test_the_backends_name_the_same_members_in_the_same_order(
 		path: Path) -> None:
 	"""The id is the contract, so the two that publish one must agree.
 
@@ -833,10 +839,18 @@ def test_c_and_cpp_name_the_same_members_in_the_same_order(
 	id after it, silently, and an id is a small integer that reads the same
 	whatever it means.
 
-	Rust and Python publish no ids yet, so they are not here. When they do
-	they join this list rather than getting a test of their own: four
-	separate comparisons is three chances for two of them to agree with
-	each other and not with the rest.
+	Python publishes no ids yet, so it is not here. When it does it joins
+	this comparison rather than getting a test of its own: separate
+	comparisons are chances for two backends to agree with each other and
+	not with the rest.
+
+	It has paid three times. C's pattern missed `return err;`, so a nested
+	member had no id; C++ reproduced the same fault with `return e;`; and
+	Rust missed `self.flags()?.validate()?;`, where the `?` IS the return
+	and there is no `return` to match on. Each was a member `check` could
+	refuse over while leaving `*which` at the sentinel its own doc comment
+	calls "nothing refused" -- and each was invisible from inside its own
+	backend, because what is missing is a constant nobody named.
 	"""
 	if "STATUS: needs phase" in path.read_text(encoding="ascii"):
 		pytest.skip("declares itself unbuildable")
@@ -890,6 +904,25 @@ def test_c_and_cpp_name_the_same_members_in_the_same_order(
 		if schema_name != name:
 			in_cpp[schema_name] = in_cpp.pop(name)
 
+	# Rust's are associated constants, so they are scoped by the `impl` they
+	# sit in rather than by a class body.
+	in_rs: dict[str, list[tuple[str, str]]] = {}
+	# Rust types are PascalCase, so the impl's name is mapped back through
+	# the same function that produced it rather than lower-cased -- which
+	# turns `UdpHeader` into `udpheader` and reports a struct both backends
+	# agree about as one only Rust has.
+	rust_back = {_pascal(name): c_name(name) for name in resolved.structs}
+	owner = ""
+	for line in generate_rs(schema, resolved, path.stem).module.splitlines():
+		opened = re.match(r"impl<'a> (\w+?)(?:Mut)?<'a> \{", line)
+		if opened:
+			owner = rust_back.get(opened.group(1), opened.group(1))
+			continue
+		one = re.match(r"\tpub const CHECK_(\w+): u32 = (\d+);", line)
+		if one:
+			in_rs.setdefault(owner, []).append(
+				(one.group(1).lower(), one.group(2)))
+
 	# One divergence is held out, and the carve-out names the MECHANISM
 	# rather than the symptoms -- a list of symptoms is how a gate acquires
 	# an ignore list and stops being one.
@@ -912,5 +945,7 @@ def test_c_and_cpp_name_the_same_members_in_the_same_order(
 	for name in apart:
 		in_c.pop(name, None)
 		in_cpp.pop(name, None)
+		in_rs.pop(name, None)
 
-	assert in_c == in_cpp, path.name
+	assert in_c == in_cpp, f"{path.name}: c and cpp"
+	assert in_c == in_rs, f"{path.name}: c and rust"

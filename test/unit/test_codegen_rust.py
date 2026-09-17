@@ -2264,3 +2264,99 @@ fn main() {
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Which member refused (26.231's half, in Rust)
+# ---------------------------------------------------------------------------
+
+CHECKED = """struct reading {
+	u8  kind [must_eq = 7];
+	u8  level [max = 3];
+}
+"""
+
+
+def test_a_struct_that_can_refuse_publishes_a_constant_per_member() -> None:
+	"""The identity C has had since 26.231, in Rust (0051)."""
+	module = emit(CHECKED)
+
+	assert "pub const NO_CHECK: u32 = 0xFFFF_FFFF;" in module
+	assert "pub const CHECK_KIND: u32 = 0;" in module
+	assert "pub const CHECK_LEVEL: u32 = 1;" in module
+
+
+def test_the_method_is_not_called_check() -> None:
+	"""C and C++ call it `check` and Rust cannot.
+
+	`cpio_header` has a member called `check`, so the accessor takes that
+	name, and Rust has no overloading to resolve the two -- the module had
+	duplicate definitions and did not compile. The same hazard already
+	reaches `validate`, `extent` and `required` in this backend and has
+	never fired, no schema having such a member; this one fired on the
+	first build of the corpus, which is the difference between a latent
+	collision and a shipped one.
+	"""
+	module = emit(CHECKED)
+
+	assert "pub fn check_which(&self, which: &mut u32) -> Result<()>" in module
+	assert "pub fn check(&self" not in module
+
+
+def test_a_struct_that_cannot_refuse_gets_no_sibling() -> None:
+	"""An id nothing can report means "did not happen" and "has no name" at
+	once, so a struct with nothing to refuse over keeps `validate` alone."""
+	module = emit("struct S { u8 a; u8 b; }")
+
+	assert "pub fn validate(&self) -> Result<()>" in module
+	assert "check_which" not in module
+	assert "NO_CHECK" not in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_check_which_names_the_member_that_refused(tmp_path: Path) -> None:
+	"""Run under `-D warnings`. The clean case is the one a reader of the
+	module would get wrong: `*which` is written on a clean walk too, so a
+	caller must not expect its own value to survive the call."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	schema   = parse_text(PREAMBLE + CHECKED)
+	resolved = resolve(schema, solve(schema))
+	(src / "unit.rs").write_text(
+		generate_rs(schema, resolved, "unit").module, encoding="ascii")
+	(src / "main.rs").write_text("""mod situ_rt;
+mod unit;
+
+fn verdict(kind: u8, level: u8, which: &mut u32) -> situ_rt::Result<()> {
+	let raw = [kind, level];
+	unit::Reading::new(&raw).unwrap().check_which(which)
+}
+
+fn main() {
+	let mut which = 0xabcd_u32;
+
+	assert!(verdict(7, 3, &mut which).is_ok());
+	assert_eq!(which, unit::Reading::NO_CHECK);
+
+	assert!(verdict(9, 3, &mut which).is_err());
+	assert_eq!(which, unit::Reading::CHECK_KIND);
+
+	assert!(verdict(7, 9, &mut which).is_err());
+	assert_eq!(which, unit::Reading::CHECK_LEVEL);
+
+	// `validate` is the same walk with the identity thrown away.
+	let raw = [9u8, 3u8];
+	assert!(unit::Reading::new(&raw).unwrap().validate().is_err());
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings",
+		 "-o", str(tmp_path / "probe"), str(src / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
