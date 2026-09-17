@@ -1064,3 +1064,61 @@ text-region encoding lands (it is "Proposed" in your README), and whether any
 nested layout of ours needs a caller-supplied `parameter`, which decision 0050
 says cannot yet be a struct member. Neither has bitten; we will not file them
 until one does.
+
+# Nine more layouts converted, three limits found (2026-09-17)
+
+Following the hop, we described nine more of our hand-written layouts as situ
+schemas and adopted them as checked contracts (committed `.wire`/`.map`, pinned
+by our build): revocation, the revocation manifest, the prekey record, our
+on-disk persist blobs, the four spool sync messages, the sidecar, our signed
+record, a tree node body, and three catalog objects. `situc map` placed every
+field exactly where our hand-written offsets already had it -- zero mismatches
+across all nine -- and `situc advise` had nothing to say on the fixed ones.
+
+What worked, so the limits below are not read as a complaint: the persist blobs
+are a `variant switch (tag) { case ...: <body>; default: error }` under
+`target file`, and it modelled the tagged union exactly, per-arm sizes and all.
+Count-driven arrays (manifest pairs, spool ranges and proof nodes) and an
+arithmetic size (`present[(leaves + 7) / 8]` for the sidecar bitmap) all
+compiled. And a schema caught a bug our own C had hidden: our revocation
+header's comment table had gone stale, omitting a field and misplacing the
+signature; the schema, agreeing with the constants, exposed the prose as wrong.
+
+## 1. No `sum` -- a payload sized by a length table cannot be tied to it
+
+Our spool `data` message is `... proof_count, hash[proof_count],
+leaf_len[count], payload`, and the payload is exactly `sum(leaf_len[i])` bytes.
+situc rejects `sum` -- "unknown function `sum`; the expression language has no
+user-defined functions; builtins: align_up, count, max, min, offset, size". So
+we model the payload as `u8 payload[remaining]`, one opaque Unbounded region,
+and situ can enforce neither that its length equals the table's sum nor recover
+the per-chunk boundaries -- the two things our hand-written parser does.
+
+A length-PREFIXED chunk array (`struct { u32 len; u8 bytes[len]; } chunks[n]`)
+is expressible, but that is a different wire layout (interleaved), not ours
+(lengths-then-payloads). The narrow ask: a way to size a region from the sum of
+a prior length array -- a `sum(field)` builtin, or a region form that consumes
+a length table. Bounded, so no DoS concern: `count` and each `leaf_len` are
+themselves bounded, so the sum is too.
+
+## 2. `[max]` cannot bound a `remaining` field
+
+Our tree node body and our catalog inline content are RECORD BODIES: their real
+cap is the record's `body_len` minus the header, so it lives in the ENCLOSING
+record, not in the body. There is no in-body length field to size them from, so
+the body-only schema writes `content[remaining]`, and `content[remaining]
+[max = 470]` is refused ("`[max]` means nothing here"). The region reads as
+Unbounded -- honest, since the bound really is external, but the schema cannot
+carry it. If a `[max]` on a `remaining` field named the worst case without
+changing the offset, a body-only schema could state its cap.
+
+## 3. `inline` is a reserved word
+
+Minor, and correct of you to refuse: our catalog content-kind enum wanted an
+`inline` member, and situc refused it as a C++ keyword that would not compile.
+We renamed the member to `inline_value`; the wire byte is unchanged. Noted only
+because the refusal message is good and someone converting a format with a
+`switch`, `case`, `default`, `struct` or `enum` field name will meet it too.
+
+Nothing needed back. These came out of really running situc over nine layouts,
+which is the evidence you would want over our reading of the grammar.
