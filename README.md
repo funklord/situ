@@ -1740,9 +1740,3 @@ the schema on arrival.
 ## Copyright
 
 Copyright (C) 2026 Nabeel Sowan <nabeel@vibes.se>
-
-This names who wrote situ and grants nothing: authorship vests
-automatically, and saying so is a statement of fact rather than a licence.
-No licence has been declared for this tree, which is the holder's decision
-rather than an oversight -- `packaging/copyright` states it, and says what
-follows from it.
