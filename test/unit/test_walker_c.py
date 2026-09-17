@@ -2497,7 +2497,13 @@ def test_the_two_walkers_agree_about_which_check_refused(
 				p_said = report.failed_check(image, view, which)
 			except (Refused, Unplaceable):
 				continue
-			if p_said in (report.CLEAN, report.CANNOT_SAY):
+			if p_said in (report.CLEAN, report.CANNOT_SAY,
+			              report.BY_MESSAGE):
+				# `BY_MESSAGE` is a refusal with no member behind it: a
+				# `when` is a predicate over the whole struct (0051). Both
+				# walks make it and neither records an identity for it, so
+				# there is nothing here to compare -- which is why it is
+				# skipped rather than expected.
 				continue
 
 			try:

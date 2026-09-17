@@ -521,6 +521,16 @@ def listing(image: Image, buffer: bytes) -> str:
 #: `situ_err_t`, which the driver prints as an integer.
 OK, ERR_BOUNDS, ERR_CONSTRAINT = 0, 1, 2
 
+#: `image_severity`'s `refuse`, which is the only severity a verdict
+#: reads: the other two say something about a message that conforms.
+REFUSE = 0
+
+#: The placement a message refusal names, which is none: a `when` is a
+#: predicate over the whole struct. Kept out of the `image_check` space on
+#: purpose -- a message is not a check, and numbering it as one would hand a
+#: caller an id that resolves to whichever kind sits at that number.
+BY_MESSAGE_INDEX = -2
+
 #: `image_check`
 MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 FITS_FRAME, TERMINATED, ARM_SELECTED = 6, 7, 8
@@ -1049,6 +1059,28 @@ def _validate(image: Image, view: View, struct_index: int,
 				return fail(ERR_CONSTRAINT, index, check)
 			if check == FITS_FRAME:
 				continue		# handled above, before the value is read
+
+	# Last, after every member check, and the four backends put theirs in
+	# the same place. A `when` is a predicate over the whole struct, so a
+	# member that is wrong is the more specific answer and order decides
+	# which code comes back -- five descriptions agreeing about the verdict
+	# and not about the order would disagree on any frame that trips both.
+	#
+	# `refuse` only. `warn` and `note` say something about a message that
+	# conforms (0051), and the sibling reports all three.
+	for refusal in image.messages:
+		if refusal.owner != struct_index or refusal.severity != REFUSE:
+			continue
+		try:
+			if _evaluate(view, refusal.code):
+				return fail(ERR_CONSTRAINT, BY_MESSAGE_INDEX)
+		except (Refused, vm.VmError):
+			# The packer clears `validatable` for a struct whose `refuse`
+			# it could not encode, so reaching here means a program that
+			# was encodable and would not run on these bytes. Saying OK
+			# would be the partial verdict this function's own docstring
+			# refuses.
+			return None
 	return OK
 
 
@@ -1057,10 +1089,16 @@ def _validate(image: Image, view: View, struct_index: int,
 #: walker cannot tell you" are the two states invariant 154 is about.
 CLEAN, CANNOT_SAY = "clean", "cannot-say"
 
+#: What `failed_check` answers when a `when` refused rather than a check
+#: (0051). Neither of the two above: the walk made the refusal and there is
+#: no member behind it.
+BY_MESSAGE = "by-message"
+
 
 #: What each severity means to a verdict. `refuse` makes a message
 #: malformed; the other two say something about one that is well formed.
 SEVERITIES = ("refuse", "warn", "note")
+
 
 
 def messages(image: Image, view: View,
@@ -1083,8 +1121,6 @@ def messages(image: Image, view: View,
 	unencodable -- and a message inferred from a program that did not run
 	would be the compiler speaking with more authority than it has.
 	"""
-	from walker.walk import _evaluate
-
 	found: list[tuple[str, str, str]] = []
 	for held in image.messages:
 		if held.owner != struct_index:
@@ -1125,6 +1161,12 @@ def failed_check(image: Image, view: View,
 	if not found:
 		return CANNOT_SAY
 	index, check = found[-1]
+	if index == BY_MESSAGE_INDEX:
+		# A third answer, and not a shade of the other two. `CANNOT_SAY`
+		# means the image was packed without every check this struct
+		# states; this walk HAS the refusal and ran it, and there is simply
+		# no member to name -- `messages` is what names one of these.
+		return BY_MESSAGE
 	member = _local(image, index) if index != NONE else "?"
 	return member, CHECK_NAMES.get(check, "bounds")
 

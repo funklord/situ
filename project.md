@@ -29502,6 +29502,56 @@ descriptions at once because the walk is held to the four compiled backends
 over the same bytes, and the identity on existing per-member constraints
 outside C.
 
+### 26.382 A refusal, in all six descriptions at once
+
+**0051's last half, and it could not land anywhere on its own.** A
+`refuse` makes a message illegal, so `validate` says so -- and `validate`
+is what the four compiled backends, the Python walker and the C walker are
+all held to over the same bytes. One of them learning it first is a
+description disagreeing with five for a reason that is not a defect, which
+is why 26.378 recorded the gap with a test rather than closing it early.
+
+**Six, not five.** The walker is two implementations: `walker/report.py`
+and `walker/c/situ_walk.c`, which read the same image and are compared
+against each other per schema. The C walker already had the expression
+evaluator the predicate needs, so what it wanted was the section, the
+record layout and a loop -- and the loop sits exactly where the other five
+put theirs.
+
+**The order is the contract, not just the verdict.** A `when` is a
+predicate over the whole struct, so a member that is wrong is the more
+specific answer, and every description evaluates refusals LAST. Five
+agreeing about the verdict and not about the order would disagree on any
+frame that trips a member check and a message at once, and the code that
+comes back would depend on which description was asked.
+
+**`*count` has a sibling problem and `*which` has the same shape.** A
+CHECK id names a member and a `when` has none, so C writes the sentinel
+rather than a MSG id: the two are different spaces, and an id from one
+read as the other resolves to whichever member sits at that index. The
+sentinel goes on the line above the refusal, because that is `check`'s
+own contract -- and the gate that enforces it caught the first version,
+which returned without writing it.
+
+**`failed_check` gained a third answer rather than reusing one.**
+`BY_MESSAGE` is not `CANNOT_SAY`: the walk HAS the refusal and ran it.
+Saying "cannot say" would have made an answered question look like an
+unanswerable one, which is invariant 154's distinction pointed at a new
+case.
+
+**The packer had to move a block to make this decidable.** A struct whose
+`refuse` the VM cannot encode cannot answer `validate` either -- and the
+flag that says so is computed well before the messages were being packed.
+So the `when` compilation moved ahead of it: an unencodable refusal now
+clears that struct's `validatable` bit, and both walkers answer
+`cannot-say` rather than a verdict they cannot support. `validate` is the
+one probe that cannot be rendered by halves, and this is that rule
+reaching a construct written three days after it.
+
+**0051 is built.** What remains of it is the identity on existing
+per-member constraints outside C, which is 26.231's half rather than this
+record's construct.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

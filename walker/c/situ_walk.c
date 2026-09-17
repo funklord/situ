@@ -20,6 +20,7 @@
 #define TAG_DEPTHS     21u
 #define TAG_PINNED_RUNS 20u
 #define TAG_SKIPS      22u
+#define TAG_MESSAGES   25u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -40,6 +41,8 @@
 #define REGION_READS    13u	/* `<IIIB3x`: placement, owner, codec, flags */
 #define VERSION_READS    8u	/* `<II`: shape, version-field placement */
 #define DEPTH_READS     12u	/* `<III`: shape, depth, limit */
+/* `<IIIIB`: name, text, owner shape, code offset, severity (0051). */
+#define MESSAGE_READS   17u
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
 #define TLV_READS       15u	/* to the tag's decode parameters */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
@@ -226,6 +229,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->depths       = image + offset;
 			out->depth_count  = items;
 			out->depth_stride = stride;
+		} else if (kind == TAG_MESSAGES) {
+			if (stride < MESSAGE_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->messages       = image + offset;
+			out->message_count  = items;
+			out->message_stride = stride;
 		} else if (kind == TAG_VERSIONS) {
 			if (stride < VERSION_READS) {
 				return SITU_WALK_MALFORMED;
@@ -3661,6 +3671,40 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				*verdict = SITU_WALK_CONSTRAINT;
 				return SITU_WALK_OK;
 			}
+		}
+	}
+
+	/* What the schema refuses this message over (0051). Last, after every
+	 * member check, and the other four descriptions put theirs in the same
+	 * place: a member that is wrong is the more specific answer, and order
+	 * decides which code comes back.
+	 *
+	 * `refuse` only. `warn` and `note` say something about a message that
+	 * conforms, and neither belongs in a verdict.
+	 *
+	 * Nothing is recorded in `why`: that names a member and a check kind,
+	 * and a message has neither. The packer clears this struct's
+	 * `validatable` bit where it could not encode a `refuse`, so a program
+	 * reached here is one that was encodable -- and one that will not RUN
+	 * is `UNSUPPORTED` rather than a verdict, which is what saying OK would
+	 * silently become. */
+	for (uint32_t m = 0u; m < image->message_count; m++) {
+		const uint8_t *row = image->messages + m * image->message_stride;
+		if (u32_at(row + 8) != shape || row[16] != 0u) {
+			continue;
+		}
+
+		walk_ctx      ctx  = {image, message, len, shape, depth};
+		int64_t       held = 0;
+		situ_walk_err err  = situ_walk_eval(image, u32_at(row + 12),
+		                                    ctx_load, &ctx, (int64_t)len,
+		                                    &held);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (held) {
+			*verdict = SITU_WALK_CONSTRAINT;
+			return SITU_WALK_OK;
 		}
 	}
 

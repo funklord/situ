@@ -6655,6 +6655,8 @@ class Emitter:
 		         if struct.layout.size_bytes and struct.layout.register is None
 		         else [])
 
+		refusals = self._refuse_checks(struct)
+
 		return [
 			*self._nesting_probe(struct),
 			"",
@@ -6662,11 +6664,36 @@ class Emitter:
 			"\tpub fn validate(&self) -> Result<()> {",
 			*floor,
 			*depth,
-			*(checks or ([] if depth or floor else
+			*(checks or refusals or ([] if depth or floor else
 			             ["\t\t// Nothing in this struct is constrained."])),
+			*(refusals if checks else []),
 			"\t\tOk(())",
 			"\t}",
 		]
+
+	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""A `refuse` makes a message illegal, so `validate` says so (0051).
+
+		Last, after every member check, which is where the other four
+		descriptions put theirs: a member that is wrong is the more specific
+		answer, and order decides which code comes back.
+		"""
+		held = [when for when in traverse.messages(self.schema, struct.name)
+		        if when.severity is ast.Severity.REFUSE]
+		if not held:
+			return []
+
+		lines = ["\t\t// What the schema refuses this message over (0051)."]
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"\t\tif {self._over_fields(struct, local, 'self')} {{",
+				f"\t\t\t// {when.name}",
+				"\t\t\treturn Err(situ_rt::Error::Constraint);",
+				"\t\t}",
+			])
+		return lines
 
 	def _messages(self, struct: ResolvedStruct) -> list[str]:
 		"""0051's sibling, as a method and an associated constant per id.

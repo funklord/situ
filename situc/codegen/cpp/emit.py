@@ -6874,11 +6874,37 @@ class Emitter:
 				"\t\t}",
 			])
 		lines.extend(self._depth_checks(struct))
-		if not checks and not (struct.layout.size_bytes
-		                       and struct.layout.register is None):
+		if not checks and not self._refuse_checks(struct) \
+				and not (struct.layout.size_bytes
+				         and struct.layout.register is None):
 			lines.append("\t\t/* Nothing in this struct is constrained. */")
 		lines.extend(checks)
+		lines.extend(self._refuse_checks(struct))
 		lines.extend(["\t\treturn ::situ::rt::err::ok;", "\t}"])
+		return lines
+
+	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""A `refuse` makes a message illegal, so `validate` says so (0051).
+
+		Last, after every member check, which is where the other four
+		descriptions put theirs: a member that is wrong is the more specific
+		answer, and order decides which code comes back.
+		"""
+		held = [when for when in traverse.messages(self.schema, struct.name)
+		        if when.severity is ast.Severity.REFUSE]
+		if not held:
+			return []
+
+		lines = ["\t\t/* What the schema refuses this message over (0051). */"]
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"\t\tif ({self._over_fields(struct, local)}) {{",
+				f"\t\t\t/* {when.name} */",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			])
 		return lines
 
 	def _messages(self, struct: ResolvedStruct) -> list[str]:

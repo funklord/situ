@@ -8015,9 +8015,11 @@ class Emitter:
 			line.strip() and not line.strip().startswith(("/*", "*", "//"))
 			for line in checks)
 
-		if not reads_view:
+		refusals = self._refuse_checks(struct)
+		if not reads_view and not refusals:
 			lines.append("\t(void)view;")
 		lines.extend(checks)
+		lines.extend(refusals)
 
 		lines.extend([
 			"\treturn SITU_OK;", "}", "",
@@ -8026,6 +8028,46 @@ class Emitter:
 			f"\treturn {named}(view, NULL);",
 			"}", "",
 		])
+		return lines
+
+	def _refuse_checks(self, struct: ResolvedStruct) -> list[str]:
+		"""A `refuse` makes a message illegal, so `validate` says so (0051).
+
+		Last, after every member check, and the other four descriptions put
+		theirs in the same place. A `when` is a predicate over the whole
+		struct, so a member that is wrong is the more specific answer -- and
+		order decides which code comes back, so five descriptions agreeing
+		about the verdict and not about the order would disagree on any
+		frame that trips both.
+
+		`*which` stays the sentinel. The CHECK ids name a member and a
+		message has none; the MSG ids are a different space, and writing one
+		into the other would hand a caller an id that resolves to whichever
+		member happens to sit at that index. `messages` is what names a
+		refusal of this kind.
+		"""
+		held = [when for when in traverse.messages(self.schema, struct.name)
+		        if when.severity is ast.Severity.REFUSE]
+		if not held:
+			return []
+
+		lines = ["", "\t/* What the schema refuses this message over (0051)."
+		         " `*which` is set", "\t * to the sentinel rather than to an"
+		         " id: a CHECK id names a member", "\t * and a `when` is a"
+		         " predicate over the whole struct, so there",
+		         "\t * is none to name. `messages` names one of these."
+		         " Written on the", "\t * line above the refusal because"
+		         " that is `check`'s contract. */"]
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"\tif ({self._over_fields(struct, local, 'view')}) {{",
+				f"\t\t/* {when.name} */",
+				f"\t\t*which = {_NO_CHECK};",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			])
 		return lines
 
 	def _checks_for(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:

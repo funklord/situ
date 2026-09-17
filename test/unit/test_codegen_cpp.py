@@ -3142,3 +3142,47 @@ int main()
 
 def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
 	assert "messages(" not in emit("struct S { u8 a; }")
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host compiler")
+def test_a_refuse_changes_the_verdict_and_a_warn_does_not(
+		tmp_path: Path) -> None:
+	"""0051's other half. The warn frame is what separates this from a
+	validator that refuses any message with something to say about it."""
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text("""
+#include "unit.hpp"
+
+static ::situ::rt::err verdict(std::uint8_t ver, std::uint16_t length)
+{
+	std::uint8_t raw[3] = {
+		ver, static_cast<std::uint8_t>(length >> 8),
+		static_cast<std::uint8_t>(length),
+	};
+	situ::rt::message msg(raw, sizeof raw);
+	situ::S held;
+	if (situ::S::at(msg, 0, held) != ::situ::rt::err::ok) {
+		return ::situ::rt::err::stage;
+	}
+	return held.validate();
+}
+
+int main()
+{
+	if (verdict(0u, 10u) != ::situ::rt::err::constraint) return 1;
+	if (verdict(2u, 9000u) != ::situ::rt::err::ok) return 2;
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0

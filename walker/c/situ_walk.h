@@ -181,6 +181,16 @@ typedef struct {
 	const uint8_t *depths;
 	uint32_t       depth_count;
 	uint32_t       depth_stride;
+
+	/* What the schema says about a message beyond its layout (0051): one
+	 * row per `when`, keyed by the shape whose members its predicate
+	 * reads. Only the `refuse` rows change a verdict -- `warn` and `note`
+	 * say something about a message that conforms -- and this build reads
+	 * them for exactly that, because a walker that skipped a refusal would
+	 * call a message legal that the four backends refuse. */
+	const uint8_t *messages;
+	uint32_t       message_count;
+	uint32_t       message_stride;
 } situ_walk_image;
 
 /* One member, as the image describes it. */

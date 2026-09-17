@@ -5104,3 +5104,73 @@ def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
 	before trusting it -- the same rule the dissector's helpers follow."""
 	header, source = emit("struct S { u8 a; }")
 	assert "situ_S_messages" not in header + source
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_refuse_changes_the_verdict_and_a_warn_does_not(
+		tmp_path: Path) -> None:
+	"""0051's other half. A `refuse` makes a message illegal, so `validate`
+	says so; `warn` and `note` say something about one that conforms.
+
+	The warn frame is what separates this from a validator that refuses on
+	any message at all -- it holds a message and validates, which is the
+	distinction the severity exists to make.
+
+	`*which` stays the sentinel. A CHECK id names a member and a `when` is
+	a predicate over the whole struct, so there is none to name: writing a
+	MSG id into that parameter would hand a caller an id that resolves to
+	whichever member sits at that index.
+	"""
+	# `[max]` on a member as well as the `when`s, so `check` is declared:
+	# the header emits it only for a struct that has a member id to report,
+	# and this test is about what it does with the parameter when the
+	# refusal has none.
+	header, source = emit(SAYS.replace("u16 length;", "u16 length [max = 60000];"))
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+static situ_err_t verdict(uint8_t *raw, uint8_t ver, uint16_t length,
+		uint32_t *which)
+{
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	raw[0] = ver;
+	raw[1] = (uint8_t)(length >> 8);
+	raw[2] = (uint8_t)length;
+	situ_msg_init(&msg, raw, 3u);
+	if (situ_S_view(&msg, 0, &view) != SITU_OK) {
+		return SITU_ERR_STAGE;	/* not a verdict; the probe fails below */
+	}
+	return situ_S_check(view, which);
+}
+
+int main(void)
+{
+	uint8_t  raw[3];
+	uint32_t which;
+
+	/* `refuse`: illegal, and no member is named. */
+	which = 0xabcdu;
+	if (verdict(raw, 0u, 10u, &which) != SITU_ERR_CONSTRAINT)  return 1;
+	if (which != 0xFFFFFFFFu)                                  return 2;
+
+	/* `warn`: a message that conforms and has something said about it. */
+	if (verdict(raw, 2u, 9000u, &which) != SITU_OK)            return 3;
+
+	/* `note`, likewise. */
+	if (verdict(raw, 1u, 10u, &which) != SITU_OK)              return 4;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0

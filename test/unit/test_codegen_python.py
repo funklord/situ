@@ -2357,3 +2357,18 @@ def test_the_messages_sibling_reports_every_message_that_holds(
 
 def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
 	assert "def messages(" not in emit("struct S { u8 a; }")
+
+
+def test_a_refuse_changes_the_verdict_and_a_warn_does_not(
+		tmp_path: Path) -> None:
+	"""0051's other half. The warn frame is what separates this from a
+	validator that refuses any message with something to say about it."""
+	module = load(tmp_path, SAYS)
+	runtime_module = runtime()
+
+	refused = module.S.at(module.Message(bytes([0, 0, 10])), 0)
+	with pytest.raises(runtime_module.ConstraintError):
+		refused.validate()
+
+	warned = module.S.at(module.Message(bytes([2, 0x23, 0x28])), 0)
+	assert warned.validate() is None

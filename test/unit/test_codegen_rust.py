@@ -2226,3 +2226,41 @@ fn main() {
 
 def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
 	assert "fn messages(" not in emit("struct S { u8 a; }")
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_refuse_changes_the_verdict_and_a_warn_does_not(
+		tmp_path: Path) -> None:
+	"""0051's other half. The warn frame is what separates this from a
+	validator that refuses any message with something to say about it."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	(src / "unit.rs").write_text(
+		generate_rs(schema, resolved, "unit").module, encoding="ascii")
+	(src / "main.rs").write_text("""mod situ_rt;
+mod unit;
+
+fn verdict(ver: u8, length: u16) -> situ_rt::Result<()> {
+	let raw = [ver, (length >> 8) as u8, length as u8];
+	unit::S::new(&raw).unwrap().validate()
+}
+
+fn main() {
+	assert!(matches!(verdict(0, 10), Err(situ_rt::Error::Constraint)));
+	assert!(verdict(2, 9000).is_ok());
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings",
+		 "-o", str(tmp_path / "probe"), str(src / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0

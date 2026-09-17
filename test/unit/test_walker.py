@@ -1257,20 +1257,29 @@ def test_the_messages_sibling_does_not_short_circuit() -> None:
 		"zero_version", "oversized"]
 
 
-def test_a_refuse_does_not_yet_change_the_verdict() -> None:
-	"""Deliberate, and recorded so that closing it is a change somebody
-	makes rather than a gap somebody finds.
+def test_a_refuse_changes_the_verdict_and_names_no_member() -> None:
+	"""0051's other half: a `refuse` makes a message illegal, so `validate`
+	says so -- and `warn` and `note` do not.
 
-	0051 says a `refuse` contributes to `validate`. It cannot land in the
-	walker alone: the walk is held to the compiled backends on the same
-	bytes, and none of the four emits the `messages` sibling yet, so a
-	walker that refused here would be a fifth description disagreeing with
-	four for a reason that is not a defect. It lands with them.
+	The identity is a third answer rather than a shade of the other two.
+	`CANNOT_SAY` means the image was packed without every check a struct
+	states; this walk HAS the refusal and ran it, and there is no member to
+	name because a `when` is a predicate over the whole struct. `messages`
+	is what names one of these.
 	"""
 	image, si = _messages_image()
-	view = acquire(image, struct.pack(">BH", 0, 10), si)
-	assert report.messages(image, view, si)[0][0] == "refuse"
-	assert report.failed_check(image, view, si) == report.CLEAN
+
+	refused = acquire(image, struct.pack(">BH", 0, 10), si)
+	assert report._validate(image, refused, si) == report.ERR_CONSTRAINT
+	assert report.failed_check(image, refused, si) == report.BY_MESSAGE
+
+	# A `warn` holds here and a `note` on the row below; neither is a
+	# verdict, and a walk that read severity as "is a message" would refuse
+	# both.
+	for ver, length in ((2, 9000), (1, 10)):
+		fine = acquire(image, struct.pack(">BH", ver, length), si)
+		assert report._validate(image, fine, si) == report.OK, (ver, length)
+		assert report.failed_check(image, fine, si) == report.CLEAN
 
 
 PERMISSIVE_VARIANT = """

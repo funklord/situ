@@ -1173,6 +1173,53 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			None if version_member is None
 			else placement_index.get(f"{name}.{version_member}"))
 
+	shape_of  = {name: index for index, (name, _) in enumerate(order)}
+
+	# -- what the schema says about a message (0051) --
+	#
+	# One program per `when`, over ONE view -- so `field` rather than
+	# `arg_field`, which is the whole difference from a relation and the
+	# reason this needed no opcode. The predicate's owner is the struct
+	# every path in it names, which `wellformed.check_whens` has already
+	# held to one.
+	# Ahead of `validatable` below, and that is the whole reason it sits
+	# here rather than beside the relations it resembles. A `refuse` is part
+	# of the verdict (0051), so a struct carrying one this image cannot
+	# evaluate cannot answer `validate` either -- and the flag that says so
+	# is decided a few lines down.
+	messages_blob = bytearray()
+	severities = {ast.Severity.REFUSE: 0, ast.Severity.WARN: 1,
+	              ast.Severity.NOTE: 2}
+	#: Structs with a `refuse` this image could not encode.
+	refusal_lost: set[str] = set()
+	for when in schema.whens():
+		owners = [path.partition(".")[0] for path in paths_in(when.expr)
+		          if path.partition(".")[0] in shape_of]
+		owner  = owners[0] if owners else ""
+		if not owner or shape_of.get(owner) is None:
+			coverage.unencodable[f"when {when.name}"] = \
+				"names no struct in this image"
+			continue
+
+		start = len(program.code)
+		try:
+			program.compile(when.expr, resolve_path, consts)
+		except PackError as why:
+			# Recorded rather than dropped: an image that carried a message
+			# it cannot evaluate would answer about a schema nobody wrote,
+			# and `Coverage` exists because an image is opaque (26.76).
+			del program.code[start:]
+			coverage.unencodable[f"when {when.name}"] = str(why)
+			if when.severity is ast.Severity.REFUSE:
+				refusal_lost.add(owner)
+			continue
+		program.emit(Op.END)
+
+		messages_blob += _struct.pack(
+			"<IIIIBxxx", strings.intern(when.name), strings.intern(when.text),
+			shape_of[owner] or 0, start, severities[when.severity])
+		coverage.messages += 1
+
 	validatable: dict[str, bool] = {name: True for name, _ in order}
 	nests: dict[str, set[str]] = {}
 	for name, rstruct in order:
@@ -1723,7 +1770,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				nests.setdefault(name, set()).add(placement.type_name)
 				continue
 			whole = False		# a check this image does not carry yet
-		validatable[name] = whole
+		# A `refuse` this image could not encode is a refusal the walk
+		# cannot make, and `validate` is the one probe that cannot be
+		# rendered by halves -- a partial one answers OK where the schema
+		# says no.
+		validatable[name] = whole and name not in refusal_lost
 
 	for _ in range(len(order) + 1):
 		changed = False
@@ -1935,7 +1986,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# here cannot move an offset another section already recorded. The
 	# struct ids are positions in `order`, which is what every other
 	# reference into the struct table already means.
-	shape_of  = {name: index for index, (name, _) in enumerate(order)}
 	relations_blob  = bytearray()
 	musts_blob      = bytearray()
 
@@ -2006,42 +2056,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			"<IIIIII", strings.intern(decl.name), shapes[0] or 0,
 			shapes[1] or 0, first, len(decl.body), 0)
 		coverage.relations += 1
-
-	# -- what the schema says about a message (0051) --
-	#
-	# One program per `when`, over ONE view -- so `field` rather than
-	# `arg_field`, which is the whole difference from a relation and the
-	# reason this needed no opcode. The predicate's owner is the struct
-	# every path in it names, which `wellformed.check_whens` has already
-	# held to one.
-	messages_blob = bytearray()
-	severities = {ast.Severity.REFUSE: 0, ast.Severity.WARN: 1,
-	              ast.Severity.NOTE: 2}
-	for when in schema.whens():
-		owners = [path.partition(".")[0] for path in paths_in(when.expr)
-		          if path.partition(".")[0] in shape_of]
-		owner  = owners[0] if owners else ""
-		if not owner or shape_of.get(owner) is None:
-			coverage.unencodable[f"when {when.name}"] = \
-				"names no struct in this image"
-			continue
-
-		start = len(program.code)
-		try:
-			program.compile(when.expr, resolve_path, consts)
-		except PackError as why:
-			# Recorded rather than dropped: an image that carried a message
-			# it cannot evaluate would answer about a schema nobody wrote,
-			# and `Coverage` exists because an image is opaque (26.76).
-			del program.code[start:]
-			coverage.unencodable[f"when {when.name}"] = str(why)
-			continue
-		program.emit(Op.END)
-
-		messages_blob += _struct.pack(
-			"<IIIIBxxx", strings.intern(when.name), strings.intern(when.text),
-			shape_of[owner] or 0, start, severities[when.severity])
-		coverage.messages += 1
 
 	sections.append((SECTION_STRUCTS, bytes(structs_blob), STRUCT_BYTES))
 	sections.append((SECTION_PLACEMENTS, b"", PLACEMENT_BYTES))	# filled below
