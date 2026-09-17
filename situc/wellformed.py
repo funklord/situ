@@ -69,6 +69,7 @@ def check(schema: ast.Schema) -> None:
 	check_located_names(schema)
 	check_peeked_members(schema)
 	check_parameters(schema)
+	check_parameter_nesting(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
@@ -2655,6 +2656,46 @@ def check_parameters(schema: ast.Schema) -> None:
 							"meaning: a constraint, an enum's reading, "
 							"whether a member is required",
 						])
+
+
+def check_parameter_nesting(schema: ast.Schema) -> None:
+	"""A struct that takes an argument is not a member yet (0050).
+
+	The argument reaches a view through its own constructor. A nested
+	struct's view is constructed by the parent's accessor, which has no
+	argument to pass and no way to be given one -- so the nested view would
+	be built with whatever a missing argument means, which is a wrong
+	number rather than a refusal.
+
+	Refused by name until the parent can carry it. Everything 0050 has real
+	formats behind -- a TLS record, an MMC command, a volume header -- is a
+	top-level struct, so this is the case that waits rather than the case
+	that matters.
+	"""
+	takes = {struct.name for struct in schema.structs()
+	         if any(isinstance(member, ast.Field) and member.parameter
+	                for member in struct.members)}
+	if not takes:
+		return
+
+	for struct in schema.structs():
+		for member in struct.members:
+			named = getattr(getattr(member, "type_ref", None), "name", None)
+			if named not in takes or struct.name == named:
+				continue
+			raise error(
+				f"`{named}` takes an argument, so it cannot be a member yet",
+				member.span,
+				f"`{struct.name}.{getattr(member, 'name', '?')}` is a "
+				f"`{named}`",
+				[
+					"an argument reaches a view through its own `at`, and a "
+					"nested view is built by the parent's accessor -- which "
+					"has none to pass (decision 0050)",
+					"a struct that takes a `parameter` is a top-level "
+					"message for now: acquire it yourself and hand it the "
+					"argument",
+				])
 
 
 def _moving_expressions(member: ast.Member) -> list[tuple[ast.Expr, str]]:

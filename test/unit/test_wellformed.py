@@ -2349,8 +2349,9 @@ def test_a_parameter_round_trips_through_the_unparser() -> None:
 	assert unparse(parse_text(once)) == once
 
 
-@pytest.mark.parametrize("target", ["c", "cpp", "rust", "python", "pack"])
-def test_no_backend_generates_for_a_parameter_yet(target: str) -> None:
+@pytest.mark.parametrize("target", ["c", "cpp", "rust", "pack"])
+def test_three_backends_do_not_generate_for_a_parameter_yet(
+		target: str) -> None:
 	"""Refused, because what it would emit is worse than nothing.
 
 	No view carries an argument yet, so `_over_fields` reads a parameter
@@ -2366,6 +2367,10 @@ def test_no_backend_generates_for_a_parameter_yet(target: str) -> None:
 
 	The packer is here too. Its image is what both walkers read, and a
 	walker would make the same mistake from the same offset.
+
+	Python is NOT here: its view takes the argument as of 26.393, and the
+	test below asserts that. A C view is the runtime's `situ_view_t` and
+	has nowhere to put one, which is why the other three wait.
 	"""
 	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
 	                      "u8 body[n]; }")
@@ -2452,6 +2457,22 @@ def test_every_generator_refuses_a_parameter(module: str,
 		generate(*[held[one] for one in shape])
 
 	assert "parameter n" in str(refused.value)
+
+
+def test_a_python_view_takes_the_argument_rather_than_refusing() -> None:
+	"""The control for Python leaving the list above (26.393).
+
+	A module dropping out of that list looks the same whether the backend
+	gained the capability or somebody deleted a refusal, and the second is
+	the silence the list exists to prevent.
+	"""
+	from situc.codegen import python as backend
+
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+
+	assert "*, n: int" in backend.generate(schema, resolved, "unit").module
 
 
 def test_the_dissector_takes_a_stream_argument_rather_than_refusing() -> None:

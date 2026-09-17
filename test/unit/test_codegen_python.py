@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from situc.diagnostics import SituError
 from situc.codegen.c import generate as generate_c
 from situc.codegen.python import generate as generate_py
 from situc.layout import solve
@@ -2491,3 +2492,88 @@ def test_a_nested_refusal_is_relabelled_with_the_parent_s_id(
 	with pytest.raises(held.ConstraintError) as refused:
 		view.validate()
 	assert refused.value.which == module.outer.CHECK_TAIL
+
+
+# ---------------------------------------------------------------------------
+# A view takes its arguments (0050)
+# ---------------------------------------------------------------------------
+
+TAKES = """struct frame {
+	parameter u8 n [stream];
+	u8        body[n];
+	u8        tail;
+}
+"""
+
+
+def test_at_takes_the_argument_and_the_view_carries_it() -> None:
+	"""Keyword-only and undefaulted, and both halves are deliberate.
+
+	Keyword-only because the arguments are named facts rather than a second
+	positional list a caller has to get in order, and because adding one
+	later must not silently reassign an existing call's `offset`.
+	Undefaulted because a default is a guess: situ does not know the
+	caller's block size, and a view built on the wrong one reads the wrong
+	bytes confidently.
+	"""
+	module = emit(TAKES)
+
+	assert ("def at(cls, msg: Message, offset: int, length: int, *, "
+	        "n: int) -> \"frame\":") in module
+	assert "view.n = n" in module
+	# And no accessor: `self.n` IS the argument, so a property over it
+	# would read the buffer at its offset -- which is where `body` begins.
+	assert "def n(self)" not in module
+
+
+def test_the_layout_follows_the_argument(tmp_path: Path) -> None:
+	"""Run, and the claim is that the SAME bytes read differently.
+
+	`tail` is the half that catches an argument counted as bytes: it sits
+	immediately after `body`, so if the offset chain has added the
+	parameter's own width it is one byte late for every value of `n`.
+
+	That chain is `traverse.fixed_span_bits`, which answers for four
+	backends and both walkers -- and it counted the width. Found by running
+	the generated Python rather than by reading it: every offset in the
+	module was otherwise correct, and `tail` was one byte late.
+	"""
+	module = load(tmp_path, TAKES)
+	raw    = bytes([0x11, 0x22, 0x33, 0x44, 0x55])
+
+	for n, body, tail in ((0, "", 0x11), (2, "1122", 0x33), (4, "11223344", 0x55)):
+		view = module.frame.at(module.Message(raw), 0, len(raw), n=n)
+		assert bytes(view.body).hex() == body, n
+		assert view.tail == tail, n
+
+
+def test_an_argument_is_not_counted_in_the_struct_s_extent(
+		tmp_path: Path) -> None:
+	"""The layout cursor's half: two one-byte members behind a two-byte
+	argument is a two-byte struct, not a four-byte one.
+
+	This is the solver's rule (26.386) and NOT `fixed_span_bits`' -- it
+	passes with that one sabotaged, which is worth saying because the two
+	look like the same claim. What holds the offset CHAIN is
+	`test_the_layout_follows_the_argument` below, which fails the moment a
+	parameter's width is added back to it.
+	"""
+	schema   = parse_text(PREAMBLE + "struct S { parameter u16 block; "
+	                      "u8 a; u8 b; }")
+	resolved = resolve(schema, solve(schema))
+
+	assert resolved.structs["S"].layout.size_bytes == 2
+
+
+def test_a_struct_that_takes_an_argument_cannot_be_a_member() -> None:
+	"""Refused by name until a parent can carry it (0050).
+
+	A nested view is built by the parent's accessor, which has no argument
+	to pass -- so it would be built with whatever a missing one means,
+	which is a wrong number rather than a refusal.
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + "struct inner { parameter u8 n [stream]; "
+		           "u8 body[n]; }\nstruct outer { u8 a; inner it; }")
+
+	assert "cannot be a member yet" in str(refused.value)

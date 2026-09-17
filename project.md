@@ -30018,6 +30018,60 @@ a cheaper proof than re-reading forty of them.
 lets the test assert the claim that matters: the SAME five bytes dissect as
 a zero-, two- and four-byte `body`, with `tail` moving each time.
 
+### 26.393 A Python view takes its arguments, and the chain that counted them
+
+**0050's blocking half, in the first backend.** `frame.at(msg, offset,
+length, *, n)` takes the argument, stores it on the view, and every
+expression that reads the parameter renders `self.n` -- exactly as it
+renders `self.<field>` for bytes, which is the whole point of spelling an
+argument as a member.
+
+**Keyword-only and undefaulted, and both halves are deliberate.**
+Keyword-only because the arguments are named facts rather than a second
+positional list a caller has to get in order, and because adding one later
+must not silently reassign an existing call's `offset`. Undefaulted because
+a default is a guess: situ does not know the caller's block size, and a
+view built on the wrong one reads the wrong bytes confidently.
+
+**The find is in the shared decision layer, and it would have been wrong in
+all six descriptions.** `traverse.fixed_span_bits` says how many bits a
+member adds to an offset chain -- `peek` already answers zero there -- and
+a parameter answered its scalar's width. So every member after a
+`parameter u8` was one byte late, in generated Python that was otherwise
+correct.
+
+It answers zero now, and the docstring says why it belongs there rather
+than in a backend: three functions add members up, four backends read all
+three, and a rule stated at two of them is a member placed on top of
+another with nothing to report it. **That sentence was already in the file,
+about a different construct, and this is the second time it has paid.**
+
+**Found by running the module, not by reading it.** The accessors, the
+offsets, the `validate` -- all of it read correctly, and `tail` was the
+byte after the one it should have been. Two of three cases were right,
+which is what makes reading no good: `n = 0` and `n = 2` both look
+plausible until the raw bytes are laid beside them.
+
+**One test was right for the wrong reason and says so now.** A struct's
+own extent is the layout cursor's rule (26.386) and not this one -- it
+passes with `fixed_span_bits` sabotaged. The offset chain is held by the
+test that runs three values of the argument through the same five bytes,
+and the docstrings now name which holds which.
+
+**A struct that takes an argument cannot be a member yet.** A nested view
+is built by the parent's accessor, which has no argument to pass -- so it
+would be built with whatever a missing one means, a wrong number rather
+than a refusal. Refused by name. Everything 0050 has real formats behind
+is a top-level message, so this is the case that waits rather than the case
+that matters.
+
+**C, C++ and Rust still refuse**, and their shape is a separate piece: a
+C view is `situ_view_t`, a runtime type with nowhere to put an argument, so
+it needs a generated view type and that is 104 signature sites. Python was
+first because its view is a generated class already -- and because `situ
+verify` builds one in memory, so it is the backend that unlocks the last
+consumer.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

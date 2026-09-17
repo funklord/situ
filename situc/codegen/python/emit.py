@@ -309,7 +309,6 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	#
 	# Whole-schema rather than per-member: a note beside the parameter
 	# leaves every expression that reads it still emitting that read.
-	refuse_parameters(schema)
 
 	return Generated(module=Emitter(schema, resolved, basename,
 	                                materialize, messages).module(),
@@ -986,25 +985,68 @@ class Emitter:
 		          else f"{layout.size_bytes} bytes and up")
 		return [f'\t"""struct {struct.name}: {extent}."""', ""]
 
+	def _arguments(self, struct: ResolvedStruct) -> list[Placement]:
+		"""The `parameter`s this struct takes, in declaration order (0050)."""
+		return [held for held in own_members(struct) if held.parameter]
+
+	def _argument_signature(self, struct: ResolvedStruct) -> str:
+		"""What `at` adds for them: keyword-only and with no default.
+
+		Keyword-only because the arguments are named facts rather than a
+		second positional list a caller has to get in order, and because
+		adding one later must not silently reassign an existing call's
+		`offset`. Undefaulted because a default is a guess: situ does not
+		know the caller's block size, and a view built on the wrong one
+		reads the wrong bytes confidently.
+		"""
+		held = self._arguments(struct)
+		if not held:
+			return ""
+		return ", *, " + ", ".join(
+			f"{py_name(one.name)}: int" for one in held)
+
+	def _argument_store(self, struct: ResolvedStruct) -> list[str]:
+		"""Put them on the view, which is what makes an accessor able to
+		read one: every expression over a parameter renders `self.<name>`,
+		exactly as it renders `self.<field>` for bytes."""
+		return [f"\t\tview.{py_name(one.name)} = {py_name(one.name)}"
+		        for one in self._arguments(struct)]
+
 	def _acquire(self, struct: ResolvedStruct) -> list[str]:
 		layout = struct.layout
+		args   = self._argument_signature(struct)
+		store  = self._argument_store(struct)
 
 		if layout.is_fixed_size:
+			if not store:
+				return [
+					f"\tSIZE_BYTES = {layout.size_bytes}",
+					"",
+					"\t@classmethod",
+					f"\tdef at(cls, msg: Message, offset: int = 0) -> \"{py_name(struct.name)}\":",
+					'\t\t"""The one bounds check. Everything after it trusts the extent."""',
+					"\t\treturn acquire(cls, msg, offset, cls.SIZE_BYTES)"
+					f"  # type: ignore[return-value]",
+				]
 			return [
 				f"\tSIZE_BYTES = {layout.size_bytes}",
 				"",
 				"\t@classmethod",
-				f"\tdef at(cls, msg: Message, offset: int = 0) -> \"{py_name(struct.name)}\":",
-				'\t\t"""The one bounds check. Everything after it trusts the extent."""',
-				"\t\treturn acquire(cls, msg, offset, cls.SIZE_BYTES)"
-				f"  # type: ignore[return-value]",
+				f"\tdef at(cls, msg: Message, offset: int = 0{args})"
+				f" -> \"{py_name(struct.name)}\":",
+				'\t\t"""The one bounds check. Everything after it trusts the',
+				"\t\textent -- and the arguments this format's shape follows,",
+				'\t\twhich the message does not carry (0050)."""',
+				"\t\tview = acquire(cls, msg, offset, cls.SIZE_BYTES)",
+				*store,
+				"\t\treturn view  # type: ignore[return-value]",
 			]
 
 		return [
 			f"\tSIZE_MIN = {layout.size_bytes}",
 			"",
 			"\t@classmethod",
-			f"\tdef at(cls, msg: Message, offset: int, length: int)"
+			f"\tdef at(cls, msg: Message, offset: int, length: int{args})"
 			f" -> \"{py_name(struct.name)}\":",
 			'\t\t"""Nothing in the bytes says where the frame ends, so the',
 			"\t\tcaller supplies it. That is the one bounds check, and the",
@@ -1015,8 +1057,11 @@ class Emitter:
 			"\t\t\traise BoundsError(",
 			f'\t\t\t\tf"{struct.name} needs at least {{cls.SIZE_MIN}} bytes;'
 			' {length} given")',
-			"\t\treturn acquire(cls, msg, offset, length)"
-			f"  # type: ignore[return-value]",
+			*(["\t\treturn acquire(cls, msg, offset, length)"
+			   "  # type: ignore[return-value]"] if not store else [
+				"\t\tview = acquire(cls, msg, offset, length)",
+				*store,
+				"\t\treturn view  # type: ignore[return-value]"]),
 		]
 
 	# -- members -------------------------------------------------------
@@ -2854,6 +2899,14 @@ class Emitter:
 		]
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		# A parameter is the argument the caller supplied to `at`, stored on
+		# the view there (0050). `self.<name>` IS the value, so it gets no
+		# accessor: a property over it would read the BUFFER at its offset,
+		# which is where the member after it begins -- a parameter occupies
+		# nothing -- and would shadow the argument with a wrong number.
+		if entry.placement.parameter:
+			return []
+
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
 		lead = self._lead_methods(struct, entry.placement)
@@ -4248,6 +4301,12 @@ class Emitter:
 			if local in consts:
 				return str(consts[local])
 			placement = by_local[local]
+			# A parameter is the argument the caller gave `at`, which the
+			# view carries (0050). `self.<name>` is that value; reading the
+			# buffer at its offset would read the member AFTER it, since a
+			# parameter occupies nothing.
+			if placement.parameter:
+				return leaf(f"{held}.{py_name(local)}")
 			if "." not in local:
 				# A varint's own property raises on a truncated encoding;
 				# `_value` is the read that cannot, which is what the count
@@ -5368,6 +5427,14 @@ class Emitter:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None
+
+		# A `[stream]` driver is the argument the caller gave `at`, carried
+		# on the view (0050). Read from the buffer it would be the member
+		# after it, a parameter occupying nothing -- and this is the second
+		# of the two spellings, which the comment above already names as the
+		# place one of them gets missed.
+		if driver.placement.parameter:
+			return f"self.{py_name(placement.sized_by or '')}"
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the

@@ -807,8 +807,16 @@ def fixed_span_bits(placement: Placement) -> int:
 	`size_bits`, for the reason the predicate above gives: four backends
 	read all three, and a rule stated at two of them is a member placed on
 	top of another with nothing to report it.
+
+	A `parameter` is the same separation taken all the way (0050): its size
+	is its scalar's, because that is what bounds the argument's value, and
+	its span is nothing, because it is not in the buffer at all. Stated
+	here rather than in each backend for this function's own reason -- and
+	it was found by running one: every offset chain counted the argument's
+	width, so the member after a `parameter u8` was read one byte late in
+	generated Python that was otherwise correct.
 	"""
-	return 0 if placement.peek else placement.size_bits
+	return 0 if placement.peek or placement.parameter else placement.size_bits
 
 
 def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],

@@ -780,10 +780,15 @@ takes a `[stream]` argument from a *preference* -- per-dissector rather
 than per-packet, which is the shape of a fact negotiated once. The default
 is zero and stays zero until a person sets it: a dissector cannot know the
 argument and does not guess. `situc map` and `situc wire` name a parameter
-rather than placing it, since it occupies no bytes. What is missing is
-passing the argument to a *view*, so the four backends and `situc pack`
-refuse a schema carrying one rather than emitting an accessor that would
-read the buffer at the offset of the member after it.
+rather than placing it, since it occupies no bytes.
+
+**A Python view takes its arguments**: `frame.at(msg, offset, length, *,
+n)`, keyword-only and undefaulted, because a default would be a guess about
+somebody else's block size. C, C++ and Rust still refuse a schema carrying
+one rather than emitting an accessor that would read the buffer at the
+offset of the member after it -- a C view is the runtime's `situ_view_t`
+and has nowhere to put an argument. A struct that takes one cannot be a
+member of another yet, and is refused by name.
 
 `require` is a compile-time assertion about the capability vector; `invariant`
 names a field situ *maintains* rather than one it merely checks. Writing a
@@ -1595,10 +1600,11 @@ today and which is a written-down design.
   a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
   are checked; the map and the wire signature name one; and the Wireshark
   dissector reads a `[stream]` one from a preference, which is the first
-  preference that generator has ever emitted. What is missing is passing
-  the argument to a *view*, so every code generator refuses a schema
-  carrying one rather than emitting an accessor that would read the buffer
-  at the offset of the member after it.
+  preference that generator has ever emitted. A Python view takes its
+  arguments; C, C++ and Rust refuse a schema carrying one rather than
+  emitting an accessor that would read the buffer at the offset of the
+  member after it, and a struct that takes one cannot be a member of
+  another yet.
 
 **Designed and accepted, not yet built.**
 
