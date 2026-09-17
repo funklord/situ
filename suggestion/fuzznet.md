@@ -961,3 +961,74 @@ the total, but the number is wrong and it is ours.
 We are leaving the original text above unedited rather than rewriting history
 in your tree. This section is the correction; the sections above are what we
 actually said at the time.
+
+# A feature request: derive the in-memory unpack target from the packed schema (2026-09-17)
+
+This refines "## 2. No owned form where the size is data-decided" above, which
+we filed 2026-08-14. That section read situ's refusal to emit an owned form for
+a data-decided size as a limitation. We were half right, and this is the other
+half.
+
+## The refusal is a guardrail, and it stays
+
+A `u8 payload[length]` owned form would materialise an attacker-decided extent
+into a receiver-side allocation, which is a denial-of-service magnet -- and
+situ refusing to choose a pointer or a worst-case array on the author's behalf
+is protecting the consumer from building one. Keep it. fuzznet's own design is
+zero-copy and bounded for exactly this reason: our decoders return views,
+reassembly is capped, nothing unpacks an unbounded region. We withdraw the
+implication that the data-decided refusal is a gap.
+
+## The real gap, and a shape for it (the copyright holder's proposal)
+
+Where an owned form IS wanted, it is wanted for a BOUNDED layout -- a fixed
+certificate, or a variable one every extent of which carries a `max`. There the
+owned struct has a known size and the unpack is bounded work, no magnet.
+decision 0031 already records the demand: fuzzypickles adopts `--owned` because
+225 call sites hold decoded structs that outlive the buffer. But `--owned`
+today is a fixed-size copy of the SAME packed layout, which is not what a
+decoded, in-memory-optimised struct wants to be -- native alignment, natural
+field order, computed fields.
+
+The shape:
+
+- situ can already describe any format, including the ideal in-memory unpack
+  target, so both the packed wire schema and the memory-optimised schema are
+  expressible in situ today.
+- What is missing is a GENERATOR: given a packed schema, derive its
+  memory-optimised sibling automatically.
+- Because the two share the exact same member names, the copy between them is a
+  field-by-field, name-matched move -- so the pack and unpack code is trivially
+  generatable in both directions, and its correctness is by construction rather
+  than by a hand-written correspondence that can drift.
+
+## The intermediate step should be emittable for evaluation
+
+The derived memory-optimised schema is itself an artifact, and situ should be
+able to EMIT it for review before anyone trusts the generated marshalling --
+the way `situc map` and `situc wire` emit a contract to be checked rather than
+taken on faith. This is what answers the prior refusal's real worry: situ is no
+longer choosing a layout on the author's behalf silently; it PROPOSES a derived
+schema, the author reads it, and only then is the struct and the pack/unpack
+generated from it. Evaluatable intermediate first, codegen second.
+
+## The reproduction, so this is not abstract
+
+fuzznet hit the cost of not having this while wiring its node's remote hop
+(sec 301; node/provision.c, node/remote.c). `fzn_chain_hop_t` is a view --
+`{ const uint8_t *base; }` over 179 fixed bytes. A provisioning path filled a
+peer and returned with the view left pointing into a temporary; the frame then
+authenticated and the capability failed to verify against freed stack. The fix
+was to make the peer own the 179 bytes and open the view locally per call --
+i.e. we hand-wrote the owned side and the tie to the wire side, and nothing but
+our own care kept the member correspondence honest. A derived owned form for
+that fixed 179-byte cert, with generated marshalling, would have been safe by
+construction and bounded -- the exact bounded case above.
+
+## What we are not asking for
+
+Not owned forms for unbounded / data-decided sizes -- keep refusing those. Not
+abandoning zero-copy: views stay the default and the right choice for large
+variable extents. This is an opt-in generator for bounded layouts, with an
+evaluatable intermediate schema, that turns a hand-maintained wire-to-memory
+correspondence into a generated one.
