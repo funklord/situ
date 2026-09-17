@@ -2565,6 +2565,53 @@ def test_an_argument_is_not_counted_in_the_struct_s_extent(
 	assert resolved.structs["S"].layout.size_bytes == 2
 
 
+def test_a_variant_arm_at_a_dynamic_offset_reads_the_right_bytes() -> None:
+	"""`situc build --target python` raised `AssertionError`, not a
+	diagnostic -- a traceback. `_arm_member` passed no offset to
+	`_raw_load`, which falls back to `placement.offset_bytes`, whose own
+	assertion reads *offset is dynamic*.
+
+	Three of four backends had it and C alone did not, on a shape with no
+	parameter in it: `u8 body[len]` before a variant is ordinary. The
+	corpus carries variants and carries data-sized runs and never one
+	after the other.
+
+	Asserted on the rendered offset rather than on generating at all,
+	because generating is the weaker claim -- the arm has to read where
+	the data says, and a constant that happens to be in range would
+	generate just as happily.
+	"""
+	module = emit("""struct inner { u16 v; }
+struct S {
+	u8 len;
+	u8 body[len];
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+""")
+
+	# `len` at 0, `body` at 1, `kind` at 1 + len, the arm at 2 + len.
+	assert "advance(2, (self._read(0, 1, signed=False, big=True))" in module
+
+	# The control: an arm the schema places keeps its constant, so a
+	# change that always computed an expression would churn every header.
+	fixed = emit("""struct inner { u16 v; }
+struct S {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+""")
+	assert "self._read(1, 1, signed=False, big=True)" in fixed
+
+
 def test_the_argument_is_declared_on_the_class_and_reaches_required(
 		) -> None:
 	"""Two faults the corpus struct found within the hour of landing.

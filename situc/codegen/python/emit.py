@@ -2657,8 +2657,15 @@ class Emitter:
 			          f'\t\t\traise BoundsError("{placement.path}: outside'
 			          ' the frame")']
 			         if span is not None else [])
+			# The offset EXPRESSION where the arm's is dynamic, and the
+			# default only where it is a constant. `_raw_load` falls back
+			# to `placement.offset_bytes`, whose own assertion reads
+			# *offset is dynamic* -- so an arm placed after ANY data-sized
+			# member raised `AssertionError` out of `situc build`. Not a
+			# diagnostic and not a wrong byte: a traceback. Three of four
+			# backends had it; C alone did not (26.412).
 			return [*head, *bound,
-			        f"\t\treturn {self._raw_load(placement, scalar)}"]
+			        f"\t\treturn {self._raw_load(placement, scalar, self._offset_expression(struct, placement) if placement.offset_bits is None else None)}"]
 
 		if scalar is not None and indexed_elements(placement):
 			# A run of values wider than a byte, which the slice below is not

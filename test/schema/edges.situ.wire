@@ -230,11 +230,17 @@ struct mmc_command size=6
   @0x0005:7 1bit      u1         <reserved0>  msb_first must_be_one
   crc covers: argument command index
 
-struct negotiated size=3..513
+struct negotiated size=5..516
   parameter -         u8         block [stream]
   @0x0000   0..255    u8         payload  sized-by=block
   ~         1..256    u8         trailer  sized-by=block+1
   ~         2         u16        checksum  big
+  ~         1         u8         kind
+  ~         1..2      variant    carried
+  carried switch: kind
+  carried case 1: marker kinded_a
+  carried case 2: flag u8
+  carried case default: error
 
 struct packed_driver size=3..63
   @0x0000   4bit      u4         hi  msb_first

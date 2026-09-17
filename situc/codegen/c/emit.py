@@ -2795,8 +2795,13 @@ class Emitter:
 			         else (placement.size_bits + 7) // BITS_PER_BYTE)
 			return [
 				*head,
+				# The same tail the arm's sub-view accessor takes below,
+				# and for the same two reasons: this body reads the
+				# discriminant and its own offset, either of which can
+				# reach an argument (0050).
 				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'get')}"
-				f"(situ_view_t view, {ctype} *out)",
+				f"(situ_view_t view, {ctype} *out"
+				f"{self._member_tail(struct, placement)})",
 				"{",
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
@@ -2872,19 +2877,23 @@ class Emitter:
 				lines.extend(self._arm_extent(struct, placement, local, base,
 				                              nested.name))
 
-			# NOT given an argument tail, deliberately. A variant ARM
-			# holding a nested struct is a fourth unplumbed shape (0050)
-			# and it is not one site: the arm's own accessors call
-			# `<disc>_get` without a tail as well, so plumbing the view
-			# alone turns *undeclared `arg_n`* into *too few arguments*
-			# without making anything compile. Reproduced and recorded
-			# rather than half-fixed; a schema in this tree reaches none
-			# of it, and a change nobody can prove is worse here than an
-			# absence somebody has written down.
+			# A variant ARM behind a parameter reads two things that can
+			# reach an argument: its own offset, and the DISCRIMINANT it
+			# tests. Both are in the body, so the signature carries the
+			# tail.
+			#
+			# This was left alone on a first pass, and the note said why:
+			# plumbing the view alone turned *undeclared `arg_n`* into
+			# *too few arguments*, because `_over_fields` rendered the
+			# discriminant read as `<disc>_get(view)` against a definition
+			# that took the tail. That call site is fixed now, so the two
+			# halves land together -- which is what made a half-fix worse
+			# than the absence, and what makes this one whole.
 			lines.extend([
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'view')}"
-				"(situ_view_t view, situ_view_t *out)",
+				f"(situ_view_t view, situ_view_t *out"
+				f"{self._member_tail(struct, placement)})",
 				"{",
 				f"\tif ({test}) {{",
 				"\t\treturn SITU_ERR_VERSION;",
@@ -4848,9 +4857,20 @@ class Emitter:
 				which = ("value"
 				         if placement.varint is not None
 				         or placement.radix is not None else "get")
+				# The member's own tail (0050). This read renders a call
+				# to an accessor whose arity moves with whether ITS
+				# arithmetic reaches an argument, and the call was written
+				# with the view alone -- so a discriminant placed after a
+				# parameter gave `situ_frame_kind_get(view)` against a
+				# definition taking `(view, arg_n)`, in every arm accessor
+				# and every check that reads it.
+				#
+				# `_member_args` is `_member_tail`'s other half, so this
+				# call and that definition ask one question and cannot
+				# disagree.
 				return leaf(
 					f"{ident(self.prefix, struct.name, c_name(local), which)}"
-					f"({held})",
+					f"({held}{self._member_args(struct, placement)})",
 					placement.scalar is not None and placement.scalar.signed)
 			# A text number is digits, not bytes of an integer. Reading it
 			# where it sits gave `situ_get_be32` over eight ASCII characters
@@ -8394,8 +8414,10 @@ class Emitter:
 			"\t * fitting the frame is a malformed message. */",
 			"\t{",
 			"\t\tsitu_view_t arm;",
+			# `_member_args` against the accessor's `_member_tail`: one
+			# question, so the call and the definition cannot disagree.
 			f"\t\tconst situ_err_t got = {ident(self.prefix, struct.name, local, 'view')}"
-			"(view, &arm);",
+			f"(view, &arm{self._member_args(struct, placement)});",
 			"",
 			"\t\tif (got == SITU_OK) {",
 			f"\t\t\tconst situ_err_t err = "

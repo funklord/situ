@@ -2469,7 +2469,15 @@ class Emitter:
 				*bound,
 				# `as` the field's type: `read_be` hands back a `u64` and
 				# the ordinary getter casts the same way.
-				f"\t\tOk({self._unparen(self._raw_load(placement, scalar))}"
+				#
+				# The offset EXPRESSION where the arm's is dynamic, and
+				# the default only where it is a constant. `_raw_load`
+				# falls back to `placement.offset_bytes`, whose own
+				# assertion reads *offset is dynamic* -- so an arm placed
+				# after ANY data-sized member raised `AssertionError` out
+				# of `situc build`. Three of four backends had it; C alone
+				# did not (26.412).
+				f"\t\tOk({self._unparen(self._raw_load(placement, scalar, self._offset_expression(struct, placement) if placement.offset_bits is None else None))}"
 				f" as {self._rust_type(scalar)})",
 				"\t}",
 			]

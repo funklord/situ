@@ -221,6 +221,77 @@ def test_a_gated_byte_run_is_clamped_to_the_frame() -> None:
 # -- what it compiles to ----------------------------------------------------
 
 
+
+ARM_AT_A_DYNAMIC_OFFSET = """struct inner { u16 v; }
+struct S {
+	u8 len;
+	u8 body[len];
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_variant_arm_at_a_dynamic_offset_generates(tmp_path: Path) -> None:
+	"""`situc build --target cpp` raised `AssertionError`, not a
+	diagnostic and not a wrong byte -- a traceback out of the compiler.
+
+	`_arm_member` passed `None` as the offset to `_load`, which falls back
+	to `placement.offset_bytes`, whose own assertion reads *offset is
+	dynamic*. So an arm placed after ANY data-sized member crashed the
+	build, and `u8 body[len]` followed by a variant is an ordinary thing
+	to write.
+
+	No parameter is involved. It survived because the corpus carries
+	variants and carries data-sized runs and never one after the other --
+	the population is not constructs but their products (26.411).
+	"""
+	assert compiles(tmp_path, ARM_AT_A_DYNAMIC_OFFSET).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_variant_arm_behind_a_parameter_generates(tmp_path: Path) -> None:
+	"""The same shape with the offset following an ARGUMENT rather than a
+	length (0050). A separate case because the offset expression is built
+	from the argument rather than from a member read, and the two reach
+	`_load` by different routes."""
+	assert compiles(tmp_path, """struct inner { u16 v; }
+struct S {
+	parameter u8 n [stream];
+	u8 body[n];
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+""").returncode == 0
+
+
+def test_an_arm_at_a_constant_offset_still_uses_the_constant() -> None:
+	"""The control: the offset expression is passed only where the
+	placement is dynamic, so an arm whose offset the schema fixes keeps
+	the constant it had. A change that always computed one would churn
+	every existing header."""
+	header = emit("""struct inner { u16 v; }
+struct S {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+""")
+	assert "situ_base(raw_) + 1" in header
+
+
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
 @pytest.mark.parametrize("body", [
 	"struct s { u8 a; u16 b; u32 c; }",

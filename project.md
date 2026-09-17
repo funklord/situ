@@ -30689,6 +30689,135 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.412 The C++ backend crashed on a variant arm at a dynamic offset
+
+**Not a wrong byte and not a diagnostic -- a traceback out of `situc
+build --target cpp`.** `_arm_member` passed `None` as the offset to
+`_load`, which falls back to `placement.offset_bytes`, whose own
+assertion reads *offset is dynamic*. So an arm placed after any
+data-sized member crashed the build:
+
+```
+struct frame { u8 len; u8 body[len]; u8 kind;
+               variant held switch (kind) { case 1: inner one; ... } }
+```
+
+**No parameter is involved and `u8 body[len]` before a variant is an
+ordinary thing to write.** It survived because the corpus carries
+variants and carries data-sized runs and has never carried one after the
+other -- 26.411's lesson, one construct along, and the second instance
+in an hour. **The population is not constructs but their products.**
+
+**And it is THREE of the four backends, not one.** Asked after C++ was
+fixed, because a fault in one emitter's arm handling is a question about
+the other three: Python and Rust raise the identical assertion from the
+identical shape -- `_arm_member`, no offset passed, `_raw_load` falling
+back to `offset_bytes`. C alone is right. So `situc build` crashed with
+a traceback for three targets on a shape any schema may write, and the
+one backend that worked is the one whose arm emitter had already been
+taught a dynamic offset for its own reasons.
+
+**Checked by running, not by reading.** The generated Python answers
+`0x77` for the scalar arm at `len = 0` and at `len = 2` -- different
+byte positions, so the offset follows the data rather than landing right
+by luck. Both fixtures assert the RENDERED offset rather than that
+generation succeeded, because generating is the weaker claim: a constant
+that happened to be in range would generate just as happily.
+
+**What found it is worth more than the fix.** Not the C work it belongs
+beside: the FOUR-WAY differential, building all four backends over
+`edges`, because the variant had just been added to the corpus to cover
+a fault fixed in C. The corpus addition paid for itself within minutes,
+in a different backend from the one it was written for, on a shape
+nobody was looking at.
+
+The fix passes the offset expression where the placement is dynamic and
+`None` where it is not, so an arm whose offset the schema fixes keeps
+the constant it had -- asserted as a control, since a change that always
+computed one would churn every existing header. 324 of 328 captured C++
+files are byte-identical against HEAD; the four that differ are the
+`edges` generations that gained the variant.
+
+### 26.411 A byte-run enum as a variant arm does not compile
+
+**Found while choosing a fixture, and nothing to do with 0050.**
+Reproduced with no `parameter` anywhere:
+
+```
+enum sig : u8[2] { bmp = "BM", pe = "MZ" }
+struct frame {
+	u8 kind;
+	variant held switch (kind) { case 1: sig marker; case 2: u8 flag;
+	                             default: error; }
+}
+```
+
+`situc build --target c` succeeds and `cc` refuses the header:
+*unknown type name `situ_sig_t`*. A byte-run enum emits byte arrays and a
+`_is_known` predicate and **no `_t` type at all** -- it is a span, not a
+scalar -- while the arm getter declares `situ_sig_t *out`. The arm
+emitter assumes every enum arm has a scalar C type.
+
+**The shape is already decided elsewhere in the same backend**, which
+makes this a wiring gap rather than a design question: an ordinary
+byte-enum MEMBER gets `situ_edges_kind_ptr(view)` returning `uint8_t *`,
+not a `_get` with a typed out-parameter. `edges.situ` has carried such a
+member since the file was written. So the arm wants the member's answer,
+and nobody had asked it for an arm.
+
+**Why the corpus missed it, having had both halves for months.**
+`edges.situ` carries a byte-run enum and carries variants, and has since
+26.27 -- but never a byte-run enum AS an arm. A construct the corpus
+holds twice over is still absent in the combination, which is a sharper
+version of 26.402 than that entry states: the population is not
+constructs, it is their products.
+
+Recorded rather than fixed: it is a separate defect from 0050, and the
+fixture that found it was changed to a struct arm so that this arc's
+corpus addition proves what it is for.
+
+### 26.410 The fourth shape, and why the half-fix had to be reverted first
+
+**A variant ARM behind a parameter now compiles.** 26.408 reproduced it
+and left it, saying a change nobody can prove is worse than an absence
+somebody has written down. That was right, and the reason is now visible:
+**it was four sites, and one of them was the reason the other three could
+not be fixed alone.**
+
+An arm reads TWO things that can reach an argument -- its own offset, and
+the DISCRIMINANT it tests. Unplumbed in four places:
+
+- `_over_fields`, which renders a member read as a call to that member's
+  accessor and wrote `<disc>_get(view)` with the view alone;
+- the arm's sub-view accessor;
+- the arm's scalar getter, a separate emitter;
+- the call to the sub-view from `check`.
+
+**`_over_fields` is the root, and it is not about arms.** It renders
+every read of one member from another's arithmetic, and an accessor's
+arity moves with whether its own arithmetic reaches an argument. So a
+discriminant placed after a parameter produced `situ_S_kind_get(view)`
+against a definition taking `(view, arg_n)` -- in every arm accessor and
+every check that tests it. Fixing that first is what let the rest land;
+plumbing an accessor while the read had none moved *undeclared `arg_n`*
+to *too few arguments* and removed nothing.
+
+**Which is the argument for the revert, arriving after the fact.** The
+first pass had the accessor half and not the root, and shipping it would
+have left a differently-broken build under a commit saying it was fixed.
+The note left in its place named the missing half by name, so picking it
+up again cost reading one comment.
+
+Every site pairs `_member_tail` with `_member_args`, both from
+`_member_reads_arguments`: the call and the definition ask one question
+and cannot disagree. The test carries both arm kinds -- a nested-struct
+arm takes the sub-view path and a scalar arm the getter path, separate
+emitters, so a fixture with one proves half -- and a control with the
+discriminant in FRONT of the parameter, which reads no argument and must
+get no tail.
+
+Zero churn across the corpus, controlled. `make test-c` 2180 OK.
+
 ### 26.409 The construct is in the corpus, and what it took to get there
 
 **`edges.situ` carries a `parameter` now**, which is what that file is

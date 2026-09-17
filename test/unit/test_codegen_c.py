@@ -5364,6 +5364,86 @@ def test_a_located_member_generates_a_header_that_compiles(
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_variant_arm_behind_a_parameter_compiles(tmp_path: Path) -> None:
+	"""The fourth unplumbed shape, and the one that took four sites.
+
+	An arm reads TWO things that can reach an argument: its own offset,
+	and the discriminant it tests. Both were unplumbed, in four places --
+	the arm's sub-view accessor, the arm's scalar getter, the call to the
+	sub-view from `check`, and `_over_fields`, which renders the
+	discriminant read as `<disc>_get(view)` for every caller.
+
+	That last one is why a half-fix was worse than none, and why this was
+	reproduced and left on a first pass rather than partly done: giving
+	the accessor a tail while the discriminant read had none turned
+	*undeclared `arg_n`* into *too few arguments* and moved the error
+	without removing it. Fixing `_over_fields` first is what let the rest
+	land.
+
+	Both arm kinds are here. A nested-struct arm takes the sub-view path
+	and a scalar arm takes the getter path, and they are separate
+	emitters -- so a fixture with one proves half.
+	"""
+	compile_generated(
+		tmp_path,
+		"struct inner { u16 v; }\n"
+		"struct S {\n"
+		"\tparameter u8 n [stream];\n"
+		"\tu8   body[n];\n"
+		"\tu8   kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1: inner one;\n"
+		"\t\tcase 2: u8    two;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n")
+
+
+def test_a_member_read_carries_the_read_member_s_tail() -> None:
+	"""`_over_fields` renders a read as a call to that member's accessor,
+	and the accessor's arity moves with whether ITS arithmetic reaches an
+	argument (0050). The call was written with the view alone.
+
+	Asserted on the discriminant read specifically, because that is where
+	it bit: `kind` sits after `body[n]`, so its getter takes the tail, and
+	every arm accessor and every check that tests the discriminant called
+	it without one.
+	"""
+	header, _ = emit(
+		"struct inner { u16 v; }\n"
+		"struct S {\n"
+		"\tparameter u8 n [stream];\n"
+		"\tu8   body[n];\n"
+		"\tu8   kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1: inner one;\n"
+		"\t\tcase 2: u8    two;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n")
+
+	assert "situ_S_kind_get(view, arg_n)" in header
+	assert "situ_S_kind_get(view)" not in header
+
+	# The control: a discriminant in FRONT of the parameter reads no
+	# argument, so its getter takes none -- a tail emitted unconditionally
+	# fails here.
+	plain, _ = emit(
+		"struct inner { u16 v; }\n"
+		"struct S {\n"
+		"\tu8   kind;\n"
+		"\tparameter u8 n [stream];\n"
+		"\tu8   body[n];\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1: inner one;\n"
+		"\t\tcase 2: u8    two;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n")
+	assert "situ_S_kind_get(view)" in plain
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
 def test_a_meaning_only_parameter_does_not_leave_an_unused_argument(
 		tmp_path: Path) -> None:
 	"""A uniform tail costs a `(void)` for whatever does not read it.

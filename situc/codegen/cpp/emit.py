@@ -4711,7 +4711,21 @@ class Emitter:
 				"\t{",
 				*refuse,
 				*bound,
-				f"\t\tout = {self._load(scalar, placement, None)};",
+				# The offset EXPRESSION where the arm's is dynamic, and
+				# `None` only where it is a constant. `None` makes `_load`
+				# fall back to `placement.offset_bytes`, whose own
+				# assertion is `offset is dynamic` -- so a variant after
+				# ANY data-sized member raised `AssertionError` out of
+				# `situc build --target cpp`. Not a diagnostic and not a
+				# wrong byte: a traceback.
+				#
+				# `u8 body[len]` followed by a variant is an ordinary
+				# thing to write. No schema in this tree writes it, which
+				# is why a crash in a common shape survived: the corpus
+				# carries variants and carries data-sized runs, and never
+				# one after the other (26.411's lesson, one construct
+				# along).
+				f"\t\tout = {self._load(scalar, placement, self._offset_expression(struct, placement) if placement.offset_bits is None else None)};",
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			]

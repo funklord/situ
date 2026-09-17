@@ -30,6 +30,10 @@ Status: accepted 2026-09-04. Built in four passes:
   three whose refusal was unnecessary (26.405, 26.407) -- which is not
   what "lands with the backends" said.
 
+- The variant-arm shape, 2026-09-17 (26.410). Four sites, of which
+  `_over_fields` was the root: it rendered a read of one member from
+  another's arithmetic without that member's tail.
+
 Still to do: lifting the refusal on a struct that takes an argument being
 a member of another, which needs a decision about how a parent's
 arguments compose with a child's; `situc gen-tamper`, which declines a

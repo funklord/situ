@@ -1305,4 +1305,22 @@ struct negotiated {
 	// A member after both, so a wrong width for either shows up here as a
 	// wrong BYTE rather than as a length nobody reads back.
 	u16 checksum;
+
+	// A discriminant BEHIND the argument, and a variant on it. This is a
+	// second shape rather than decoration: an arm reads two things that
+	// can reach an argument -- its own offset and the discriminant it
+	// tests -- and `kind` sitting after `payload` is what makes the
+	// second one true. Four sites were unplumbed for it, one of them
+	// `_over_fields`, which renders a read of any member from any other
+	// member's arithmetic. The struct above exercises none of that: a
+	// size over an argument reads the argument itself, never a getter.
+	u8  kind;
+	variant carried switch (kind) {
+		// A nested arm and a scalar arm, which are separate emitters --
+		// the first takes the sub-view path and the second the getter
+		// path, so one of them alone proves half.
+		case 1:  kinded_a  marker;
+		case 2:  u8        flag;
+		default: error;
+	}
 }

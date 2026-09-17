@@ -2389,6 +2389,52 @@ def test_the_view_carries_the_argument() -> None:
 	assert "pub fn required(data: &[u8], n: u8) -> situ_rt::Framing" in module
 
 
+def test_a_variant_arm_at_a_dynamic_offset_reads_the_right_bytes() -> None:
+	"""`situc build --target rust` raised `AssertionError`, not a
+	diagnostic -- a traceback. `_arm_member` passed no offset to
+	`_raw_load`, which falls back to `placement.offset_bytes`, whose own
+	assertion reads *offset is dynamic*.
+
+	Three of four backends had it and C alone did not, on a shape with no
+	parameter in it: `u8 body[len]` before a variant is ordinary. The
+	corpus carries variants and carries data-sized runs and never one
+	after the other (26.412).
+
+	Asserted on the rendered offset, not on generating at all: generating
+	is the weaker claim, and a constant that happened to be in range
+	would generate just as happily.
+	"""
+	module = emit("""struct inner { u16 v; }
+struct S {
+	u8 len;
+	u8 body[len];
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+""")
+
+	# `len` at 0, `body` at 1, `kind` at 1 + len, the arm at 2 + len.
+	assert ("situ_rt::advance(2, situ_rt::read_be(self.bytes, 0, 1) as usize"
+	        in module)
+
+	# The control: an arm the schema places keeps its constant.
+	fixed = emit("""struct inner { u16 v; }
+struct S {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  inner one;
+		case 2:  u8    two;
+		default: error;
+	}
+}
+""")
+	assert "situ_rt::read_be(self.bytes, 1, 1)" in fixed
+
+
 def test_a_parameter_gets_no_accessor_of_its_own() -> None:
 	"""A field and a method of one name, where the field is right.
 

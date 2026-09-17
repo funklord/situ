@@ -156,10 +156,18 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: is the benign half of what this test distinguishes; a new one would not
 #: have been a number to update.
 #:
+#: Both moved by one on 2026-09-18, when `edges.negotiated` gained a variant
+#: behind its argument -- one struct arm and one scalar arm, which is why
+#: two cells moved by exactly one each and no cell appeared. That struct is
+#: 0050's corpus entry, and the variant was added to it to reach a member
+#: read that needs an argument tail; it went on to find a crash in three of
+#: the four backends' arm emitters (26.412), which is the same thing this
+#: guard is for one level down.
+#:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                11,
-	("no-scalar", "struct", "fixed"):            47,
+	("scalar", "not-struct", ""):                12,
+	("no-scalar", "struct", "fixed"):            48,
 	("no-scalar", "struct", "unmeasurable"):     20,
 	("no-scalar", "not-struct", ""):              1,
 }
