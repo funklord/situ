@@ -81,8 +81,29 @@ EnumT = TypeVar("EnumT", bound=enum.Enum)
 NATIVE_BIG: Final = sys.byteorder == "big"
 
 
+#: The id a refusal reports when it names no member. Distinguished from any
+#: real id, because "nothing refused" and "something refused with no name"
+#: are two different states (0051, 26.231's half).
+NO_CHECK: Final = 0xFFFFFFFF
+
+
 class SituError(Exception):
-	"""Base for everything raised here, so a caller can catch one thing."""
+	"""Base for everything raised here, so a caller can catch one thing.
+
+	`which` names the member a generated `validate` refused over, and is
+	`NO_CHECK` where the refusal names none -- a frame shorter than the
+	struct, or a `when` the schema states about the whole message.
+
+	On the exception rather than in an out-parameter, which is where the
+	other three backends put it: a Python caller does not pass one, and it
+	already has to catch this to learn there was a refusal at all. Keyword
+	only and defaulted, so the runtime's own raises -- and any a caller
+	writes -- are unchanged.
+	"""
+
+	def __init__(self, *args: object, which: int = NO_CHECK) -> None:
+		super().__init__(*args)
+		self.which = which
 
 
 class BoundsError(SituError):

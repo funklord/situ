@@ -5,10 +5,10 @@ and the wire signature's refusals built 2026-09-17 (26.377); the
 image, the walker and the editor 2026-09-17 (26.378); the
 dissector's expert info 2026-09-17 (26.379); the `messages` sibling
 in all four backends 2026-09-17 (26.380, 26.381); the `refuse` half,
-in all six descriptions, 2026-09-17 (26.382). Still to do: the
-identity on existing per-member constraints in Python --
-26.231's half rather than this record's construct; C++ and Rust have
-it as of 2026-09-17 (26.383, 26.384)
+in all six descriptions, 2026-09-17 (26.382). Built. The identity on
+existing per-member constraints -- 26.231's half rather than this
+record's construct -- reached all four backends on 2026-09-17
+(26.383, 26.384, 26.385)
 Date: 2026-09-04
 Phase: raised by the copyright holder, after 0050
 

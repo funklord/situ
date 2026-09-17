@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import keyword
 
+import ast as pyast
 import re
+import textwrap
 from dataclasses import dataclass, field
 
 from situc import ast
@@ -181,6 +183,97 @@ def _doc(text: str) -> str:
 	return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
+#: A line that opens a refusal. Python's `validate` raises rather than
+#: returning a code, so the identity goes on the exception -- which means
+#: editing the raise rather than writing a line above it, and a raise here
+#: may span several lines.
+_REFUSES = re.compile(r"\s*raise \w+Error\(")
+
+#: A line that refuses by PROPAGATING: a nested member's own `validate`,
+#: whose exception carries the nested struct's id rather than this struct's.
+#: The same case the other three backends spell `return err;`, `return e;`
+#: and `self.flags()?.validate()?;`, and the same case each of them missed.
+#: Two spellings: a nested member's `validate`, and a bare read of a text
+#: number, whose accessor parses the digits and raises where they are not
+#: digits. The second is `_ = self.ino` -- a statement whose whole purpose
+#: is the exception it may raise, which reads as doing nothing at all.
+_PROPAGATES = re.compile(
+	r"\s*(?:self\.[\w.]+(?:\(\))?\.validate\(\)|_ = self\.\w+)\s*$")
+
+
+def _name_the_member(lines: list[str], const: str) -> list[str]:
+	"""Every `raise` in `lines`, told which member it refused over (0051).
+
+	The other three backends write `*which` on the line above the refusal;
+	Python's refusal IS the raise, so the id becomes a keyword argument to
+	it. That is text surgery on generated code, so it carries a proof rather
+	than a convention: each statement is accumulated until it PARSES, the
+	argument is inserted, and the result must parse again as a `raise` whose
+	call now has that keyword. Measured over this repository, 52 of 342
+	raises span more than one line, so a version that edited the opening
+	line alone would have been wrong 15% of the time and only where the
+	message was long enough to wrap.
+	"""
+	out: list[str] = []
+	at  = 0
+	while at < len(lines):
+		one = lines[at]
+		if _PROPAGATES.match(one):
+			# The nested struct's `validate` raises with ITS id, which means
+			# nothing in this struct's space. Relabelled rather than
+			# re-raised as something new, so the class and the message a
+			# caller sees are the nested struct's -- the parent names the
+			# member, which is what the other three do when they set
+			# `*which` before propagating.
+			indent = one[:len(one) - len(one.lstrip("\t"))]
+			out.extend([
+				f"{indent}try:",
+				f"\t{one}",
+				f"{indent}except SituError as why:",
+				f"{indent}\twhy.which = {const}",
+				f"{indent}\traise",
+			])
+			at += 1
+			continue
+
+		if not _REFUSES.match(one):
+			out.append(one)
+			at += 1
+			continue
+
+		# Accumulate until the statement is complete, which the parser
+		# decides rather than a paren count: a message may carry a bracket
+		# of its own, and counting them inside a string literal is how a
+		# scanner gets this wrong.
+		held = [one]
+		while True:
+			body = textwrap.dedent("\n".join(held))
+			try:
+				pyast.parse(body)
+				break
+			except SyntaxError:
+				at += 1
+				if at >= len(lines):
+					raise AssertionError(
+						"a raise that never completes: " + held[0].strip())
+				held.append(lines[at])
+
+		closed = held[-1].rstrip()
+		assert closed.endswith(")"), closed
+		held[-1] = f"{closed[:-1]}, which={const})"
+
+		# The proof. A `)` inside a string literal would have been the wrong
+		# one to insert before, and nothing about the text says which it is.
+		parsed = pyast.parse(textwrap.dedent("\n".join(held))).body[0]
+		assert isinstance(parsed, pyast.Raise)
+		assert isinstance(parsed.exc, pyast.Call)
+		assert any(word.arg == "which" for word in parsed.exc.keywords), closed
+
+		out.extend(held)
+		at += 1
+	return out
+
+
 def py_name(path: str) -> str:
 	"""`c_name`, mangled where Python could not parse the result.
 
@@ -271,6 +364,12 @@ class Emitter:
 			*(["\tDepthError,"] if any(
 				is_recursive(self.resolved.structs, name)
 				for name in self.resolved.structs) else []),
+			# Only where a struct publishes ids, so a module with none is
+			# not importing a name it never uses.
+			*(["\tNO_CHECK,"] if self._names_a_member() else []),
+			# `SituError` is the base a relabelled propagation catches, and
+			# reaches a module only where a nested member can refuse.
+			*(["\tSituError,"] if self._names_a_member() else []),
 			"\tTruncatedError,",
 			"\tVersionError, View,",
 			"\tacquire,",
@@ -5299,18 +5398,45 @@ class Emitter:
 	# -- validation ----------------------------------------------------
 
 	def _validate(self, struct: ResolvedStruct) -> list[str]:
-		checks: list[str] = []
-		for entry in own_entries(struct):
-			checks.extend(self._check(struct, entry))
+		groups = self._check_groups(struct)
+		ids    = [member for member, _ in groups if member]
 
-		lines = [
-			*self._nesting_probe(struct),
+		checks: list[str] = []
+		for member, group in groups:
+			checks.extend(_name_the_member(group, f"self.CHECK_{member.upper()}")
+			              if member and ids else group)
+
+		lines = [*self._nesting_probe(struct)]
+		if ids:
+			lines.extend([
+				"",
+				"\t# The ids a refusal reports, one per member `validate` can",
+				"\t# refuse over. The id is the contract and the name is a",
+				"\t# class attribute, so a consumer keys on the first and a",
+				"\t# person reads the second (0051).",
+				"\tNO_CHECK = NO_CHECK",
+			])
+			lines.extend(f"\tCHECK_{member.upper()} = {at}"
+			             for at, member in enumerate(ids))
+		# The `which` paragraph only where there are ids to report. A
+		# docstring promising an identity the class does not carry is a
+		# claim about the code that the code does not keep.
+		lines.extend([
 			"", "\tdef validate(self) -> None:",
 			'\t\t"""Every constraint the schema declares, on parse.',
 			"",
 			"\t\tRaises ConstraintError rather than returning a code: a Python",
-			'\t\tcaller drops a return value far too easily."""',
-		]
+			"\t\tcaller drops a return value far too easily."
+			+ ('' if ids else '"""'),
+		])
+		if ids:
+			lines.extend([
+				"",
+				"\t\tThe exception carries `which`: the id of the member it",
+				"\t\trefused over, or `NO_CHECK` where the refusal names none.",
+				"\t\tThat is where the other three backends' out-parameter",
+				'\t\tgoes."""',
+			])
 
 		# Before any field is read. Every check below reaches a member at an
 		# offset the layout gives, and a view shorter than the struct cannot
@@ -5606,6 +5732,31 @@ class Emitter:
 			f'\t\t\t\t"{placement.path} is not the minimal spelling of '
 			'its value")',
 		]
+
+	def _names_a_member(self) -> bool:
+		"""Whether any struct here publishes check ids, so the module needs
+		`NO_CHECK` imported."""
+		return any(member for struct in self.resolved.structs.values()
+		           for member, _ in self._check_groups(struct))
+
+	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
+		"""One group per member that `validate` says anything about.
+
+		C's copy carries the reasoning, and this is deliberately its shape
+		rather than a shared helper: whether a member CAN refuse is a fact
+		about what this backend emits, not about the schema. What must not
+		diverge is the numbering, and a test compares the ids the backends
+		publish.
+		"""
+		groups: list[tuple[str, list[str]]] = []
+		for entry in own_entries(struct):
+			lines = self._check(struct, entry)
+			if not any(_REFUSES.match(one) or _PROPAGATES.match(one)
+			           for one in lines):
+				groups.append(("", lines))
+				continue
+			groups.append((c_name(local_name(struct, entry.placement)), lines))
+		return groups
 
 	def _check(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		"""Everything `validate` says about one member.

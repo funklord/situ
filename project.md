@@ -29658,6 +29658,56 @@ span more than one line -- appending an argument means balancing
 parentheses forward from the `raise`, with an assertion that the balance
 closed.
 
+### 26.385 The identity in Python, and the coincidence that passed a sabotage
+
+**26.231's half, finished.** All four backends now name the member
+`validate` refused over. Python's goes on the EXCEPTION -- `SituError`
+gains a keyword-only `which`, defaulting to a `NO_CHECK` the runtime
+exports -- because that is where a Python caller already has to look: the
+other three take an out-parameter and a Python caller does not pass one.
+
+**Editing a raise is text surgery, so it carries a proof rather than a
+convention.** The other three write `*which` on the line above the
+refusal; Python's refusal IS the raise, so the id becomes a keyword
+argument to it -- and 52 of this backend's 342 raises span more than one
+line. The tool accumulates each statement until it PARSES, inserts the
+argument, and asserts the result parses again as a `raise` whose call now
+carries that keyword. A paren count would have done instead, and would
+have been wrong inside any message carrying a bracket of its own.
+
+**The propagating case has now appeared in all four backends and Python's
+was the worst of them.** A nested member refuses by raising from its own
+`validate`, so the exception arrives carrying THE NESTED STRUCT'S id --
+not "no id", which is what the other three had, but a number that means
+something else. `outer` would have reported `flags`' numbering,
+confidently. It is relabelled in an `except SituError` that re-raises,
+which is the same act as C setting `*which` before `return err;`.
+
+Python also has a second spelling nobody would guess: `_ = self.ino`, a
+statement whose whole purpose is the exception it may raise, which reads
+as doing nothing at all. That is how a text number's digits are checked
+here, and cpio_header has eleven of them.
+
+**A sabotage passed, and that is the entry's real content.** Breaking the
+relabelling left `test_a_nested_refusal_is_relabelled_with_the_parent_s_id`
+green -- because the fixture put the nested member FIRST, so the parent's
+id for it and the nested struct's own id were both 0. The test was right
+by coincidence, which reads exactly like right, and only sabotaging what
+had just been built showed it. A member before the nested one separates
+them, and the fixture now asserts the two ids differ before relying on the
+difference.
+
+**What the comparison has now found, in one sentence per backend:**
+
+    C       return err;                    no id
+    C++     return e;                      no id
+    Rust    self.flags()?.validate()?;     no id
+    Python  raises from the nested validate    the WRONG id
+
+Four backends, written separately, each missing the same case in its own
+spelling -- and the fourth failing worse than the other three, because an
+absent identity is silent where a wrong one is confident.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

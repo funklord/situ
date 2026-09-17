@@ -2372,3 +2372,122 @@ def test_a_refuse_changes_the_verdict_and_a_warn_does_not(
 
 	warned = module.S.at(module.Message(bytes([2, 0x23, 0x28])), 0)
 	assert warned.validate() is None
+
+
+# ---------------------------------------------------------------------------
+# Which member refused (26.231's half, in Python)
+# ---------------------------------------------------------------------------
+
+CHECKED = """struct reading {
+	u8  kind [must_eq = 7];
+	u8  level [max = 3];
+}
+"""
+
+
+def test_a_struct_that_can_refuse_publishes_an_id_per_member() -> None:
+	"""The identity C has had since 26.231, in Python (0051)."""
+	module = emit(CHECKED)
+
+	assert "\tCHECK_KIND = 0" in module
+	assert "\tCHECK_LEVEL = 1" in module
+	assert "\tNO_CHECK = NO_CHECK" in module
+
+
+def test_a_struct_that_cannot_refuse_publishes_none() -> None:
+	"""An id nothing can report means "did not happen" and "has no name" at
+	once, and the module does not import a name it never uses."""
+	module = emit("struct S { u8 a; u8 b; }")
+
+	assert "CHECK_" not in module
+	assert "NO_CHECK" not in module
+
+
+def test_the_exception_names_the_member_it_refused_over(
+		tmp_path: Path) -> None:
+	"""Imported and run. The identity is on the exception, which is where a
+	Python caller already has to look: the other three take an
+	out-parameter and a Python caller does not pass one.
+
+	The clean case has no exception to carry an id, so what is asserted
+	there is that `validate` returns -- the control without which a
+	`validate` that refused everything would pass the other two.
+	"""
+	module = load(tmp_path, CHECKED)
+	held   = runtime()
+
+	assert module.reading.at(
+		module.Message(bytes([7, 3])), 0).validate() is None
+
+	for raw, want in ((bytes([9, 3]), "CHECK_KIND"),
+	                  (bytes([7, 9]), "CHECK_LEVEL")):
+		view = module.reading.at(module.Message(raw), 0)
+		with pytest.raises(held.ConstraintError) as refused:
+			view.validate()
+		assert refused.value.which == getattr(module.reading, want)
+
+
+def test_a_refusal_that_names_no_member_says_so(tmp_path: Path) -> None:
+	"""A frame shorter than the struct is not a member being wrong, so the
+	id is the sentinel -- the distinction invariant 154 is about, and the
+	same answer C writes into `*which` before returning BOUNDS.
+
+	The view is built directly rather than through `at`, because `at`
+	refuses a short frame itself and `validate`'s own floor is the path a
+	sub-view takes: an arm taken at a computed extent does not go through
+	acquisition, which is how a four-byte JSON buffer reached
+	`value.validate` (26.322). Reaching it here needs the same door.
+	"""
+	module = load(tmp_path, CHECKED)
+	held   = runtime()
+
+	view = module.reading(module.Message(bytes([7])), 0, 1)
+	with pytest.raises(held.SituError) as refused:
+		view.validate()
+	assert refused.value.which == module.reading.NO_CHECK
+
+
+#: `lead` comes BEFORE the nested member on purpose. With `f` first, the
+#: parent's id for it and the nested struct's own id for `kind` are both 0,
+#: so a relabelling that did nothing passed -- right by coincidence, which
+#: reads exactly like right. `lead` makes `outer.CHECK_F` 1 while `flags`
+#: still numbers its own member 0, and the two answers separate.
+NESTED = """struct flags {
+	u8 kind [must_eq = 1];
+}
+
+struct outer {
+	u8    lead [max = 3];
+	flags f;
+	u8    tail [max = 3];
+}
+"""
+
+
+def test_a_nested_refusal_is_relabelled_with_the_parent_s_id(
+		tmp_path: Path) -> None:
+	"""The fault every backend had, in Python's spelling.
+
+	A nested member refuses by PROPAGATING, so the exception arrives
+	carrying the nested struct's id -- which means nothing in the parent's
+	id space. The parent relabels it, which is what C, C++ and Rust do by
+	setting `*which` before they propagate. Without that, `outer` reported
+	`flags`' own numbering, confidently.
+	"""
+	module = load(tmp_path, NESTED)
+	held   = runtime()
+
+	assert module.outer.CHECK_F != module.flags.CHECK_KIND, (
+		"the fixture cannot separate a relabelled id from the nested one")
+
+	view = module.outer.at(module.Message(bytes([0, 9, 0])), 0)
+	with pytest.raises(held.SituError) as refused:
+		view.validate()
+	assert refused.value.which == module.outer.CHECK_F
+
+	# And the parent's own member still reports the parent's id, so the
+	# relabelling has not swallowed the ordinary case.
+	view = module.outer.at(module.Message(bytes([0, 1, 9])), 0)
+	with pytest.raises(held.ConstraintError) as refused:
+		view.validate()
+	assert refused.value.which == module.outer.CHECK_TAIL

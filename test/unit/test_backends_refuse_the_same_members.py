@@ -839,8 +839,7 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	id after it, silently, and an id is a small integer that reads the same
 	whatever it means.
 
-	Python publishes no ids yet, so it is not here. When it does it joins
-	this comparison rather than getting a test of its own: separate
+	All four are here rather than in four tests of their own: separate
 	comparisons are chances for two backends to agree with each other and
 	not with the rest.
 
@@ -923,6 +922,20 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 			in_rs.setdefault(owner, []).append(
 				(one.group(1).lower(), one.group(2)))
 
+	# Python's are class attributes, so they are scoped by the `class` they
+	# sit in, and its name is the schema's already.
+	in_py: dict[str, list[tuple[str, str]]] = {}
+	owner = ""
+	for line in generate_py(schema, resolved, path.stem).module.splitlines():
+		opened = re.match(r"class (\w+)\(View\):", line)
+		if opened:
+			owner = opened.group(1)
+			continue
+		one = re.match(r"\tCHECK_(\w+) = (\d+)$", line)
+		if one:
+			in_py.setdefault(owner, []).append(
+				(one.group(1).lower(), one.group(2)))
+
 	# One divergence is held out, and the carve-out names the MECHANISM
 	# rather than the symptoms -- a list of symptoms is how a gate acquires
 	# an ignore list and stops being one.
@@ -946,6 +959,8 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 		in_c.pop(name, None)
 		in_cpp.pop(name, None)
 		in_rs.pop(name, None)
+		in_py.pop(name, None)
 
 	assert in_c == in_cpp, f"{path.name}: c and cpp"
 	assert in_c == in_rs, f"{path.name}: c and rust"
+	assert in_c == in_py, f"{path.name}: c and python"
