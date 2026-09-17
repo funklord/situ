@@ -33,7 +33,7 @@ from fourway import COMPLETE, answers, build, draw
 
 sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
-from walker.image import load                      # noqa: E402
+from walker.image import Image, load                      # noqa: E402
 from walker import walk as walk_module             # noqa: E402
 from walker.walk import Refused, View, acquire, read_scalar  # noqa: E402
 
@@ -1171,6 +1171,105 @@ def test_a_pass_default_enum_carries_no_membership_check() -> None:
 	si = next(i for i in range(len(image.structs))
 	          if image.struct_name(i) == "S")
 	view = acquire(image, b"ZZ\x00\x00\x00\x01", si)
+	assert report.failed_check(image, view, si) == report.CLEAN
+
+
+# ---------------------------------------------------------------------------
+# The messages a schema carries (0051)
+# ---------------------------------------------------------------------------
+
+MESSAGES = """
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct S {
+	u8  ver;
+	u16 length;
+}
+
+when S.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when S.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+
+when S.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`";
+"""
+
+
+def _messages_image() -> tuple[Image, int]:
+	parsed   = parse_text(MESSAGES)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+	return image, next(i for i in range(len(image.structs))
+	                   if image.struct_name(i) == "S")
+
+
+def test_the_walk_reports_one_message_per_predicate_that_holds() -> None:
+	"""Each severity, and the bytes that separate them.
+
+	Every case here is chosen so that a wrong answer is a DIFFERENT answer
+	rather than a missing one: ver 2 with a short length satisfies none of
+	the three, so a `messages` that reported everything it carried would
+	fail on the last row rather than passing three times.
+	"""
+	image, si = _messages_image()
+
+	for ver, length, expected in ((0, 10, [("refuse", "zero_version")]),
+	                              (1, 10, [("note", "legacy_framing")]),
+	                              (2, 9000, [("warn", "oversized")]),
+	                              (2, 10, [])):
+		view = acquire(image, struct.pack(">BH", ver, length), si)
+		said = [(severity, name)
+		        for severity, name, _ in report.messages(image, view, si)]
+		assert said == expected, (ver, length)
+
+
+def test_a_message_carries_the_text_the_schema_wrote() -> None:
+	"""The name is the contract and the text is a default rendering, and a
+	consumer with no catalogue has only the second -- so an image that
+	interned the name and dropped the text would leave that consumer with an
+	identifier to show a person."""
+	image, si = _messages_image()
+	view = acquire(image, struct.pack(">BH", 1, 10), si)
+	assert report.messages(image, view, si) == [
+		("note", "legacy_framing", "v1 counts the header in `length`")]
+
+
+def test_the_messages_sibling_does_not_short_circuit() -> None:
+	"""0051's reason for putting this beside `validate` rather than inside
+	it: `validate` stops at the first failure because the first failure is
+	the answer, and a caller asking what a message SAYS wants all of it.
+
+	ver 0 with a long length holds the `refuse` and the `warn` at once, so a
+	reader that stopped at the refusal -- which is what reusing `validate`'s
+	loop would do -- returns one row where two are true.
+	"""
+	image, si = _messages_image()
+	view = acquire(image, struct.pack(">BH", 0, 9000), si)
+	assert [name for _, name, _ in report.messages(image, view, si)] == [
+		"zero_version", "oversized"]
+
+
+def test_a_refuse_does_not_yet_change_the_verdict() -> None:
+	"""Deliberate, and recorded so that closing it is a change somebody
+	makes rather than a gap somebody finds.
+
+	0051 says a `refuse` contributes to `validate`. It cannot land in the
+	walker alone: the walk is held to the compiled backends on the same
+	bytes, and none of the four emits the `messages` sibling yet, so a
+	walker that refused here would be a fifth description disagreeing with
+	four for a reason that is not a defect. It lands with them.
+	"""
+	image, si = _messages_image()
+	view = acquire(image, struct.pack(">BH", 0, 10), si)
+	assert report.messages(image, view, si)[0][0] == "refuse"
 	assert report.failed_check(image, view, si) == report.CLEAN
 
 

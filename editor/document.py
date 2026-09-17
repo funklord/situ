@@ -162,6 +162,19 @@ class Document:
 
 		return rows
 
+	def messages(self) -> list[tuple[str, str, str]]:
+		"""What the schema says about this message beyond its layout (0051).
+
+		`(severity, name, text)` per `when` whose predicate holds. A document
+		concern rather than a field one, which is the one place this departs
+		from what 0051 wrote down: that record says the editor "puts the text
+		in the `note` it already has", and a `when` is a predicate over a
+		struct rather than over a member -- so there is no member whose row it
+		belongs on. `failed_check` above is the per-member half and keeps the
+		`note` channel; this is the struct-scoped one and needs its own.
+		"""
+		return report.messages(self.image, self.view(), self.struct)
+
 	def _members(self) -> dict[str, int]:
 		"""Local name -> placement index, for the members `fields` shows."""
 		image = self.image

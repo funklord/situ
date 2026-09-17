@@ -29318,6 +29318,60 @@ schema carrying an invariant.
 identity on existing per-member constraints, and the dissector's expert
 info. The record's build order put the document first and this is that.
 
+### 26.378 The messages an image carries, and who runs them
+
+**0051's second slice: the generic descriptions.** 26.377 built the
+construct and the two descriptions that are generated text -- `situc doc`
+and the wire signature. This is the pair that reads an image at run time:
+the walker evaluates the predicates and the editor shows what they said.
+
+**The construct cost no opcode, and that is the fact worth keeping.** A
+`when` is a predicate over ONE view, so every path in it is a `field`
+rather than the `arg_field` a relation needs, and the bytecode VM 0049
+already bounds runs it unchanged. `situc pack` compiles each one into the
+same code section a relation's `must` goes into and records a twenty-byte
+`image_message` -- name, text, owner, code offset, severity -- under a new
+section 25. The whole of the packer's new work is choosing the owning
+struct and interning two strings.
+
+**An image says what it can answer.** A `when` whose predicate the VM
+cannot encode is recorded in `Coverage.unencodable` and left out of the
+section, rather than packed and skipped at walk time. That is 26.76's rule:
+an image is opaque, so what it declined has to be visible to whoever packed
+it. The walk drops a program that refuses at run time for the same reason
+pointed the other way -- a message inferred from a program that did not run
+would be the compiler speaking with more authority than it has.
+
+**No short circuit, and the test that separates them.** `validate` stops at
+the first failure because the first failure is the answer; a caller asking
+what a message SAYS wants all of it, which is why 0051 puts the sibling
+beside `validate` rather than inside it. The case that holds it is one
+frame satisfying a `refuse` and a `warn` at once: a reader that reused
+`validate`'s loop returns one row where two are true. Both this and the
+owner filter were confirmed by sabotage, and the first sabotage did not
+apply -- two tabs where the file has one -- which is a green suite that
+proved nothing until the marker was grepped for.
+
+**The editor departs from what the record wrote down, in one place.** 0051
+says the editor "puts the text in the `note` it already has". A `when` is a
+predicate over a struct, so there is no member whose row it belongs on:
+`report.failed_check` is the per-member half and keeps the `note` channel,
+and `Document.messages()` is the struct-scoped one. The text rendering puts
+them after the fields and the JSON carries them as a sibling of `fields`
+rather than a key inside one.
+
+**A `refuse` does not yet change a verdict, deliberately.** 0051 says it
+contributes to `validate`, and it cannot land in the walker alone: the walk
+is held to the four compiled backends over the same bytes, none of which
+emits the `messages` sibling yet, so a walker that refused would be the
+fifth description disagreeing with four for a reason that is not a defect.
+A test asserts the current answer and says why, so closing the gap is a
+change somebody makes rather than one somebody finds.
+
+**Still to do**, unchanged from 26.377 except that the editor is now built:
+the `messages` sibling in the four backends, the identity on existing
+per-member constraints, and the dissector's expert info.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

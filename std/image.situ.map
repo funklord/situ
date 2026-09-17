@@ -77,6 +77,14 @@ struct image_marker size=16 repr=ValueConverted atomic=NonAtomic
   image_marker.little_value              offset=AbsoluteStatic(0x04) size=Fixed(8) align=Aligned(4) repr=ValueConverted atomic=NonAtomic
   image_marker.marker_pad                offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
 
+struct image_message size=20 repr=ValueConverted atomic=NonAtomic
+  image_message.name                     offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_message.text                     offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_message.owner                    offset=AbsoluteStatic(0x08) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  image_message.code                     offset=AbsoluteStatic(0x0C) size=Fixed(4) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  image_message.severity                 offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  image_message.message_pad              offset=AbsoluteStatic(0x11) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+
 struct image_pinned size=32 repr=ValueConverted atomic=NonAtomic
   image_pinned.placement                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   image_pinned.length                    offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord

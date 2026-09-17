@@ -69,6 +69,7 @@ enum image_section_tag : u32 {
 	skips        = 22,     // the whitespace a member owns in front of it
 	whitespace   = 23,     // what `[trim]` removes, for the whole schema
 	tlv_rules    = 24,     // how a `tlv` item's value says where it ends
+	messages     = 25,     // what a schema says about a message (0051)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -577,6 +578,39 @@ struct image_relation_must {
 	u32  must_pad;
 }
 
+// -- messages a schema carries (0051) -----------------------------------------
+
+// A `when` is a predicate over ONE view, a severity, an identity and a
+// default rendering. The identity is the contract and the text is a default:
+// a consumer with its own catalogue keys on `name` and ignores `text`.
+//
+// The program uses `field` rather than `arg_field`: unlike a relation there
+// is one message, so a placement id says which member to read without saying
+// which view it came from. That is the whole difference between the two
+// sections, and it is why a `when` needed no opcode.
+//
+// `severity` decides only what a verdict does with it -- `refuse` makes a
+// message malformed, `warn` and `note` leave the verdict alone -- and all
+// three are reported. A reader that wants only refusals filters on it; one
+// that wants to show everything ignores it.
+struct image_message {
+	u32  name;                        // string id: what a consumer keys on
+	u32  text;                        // string id: the default rendering
+	u32  owner;                       // the struct it is evaluated against
+	u32  code;                        // offset into the code section
+	u8   severity;                    // image_severity
+	u8   message_pad[3];
+}
+
+// The three of 0051, and no fourth: a fourth would be situ adopting one
+// consumer's presentation model.
+enum image_severity : u8 {
+	refuse  = 0,
+	warn    = 1,
+	note    = 2,
+	default = error,
+}
+
 // -- the whole image ---------------------------------------------------------
 
 // Only the header is a member here. Everything else is reached through the
@@ -608,6 +642,7 @@ require absolute_static(image_version);
 require absolute_static(image_marker);
 require absolute_static(image_index);
 require absolute_static(image_relation);
+require absolute_static(image_message);
 require absolute_static(image_relation_must);
 
 require size(image_header) == 20;

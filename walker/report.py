@@ -21,7 +21,7 @@ while rendering nothing is the failure mode that has to be impossible.
 from __future__ import annotations
 
 from walker import vm
-from walker.image import NONE, Image
+from walker.image import NONE, Image, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
@@ -1056,6 +1056,49 @@ def _validate(image: Image, view: View, struct_index: int,
 #: image cannot say. Distinguished, because "nothing failed" and "this
 #: walker cannot tell you" are the two states invariant 154 is about.
 CLEAN, CANNOT_SAY = "clean", "cannot-say"
+
+
+#: What each severity means to a verdict. `refuse` makes a message
+#: malformed; the other two say something about one that is well formed.
+SEVERITIES = ("refuse", "warn", "note")
+
+
+def messages(image: Image, view: View,
+		struct_index: int) -> list[tuple[str, str, str]]:
+	"""Every `when` this struct states whose predicate holds (0051).
+
+	`(severity, name, text)` per message, in declaration order. The NAME is
+	what a consumer keys on and the text is a default rendering it may
+	replace -- both are returned because a caller with no catalogue needs
+	the second and one with a catalogue needs the first.
+
+	All three severities, and no short circuit. `validate` stops at the
+	first failure "because the first failure is the answer", which is right
+	for a verdict and wrong for collecting messages: a caller asking what a
+	message says wants everything it says. That is why 0051 puts this beside
+	`validate` rather than inside it.
+
+	A predicate that cannot be evaluated is dropped rather than reported.
+	The image says what it can answer -- `situc pack` records the rest as
+	unencodable -- and a message inferred from a program that did not run
+	would be the compiler speaking with more authority than it has.
+	"""
+	from walker.walk import _evaluate
+
+	found: list[tuple[str, str, str]] = []
+	for held in image.messages:
+		if held.owner != struct_index:
+			continue
+		try:
+			if not _evaluate(view, held.code):
+				continue
+		except (Refused, vm.VmError):
+			continue
+		found.append((SEVERITIES[held.severity]
+		              if held.severity < len(SEVERITIES) else "note",
+		              _string_at(image.strings, held.name),
+		              _string_at(image.strings, held.text)))
+	return found
 
 
 def failed_check(image: Image, view: View,

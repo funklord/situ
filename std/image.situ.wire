@@ -19,7 +19,7 @@ endian little
 target buffer
 
 enum image_section_tag : u32 unknown=pass
-  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 names=12 vectors=13
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 names=12 vectors=13
 
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
@@ -35,6 +35,9 @@ enum image_offset_base : u8 unknown=error
 
 enum image_check : u8 unknown=error
   must_eq=0 minimum=1 maximum=2 must_be_zero=3 must_be_one=4 enum_known=5 fits_frame=6 terminated=7 arm_selected=8 digits_valid=9 digits_minimal=10 nul_terminated=11 encoded_as=12 pinned_run=14 zero_run=13 encoded_from=15 pad_length_min=17 pad_length_max=18 encoding_arm=16
+
+enum image_severity : u8 unknown=error
+  refuse=0 warn=1 note=2
 
 struct image size=20
   @0x0000   20        image_header head  little
@@ -95,6 +98,14 @@ struct image_marker size=16
   @0x0000   4         u32        placement  little
   @0x0004   8         i64        little_value  little
   @0x000c   4         u32        marker_pad  little
+
+struct image_message size=20
+  @0x0000   4         u32        name  little
+  @0x0004   4         u32        text  little
+  @0x0008   4         u32        owner  little
+  @0x000c   4         u32        code  little
+  @0x0010   1         u8         severity
+  @0x0011   3         u8         message_pad  little
 
 struct image_pinned size=32
   @0x0000   4         u32        placement  little

@@ -35,6 +35,7 @@ NAMES, VECTORS, MARKERS            = 12, 13, 14
 CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
 DEPTHS = 21
 RELATIONS, RELATION_MUSTS = 18, 19
+MESSAGES = 25
 PINNED_RUNS = 20
 
 #: `image_check`
@@ -189,6 +190,26 @@ class Relation:
 
 
 @dataclass
+class Message:
+	"""One `when` the image carries (0051).
+
+	`name` and `text` are string ids and `owner` a struct index. `code` is an
+	offset into the code section, and the program there leaves a single
+	value: non-zero means the predicate holds and the message applies.
+
+	`severity` is 0 `refuse`, 1 `warn`, 2 `note`, which is `image_severity`.
+	It decides what a verdict does with the message and nothing about
+	whether it is reported: all three are.
+	"""
+
+	name: int
+	text: int
+	owner: int
+	code: int
+	severity: int
+
+
+@dataclass
 class Image:
 	"""One loaded image: the tables, and the names where they were kept."""
 
@@ -199,6 +220,10 @@ class Image:
 	#: an image packed before the section existed, which is a section a
 	#: walker skips rather than a load that fails.
 	relations: list[Relation]		= field(default_factory=list)
+	#: What the schema says about a message beyond its layout (0051), in
+	#: declaration order. Absent from an image packed before the section
+	#: existed, which a walker skips rather than failing to load.
+	messages: list[Message]			= field(default_factory=list)
 	strings: bytes				= b""
 	#: placement index -> the byte runs it may hold (0052). One for a
 	#: `[must_eq]` or a `preamble`, one per arm for a byte-run enum. Keyed
@@ -412,6 +437,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				                    musts_at + (first + j) * musts_stride)[0]
 				for j in range(count))
 			image.relations.append(Relation(name, request, response, musts))
+
+	if MESSAGES in found:
+		at, records, stride = found[MESSAGES]
+		for i in range(records):
+			name, text, owner, code, severity = _struct.unpack_from(
+				"<IIIIB", blob, at + i * stride)
+			image.messages.append(Message(name, text, owner, code, severity))
 
 	if PINNED_RUNS in found:
 		at, records, stride = found[PINNED_RUNS]

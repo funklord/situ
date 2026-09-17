@@ -34,6 +34,7 @@ from situc import ast, traverse
 from situc.capability import DOMAINS, Axis
 from situc.diagnostics import SituError
 from situc.expr import evaluate
+from situc.invariant import paths_in
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.relation import Refused as RelationRefused
 from situc.relation import plan as plan_relation
@@ -78,6 +79,7 @@ VERSION_BYTES		= 8
 DEPTH_BYTES		= 12
 RELATION_BYTES		= 24
 RELATION_MUST_BYTES	= 8
+MESSAGE_BYTES		= 20
 
 FLAG_METADATA	= 1 << 0	# header.flags
 
@@ -96,6 +98,7 @@ SECTION_CODECS		= 8
 SECTION_VARINTS		= 9
 SECTION_TLVS		= 10
 SECTION_TLV_RULES	= 24
+SECTION_MESSAGES	= 25
 SECTION_INDEXES		= 11
 SECTION_MARKERS		= 14
 SECTION_CONSTRAINTS	= 15
@@ -474,6 +477,7 @@ class Coverage:
 	placements: int			= 0
 	expressions: int		= 0
 	relations: int			= 0
+	messages: int			= 0
 	#: path -> why, for every expression that could not be encoded.
 	unencodable: dict[str, str]	= field(default_factory=dict)
 	#: family -> how many placements carry it. Reported whether or not the
@@ -2003,6 +2007,42 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			shapes[1] or 0, first, len(decl.body), 0)
 		coverage.relations += 1
 
+	# -- what the schema says about a message (0051) --
+	#
+	# One program per `when`, over ONE view -- so `field` rather than
+	# `arg_field`, which is the whole difference from a relation and the
+	# reason this needed no opcode. The predicate's owner is the struct
+	# every path in it names, which `wellformed.check_whens` has already
+	# held to one.
+	messages_blob = bytearray()
+	severities = {ast.Severity.REFUSE: 0, ast.Severity.WARN: 1,
+	              ast.Severity.NOTE: 2}
+	for when in schema.whens():
+		owners = [path.partition(".")[0] for path in paths_in(when.expr)
+		          if path.partition(".")[0] in shape_of]
+		owner  = owners[0] if owners else ""
+		if not owner or shape_of.get(owner) is None:
+			coverage.unencodable[f"when {when.name}"] = \
+				"names no struct in this image"
+			continue
+
+		start = len(program.code)
+		try:
+			program.compile(when.expr, resolve_path, consts)
+		except PackError as why:
+			# Recorded rather than dropped: an image that carried a message
+			# it cannot evaluate would answer about a schema nobody wrote,
+			# and `Coverage` exists because an image is opaque (26.76).
+			del program.code[start:]
+			coverage.unencodable[f"when {when.name}"] = str(why)
+			continue
+		program.emit(Op.END)
+
+		messages_blob += _struct.pack(
+			"<IIIIBxxx", strings.intern(when.name), strings.intern(when.text),
+			shape_of[owner] or 0, start, severities[when.severity])
+		coverage.messages += 1
+
 	sections.append((SECTION_STRUCTS, bytes(structs_blob), STRUCT_BYTES))
 	sections.append((SECTION_PLACEMENTS, b"", PLACEMENT_BYTES))	# filled below
 	sections.append((SECTION_CODE, bytes(program.code), 1))
@@ -2024,7 +2064,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_DEPTHS, depths_blob, DEPTH_BYTES),
 			(SECTION_RELATIONS, relations_blob, RELATION_BYTES),
 			(SECTION_RELATION_MUSTS, musts_blob, RELATION_MUST_BYTES),
-			(SECTION_PINNED_RUNS, pinned_blob, PINNED_BYTES)):
+			(SECTION_PINNED_RUNS, pinned_blob, PINNED_BYTES),
+			(SECTION_MESSAGES, messages_blob, MESSAGE_BYTES)):
 		if blob:
 			sections.append((section, bytes(blob), stride))
 

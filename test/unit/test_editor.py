@@ -109,6 +109,84 @@ def test_a_document_keeps_the_note_it_already_had() -> None:
 	assert "refused: max" in note
 
 
+#: A schema that says something about a message beyond its layout (0051).
+#: Two `when`s over one struct, because the property worth holding is that a
+#: document reports every message that holds rather than the first.
+SAYS = """target buffer;
+endian big;
+
+struct frame {
+	u8  ver;
+	u16 length;
+}
+
+when frame.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`";
+
+when frame.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+"""
+
+
+def says_image() -> bytes:
+	schema   = parse_text(SAYS)
+	resolved = resolve(schema, solve(schema))
+	return pack(schema, resolved, metadata=True)[0]
+
+
+def test_a_document_reports_the_messages_the_schema_carries() -> None:
+	"""The editor consumer of 0051, and the one place it departs from what
+	that record wrote down.
+
+	0051 says the editor "puts the text in the `note` it already has". A
+	`when` is a predicate over a STRUCT, so no member's row is where it
+	belongs -- `failed_check` is the per-member half and keeps `note`, and
+	this is the struct-scoped one. Recorded here rather than only in the
+	record, because a reader comparing the two should find the difference
+	stated rather than infer it.
+	"""
+	document = open_document(says_image(), b"\x01\x00\x0a")
+	assert document.messages() == [
+		("note", "legacy_framing",
+		 "v1 counts the header in `length`")]
+
+
+def test_a_document_reports_every_message_that_holds() -> None:
+	"""Both, and in declaration order. A frontend showing one of two would
+	be the short circuit 0051 puts the sibling beside `validate` to avoid."""
+	document = open_document(says_image(), b"\x01\x23\x28")
+	assert [name for _, name, _ in document.messages()] == [
+		"legacy_framing", "oversized"]
+
+
+def test_a_document_whose_predicates_hold_says_nothing() -> None:
+	"""The control. A list built unconditionally would show both messages on
+	every frame the editor ever opened, and the text would be believed."""
+	assert open_document(says_image(), b"\x02\x00\x0a").messages() == []
+
+
+def test_the_rendering_shows_a_message_after_the_fields() -> None:
+	"""Severity, name and text, in that order: the name is the contract a
+	consumer keys on and the text is the default a person reads, so a
+	rendering that dropped either leaves one of the two with nothing."""
+	lines = render(open_document(says_image(), b"\x01\x00\x0a"))
+	assert lines[-1] == ("  note: legacy_framing -- "
+	                     "v1 counts the header in `length`")
+
+
+def test_the_json_carries_the_messages_beside_the_fields() -> None:
+	"""A sibling of `fields` rather than a key inside one, because the thing
+	it describes is the message and not a member of it."""
+	said = json.loads(as_json(open_document(says_image(), b"\x01\x23\x28")))
+	assert said["messages"] == [
+		{"severity": "note", "name": "legacy_framing",
+		 "text": "v1 counts the header in `length`"},
+		{"severity": "warn", "name": "oversized",
+		 "text": "longer than any early reader was written to hold"}]
+
+
 def test_a_document_places_and_reads_every_member() -> None:
 	document = open_document(image(), MESSAGE)
 

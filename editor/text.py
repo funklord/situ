@@ -88,6 +88,14 @@ def render(document: Document) -> list[str]:
 		row    = f"  {where} +{wide}  {field.name:<24} {shown}"
 		marker = _write_marker(field)
 		lines.append(f"{row.ljust(50)}{marker}".rstrip() if marker else row)
+
+	# What the schema says about the message as a whole (0051), after the
+	# fields rather than among them: a `when` is a predicate over the struct,
+	# so there is no row it belongs on. The name is printed beside the text
+	# because the name is the contract a consumer keys on and the text is a
+	# default rendering it may replace.
+	for severity, name, text in document.messages():
+		lines.append(f"  {severity}: {name} -- {text}")
 	return lines
 
 
@@ -154,5 +162,13 @@ def as_json(document: Document) -> str:
 				"write_cost": field.write_cost,
 			}
 			for field in document.fields()
+		],
+		# Struct-scoped, so a sibling of `fields` rather than a key inside
+		# one. Absent from an image packed before the section existed, which
+		# reads as an empty list: a frontend must not take that for "the
+		# schema says nothing", any more than a null `mutate` means yes.
+		"messages": [
+			{"severity": severity, "name": name, "text": text}
+			for severity, name, text in document.messages()
 		],
 	}, indent=1)
