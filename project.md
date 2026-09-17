@@ -30371,12 +30371,20 @@ that reads one has only ever been asked about it by hand. The commands
 that got it right got it right because somebody thought to ask.
 
 Found by running all seven schema-reading commands against a scratch
-schema rather than the four this arc touched. OPEN as this is written, and
-deliberately not folded into the view commit: it is a description rather
-than a view, so it does not belong under a message about view
-constructors. The fix is to say what the vector describes, the way the map
-and the wire signature do, rather than to suppress it -- the axes are real
-and printing them is what the command is for.
+schema rather than the four this arc touched, and kept out of the view
+commit deliberately: it is a description rather than a view.
+
+**Said rather than suppressed.** The map and the wire signature drop the
+position because a one-line row has nowhere to put a caveat; `explain` has
+a whole block, so it names the member a parameter and says what the axes
+below describe. The vector is real and printing it is what the command is
+for -- what was missing was anything to stop a reader taking `offset=0`
+for a position.
+
+The test holds both directions, which is what a conditional note needs: it
+fails when the note is absent for a parameter, and fails again when the
+note is printed for an ordinary member. Sabotaged both ways and watched to
+go red on a different assertion each time.
 
 ### 26.400 A refusal test whose population went empty, and its two detectors
 

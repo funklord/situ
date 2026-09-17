@@ -1321,6 +1321,24 @@ def cmd_explain(args: argparse.Namespace) -> int:
 		return 0
 
 	print(entry.placement.path)
+	# A `parameter` is the caller's argument and occupies no bytes (0050),
+	# so every axis below is about the ARGUMENT rather than about a span of
+	# the message -- `offset` is where the member after it begins, `size`
+	# is how wide the value is, and `mutate` describes a setter that does
+	# not exist and cannot, since writing there would store over the member
+	# the argument sizes.
+	#
+	# Said rather than suppressed: the vector is real and is what this
+	# command exists to print. What was wrong was printing it with nothing
+	# to stop a reader taking `offset=0` for a position. `situc map` and
+	# `situc wire` solve the same problem by naming the member and placing
+	# nothing, which suits a one-line row; this has a whole block and can
+	# afford the sentence.
+	if entry.placement.parameter:
+		print("  parameter -- an argument the caller supplies, not bytes in")
+		print("  the message. `offset` below is where the member after it")
+		print("  begins, `size` is the argument's own width, and there is no")
+		print("  setter.")
 	for axis, value in entry.vector.items():
 		marker = "" if value.base == DOMAINS[axis][0] else "  <- weakened"
 		print(f"  {axis.value:10} {value.render()}{marker}")

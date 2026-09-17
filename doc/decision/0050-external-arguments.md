@@ -8,7 +8,8 @@ Status: accepted 2026-09-04. Built in four passes:
 - The descriptions that place nothing: the map and the wire signature name
   a parameter rather than placing it (26.390, 26.391); the dissector reads
   a `[stream]` one from a preference (26.392); `situ verify` supplies one
-  with `--arg` (26.394).
+  with `--arg` (26.394); and `situc explain` says what its axes describe
+  rather than printing a position that is the next member's (26.404).
 - The views, 2026-09-17: Python (26.393), Rust (26.395), C++ (26.396) and
   C (26.397). None emits an accessor for the parameter itself (26.398).
   What still declines are the generators that emit a second artifact

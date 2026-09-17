@@ -107,6 +107,49 @@ def test_explain_on_a_struct(capsys: pytest.CaptureFixture[str]) -> None:
 	assert "struct header" in capsys.readouterr().out
 
 
+def test_explain_says_a_parameter_is_not_bytes(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""Every axis of a `parameter`'s vector reads as a fact about a span
+	of the message, and none of them is one (0050, 26.404).
+
+	`size Fixed(1)` is how wide the ARGUMENT is; `offset
+	AbsoluteStatic(0x00)` is where the member AFTER it begins, a parameter
+	occupying nothing; and `mutate InPlaceFixed` promises a setter that
+	cannot exist, since writing there would store over the member the
+	argument sizes. The vector is not wrong -- it is what the solver
+	computed -- but printed bare it reads as a position and a width.
+
+	`situc map` and `situc wire` were both taught to name a parameter and
+	place nothing. This is the sixth description, and it was missed because
+	no corpus schema declares one, so every command that reads one has only
+	ever been asked by hand.
+	"""
+	schema = tmp_path / "param.situ"
+	schema.write_text(
+		"struct frame {\n"
+		"\tparameter u8 n [stream];\n"
+		"\tu8        body[n];\n"
+		"\tu8        tail;\n"
+		"}\n", encoding="ascii")
+
+	assert main(["explain", str(schema), "frame.n"]) == 0
+	out = capsys.readouterr().out
+
+	assert "an argument the caller supplies, not bytes in" in out
+	assert "there is no" in out and "setter" in out
+	# The axes still print: they are what this command is for, and
+	# suppressing them would answer a different question.
+	assert "size       Fixed(1)" in out
+
+	# The control, in the same schema: an ordinary member says nothing of
+	# the sort, so a note printed unconditionally fails here.
+	assert main(["explain", str(schema), "frame.body"]) == 0
+	body = capsys.readouterr().out
+	assert "an argument the caller supplies" not in body
+	assert "offset     AbsoluteStatic(0x00)" in body
+
+
 def test_explain_on_an_unknown_path(capsys: pytest.CaptureFixture[str]) -> None:
 	assert main(["explain", HEADER, "header.nope"]) == 1
 	assert "unknown path" in capsys.readouterr().err
