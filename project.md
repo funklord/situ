@@ -29977,6 +29977,47 @@ how the argument is actually passed, which is 0050's unbuilt half. Recorded
 rather than answered, so the next pass decides it deliberately instead of
 inheriting a verdict nobody chose.
 
+### 26.392 The dissector takes its argument from a preference
+
+**0050's first consumer of a `parameter`, and the description that could
+not follow is now the one that leads.** A `[stream]` argument becomes a
+Wireshark preference:
+
+    frame.prefs.n = Pref.uint("n", 0, "frame.n: an argument the layout
+                                       follows")
+
+and every expression that reads the parameter reads the preference instead
+of the capture. A per-message parameter is still refused, because nothing
+in a capture carries one and no preference varies packet to packet -- which
+is exactly the split 0050 decided.
+
+**The default is zero and that is a refusal to guess.** A dissector cannot
+know the argument; a person opening a capture sets it. Until they do, the
+layout is described under whatever the schema's expressions make of a
+zero -- honest in a way a guessed default would not be, which is why the
+test asserts the zero case as its own row rather than only the two set
+ones.
+
+**Two reads, and the second was the one that was wrong.** `_over_fields`
+renders an arithmetic size (`body[n + 1]`), and `_count_expression` has a
+separate path for the plain form (`body[n]`) that calls `_read` on the
+driver. Teaching only the first left `body[n]` reading
+`situ_uint(tvb, 0, 1, false)` -- the parameter's offset, which is where
+`body` itself begins. Two spellings of one construct, and the shorter one
+was the broken one; the file's own comment about a parallel accessor family
+being a backend that has to be finished twice is the reason to look.
+
+**A forward declaration, emitted only where a schema takes an argument.**
+An extent function is emitted BEFORE the `Proto` whose preferences it
+reads, so `frame.prefs.n` was an index of a nil global at the first packet.
+`local frame` ahead of them is the upvalue those functions close over.
+Conditional, so every dissector without a parameter stays byte-identical --
+a cheaper proof than re-reading forty of them.
+
+**The harness learned `Pref` and a `name=value` argument**, which is what
+lets the test assert the claim that matters: the SAME five bytes dissect as
+a zero-, two- and four-byte `body`, with `tail` moving each time.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

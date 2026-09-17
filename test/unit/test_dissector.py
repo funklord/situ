@@ -34,6 +34,7 @@ import pytest
 from every_schema import SCHEMAS, ids
 from situc import pack as packer
 from situc.cli import analyse
+from situc.diagnostics import SituError
 from situc.dissector import _local, generate
 from situc.layout import solve
 from situc.parser import parse, parse_text
@@ -215,12 +216,18 @@ def read_back_experts(lua: Path, proto: str,
 	return _read_all(lua, proto, packet)[2]
 
 
-def _read_all(lua: Path, proto: str, packet: bytes) -> tuple[
+def _read_all(lua: Path, proto: str, packet: bytes,
+		pref: str = "") -> tuple[
 		int, list[tuple[str, int, int, str]], list[tuple[str, str, str]]]:
-	"""One run of the harness, read into its three parts."""
+	"""One run of the harness, read into its three parts.
+
+	`pref` is `name=value`, which is how a `[stream]` argument reaches a
+	dissector (0050): a preference rather than anything in the capture.
+	"""
 	assert LUA is not None
 	result = subprocess.run(
-		[LUA, str(HARNESS), str(lua), proto, packet.hex()],
+		[LUA, str(HARNESS), str(lua), proto, packet.hex(),
+		 *( [pref] if pref else [] )],
 		capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
 
@@ -1769,3 +1776,76 @@ def test_a_message_text_carrying_a_quote_still_parses(tmp_path: Path) -> None:
 	result = subprocess.run([LUAC, "-p", str(lua)],
 	                        capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# An argument the capture does not carry (0050)
+# ---------------------------------------------------------------------------
+
+TAKES = """struct frame {
+	parameter u8 n [stream];
+	u8        body[n];
+	u8        tail;
+}
+"""
+
+
+def test_a_stream_parameter_becomes_a_preference() -> None:
+	"""The first preference this generator has ever emitted, and the case
+	0050 says would justify one: a preference is per-dissector rather than
+	per-packet, which is the shape of a fact negotiated once and then
+	fixed."""
+	text = emit(TAKES)
+
+	assert 'frame.prefs.n = Pref.uint("n", 0,' in text
+	# And no ProtoField for it: a parameter is not bytes in the packet, so
+	# a row in the tree would show a byte belonging to the member after it.
+	assert "frame_f.n" not in text
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua")
+def test_the_layout_follows_the_preference(tmp_path: Path) -> None:
+	"""Run, and the assertion is that the SAME bytes dissect differently
+	when the argument changes -- which is the whole claim.
+
+	Three values rather than two: the default of zero is a case in its own
+	right, because a dissector cannot know the argument and must not guess
+	one, so a capture opened before anybody sets it describes a zero-length
+	member rather than some other capture's length.
+	"""
+	lua = tmp_path / "takes.lua"
+	lua.write_text(emit(TAKES), encoding="ascii")
+
+	packet = bytes([1, 2, 3, 4, 5])
+	for pref, wide in (("", 0), ("n=2", 2), ("n=4", 4)):
+		_, rows, _ = _read_all(lua, "frame", packet, pref)
+		shown = {one[0]: one for one in rows}
+		assert shown["frame.body"][2] == wide, pref
+		# And the member after it moves with the argument, which is the
+		# half a dissector reading the capture got wrong.
+		assert shown["frame.tail"][1] == wide, pref
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua")
+def test_the_parameter_is_not_a_row(tmp_path: Path) -> None:
+	"""It occupies no bytes, so a row for it would show a byte the member
+	after it owns -- which is what the dissector did before it refused."""
+	lua = tmp_path / "takes.lua"
+	lua.write_text(emit(TAKES), encoding="ascii")
+
+	_, rows, _ = _read_all(lua, "frame", bytes([1, 2, 3, 4, 5]), "n=2")
+	assert not any(one[0] == "frame.n" for one in rows)
+
+
+def test_a_per_message_parameter_is_refused() -> None:
+	"""0050's decision, from the dissector's side: nothing in a capture
+	carries a per-message argument and no preference varies packet to
+	packet, so there is nowhere to read one from.
+
+	`wellformed` already refuses one that MOVES a member; this refuses one
+	that would be READ at all, which is the wider rule the dissector needs.
+	"""
+	with pytest.raises(SituError) as refused:
+		emit("struct frame { parameter u8 mode; u8 a [max = 3]; }")
+
+	assert "mode" in str(refused.value)

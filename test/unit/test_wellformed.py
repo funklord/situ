@@ -2409,7 +2409,12 @@ def test_the_descriptions_that_need_no_view_still_work() -> None:
 #: is that each has the refusal -- and a list derived from "modules with a
 #: `generate`" would grow a new one already exempt.
 GENERATORS = [
-	("situc.dissector", ("schema", "resolved", "name")),
+	# The dissector is NOT here, and its absence is the point rather than
+	# an exemption: it is the one description that can take a `[stream]`
+	# argument, from a preference (26.392). It refuses a per-message one,
+	# and `test_dissector` asserts that -- beside a test that a `[stream]`
+	# one works, so this list shrinking is a capability arriving rather
+	# than a hole opening.
 	("situc.codegen.c.fuzz", ("schema", "resolved", "name")),
 	("situc.codegen.c.checks", ("schema", "resolved", "name")),
 	("situc.codegen.c.tamper", ("schema", "resolved", "name")),
@@ -2433,6 +2438,9 @@ def test_every_generator_refuses_a_parameter(module: str,
 	backends and leaving the fifth description is the divergence the
 	four-way comparison exists to prevent, arriving in the one description
 	that comparison does not cover.
+
+	It has since learned to take one from a preference, which is why it is
+	not in the list above.
 	"""
 	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
 	                      "u8 body[n]; }")
@@ -2444,6 +2452,24 @@ def test_every_generator_refuses_a_parameter(module: str,
 		generate(*[held[one] for one in shape])
 
 	assert "parameter n" in str(refused.value)
+
+
+def test_the_dissector_takes_a_stream_argument_rather_than_refusing() -> None:
+	"""The control for the list above shrinking (26.392).
+
+	Without this, dropping a module from `GENERATORS` looks the same
+	whether the description gained the capability or somebody removed a
+	refusal -- and the second is exactly the silence the list exists to
+	prevent.
+	"""
+	from situc import dissector
+
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+	emitted  = dissector.generate(schema, resolved, "unit")
+
+	assert "S.prefs.n = Pref.uint" in emitted
 
 
 def test_the_map_names_a_parameter_rather_than_placing_it() -> None:

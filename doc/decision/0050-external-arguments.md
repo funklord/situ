@@ -2,13 +2,14 @@
 
 Status: accepted 2026-09-04; the `--define` half built 2026-09-15
 (26.362); `parameter`, `[stream]` and their checks built 2026-09-17
-(26.386), and refused by the four backends and the packer until a view
-can carry one (26.387). Still to do: the four backends' view
-constructor, the walker's `acquire`, the dissector's preference, `situ
-verify`'s argument -- and a corpus struct, which lands with the
-backends rather than before them. The map and the wire signature name
-a parameter as of 2026-09-17 (26.390, 26.391); what a change to
-`[stream]` means for compatibility is open, and 26.391 says why
+(26.386), and refused by every generator until a view can carry one
+(26.387, 26.390). The map and the wire signature name a parameter
+rather than placing it (26.390, 26.391), and the dissector takes a
+`[stream]` one from a preference (26.392). Still to do: the four
+backends' view constructor, the walker's `acquire`, `situ verify`'s
+argument, and a corpus struct -- which lands with the backends rather
+than before them. What a change to `[stream]` means for wire
+compatibility is open, and 26.391 says why
 Date: 2026-09-04
 Phase: raised by the copyright holder while reading 15.2
 

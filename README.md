@@ -773,9 +773,17 @@ message, and is what lets it decide *position* rather than only meaning.
 Without it, a parameter reaching a size, an `at` or a scan cap is refused --
 because a per-message argument cannot reach a Wireshark dissector at all,
 and one that moved a member would leave that description unable to place
-anything after it. The construct and its checks are built; passing the
-argument to a view is not, so the four backends and `situc pack` refuse a
-schema carrying one and say why.
+anything after it.
+
+**The Wireshark dissector is the first description to take one**, and it
+takes a `[stream]` argument from a *preference* -- per-dissector rather
+than per-packet, which is the shape of a fact negotiated once. The default
+is zero and stays zero until a person sets it: a dissector cannot know the
+argument and does not guess. `situc map` and `situc wire` name a parameter
+rather than placing it, since it occupies no bytes. What is missing is
+passing the argument to a *view*, so the four backends and `situc pack`
+refuse a schema carrying one rather than emitting an accessor that would
+read the buffer at the offset of the member after it.
 
 `require` is a compile-time assertion about the capability vector; `invariant`
 names a field situ *maintains* rather than one it merely checks. Writing a
@@ -1585,10 +1593,12 @@ today and which is a written-down design.
   may know something the message does not. `--define name=value` sets a
   declared `const` before the layout is solved, and every command that reads
   a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
-  are checked; what is missing is passing the argument to a view, so the
-  four backends and `situc pack` refuse a schema carrying one rather than
-  emitting an accessor that would read the buffer at the offset of the
-  member after it.
+  are checked; the map and the wire signature name one; and the Wireshark
+  dissector reads a `[stream]` one from a preference, which is the first
+  preference that generator has ever emitted. What is missing is passing
+  the argument to a *view*, so every code generator refuses a schema
+  carrying one rather than emitting an accessor that would read the buffer
+  at the offset of the member after it.
 
 **Designed and accepted, not yet built.**
 

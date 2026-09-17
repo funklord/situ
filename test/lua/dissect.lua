@@ -234,10 +234,22 @@ end
 -- -- the globals a generated dissector reaches for -------------------------
 
 function Proto(name, description)
-	local self = { name = name, description = description, fields = {} }
+	local self = { name = name, description = description, fields = {},
+	               prefs = {} }
 	protos[name] = self
 	return self
 end
+
+--- A dissector preference: a per-dissector setting a person fills in, which
+--- is how a `[stream]` argument reaches a dissector (0050). Here it is just
+--- its default, overridable through a `name=value` argument, because what
+--- the generated code has to get right is WHICH preference it reads and not
+--- how Wireshark's dialog stores one.
+Pref = {
+	uint = function (label, default, description)
+		return default
+	end,
+}
 
 base = { DEC = "DEC", HEX = "HEX", OCT = "OCT" }
 
@@ -285,9 +297,10 @@ DissectorTable = { get = function () return { add = function () end } end }
 
 -- -- the run ---------------------------------------------------------------
 
-local path, proto, hex = ...
+local path, proto, hex, pref = ...
 if path == nil or proto == nil or hex == nil then
-	io.stderr:write("usage: dissect.lua <dissector.lua> <proto> <hex>\n")
+	io.stderr:write("usage: dissect.lua <dissector.lua> <proto> <hex>"
+	                .. " [name=value]\n")
 	os.exit(2)
 end
 
@@ -305,6 +318,18 @@ chunk()
 if protos[proto] == nil then
 	io.stderr:write(("no `%s` in %s\n"):format(proto, path))
 	os.exit(1)
+end
+
+-- A preference the caller sets, applied after the chunk has run so it
+-- overrides the default the generated file assigned. What is being checked
+-- is that the dissector READS the preference rather than the capture.
+if pref ~= nil then
+	local name, value = pref:match("^([%w_]+)=(%d+)$")
+	if name == nil then
+		io.stderr:write(("not a preference: %s\n"):format(pref))
+		os.exit(2)
+	end
+	protos[proto].prefs[name] = tonumber(value)
 end
 
 local pinfo = { cols = {} }

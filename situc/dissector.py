@@ -29,7 +29,8 @@ bytes with a note rather than guessed at.
 
 from __future__ import annotations
 
-from situc.codegen import refuse_parameters
+from situc import traverse
+from situc.diagnostics import not_yet_implemented
 from situc import __version__
 
 import re
@@ -61,16 +62,18 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	struct names, and Wireshark abbrevs are already namespaced by the protocol
 	they hang off.
 	"""
-	# A parameter is an argument the caller supplies (0050), and a
-	# dissector has nowhere to take one from -- a Wireshark preference is
-	# the shape 0050 names for a `[stream]` one and it is not built.
+	# A `[stream]` parameter reaches a dissector as a preference, which is
+	# the shape 0050 names for it: a preference is per-dissector and not
+	# per-packet, which is exactly the shape of a per-stream fact.
 	#
-	# Refused rather than emitted, because what it emitted was
-	# `situ_uint(tvb, 0, 1, false)`: a parameter occupies nothing, so it
-	# sits at the offset of the member after it and the read measured that
-	# member's own first byte. The same silence the four backends were
-	# refused for, in the fifth description.
-	refuse_parameters(schema)
+	# A per-message one cannot reach a dissector at all -- nothing in a
+	# capture carries it and no preference varies packet to packet -- so it
+	# is refused. `wellformed.check_parameters` already refuses one that
+	# MOVES a member; this refuses one that would be read at all, because
+	# what would be emitted is `situ_uint(tvb, 0, 1, false)`: a parameter
+	# occupies nothing, so it sits at the offset of the member after it and
+	# the read measures that member's own first byte.
+	_refuse_per_message_parameters(schema)
 
 	_CONSTS.clear()
 	_CONSTS.update(resolved.layout.env.consts)
@@ -105,13 +108,32 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	if values:
 		lines.extend(values)
 
-	lines.extend(_extent_functions(resolved))
-
 	roots = [name for name in sorted(resolved.structs)
 	         if resolved.structs[name].layout.register is None]
 
+	# Forward-declared where a schema takes an argument, and only there.
+	#
+	# A `[stream]` parameter is read as `<proto>.prefs.<name>`, and an
+	# extent function is emitted BEFORE the `Proto` it names -- so the read
+	# would be an index of a nil global, at the first packet. A Lua local
+	# declared here is the upvalue those functions close over, and the
+	# assignment below fills it before anything calls one.
+	#
+	# Conditional so that every dissector without a parameter stays
+	# byte-identical, which is a cheaper proof than re-reading forty of
+	# them.
+	takes_arguments = bool(traverse.parameters(schema))
+	if takes_arguments:
+		lines.extend(["",
+		              "-- Declared before the extent functions below, which",
+		              "-- read an argument off a protocol's preferences.",
+		              *(f"local {_lua(name)}" for name in roots)])
+
+	lines.extend(_extent_functions(resolved))
+
 	for name in roots:
-		lines.extend(_proto(resolved, resolved.structs[name], basename))
+		lines.extend(_proto(resolved, resolved.structs[name], basename,
+		                    declared=takes_arguments))
 
 	skipped = [name for name in sorted(resolved.structs)
 	           if resolved.structs[name].layout.register is not None]
@@ -297,6 +319,33 @@ _CONVERSATIONS: list[tuple[str, str, str, list[tuple[str, str]]]] = []
 _MESSAGES: dict[str, list[ast.When]] = {}
 
 
+def _refuse_per_message_parameters(schema: ast.Schema) -> None:
+	"""Refuse an argument a capture cannot carry (0050).
+
+	A `[stream]` parameter is fine here and becomes a preference. One
+	without it varies per message, and nothing in a capture says what it
+	was -- so a dissector reading it would be reading the buffer at the
+	offset of the member after it, which is where a parameter sits because
+	it occupies nothing.
+	"""
+	held = [(struct, member) for struct, member in traverse.parameters(schema)
+	        if not any(one.name == "stream" for one in member.attrs)]
+	if not held:
+		return
+
+	struct, member = held[0]
+	raise not_yet_implemented(
+		f"`parameter {member.name}` in `{struct}` without `[stream]`",
+		member.span, 12,
+		[
+			"a dissector takes a `[stream]` argument from a preference, "
+			"which is per-dissector rather than per-packet -- and nothing "
+			"in a capture carries a per-message one (decision 0050)",
+			f"write `parameter {member.type_ref.name} {member.name} "
+			"[stream];` where the argument is fixed for a stream",
+		])
+
+
 def _message_setup(schema: ast.Schema, resolved: ResolvedSchema) -> None:
 	"""Sort the schema's `when`s under the struct each one reads.
 
@@ -444,15 +493,20 @@ def _value_strings(schema: ast.Schema, resolved: ResolvedSchema) -> list[str]:
 
 
 def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
-		basename: str) -> list[str]:
+		basename: str, declared: bool = False) -> list[str]:
 	proto = _lua(struct.name)
 	lines = [
 		f"-- struct {struct.name}",
-		f"local {proto} = Proto(\"{struct.name}\", \"{struct.name} (situ)\")",
+		f"{'' if declared else 'local '}{proto} = "
+		f"Proto(\"{struct.name}\", \"{struct.name} (situ)\")",
 		"",
 	]
 
-	members = own_members(struct)
+	# A parameter is an argument the caller supplies, not bytes in the
+	# packet: it gets no `ProtoField` and no row in the tree, and the
+	# dissector body does not advance past it. It reaches the schema's
+	# expressions through the preference emitted below (0050).
+	members = [held for held in own_members(struct) if not held.parameter]
 
 	# An arm's member is not an own member -- it lives under the variant's
 	# path -- so it got no `ProtoField` and the arm's bytes were shown as
@@ -477,6 +531,7 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	lines.extend(fields)
 	lines.extend(_conversation_fields(struct))
 	lines.extend(_experts(struct))
+	lines.extend(_preferences(struct))
 	lines.append("")
 
 	lines.extend(_dissector(resolved, struct, members))
@@ -800,6 +855,40 @@ def _lua_string(text: str) -> str:
 	and a dissector that fails to load is worse than one that divides.
 	"""
 	return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _preferences(struct: ResolvedStruct) -> list[str]:
+	"""One preference per `[stream]` parameter this struct takes (0050).
+
+	The first preference this generator has ever emitted, and the case
+	0050 says would justify one: a preference is per-dissector rather than
+	per-packet, which is exactly the shape of a fact negotiated once and
+	then fixed -- a cipher suite, a card class, a block size.
+
+	The default is zero, and that is a deliberate refusal to guess. A
+	dissector cannot know the argument; a person opening a capture sets it,
+	and until they do the layout is described under whatever the schema's
+	own expressions make of a zero. A guessed default would describe some
+	other capture confidently.
+	"""
+	held = [placement for placement in own_members(struct)
+	        if placement.parameter]
+	if not held:
+		return []
+
+	proto = _lua(struct.name)
+	lines = ["",
+	         "-- Arguments this format's shape follows, which the message",
+	         "-- does not carry (0050). A preference rather than a field:",
+	         "-- the fact is negotiated once and fixed for a stream, and",
+	         "-- nothing in a capture says what it was."]
+	for placement in held:
+		lines.append(
+			f"{proto}.prefs.{_lua(placement.name)} = Pref.uint("
+			f'"{placement.name}", 0, '
+			f'"{struct.name}.{placement.name}: an argument the layout '
+			f'follows")')
+	return lines
 
 
 def _experts(struct: ResolvedStruct) -> list[str]:
@@ -1428,6 +1517,13 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 		# the emitted Lua as a global that does not exist.
 		local = held.path[len(struct.name) + 1:]
 		if "." in local and held.offset_bits is None:
+			continue
+		# A `[stream]` parameter is read from the dissector's own
+		# preference rather than from the capture (0050). Nothing in a
+		# capture carries an argument, which is why a per-message one
+		# cannot reach a dissector at all and is refused before this.
+		if held.parameter:
+			reads[local] = f"{_lua(struct.name)}.prefs.{_lua(held.name)}"
 			continue
 		one = _read(held, base)
 		if one is not None:
@@ -2188,6 +2284,16 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 	driver = resolved.find(f"{struct.name}.{placement.sized_by}")
 	if driver is None:
 		return None
+
+	# A `[stream]` driver is an argument rather than bytes, so `_read`
+	# below would read the buffer at its offset -- which is where this very
+	# member begins, a parameter occupying nothing. Read from the
+	# preference instead, which is what `_over_fields` does for the
+	# arithmetic form a few lines above; without this the two forms of one
+	# construct disagreed, and the plain `body[n]` was the one that was
+	# wrong (0050).
+	if driver.placement.parameter:
+		return f"{_lua(struct.name)}.prefs.{_lua(driver.placement.name)}"
 
 	# `_read`, rather than a second reader beside it. This hand-rolled the
 	# load and said so -- "`_read` above says the same thing for the same
