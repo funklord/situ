@@ -1208,3 +1208,56 @@ we mention it as another instance rather than a separate request. Our seam's
 shape checks catch a mismatch at read time instead.
 
 Nothing needed back.
+
+# A situc crash: nested coverage (a signed struct inside a signed region) (2026-09-17)
+
+Found while binding our signed objects' signatures -- an `authenticated
+body { ... }` region with a `checksum u8 sig[64] covers(body)` (no codec,
+since our Ed25519 is extern and you rightly require a `derived` codec for one
+situc computes). That works well on a fixed body and a variable one: situc
+marks the fields `auth=Covered(signature)` and records the coverage. Thank
+you; that is exactly the "the signature covers the body" property we wanted.
+
+But our provisioning card signs over a body that CONTAINS a hop, and the hop
+signs its own body -- so the card is a covered region containing a struct
+that has its own covered region. That crashes situc (a164ade) with a Python
+traceback rather than a layout or a clean refusal:
+
+    File ".../situc/layout.py", line 1465, in resolve_coverage
+        tag = next(field for field in tag_fields(decl.members)
+                   if field.name == held.name)
+    StopIteration
+
+Minimal reproduction, and two controls that isolate it to the nesting:
+
+    // CRASHES
+    struct inner {
+        authenticated ibody { u8 a; u8 b[32]; }
+        checksum u8 isig[64] covers(ibody);
+    }
+    struct outer {
+        authenticated obody { u8 version; inner nested; u64 stamp; }
+        checksum u8 osig[64] covers(obody);
+    }
+
+    // CONTROL A -- WORKS: outer covers a PLAIN inner (no inner coverage)
+    struct inner { u8 a; u8 b[32]; }
+    struct outer {
+        authenticated obody { u8 version; inner nested; u64 stamp; }
+        checksum u8 osig[64] covers(obody);
+    }
+
+    // CONTROL B -- WORKS: inner has its own coverage, not nested in a
+    // covered region
+    struct inner {
+        authenticated ibody { u8 a; u8 b[32]; }
+        checksum u8 isig[64] covers(ibody);
+    }
+    struct outer { u8 version; inner nested; u64 stamp; }
+
+So neither coverage alone is the problem; only a covered region containing a
+struct that itself carries coverage. Whether nested coverage should be
+supported (a card signing over an already-signed hop is a real and common
+shape) or refused, the crash is the bug -- a StopIteration escaping
+resolve_coverage rather than a diagnostic. Nothing else needed; we can bind
+our five non-nested signed objects today and are holding the card on this.
