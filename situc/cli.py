@@ -808,7 +808,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 		emitted_rs = generate_rs(parse(source), resolved, args.schema.stem,
 		                         args.prefix,
-							 materialize=args.materialize)
+							 materialize=args.materialize,
+							 messages=args.messages)
 		files    = emitted_rs.files()
 		warnings = emitted_rs.warnings
 	elif args.target == "python":
@@ -816,7 +817,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 		emitted_py = generate_py(parse(source), resolved, args.schema.stem,
 		                         args.prefix,
-							 materialize=args.materialize)
+							 materialize=args.materialize,
+							 messages=args.messages)
 		files    = emitted_py.files()
 		warnings = emitted_py.warnings
 
@@ -828,7 +830,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 	elif args.target == "cpp":
 		cpp      = generate_cpp(parse(source), resolved, args.schema.stem,
 		                        args.prefix,
-							 materialize=args.materialize)
+							 materialize=args.materialize,
+							 messages=args.messages)
 		files    = cpp.files()
 		warnings = cpp.warnings
 	else:

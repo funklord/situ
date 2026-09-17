@@ -44,6 +44,7 @@ from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
+from situc import traverse
 from situc.traverse import (
 	bit_addressed_tag, covered_bit_span,
 	fixed_span_bits,
@@ -126,7 +127,8 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		namespace: str = "situ", materialize: bool = False) -> Generated:
+		namespace: str = "situ", materialize: bool = False,
+		messages: bool = False) -> Generated:
 	# Before anything is emitted: a class a member has taken the name of is
 	# renamed and aliased, and the one case where that rename has nowhere to go
 	# is a diagnostic rather than a header no compiler accepts.
@@ -134,14 +136,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 	return Generated(
 		header   = Emitter(schema, resolved, basename, namespace,
-		                   materialize).header(),
+		                   materialize, messages).header(),
 		basename = basename,
 	)
 
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str, namespace: str, materialize: bool = False) -> None:
+			basename: str, namespace: str, materialize: bool = False,
+			messages: bool = False) -> None:
 		self.schema    = schema
 		self.resolved  = resolved
 		self.basename  = basename
@@ -164,6 +167,11 @@ class Emitter:
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
 		self.materialize = materialize
+		#: Emit the default rendering of each message beside its id (0051).
+		#: The identity is the contract and costs a constant; the text needs
+		#: a locale and a budget situ cannot choose. C's copy carries the
+		#: reasoning.
+		self.messages = messages
 
 	# -- the file ------------------------------------------------------
 
@@ -556,6 +564,7 @@ class Emitter:
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
+		lines.extend(self._messages(struct))
 		lines.extend(self._gates(struct))
 		lines.append("};")
 		lines.extend(self._alias(struct))
@@ -6870,6 +6879,72 @@ class Emitter:
 			lines.append("\t\t/* Nothing in this struct is constrained. */")
 		lines.extend(checks)
 		lines.extend(["\t\treturn ::situ::rt::err::ok;", "\t}"])
+		return lines
+
+	def _messages(self, struct: ResolvedStruct) -> list[str]:
+		"""0051's sibling, as a member function and a class constant per id.
+
+		Beside `validate` rather than inside it: `validate` short-circuits
+		because for a verdict the first failure is the answer, and a caller
+		asking what a message SAYS wants all of it.
+
+		`cap` is what there was room for and the RETURN is how many hold,
+		which may exceed it -- the same contract C's out-parameter states.
+		Stopping at `cap` and reporting `cap` would make truncation
+		invisible, and a caller with a short buffer would be told fewer
+		messages held than did.
+		"""
+		held = traverse.messages(self.schema, struct.name)
+		if not held:
+			return []
+
+		lines = ["",
+		         "\t/* Every message the schema states about this frame whose",
+		         "\t * predicate holds, in declaration order and without",
+		         "\t * stopping at the first. The return is how many hold,",
+		         "\t * which may exceed `cap`: a caller that cares about",
+		         "\t * truncation compares the two (0051). */"]
+		lines.extend(
+			f"\tstatic constexpr std::uint32_t msg_{c_name(when.name)} = {at}u;"
+			for at, when in enumerate(held))
+		lines.extend([
+			"\t[[nodiscard]] std::size_t messages(std::uint32_t *ids,",
+			"\t\t\tstd::size_t cap) const noexcept",
+			"\t{",
+			"\t\tstd::size_t found = 0;",
+		])
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"\t\t/* {when.severity.value} {when.name} */",
+				f"\t\tif ({self._over_fields(struct, local)}) {{",
+				"\t\t\tif (found < cap) {",
+				f"\t\t\t\tids[found] = msg_{c_name(when.name)};",
+				"\t\t\t}",
+				"\t\t\t++found;",
+				"\t\t}",
+			])
+		lines.extend(["\t\treturn found;", "\t}"])
+
+		if self.messages:
+			lines.extend([
+				"",
+				"\t/* The default rendering of one id, or nullptr for an id",
+				"\t * this struct does not state. A consumer with its own",
+				"\t * catalogue keys on the id and never calls this. */",
+				"\tstatic const char *message_text(std::uint32_t id) noexcept",
+				"\t{",
+				"\t\tswitch (id) {",
+			])
+			for when in held:
+				escaped = when.text.replace("\\", "\\\\").replace('"', '\\"')
+				lines.extend([
+					f"\t\tcase msg_{c_name(when.name)}:",
+					f'\t\t\treturn "{escaped}";',
+				])
+			lines.extend(["\t\tdefault:", "\t\t\treturn nullptr;",
+			              "\t\t}", "\t}"])
 		return lines
 
 	def _delimiter_check(self, struct: ResolvedStruct,

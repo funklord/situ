@@ -32,7 +32,7 @@ from situc.codegen.python import generate as generate_py
 from situc.codegen.rust import generate as generate_rs
 from situc.diagnostics import Source
 from situc.layout import solve
-from situc.parser import parse
+from situc.parser import parse, parse_text
 from situc.resolve import resolve
 
 from every_schema import ROOT, SCHEMAS, ids
@@ -740,3 +740,68 @@ def test_an_arm_accessor_checks_the_frame_in_every_backend() -> None:
 		assert ARM_BOUND[backend] in window, (
 			f"{backend}: the `wide` arm accessor does not check that the "
 			f"frame holds it")
+
+
+# ---------------------------------------------------------------------------
+# One message, one id, in four spellings (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct S {
+	u8  ver;
+	u16 length;
+}
+
+when S.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when S.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+
+when S.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`";
+"""
+
+
+def test_the_four_backends_number_a_message_the_same_way() -> None:
+	"""The id is the contract, so the four have to agree about which integer
+	is which message (0051).
+
+	The risk is real and is the one `traverse.messages` exists to remove:
+	`traverse.obligations` carries the same rule for dirty bits, and was
+	written because C and Python each numbered them from their own list and
+	gave different answers for a struct carrying both a tag and an
+	invariant. Four backends deriving the order from four walks would repeat
+	that, and nothing else here would notice -- an id is a small integer and
+	a wrong one reads exactly like a right one.
+
+	Read off the emitted text rather than from a run, because what is being
+	compared is what each backend PUBLISHED as its contract.
+	"""
+	schema   = parse_text(SAYS)
+	resolved = resolve(schema, solve(schema))
+
+	names = ("ZERO_VERSION", "OVERSIZED", "LEGACY_FRAMING")
+	spelled = {
+		"c":      (generate_c(schema, resolved, "unit").header,
+		           "#define SITU_S_{}_MSG {}u"),
+		"cpp":    (generate_cpp(schema, resolved, "unit").header,
+		           "static constexpr std::uint32_t msg_{} = {}u;"),
+		"rust":   (generate_rs(schema, resolved, "unit").module,
+		           "pub const MSG_{}: u32 = {};"),
+		"python": (generate_py(schema, resolved, "unit").module,
+		           "\tMSG_{} = {}"),
+	}
+
+	for target, (text, shape) in spelled.items():
+		for at, name in enumerate(names):
+			spelling = name if target in ("c", "rust", "python") \
+			           else name.lower()
+			assert shape.format(spelling, at) in text, (
+				f"{target} does not number {name} {at}")

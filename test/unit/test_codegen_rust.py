@@ -2133,3 +2133,96 @@ fn main() {
 	run = subprocess.run([str(tmp_path / "out")], capture_output=True,
 	                     text=True, check=False)
 	assert run.returncode == 0, run.stderr
+
+
+# ---------------------------------------------------------------------------
+# The messages sibling (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """struct S {
+	u8  ver;
+	u16 length;
+}
+
+when S.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when S.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+"""
+
+
+def test_a_message_gets_a_constant_and_no_string() -> None:
+	"""Without `--messages` the identity is emitted and the text is not, so
+	a default build carries no sentence at all (0051)."""
+	module = emit(SAYS)
+
+	assert "pub const MSG_ZERO_VERSION: u32 = 0;" in module
+	assert "pub const MSG_OVERSIZED: u32 = 1;" in module
+	assert "version 0 was never shipped" not in module
+	assert "message_text" not in module
+
+
+def test_the_text_arrives_only_when_it_is_asked_for() -> None:
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	module   = generate_rs(schema, resolved, "unit", messages=True).module
+
+	assert "pub fn message_text(id: u32) -> Option<&'static str>" in module
+	assert '"version 0 was never shipped"' in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_messages_sibling_reports_every_message_that_holds(
+		tmp_path: Path) -> None:
+	"""Compiled and run under `-D warnings`. The quiet frame is the control:
+	nothing holds, so nothing is reported."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	(src / "unit.rs").write_text(
+		generate_rs(schema, resolved, "unit", messages=True).module,
+		encoding="ascii")
+	(src / "main.rs").write_text("""mod situ_rt;
+mod unit;
+
+fn main() {
+	let mut ids = [0u32; 4];
+
+	let loud = [0u8, 0x23, 0x28];
+	let held = unit::S::new(&loud).unwrap();
+	assert_eq!(held.messages(&mut ids), 2);
+	assert_eq!(ids[0], unit::S::MSG_ZERO_VERSION);
+	assert_eq!(ids[1], unit::S::MSG_OVERSIZED);
+
+	// A slice too small: the count is still how many held.
+	let mut one = [0u32; 1];
+	assert_eq!(held.messages(&mut one), 2);
+
+	let quiet = [2u8, 0, 10];
+	assert_eq!(unit::S::new(&quiet).unwrap().messages(&mut ids), 0);
+
+	assert_eq!(unit::S::message_text(unit::S::MSG_OVERSIZED),
+	           Some("longer than any early reader was written to hold"));
+	assert_eq!(unit::S::message_text(77), None);
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings",
+		 "-o", str(tmp_path / "probe"), str(src / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
+	assert "fn messages(" not in emit("struct S { u8 a; }")

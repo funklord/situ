@@ -3,10 +3,10 @@
 Status: accepted 2026-09-04; the construct, its checks, `situc doc`
 and the wire signature's refusals built 2026-09-17 (26.377); the
 image, the walker and the editor 2026-09-17 (26.378); the
-dissector's expert info 2026-09-17 (26.379). Still to do: the
-`messages` sibling in the four backends -- which is what a `refuse`
-needs before it can change a verdict -- and the identity on existing
-per-member constraints
+dissector's expert info 2026-09-17 (26.379); the `messages` sibling
+in all four backends 2026-09-17 (26.380, 26.381). Still to do: the
+`refuse` half, which has to land in all five descriptions at once,
+and the identity on existing per-member constraints outside C
 Date: 2026-09-04
 Phase: raised by the copyright holder, after 0050
 

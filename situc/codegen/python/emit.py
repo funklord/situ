@@ -39,6 +39,7 @@ from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
+from situc import traverse
 from situc.traverse import (
 	bit_addressed_tag, covered_bit_span,
 	fixed_span_bits,
@@ -203,15 +204,17 @@ def py_name(path: str) -> str:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ", materialize: bool = False) -> Generated:
+		prefix: str = "situ", materialize: bool = False,
+		messages: bool = False) -> Generated:
 	return Generated(module=Emitter(schema, resolved, basename,
-	                                materialize).module(),
+	                                materialize, messages).module(),
 	                 basename=basename)
 
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str, materialize: bool = False) -> None:
+			basename: str, materialize: bool = False,
+			messages: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
@@ -234,6 +237,11 @@ class Emitter:
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
 		self.materialize = materialize
+		#: Emit the default rendering of each message beside its id (0051).
+		#: C's copy carries the reasoning; here it costs a dict rather than
+		#: flash, and the flag exists so the four backends agree about what
+		#: a default build contains.
+		self.messages = messages
 
 	def module(self) -> str:
 		lines = [
@@ -541,6 +549,7 @@ class Emitter:
 		lines.extend(self._required(struct))
 		lines.extend(self._invariants(struct))
 		lines.extend(self._validate(struct))
+		lines.extend(self._messages(struct))
 		lines.extend(self._gates(struct))
 		lines.append("")
 		return lines
@@ -5322,6 +5331,64 @@ class Emitter:
 			lines.append("\t\t# Nothing in this struct is constrained.")
 			lines.append("\t\treturn")
 		lines.extend(checks)
+		return lines
+
+	def _messages(self, struct: ResolvedStruct) -> list[str]:
+		"""0051's sibling, as a method and a class attribute per id.
+
+		Beside `validate` rather than inside it: `validate` raises at the
+		first failure because for a verdict the first failure is the answer,
+		and a caller asking what a message SAYS wants all of it.
+
+		A list rather than the buffer-and-count the other three take. The
+		truncation contract those state exists because a C caller supplies
+		the memory; Python's caller does not, so there is nothing to
+		truncate and a cap would be ceremony. What agrees across the four is
+		the ids and their order, which is the contract 0051 makes.
+		"""
+		held = traverse.messages(self.schema, struct.name)
+		if not held:
+			return []
+
+		lines = [""]
+		lines.extend(
+			f"\tMSG_{py_name(when.name).upper()} = {at}"
+			for at, when in enumerate(held))
+		lines.extend([
+			"",
+			"\tdef messages(self) -> list[int]:",
+			'\t\t"""Every message the schema states about this frame whose',
+			"\t\tpredicate holds, in declaration order and without stopping",
+			'\t\tat the first (0051)."""',
+			"\t\tfound: list[int] = []",
+		])
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"\t\t# {when.severity.value} {when.name}",
+				f"\t\tif {self._over_fields(struct, local, 'self')}:",
+				f"\t\t\tfound.append(self.MSG_{py_name(when.name).upper()})",
+			])
+		lines.append("\t\treturn found")
+
+		if self.messages:
+			lines.extend([
+				"",
+				"\tMESSAGE_TEXT = {",
+			])
+			for at, when in enumerate(held):
+				escaped = when.text.replace("\\", "\\\\").replace('"', '\\"')
+				lines.append(f'\t\t{at}: "{escaped}",')
+			lines.extend([
+				"\t}",
+				"",
+				"\tdef message_text(self, held: int) -> str | None:",
+				'\t\t"""The default rendering of one id, or None for an id',
+				"\t\tthis struct does not state. A consumer with its own",
+				'\t\tcatalogue keys on the id and never calls this."""',
+				"\t\treturn self.MESSAGE_TEXT.get(held)",
+			])
 		return lines
 
 	def _delimiter_check(self, struct: ResolvedStruct,

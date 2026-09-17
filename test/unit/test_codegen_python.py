@@ -2297,3 +2297,63 @@ def test_a_scaled_number_reads_as_an_exact_pair(tmp_path: Path) -> None:
 	for bad in (".5,", "12.,", "1e,", "1e+,", "+1,", "1.2.3,", "12x,",
 	            "0x10,", "Infinity,", "NaN,", " 1,"):
 		assert one(bad)[0] is False, bad
+
+
+# ---------------------------------------------------------------------------
+# The messages sibling (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """struct S {
+	u8  ver;
+	u16 length;
+}
+
+when S.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when S.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+"""
+
+
+def test_a_message_gets_an_attribute_and_no_string() -> None:
+	"""Without `--messages` the identity is emitted and the text is not.
+
+	Python pays for a string in a dict rather than in flash, so the flag
+	buys this backend little on its own -- it is here so the four agree
+	about what a default build contains, which is the property a caller
+	reading one backend's output and writing against another relies on.
+	"""
+	module = emit(SAYS)
+
+	assert "MSG_ZERO_VERSION = 0" in module
+	assert "MSG_OVERSIZED = 1" in module
+	assert "version 0 was never shipped" not in module
+	assert "MESSAGE_TEXT" not in module
+
+
+def test_the_messages_sibling_reports_every_message_that_holds(
+		tmp_path: Path) -> None:
+	"""Imported and run. The quiet frame is the control: nothing holds, so
+	nothing is reported -- without it a method returning everything it
+	carries passes the other case."""
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	module   = load(tmp_path, SAYS, module_text=generate_py(
+		schema, resolved, "unit", messages=True).module)
+
+	loud = module.S.at(module.Message(bytes([0, 0x23, 0x28])), 0)
+	assert loud.messages() == [module.S.MSG_ZERO_VERSION,
+	                           module.S.MSG_OVERSIZED]
+	assert loud.message_text(module.S.MSG_OVERSIZED) == \
+		"longer than any early reader was written to hold"
+	assert loud.message_text(77) is None
+
+	quiet = module.S.at(module.Message(bytes([2, 0, 10])), 0)
+	assert quiet.messages() == []
+
+
+def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
+	assert "def messages(" not in emit("struct S { u8 a; }")

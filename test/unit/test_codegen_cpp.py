@@ -3044,3 +3044,101 @@ def test_a_scaled_number_reads_as_an_exact_pair(tmp_path: Path) -> None:
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# The messages sibling (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """struct S {
+	u8  ver;
+	u16 length;
+}
+
+when S.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when S.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+"""
+
+
+def test_a_message_gets_a_constant_and_no_string() -> None:
+	"""Without `--messages` the identity is emitted and the text is not, so
+	a default build carries no sentence at all (0051)."""
+	header = emit(SAYS)
+
+	assert "static constexpr std::uint32_t msg_zero_version = 0u;" in header
+	assert "static constexpr std::uint32_t msg_oversized = 1u;" in header
+	assert "version 0 was never shipped" not in header
+	assert "message_text" not in header
+
+
+def test_the_text_arrives_only_when_it_is_asked_for() -> None:
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	header   = generate_cpp(schema, resolved, "unit", messages=True).header
+
+	assert "static const char *message_text(std::uint32_t id) noexcept" in header
+	assert '"version 0 was never shipped"' in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host compiler")
+def test_the_messages_sibling_reports_every_message_that_holds(
+		tmp_path: Path) -> None:
+	"""Compiled and run. The control is the third frame: nothing holds, so
+	nothing is reported -- without it a method returning everything it
+	carries passes the other two."""
+	schema   = parse_text(PREAMBLE + SAYS)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit", messages=True).header,
+		encoding="ascii")
+	(tmp_path / "main.cpp").write_text("""
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	std::uint32_t ids[4];
+	situ::S        held;
+
+	std::uint8_t zero[3] = { 0u, 0x23u, 0x28u };
+	situ::rt::message loud(zero, sizeof zero);
+	if (situ::S::at(loud, 0, held) != situ::rt::err::ok) return 1;
+	if (held.messages(ids, 4u) != 2u) return 2;
+	if (ids[0] != situ::S::msg_zero_version) return 3;
+	if (ids[1] != situ::S::msg_oversized) return 4;
+
+	/* A buffer too small: the count is still how many held. */
+	if (held.messages(ids, 1u) != 2u) return 5;
+
+	std::uint8_t quiet[3] = { 2u, 0u, 10u };
+	situ::rt::message calm(quiet, sizeof quiet);
+	situ::S fine;
+	if (situ::S::at(calm, 0, fine) != situ::rt::err::ok) return 6;
+	if (fine.messages(ids, 4u) != 0u) return 7;
+
+	if (std::strcmp(situ::S::message_text(situ::S::msg_oversized),
+	                "longer than any early reader was written to hold") != 0)
+		return 8;
+	if (situ::S::message_text(77u) != nullptr) return 9;
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+def test_a_struct_with_nothing_to_say_gets_no_sibling() -> None:
+	assert "messages(" not in emit("struct S { u8 a; }")

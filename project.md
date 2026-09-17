@@ -29463,6 +29463,45 @@ signature uses two tabs; this now matches it.
 the walk is held to the four compiled backends over the same bytes -- and
 the identity on existing per-member constraints outside C.
 
+### 26.381 The other three backends, and one number in four spellings
+
+**C++, Rust and Python gained the same sibling**, each in its own idiom:
+a method and a class constant per id in C++, a method and an associated
+constant in Rust, a method and a class attribute in Python. `--messages`
+adds the default rendering in all three.
+
+**Python takes a list rather than a buffer and a count, and the departure
+is deliberate.** The truncation contract the other three state exists
+because a C caller supplies the memory; Python's caller does not, so there
+is nothing to truncate and a cap would be ceremony. What agrees across the
+four is the ids and their order, which is what 0051 makes the contract.
+
+**The id is the contract, so a test holds the four to one numbering.**
+`test_the_four_backends_number_a_message_the_same_way` reads the published
+constant out of each of the four and asserts the same integer. That is not
+a hypothetical risk: `traverse.obligations` carries the identical rule for
+dirty bits and exists because C and Python each numbered them from their
+own list and disagreed about a struct carrying a tag and an invariant. Four
+walks would repeat it, and nothing else would notice -- an id is a small
+integer and a wrong one reads exactly like a right one.
+
+**Rust compiles its `message_text` as a match over associated constants**,
+which is legal because a const path is a pattern, and it is run under
+`-D warnings` like everything else this backend emits.
+
+**Each sabotage was confirmed to land, and two did not the first time.**
+The C short-circuit sabotage matched nothing because the anchor was written
+with two tabs where the file has one; the numbering sabotage had to be
+aimed at ONE backend, since reversing the shared rule keeps all four in
+agreement and the test says nothing about which order is right. A test that
+compares descriptions is blind to a change made to the thing they all read,
+which is the property that makes it worth saying rather than assuming.
+
+**Still to do**: the `refuse` half, which has to land in all five
+descriptions at once because the walk is held to the four compiled backends
+over the same bytes, and the identity on existing per-member constraints
+outside C.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

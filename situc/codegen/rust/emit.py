@@ -41,6 +41,7 @@ from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc import traverse
 from situc.traverse import (
 	bit_addressed_tag, covered_bit_span,
 	fixed_span_bits,
@@ -122,9 +123,10 @@ class Generated:
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ", materialize: bool = False) -> Generated:
+		prefix: str = "situ", materialize: bool = False,
+		messages: bool = False) -> Generated:
 	return Generated(module=Emitter(schema, resolved, basename,
-	                                materialize).module(),
+	                                materialize, messages).module(),
 	                 basename=basename)
 
 
@@ -247,7 +249,8 @@ def _byte_string(run: bytes) -> str:
 
 class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
-			basename: str, materialize: bool = False) -> None:
+			basename: str, materialize: bool = False,
+			messages: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
@@ -259,6 +262,10 @@ class Emitter:
 		#: Emit the second accessor family (decision 0022): the consumer's
 		#: choice rather than the schema's, and off unless asked for.
 		self.materialize = materialize
+		#: Emit the default rendering of each message beside its id (0051).
+		#: C's copy carries the reasoning: the identity is the contract and
+		#: the text needs a locale situ cannot choose.
+		self.messages = messages
 
 	def module(self) -> str:
 		body: list[str] = list(self._codec_externs())
@@ -507,6 +514,7 @@ class Emitter:
 		lines.extend(self._extent_method(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._validate(struct))
+		lines.extend(self._messages(struct))
 		lines.extend(self._gate_opens(struct))
 		lines.extend(["}", ""])
 		lines.extend(self._gates(struct))
@@ -6659,6 +6667,67 @@ class Emitter:
 			"\t\tOk(())",
 			"\t}",
 		]
+
+	def _messages(self, struct: ResolvedStruct) -> list[str]:
+		"""0051's sibling, as a method and an associated constant per id.
+
+		Beside `validate` rather than inside it: `validate` short-circuits
+		because for a verdict the first failure is the answer, and a caller
+		asking what a message SAYS wants all of it.
+
+		`cap` is what there was room for and the RETURN is how many hold,
+		which may exceed it -- the contract C's out-parameter states. Rust
+		could take a slice and return one, and this takes a pointer-free
+		slice with the same two numbers so that the four backends agree
+		about truncation rather than each spelling it its own way.
+		"""
+		held = traverse.messages(self.schema, struct.name)
+		if not held:
+			return []
+
+		lines = ["",
+		         "\t/// Every message the schema states about this frame whose",
+		         "\t/// predicate holds, in declaration order and without",
+		         "\t/// stopping at the first. The return is how many hold,",
+		         "\t/// which may exceed `ids.len()`: a caller that cares",
+		         "\t/// about truncation compares the two (0051)."]
+		lines.extend(
+			f"\tpub const MSG_{_ident(when.name).upper()}: u32 = {at};"
+			for at, when in enumerate(held))
+		lines.extend([
+			"\tpub fn messages(&self, ids: &mut [u32]) -> usize {",
+			"\t\tlet mut found = 0usize;",
+		])
+		for when in held:
+			source = unparse_expr(when.expr, explicit=True)
+			local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+			lines.extend([
+				f"\t\t// {when.severity.value} {when.name}",
+				f"\t\tif {self._over_fields(struct, local, 'self')} {{",
+				"\t\t\tif found < ids.len() {",
+				f"\t\t\t\tids[found] = Self::MSG_{_ident(when.name).upper()};",
+				"\t\t\t}",
+				"\t\t\tfound += 1;",
+				"\t\t}",
+			])
+		lines.extend(["\t\tfound", "\t}"])
+
+		if self.messages:
+			lines.extend([
+				"",
+				"\t/// The default rendering of one id, or `None` for an id",
+				"\t/// this struct does not state. A consumer with its own",
+				"\t/// catalogue keys on the id and never calls this.",
+				"\tpub fn message_text(id: u32) -> Option<&'static str> {",
+				"\t\tmatch id {",
+			])
+			for when in held:
+				escaped = when.text.replace("\\", "\\\\").replace('"', '\\"')
+				lines.append(
+					f'\t\t\tSelf::MSG_{_ident(when.name).upper()} '
+					f'=> Some("{escaped}"),')
+			lines.extend(["\t\t\t_ => None,", "\t\t}", "\t}"])
+		return lines
 
 	def _nesting_probe(self, struct: ResolvedStruct) -> list[str]:
 		"""The depth counter `validate` reads. The extent cannot answer it:
