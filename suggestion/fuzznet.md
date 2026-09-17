@@ -1150,3 +1150,61 @@ generating the flat, member-name-matched form for one struct and letting `import
 handle the rest, which is a smaller thing than it looked when we first asked.
 
 Nothing needed back.
+
+# The last three layouts judged: a real gap in the blob leaf (2026-09-17)
+
+We went down to the three layouts we had held back and judged each against
+situ rather than forcing them. One converted, and it found a small tie you
+cannot express; one is a genuine gap; one is limit 2 above, again.
+
+## The blob leaf: a trailing fixed field after a length-less variable region
+
+Our sealed blob leaf is `commitment || ciphertext || tag`: a fixed
+commitment prefix, the ciphertext, and the AEAD tag last. Its plaintext
+length is NOT in the leaf -- `fzn_blob_leaf_open` takes a `sealed_len`
+parameter and computes `plain_len = sealed_len - FZN_BLOB_LEAF_OVERHEAD`,
+where the overhead is the commitment plus the tag. The container frames the
+leaf; the leaf carries no length of its own, on purpose.
+
+So the ciphertext has to be `u8 ciphertext[remaining]`, and situc refuses
+the `tag` that must follow it:
+
+    error: `[remaining]` must be the last member of its frame
+      = a member after this one would have no bytes to occupy
+
+Which is correct for the form we wrote. The gap is that there is no form for
+"the rest of the frame, LESS the trailing fixed members". `wire/frame.situ`
+does not hit this because it carries `head.length` and sizes its payload
+from that -- a field it spends bytes on precisely so the tag has somewhere
+to live. A container-framed sealed object that deliberately carries no
+length field has no such escape. The narrow ask: a region sized as
+remaining-minus-trailing-fixed, or -- since the codec already knows its own
+tag length -- a `sealed{}` region that reserves the declared tag from the
+tail the way it reserves it from the front.
+
+## Disclosure: limit 2 again, so we did not write a schema
+
+Our committed field is `salt[16]` then `field[remaining]`, with `field`
+bounded at `FZN_DISCLOSE_MAX_FIELD`. That bound sits on a `remaining` array
+and situc refuses `[max]` there -- the same refusal our tree body and
+catalog content already reported. The layout is expressible; the cap is not,
+so a schema would state less than our constant does, and we left it in C.
+
+## The record slot converted, and showed the length-tie you cannot state
+
+The one that worked: our record store is one sparse file per stream, a
+`u16` big-endian length then the record's bytes, and it is now
+`record/store_file.situ` under `target file`, size 2..670 matching an empty
+slot and `FZN_RECORD_STORE_FILE_SLOT`. We kept the record OPAQUE rather than
+nesting `record.situ`, because a nested struct forces a 158-byte minimum and
+cannot express the empty slot -- `len` zero, no record following, the
+sparse-hole sentinel.
+
+What we could not state: on a present slot `len` equals the record's own
+encoded size, and there is no way to tie a length prefix to a nested
+object's size. It is the same shape as the `sum` ask at the top of this
+file -- a field whose value must equal a computed size of other fields -- so
+we mention it as another instance rather than a separate request. Our seam's
+shape checks catch a mismatch at read time instead.
+
+Nothing needed back.
