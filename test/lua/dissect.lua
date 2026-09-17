@@ -26,6 +26,7 @@
 -- accessors were generated from, which is the thing being checked.
 
 local rows    = {}
+local experts = {}
 local protos  = {}
 
 -- -- the byte range -------------------------------------------------------
@@ -210,6 +211,17 @@ end
 --- No mask arm of its own: `display` has one, and no schema in the tree hands
 --- `add_le` a masked field. Nine signed ones reach it, which is why it shares
 --- the sign rather than restating it.
+--- Wireshark's expert info: a severity and a sentence attached to the packet
+--- rather than to a byte range, which is what `when` generates (0051). Kept in
+--- its own list rather than among the field rows, because a row is a thing the
+--- dissector SHOWED at an offset and this is a thing it SAID about the whole
+--- message -- and because the differential against the walker compares rows.
+Tree.add_proto_expert_info = function(self, held)
+	experts[#experts + 1] = ("expert\t%s\t%s\t%s"):format(
+		held.abbr, held.severity, held.text)
+	return self
+end
+
 Tree.add_le = function(self, field, item)
 	if field.abbr ~= nil and item ~= nil then
 		rows[#rows + 1] = ("%s\t%d\t%d\t%s"):format(
@@ -238,6 +250,19 @@ end
 
 ProtoField = {
 	bytes = field("bytes"), string = field("string"), none = field("none"),
+}
+
+expert = {
+	group    = { MALFORMED = "MALFORMED", PROTOCOL = "PROTOCOL" },
+	severity = { ERROR = "ERROR", WARN = "WARN", NOTE = "NOTE",
+	             CHAT = "CHAT" },
+}
+
+ProtoExpert = {
+	new = function (abbr, text, group, severity)
+		return { abbr = abbr, text = text, group = group,
+		         severity = severity }
+	end,
 }
 for _, width in ipairs({ 8, 16, 24, 32, 64 }) do
 	ProtoField["uint" .. width] = field("uint")
@@ -288,4 +313,11 @@ local read  = protos[proto].dissector(Tvb(buffer, 0), pinfo, tree())
 print(("consumed\t%d"):format(read))
 for _, row in ipairs(rows) do
 	print(row)
+end
+
+-- After the fields, and marked, because a reader of this output splits a row
+-- into four and every field abbreviation carries a dot -- `struct.member` --
+-- so a bare `expert` in the first column cannot be one.
+for _, said in ipairs(experts) do
+	print(said)
 end

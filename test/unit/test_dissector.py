@@ -199,6 +199,25 @@ def read_back(lua: Path, proto: str,
 	Split off so that a sweep over many packets writes the Lua once. `analyse`
 	and `generate` are the expensive half and neither depends on the bytes.
 	"""
+	consumed, rows, _ = _read_all(lua, proto, packet)
+	return consumed, rows
+
+
+def read_back_experts(lua: Path, proto: str,
+		packet: bytes) -> list[tuple[str, str, str]]:
+	"""What the dissector SAID about the packet, rather than showed (0051).
+
+	`(abbrev, severity, text)` per expert info added, in the order added.
+	Separate from the rows because the two are different things: a row is a
+	field at an offset, and this is a remark about the whole message -- and
+	the differential against the walker compares rows.
+	"""
+	return _read_all(lua, proto, packet)[2]
+
+
+def _read_all(lua: Path, proto: str, packet: bytes) -> tuple[
+		int, list[tuple[str, int, int, str]], list[tuple[str, str, str]]]:
+	"""One run of the harness, read into its three parts."""
 	assert LUA is not None
 	result = subprocess.run(
 		[LUA, str(HARNESS), str(lua), proto, packet.hex()],
@@ -208,10 +227,16 @@ def read_back(lua: Path, proto: str,
 	lines    = result.stdout.splitlines()
 	consumed = int(lines[0].split("\t")[1])
 	rows     = []
+	experts  = []
 	for line in lines[1:]:
-		field, offset, length, value = line.split("\t")
-		rows.append((field, int(offset), int(length), value))
-	return consumed, rows
+		first, second, third, fourth = line.split("\t")
+		# Every field abbreviation is `struct.member` and carries a dot, so a
+		# bare `expert` in the first column cannot be one.
+		if first == "expert":
+			experts.append((second, third, fourth))
+			continue
+		rows.append((first, int(second), int(third), fourth))
+	return consumed, rows, experts
 
 
 def test_the_blocks_balance() -> None:
@@ -1628,3 +1653,119 @@ def test_a_value_spelled_in_characters_is_shown_as_one() -> None:
 	# The denominator, so a corpus that stopped declaring fields could not
 	# pass this by having nothing to check.
 	assert checked > 500, f"only {checked} declarations were examined"
+
+
+# ---------------------------------------------------------------------------
+# What a schema says about a message, as expert info (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """struct frame {
+	u8  ver;
+	u16 length;
+}
+
+when frame.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when frame.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+
+when frame.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`";
+"""
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua")
+def test_a_message_becomes_expert_info(tmp_path: Path) -> None:
+	"""0051's dissector consumer: a severity and a sentence attached to the
+	packet, filterable, which `situc gen-dissector` emitted none of.
+
+	The last case is the one that makes the others mean something. ver 2 with
+	a short length satisfies no predicate, so a dissector that reported
+	everything it had registered fails there rather than passing three times.
+	"""
+	lua = tmp_path / "says.lua"
+	lua.write_text(emit(SAYS), encoding="ascii")
+
+	for packet, expected in (
+			(b"\x00\x00\x0a", [("frame.zero_version", "ERROR")]),
+			(b"\x01\x00\x0a", [("frame.legacy_framing", "NOTE")]),
+			(b"\x02\x23\x28", [("frame.oversized", "WARN")]),
+			(b"\x02\x00\x0a", [])):
+		said = [(abbrev, severity) for abbrev, severity, _
+		        in read_back_experts(lua, "frame", packet)]
+		assert said == expected, packet.hex()
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua")
+def test_the_dissector_reports_every_message_that_holds(tmp_path: Path) -> None:
+	"""No short circuit, for the reason 0051 puts the reporting sibling beside
+	`validate` rather than inside it: a reader wants everything the schema has
+	to say about the packet, not the first thing."""
+	lua = tmp_path / "says.lua"
+	lua.write_text(emit(SAYS), encoding="ascii")
+
+	said = read_back_experts(lua, "frame", b"\x00\x23\x28")
+	assert [abbrev for abbrev, _, _ in said] == [
+		"frame.zero_version", "frame.oversized"]
+
+
+@pytest.mark.skipif(LUA is None, reason="no lua")
+def test_the_expert_carries_the_text_the_schema_wrote(tmp_path: Path) -> None:
+	"""The identity is what a filter keys on and the text is what a person
+	reads. A registration that dropped either leaves one of the two with
+	nothing, which is the split 0051 takes."""
+	lua = tmp_path / "says.lua"
+	lua.write_text(emit(SAYS), encoding="ascii")
+
+	assert read_back_experts(lua, "frame", b"\x01\x00\x0a") == [
+		("frame.legacy_framing", "NOTE", "v1 counts the header in `length`")]
+
+
+def test_every_severity_maps_onto_one_of_wireshark_s(tmp_path: Path) -> None:
+	"""Three, and no fourth. Wireshark has four levels and situ has three, so
+	`chat` is the one nothing maps onto -- which is the right way round, and
+	is why 0051 refuses a fourth severity to match a consumer.
+
+	Read off the emitted text rather than from a run, because this is about
+	what was REGISTERED: an expert whose predicate never holds is still a
+	filter a person may type, and a name that does not exist is an error in
+	their filter rather than an honest silence.
+	"""
+	text = emit(SAYS)
+	declared = dict(re.findall(
+		r'ProtoExpert\.new\("([\w.]+)", "[^"]*", expert\.group\.\w+, '
+		r"expert\.severity\.(\w+)\)", text))
+	assert declared == {"frame.zero_version":   "ERROR",
+	                    "frame.oversized":      "WARN",
+	                    "frame.legacy_framing": "NOTE"}
+
+
+def test_a_refusal_is_malformed_and_a_remark_is_not(tmp_path: Path) -> None:
+	"""`refuse` means the message does not conform, which is what Wireshark's
+	MALFORMED group says; `warn` and `note` are remarks about one that
+	does."""
+	text = emit(SAYS)
+	groups = dict(re.findall(
+		r'ProtoExpert\.new\("([\w.]+)", "[^"]*", expert\.group\.(\w+)', text))
+	assert groups == {"frame.zero_version":   "MALFORMED",
+	                  "frame.oversized":      "PROTOCOL",
+	                  "frame.legacy_framing": "PROTOCOL"}
+
+
+def test_a_message_text_carrying_a_quote_still_parses(tmp_path: Path) -> None:
+	"""A message is prose a person wrote, so it may carry anything. A text
+	with a quote in it produced Lua that does not parse, and a dissector that
+	fails to load is worse than one that divides."""
+	source = SAYS.replace('"version 0 was never shipped"',
+	                      r'"a \"v0\" message was never shipped"')
+	lua = tmp_path / "quoted.lua"
+	lua.write_text(emit(source), encoding="ascii")
+
+	assert LUAC is not None
+	result = subprocess.run([LUAC, "-p", str(lua)],
+	                        capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr

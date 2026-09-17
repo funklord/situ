@@ -29372,6 +29372,51 @@ change somebody makes rather than one somebody finds.
 the `messages` sibling in the four backends, the identity on existing
 per-member constraints, and the dissector's expert info.
 
+### 26.379 Expert info, which is what a `when` already was
+
+**0051 said the dissector gains most and it was right.** Wireshark's expert
+info is a severity and a sentence attached to a packet, filterable -- which
+is `when` exactly -- and `situc gen-dissector` emitted none. It does now:
+one `ProtoExpert` per message, registered with the name the schema gave, and
+`subtree:add_proto_expert_info` for each predicate that holds.
+
+**The predicate needed no new machinery.** `_over_fields` has rewritten
+schema expressions into Lua reads since the dissector learned to size a
+member, and a `when` is an expression over one struct's own fields -- so it
+is `expr_to_source(expr, explicit=True)` with the struct prefix stripped,
+handed to the function every other expression here goes through. Where it
+declines, the message comes out as a comment naming what stopped it, the
+way every declined expression in that file does.
+
+**Three severities onto four levels, and `chat` is the one nothing maps
+onto.** That is the right way round: 0051 refuses a fourth severity to
+match a consumer, and a schema saying less than a display can show costs
+nothing. `refuse` is `expert.group.MALFORMED` because that is what it means
+-- the message does not conform -- and the other two are `PROTOCOL`, being
+remarks about one that does.
+
+**The expert is registered whether or not the predicate can be read.** A
+name a person may type into a filter has to exist: a filter on a name that
+was never registered is an error in their filter, where one on a message
+this backend cannot evaluate is an honest silence.
+
+**The stub had to learn expert info, and where to put it.** `dissect.lua`
+keeps them in their own list rather than among the field rows, because the
+differential that runs every dissector over random bytes compares rows
+against `walker/report.listing` -- and a remark about the whole message is
+not a row. Field abbreviations are `struct.member` and always carry a dot,
+so a bare `expert` in the first column cannot be one, which is what lets the
+reader split the two out of one stream.
+
+**A message is prose, so the text is escaped.** A `when` carrying a quote
+emitted Lua that does not parse, and a dissector that fails to load is worse
+than one that divides -- 0021's rule, met by a construct that lets a person
+write anything.
+
+**Still to do**: the `messages` sibling in the four backends, which is what
+a `refuse` needs before it can change a verdict, and the identity on
+existing per-member constraints.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

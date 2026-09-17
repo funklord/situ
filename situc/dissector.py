@@ -35,12 +35,14 @@ import re
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.invariant import paths_in
 from situc.relation import conversation_key
 from situc.names import (
 	expand_calls, lua_spelling, over_fields, render_delimiter,
 	translate_operators,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.unparse import expr_to_source
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
 	extent_parts, is_counted_run, local_name, own_members, pinned_bytes,
@@ -78,6 +80,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend(TRIM_HELPER)
 
 	lines.extend(READ_HELPER)
+	_message_setup(schema, resolved)
 	lines.extend(_conversation_setup(schema, resolved))
 
 	# Same rule: only where a number is written as digits.
@@ -275,6 +278,33 @@ SCAN_HELPER = [
 #: runs once per struct and needs to know which relations touch it.
 _CONVERSATIONS: list[tuple[str, str, str, list[tuple[str, str]]]] = []
 
+#: struct name -> the `when`s it owns (0051). Filled by `_message_setup` and
+#: read once per struct, the same shape as `_CONVERSATIONS` above and for the
+#: same reason: `_proto` and `_dissector` take a resolved struct rather than
+#: the schema, and a message is a fact about the schema.
+_MESSAGES: dict[str, list[ast.When]] = {}
+
+
+def _message_setup(schema: ast.Schema, resolved: ResolvedSchema) -> None:
+	"""Sort the schema's `when`s under the struct each one reads.
+
+	0051's construct is a predicate over ONE message, which `wellformed`
+	holds it to -- a predicate over two structs is a relation and 0030 owns
+	it -- so the owner is whichever struct its paths name and there is
+	exactly one.
+
+	The dissector is the consumer 0051 said gains most: Wireshark's expert
+	info is a severity and a sentence attached to a packet, filterable, and
+	`situc gen-dissector` emitted none.
+	"""
+	_MESSAGES.clear()
+	for when in schema.whens():
+		for path in sorted(paths_in(when.expr)):
+			owner = path.partition(".")[0]
+			if owner in resolved.structs:
+				_MESSAGES.setdefault(owner, []).append(when)
+				break
+
 
 def _conversation_setup(schema: ast.Schema,
 		resolved: ResolvedSchema) -> list[str]:
@@ -436,6 +466,7 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 	lines.append(f"local {proto}_f = {proto}.fields")
 	lines.extend(fields)
 	lines.extend(_conversation_fields(struct))
+	lines.extend(_experts(struct))
 	lines.append("")
 
 	lines.extend(_dissector(resolved, struct, members))
@@ -729,7 +760,95 @@ def _dissector(resolved: ResolvedSchema, struct: ResolvedStruct,
 		lost = _LOST in body
 
 	lines.extend(_conversation_calls(resolved, struct))
+	lines.extend(_message_calls(struct))
 	lines.extend(["", "\treturn at", "end"])
+	return lines
+
+
+#: 0051's three severities as Wireshark's. Wireshark has four and situ has
+#: three, and the record refuses a fourth: adding one to match a consumer
+#: would put situ in the business of somebody else's presentation model. So
+#: `chat` is the level nothing maps onto, which is the right way round --
+#: a schema saying less than a display can show costs nothing.
+#:
+#: `refuse` is MALFORMED rather than PROTOCOL, because that is what it means:
+#: the message does not conform. The other two are remarks about one that
+#: does.
+_EXPERT = {
+	ast.Severity.REFUSE: ("expert.group.MALFORMED", "expert.severity.ERROR"),
+	ast.Severity.WARN:   ("expert.group.PROTOCOL", "expert.severity.WARN"),
+	ast.Severity.NOTE:   ("expert.group.PROTOCOL", "expert.severity.NOTE"),
+}
+
+
+def _lua_string(text: str) -> str:
+	"""A schema's sentence inside a Lua double-quoted string.
+
+	A message may say anything -- it is prose a person wrote -- so the two
+	characters that would end the string or start an escape are spelled out.
+	Without this a text carrying a quote produces Lua that does not parse,
+	and a dissector that fails to load is worse than one that divides.
+	"""
+	return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _experts(struct: ResolvedStruct) -> list[str]:
+	"""One `ProtoExpert` per message this struct carries (0051).
+
+	Declared whether or not the body can evaluate the predicate. The
+	abbreviation is what a person filters a capture on, so it is derived from
+	the NAME the schema gave -- which is the identity 0051 makes the contract
+	-- and the text is the default rendering registered beside it.
+	"""
+	held = _MESSAGES.get(struct.name)
+	if not held:
+		return []
+
+	proto = _lua(struct.name)
+	lines = [f"{proto}.experts = {{}}",
+	         f"local {proto}_e = {proto}.experts"]
+	for when in held:
+		group, severity = _EXPERT[when.severity]
+		lines.append(
+			f"{proto}_e.{_lua(when.name)} = ProtoExpert.new("
+			f'"{struct.name}.{when.name}", "{_lua_string(when.text)}", '
+			f"{group}, {severity})")
+	return lines
+
+
+def _message_calls(struct: ResolvedStruct) -> list[str]:
+	"""Add the expert info for every message whose predicate holds.
+
+	At the end of the dissection rather than beside a member, because a
+	`when` is a predicate over the whole struct and there is no member it
+	hangs off. No short circuit either: 0051 puts the reporting sibling
+	beside `validate` rather than inside it for exactly this reason, and a
+	dissector that stopped at the first would hide the rest of what the
+	schema had to say about the packet.
+
+	A predicate this backend cannot read comes out as a comment naming what
+	stopped it, which is what every other declined expression here does. The
+	expert is still registered, so a filter on its name is valid and simply
+	never matches -- the alternative, a name that does not exist, is an error
+	in the user's filter rather than an honest silence.
+	"""
+	held = _MESSAGES.get(struct.name)
+	if not held:
+		return []
+
+	proto = _lua(struct.name)
+	lines = ["", "\t-- what the schema says about this message (0051)"]
+	for when in held:
+		source = expr_to_source(when.expr, explicit=True)
+		local  = re.sub(rf"\b{re.escape(struct.name)}\.", "", source)
+		shown  = _over_fields(struct, local, "0")
+		if shown is None:
+			lines.append(f"\t-- {when.name}: {_unreadable(struct, local)}")
+			continue
+		lines.append(f"\tif {shown} then")
+		lines.append(f"\t\tsubtree:add_proto_expert_info("
+		             f"{proto}_e.{_lua(when.name)})")
+		lines.append("\tend")
 	return lines
 
 
