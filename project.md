@@ -29863,6 +29863,41 @@ to avoid the work. The gate carries a control instead: a name no parser
 dispatches on must come back missing, or three regexes over a file could
 report everything present.
 
+### 26.389 `situ verify` says what the schema says
+
+**0051's fifth consumer, and the last one that record names.** A vector's
+report now carries every `when` whose predicate holds:
+
+    warn: frame `warned`: oversized
+       --> says.vectors:3
+        = longer than any early reader was written to hold
+
+**Every severity, including on vectors that CONFORM.** A `warn` or a `note`
+is by definition about a well-formed message, so a report that spoke only
+about failures would never print one -- which is most of what the construct
+is for. The messages are collected right after the view is acquired and
+before `validate` runs, so a vector that `validate` refuses still carries
+the `refuse` message naming why.
+
+**The ids come from the module and the words from the schema**, which is
+0051's split doing exactly what it was designed for. The generated module
+answers WHICH messages hold; `situ verify` holds the schema, so it reads
+the severity and the sentence from there. Nothing asks for `--messages`:
+the module built in memory carries no strings at all, and the report
+carries the schema's own words.
+
+**The id is read back by POSITION, not by name.** `traverse.messages` is
+the one list all six descriptions number from, and a name lookup would
+agree today and stop agreeing the moment two structs state a `when` of the
+same name -- which nothing forbids, since the check that names must be
+unique is per schema rather than per struct.
+
+**Three controls, because the assertions are string matches on a report.**
+A vector holding no predicate must be spoken about by nothing; a schema
+with no `when` must produce no severity line at all; and changing the
+schema's sentence must change the report, which is what shows the words
+are not the module's.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

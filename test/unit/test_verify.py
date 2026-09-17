@@ -418,3 +418,105 @@ def test_a_schema_without_arrays_is_not_qualified(
 	assert "2 vectors conform" in out
 	assert "except inside arrays" not in out
 	assert "note:" not in out
+
+
+# ---------------------------------------------------------------------------
+# What the schema says about a vector (0051)
+# ---------------------------------------------------------------------------
+
+SAYS = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct frame {
+	u8  ver;
+	u16 length;
+}
+
+when frame.ver == 0
+	refuse zero_version
+	"version 0 was never shipped";
+
+when frame.length > 4096
+	warn oversized
+	"longer than any early reader was written to hold";
+
+when frame.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`";
+"""
+
+SAYS_VECTORS = """frame  quiet    02 00 0A
+frame  noted    01 00 0A
+frame  warned   02 23 28
+frame  refused  00 00 0A
+"""
+
+
+def test_verify_reports_what_the_schema_says(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""0051's fifth consumer, and the last one that record names.
+
+	Every severity, including on vectors that conform: a `warn` or a `note`
+	is by definition about a well-formed message, so a report that spoke
+	only about failures would never print one. The first vector holds no
+	predicate at all and is the control -- without it, a version that
+	printed every message the schema carries would pass the other three.
+	"""
+	schema = tmp_path / "says.situ"
+	schema.write_text(SAYS, encoding="ascii")
+	vectors = tmp_path / "says.vectors"
+	vectors.write_text(SAYS_VECTORS, encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors)]) == 1, \
+		"the `refuse` vector does not conform"
+
+	out = capsys.readouterr().out
+	assert "note: frame `noted`: legacy_framing" in out
+	assert "v1 counts the header in `length`" in out
+	assert "warn: frame `warned`: oversized" in out
+	assert "refuse: frame `refused`: zero_version" in out
+	assert "quiet" not in out.replace("says.vectors", ""), \
+		"a vector holding no predicate is spoken about by nothing"
+
+
+def test_the_words_come_from_the_schema_and_the_ids_from_the_module(
+		tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	"""The split 0051 makes, and why nothing here asks for `--messages`.
+
+	The generated module answers WHICH messages hold, as ids; the severity
+	and the sentence come from the schema, which this command has in hand.
+	So the module `verify` builds in memory carries no strings at all, and
+	the report carries the schema's own words -- asserted by changing the
+	text and seeing the report change while the module is built the same
+	way.
+	"""
+	schema = tmp_path / "says.situ"
+	schema.write_text(SAYS.replace("v1 counts the header in `length`",
+	                               "a sentence only the schema knows"),
+	                  encoding="ascii")
+	vectors = tmp_path / "says.vectors"
+	vectors.write_text("frame noted 01 00 0A\n", encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors)]) == 0
+
+	out = capsys.readouterr().out
+	assert "a sentence only the schema knows" in out
+
+
+def test_a_schema_that_says_nothing_reports_nothing(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""The control at the other end: a schema with no `when` must produce a
+	report with no message lines, or the three severities above would be
+	matching something this command prints regardless."""
+	schema = tmp_path / "plain.situ"
+	schema.write_text(SAYS.split("when")[0], encoding="ascii")
+	vectors = tmp_path / "plain.vectors"
+	vectors.write_text("frame any 01 00 0A\n", encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors)]) == 0
+
+	out = capsys.readouterr().out
+	assert "1 vectors conform" in out
+	for severity in ("note:", "warn:", "refuse:"):
+		assert severity not in out

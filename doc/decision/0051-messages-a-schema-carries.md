@@ -8,7 +8,8 @@ in all four backends 2026-09-17 (26.380, 26.381); the `refuse` half,
 in all six descriptions, 2026-09-17 (26.382). Built. The identity on
 existing per-member constraints -- 26.231's half rather than this
 record's construct -- reached all four backends on 2026-09-17
-(26.383, 26.384, 26.385)
+(26.383, 26.384, 26.385), and `situ verify` reports them 2026-09-17
+(26.389)
 Date: 2026-09-04
 Phase: raised by the copyright holder, after 0050
 

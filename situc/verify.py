@@ -56,6 +56,7 @@ from situc.codegen.c.vectors import (
 from situc.codegen.python.emit import py_name
 from situc.diagnostics import Source
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc import traverse
 from situc.traverse import Check, classify_check, data_sized
 
 
@@ -72,6 +73,14 @@ class Outcome:
 	#: -- see `_unwalked`. Recorded whether or not the vector conformed,
 	#: because it qualifies what conforming means rather than the vector.
 	unwalked: tuple[str, ...] = ()
+
+	#: What the schema SAYS about this vector beyond its layout (0051), as
+	#: `(severity, name, text)` per `when` whose predicate holds. Collected
+	#: whether or not the vector conforms, and independently of `validate`:
+	#: a `refuse` is why a vector was refused and a `note` is worth showing
+	#: about one that was not, so a report that only spoke on failure would
+	#: drop half of what the schema has to say.
+	messages: tuple[tuple[str, str, str], ...] = ()
 
 	#: True where situc itself failed rather than the vector being refused.
 	#: Rendered as a compiler fault, because a reader told that their bytes
@@ -167,16 +176,19 @@ def check(schema: ast.Schema, resolved: ResolvedSchema, name: str,
 			found.append(Outcome(case, f"no struct `{case.struct}` in this schema"))
 			continue
 
-		found.append(_outcome(module, resolved, macros, held, struct, case))
+		found.append(_outcome(schema, module, resolved, macros,
+		                      held, struct, case))
 
 	return found
 
 
-def _outcome(module: object, resolved: ResolvedSchema, macros: dict[str, int],
-		held: object, struct: ResolvedStruct, case: Case) -> Outcome:
+def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
+		macros: dict[str, int], held: object, struct: ResolvedStruct,
+		case: Case) -> Outcome:
 	"""One vector: acquire, validate, measure, and read what it claims."""
 	unwalked = _unwalked(resolved, struct)
 	message  = getattr(module, "Message")
+	said: tuple[tuple[str, str, str], ...] = ()
 
 	try:
 		# A fixed-size struct's `at` takes no length: its extent is the
@@ -186,6 +198,12 @@ def _outcome(module: object, resolved: ResolvedSchema, macros: dict[str, int],
 		         if fixed else
 		         held.at(message(bytearray(case.data)), 0,   # type: ignore[attr-defined]
 		                 len(case.data)))
+		# Before `validate`, and not inside its `try`: the messages are what
+		# the schema SAYS about these bytes, and a vector that `validate`
+		# refuses is exactly the one whose `refuse` message names why. A
+		# report that collected them only on success would drop the half a
+		# reader most wants (0051).
+		said = _said(schema, struct, view)
 		view.validate()
 	except Exception as refused:                        # noqa: BLE001
 		# A refusal by the generated module is a verdict about the vector,
@@ -201,22 +219,55 @@ def _outcome(module: object, resolved: ResolvedSchema, macros: dict[str, int],
 		# smaller half of the bug.
 		if isinstance(refused, getattr(module, "__situ_refusal__", ())):
 			return Outcome(case, f"{type(refused).__name__}: {refused}",
-			               unwalked=unwalked)
+			               unwalked=unwalked, messages=said)
 		return Outcome(case, f"{type(refused).__name__}: {refused}",
-		               unwalked=unwalked, broke=True)
+		               unwalked=unwalked, messages=said, broke=True)
 
 	surplus = _surplus(held, struct, case.data)
 	if surplus is not None:
-		return Outcome(case, surplus, unwalked=unwalked)
+		return Outcome(case, surplus, unwalked=unwalked, messages=said)
 
 	mismatches = _expectations(resolved, macros, view, struct.name, case)
 	if mismatches:
 		return Outcome(case,
 		               f"{len(mismatches)} of {len(case.expectations)} "
 		               f"expectations do not hold",
-		               mismatches, unwalked)
+		               mismatches, unwalked, messages=said)
 
-	return Outcome(case, None, unwalked=unwalked)
+	return Outcome(case, None, unwalked=unwalked, messages=said)
+
+
+def _said(schema: ast.Schema, struct: ResolvedStruct,
+		view: object) -> tuple[tuple[str, str, str], ...]:
+	"""What the schema says about these bytes, as `(severity, name, text)`.
+
+	The generated module answers WHICH messages hold, as ids; the severity
+	and the words come from the schema, which this command has in hand. That
+	is the split 0051 makes -- the id is the contract and the text is a
+	default rendering -- and it is why nothing here asks the module to have
+	been built with `--messages`: a consumer holding the schema needs only
+	the ids.
+
+	The id is the message's position in `traverse.messages`, which is the
+	one list all six descriptions number from. Read back by index rather
+	than by name for that reason: a name lookup would agree today and stop
+	agreeing the moment two structs state a `when` of the same name.
+	"""
+	held = traverse.messages(schema, struct.name)
+	if not held:
+		return ()
+
+	try:
+		ids = view.messages()                   # type: ignore[attr-defined]
+	except AttributeError:
+		return ()                               # a build without the sibling
+
+	said = []
+	for one in ids:
+		if 0 <= one < len(held):
+			when = held[one]
+			said.append((when.severity.value, when.name, when.text))
+	return tuple(said)
 
 
 def _surplus(held: object, struct: ResolvedStruct, data: bytes) -> str | None:
@@ -507,6 +558,22 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 		lines.append(f"    = {len(one.case.data)} bytes, from an implementation "
 		             f"that is not this schema")
 		lines.append("")
+
+	# What the schema SAYS about each vector, after the refusals and before
+	# the summary (0051). Per vector rather than deduplicated, unlike the
+	# arrays below: a message is about THESE bytes, and two vectors holding
+	# the same `note` for different reasons is two facts.
+	#
+	# Every severity, including on vectors that conform. A `warn` or a
+	# `note` is by definition about a message that is well formed, so a
+	# report that spoke only about failures would never print one.
+	for one in found:
+		for severity, name, text in one.messages:
+			lines.append(f"{severity}: {one.case.struct} "
+			             f"`{one.case.name}`: {name}")
+			lines.append(f"   --> {vectors_path}:{one.case.line}")
+			lines.append(f"    = {text}")
+			lines.append("")
 
 	# Deduplicated across the corpus and in the order the schema declares
 	# them: two vectors for one struct have the same arrays in them, and
