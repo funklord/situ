@@ -383,6 +383,18 @@ class Field(Member):
 	#: construct along -- it is read to choose, and the bytes belong to the
 	#: arm.
 	peek: bool			= False
+	#: `parameter u8 block_size;` -- an argument the CALLER supplies, not a
+	#: member of the message at all (0050). Zero bytes wide, no offset, and
+	#: read by every expression that reads a field: a size, an `at`, a
+	#: `[since]`, a `require`, an `invariant`. That reuse is the point of
+	#: spelling it as a member rather than inventing a second expression
+	#: world -- none of those has to learn that this one costs no bytes.
+	#:
+	#: `[stream]` says the argument is fixed for a stream rather than
+	#: varying per message, which is what lets it reach an expression that
+	#: MOVES a member: a dissector can carry a per-stream fact as a
+	#: preference and cannot carry a per-message one at all.
+	parameter: bool			= False
 	#: `u8 pixels[n] at hdr.pixel_offset` -- the member sits where a field
 	#: says, measured from the start of the message rather than from the
 	#: member before it. Distinct from `pin`, which asserts the offset the

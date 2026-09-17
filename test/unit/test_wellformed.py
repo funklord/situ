@@ -718,8 +718,13 @@ def test_every_attribute_is_accounted_for() -> None:
 	# rather than reading: on `u8 a` at offset zero the generated C is
 	# byte-identical with and without it, which looks exactly like an
 	# unread attribute and is a check passing.
+	#   stream           `check_parameters` -- "`[stream]` belongs on a
+	#                    `parameter`", which is a better answer than a
+	#                    position table can give: the attribute is legal on
+	#                    exactly one KIND of member rather than in one place
+	#                    in a declaration (0050).
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries",
-	             "bits", "since", "require_aligned"}
+	             "bits", "since", "require_aligned", "stream"}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
 	         | set(wellformed.UNIMPLEMENTED_ATTRS))
@@ -2232,3 +2237,113 @@ def test_a_declared_encoding_is_carried_as_two_rows() -> None:
 	assert any(check == PINNED_RUN
 	           for check, _ in image.constraints[said]), (
 		"the membership check the arm lookup relies on having run first")
+
+
+# ---------------------------------------------------------------------------
+# `parameter`: an argument the caller supplies (0050)
+# ---------------------------------------------------------------------------
+
+PARAM = "target buffer;\nendian big;\nbit_order msb_first;\n"
+
+
+def test_a_parameter_occupies_no_bytes() -> None:
+	"""It is a member of zero width, so the cursor does not move for it and
+	the member after it begins where it began.
+
+	Asserted through the LAYOUT rather than the AST, because the claim is
+	about what the bytes are: a two-byte argument in front of two one-byte
+	members leaves a two-byte struct, not a four-byte one.
+	"""
+	schema   = parse_text(PARAM + "struct S { parameter u16 block; u8 a; u8 b; }")
+	resolved = resolve(schema, solve(schema))
+	struct   = resolved.structs["S"]
+
+	assert struct.layout.size_bytes == 2
+	assert struct.layout.is_fixed_size
+
+	where = {entry.placement.path: entry.placement.offset_bits
+	         for entry in struct.entries}
+	assert where["S.a"] == 0 and where["S.b"] == 8
+
+
+def test_a_parameter_may_decide_meaning() -> None:
+	"""The half 0050 admits freely: a constraint, an enum's reading, whether
+	a member is required. Nothing moves, so no description loses anything."""
+	schema = parse_text(PARAM + "struct S { parameter u8 mode; u8 a [max = 3]; }")
+	resolved = resolve(schema, solve(schema))
+	assert resolved.structs["S"].layout.size_bytes == 1
+
+
+def test_a_parameter_that_moves_a_member_needs_stream() -> None:
+	"""0050's decision, and the reason is the fifth description.
+
+	A per-message argument cannot reach a Lua dissector at all -- nothing in
+	a capture carries it and no preference varies packet to packet -- so one
+	that moves a member leaves the dissector unable to place anything after
+	it. Refused at schema-writing time rather than lost silently in a
+	description the author never runs.
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PARAM + "struct S { parameter u8 n; u8 body[n]; }")
+
+	said = str(refused.value)
+	assert "[stream]" in said
+	assert "n" in said
+
+
+def test_a_stream_parameter_may_move_a_member() -> None:
+	"""`[stream]` says the argument is fixed for a stream, which is exactly
+	the shape a dissector can carry as a preference."""
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+
+	assert not resolved.structs["S"].layout.is_fixed_size
+
+
+@pytest.mark.parametrize("body", [
+	"struct S { parameter u8 n; u8 body[] until \"\\r\" max n; }",
+	"struct S { parameter u8 at_; u8 body[2] at at_; }",
+])
+def test_every_moving_expression_is_covered(body: str) -> None:
+	"""Not only an array size. An `at` offset says where a member sits and a
+	scan cap says how far one reaches, so each decides where the next one
+	begins -- and a check that covered the array alone would have let the
+	other two through, which is the population question rather than the
+	predicate one."""
+	with pytest.raises(SituError):
+		parse_text(PARAM + body)
+
+
+def test_stream_on_an_ordinary_member_is_refused() -> None:
+	"""`[stream]` says what an ARGUMENT is. A member's bytes arrive with the
+	message either way, so the attribute would assert nothing."""
+	with pytest.raises(SituError) as refused:
+		parse_text(PARAM + "struct S { u8 a [stream]; }")
+	assert "parameter" in str(refused.value)
+
+
+@pytest.mark.parametrize("body", [
+	"struct S { parameter u8 n[4]; }",
+	"struct S { parameter u8 n until \",\"; }",
+	"struct S { parameter u8 n at 4; }",
+])
+def test_a_parameter_cannot_be_given_a_position(body: str) -> None:
+	"""Every form that asks where the bytes are, refused: there are none.
+
+	At the parser rather than in `wellformed`, because each is a question
+	about the declaration rather than about the schema around it.
+	"""
+	with pytest.raises(SituError):
+		parse_text(PARAM + body)
+
+
+def test_a_parameter_round_trips_through_the_unparser() -> None:
+	"""The keyword is the member's KIND, so dropping it writes an ordinary
+	member that occupies bytes -- which is the round-trip failure `peek`
+	already paid for once."""
+	source = (PARAM + "\nstruct S {\n\tparameter u8 n [stream];\n"
+	          "\tu8 body[n];\n}\n")
+	once = unparse(parse_text(source))
+
+	assert "parameter u8 n [stream];" in once
+	assert unparse(parse_text(once)) == once

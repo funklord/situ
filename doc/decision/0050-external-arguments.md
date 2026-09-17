@@ -1,8 +1,11 @@
 # 0050: external arguments, and which of them a schema may take
 
 Status: accepted 2026-09-04; the `--define` half built 2026-09-15
-(26.362). `parameter`, `[stream]` and the wire and map naming that goes
-with them are not built
+(26.362); `parameter`, `[stream]` and their checks built 2026-09-17
+(26.386). Still to do: the four backends' view constructor, the
+walker's `acquire`, the dissector's preference, `situ verify`'s
+argument, and the wire and map naming -- and a corpus struct, which
+lands with the backends rather than before them
 Date: 2026-09-04
 Phase: raised by the copyright holder while reading 15.2
 

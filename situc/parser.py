@@ -159,6 +159,11 @@ ATTRIBUTE_NAMES = frozenset({
 	"trim", "case_insensitive",
 	# section 19.4: one file, more than one version of the protocol
 	"since", "version",
+	# decision 0050: a `parameter` fixed for a stream rather than varying
+	# per message, which is what lets it reach an expression that moves a
+	# member -- a dissector can carry a per-stream fact as a preference and
+	# cannot carry a per-message one at all.
+	"stream",
 	# section 11.5: a weakening the lattice cannot derive
 	"non_canonical",
 	# section 8.3: host-dependent byte order
@@ -1500,6 +1505,8 @@ class Parser:
 				return self.parse_marker_field()
 			if token.text == "peek":
 				return self.parse_peek()
+			if token.text == "parameter":
+				return self.parse_parameter()
 			if token.text == "reserved":
 				return self.parse_reserved()
 			if token.text == "preamble":
@@ -2453,6 +2460,49 @@ class Parser:
 		                 peek    = True,
 		                 located = field.located,
 		                 skip    = field.skip)
+
+	def parse_parameter(self) -> ast.Field:
+		"""`parameter u8 block_size;` -- an argument the caller supplies.
+
+		A prefix, like `peek` and for the same reason: it says what KIND of
+		member this is. What follows is an ordinary field declaration, and
+		reusing one is the point of 0050's design -- every expression that
+		reads a field reads this without learning anything new.
+
+		The forms that make no sense for something with no bytes are refused
+		here rather than later, because each is a question about the
+		declaration rather than about the schema: an argument has no run to
+		count, no delimiter to stop at, no offset to be pinned to and no
+		earlier bytes to skip.
+		"""
+		start = self.advance()
+		field = self.parse_field()
+
+		for held, what in ((field.array, "an array size"),
+		                   (field.until, "a delimiter"),
+		                   (field.pin, "a pinned offset"),
+		                   (field.located, "an `at` offset"),
+		                   (field.skip, "a skip")):
+			if held is None:
+				continue
+			raise error(
+				f"a `parameter` cannot have {what}", field.span,
+				"this is an argument the caller supplies, not bytes in "
+				"the message",
+				[
+					"a parameter is a member of zero width: it has no "
+					"position in the buffer and nothing to read a "
+					"delimiter or a count from",
+					"declare it as a plain scalar -- `parameter u16 "
+					f"{field.name};` -- and let the expressions that read "
+					"it do the rest (decision 0050)",
+				])
+
+		return ast.Field(self.span_from(start), field.name, field.type_ref,
+		                 attrs     = field.attrs,
+		                 radix     = field.radix,
+		                 scaled    = field.scaled,
+		                 parameter = True)
 
 	def parse_field(self) -> ast.Field:
 		start    = self.current

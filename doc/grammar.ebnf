@@ -82,8 +82,8 @@ tokens_decl	= "tokens" ident [ attrs ] "{" enum_body "}" ;
 
 struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 
-member		= field | reserved | marker_field | block | variant | tag_field
-	| pad ;
+member		= field | parameter | reserved | marker_field | block | variant
+	| tag_field | pad ;
 
 (* Section 8.4, decision 0043. Aligns the offset to the next multiple of n;
  * it occupies whatever that costs and shows nothing. *)
@@ -102,6 +102,20 @@ pad		= "pad_to" "(" digits ")" ";"
  * it, and only on a scalar: a member whose extent is emptied and whose
  * bytes the data frames is the general overlap case rather than a
  * dispatch. *)
+(* Decision 0050. `parameter u8 block_size;` -- an argument the CALLER
+ * supplies rather than bytes in the message: zero width, no position, and
+ * read by every expression that reads a field. Spelled as a member so that
+ * sizes, `at`, `[since]`, `require` and `invariant` need learn nothing.
+ *
+ * `[stream]` says the argument is fixed for a stream rather than varying
+ * per message, and is what lets it reach an expression that MOVES a member
+ * -- a dissector can carry a per-stream fact as a preference and cannot
+ * carry a per-message one at all. Without it, a parameter reaching a size,
+ * an `at` or a scan cap is refused.
+ *
+ * None of the forms that ask where the bytes are: there are none. *)
+parameter	= "parameter" [ radix ] scalar_type ident [ attrs ] ";" ;
+
 field		= [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
 		  [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
 (* Section 8.6.8. A run of bytes that may precede the member and belongs to

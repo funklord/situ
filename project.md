@@ -493,11 +493,14 @@ enum_body     = { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
 struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
-member        = field | reserved | marker_field | block | variant
-              | tag_field | pad ;
+member        = field | parameter | reserved | marker_field | block
+              | variant | tag_field | pad ;
 pad           = "pad_to" "(" digits ")" ";"        (* section 8.4 *)
               | "pad_random" "(" digits "," digits ")" scalar_type
                 [ array_spec ] [ attrs ] ";" ;    (* 14.7, 0045 *)
+
+parameter     = "parameter" [ radix ] scalar_type ident [ attrs ] ";" ;
+                                                 (* decision 0050 *)
 
 field         = [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
                 [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
@@ -29707,6 +29710,54 @@ difference.
 Four backends, written separately, each missing the same case in its own
 spelling -- and the fourth failing worse than the other three, because an
 absent identity is silent where a wrong one is confident.
+
+### 26.386 `parameter`: the construct, and a guard that guarded nothing
+
+**0050's second half, at the front end.** `parameter u8 block_size;` is an
+argument the CALLER supplies rather than bytes in the message: zero width,
+no position, and read by every expression that reads a field. Spelling it
+as a member is the record's point -- a size, an `at`, a `[since]`, a
+`require` and an `invariant` all read fields already, and none of them has
+to learn that this one costs no bytes.
+
+**`[stream]` is the whole decision, and the fifth description is why.** A
+parameter may decide MEANING freely; it may decide POSITION only where
+`[stream]` says it is fixed for a stream. Without it a per-message argument
+that moves a member leaves the Lua dissector unable to place anything after
+it -- nothing in a capture carries the argument and no preference varies
+packet to packet. Refused at schema-writing time rather than lost in a
+description the author never runs, which is 14.5's rule pointed the other
+way.
+
+**The check covers three moving expressions, not one.** An array size, an
+`at` offset and a delimited scan's cap: each decides where the next member
+begins. A version covering the array alone would have let the other two
+through, and the test is parameterised over all three -- the population
+question rather than the predicate one.
+
+**A guard I added guarded nothing, and cost the construct its purpose.** I
+put the "a parameter occupies no bytes" return BEFORE `record_interval`,
+reasoning that a parameter placed at the cursor with its scalar's width
+would claim bytes the next member also claims. That was a guess about what
+`record_interval` does: it records a member's VALUE RANGE, not a claim on
+bytes, and it is what puts the name in scope. With the return above it,
+`parameter u8 n [stream]; u8 body[n];` was refused with "`n` is not in
+scope here" -- the construct's one job, defeated. The test asserting that a
+`[stream]` parameter may size a member is what found it, within a minute of
+being written, and the guard is now below the call with the reason
+recorded beside it.
+
+**The unparser had to learn the keyword, and that was predictable.** It is
+the member's KIND, so dropping it writes an ordinary member that occupies
+bytes -- exactly the round-trip failure `peek` paid for once, and the test
+that caught `peek` is the one that would have caught this.
+
+**No backend supports it yet, and no schema in the corpus declares one.**
+That is deliberate rather than an oversight: adding a `parameter` to
+`edges.situ` before the backends can emit an accessor for it would break
+all four on the first build, and 26.223's lesson is that a construct the
+corpus does not carry is a construct no gate can fail on. The corpus struct
+lands with the backend support, which is the next slice.
 
 ## 27. Questions, and how they were settled
 

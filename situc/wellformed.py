@@ -68,6 +68,7 @@ def check(schema: ast.Schema) -> None:
 	check_token_sets(schema)
 	check_located_names(schema)
 	check_peeked_members(schema)
+	check_parameters(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
@@ -2593,6 +2594,106 @@ def _check_located(member: ast.Member, located: ast.Expr,
 			         "layout the solver is computing, and this is an input "
 			         "to it"],
 		)
+
+
+def check_parameters(schema: ast.Schema) -> None:
+	"""What a `parameter` may be, and what it may decide (0050).
+
+	Two refusals, and the second is the record's whole decision. A
+	parameter may decide MEANING freely -- which constraint applies, how an
+	enum reads -- and may decide POSITION only where `[stream]` says it is
+	fixed for a stream. Without that it is a per-message fact, and a
+	per-message fact that moves a member leaves the Lua dissector unable to
+	place anything after it: nothing in a capture carries the argument and
+	no preference varies packet to packet.
+
+	Refused rather than admitted with the dissector declining, because the
+	loss would be silent at schema-writing time -- an author adds one
+	parameter to a size expression and a description they never run stops
+	describing the rest of the struct. 14.5's rule pointed the other way.
+	"""
+	for struct in schema.structs():
+		named = {member.name: member for member in struct.members
+		         if isinstance(member, ast.Field) and member.parameter}
+		if not named:
+			_refuse_stray_stream(struct)
+			continue
+
+		for held in named.values():
+			if held.type_ref.scalar is None:
+				raise error(
+					f"`parameter {held.name}` must be a scalar",
+					held.span,
+					f"`{held.type_ref.name}` is not a scalar type",
+					["an argument is one value the caller supplies; a "
+					 "struct-typed one would be a second message, which is "
+					 "what a `relation` is for (decision 0030)"])
+
+		for member in struct.members:
+			for moves, what in _moving_expressions(member):
+				for path in paths_in(moves):
+					first = path.partition(".")[0]
+					if first not in named:
+						continue
+					if _has(named[first].attrs, "stream"):
+						continue
+					raise error(
+						f"`parameter {first}` decides where a member sits, "
+						f"so it must be `[stream]`",
+						moves.span,
+						f"this {what} reads `{first}`",
+						[
+							f"`{first}` is a per-message argument, and a "
+							"per-message argument that moves a member "
+							"leaves a dissector unable to place anything "
+							"after it -- nothing in a capture carries it",
+							f"write `parameter {named[first].type_ref.name} "
+							f"{first} [stream];` where the argument is fixed "
+							"for a stream, which a dissector can carry as a "
+							"preference (decision 0050)",
+							"a parameter with no `[stream]` may still decide "
+							"meaning: a constraint, an enum's reading, "
+							"whether a member is required",
+						])
+
+
+def _moving_expressions(member: ast.Member) -> list[tuple[ast.Expr, str]]:
+	"""Every expression on this member that decides where bytes sit.
+
+	A size, an `at`, and a delimited scan's cap -- which bounds how far the
+	member reaches and so where the next one begins. Meaning-only
+	expressions are deliberately absent: a `[max]`, a discriminant or a
+	`require` reads a value and moves nothing.
+	"""
+	found: list[tuple[ast.Expr, str]] = []
+	array = getattr(member, "array", None)
+	if array is not None and array.size is not None:
+		found.append((array.size, "array size"))
+	located = getattr(member, "located", None)
+	if located is not None:
+		found.append((located, "`at` offset"))
+	until = getattr(member, "until", None)
+	if until is not None and until.cap is not None:
+		found.append((until.cap, "scan cap"))
+	return found
+
+
+def _refuse_stray_stream(struct: ast.StructDecl) -> None:
+	"""`[stream]` says what an ARGUMENT is, so it means nothing on bytes."""
+	for member in struct.members:
+		if not _has(getattr(member, "attrs", ()), "stream"):
+			continue
+		raise error(
+			"`[stream]` belongs on a `parameter`", member.span,
+			"this is a member of the message, which every reader of the "
+			"message already has",
+			["`[stream]` says an ARGUMENT is fixed for a stream rather "
+			 "than varying per message (decision 0050); a member's bytes "
+			 "arrive with the message either way"])
+
+
+def _has(attrs: tuple[ast.Attr, ...], name: str) -> bool:
+	return any(attr.name == name for attr in attrs)
 
 
 def check_peeked_members(schema: ast.Schema) -> None:

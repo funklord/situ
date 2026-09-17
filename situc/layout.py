@@ -434,6 +434,11 @@ class Placement:
 	#: the enclosing struct's extent, so the member after it begins where
 	#: it began (0057). The arm owns the bytes; this only looked at them.
 	peek: bool			= False
+	#: `parameter u8 block_size;` -- an argument the caller supplies rather
+	#: than bytes in the message (0050). Zero bits wide and placed nowhere:
+	#: the cursor does not move for it, so the member after it begins where
+	#: it began, and nothing reads a buffer at its offset.
+	parameter: bool			= False
 
 	@property
 	def extent_from_own_bytes(self) -> bool:
@@ -2110,6 +2115,7 @@ class Solver:
 			radix              = getattr(member, "radix", None),
 			scaled             = bool(getattr(member, "scaled", False)),
 			peek               = bool(getattr(member, "peek", False)),
+			parameter          = bool(getattr(member, "parameter", False)),
 			radix_minimal      = _has_attr(member.attrs, "minimal"),
 			trimmed            = _has_attr(member.attrs, "trim"),
 			trim_set           = (_whitespace_of(self.schema, member.span)
@@ -2157,6 +2163,19 @@ class Solver:
 
 		if member.array is not None and isinstance(member.array.size, ast.Remaining):
 			state.closed_by = name
+
+		if getattr(member, "parameter", False):
+			# An argument, not bytes (0050): the cursor does not move, so the
+			# member after it begins where it began.
+			#
+			# AFTER `record_interval`, which is the part that is easy to get
+			# wrong and was: that call records the member's VALUE RANGE, not
+			# a claim on bytes, and it is what puts the name in scope. Moved
+			# above it on a guess about overlapping intervals, a `[stream]`
+			# parameter sizing a member was refused with "`n` is not in scope
+			# here" -- the construct's whole purpose, defeated by a guard
+			# guarding nothing.
+			return
 
 		if getattr(member, "peek", False):
 			# A peeked member is read at the cursor and not spent (0057), so

@@ -411,12 +411,14 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 
 def member_to_source(member: ast.Member) -> str:
 	if isinstance(member, ast.Field):
-		# `peek` first, because it is the member's KIND and sits where
+		# `parameter` and `peek` first, because each is the member's KIND and
+		# sits where
 		# `reserved` and `preamble` do. Dropped here, the round-trip wrote
 		# an ordinary member whose bytes the arm no longer owns -- caught
 		# by the same test that caught `scaled` being written `decimal`,
 		# which is what that test is for.
-		parts = ["peek " if getattr(member, "peek", False) else "",
+		parts = ["parameter " if getattr(member, "parameter", False) else "",
+		         "peek " if getattr(member, "peek", False) else "",
 		         _radix_to_source(getattr(member, "radix", None),
 		                          bool(getattr(member, "scaled", False))),
 		         member.type_ref.name, " ", member.name,
