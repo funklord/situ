@@ -191,6 +191,65 @@ def test_every_example_documents_without_error(path: Path) -> None:
 		assert "struct " in text or "tlv" in text
 
 
+WITH_MESSAGES = """struct packet {
+	u8   mode;
+	u8   flags;
+	u16  length;
+}
+
+when packet.flags > 7 refuse undefined_flags
+	"only three flag bits are defined";
+when packet.length > 1500 warn oversized
+	"larger than an Ethernet payload";
+when packet.mode == 3 note legacy_framing
+	"the length counts the header, as it did before v4";
+"""
+
+
+def test_a_document_lists_the_messages_a_schema_carries() -> None:
+	"""0051's cheapest consumer, and the one its record named first: a
+	document is where a reader goes to find out what a format means, and a
+	`when` is the schema saying something a diagram cannot.
+
+	Both halves of each message, because they are different things -- the
+	NAME is what a consumer keys on and what a bug report quotes, the text
+	is a default rendering that a catalogue replaces. A document printing
+	only the sentence would be showing the half that is allowed to change.
+	"""
+	text = emit(WITH_MESSAGES)
+
+	assert "messages" in text
+	for name in ("undefined_flags", "oversized", "legacy_framing"):
+		assert name in text, f"the document does not name `{name}`"
+	assert "only three flag bits are defined" in text
+	assert "when packet.flags > 7" in text
+
+
+def test_the_messages_are_ordered_by_what_they_cost_a_reader() -> None:
+	"""`refuse` before `warn` before `note`. The severities are a scale
+	rather than a set: what makes a message illegal is read before what
+	makes it remarkable."""
+	text  = emit(WITH_MESSAGES)
+	where = [text.index(name) for name in
+	         ("undefined_flags", "oversized", "legacy_framing")]
+
+	assert where == sorted(where), (
+		"the severities are out of order: refuse, then warn, then note")
+
+
+def test_a_document_says_what_validate_does_with_them() -> None:
+	"""A severity word does not say whether the verdict moves, and that is
+	the part a reader cannot infer."""
+	assert "makes `validate` fail" in emit(WITH_MESSAGES)
+	assert "reported, not enforced" in emit(
+		WITH_MESSAGES.replace("refuse undefined_flags", "note undefined_flags"))
+
+
+def test_a_struct_with_no_messages_gets_no_section() -> None:
+	"""An empty heading is a reader asking what it is for."""
+	assert "messages" not in emit("struct s { u8 a; }")
+
+
 def test_a_derived_field_says_it_is_derived() -> None:
 	"""Somebody writing an encoder from this table needs to know the value is
 	not theirs to choose. The fields an invariant *reads* showed up here from

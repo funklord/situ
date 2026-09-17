@@ -94,6 +94,14 @@ def _decl(decl: ast.Decl, depth: int) -> list[str]:
 		return [_indent(depth,
 		                f"invariant {decl.derived} == {expr_to_source(decl.expr)}")]
 
+	if isinstance(decl, ast.When):
+		# The severity and the name before the text, which is the order the
+		# source reads in and the order a consumer cares about: the identity
+		# is the contract and the sentence is a default (0051).
+		return [_indent(depth, f"when {expr_to_source(decl.expr)}"),
+		        _indent(depth + 1, f"{decl.severity.value} {decl.name}"),
+		        _indent(depth + 1, f"\"{decl.text}\"")]
+
 	if isinstance(decl, ast.Relation):
 		params = ", ".join(f"{param.name}: {param.type_name}"
 		                   for param in decl.params)

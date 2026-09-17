@@ -186,6 +186,14 @@ def decl_lines(decl: ast.Decl) -> list[str]:
 	if isinstance(decl, ast.Invariant):
 		return [f"invariant {decl.derived} == {expr_to_source(decl.expr)};"]
 
+	if isinstance(decl, ast.When):
+		# The text back in quotes, escaped the way the lexer reads it: a
+		# message carrying a quote of its own round-trips or the schema this
+		# prints is not the schema that was read (0051).
+		text = decl.text.replace("\\", "\\\\").replace('"', '\\"')
+		return [f"when {expr_to_source(decl.expr)} {decl.severity.value} "
+		        f'{decl.name} "{text}";']
+
 	if isinstance(decl, ast.Relation):
 		params = ", ".join(f"{param.name}: {param.type_name}"
 		                   for param in decl.params)

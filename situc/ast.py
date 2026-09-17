@@ -1497,6 +1497,46 @@ class Invariant(Decl):
 	expr: Expr			# what it equals
 
 
+class Severity(Enum):
+	"""What a `when` says about the message it fires on (0051).
+
+	Three, and no fourth. `refuse` contributes to `validate` and the other
+	two do not; all three are reported by the `messages` sibling. Wireshark
+	has four levels and the editor has three, and adding one to match a
+	consumer would put situ in the business of somebody else's presentation
+	model.
+	"""
+
+	REFUSE = "refuse"
+	WARN   = "warn"
+	NOTE   = "note"
+
+
+@dataclass(frozen=True)
+class When(Decl):
+	"""`when p.mode == 3 note legacy_framing "the length counts the header";`
+
+	A predicate over one message, a severity, an identity and a default
+	rendering (0051). The IDENTITY is the contract and the text is a
+	default: a consumer with its own catalogue keys on the name and ignores
+	the string, and one without it renders what the schema said.
+
+	Evaluated once, in `validate`, and at no other point. No `when` may read
+	another, so there is no order to define and no fixed point to reach --
+	the flat model falls out of there being one execution point rather than
+	out of a rule forbidding others.
+
+	A predicate over members of TWO structs is not a `when`: it is a
+	relation, and 0030 owns that.
+	"""
+
+	span: Span
+	severity: Severity
+	name: str
+	text: str
+	expr: Expr
+
+
 @dataclass(frozen=True)
 class Must(Node):
 	"""One run-time constraint in a relation body (26.95, decision 0030).
@@ -1582,6 +1622,9 @@ class Schema(Node):
 
 	def invariants(self) -> list[Invariant]:
 		return [decl for decl in self.decls if isinstance(decl, Invariant)]
+
+	def whens(self) -> list[When]:
+		return [decl for decl in self.decls if isinstance(decl, When)]
 
 	def relations(self) -> list[Relation]:
 		return [decl for decl in self.decls if isinstance(decl, Relation)]

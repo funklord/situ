@@ -63,6 +63,7 @@ decl		= namespace_decl
 	| register_block_decl
 	| requirement
 	| invariant
+	| when_decl
 	| relation_decl ;
 
 const_decl	= "const" ident "=" expr ";" ;
@@ -227,6 +228,17 @@ relation_decl	= "relation" ident "(" param "," param ")" [ attrs ]
 		  "{" { must } "}" ;
 param		= ident ":" qualified ;
 must		= "must" expr ";" ;
+
+(* A predicate over ONE message, a severity, an identity and a default
+ * rendering. Evaluated once, in `validate`, and at no other point -- so no
+ * `when` can read another and there is no order to define. The NAME is the
+ * contract and the text is a default: a consumer with its own catalogue keys
+ * on the name and ignores the string. A predicate over two messages is a
+ * relation, not a `when`.
+ *
+ * See doc/decision/0051-messages-a-schema-carries.md. *)
+when_decl	= "when" expr severity ident string ";" ;
+severity	= "refuse" | "warn" | "note" ;
 
 
 (* --------------------------------------------------------------------------

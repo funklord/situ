@@ -468,7 +468,7 @@ strictness    = "strict" | "lenient" ;
 decl          = namespace_decl | const_decl | enum_decl | tokens_decl
               | struct_decl | endian_marker_decl | codec_decl
               | register_decl | register_block_decl | requirement
-              | invariant | relation_decl ;
+              | invariant | when_decl | relation_decl ;
 
 (* One level; nesting is rejected naming its phase. A declaration inside is
    named `outer::header`, and an unqualified reference within the same
@@ -637,6 +637,15 @@ relation_decl = "relation" ident "(" param "," param ")" [ attrs ]
                 "{" { must } "}" ;
 param         = ident ":" qualified ;
 must          = "must" expr ";" ;
+
+(* A predicate over ONE message, a severity, an identity and a default
+   rendering. Evaluated once, in `validate`, and at no other point -- so no
+   `when` can read another and there is no order to define. The NAME is the
+   contract and the text is a default: a consumer with its own catalogue
+   keys on the name. A predicate over two messages is a relation, not a
+   `when`. See doc/decision/0051-messages-a-schema-carries.md *)
+when_decl     = "when" expr severity ident string ";" ;
+severity      = "refuse" | "warn" | "note" ;
 ```
 
 `register_decl` is defined in Section 15.
@@ -29256,6 +29265,58 @@ disagreeing about what an accessor is, a one-byte checksum reading
 `lsb_first` field the other way round -- which 26.223 had recorded as a
 fault the corpus could not reach, and which stayed unreachable until a
 protocol needed the axis for its own reasons.
+
+### 26.377 `when`: the construct, and the two descriptions that carry it
+
+**0051's first slice, and the consumer its own record named cheapest.** A
+schema can say something about a message that is not a layout fact:
+
+    when versioned.ver == 0
+        refuse zero_version
+        "version 0 was never shipped; a message claiming it is malformed";
+
+Three severities and no fourth. `refuse` makes a message illegal; `warn` and
+`note` say something about one that is legal. Wireshark has four levels and
+the editor has three, and adding one to match a consumer would put situ in
+the business of somebody else's presentation model.
+
+**The identity is the contract and the text is a default.** A consumer with
+its own catalogue keys on `zero_version` and renders its own sentence; one
+without it renders what the schema said. That is the split situ already
+makes for fixed point -- the scale is emitted and the conversion is not --
+and it answers localisation without inventing i18n.
+
+**Four refusals, and each is a different kind of mistake.** A predicate over
+two structs is not a `when` needing widening: it is a relation, and 0030
+owns it, so reaching across is refused naming that construct. Two `when`s
+may not share a name, because the name is what a consumer keys on and two
+meanings behind one identity cannot be told apart. A predicate that reads no
+member is always true or always false and is not about the message. And a
+`when` with no text is an identity with no default, which is the alternative
+the record rejected: the ask was to make a consumer helpful WITHOUT callback
+code, and an id with no words does not.
+
+**Two descriptions carry it, and they carry different halves.** `situc doc`
+lists all three severities per struct, ordered `refuse`, `warn`, `note` --
+what makes a message illegal is read before what makes it remarkable -- with
+the predicate and the default text beside each name, and a line saying what
+`validate` does with them, which is the part a severity word does not say.
+The WIRE SIGNATURE names only the refusals, and only their name and
+predicate: a refusal changes which messages are legal, so two peers that
+disagree about one disagree about the bytes (0048), while a note changes
+nothing about legality and naming it would churn the signature on an
+editorial change to a sentence.
+
+**`edges.situ` carries one of each**, which is what caught the fifth
+consumer: `situc dump` refuses a declaration it has no case for, by design,
+and said so the moment the schema had one. That is a construct arriving
+correctly -- the failure was a `TypeError` naming the file to edit, in a
+module whose own comment records the last time a subcommand died on a
+schema carrying an invariant.
+
+**What is not built yet**: the `messages` sibling in the four backends, the
+identity on existing per-member constraints, and the dissector's expert
+info. The record's build order put the document first and this is that.
 
 ## 27. Questions, and how they were settled
 

@@ -28,6 +28,70 @@ def rendered(source: str) -> str:
 # -- duplicate declarations -------------------------------------------------
 
 
+
+# -- `when`: messages a schema carries (0051) --------------------------------
+
+
+WHEN_PREAMBLE = ("endian big;\n"
+                 "struct packet { u8 mode; u8 flags; }\n"
+                 "struct other { u8 x; }\n")
+
+
+def when_refused(body: str) -> str:
+	with pytest.raises(SituError) as caught:
+		parse_text(WHEN_PREAMBLE + body + "\n")
+	return caught.value.diagnostic.render()
+
+
+def test_a_when_over_two_messages_is_a_relation() -> None:
+	"""The construct that already exists takes two messages as parameters in
+	temporal order (0030). A `when` is evaluated against ONE view, so a
+	predicate reaching across is not a `when` that needs widening -- it is a
+	second spelling of a relation."""
+	report = when_refused(
+		'when packet.mode == other.x refuse mixed "x";')
+
+	assert "names members of `packet` and `other`" in report
+	assert "`relation`" in report
+
+
+def test_two_whens_may_not_share_a_name() -> None:
+	"""The name is what a consumer keys on, so two messages behind one
+	identity cannot be told apart. The TEXT may say anything."""
+	report = when_refused('when packet.mode == 3 note twice "a";\n'
+	                      'when packet.flags == 1 warn twice "b";')
+
+	assert "names two messages" in report
+	assert "keys on" in report
+
+
+def test_a_when_that_reads_nothing_is_refused() -> None:
+	"""A statement that does not depend on the bytes is always true or
+	always false, and either way it is not about this message."""
+	assert "reads no member" in when_refused('when 1 == 1 note constant "x";')
+
+
+def test_a_when_names_a_field_that_exists() -> None:
+	assert "has no field `nope`" in when_refused(
+		'when packet.nope == 3 note bad "x";')
+
+
+def test_a_when_needs_a_severity_the_language_has() -> None:
+	"""Three and no fourth: a fourth would be situ adopting one consumer's
+	presentation model."""
+	report = when_refused('when packet.mode == 3 shout loud "x";')
+
+	assert "unknown severity `shout`" in report
+	assert "expected `refuse`, `warn` or `note`" in report
+
+
+def test_a_when_needs_its_default_text() -> None:
+	"""An identity with no rendering leaves the sentence in hand-written
+	code, which is what the construct exists to remove."""
+	assert "has no text" in when_refused(
+		'when packet.mode == 3 note legacy_framing;')
+
+
 def test_duplicate_struct_name_rejected() -> None:
 	assert "struct `S` is declared more than once" in rendered(
 		"struct S { u8 a; } struct S { u8 b; }")

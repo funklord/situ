@@ -32,7 +32,9 @@ from situc.types import pinned_shown
 from situc.layout import (
 	Arm, BITS_PER_BYTE, IndexTable, KnownTag, Placement, ValueRule)
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.invariant import paths_in
 from situc.traverse import own_members
+from situc.unparse import expr_to_source
 
 #: Bumped from 0, which 0041 kept because new facts on existing lines are
 #: what the fact list is for and a comparator ignores tokens it does not know.
@@ -72,8 +74,32 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 	for name in sorted(resolved.structs):
 		lines.append("")
 		lines.extend(_struct(resolved.structs[name]))
+		lines.extend(_refusals(schema, name))
 
 	return "\n".join(lines) + "\n"
+
+
+def _refusals(schema: ast.Schema, struct: str) -> list[str]:
+	"""The `when`s that make a message illegal, and only those (0051).
+
+	A `refuse` changes which messages are legal, so two peers that disagree
+	about one disagree about the bytes -- which is 0048's rule for what a
+	wire signature is for. A `warn` or a `note` changes nothing about
+	legality, and naming one here would churn the signature on an editorial
+	change to a sentence.
+
+	The NAME and the predicate, not the text. The text is a default
+	rendering that a consumer may replace; the name is the contract, and
+	the predicate is what a peer has to agree with.
+	"""
+	held = sorted((when for when in schema.whens()
+	               if when.severity is ast.Severity.REFUSE
+	               and any(path.partition(".")[0] == struct
+	                       for path in paths_in(when.expr))),
+	              key=lambda one: one.name)
+
+	return [f"  {struct} refuses: {one.name} when {expr_to_source(one.expr)}"
+	        for one in held]
 
 
 def _directives(schema: ast.Schema) -> list[str]:

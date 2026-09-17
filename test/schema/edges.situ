@@ -1252,3 +1252,28 @@ struct usb_token [allow_straddle, bit_order = lsb_first] {
 }
 
 require size(usb_token) == 2;
+
+// Messages a schema carries (0051). Three severities over one struct, which
+// is the whole construct: a predicate, an identity a consumer keys on, and a
+// default rendering it may replace.
+//
+// Over `versioned` because its fields are what a message is usually about --
+// a version, a length and flags that mean different things across it. A
+// `when` is evaluated once, in `validate`, so none of these can read another
+// and there is no order to define.
+//
+// `refuse` is in the wire signature and the other two are not: a refusal
+// changes which messages are legal, so two peers disagreeing about one
+// disagree about the bytes, while a note changes nothing about legality and
+// would churn the signature on an editorial change.
+when versioned.ver == 0
+	refuse zero_version
+	"version 0 was never shipped; a message claiming it is malformed";
+
+when versioned.length > 4096
+	warn oversized
+	"longer than any v1 reader was written to hold";
+
+when versioned.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`; every later version does not";

@@ -88,6 +88,7 @@ def check(schema: ast.Schema) -> None:
 	check_repeats(schema)
 	check_versions(schema)
 	check_invariants(schema)
+	check_whens(schema)
 	check_relations(schema)
 
 
@@ -1150,6 +1151,87 @@ def _since_of(member: ast.Member) -> int | None:
 			)
 		return attr.value.value
 	return None
+
+
+def check_whens(schema: ast.Schema) -> None:
+	"""A `when` is a predicate over ONE message, named once (0051).
+
+	Three things have to hold, and each is a different kind of mistake. Every
+	path has to name a struct and a member that exist, or the predicate
+	cannot be evaluated at all. Every path has to name the SAME struct: a
+	predicate over two messages is a relation and 0030 owns it, so reaching
+	across here would be a second spelling of a construct that exists. And
+	the names have to be distinct, because the name is what a consumer keys
+	on -- two `when`s sharing one is two meanings behind one identity, which
+	is exactly what the record's "identity is the contract" rules out.
+	"""
+	structs = {decl.name: decl for decl in schema.structs()}
+	seen: dict[str, ast.When] = {}
+
+	for held in schema.whens():
+		if held.name in seen:
+			raise error(
+				f"`{held.name}` names two messages",
+				held.span,
+				label = "this name is already taken",
+				notes = ["the name is what a consumer keys on, so two "
+				         "messages behind one identity cannot be told apart "
+				         "(0051)",
+				         "the text may say anything; the name may not be "
+				         "said twice"],
+			)
+		seen[held.name] = held
+
+		owner: str | None = None
+		for path in paths_in(held.expr):
+			struct_name, _, field = path.partition(".")
+
+			if owner is None:
+				owner = struct_name
+			elif struct_name != owner:
+				raise error(
+					f"`{held.name}` names members of `{owner}` and "
+					f"`{struct_name}`",
+					held.span,
+					label = "two messages, not one",
+					notes = ["a `when` is evaluated against one view, in "
+					         "`validate`, so every path it reads has to be "
+					         "in that view (0051)",
+					         "a predicate over two messages is a `relation`, "
+					         "which takes them as parameters in temporal "
+					         "order (0030)"],
+				)
+
+			struct = structs.get(struct_name)
+			if struct is None:
+				raise error(
+					f"unknown struct `{struct_name}`",
+					held.span,
+					label = "no such struct",
+					notes = ["a `when` is evaluated against a view of one "
+					         "struct, so the members it reads have to be in "
+					         "one"],
+				)
+			if field and _find_member(struct, field) is None:
+				raise error(
+					f"`{struct_name}` has no field `{field}`",
+					held.span,
+					label = "no such field",
+					notes = ["the predicate would read a field that does not "
+					         "exist, so nothing could evaluate it"],
+				)
+
+		if owner is None:
+			raise error(
+				f"`{held.name}` reads no member of any message",
+				held.span,
+				label = "a predicate over nothing",
+				notes = ["a `when` says something about a message, so it has "
+				         "to read one: `when p.mode == 3 note ...` (0051)",
+				         "a statement that does not depend on the bytes is "
+				         "either always true or always false, and either way "
+				         "it is not about this message"],
+			)
 
 
 def check_invariants(schema: ast.Schema) -> None:

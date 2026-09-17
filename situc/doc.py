@@ -24,6 +24,7 @@ from collections.abc import Callable, Sequence
 
 from situc import ast
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.invariant import paths_in
 from situc.names import render_delimiter
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
@@ -73,6 +74,7 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	for name in sorted(resolved.structs):
 		struct = resolved.structs[name]
 		lines.extend(_struct(struct, fmt))
+		lines.extend(_messages(schema, struct, fmt))
 
 	return "\n".join(lines).rstrip() + "\n"
 
@@ -110,6 +112,58 @@ def _struct(struct: ResolvedStruct, fmt: str) -> list[str]:
 		lines.append("")
 
 	lines.extend(_table(struct, fmt))
+	lines.append("")
+	return lines
+
+
+def _messages(schema: ast.Schema, struct: ResolvedStruct,
+		fmt: str) -> list[str]:
+	"""What this struct says about itself beyond its layout (0051).
+
+	The cheapest consumer of `when`, and the record picked it as the first
+	for that reason: a document is where a reader looks to find out what a
+	format means, and a message is the schema saying something a diagram
+	cannot.
+
+	Both parts of each one, because they are different things. The NAME is
+	what a consumer keys on and what a bug report can quote; the text is a
+	default rendering that a consumer with its own catalogue replaces. A
+	document that printed only the sentence would be showing the half that
+	is allowed to change.
+	"""
+	held = [when for when in schema.whens()
+	        if any(path.partition(".")[0] == struct.name
+	               for path in paths_in(when.expr))]
+	if not held:
+		return []
+
+	heading = "messages"
+	lines   = ([f"### {heading}", ""] if fmt == "markdown"
+	           else [heading, "~" * len(heading), ""])
+
+	# `refuse` first, then `warn`, then `note`: a reader wants to know what
+	# makes a message illegal before what makes it remarkable, and the
+	# severities are a scale rather than a set.
+	order = {ast.Severity.REFUSE: 0, ast.Severity.WARN: 1, ast.Severity.NOTE: 2}
+	for when in sorted(held, key=lambda one: (order[one.severity], one.name)):
+		rule = expr_to_source(when.expr)
+		if fmt == "markdown":
+			lines.extend([f"- **{when.severity.value} `{when.name}`** --"
+			              f" {when.text}", f"  - `when {rule}`"])
+		else:
+			lines.extend([f"  {when.severity.value:<7} {when.name}",
+			              f"          when {rule}",
+			              f"          \"{when.text}\""])
+	lines.append("")
+
+	# What `validate` does with them, which is the part a reader cannot
+	# infer from a severity word.
+	refuses = any(one.severity is ast.Severity.REFUSE for one in held)
+	lines.append("A `refuse` makes `validate` fail; `warn` and `note` leave"
+	             " its verdict alone."
+	             if refuses else
+	             "None of these changes `validate`'s verdict: they are"
+	             " reported, not enforced.")
 	lines.append("")
 	return lines
 

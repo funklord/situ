@@ -119,7 +119,8 @@ SPELLED_DIFFERENTLY = {
 	"none": '[ "not" ] "seekable"',  # `not seekable`, not `seekable = none`
 }
 
-ENUMERATED = ("TargetKind", "Granularity", "Seekable", "Expansion")
+ENUMERATED = ("TargetKind", "Granularity", "Seekable", "Expansion",
+              "Severity")
 
 
 def test_the_grammar_names_every_spelling_the_parser_accepts() -> None:

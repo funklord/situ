@@ -202,6 +202,7 @@ STRICTNESS	= {level.value: level for level in ast.Strictness}
 ENDIANS		= {endian.value: endian for endian in ast.Endian}
 BIT_ORDERS	= {order.value: order for order in ast.BitOrder}
 ENUM_DEFAULTS	= {default.value: default for default in ast.EnumDefault}
+SEVERITIES	= {level.value: level for level in ast.Severity}
 
 # Binary operator precedence, loosest first. Section 10 permits arithmetic and
 # bitwise operators everywhere, comparison and boolean operators in constraints
@@ -382,6 +383,7 @@ class Parser:
 			"require":	self.parse_requirement,
 			"assert":	self.parse_requirement,
 			"invariant":	self.parse_invariant,
+			"when":		self.parse_when,
 			"relation":	self.parse_relation,
 		}
 
@@ -2786,6 +2788,55 @@ class Parser:
 		expr = self.parse_expr()
 		self.expect_symbol(";", "after the invariant")
 		return ast.Invariant(self.span_from(start), derived, expr)
+
+	def parse_when(self) -> ast.When:
+		"""`when p.mode == 3 note legacy_framing "before v4 it counted";`
+
+		A predicate, a severity, a name and a default rendering (0051). The
+		name comes after the severity rather than before it so that the line
+		reads as a sentence -- "when this, note that" -- and so that a reader
+		scanning for the severities finds them in one column.
+
+		The text is required. A `when` with no rendering is an identity with
+		no default, which is the alternative that record rejected: the ask
+		was to make a consumer helpful without callback code, and an id with
+		no words does not.
+		"""
+		start = self.advance()
+		expr  = self.parse_expr()
+
+		token    = self.expect_ident("a severity")
+		severity = SEVERITIES.get(token.text)
+		if severity is None:
+			raise error(
+				f"unknown severity `{token.text}`",
+				token.span,
+				label = "expected `refuse`, `warn` or `note`",
+				notes = ["`refuse` makes `validate` fail; `warn` and `note` "
+				         "leave it alone, and all three are reported by the "
+				         "`messages` sibling (0051)",
+				         "three and no fourth: a fourth would be situ "
+				         "adopting one consumer's presentation model"],
+			)
+
+		name = self.expect_ident("a name for this message")
+		if self.current.kind is not TokenKind.STRING:
+			raise error(
+				f"`{name.text}` has no text",
+				self.current.span,
+				label = "expected a quoted sentence here",
+				notes = ["the identity is the contract and the text is a "
+				         "default rendering, which a consumer with its own "
+				         "catalogue ignores (0051)",
+				         "an identity with no default leaves the sentence in "
+				         "hand-written code, which is what the construct "
+				         "exists to remove"],
+			)
+		text = self.advance()
+		self.expect_symbol(";", "after the message")
+
+		return ast.When(self.span_from(start), severity, name.text,
+		                text.text, expr)
 
 	def parse_relation(self) -> ast.Relation:
 		"""`relation response_to(request: frame, response: frame) { ... }`
