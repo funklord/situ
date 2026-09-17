@@ -75,6 +75,7 @@ from situc.traverse import (
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
+from situc.codegen import refuse_parameters
 from situc import __version__
 
 #: A refusal that names no member -- a member noted rather than walked, or a
@@ -148,6 +149,17 @@ class Generated:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		namespace: str = "situ", materialize: bool = False,
 		messages: bool = False) -> Generated:
+	# A `parameter` is an argument the caller supplies (0050), and no
+	# backend can pass one yet: the view carries bytes and nothing else.
+	# Refused rather than emitted, because what an accessor would do is
+	# worse than nothing -- `_over_fields` reads a member "where it sits",
+	# and a parameter sits at the offset of the member AFTER it, so a size
+	# expression reading one compiles cleanly and measures the wrong byte.
+	#
+	# Whole-schema rather than per-member: a note beside the parameter
+	# leaves every expression that reads it still emitting that read.
+	refuse_parameters(schema)
+
 	# Before anything is emitted: a class a member has taken the name of is
 	# renamed and aliased, and the one case where that rename has nowhere to go
 	# is a diagnostic rather than a header no compiler accepts.

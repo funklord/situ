@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 
 from situc import ast, traverse
 from situc.capability import DOMAINS, Axis
+from situc.codegen import refuse_parameters
 from situc.diagnostics import SituError
 from situc.expr import evaluate
 from situc.invariant import paths_in
@@ -788,6 +789,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	rather than logged because a caller that cannot say how much of the
 	schema it encoded has not checked anything.
 	"""
+	# The same refusal the four backends make, and for the same reason: a
+	# walker reading this image would read a parameter off the buffer at
+	# the offset of the member after it. One function rather than five
+	# copies of the sentence (0050).
+	refuse_parameters(schema)
+
 	coverage = Coverage()
 	members  = _ast_members(schema)
 	# 0055's arms, keyed by the set's name. Only where unknown spellings are

@@ -482,6 +482,7 @@ struct cannot describe:
 | `positional { ... }` | a group whose offsets are asserted rather than accumulated |
 | `variant v switch (e) { case 1: ... default: error }` | one of several layouts, chosen by a field already read |
 | `peek u8 kind;` | a discriminant read at the cursor and not spent, so the arm it selects owns the byte |
+| `parameter u8 block_size;` | an argument the *caller* supplies: zero bytes wide, read by every expression a field is read by |
 | `indexed (base = region) { ... }` | members reached through an offset table |
 | `tlv name (tag_decode = ..., value_size = ...)` | a run of tag-length-value items, with the item grammar declared |
 | `opaque name [ n ]` | bytes with no described interior |
@@ -502,6 +503,7 @@ struct cannot describe:
 | `varint_type name { encoding = leb128; max_bits = 64; }` | a variable-length integer encoding |
 | `codec name { ... }` and `impl name extern "sym";` | a transform's property signature, and what implements it |
 | `relation name(a: t, b: t) { must ...; }` | a predicate over two messages, for request/response pairing |
+| `when p.ver == 0 refuse zero_version "..."` | what a message MEANS beyond its layout: an identity a consumer keys on, and a default sentence |
 
 **A byte order the data declares** is TIFF's, and it is a construct rather
 than a case of `endian native` because the answer is in the bytes rather than
@@ -721,6 +723,54 @@ checksum u8 header_checksum[2] covers(header) [self_as = 0];
 require absolute_static(arp_packet);   // fails the build if it does not hold
 invariant derived.total == size(derived.a) + size(derived.b);
 ```
+
+**What a message means, beyond what it holds.** `when` states a predicate
+over one message, a severity, an identity and a default sentence:
+
+```situ
+when frame.ver == 0
+	refuse zero_version
+	"version 0 was never shipped; a message claiming it is malformed";
+
+when frame.length > 4096
+	warn oversized
+	"longer than any v1 reader was written to hold";
+
+when frame.ver == 1
+	note legacy_framing
+	"v1 counts the header in `length`; every later version does not";
+```
+
+Three severities and no fourth. `refuse` makes a message illegal and
+`validate` says so; `warn` and `note` describe one that conforms. All three
+come back from the sibling `situ_frame_messages(view, ids, cap, &count)`,
+which does not stop at the first -- `validate` short-circuits because for a
+verdict the first failure is the answer, and a caller asking what a message
+*says* wants all of it.
+
+**The identity is the contract and the text is a default.** The id is always
+emitted and costs a small integer; the sentence arrives only under
+`--messages`, because text needs a locale, a log format and a flash budget
+situ cannot choose for a target it has never seen. A consumer with its own
+catalogue keys on `zero_version` and renders its own words. Six descriptions
+carry it: the four backends, both walkers, the editor, the Wireshark
+dissector (as expert info) and `situc doc`.
+
+**An argument the caller supplies.** `parameter u8 block_size;` is a member
+of zero width -- no bytes, no offset -- for a format whose shape follows a
+fact the message does not carry: a negotiated cipher suite, a card class, a
+block size a volume header does not repeat. Spelling it as a member is the
+point: a size, an `at`, a `[since]`, a `require` and an `invariant` all read
+fields already.
+
+`[stream]` says the argument is fixed for a stream rather than varying per
+message, and is what lets it decide *position* rather than only meaning.
+Without it, a parameter reaching a size, an `at` or a scan cap is refused --
+because a per-message argument cannot reach a Wireshark dissector at all,
+and one that moved a member would leave that description unable to place
+anything after it. The construct and its checks are built; passing the
+argument to a view is not, so the four backends and `situc pack` refuse a
+schema carrying one and say why.
 
 `require` is a compile-time assertion about the capability vector; `invariant`
 names a field situ *maintains* rather than one it merely checks. Writing a
@@ -1495,14 +1545,18 @@ today and which is a written-down design.
 
 **Built.**
 
-- **A failed check has a name.** `situ_S_check(view, &which)` reports *which
-  member* refused, with the ids as macros -- `#define
-  SITU_UDP_HEADER_LENGTH_CHECK 0u` -- and `validate` becomes
-  `return situ_S_check(view, NULL)`. The Python walker answers the same
-  question through `report.failed_check()`, returning `(member, check)` or
-  the clean and cannot-say sentinels, so the two descriptions can be held
-  against each other on the same bytes. It names the member and not yet the
-  check *kind*, and C++, Rust and Python have not been given it.
+- **A failed check has a name, in all four backends.**
+  `situ_S_check(view, &which)` reports *which member* refused, with the ids
+  as macros -- `#define SITU_UDP_HEADER_LENGTH_CHECK 0u` -- and `validate`
+  becomes `return situ_S_check(view, NULL)`. C++ publishes `check_<member>`
+  constants and a `check(std::uint32_t *)`; Rust publishes `CHECK_<MEMBER>`
+  and `check_which(&mut u32)`, which cannot be called `check` because cpio
+  has a member of that name and Rust has no overloading; Python puts the id
+  on the exception, as `which`. A test holds the four to one numbering, and
+  it found the same defect in each of them -- a member whose check
+  *propagates* rather than naming a refusal was numbered nothing, so `check`
+  returned refused with the sentinel meaning "nothing refused". It names the
+  member and not yet the check *kind*.
 - **Operations the backends define differently are refused.** A shift whose
   amount cannot be proved inside `0..63`, and signed `/` and `%`, no longer
   compile: C leaves them undefined or implementation-defined where Python
@@ -1518,23 +1572,29 @@ today and which is a written-down design.
   cross-backend comparison by an allow-list, which hid three separate bugs
   in the walker's reading and writing of it. It is included now.
 
+**Designed and accepted, half built.**
+
+- **External arguments** (decision 0050). A format whose shape follows a
+  fact the message does not carry -- a negotiated cipher suite, a card
+  class, a block size. `prefix(...)` was already the precedent that a caller
+  may know something the message does not. `--define name=value` sets a
+  declared `const` before the layout is solved, and every command that reads
+  a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
+  are checked; what is missing is passing the argument to a view, so the
+  four backends and `situc pack` refuse a schema carrying one rather than
+  emitting an accessor that would read the buffer at the offset of the
+  member after it.
+
 **Designed and accepted, not yet built.**
 
-- **External arguments** (decision 0050), half built. A format whose shape
-  follows a fact the message does not carry -- a negotiated cipher suite, a
-  card class, a block size. `prefix(...)` was already the precedent that a
-  caller may know something the message does not. The spelling is a
-  `parameter` declaration and a `--define` flag; `--define name=value` sets
-  a declared `const` before the layout is solved and every command that
-  reads a schema takes it, while `parameter` -- the run-time half, a member
-  of zero width -- is not built.
-- **Messages a schema carries** (decision 0051). A schema should be able to
-  say what a violation *means*, not only that one happened: today every
-  bound collapses into `SITU_ERR_CONSTRAINT` and generated code carries no
-  strings at all. The model is deliberately flat -- the checks run once, at
-  the end of processing a buffer, rather than at points scattered through a
-  traversal. The identity half is built, as above; the `when` construct and
-  the text are not.
+- **Messages a schema carries** (decision 0051), built end to end. `when`
+  states what a message *means* beyond its layout -- an identity, a
+  severity and a default sentence -- where every bound used to collapse into
+  `SITU_ERR_CONSTRAINT` with no strings at all. A `refuse` changes the
+  verdict in all six descriptions at once, which is why it could not land in
+  any one of them first. The `messages` sibling reports all three severities
+  without short-circuiting, the Wireshark dissector emits them as expert
+  info, and the editor shows them per document.
 
 - **A byte run as a value** (decision 0052). `u8 sig[4] [must_eq = "WOZ2"]`
   is one span comparison taking one check id, `enum format : u8[2] { bmp =

@@ -71,6 +71,7 @@ from situc.traverse import (
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
+from situc.codegen import refuse_parameters
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -117,6 +118,17 @@ class Generated:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ", materialize: bool = False,
 		messages: bool = False) -> Generated:
+	# A `parameter` is an argument the caller supplies (0050), and no
+	# backend can pass one yet: the view carries bytes and nothing else.
+	# Refused rather than emitted, because what an accessor would do is
+	# worse than nothing -- `_over_fields` reads a member "where it sits",
+	# and a parameter sits at the offset of the member AFTER it, so a size
+	# expression reading one compiles cleanly and measures the wrong byte.
+	#
+	# Whole-schema rather than per-member: a note beside the parameter
+	# leaves every expression that reads it still emitting that read.
+	refuse_parameters(schema)
+
 	# Before anything is emitted: two constructs that flatten to one C
 	# identifier would otherwise surface as a redefinition error in generated
 	# code, naming a function nobody wrote.

@@ -1153,6 +1153,22 @@ def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
 	return found
 
 
+def parameters(schema: Schema) -> list[tuple[str, ast.Field]]:
+	"""Every `parameter` the schema declares, as `(struct, member)` (0050).
+
+	Here rather than in a backend because what asks is not one backend: each
+	of the four refuses to generate for a schema carrying one, and so does
+	the packer, until the argument reaches a view. Five copies of "does this
+	schema have one" is five things to be wrong.
+	"""
+	found: list[tuple[str, ast.Field]] = []
+	for struct in schema.structs():
+		for member in struct.members:
+			if isinstance(member, ast.Field) and member.parameter:
+				found.append((struct.name, member))
+	return found
+
+
 def messages(schema: Schema, struct_name: str) -> list[ast.When]:
 	"""Every `when` this struct owns, in declaration order (0051).
 

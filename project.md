@@ -5111,6 +5111,33 @@ gap instead of papering over it.
 rules in detail along with the schema identifier rules and the decision
 references. This section is the brief.
 
+### 25.-1 A keyword that lands, lands in the README too
+
+**Set by the copyright holder 2026-09-17.** The README is where the
+language is described to somebody who has not read this file, so a
+construct that exists and is not in it is a construct nobody outside the
+tree can find.
+
+So: **adding, renaming or removing a keyword or an attribute is not done
+until the README says so.** Concretely, in the same commit as the change --
+
+- the construct or declaration tables in *The language* gain, lose or
+  rename their row;
+- an attribute gains a row in *Attributes, requirements and invariants*
+  where its placement rule is the interesting part;
+- a construct with a shape worth seeing gets the few lines of schema that
+  show it, beside the ones already there;
+- *Recent additions* moves the feature between **Built**, **half built**
+  and **not yet built**, and says which half is which.
+
+**The last is the one that rots**, because it is the only part that
+describes a STATE rather than a rule -- 0051 sat under "not yet built"
+while all six descriptions carried it, and 0050's entry said `parameter`
+was not built on the day it was. A reader trusts that section precisely
+because situ's own rule is that a description stating what the code does
+not do is worse than one that states nothing (14.5), and this file is a
+description like any other.
+
 ### 25.0 Commits come in two parts, and that is deliberate
 
 A finding lands as **two commits**: the work, and then a `fold:` commit
@@ -29758,6 +29785,46 @@ That is deliberate rather than an oversight: adding a `parameter` to
 all four on the first build, and 26.223's lesson is that a construct the
 corpus does not carry is a construct no gate can fail on. The corpus struct
 lands with the backend support, which is the next slice.
+
+### 26.387 A note would have been worse than a refusal
+
+**The hole 26.386 left open, closed -- and the first way I closed it was
+wrong.** A schema carrying a `parameter` now refuses in all four backends
+and in the packer, naming the member and pointing at 0050.
+
+**The first attempt was a note beside the member**, which is this tree's
+convention for a construct a backend cannot emit: no accessor, and a
+comment saying why. It was written, and all four backends stopped emitting
+a getter. Then the generated C was compiled:
+
+    static inline uint32_t situ_S_body_len(situ_view_t view)
+    {
+        return situ_min_u32((uint32_t)((uint8_t)(situ_base(view))[0u]), ...
+
+`parameter u8 n [stream]; u8 body[n];` compiled cleanly and measured
+`situ_base(view)[0]` -- which is `body`'s OWN first byte. A parameter
+occupies nothing, so it sits at the offset of the member after it, and
+`_over_fields` reads a member where it sits.
+
+**The note was correct about the half it covered and silent about the half
+that mattered.** Declining the accessor stops a caller reading the
+argument; it does nothing about every expression that reads it, and those
+are where the wrong number comes from. A convention followed without asking
+what it covers is the shape `evidence.md` calls a passing check that
+inspected the wrong thing.
+
+**So the refusal is whole-schema, and it is one function.**
+`codegen.refuse_parameters` is called by the four backends and by `situc
+pack` -- the packer too, because its image is what both walkers read and a
+walker would make the identical mistake from the identical offset. Five
+copies of one sentence is five things to reword when the feature lands;
+one function is one line to delete.
+
+**And the refusal is about generated code, not about the construct.** A
+schema with a parameter still parses, still solves, still unparses and
+still has a layout, so `situc doc` and `situc dump` describe one today. A
+test asserts that, so widening the refusal later is a deliberate act rather
+than a side effect of touching something nearby.
 
 ## 27. Questions, and how they were settled
 

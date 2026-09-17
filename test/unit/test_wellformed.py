@@ -2347,3 +2347,58 @@ def test_a_parameter_round_trips_through_the_unparser() -> None:
 
 	assert "parameter u8 n [stream];" in once
 	assert unparse(parse_text(once)) == once
+
+
+@pytest.mark.parametrize("target", ["c", "cpp", "rust", "python", "pack"])
+def test_no_backend_generates_for_a_parameter_yet(target: str) -> None:
+	"""Refused, because what it would emit is worse than nothing.
+
+	No view carries an argument yet, so `_over_fields` reads a parameter
+	"where it sits" -- and a parameter sits at the offset of the member
+	AFTER it, having occupied nothing. Measured before this refusal existed:
+	`parameter u8 n [stream]; u8 body[n];` compiled cleanly in C and
+	`situ_S_body_len` read `situ_base(view)[0]`, which is `body`'s own first
+	byte. A wrong length, confidently, from code a compiler accepts.
+
+	Whole-schema rather than a note beside the parameter: a note leaves
+	every expression that READS it still emitting that read, which is the
+	half that produces the wrong number.
+
+	The packer is here too. Its image is what both walkers read, and a
+	walker would make the same mistake from the same offset.
+	"""
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+
+	if target == "pack":
+		from situc import pack as packer
+		with pytest.raises(SituError) as refused:
+			packer.pack(schema, resolved)
+	else:
+		backend = __import__(f"situc.codegen.{target}", fromlist=["generate"])
+		with pytest.raises(SituError) as refused:
+			backend.generate(schema, resolved, "unit")
+
+	assert "parameter n" in str(refused.value)
+	# The notes rather than the message, because that is where the reason
+	# lives -- and a refusal whose message says only "not yet implemented"
+	# sends a reader to the phase table rather than to the record.
+	assert any("decision 0050" in note
+	           for note in refused.value.diagnostic.notes)
+
+
+def test_the_descriptions_that_need_no_view_still_work() -> None:
+	"""The refusal is about generated code, not about the construct.
+
+	A schema carrying a parameter still parses, still solves, still
+	unparses and still has a layout -- so `situc doc` and `situc dump` can
+	describe one today. Asserted so that widening the refusal later is a
+	deliberate act rather than a side effect.
+	"""
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+
+	assert "S" in resolved.structs
+	assert "parameter u8 n [stream];" in unparse(schema)
