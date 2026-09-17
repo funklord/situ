@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tool"))
 
 import pytest
 
+from situc.parser import ATTRIBUTE_NAMES
+
 import python_floor  # noqa: E402
 import style_gate  # noqa: E402
 from python_floor import declared_floor  # noqa: E402
@@ -760,3 +762,85 @@ def test_every_require_predicate_is_documented() -> None:
 	assert not known - written, (
 		f"the `require` table in project.md has no row for: "
 		f"{sorted(known - written)}")
+
+
+# ---------------------------------------------------------------------------
+# The README carries every keyword (25.-1)
+# ---------------------------------------------------------------------------
+
+def _readme_as_code() -> str:
+	"""Every fenced block and inline code span in the README, joined.
+
+	The code spans rather than the whole file, because the prose uses these
+	words in other senses: "eight bits with no numeric reading" is not
+	`[bits]`, and "the version" is not `[version]`. Matching anywhere in the
+	file passes for those two the moment somebody writes an ordinary
+	sentence, which is a check that inspected the wrong thing rather than
+	nothing.
+
+	Inline spans are matched across newlines: the README hard-wraps, so a
+	span like `preamble u8 sync[4] = "..."` runs over the break. A version
+	that stopped at the newline reported `preamble` missing while it was
+	there, which is the same fault from the other side.
+	"""
+	readme = (ROOT / "README.md").read_text(encoding="utf-8")
+	fenced = re.findall(r"```[\w]*\n(.*?)\n```", readme, re.S)
+	prose  = re.sub(r"```[\w]*\n.*?\n```", "\n", readme, flags=re.S)
+	return "\n".join(fenced + re.findall(r"`([^`]+)`", prose, re.S))
+
+
+def _parser_keywords() -> tuple[list[str], list[str]]:
+	"""The declaration and member keywords, read off the parser's own source.
+
+	Derived rather than listed, for `test_the_affixes_match_the_emitter`'s
+	reason: a hand-written list is a second thing to keep in step, and the
+	one it would be checking is the README.
+	"""
+	source = (ROOT / "situc" / "parser.py").read_text(encoding="ascii")
+	decls  = set(re.findall(r'^\t\t\t"(\w+)":\s*self\.parse_\w+,', source, re.M))
+	# `tag` and `checksum` share one dispatch line and are spelled `in (...)`.
+	members = set(re.findall(r'if token\.text == "(\w+)":', source))
+	return sorted(decls), sorted(members | {"tag", "checksum"})
+
+
+def test_the_readme_names_every_keyword() -> None:
+	"""A keyword the README does not carry is one nobody outside this tree
+	can find (project.md 25.-1).
+
+	It paid on the first run: `namespace`, `pad_random`, `[non_canonical]`,
+	`[require_aligned]`, `[timeout_ms]` and `[retries]` were in the language
+	and in no table, and two of them had been for phases.
+
+	No held-out set, deliberately. Every name the parser dispatches on is a
+	thing a schema author can write, so "documented somewhere" is the right
+	rule for all of them -- and an exemption list here would be the first
+	place a new keyword went to avoid the work.
+	"""
+	held  = _readme_as_code()
+	decls, members = _parser_keywords()
+
+	missing = {
+		"declaration": [one for one in decls
+		                if not re.search(rf"\b{re.escape(one)}\b", held)],
+		"member":      [one for one in members
+		                if not re.search(rf"\b{re.escape(one)}\b", held)],
+		"attribute":   [one for one in sorted(ATTRIBUTE_NAMES)
+		                if not re.search(rf"\b{re.escape(one)}\b", held)],
+	}
+
+	assert not any(missing.values()), (
+		f"the README names no code for these: {missing}. A keyword that "
+		f"lands, lands in the README too -- the construct tables, the "
+		f"attribute table, and `Recent additions` (project.md 25.-1).")
+
+
+def test_the_readme_check_can_fail() -> None:
+	"""The control, and it is not a formality: the scan is three regexes
+	over a file, and a wrong one reports everything present.
+
+	A name no parser dispatches on has to come back missing, or the check
+	above would pass for a README that said nothing at all.
+	"""
+	held = _readme_as_code()
+	assert not re.search(r"\bnot_a_situ_keyword\b", held)
+	assert re.search(r"\bstruct\b", held), "and a real one has to be found"

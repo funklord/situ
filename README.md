@@ -491,6 +491,7 @@ struct cannot describe:
 | `coded name (codec) { ... }` | a region transformed before it is read |
 | `register` / `register_block` | an MMIO register with its bus width and access rules |
 | `pad_to(n);` | the bytes from here to the next multiple of `n` |
+| `pad_random(min, max) u8 fill[];` | a run of unpredictable length, so the extent carries no information |
 
 **Declarations** name a thing the members then use:
 
@@ -503,6 +504,7 @@ struct cannot describe:
 | `varint_type name { encoding = leb128; max_bits = 64; }` | a variable-length integer encoding |
 | `codec name { ... }` and `impl name extern "sym";` | a transform's property signature, and what implements it |
 | `relation name(a: t, b: t) { must ...; }` | a predicate over two messages, for request/response pairing |
+| `namespace name;` | what the generated symbols are scoped by, where the default prefix is not wanted |
 | `when p.ver == 0 refuse zero_version "..."` | what a message MEANS beyond its layout: an identity a consumer keys on, and a default sentence |
 
 **A byte order the data declares** is TIFF's, and it is a construct rather
@@ -693,7 +695,9 @@ rather than ignored. `[min = 8]`, `[max = N]`, `[must_eq = 0x1f]`,
 `[must_be_zero]`, `[preserve]`, `[since = 2]` for a member a later version
 added, `[secret]`, `[self_as = 0]` for what a checksum's own bytes read as
 while it is computed, `[allow_straddle]` for a bit field that crosses a byte
-boundary on purpose.
+boundary on purpose, `[require_aligned]` for one that must start on its
+natural boundary, `[non_canonical]` for a weakening the lattice cannot
+derive and the schema therefore has to state.
 
 The ones whose placement rule is the interesting part:
 
@@ -708,6 +712,7 @@ The ones whose placement rule is the interesting part:
 | `[preserve]` / `[unknown]` | on a `reserved` run: carry the bits through, or accept them, rather than demanding a value |
 | `[on_read = clear]` / `[on_write = ...]` | on an `mmio` register field: the side effect access has, which is why `effect` is an axis |
 | `[rsvd]` | on a register field: SystemRDL's reserved, which is not `reserved u2 [preserve]` |
+| `[timeout_ms = N]` / `[retries = N]` | on a `relation`: the retransmission and timing contract of an exchange, which both endpoints must agree on |
 
 A member may carry an access mode too -- `[rw]`, `[ro]`, `[wo]`, `[w1c]`,
 `[w0c]`, `[w1s]`, `[w0s]`, `[rc]`, `[rs]`, `[wo_once]` -- which is the

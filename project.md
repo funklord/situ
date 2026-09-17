@@ -29826,6 +29826,43 @@ still has a layout, so `situc doc` and `situc dump` describe one today. A
 test asserts that, so widening the refusal later is a deliberate act rather
 than a side effect of touching something nearby.
 
+### 26.388 The README rule, made mechanical -- and what it found
+
+**25.-1 says a keyword lands in the README too. A test now says so.**
+`test_the_readme_names_every_keyword` reads the DECLARATION and MEMBER
+keywords off `parser.py`'s own dispatch tables and `ATTRIBUTE_NAMES` off
+the parser, and requires each to appear in the README as code -- a fenced
+block or an inline span.
+
+**It paid on the first run, and not only for this session's work.** Six
+names were in the language and in no table:
+
+    namespace          a file-scope declaration
+    pad_random         a member kind (0045)
+    [non_canonical]    a weakening the lattice cannot derive
+    [require_aligned]  a member that must start on its natural boundary
+    [timeout_ms]       a relation's retransmission contract (26.98)
+    [retries]          the same
+
+Four of those predate this session by phases. A rule nobody could check
+had been followed for whatever was recent and not for anything older,
+which is what an unenforced convention looks like from the outside.
+
+**The scan is over code spans, not the whole file, and that is the whole
+design.** Matching anywhere would pass `[bits]` on "eight bits with no
+numeric reading" and `[version]` on "the version" -- a check inspecting
+the wrong thing rather than nothing, which reads identically from the
+output. And inline spans have to match ACROSS NEWLINES, because the README
+hard-wraps: a first version stopped at the line break and reported
+`preamble` missing while it was there, in a span that wrapped.
+
+**No held-out set, deliberately.** Every name the parser dispatches on is
+something a schema author can write, so the rule is right for all of them
+-- and an exemption list here would be the first place a new keyword went
+to avoid the work. The gate carries a control instead: a name no parser
+dispatches on must come back missing, or three regexes over a file could
+report everything present.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase
