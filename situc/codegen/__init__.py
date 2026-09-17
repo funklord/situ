@@ -13,10 +13,18 @@ from situc.diagnostics import not_yet_implemented
 def refuse_parameters(schema: ast.Schema) -> None:
 	"""Stop a build that would silently read a parameter off the buffer.
 
-	One function for all four backends and the packer, for
-	`traverse.parameters`' own reason: five copies of this refusal is five
-	things to reword separately. It goes when a view learns to carry an
-	argument, which is what 0050's status line is waiting on.
+	One function for every generator that has not learned to pass an
+	argument, for `traverse.parameters`' own reason: a copy of this refusal
+	per generator is a copy to reword separately.
+
+	It covered the four backends and the packer too until 2026-09-17, and
+	those six now take their arguments (26.393 to 26.397). What is left are
+	the generators that emit a SECOND artifact over a schema -- the differ,
+	the C checks, fuzz and tamper harnesses, and the three `derived`
+	emitters. Each builds calls of its own and would have to thread an
+	argument through them; none is on a `situc build` path, so what a
+	parameter costs there is `situc gen-checks` and its siblings declining,
+	not a broken build.
 
 	A whole-schema refusal rather than a note beside the parameter, because
 	a note leaves every expression that READS it still emitting that read:
@@ -33,12 +41,12 @@ def refuse_parameters(schema: ast.Schema) -> None:
 	raise not_yet_implemented(
 		f"`parameter {member.name}` in `{struct}`", member.span, 12,
 		[
-			"a parameter is an argument the caller supplies, and no view "
-			"carries one yet -- so an accessor for it would read the "
-			"buffer at its offset, which is where the member after it "
-			"begins (decision 0050)",
-			"the construct parses, and `situc doc`, `situc dump` and the "
-			"layout all describe it; what is missing is the view "
-			"constructor, the walker's `acquire` and the dissector's "
-			"preference",
+			"a parameter is an argument the caller supplies, and this "
+			"generator does not pass one -- so a read of it would come "
+			"off the buffer at its offset, which is where the member "
+			"after it begins (decision 0050)",
+			"the four `situc build` backends DO take their arguments, so "
+			"a view for this schema is available; what declines here is "
+			"the second artifact this command emits, which builds calls "
+			"of its own",
 		])

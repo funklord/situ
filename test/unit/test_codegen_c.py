@@ -5174,3 +5174,220 @@ int main(void)
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- external arguments, decision 0050 --------------------------------------
+
+#: A struct whose shape follows a fact the message does not carry. `n` is a
+#: `parameter`: zero bytes wide, `[stream]` so it may move a member, and read
+#: by the size of `body` -- which puts `tail` at a different byte for every
+#: value the caller supplies. Two spellings of that size, because a backend
+#: gets one of them and misses the other: `body[n]` is a bare reference and
+#: goes through the count path, `body[n + 1]` is arithmetic and goes through
+#: the field-expression path. The two live in different functions here.
+PARAMETER = ("struct frame {\n"
+             "\tparameter u8 n [stream];\n"
+             "\tu8        body[n];\n"
+             "\tu8        tail;\n}\n")
+PARAMETER_ARITHMETIC = PARAMETER.replace("body[n]", "body[n + 1]")
+
+#: The probe both run-tests below share. `n`, the length it should produce and
+#: the byte `tail` should land on, over five bytes that are all different --
+#: so a `tail` read one byte early or late is a different number rather than
+#: the same one, and an argument ignored altogether reads `body[0]` as the
+#: length, which is 0x11 and clamps to the whole view.
+PARAMETER_PROBE = """
+#include <stdio.h>
+#include <string.h>
+#include "unit.h"
+
+static int check(uint8_t n, uint32_t want_len, unsigned want_tail)
+{
+	uint8_t     raw[5] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    at;
+
+	situ_msg_init(&msg, raw, sizeof raw);
+	if (situ_frame_view(&msg, 0u, sizeof raw, &view) != SITU_OK) return 1;
+
+	if (situ_frame_body_len(view, n) != want_len)                return 2;
+	if (situ_frame_tail_get(view, n) != want_tail)               return 3;
+	if (situ_frame_tail_offset(view, n) != want_len)             return 4;
+
+	/* The bytes themselves, not just the count: a length that is right
+	 * beside a pointer that is not is the same wrong answer. */
+	for (at = 0u; at < want_len; at++) {
+		if (situ_frame_body_ptr(view, n)[at] != raw[at])     return 5;
+	}
+	return 0;
+}
+
+int main(void)
+{
+	if (check(CASE_A_ARG, CASE_A_LEN, CASE_A_TAIL) != 0) return 1;
+	if (check(CASE_B_ARG, CASE_B_LEN, CASE_B_TAIL) != 0) return 2;
+	if (check(CASE_C_ARG, CASE_C_LEN, CASE_C_TAIL) != 0) return 3;
+	return 0;
+}
+"""
+
+
+def _run_parameter_probe(tmp_path: Path, body: str, cases: str) -> None:
+	"""Build the generated pair plus `PARAMETER_PROBE` and run it."""
+	header, source = emit(body)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text(PARAMETER_PROBE, encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, *cases.split(), f"-I{RUNTIME}",
+		 f"-I{tmp_path}", str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(binary)]).returncode == 0
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_an_accessor_takes_the_argument_and_reads_the_right_bytes(
+		tmp_path: Path) -> None:
+	"""Decision 0050: a view takes its arguments, and in C that is a trailing
+	parameter on the accessors that read one -- `situ_view_t` is the runtime's
+	type, shared by every schema, with nowhere to put a schema's own fact.
+
+	Run rather than read, and run at three values, because two of the three
+	can look right while the third is wrong: a backend that ignores the
+	argument entirely reads `body[0]` where the parameter would sit, which
+	over these bytes is 0x11, clamps to the view, and gives a plausible
+	`body` for no value of `n` -- but a `tail` of zero for all three. One
+	that is off by a byte agrees with the schema at `n = 0`.
+
+	`n = 0` is the case worth stating separately: a parameter occupies no
+	bytes, so an empty `body` must leave `tail` at offset zero, on the first
+	byte of the frame. A backend that gave the parameter a byte of its own
+	puts it at one.
+	"""
+	_run_parameter_probe(
+		tmp_path, PARAMETER,
+		"-DCASE_A_ARG=0u -DCASE_A_LEN=0u -DCASE_A_TAIL=0x11u "
+		"-DCASE_B_ARG=2u -DCASE_B_LEN=2u -DCASE_B_TAIL=0x33u "
+		"-DCASE_C_ARG=4u -DCASE_C_LEN=4u -DCASE_C_TAIL=0x55u")
+
+	# The control: the argument is in the signature at all. Without it the
+	# probe above would not compile, but it would not compile for a dozen
+	# other reasons either, and this says which one is being asserted.
+	header, _ = emit(PARAMETER)
+	assert ("static inline uint32_t situ_frame_body_len(situ_view_t view,"
+	        " uint8_t arg_n)" in header)
+	assert "situ_err_t situ_frame_validate(situ_view_t view, uint8_t arg_n);" \
+		in header
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_an_arithmetic_size_over_an_argument_reads_the_right_bytes(
+		tmp_path: Path) -> None:
+	"""`body[n + 1]` and `body[n]` are two spellings of one question, and they
+	are answered in two places: a bare reference is looked up as the member
+	that drives the length, arithmetic is rendered over the struct's fields.
+	Every other backend built this feature through the second and missed the
+	first, so C is tested on both -- and a parameter is exactly the case where
+	missing one is silent, since a parameter occupies nothing and a read at
+	its offset lands on the member after it and compiles.
+
+	Same five bytes and the same three-case rule, with the arguments shifted
+	so the lengths match: `n + 1` of 0, 1 and 3 is 1, 2 and 4.
+	"""
+	_run_parameter_probe(
+		tmp_path, PARAMETER_ARITHMETIC,
+		"-DCASE_A_ARG=0u -DCASE_A_LEN=1u -DCASE_A_TAIL=0x22u "
+		"-DCASE_B_ARG=1u -DCASE_B_LEN=2u -DCASE_B_TAIL=0x33u "
+		"-DCASE_C_ARG=3u -DCASE_C_LEN=4u -DCASE_C_TAIL=0x55u")
+
+	header, _ = emit(PARAMETER_ARITHMETIC)
+	assert ("static inline uint32_t situ_frame_body_len(situ_view_t view,"
+	        " uint8_t arg_n)" in header)
+
+
+def test_the_invalidation_note_does_not_send_a_caller_to_a_setter() -> None:
+	"""A parameter drives a length and cannot be written (0050).
+
+	The note lists what invalidates a view and says "use the setters at
+	the end of this struct's section". A parameter has no setter and
+	cannot have one, so listing it there named a write that cannot happen
+	and pointed at a function that does not exist -- in the one comment
+	whose whole job is to state a rule the C type system cannot enforce.
+
+	Where every driver is an argument, nothing invalidates the view at
+	all: passing a different argument is not a write and leaves nothing
+	stale.
+	"""
+	header, _ = emit(PARAMETER)
+
+	assert "nothing invalidates a frame view" in header
+	assert "Nothing writes it" in header
+	# The control: the note still exists and still names the driver, so a
+	# note that vanished entirely fails here rather than passing.
+	assert "INVALIDATION" in header
+	assert "`n` decides where later members start" in header
+	# And it does not send the caller looking for situ_frame_n_set().
+	assert "Use the setters at the end" not in header
+
+
+def test_a_parameter_gets_no_accessor_of_its_own() -> None:
+	"""A `parameter` is the caller's own number and occupies no bytes, so
+	there is nothing in the frame to read it from or write it to.
+
+	The setter is why this is a refusal rather than a tidiness: `n` drives a
+	length, so it would have been emitted as the shifting setter -- which
+	stores at the offset the member begins at and bumps the generation. That
+	offset is `body`'s. `situ_frame_n_set(msg, view, 4)` would have written a
+	4 over the first byte of the member the argument sizes, under a name
+	saying it set the argument.
+
+	The control is the member beside it: `tail` keeps its getter, its pointer
+	and its setter, so this asserts that one member lost its accessors rather
+	than that the struct emitted nothing.
+	"""
+	header, _ = emit(PARAMETER)
+
+	assert "situ_frame_n_get" not in header
+	assert "situ_frame_n_ptr" not in header
+	assert "situ_frame_n_set" not in header
+	assert "No accessor for `n`" in header
+
+	assert "situ_frame_tail_get(situ_view_t view, uint8_t arg_n)" in header
+	assert "situ_frame_tail_ptr(situ_view_t view, uint8_t arg_n)" in header
+	assert "situ_frame_tail_set(situ_view_t view, uint8_t arg_n," in header
+
+
+def test_a_struct_with_no_parameter_keeps_the_signatures_it_had() -> None:
+	"""The whole of what 0050 costs a schema that does not use it: nothing.
+
+	Every accessor in the corpus takes `situ_view_t view` and no more, and
+	the generated C for all 41 schemas is byte-for-byte what it was before a
+	view could carry an argument -- which is the proof the change is
+	mechanical. That sweep is not a test anybody would run per commit; this
+	is the same property at one struct, which is enough to catch the shape of
+	the mistake: a tail rendered from the struct rather than from its
+	arguments puts an empty parameter list's comma into every signature in
+	the tree.
+
+	The parameterised half is the control -- same members, same names, one
+	`parameter` in front -- so this cannot pass by the generator having
+	stopped emitting the tail at all.
+	"""
+	plain = ("struct frame {\n"
+	         "\tu8 n;\n"
+	         "\tu8 body[n];\n"
+	         "\tu8 tail;\n}\n")
+	header, _ = emit(plain)
+
+	assert "static inline uint32_t situ_frame_body_len(situ_view_t view)" \
+		in header
+	assert "situ_err_t situ_frame_validate(situ_view_t view);" in header
+	assert "arg_" not in header
+
+	taking, _ = emit(PARAMETER)
+	assert "arg_n" in taking

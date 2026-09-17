@@ -48,6 +48,15 @@ MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO, MUST_BE_ONE, ENUM_KNOWN = range(6)
 #: thing to be wrong.
 PEEK = 32
 
+#: `image_placement.text_flags` bit 64 (0050): the member is an argument the
+#: caller supplies, not bytes the message carries. It occupies nothing, so
+#: the member after it begins where it began -- and its own row still says
+#: `offset_bits` and `size_bits`, those being where the NEXT member starts
+#: and how wide the argument is. A walker without the flag therefore reads
+#: the next member's first byte and hands it back as the argument, which is
+#: a wrong value that reads exactly like a right one.
+PARAMETER = 64
+
 #: `image_placement.flags`
 OFFSET_KNOWN, FRAME_RELATIVE, SIZE_FIXED, FRAME_BASE_DYNAMIC = 1, 2, 4, 8
 SIGNED, MARKER_GOVERNED, IS_TAG = 16, 32, 64
@@ -143,6 +152,10 @@ class Placement:
 	@property
 	def is_tag(self) -> bool:
 		return bool(self.flags & IS_TAG)
+
+	@property
+	def parameter(self) -> bool:
+		return bool(self.text_flags & PARAMETER)
 
 
 @dataclass

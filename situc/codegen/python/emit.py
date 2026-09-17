@@ -70,7 +70,6 @@ from situc.traverse import (
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
-from situc.codegen import refuse_parameters
 from situc import __version__
 
 

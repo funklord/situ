@@ -288,6 +288,99 @@ situ_walk_err situ_walk_members(const situ_walk_image *image, uint32_t shape,
 	return SITU_WALK_OK;
 }
 
+/* How many of `shape`'s members are arguments, and which ordinal `index` is.
+ *
+ * One pass answering both, because every caller wants one of them and the
+ * loop is the same: `situ_walk_acquire` counts, and a read of a parameter
+ * needs its position in the list the caller supplied. `ordinal` is left
+ * alone where `index` is not a member of `shape` or is not a parameter, and
+ * a caller that asked for one checks the count it gets back against it.
+ *
+ * Declaration order is the placement table's order, which is what makes an
+ * argument positional in both walkers without either needing the names in
+ * the image's optional tail. */
+static situ_walk_err parameters_of(const situ_walk_image *image,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t *count, uint32_t *ordinal)
+{
+	uint32_t first = 0u;
+	uint32_t held  = 0u;
+	uint32_t seen  = 0u;
+	situ_walk_err err = situ_walk_members(image, shape, &first, &held);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+
+	for (uint32_t i = 0u; i < held; i++) {
+		situ_walk_placement member;
+
+		err = situ_walk_placement_at(image, first + i, &member);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if ((member.text_flags & SITU_WALK_PARAMETER) == 0u) {
+			continue;
+		}
+		if (ordinal != NULL && first + i == index) {
+			*ordinal = seen;
+		}
+		seen++;
+	}
+	*count = seen;
+	return SITU_WALK_OK;
+}
+
+/* The value the caller supplied for parameter `index` of `shape`.
+ *
+ * SITU_WALK_ARGUMENT where they supplied none, and never a zero: the layout
+ * after a `[stream]` parameter is a function of it, so a value nobody gave
+ * is a layout nobody chose. Refused here as well as in
+ * `situ_walk_acquire`, so a caller that skipped the door cannot get a
+ * defaulted answer through the window. */
+static situ_walk_err argument_of(const situ_walk_image *image, uint32_t shape,
+                                 uint32_t index, uint64_t *out)
+{
+	uint32_t count   = 0u;
+	uint32_t ordinal = SITU_WALK_NONE;
+	const situ_walk_err err = parameters_of(image, shape, index, &count,
+	                                        &ordinal);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (ordinal == SITU_WALK_NONE) {
+		/* `index` is a parameter of some other struct, so this walk has no
+		 * argument for it. A nested struct cannot take one yet -- the
+		 * parent's accessor would have nothing to pass -- so this is a
+		 * malformed ask rather than a missing argument. */
+		return SITU_WALK_UNSUPPORTED;
+	}
+	if (image->args == NULL || shape != image->arg_shape
+	                || ordinal >= image->arg_count) {
+		return SITU_WALK_ARGUMENT;
+	}
+	*out = (uint64_t)image->args[ordinal];
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_acquire(situ_walk_image *image, uint32_t shape,
+                                const int64_t *args, uint32_t count)
+{
+	uint32_t held = 0u;
+	const situ_walk_err err = parameters_of(image, shape, SITU_WALK_NONE,
+	                                        &held, NULL);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (count != held) {
+		return SITU_WALK_ARGUMENT;
+	}
+	image->args      = args;
+	image->arg_count = count;
+	image->arg_shape = shape;
+	return SITU_WALK_OK;
+}
+
 situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
                                      uint32_t index,
                                      situ_walk_placement *out)
@@ -904,6 +997,14 @@ static situ_walk_err read_based(const situ_walk_image *image,
 	if ((held.flags & FLAG_OFFSET_KNOWN) == 0u) {
 		return SITU_WALK_UNSUPPORTED;
 	}
+	/* A field of a NESTED struct, and a nested struct cannot take an
+	 * argument yet (decision 0050): the parent's accessor has none to pass,
+	 * so it would be built with whatever a missing one means. Refused by
+	 * name rather than read at the offset, which here would be the next
+	 * member of that nested struct. */
+	if ((held.text_flags & SITU_WALK_PARAMETER) != 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
 	if (base < 0) {
 		return SITU_WALK_MALFORMED;
 	}
@@ -1448,8 +1549,28 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 {
 	uint32_t content = 0u;
 	uint32_t chain   = 0u;
-	situ_walk_err err = content_bits_deep(image, message, len, shape, index,
-	                                      depth, &content);
+	situ_walk_placement first;
+	situ_walk_err err = situ_walk_placement_at(image, index, &first);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	/* A PARAMETER occupies nothing at all (decision 0050). The caller
+	 * supplies it, the message does not carry it, so the member after it
+	 * begins exactly where it began.
+	 *
+	 * Before everything, because the row still carries `size_bits` -- the
+	 * width of the argument, not of anything in the frame -- and the chain
+	 * below sums this function. Falling through would put `u8 body[n]` one
+	 * byte late and read `tail` off the end of a five-byte message, which
+	 * is the defect the construct was refused for until now. */
+	if ((first.text_flags & SITU_WALK_PARAMETER) != 0u) {
+		*out = 0u;
+		return SITU_WALK_OK;
+	}
+
+	err = content_bits_deep(image, message, len, shape, index, depth,
+	                        &content);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
@@ -2133,6 +2254,15 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+
+	/* An ARGUMENT, not bytes (decision 0050). First of everything, because
+	 * every branch below reads the frame at this row's `offset_bits` -- and
+	 * that offset is where the member AFTER this one begins. The answer
+	 * would be that member's first byte under this member's name: a wrong
+	 * value indistinguishable from a right one. */
+	if ((held.text_flags & SITU_WALK_PARAMETER) != 0u) {
+		return argument_of(image, shape, index, out);
 	}
 
 	/* A text number is digits, not bits, and it comes first for the same
@@ -3719,8 +3849,22 @@ situ_walk_err situ_walk_bytes(const situ_walk_image *image,
 {
 	uint32_t start = 0u;
 	uint32_t width = 0u;
-	situ_walk_err err = situ_walk_offset_bits(image, message, len, shape,
-	                                          index, &start);
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	/* A parameter has no bytes in the message (decision 0050). Its span is
+	 * zero and its offset is the next member's, so the obvious answer is an
+	 * empty run pointing at that member -- a caller reaching for the bytes
+	 * of an argument has asked the wrong question and should be told so,
+	 * rather than handed an empty answer that looks like a short one.
+	 * `situ_walk_read` is the reader for it. */
+	if ((held.text_flags & SITU_WALK_PARAMETER) != 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	err = situ_walk_offset_bits(image, message, len, shape, index, &start);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}

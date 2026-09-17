@@ -75,7 +75,6 @@ from situc.traverse import (
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
-from situc.codegen import refuse_parameters
 from situc import __version__
 
 #: A refusal that names no member -- a member noted rather than walked, or a
@@ -149,16 +148,14 @@ class Generated:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		namespace: str = "situ", materialize: bool = False,
 		messages: bool = False) -> Generated:
-	# A `parameter` is an argument the caller supplies (0050), and no
-	# backend can pass one yet: the view carries bytes and nothing else.
-	# Refused rather than emitted, because what an accessor would do is
-	# worse than nothing -- `_over_fields` reads a member "where it sits",
-	# and a parameter sits at the offset of the member AFTER it, so a size
-	# expression reading one compiles cleanly and measures the wrong byte.
-	#
-	# Whole-schema rather than per-member: a note beside the parameter
-	# leaves every expression that reads it still emitting that read.
-	refuse_parameters(schema)
+	# A `parameter` is an argument the caller supplies (0050), and this
+	# backend used to refuse the whole schema rather than emit one. The view
+	# carries it as a data member now, `at` takes it, and the two places that
+	# read a member -- `_over_fields` and `_count_expression`'s bare
+	# `sized_by` branch -- read that member rather than the buffer. Both,
+	# because a parameter occupies nothing and so "sits" at the offset of the
+	# member AFTER it: a read there compiles cleanly and measures the wrong
+	# byte, which is what the refusal was standing in front of.
 
 	# Before anything is emitted: a class a member has taken the name of is
 	# renamed and aliased, and the one case where that rename has nowhere to go
@@ -574,12 +571,27 @@ class Emitter:
 		lines = ["", *self._struct_comment(struct),
 		         f"class {name} : public ::situ::rt::view {{", "public:"]
 		lines.extend(self._acquire(struct))
+		# The arguments this format's shape follows, which the message does
+		# not carry (0050). Initialised from what `at` was given, and
+		# declared below among the members so the class reads in the
+		# schema's order.
+		init = "".join(
+			f", {self._argument_member(struct, one)}"
+			f"({self._argument_local(struct, one)})"
+			for one in self._arguments(struct))
+		args = self._argument_signature(struct)
 		lines.extend([
 			"",
 			f"\tconstexpr {name}() noexcept = default;",
-			f"\texplicit constexpr {name}(situ_view_t raw) noexcept"
-			f" : ::situ::rt::view(raw) {{}}",
 		])
+		if not args:
+			lines.append(f"\texplicit constexpr {name}(situ_view_t raw) noexcept"
+			             f" : ::situ::rt::view(raw) {{}}")
+		else:
+			lines.extend([
+				f"\texplicit constexpr {name}(situ_view_t raw{args}) noexcept",
+				f"\t\t: ::situ::rt::view(raw){init} {{}}",
+			])
 		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):
@@ -953,25 +965,75 @@ class Emitter:
 			" * everything below trusts it. */",
 		]
 
+	def _arguments(self, struct: ResolvedStruct) -> list[Placement]:
+		"""The `parameter`s this struct takes, in declaration order (0050).
+
+		Scalars by construction: `wellformed.check_parameters` refuses a
+		struct-typed one, so the callers below may ask for a C++ type
+		without a second guard for a case the front end has already closed.
+		"""
+		return [held for held in own_members(struct)
+		        if held.parameter and held.scalar is not None]
+
+	def _argument_signature(self, struct: ResolvedStruct) -> str:
+		"""What `at`, `required` and the constructor add for them.
+
+		Undefaulted: a default argument is a guess, and situ does not know
+		the caller's block size -- a view built on the wrong one reads the
+		wrong bytes confidently.
+
+		The trailing underscore marks a name belonging to the generated
+		function rather than to the schema, which is what `check`'s `which_`
+		already does and for the same hazard: these functions' own locals are
+		`owner`, `offset`, `length`, `out`, `data`, `have` and `need`, and a
+		schema is free to declare `parameter u8 length`. The DATA MEMBER
+		below keeps the schema's spelling, because that is the name a caller
+		reads.
+		"""
+		return "".join(
+			f", {self._ctype(one.scalar)} {self._argument_local(struct, one)}"
+			for one in self._arguments(struct) if one.scalar is not None)
+
+	def _argument_values(self, struct: ResolvedStruct) -> str:
+		"""Handing them on, wherever a view of these same bytes is built.
+
+		A view without them would answer a different question about the same
+		message, so `at` and `required` pass what they were given rather
+		than letting the member default.
+		"""
+		return "".join(f", {self._argument_local(struct, one)}"
+		               for one in self._arguments(struct))
+
+	def _argument_local(self, struct: ResolvedStruct, held: Placement) -> str:
+		"""The function-local spelling: the member's name and one underscore.
+		Separate from `_argument_member` so the two cannot drift apart."""
+		return self._argument_member(struct, held) + "_"
+
+	def _argument_member(self, struct: ResolvedStruct, held: Placement) -> str:
+		"""The data member's spelling, which is the schema's own name."""
+		return bare_name(local_name(struct, held))
+
 	def _acquire(self, struct: ResolvedStruct) -> list[str]:
 		"""The factory. Fixed-size structs know their own extent; the rest are
 		told it, because nothing in the bytes says where the frame ends."""
 		layout = struct.layout
 		name   = class_name(struct)
+		args   = self._argument_signature(struct)
+		values = self._argument_values(struct)
 
 		if layout.is_fixed_size:
 			return [
 				f"\tstatic constexpr std::uint32_t size_bytes = {layout.size_bytes};",
 				"",
 				"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
-				f"\t\t\tstd::uint32_t offset, {name} &out) noexcept",
+				f"\t\t\tstd::uint32_t offset{args}, {name} &out) noexcept",
 				"\t{",
 				"\t\tsitu_view_t raw;",
 				"\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
 				" size_bytes, &raw);",
 				"",
 				"\t\tif (e == SITU_OK) {",
-				f"\t\t\tout = ::{self.namespace}::{name}(raw);",
+				f"\t\t\tout = ::{self.namespace}::{name}(raw{values});",
 				"\t\t}",
 				"\t\treturn static_cast<::situ::rt::err>(e);",
 				"\t}",
@@ -989,7 +1051,7 @@ class Emitter:
 			" handing",
 			"\t * random bytes to all four and diffing what they said. */",
 			"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
-			f"\t\t\tstd::uint32_t offset, std::uint32_t length,"
+			f"\t\t\tstd::uint32_t offset, std::uint32_t length{args},"
 			f" {name} &out) noexcept",
 			"\t{",
 			"\t\tif (length < size_min) {",
@@ -1001,7 +1063,7 @@ class Emitter:
 			" length, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
-			f"\t\t\tout = ::{self.namespace}::{name}(raw);",
+			f"\t\t\tout = ::{self.namespace}::{name}(raw{values});",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
@@ -2339,6 +2401,15 @@ class Emitter:
 			"\t{",
 			"\t\tconst std::uint32_t have = raw_.limit;",
 		]
+		# The arguments too, where the struct takes any (0050): how far a
+		# message reaches can follow one, and a framer that could not be told
+		# would answer about a different message. `framed` needs nothing --
+		# it is a member function, and reads the members `at` filled in --
+		# but `required` builds the view itself and so has to be given them.
+		# Same order and spelling as `at`, so a caller holding both hands
+		# them on rather than remembering two shapes.
+		args   = self._argument_signature(struct)
+		values = self._argument_values(struct)
 		tail = [
 			"",
 			"\t/* The same question asked of bytes that are not a view yet,"
@@ -2346,13 +2417,15 @@ class Emitter:
 			"\t * the shape a stream reader wants. */",
 			"\t[[nodiscard]] static ::situ::rt::err required("
 			"const std::uint8_t *data,",
-			"\t\t\tstd::uint32_t have, std::uint32_t &need) noexcept",
+			f"\t\t\tstd::uint32_t have{args},"
+			" std::uint32_t &need) noexcept",
 			"\t{",
 			f"\t\treturn {name}{{ situ_view_t{{",
 			# `nullptr` owner: no message yet, these bytes have merely
 			# arrived. `situ_view_check` reads an absent owner as "nothing
 			# can have moved under this", which is exactly true here.
-			"\t\t\tconst_cast<std::uint8_t *>(data), have, 0u, nullptr } }"
+			"\t\t\tconst_cast<std::uint8_t *>(data), have, 0u, nullptr }"
+			f"{values} }}"
 			".framed(need);",
 			"\t}",
 		]
@@ -2722,6 +2795,16 @@ class Emitter:
 			if name in consts:
 				return str(consts[name])
 			held = by_name[name]
+			# A parameter is the argument the caller gave `at`, held on the
+			# view as a data member (0050). A read at its offset would read
+			# the member AFTER it, since a parameter occupies nothing -- so
+			# `body[n + 1]` measured the first byte of `body` itself. The
+			# first of the two places this backend reads a member by name;
+			# `_count_expression`'s bare `sized_by` branch is the other, and
+			# a fix to one of them alone leaves `body[n]` still wrong.
+			if held.parameter:
+				return leaf(self._argument_member(struct, held),
+				            held.scalar is not None and held.scalar.signed)
 			if "." in name:
 			# A text number is digits, not bytes of an integer: reading it
 			# where it sits parses eight ASCII characters as a binary
@@ -3152,6 +3235,16 @@ class Emitter:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None
+
+		# A `[stream]` driver is the argument the caller gave `at`, held on
+		# the view (0050). The second of the two places a member is read by
+		# name, and the one every other backend missed first: `_over_fields`
+		# above covers `body[n + 1]` and this covers the bare `body[n]`,
+		# which looks the driver up and reads it where it sits -- and a
+		# parameter sits at the offset of the member after it.
+		if driver.placement.parameter:
+			member = self._argument_member(struct, driver.placement)
+			return f"static_cast<std::uint32_t>({member})"
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the
@@ -4885,11 +4978,48 @@ class Emitter:
 		return lines
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
+		if entry.placement.parameter:
+			return self._parameter(struct, entry.placement)
+
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
 		lead = self._lead_methods(struct, entry.placement)
 		return (bounds + lead + self._member_body(struct, entry)
 		        + self._secret_erase(struct, entry))
+
+	def _parameter(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A `parameter`: the argument the caller gave `at`, held on the view
+		(0050).
+
+		A data member and no accessor. The member IS the value, so a getter
+		would be a second name for one field -- and a getter that read the
+		buffer would read the member AFTER this one, since a parameter
+		occupies no bytes and so shares its offset. That read compiles and
+		measures the wrong byte, which is what this backend's whole-schema
+		refusal used to stand in front of.
+
+		Public, because there is nothing else to read it out of, and not
+		`const`: `at` assigns a freshly built view over its `out` parameter,
+		and a const member deletes the assignment operator that does it.
+		"""
+		scalar = placement.scalar
+		if scalar is None:
+			return []
+
+		name = self._argument_member(struct, placement)
+		return [
+			"",
+			f"\t/* {placement.path}: an argument the caller supplies, not",
+			"\t * bytes (0050). It occupies nothing and has no offset, so",
+			"\t * every size and offset expression over it reads this member",
+			"\t * rather than the buffer.",
+			"\t *",
+			"\t * Zero until `at` sets it, which is the same 'not a view of",
+			"\t * anything yet' the default-constructed view itself is in --",
+			"\t * not a guess at the caller's value. */",
+			f"\t{self._ctype(scalar)} {name} = 0;",
+		]
 
 	def _secret_erase(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:

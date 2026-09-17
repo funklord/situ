@@ -16,7 +16,8 @@ being the shape of the interface and becomes data a caller may consult.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Literal
 
 from walker import vm
@@ -43,6 +44,20 @@ class Refused(Exception):
 	One exception rather than a returned sentinel, because every backend
 	refuses these cases and a walker that answered zero where C returns an
 	error would disagree with all four while looking like it agreed.
+	"""
+
+
+class Unsupplied(Exception):
+	"""An argument the schema declares and the caller did not supply (0050).
+
+	Deliberately NOT a `Refused`. Everything else in this module answers a
+	question about bytes, and a caller catching `Refused` is asking one; this
+	is the caller's own omission, and situ does not know what they meant. A
+	default would be a guess -- the block size, the cipher suite, the card
+	class -- and a view built on a guessed one reads the wrong bytes with no
+	sign that it did. `situ verify` draws the same line and exits 2 rather
+	than 1 for it (26.394): "these bytes are wrong" and "you did not say
+	which layout to read them under" are different findings.
 	"""
 
 
@@ -90,26 +105,65 @@ class View:
 	struct: int
 	at: int
 	limit: int
+	#: The arguments this view was acquired with (0050), by placement index.
+	#: A mapping rather than a sequence because every reader here is holding
+	#: a placement index and nothing else -- an ordinal would be a second
+	#: numbering to keep in step with the first.
+	#:
+	#: It does not travel into a SUB-view, and that is not an oversight: a
+	#: struct that takes an argument cannot yet be a member, because the
+	#: parent's accessor has no argument to pass and would build the nested
+	#: view with whatever a missing one means. Refused by name in
+	#: `wellformed` rather than guessed at here.
+	args: dict[int, int] = field(default_factory=dict)
 
 	@property
 	def shape(self) -> Struct:
 		return self.image.structs[self.struct]
 
 
-def acquire(image: Image, buffer: Bytes, struct: int) -> View:
+def parameters_of(image: Image, struct: int) -> list[int]:
+	"""The placements of `struct` that are arguments, in declaration order.
+
+	The order is the ORDER A CALLER SUPPLIES THEM IN, so it is read off the
+	one thing both walkers have -- the placement table, which the packer
+	writes in declaration order. Names live in the image's tail and a device
+	omits the tail, so keying the arguments by name would make an argument a
+	thing only a tooling walker could take.
+	"""
+	return [index for index in image.members(image.structs[struct])
+	        if image.placements[index].parameter]
+
+
+def acquire(image: Image, buffer: Bytes, struct: int,
+            args: Sequence[int] = ()) -> View:
 	"""The one bounds check, which everything after it trusts.
 
 	A fixed struct needs its whole size present; a frame takes what there is.
 	Section 20.2 makes this the check every constant-offset access below it
 	depends on, and it is where two backends once disagreed with the other
 	two (26.27).
+
+	`args` are the schema's `parameter` members (0050), positionally and in
+	declaration order. A caller that supplies too few is REFUSED here rather
+	than defaulted: situ does not know the caller's block size, and a view
+	built on a guessed one reads the wrong bytes confidently. Too many is
+	refused for the same reason read backwards -- an argument nothing
+	declares is one the caller believes is being used.
 	"""
+	held = parameters_of(image, struct)
+	if len(args) != len(held):
+		raise Unsupplied(
+			f"struct {struct} takes {len(held)} argument(s) and "
+			f"{len(args)} were supplied")
+
 	shape = image.structs[struct]
 	if shape.fixed:
 		need = (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		if len(buffer) < need:
 			raise Refused(f"frame of {len(buffer)} does not reach {need}")
-	return View(image, buffer, struct, 0, len(buffer))
+	return View(image, buffer, struct, 0, len(buffer),
+	            dict(zip(held, args)))
 
 
 def lead_bytes(view: View, index: int) -> int:
@@ -223,6 +277,14 @@ def size_bits(view: View, index: int, depth: int = 0) -> int:
 	first version skipped the member in both and dropped its lead with it,
 	which a document beginning with whitespace showed at once.
 	"""
+	# A PARAMETER occupies nothing at all -- not even a lead (0050). It is
+	# not in the message, so there are no bytes in front of it for anything
+	# to own, and the member after it begins exactly where it began. First,
+	# because the row still carries `size_bits` for the argument's width and
+	# falling through would spend it: `u8 body[n]` after a `parameter u8 n`
+	# would start one byte late and `tail` would be read off the end.
+	if view.image.placements[index].parameter:
+		return 0
 	lead = lead_bytes(view, index) * BITS_PER_BYTE
 	if view.image.placements[index].text_flags & PEEK:
 		return lead
@@ -557,6 +619,12 @@ def _value_of(view: View, index: int) -> int:
 	BOUNDS over a buffer whose four digit bytes were `" 1\n4"`, where C
 	sized `d[n]` at zero and said the message was fine.
 	"""
+	# An argument is an argument in both readers: there is no lax/strict
+	# distinction to make about a value that was handed in rather than
+	# parsed. Named here as well as in `read_scalar` because the `radix`
+	# branch below it would otherwise reach the buffer first.
+	if view.image.placements[index].parameter:
+		return argument(view, index)
 	if view.image.placements[index].radix:
 		try:
 			return parse_digits(view, index)
@@ -596,6 +664,23 @@ def _count(view: View, index: int) -> int:
 	raise Refused(f"placement {index} has no count this image carries")
 
 
+def argument(view: View, index: int) -> int:
+	"""The value a caller supplied for a `parameter` member (0050).
+
+	`Unsupplied` rather than a zero where the caller gave none, and that is
+	the whole point of the construct being an argument: the layout after a
+	`[stream]` parameter is a function of it, so a value nobody supplied is
+	a layout nobody chose. `acquire` refuses a short argument list at the
+	door; this refuses it again at the point of use, so a View assembled by
+	hand -- which the sub-view paths and the tests both do -- cannot get a
+	defaulted answer either.
+	"""
+	if index not in view.args:
+		raise Unsupplied(f"placement {index} is an argument no caller "
+		                 f"supplied")
+	return view.args[index]
+
+
 def read_scalar(view: View, index: int) -> int:
 	"""One member's value, bounds-checked against the frame.
 
@@ -604,6 +689,17 @@ def read_scalar(view: View, index: int) -> int:
 	walker has to know something an offset table cannot say on its own.
 	"""
 	placement = view.image.placements[index]
+
+	# An ARGUMENT, not bytes (0050). First of everything here, because the
+	# row below this line describes a member the message does not carry: its
+	# `offset_bits` is where the NEXT member begins, so every reader past
+	# this point would answer with that member's first byte -- a wrong value
+	# that reads exactly like a right one, which is the failure 26.32 rates
+	# worst and the reason every backend refused the construct until it
+	# could carry one.
+	if placement.parameter:
+		return argument(view, index)
+
 	if placement.radix:
 		return parse_digits(view, index)
 
@@ -927,6 +1023,13 @@ def _signed(value: int, width: int, is_signed: bool) -> int:
 
 def read_bytes(view: View, index: int) -> bytes:
 	"""A member's bytes, for the runs and arrays that have no scalar value."""
+	# A parameter has none. Its offset is the next member's, so the obvious
+	# fall-through hands back that member's first bytes under this member's
+	# name -- the same wrong answer `read_scalar` refuses, in the reader a
+	# caller reaches for when the value one refuses (0050).
+	if view.image.placements[index].parameter:
+		raise Refused(f"placement {index} is an argument, so it has no "
+		              f"bytes in the message; its value is `read_scalar`")
 	start = offset_bits(view, index)
 	width = content_bits(view, index)
 	if start % BITS_PER_BYTE:

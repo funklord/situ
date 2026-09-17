@@ -3295,3 +3295,302 @@ def test_a_member_called_which_does_not_shadow_the_parameter(
 	"""
 	result = compiles(tmp_path, "struct S { u8 which [max = 3]; }")
 	assert result.returncode == 0, result.stderr
+
+
+# -- a view takes its arguments (decision 0050) -----------------------------
+#
+# `parameter u8 n [stream]` is a member of zero width: no bytes, no offset,
+# and read by every expression that reads a field. This backend refused a
+# whole schema carrying one until now, because the two things a view could do
+# with it are both worse than refusing: no accessor at all leaves the size
+# expressions naming something that does not exist, and an accessor that
+# reads the buffer reads the member AFTER the parameter -- a parameter
+# occupies nothing, so it shares its successor's offset, and that read
+# compiles cleanly and measures the wrong byte.
+
+PARAMETER = """struct frame {
+	parameter u8 n [stream];
+	u8        body[n];
+	u8        tail;
+}
+"""
+
+#: The same shape with the length written as arithmetic, which is the OTHER
+#: read path: `sized_by` holds a path and holds nothing for `n + 1`, so this
+#: one goes through `_over_fields` and the one above through
+#: `_count_expression`. Fixing either alone leaves the other reading bytes.
+PARAMETER_ARITHMETIC = """struct frame {
+	parameter u8 n [stream];
+	u8        body[n + 1];
+	u8        tail;
+}
+"""
+
+#: The control: the same layout with `n` a real field. Every assertion below
+#: about the parameter form is paired against this one, so an assertion that
+#: would hold whatever the backend did fails here instead of passing twice.
+DRIVEN_BY_A_FIELD = """struct frame {
+	u8 n;
+	u8 body[n];
+	u8 tail;
+}
+"""
+
+
+def test_a_parameter_is_a_data_member() -> None:
+	"""It is the argument the caller supplied, so it is held rather than
+	read: the member IS the value.
+
+	The control is the field form, which has exactly the opposite pair --
+	an accessor and no data member -- so this cannot pass by asserting
+	something true of both.
+	"""
+	held = emit(PARAMETER)
+	assert "\tstd::uint8_t n = 0;" in held
+
+	field = emit(DRIVEN_BY_A_FIELD)
+	assert "\tstd::uint8_t n = 0;" not in field
+	assert "std::uint8_t n() const noexcept" in field
+
+
+def test_a_parameter_gets_no_accessor() -> None:
+	"""A getter would be a second name for one field, and a getter that read
+	the buffer would read `body`'s first byte -- so there is none, and no
+	setter either: there is nothing on the wire to set."""
+	held = emit(PARAMETER)
+
+	assert "std::uint8_t n() const noexcept" not in held
+	assert "set_n(" not in held
+
+
+def test_the_factory_takes_the_arguments() -> None:
+	"""`at` is where a view is built, so it is where the arguments arrive.
+
+	The local carries a trailing underscore for the reason `check`'s `which_`
+	does: the factory's own names are `owner`, `offset`, `length` and `out`,
+	and a schema may declare `parameter u8 length`. The data member keeps the
+	schema's spelling, because that is the name a caller reads.
+	"""
+	held = emit(PARAMETER)
+
+	assert "std::uint32_t length, std::uint8_t n_, frame &out) noexcept" in held
+	assert "out = ::situ::frame(raw, n_);" in held
+	# And the constructor it calls, which is what stores it.
+	assert ": ::situ::rt::view(raw), n(n_) {}" in held
+
+	# The control: no parameter, no argument -- the signature the rest of
+	# this file asserts on is unchanged for every other schema.
+	field = emit(DRIVEN_BY_A_FIELD)
+	assert "std::uint32_t length, frame &out) noexcept" in field
+
+
+def test_a_plain_sized_by_reads_the_member() -> None:
+	"""The first of the two read paths, and the one that looks safest.
+
+	`body[n]` names its driver, so the backend looks the driver up and reads
+	it where it sits -- and a parameter sits at the offset of the member
+	after it. `situ_base(raw_) + 0` is `body`'s own first byte, so the length
+	of `body` would be `body[0]`: a number, plausible, and never the
+	caller's.
+	"""
+	held = emit(PARAMETER)
+	body = held[held.index("bytes body()"):]
+	body = body[:body.index("\t}")]
+
+	assert "static_cast<std::uint32_t>(n)" in body
+	assert "situ_base(raw_) + 0)" not in body, "the length is read off the wire"
+
+	# The control: with `n` a real field the SAME accessor must read the
+	# buffer, so the assertion above is about the parameter rather than
+	# about how this backend spells a length.
+	field = emit(DRIVEN_BY_A_FIELD)
+	span  = field[field.index("bytes body()"):]
+	span  = span[:span.index("\t}")]
+	assert "situ_base(raw_) + 0)" in span
+
+
+def test_an_arithmetic_size_reads_the_member() -> None:
+	"""The second read path, and the one every backend missed first.
+
+	`body[n + 1]` sets no `sized_by` at all -- the expression IS the count --
+	so it goes through a different renderer, which reads each name it meets.
+	Two of the three run cases below can look right with only one of the two
+	fixed, which is why both are asserted separately here.
+	"""
+	held = emit(PARAMETER_ARITHMETIC)
+	body = held[held.index("bytes body()"):]
+	body = body[:body.index("\t}")]
+
+	assert "::situ::rt::leaf_u(n) + 1" in body
+	assert "situ_base(raw_) + 0)" not in body, "the length is read off the wire"
+
+	# The control: with `n` a real field the same expression must read the
+	# buffer through the accessor, so the assertion above is about the
+	# parameter rather than about how an arithmetic count is spelled.
+	field = emit(DRIVEN_BY_A_FIELD.replace("body[n]", "body[n + 1]"))
+	span  = field[field.index("bytes body()"):]
+	span  = span[:span.index("\t}")]
+	assert "::situ::rt::leaf_u(n()) + 1" in span
+
+
+def test_the_framing_helper_carries_the_arguments() -> None:
+	"""`required` builds the view itself, from bytes that are not a message
+	yet, so it is the one place besides `at` that has to be told.
+
+	How far a message reaches follows `n` here, so a framer that could not be
+	told would answer about a different message -- and it would answer
+	confidently, because the temporary it builds compiles either way.
+	"""
+	held = emit(PARAMETER)
+
+	assert "std::uint32_t have, std::uint8_t n_, std::uint32_t &need)" in held
+	assert "nullptr }, n_ }.framed(need);" in held
+
+	field = emit(DRIVEN_BY_A_FIELD)
+	assert "std::uint32_t have, std::uint32_t &need)" in field
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+@pytest.mark.parametrize("taken", ["owner", "offset", "length", "out",
+                                   "data", "have", "need"])
+def test_an_argument_does_not_collide_with_the_factory(
+		tmp_path: Path, taken: str) -> None:
+	"""Which is what the trailing underscore on the local buys.
+
+	`at` and `required` have seven locals of their own between them, and a
+	schema is free to name a parameter any of the seven -- `length` and
+	`offset` are ordinary things to be told about a stream. Without the
+	underscore the factory declares the same name twice and the header does
+	not compile at all, which is the same hazard `check`'s `which_` was
+	given that spelling for.
+	"""
+	result = compiles(tmp_path, f"""struct frame {{
+	parameter u8 {taken} [stream];
+	u8        body[{taken}];
+	u8        tail;
+}}
+""")
+	assert result.returncode == 0, result.stderr
+
+
+#: `@CASES@` is the placeholder rather than a `%s`, because the probe is
+#: full of printf conversions and `%` formatting would eat them.
+#: One probe for both schemas: only the three cases differ, because what the
+#: two schemas differ in is which read path the length goes through and not
+#: what the bytes mean. `need` is checked against the body length rather than
+#: against `n`, for the same reason.
+PARAMETER_PROBE = """
+#include <cstdio>
+#include "unit.hpp"
+
+/* 11 22 33 44 55, with `n` supplied rather than read. `body` starts at zero
+ * and `tail` is the byte after it, so every case moves `tail`. */
+static int one(std::uint8_t n, std::size_t want_body, std::uint8_t want_tail)
+{
+	std::uint8_t buf[5] = { 0x11u, 0x22u, 0x33u, 0x44u, 0x55u };
+	situ::rt::message msg(buf, sizeof buf);
+	situ::frame f;
+	int bad = 0;
+
+	if (situ::frame::at(msg, 0, sizeof buf, n, f) != situ::rt::err::ok) {
+		std::printf("n=%u: at refused\\n", n);
+		return 1;
+	}
+	if (f.validate() != situ::rt::err::ok) {
+		std::printf("n=%u: validate refused\\n", n);
+		return 1;
+	}
+
+	if (f.body().size() != want_body) {
+		std::printf("n=%u: body is %zu bytes, wanted %zu\\n",
+		            n, f.body().size(), want_body);
+		bad++;
+	}
+	for (std::size_t i = 0; i < f.body().size() && i < sizeof buf; i++) {
+		if (f.body().data()[i] != buf[i]) {
+			std::printf("n=%u: body[%zu] is %02x\\n",
+			            n, i, f.body().data()[i]);
+			bad++;
+		}
+	}
+	if (f.tail() != want_tail) {
+		std::printf("n=%u: tail is %02x, wanted %02x\\n",
+		            n, f.tail(), want_tail);
+		bad++;
+	}
+
+	/* And framing, which builds its own view from loose bytes: the whole
+	 * message is `body` plus the one byte of `tail`. */
+	std::uint32_t need = 0;
+	if (situ::frame::required(buf, sizeof buf, n, need) != situ::rt::err::ok
+	    || need != 1u + want_body) {
+		std::printf("n=%u: required said %u, wanted %zu\\n",
+		            n, need, 1u + want_body);
+		bad++;
+	}
+	return bad;
+}
+
+int main()
+{
+	int bad = 0;
+
+@CASES@
+	return bad;
+}
+"""
+
+#: `body[n]` moves `tail` to bytes 0, 2 and 4 of the same five.
+PLAIN_CASES = ("\tbad += one(0, 0, 0x11u);\n"
+               "\tbad += one(2, 2, 0x33u);\n"
+               "\tbad += one(4, 4, 0x55u);")
+
+#: `body[n + 1]` moves it to 1, 3 and 4.
+ARITHMETIC_CASES = ("\tbad += one(0, 1, 0x22u);\n"
+                    "\tbad += one(2, 3, 0x44u);\n"
+                    "\tbad += one(3, 4, 0x55u);")
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+@pytest.mark.parametrize("body,cases", [
+	(PARAMETER, PLAIN_CASES),
+	(PARAMETER_ARITHMETIC, ARITHMETIC_CASES),
+], ids=["sized_by", "arithmetic"])
+def test_a_view_reads_the_bytes_its_argument_names(
+		tmp_path: Path, body: str, cases: str) -> None:
+	"""The claim, proved by running rather than by reading.
+
+	Three cases and not one: reading the parameter off the wire gives `n =
+	buf[0] = 0x11`, which is past the frame, so a single case can fail for
+	the bounds check rather than for the number -- and a backend that reads
+	the length correctly while placing `tail` from the wire agrees with the
+	right answer whenever the two happen to coincide.
+
+	Both schemas and not one, because the two length forms go through
+	different renderers and neither run reaches the other's. Measured by
+	reverting each fix in turn: each case goes red only for its own
+	renderer, and the two fail differently. `_count_expression` reverted is
+	the dangerous one -- the `sized_by` case builds cleanly and reads
+	`body[0]` as the length. `_over_fields` reverted does not compile at
+	all, because the accessor it would have called is the one a parameter
+	deliberately does not get.
+	"""
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text(PARAMETER_PROBE.replace("@CASES@", cases),
+	                                   encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True, check=False)
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, check=False)
+	assert run.returncode == 0, \
+		f"the argument did not reach the bytes:\n{run.stdout}"

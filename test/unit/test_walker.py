@@ -1487,3 +1487,145 @@ def test_a_tlv_region_is_counted_the_same_in_all_five(tmp_path: Path) -> None:
 			found = _by_member(answers(argv, packet, tmp_path))
 			assert found.get(("proto_message", "fields")) \
 				== f"fields count={expected}", f"{backend}, on {label}"
+
+
+# ---------------------------------------------------------------------------
+# `parameter`: an argument the caller supplies (decision 0050)
+# ---------------------------------------------------------------------------
+
+#: The schema 0050's decision section describes, at its smallest: one
+#: argument, one run sized by it, and one member AFTER the run whose offset
+#: is therefore a function of the argument.
+#:
+#: `tail` is what makes this a test rather than a demonstration. Every
+#: quantity before it can be right while the offset chain is wrong -- the
+#: argument reads back, `body` has the right length, and only the member
+#: past the run lands somewhere nothing means.
+PARAMETERISED = (
+	"target buffer;\n"
+	"endian big;\n"
+	"bit_order msb_first;\n"
+	"struct frame {\n"
+	"\tparameter u8 n [stream];\n"
+	"\tu8        body[n];\n"
+	"\tu8        tail;\n"
+	"}\n")
+
+#: Five bytes with five distinct values, so a member read one byte early or
+#: one byte late is a different number rather than the same one twice.
+FIVE = bytes.fromhex("1122334455")
+
+#: What the schema says about those five bytes at each argument, written out
+#: rather than computed: a table derived from the walk would agree with
+#: whatever the walk did.
+#:
+#: 0, 2 and 4 rather than one value, because a wrong offset chain is right
+#: at some arguments by coincidence -- at `n = 1` a parameter spending its
+#: own byte puts `tail` at 2, which holds 0x33, and nothing about 0x33 looks
+#: wrong. Three values with no two consecutive is what removes the
+#: coincidence (26.393 met the same thing from the generated side).
+PARAMETER_CASES = (
+	(0, b"",                 0x11),
+	(2, bytes.fromhex("1122"),     0x33),
+	(4, bytes.fromhex("11223344"), 0x55),
+)
+
+
+def test_an_argument_places_the_members_after_a_parameter() -> None:
+	"""A `parameter` occupies nothing, so the member after it begins where
+	it began (decision 0050).
+
+	This is the offset chain and not the read. A parameter's row still
+	carries `size_bits` -- the width of the ARGUMENT, which is a real fact
+	the image has to state -- and a walk that spends it puts every member
+	after the parameter one byte late. That is a wrong value with no symptom:
+	`tail` still reads, still returns a byte of this message, and is simply
+	the wrong one.
+
+	The control is `tail` at all three arguments. `n` and `body` are right
+	whether or not the parameter is spent, because both begin at the start of
+	the frame; only the member past the run can tell the two walks apart.
+	"""
+	image = load(packed(PARAMETERISED))
+	held  = list(image.members(image.structs[0]))
+	assert len(held) == 3
+
+	for count, body, tail in PARAMETER_CASES:
+		view = acquire(image, FIVE, 0, (count,))
+
+		assert walk_module.size_bits(view, held[0]) == 0, (
+			f"the parameter's span at n={count}; a parameter is not in the "
+			"message, so it occupies nothing")
+		assert walk_module.read_bytes(view, held[1]) == body, \
+			f"`body` at n={count}"
+		assert walk_module.offset_bits(view, held[2]) == count * 8, \
+			f"`tail` begins at {count} when n={count}"
+		assert read_scalar(view, held[2]) == tail, \
+			f"`tail` at n={count}"
+
+
+def test_a_parameter_reads_its_argument_and_not_the_buffer() -> None:
+	"""The value of a `parameter` is what the caller supplied.
+
+	The trap this closes is that a parameter has an offset -- the one the
+	member after it begins at -- so the obvious read succeeds and returns
+	that member's first byte. Over `11 22 33 44 55` that is 0x11 whatever
+	the argument was, which is why every argument here is chosen NOT to be
+	17: a walk that read the buffer would answer 17 three times, and a walk
+	that answered the argument answers three different numbers.
+
+	`read_bytes` is asked too, because it is where a caller goes when the
+	value refuses, and it would hand back `body`'s bytes under `n`'s name.
+	"""
+	image = load(packed(PARAMETERISED))
+	held  = list(image.members(image.structs[0]))
+
+	assert image.placements[held[0]].parameter, \
+		"the image does not record that the member is a parameter"
+	assert not image.placements[held[1]].parameter
+	assert FIVE[0] == 0x11, "the control: what the buffer holds at offset 0"
+
+	for count, _, _ in PARAMETER_CASES:
+		view = acquire(image, FIVE, 0, (count,))
+		assert read_scalar(view, held[0]) == count, \
+			f"the argument at n={count}"
+
+		with pytest.raises(Refused):
+			walk_module.read_bytes(view, held[0])
+
+
+def test_a_walk_with_no_argument_is_refused_rather_than_defaulted() -> None:
+	"""situ does not know the caller's block size (decision 0050).
+
+	A default here would be a guess, and a view built on a guessed argument
+	reads the wrong bytes with nothing to say it did -- which is the same
+	reason `situ verify` exits 2 for a missing `--arg` rather than reporting
+	the bytes as non-conforming (26.394).
+
+	Refused twice on purpose: at `acquire`, which is the door, and again at
+	the point of use, so that a `View` assembled by hand cannot get a
+	defaulted answer through the window. The second is the one that matters,
+	because this module's own sub-view paths and its tests both build views
+	directly.
+	"""
+	image = load(packed(PARAMETERISED))
+	held  = list(image.members(image.structs[0]))
+
+	with pytest.raises(walk_module.Unsupplied):
+		acquire(image, FIVE, 0)
+	with pytest.raises(walk_module.Unsupplied):
+		acquire(image, FIVE, 0, (1, 2))
+
+	# And by hand, past the door. `tail` as well as `n`: the refusal has to
+	# reach the offset chain, or a member placed by an argument nobody gave
+	# would be placed at whatever a missing one meant.
+	bare = View(image, FIVE, 0, 0, len(FIVE))
+	with pytest.raises(walk_module.Unsupplied):
+		read_scalar(bare, held[0])
+	with pytest.raises(walk_module.Unsupplied):
+		walk_module.offset_bits(bare, held[2])
+
+	# The control: with the argument supplied, the same two calls answer.
+	view = acquire(image, FIVE, 0, (2,))
+	assert read_scalar(view, held[0]) == 2
+	assert walk_module.offset_bits(view, held[2]) == 16

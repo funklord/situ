@@ -7,6 +7,9 @@ problem rather than a style one.
 
 from __future__ import annotations
 
+import ast as python_ast
+from pathlib import Path
+
 import pytest
 
 from situc import wellformed
@@ -15,7 +18,7 @@ from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import ATTRIBUTE_NAMES, parse_text
 from situc.types import NUMERIC_BOUNDS
-from situc.resolve import resolve
+from situc.resolve import ResolvedSchema, resolve
 from situc.unparse import unparse
 
 
@@ -2349,46 +2352,120 @@ def test_a_parameter_round_trips_through_the_unparser() -> None:
 	assert unparse(parse_text(once)) == once
 
 
-@pytest.mark.parametrize("target", ["c", "cpp", "rust", "pack"])
-def test_three_backends_do_not_generate_for_a_parameter_yet(
-		target: str) -> None:
-	"""Refused, because what it would emit is worse than nothing.
+#: Generators that still decline a schema carrying a `parameter`, and the
+#: reason each one does: every module here emits a SECOND artifact over a
+#: schema -- a differ, a harness, a derived encoder -- and builds calls of
+#: its own that would each have to thread an argument through. None is on
+#: a `situc build` path. Derived from the source rather than carried, so a
+#: generator quietly gaining or losing the refusal fails this test.
+REFUSING = {
+	"situc/codegen/c/checks.py",
+	"situc/codegen/c/derived.py",
+	"situc/codegen/c/fuzz.py",
+	"situc/codegen/c/tamper.py",
+	"situc/codegen/differ.py",
+	"situc/codegen/python/derived.py",
+	"situc/codegen/rust/derived.py",
+}
 
-	No view carries an argument yet, so `_over_fields` reads a parameter
-	"where it sits" -- and a parameter sits at the offset of the member
-	AFTER it, having occupied nothing. Measured before this refusal existed:
-	`parameter u8 n [stream]; u8 body[n];` compiled cleanly in C and
-	`situ_S_body_len` read `situ_base(view)[0]`, which is `body`'s own first
-	byte. A wrong length, confidently, from code a compiler accepts.
+#: The generators that take an argument, as of 26.393 to 26.397.
+TAKING = ["c", "cpp", "python", "rust", "pack"]
 
-	Whole-schema rather than a note beside the parameter: a note leaves
-	every expression that READS it still emitting that read, which is the
-	half that produces the wrong number.
 
-	The packer is here too. Its image is what both walkers read, and a
-	walker would make the same mistake from the same offset.
+def _parameter_schema() -> tuple[ast.Schema, ResolvedSchema]:
+	schema = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                    "u8 body[n]; }")
+	return schema, resolve(schema, solve(schema))
 
-	Python is NOT here: its view takes the argument as of 26.393, and the
-	test below asserts that. A C view is the runtime's `situ_view_t` and
-	has nowhere to put one, which is why the other three wait.
+
+def test_every_generator_is_either_taking_an_argument_or_refusing_one(
+		) -> None:
+	"""The population, not a list of cells -- because the list is empty now.
+
+	This test used to name the backends that refused and assert each one
+	did. Every one of them now takes its argument, so the cell that would
+	decide the question holds nothing, and a test over an empty set reports
+	success exactly as loudly as a real one.
+
+	So it asserts the PARTITION instead: which generators refuse is read
+	out of the source, which means a generator added to `situc/codegen`
+	without either passing an argument or declining to is a failure
+	addressed to whoever added it -- rather than being absorbed by a
+	condition that would have handled it for the wrong reason.
 	"""
-	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
-	                      "u8 body[n]; }")
-	resolved = resolve(schema, solve(schema))
+	root = Path(__file__).resolve().parents[2]
+	found = set()
+	# All of `situc`, not `situc/codegen`: `situc/pack.py` refused until
+	# 2026-09-17 and does not live under `codegen`, so a population scoped
+	# to that directory would not have seen it come back. Scope chosen for
+	# where a refusal CAN be, rather than for where they happen to be now.
+	for one in (root / "situc").rglob("*.py"):
+		# The AST rather than a grep: the first version of this read the
+		# file as text, and a `# refuse_parameters(schema)` left behind
+		# when somebody removed the call still matched it. A detector
+		# that cannot tell live code from a comment reports the refusal
+		# it was written to notice the absence of.
+		tree = python_ast.parse(one.read_text(encoding="utf-8"))
+		calls = (node for node in python_ast.walk(tree)
+		         if isinstance(node, python_ast.Call))
+		if any(isinstance(call.func, python_ast.Name)
+		       and call.func.id == "refuse_parameters" for call in calls):
+			found.add(str(one.relative_to(root)))
+
+	assert found == REFUSING, (
+		"a generator changed its mind about `parameter`. Added one that "
+		"refuses? name it in REFUSING. Taught one to pass an argument? "
+		"take it out, and assert it generates below."
+	)
+
+
+@pytest.mark.parametrize("target", TAKING)
+def test_a_generator_that_takes_an_argument_generates_for_one(
+		target: str) -> None:
+	"""The control for the test above, and the half that says a refusal was
+	REMOVED rather than a test deleted.
+
+	Each of these refused until 2026-09-17, and what made the refusal right
+	was that an accessor would have read the buffer at the parameter's
+	offset -- which is where the member AFTER it begins. Measured before
+	the refusal existed: `parameter u8 n [stream]; u8 body[n];` compiled
+	cleanly in C and `situ_S_body_len` read `situ_base(view)[0]`, which is
+	`body`'s own first byte. A wrong length, confidently, from code a
+	compiler accepts.
+
+	So this asserts the arrival rather than the absence of a refusal: the
+	generator runs, and 26.393 to 26.397 hold that what it emits reads the
+	right bytes.
+	"""
+	schema, resolved = _parameter_schema()
 
 	if target == "pack":
 		from situc import pack as packer
-		with pytest.raises(SituError) as refused:
-			packer.pack(schema, resolved)
-	else:
-		backend = __import__(f"situc.codegen.{target}", fromlist=["generate"])
-		with pytest.raises(SituError) as refused:
-			backend.generate(schema, resolved, "unit")
+		assert packer.pack(schema, resolved) is not None
+		return
+
+	backend = __import__(f"situc.codegen.{target}", fromlist=["generate"])
+	assert backend.generate(schema, resolved, "unit") is not None
+
+
+def test_a_refusing_generator_still_names_the_record() -> None:
+	"""A refusal whose message says only "not yet implemented" sends a
+	reader to the phase table rather than to the record that explains it.
+
+	One refuser stands for the set: they share `refuse_parameters`, and the
+	test above is what holds the set together.
+	"""
+	from situc.codegen import differ
+
+	schema, resolved = _parameter_schema()
+	# `differ.generate` takes a TARGET here, not a basename: the first
+	# draft passed "unit" and the test still went green, because the
+	# refusal raises before the target is looked up. It would have gone on
+	# passing with the refusal moved anywhere earlier in the function.
+	with pytest.raises(SituError) as refused:
+		differ.generate(schema, resolved, "c")
 
 	assert "parameter n" in str(refused.value)
-	# The notes rather than the message, because that is where the reason
-	# lives -- and a refusal whose message says only "not yet implemented"
-	# sends a reader to the phase table rather than to the record.
 	assert any("decision 0050" in note
 	           for note in refused.value.diagnostic.notes)
 
@@ -2457,6 +2534,18 @@ def test_every_generator_refuses_a_parameter(module: str,
 		generate(*[held[one] for one in shape])
 
 	assert "parameter n" in str(refused.value)
+
+
+def test_a_rust_view_takes_the_argument_rather_than_refusing() -> None:
+	"""The control for Rust leaving the list above (26.395)."""
+	from situc.codegen import rust as backend
+
+	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
+	                      "u8 body[n]; }")
+	resolved = resolve(schema, solve(schema))
+	module   = backend.generate(schema, resolved, "unit").module
+
+	assert "pub fn new(bytes: &'a [u8], n: u8)" in module
 
 
 def test_a_python_view_takes_the_argument_rather_than_refusing() -> None:

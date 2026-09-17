@@ -2360,3 +2360,104 @@ fn main() {
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# A view takes its arguments (0050)
+# ---------------------------------------------------------------------------
+
+TAKES = """struct frame {
+	parameter u8 n [stream];
+	u8        body[n];
+	u8        tail;
+}
+"""
+
+
+def test_the_view_carries_the_argument() -> None:
+	"""A public field rather than a getter: it IS the value the caller
+	supplied, so a getter would be a second name for one field. Undefaulted
+	because Rust has no default argument and should not grow one by
+	convention -- situ does not know the caller's block size."""
+	module = emit(TAKES)
+
+	assert "\tpub n: u8," in module
+	assert "pub fn new(bytes: &'a [u8], n: u8) -> Result<Self>" in module
+	# `required` takes it too: how far a message reaches follows the
+	# argument, and a framer that could not be told would answer about a
+	# different message.
+	assert "pub fn required(data: &[u8], n: u8) -> situ_rt::Framing" in module
+
+
+def test_a_parameter_gets_no_accessor_of_its_own() -> None:
+	"""A field and a method of one name, where the field is right.
+
+	`Frame { n }` is the argument the caller gave `new`; a generated
+	`fn n()` reads the bytes at the parameter's offset, which -- a
+	parameter occupying none -- is where the member AFTER it begins. So
+	`view.n` answered correctly and `view.n()` returned the payload's
+	first byte, and nothing in the spelling said which was which.
+
+	The setter is the worse half: `set_n(4)` stored 4 over that same byte
+	and left the argument alone, so the write corrupted the payload while
+	the next read still used the old value.
+
+	Structural rather than a run, and that is forced: after the fix
+	neither name exists, so a probe calling one does not compile. What a
+	revert brings back is a method, which is a fact about the module
+	text. The positive control is the second half -- the accessors that
+	SHOULD be there -- so an emitter that stopped emitting anything at
+	all fails here rather than passing quietly.
+	"""
+	module = emit(TAKES)
+
+	assert "pub fn n(" not in module
+	assert "pub fn set_n(" not in module
+	assert "// No n():" in module
+	assert "// No set_n():" in module
+
+	# The control: the members that are bytes keep theirs.
+	assert "pub fn body(" in module
+	assert "pub fn tail(" in module
+	assert "pub fn set_tail(" in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_layout_follows_the_argument(tmp_path: Path) -> None:
+	"""Run under `-D warnings`, and the claim is that the SAME bytes read
+	differently. `tail` is the half that catches an argument counted as
+	bytes -- it sits immediately after `body`."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / "unit.rs").write_text(emit(TAKES), encoding="ascii")
+	(src / "main.rs").write_text("""mod situ_rt;
+mod unit;
+
+fn main() {
+	let raw = [0x11u8, 0x22, 0x33, 0x44, 0x55];
+	for (n, body, tail) in [(0u8, &raw[0..0], 0x11u8),
+	                        (2, &raw[0..2], 0x33),
+	                        (4, &raw[0..4], 0x55)] {
+		let view = unit::Frame::new(&raw, n).unwrap();
+		assert_eq!(view.body(), body, "n={}", n);
+		assert_eq!(view.tail(), tail, "n={}", n);
+	}
+
+	// `as_ref` hands the argument on: the read-only view is the same
+	// message under the same assumptions.
+	let mut owned = [0x11u8, 0x22, 0x33];
+	let held = unit::FrameMut::new(&mut owned, 2).unwrap();
+	assert_eq!(held.as_ref().tail(), 0x33);
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings",
+		 "-o", str(tmp_path / "probe"), str(src / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0

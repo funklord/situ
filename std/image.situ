@@ -233,12 +233,32 @@ struct image_placement {
 	u32  located_code;                // `at expr`: bytecode offset, or `none`
 	u32  repeat_code;                 // `while (cond)`: bytecode, or `none`
 	u8   radix;                       // 0, or 10 or 16 for a text number
+	// The placement's second flag byte. It began as a text number's own
+	// flags and stopped being only that when `peek` took bit 5: `flags`
+	// was full, and a fact about a member's SPAN has to be carried where a
+	// walker reads it rather than not at all.
 	u8   text_flags;                  // bit 0: minimal (no leading zeros)
 	                                  // bit 1: trimmed
 	                                  // bit 2: case_insensitive
 	                                  // bit 3: packed decimal (BCD), whose
 	                                  //        digit count is in
 	                                  //        `radix_digits`
+	                                  // bit 4: scaled (0056)
+	                                  // bit 5: peek -- read at the cursor
+	                                  //        and not spent (0057)
+	                                  // bit 6: parameter -- an argument the
+	                                  //        caller supplies, so the
+	                                  //        member occupies no bytes and
+	                                  //        a walker must read the
+	                                  //        argument rather than the
+	                                  //        buffer (0050). The row still
+	                                  //        carries `offset_bits` and
+	                                  //        `size_bits`: the offset is
+	                                  //        where the member AFTER it
+	                                  //        begins and the size is how
+	                                  //        wide the argument is, which
+	                                  //        is why the flag cannot be
+	                                  //        inferred from the row
 	u16  radix_digits;                // digits the field holds, or 0 --
 	                                  // for a text number and for packed
 	                                  // decimal alike, since both are a

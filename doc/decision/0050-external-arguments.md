@@ -1,18 +1,38 @@
 # 0050: external arguments, and which of them a schema may take
 
-Status: accepted 2026-09-04; the `--define` half built 2026-09-15
-(26.362); `parameter`, `[stream]` and their checks built 2026-09-17
-(26.386), and refused by every generator until a view can carry one
-(26.387, 26.390). The map and the wire signature name a parameter
-rather than placing it (26.390, 26.391), and the dissector takes a
-`[stream]` one from a preference (26.392). A PYTHON view takes its
-arguments as of 2026-09-17 (26.393), and `situ verify` supplies one
-with `--arg` (26.394); C, C++ and Rust still refuse, and
-a struct that takes one cannot yet be a member. Still to do: those
-three backends' view constructor, the walker's `acquire`, and a
-corpus struct -- which lands with the
-backends rather than before them. What a change to `[stream]` means for wire
-compatibility is open, and 26.391 says why
+Status: accepted 2026-09-04. Built in four passes:
+
+- `--define`, 2026-09-15 (26.362).
+- `parameter`, `[stream]` and their checks, 2026-09-17 (26.386), refused
+  by every generator until a view could carry one (26.387, 26.390).
+- The descriptions that place nothing: the map and the wire signature name
+  a parameter rather than placing it (26.390, 26.391); the dissector reads
+  a `[stream]` one from a preference (26.392); `situ verify` supplies one
+  with `--arg` (26.394).
+- The views, 2026-09-17: Python (26.393), Rust (26.395), C++ (26.396) and
+  C (26.397). None emits an accessor for the parameter itself (26.398).
+  What still declines are the generators that emit a second artifact
+  over a schema, and a test asserts that partition rather than a list
+  of cells that is now empty (26.400, 26.401).
+- The packed image and both walkers, 2026-09-17 (26.403). The flag went
+  into a free bit of an existing byte, so the record did not grow and
+  `std/image.situ.map` and `.wire` are unchanged -- which is why the
+  `[stream]` question below does not arrive through the image.
+
+Still to do: the separate CLI generators (`edit`, `drive`, `frame`,
+`converse`, `qt`, `relate`), which build a view with no arguments; lifting
+the refusal on a struct that takes one being a member of another; and a
+corpus struct -- which needs the four generators that SWEEP the corpus
+to skip a parameterised struct rather than decline the file, since a
+`parameter` in `edges.situ` today fails four passing sweeps rather than
+filling a gap (26.402). Two
+shapes reach C functions that take a view alone and so fail at the
+compiler rather than silently -- a run of variable-sized structs sized by
+an argument, and a delimited or `while` run's stride helpers -- and no
+schema in this tree has either (26.397).
+
+What a change to `[stream]` means for wire compatibility is open, and
+26.391 says why
 Date: 2026-09-04
 Phase: raised by the copyright holder while reading 15.2
 

@@ -50,7 +50,17 @@ typedef enum {
 	 * the two walkers finally had something to compare. */
 	SITU_WALK_VERSION     = 3,
 	SITU_WALK_MALFORMED   = 8,   /* the image is not one */
-	SITU_WALK_UNSUPPORTED = 9    /* a construct this build does not render */
+	SITU_WALK_UNSUPPORTED = 9,   /* a construct this build does not render */
+	/* A `parameter` the schema declares and the caller did not supply
+	 * (decision 0050). Its own code because it is a statement about the
+	 * CALL -- not about the bytes, which nothing has read, and not about
+	 * this build, which renders the construct perfectly well. Folding it
+	 * into either would report a verdict on a message nobody looked at,
+	 * which is the shape `situ verify` moved its own refusal for.
+	 *
+	 * Never a default. situ does not know the caller's block size, and a
+	 * walk under a guessed one reads the wrong bytes confidently. */
+	SITU_WALK_ARGUMENT    = 10
 } situ_walk_err;
 
 /* `none`, as `std/image.situ` spells it. */
@@ -191,6 +201,38 @@ typedef struct {
 	const uint8_t *messages;
 	uint32_t       message_count;
 	uint32_t       message_stride;
+
+	/* The arguments this walk was acquired with (decision 0050), in the
+	 * order the schema declares its `parameter` members. `arg_count` is
+	 * what says how many there are; NULL and zero both mean none, and a
+	 * parameter with no argument behind it is refused rather than read as
+	 * zero.
+	 *
+	 * Here, and not on a view, because this walker has no view: every entry
+	 * point takes `(image, message, len, shape)` and the image binding is
+	 * the one of those that belongs to the CALLER and lives as long as the
+	 * walk. Python's walker carries the same list on the `View` its
+	 * `acquire` returns; the two differ in where the caller keeps them and
+	 * in nothing a walk can observe.
+	 *
+	 * That makes them per-binding rather than per-message, which is the
+	 * right lifetime for the only kind of parameter that can move a
+	 * member: `[stream]` says the fact is negotiated once and then fixed.
+	 * A caller with a second stream calls `situ_walk_acquire` again.
+	 *
+	 * `situ_walk_open` zeroes the whole struct, so a binding nobody
+	 * supplied arguments to reads as "none supplied" -- which is refused at
+	 * the point of use rather than read as zero. */
+	const int64_t *args;
+	uint32_t       arg_count;
+	/* The struct they were supplied FOR. Python's walker gets this for
+	 * free -- its arguments live on the View under the placement indices of
+	 * the struct that View is over, so another struct's parameter is simply
+	 * not in the map. Here the arguments are positional and a second
+	 * parameterised struct would take the first one's value silently, which
+	 * is the wrong-number-confidently failure this construct was refused
+	 * for. Read only where `args` is non-NULL, so zero is not a claim. */
+	uint32_t       arg_shape;
 } situ_walk_image;
 
 /* One member, as the image describes it. */
@@ -220,10 +262,13 @@ typedef struct {
 	 * `radix_digits` is how many digits the schema declared, which is the
 	 * fixed-width form's width; the delimited form's comes from the scan. */
 	uint8_t  radix;
-	/* `image_placement.text_flags`. Bit 2 is `[case_insensitive]`, which
-	 * for a token set is a property of the SET rather than of the member
-	 * (0055) -- so a pinned-run check that ignored it refuses `helo` where
-	 * every other reader takes it. */
+	/* `image_placement.text_flags`, which is the placement's second flag
+	 * byte rather than a text number's alone -- `flags` is full, and
+	 * SITU_WALK_PARAMETER lives here for that reason.
+	 *
+	 * Bit 2 is `[case_insensitive]`, which for a token set is a property of
+	 * the SET rather than of the member (0055) -- so a pinned-run check
+	 * that ignored it refuses `helo` where every other reader takes it. */
 	uint8_t  text_flags;
 	uint16_t radix_digits;
 	/* `max` on a `while` run: the ceiling the schema put on how many
@@ -260,11 +305,45 @@ typedef struct {
 /* `[size = N]` pinned this member's footprint (decision 0039). */
 #define SITU_WALK_PINNED       0x80u
 
+/* A bit of `situ_walk_placement.text_flags`, not of `flags`.
+ *
+ * A `parameter` (decision 0050): an argument the caller supplies, which the
+ * message does not carry. The member occupies NOTHING, so the member after
+ * it begins where it began -- and its row still says `offset_bits` and
+ * `size_bits`, those being where that next member starts and how wide the
+ * argument is. A walker that missed the flag would therefore read the next
+ * member's first byte and hand it back as the argument: a wrong value that
+ * reads exactly like a right one, which is why every backend refused the
+ * construct until a view could carry one. */
+#define SITU_WALK_PARAMETER    0x40u
+
 /* Bind an image. Every table it names is bounds-checked against the whole
  * before anything reads one, because the image is the least trusted input
  * this component has. */
 situ_walk_err situ_walk_open(situ_walk_image *out,
                                  const uint8_t *image, uint32_t len);
+
+/* Supply the arguments `shape`'s `parameter` members take (decision 0050).
+ *
+ * The C answer to Python's `acquire`, and it does that function's argument
+ * half: the bounds check has no counterpart here, every entry point making
+ * its own. `args` are positional, in the order the schema declares them --
+ * the placement table's order, which is the one thing both walkers have,
+ * names living in the image's optional tail that a device omits.
+ *
+ * SITU_WALK_ARGUMENT where `count` is not exactly what `shape` takes. Too
+ * few is the case that matters and too many is refused for the same reason
+ * read backwards: an argument nothing declares is one the caller believes
+ * is being used.
+ *
+ * The array is BORROWED and must outlive every walk made through this
+ * binding; nothing here allocates.
+ *
+ * Optional for a schema with no parameters, which is every schema written
+ * before 0050: `situ_walk_open` leaves the binding with none, and a walk
+ * that never meets one never asks. */
+situ_walk_err situ_walk_acquire(situ_walk_image *image, uint32_t shape,
+                                const int64_t *args, uint32_t count);
 
 /* How many members a struct has, and where they start. */
 situ_walk_err situ_walk_members(const situ_walk_image *image, uint32_t shape,

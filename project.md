@@ -30105,6 +30105,428 @@ for it should not find one when nothing was checked.
 that may move a member. Per-vector arguments would be a second syntax in
 the vectors format, and nothing yet needs one.
 
+### 26.395 A Rust view takes its arguments
+
+**The second backend, and the one Python's shape transferred to almost
+unchanged.** `S::new(bytes, n)` takes the argument and the struct carries
+it as a public field -- public because it IS the value the caller supplied,
+so a getter would be a second name for one field.
+
+**Three places had to learn it, and the third is the one a reader would
+miss.** `_over_fields` for an arithmetic size, the plain `sized_by` path
+for `body[n]`, and **`required`** -- the framing helper that says how many
+bytes a message needs. That last one builds a probe view of the struct, so
+it needs the arguments too: how far a message reaches can follow one, and a
+framer that could not be told would answer about a different message. It
+takes them in the same order and spelling as `new`, so a caller holding
+both hands them on rather than remembering two shapes.
+
+**`as_ref` carries them across.** A mutable view's read-only twin is the
+same message under the same assumptions; one that dropped the arguments
+would answer a different question about the same bytes.
+
+**The cast was the one thing Rust asked for that Python did not.** A count
+expression is `usize` arithmetic and a parameter is a `u8`, so the plain
+`sized_by` branch has to say `as usize` -- which the compiler pointed at
+immediately. The type system doing here what a test had to do for Python.
+
+**C++ and C still refuse.** C++ waits with C rather than diverging from
+the backend it is closest to, and C is the design problem: its view is
+`situ_view_t`, a runtime type shared by every schema, so it needs a
+generated per-struct view type -- about a hundred signature sites, with
+byte-identity across the corpus as the proof.
+
+### 26.396 A C++ view takes its arguments, and a probe that proved half
+
+**The third backend**, built in parallel with C and reported back with two
+findings worth more than the code.
+
+**The first probe proved half of what it claimed, and measuring is what
+said so.** It sized a member as `body[n]` and stayed GREEN with the
+`_over_fields` fix reverted -- because the plain `sized_by` form never
+reaches that renderer. Two spellings of one construct, and a probe over
+the shorter one alone would have shipped looking like a proof. The run test
+is parameterised over both forms now, three argument values each, with
+`tail` landing on a different byte every time.
+
+**In C++ the two omissions fail differently, and only one is silent.**
+Missing the `sized_by` branch compiles cleanly and reads `body[0]` as the
+length -- the wrong byte, confidently. Missing `_over_fields` does NOT
+compile, because the accessor it would call is the one a parameter
+deliberately does not get. **That safety net exists only because
+suppressing the accessor and teaching the renderer landed together**: a
+backend that emitted the accessor would have had both mistakes silent.
+
+**The argument needs the `which_` treatment, and C++ alone does.** `at` has
+four locals and `required` three more -- `owner`, `offset`, `length`,
+`out`, `data`, `have`, `need` -- and `parameter u8 length` is an ordinary
+thing to be told about a stream. Without a trailing underscore on the
+LOCAL, all seven names produce a header that does not compile; the data
+member keeps the schema's plain spelling. Rust needs no equivalent because
+`new(bytes, n)` has one local.
+
+**Two smaller things the compiler decided.** A `const` data member is the
+obvious choice and is wrong: `at` assigns a whole view, and a const member
+deletes the copy-assignment that does it. And `= 0` on the member is
+load-bearing rather than decoration -- a `constexpr` default constructor
+requires every member to have a default initialiser. The zero is the same
+"not a view of anything yet" an empty view is already in, not a guess at
+the caller's value.
+
+**Zero churn, measured.** Headers for every schema in the corpus are
+byte-identical under the old emitter and the new one.
+
+**Two gaps left open, and named rather than quietly inherited.** The
+separate CLI generators -- `situc edit`, `drive`, `frame`, `converse`, `qt`
+and `relate` -- each emit `T::at(owner, 0u, len, view)` with no arguments,
+so a struct that takes a parameter does not compile through those. 0050's
+"four backends gain a parameter on the view constructor" does not reach
+them, and they are their own piece. And `refuse_parameters` was left
+imported and uncalled in the Rust and Python emitters once each stopped
+refusing; both imports are gone now, and the function keeps its real
+callers in the generators that still refuse.
+
+### 26.397 A C view takes its arguments, by a tail rather than a wrapper
+
+**The fourth and last backend**, and the one whose view is not its own to
+change: `situ_view_t` is the runtime's, shared by every schema, so there
+was nowhere to put an argument the way the other three did.
+
+**The wrapper was evaluated and declined, for three reasons in order of
+weight.** A `situ_frame_view_t { situ_view_t v; uint8_t n; }` needs
+wrapping twice more -- a sealed region's interior accessors already take
+`{gate} gate` in the view's place, and the shifting and covered setters
+take `(situ_msg_t *msg, situ_view_t view, ...)` -- so it is three
+generated types, not one, and a trailing parameter composes with all
+three by appending. `prefix(...)` is the precedent and 0050's own Context
+names it: situ already admits a caller knowing something the message does
+not, and C already spells that as a trailing parameter list. And the
+wrapper needs a `situ_view_t view = self.v;` prologue in about 117 bodies,
+several of which are one-line returns built where the body text is not to
+hand.
+
+**The tail is not uniform, and that is forced rather than chosen.** The
+suite builds with `-Wall -Wextra -Werror`, so an accessor taking an
+argument it does not read is an ERROR. So the tail goes on the accessors
+whose arithmetic reaches the argument and not on the rest --
+`situ_frame_body_ptr(view, arg_n)` takes it, `situ_frame_magic_get(view)`
+in front of the parameter does not -- and the signature therefore says
+which accessors depend on the caller's fact. Where a tail is uniform
+across a struct by design (`validate`, `check`, `required`, the offset
+functions, so a caller has one shape to remember) an unread argument gets
+`(void)arg_n;`, which is the `(void)view;` this emitter already writes for
+the same reason.
+
+**An unplumbed path is a compile error, not a wrong byte.** Because a
+parameter read renders as the bare identifier `arg_n`, a function that
+embeds one without the tail names something that is not there and gcc says
+so. That is what preserves what the whole-schema refusal bought: the
+refusal moved from `situc build` to `cc` rather than being removed. Two
+shapes are still unplumbed and named in the `_argument_tail` docstring
+rather than left implicit -- a run of variable-sized structs sized by an
+argument, whose `_span` walk threads through the shared `_span_entries`,
+and a delimited or `while` run's stride helpers. No schema in this tree
+has either.
+
+**Zero churn, measured, and the instrument controlled.** Every schema in
+`every_schema.SCHEMAS` x all four `(materialize, messages)` combinations
+-- 41 schemas, 164 generations, 328 files -- byte-identical before and
+after. Appending one space to one captured header makes the comparison
+report it, so the zero is a measurement rather than an empty comparison.
+
+**The run, independently re-done rather than taken from the report.** Five
+bytes `11 22 33 44 55`, compiled with the suite's own warnings: `n` of 0,
+2 and 4 gives `body_len` 0, 2 and 4 and `tail` `0x11`, `0x33`, `0x55`.
+And the arithmetic spelling `body[n + 1]`, which goes through
+`_over_fields` rather than `_count_expression`, with the arguments shifted
+so the lengths match. Both paths learned the parameter.
+
+**A `parameter` gets no accessor at all**, and the setter is why that is a
+refusal rather than tidiness: `n` drives a length, so it would have been
+emitted as the SHIFTING setter, which stores at the member's offset and
+bumps the generation -- and that offset is `body`'s.
+`situ_frame_n_set(msg, view, 4)` would have written a 4 over the first
+byte of the member the argument sizes, under a name saying it set the
+argument. The same fault Rust had and 26.398 records.
+
+**The invalidation note had to learn it too.** It lists what invalidates a
+view and says "use the setters at the end of this struct's section" -- so
+with a parameter among the drivers it named a write that cannot happen and
+pointed at a function that cannot exist, in the one comment whose whole
+job is to state a rule the C type system cannot enforce. Where every
+driver is an argument, nothing invalidates the view at all.
+
+**And `codegen/doc.py` silently re-parents a comment block**, which is
+worth knowing before anybody adds another per-member note. The first
+version of the no-accessor note was merged into the NEXT member's doc
+block -- which is the member the argument sizes, so the note documented
+the wrong thing. `_documents_an_absence` is the escape hatch and it keys
+on the block opening with `"No "`, which is the convention that file
+already uses.
+
+### 26.398 A field and a method of one name, where the field is right
+
+**The C backend's worker found this in the Rust backend, and it is the
+fault the whole-schema refusal existed to prevent, still live in work that
+had just removed the refusal.**
+
+Rust emitted, beside the correct `pub n: u8` field, a `pub fn n(&self) ->
+u8 { read_be(self.bytes, 0, 1) }` -- offset 0 being where `body` begins.
+So `view.n` answered correctly and `view.n()` returned the payload's first
+byte, and **nothing in the spelling says which a caller reached for.** The
+setter was worse: `set_n(4)` stored 4 over that same byte and left the
+argument alone, so the write corrupted the payload while the very next
+read still used the old value, under a name saying it had set the
+argument.
+
+**What made it survive the backend's own tests is that the expression path
+was right.** Every size expression rendered `self.n`, so every run test
+passed and the layout followed the argument exactly as claimed. What was
+wrong was a function nothing in the suite called -- and no run test can
+reach it now, because after the fix neither name exists and a probe
+calling one does not compile. **The discriminating test is therefore
+structural**, which is not a weaker test but the only one the fix leaves
+available; it carries a positive control asserting the accessors that
+SHOULD be there, so an emitter that stopped emitting anything fails it
+rather than passing.
+
+**C++ had the same hole and did not fall in, for a reason worth keeping.**
+26.396 records it: suppressing the accessor and teaching the renderer
+landed together there, so a missing renderer branch failed at the compiler
+instead of reading `body[0]`. The suppression was load-bearing for
+something other than tidiness, and only the backend that did both halves
+at once got the benefit.
+
+**The general shape: a cross-backend fault is invisible from inside any
+one backend**, because what is missing is a suppression nobody named. Four
+backends built the same feature four ways in parallel and three of them
+suppressed the accessor; the fourth was found by a worker sent to build a
+fifth thing entirely, reading the others' output for its own reasons.
+
+**And the comment above the fault said the opposite of what the code did.**
+The Rust `generate()` still carried the refusal's rationale -- "no backend
+can pass one yet" -- directly above the return that now generates. A claim
+that outlived its subject, in the one place a reader goes to find out what
+the backend does with a parameter.
+
+### 26.399 A generated header that does not compile, found in passing
+
+**Not a parameter fault, and not this arc's.** Reproduced with no
+`parameter` anywhere:
+
+```
+struct frame { u8 off; u8 pad[4]; u8 marker at off; }
+```
+
+`situc build --target c` succeeds. The generated `situ_frame_check` calls
+`situ_frame_marker_offset(view)`, and a located member never emits an
+`_offset` function, so `cc` refuses the output with *implicit declaration
+of function*. A build command that reports success and emits code that
+does not compile.
+
+**How it survived is the corpus lesson again.** One schema in the tree
+places a member this way -- `example/bmp`'s `u8 pixels[info.image_size] at
+file.pixel_offset` -- and it is a NESTED path, which resolves to a
+constant offset and takes a different route. The uncovered shape is `at
+<bare local member>`, which no schema has. A construct the corpus does not
+carry is one no gate can fail on, which is what put the `parameter` struct
+on this arc's list in the first place.
+
+Recorded rather than fixed: it is a separate defect from 0050 and belongs
+in its own commit rather than entangled with this one.
+
+### 26.404 `situc explain` places a member that occupies nothing
+
+**26.390 again, with a description nobody had enumerated.** That entry
+records refusing four backends and leaving the fifth description emitting
+the read anyway; the remedy was to ask every command rather than the four
+that had been changed. Asked again after this arc, with every command run
+against a parameterised schema, `situc explain` is the sixth:
+
+    $ situc explain param.situ frame.n
+    frame.n
+      size       Fixed(1)
+      offset     AbsoluteStatic(0x00)
+      mutate     InPlaceFixed
+
+Every line is false in the same way. The member occupies no bytes; offset
+0 is where `body` begins; and `InPlaceFixed` promises a setter that cannot
+exist, since writing there would store over the member the argument sizes.
+
+**The two descriptions beside it were taught and are right**, which is what
+makes this a gap rather than a decision:
+
+    situc map    frame.n                     parameter
+    situc wire   parameter -    u8    n [stream]
+
+Both name the member and place nothing. `explain` reports the capability
+vector faithfully -- the placement really does carry `size_bits = 8`, that
+being how wide the ARGUMENT is -- so the fault is not in the solver. It is
+that a vector describing a member which is not in the bytes needs saying
+differently, exactly as the map and the wire signature say it.
+
+**Why the corpus sweep could not catch it**, and this is 26.402 from the
+other side: no schema in the tree declares a `parameter`, so every command
+that reads one has only ever been asked about it by hand. The commands
+that got it right got it right because somebody thought to ask.
+
+Found by running all seven schema-reading commands against a scratch
+schema rather than the four this arc touched. OPEN as this is written, and
+deliberately not folded into the view commit: it is a description rather
+than a view, so it does not belong under a message about view
+constructors. The fix is to say what the vector describes, the way the map
+and the wire signature do, rather than to suppress it -- the axes are real
+and printing them is what the command is for.
+
+### 26.400 A refusal test whose population went empty, and its two detectors
+
+**The test that held the refusal was named for the cells it listed**, and
+when the last of them learned to pass an argument, all three parameters
+went red for the same reason: there was nothing left to refuse. A test over
+an empty set reports success exactly as loudly as a real one, so deleting
+it and shrinking it were both wrong.
+
+**What replaced it asserts the partition.** Which generators refuse is read
+out of `situc/codegen` rather than carried in the test, so a generator
+added without either passing an argument or declining to is a failure
+addressed to whoever added it. Beside it, a control that the five which
+used to refuse now GENERATE -- which is what says a refusal was removed
+rather than a test deleted.
+
+**Both halves of the first draft were wrong, and the sabotage is what said
+so.** Commenting out `refuse_parameters(schema)` in the differ left the
+partition test GREEN: the detector read the file as text, and
+`# refuse_parameters(schema)` matched the pattern it was looking for. **A
+detector that cannot tell live code from a comment reports the very thing
+it exists to notice the absence of.** It walks the AST for a `Call` now.
+
+And the refusal-message test passed `"unit"` to `differ.generate`, whose
+third argument is a TARGET. Under the sabotage it failed with a `KeyError`
+rather than *did not raise* -- so it had never exercised anything past the
+refusal, and would have gone on passing with the refusal moved anywhere
+earlier in the function. **A test that fails for the wrong reason under
+sabotage has not been shown to work**, which is why reading WHICH failure
+came out matters as much as that one did.
+
+### 26.401 A refusal message that outlived what it refused
+
+`refuse_parameters` still told the user "no view carries one yet", and sent
+them to "the view constructor, the walker's `acquire` and the dissector's
+preference" as the missing work. By then all four view constructors and the
+dissector's preference were built. **A live, user-facing diagnostic naming
+finished work as the reason for a refusal** -- and the docstring above it
+said the function served "all four backends and the packer", none of which
+still call it.
+
+The seven callers left are the generators that emit a SECOND artifact over
+a schema: the differ, the C checks, fuzz and tamper harnesses, and the
+three `derived` emitters. Each builds calls of its own that would have to
+thread an argument through, and none is on a `situc build` path -- so what
+a parameter costs there is `situc gen-checks` and its siblings declining,
+which the message now says.
+
+It is the same shape as the stale comment in Rust's `generate()` (26.398),
+found the same afternoon, and the reason to write both down is that
+neither was found by a gate. **A comment and a diagnostic are the two
+places a claim can rot with nothing downstream to trip over**: no test
+asserts what a refusal's prose says is missing, and the reader it misleads
+is the one who has just been stopped and is looking for what to do next.
+
+### 26.403 Both walkers take the argument, and where each one puts it
+
+**The image carries it as `image_placement.text_flags` bit 6.** `flags` is
+full -- all eight bits spoken for -- and `text_flags` had 6 and 7 free,
+with `peek` already at bit 5 for exactly this reason: it is the
+placement's SECOND flag byte rather than a text number's alone, and `peek`
+is `parameter`'s nearest cousin, the other member that occupies nothing.
+So the record did not grow, the stride did not move, and `situc map
+--check` and `situc wire --check` both report `std/image.situ.map` and
+`.wire` current -- verified here rather than taken from the report, and
+neither committed file is touched. Which also means the `[stream]`
+wire-compatibility question 26.391 leaves open does not arrive through the
+image.
+
+**The row still says `offset_bits` and `size_bits`, and that is why the
+flag cannot be inferred.** Layout answers `offset = 0` -- where `body`
+begins -- and `size = 8`, how wide the argument is. A walker without the
+flag spends that byte and reads the next member's first byte as the
+argument: the same fault as the accessors, arriving at the walker by the
+same route.
+
+**Python keys arguments by placement index; C keys them by ordinal, and
+that difference is a hole in one of them.** `acquire(image, buffer,
+struct, args=())` stores `{placement index: value}`, so another struct's
+parameter is simply not in the map. The C walker has no view -- every
+entry point takes `(image, message, len, shape)` -- so the arguments go on
+the `situ_walk_image` binding, keyed by ordinal, and in a schema with two
+parameterised top-level structs, acquiring for `one` and then reading
+`two` returned ONE's argument. A number, not an error.
+`situ_walk_image` records `arg_shape` beside the arguments now and
+`argument_of` refuses a mismatch.
+
+**Refused in four places and never defaulted**, including again at the
+point of use -- so a `View` built by hand, which the sub-view paths and
+the tests both do, cannot get a defaulted answer through the window
+either. Python raises a new `walk.Unsupplied` rather than a `Refused`, and
+C gets `SITU_WALK_ARGUMENT = 10`, because everything else in those modules
+answers a question about BYTES and this is the caller's omission. That is
+26.394's distinction: exit 2, not 1.
+
+**Two sabotages first failed through the compiler rather than through the
+check** -- `-Werror` on an unused static, then on a tautological compare
+-- and were reworked until they failed through the check under test. That
+is the rule about a control having to be REACHED, met twice in one file.
+
+**And a `printf` trap cost two false readings.** `printf("%d %llu",
+(int)situ_walk_read(..., &v), v)` reads `v` before the call that fills it
+as readily as after, and both times it looked exactly like the walker
+returning a wrong value. The committed driver sequences the read into its
+own statement and says why.
+
+**One deliberate non-change, recorded rather than taken:** `parameter` is
+not in `pack.CONSTRUCTS` / `ENCODED`. That table lists side-table
+FAMILIES, and `peek` and `scaled` are flags and are not in it either -- so
+adding one flag and not the others would be the inconsistency rather than
+the fix. Whether the coverage report should count flags is a question for
+whoever owns that table.
+
+### 26.402 The corpus struct costs more than 0050 says, and the tree has the precedent
+
+**0050's remaining-work line says a corpus struct "lands with the
+backends".** Measured, that is wrong: it lands with every generator that
+SWEEPS the corpus, and four of the seven that still refuse a parameter do.
+
+`test_generated_sources_follow_the_conventions.py` parametrizes over
+`every_schema.SCHEMAS` -- which includes `test/schema/edges.situ` -- and
+runs `c/checks.generate` and `c/fuzz.generate` on each. `fourway.py` runs
+`differ.generate` over corpus schemas the same way. So a `parameter` added
+to `edges.situ` today does not produce a gap in coverage; it produces a
+`SituError` from a sweep that currently passes.
+
+**Which is the whole argument for putting it there, arriving from the
+other side.** A construct the corpus does not carry is one no gate can
+fail on -- and the moment it carries one, four gates fail, which is those
+gates working. What has to change first is not the corpus.
+
+**The shape is already in the tree, in one of the four.** `c/fuzz.py`
+filters the structs it cannot handle rather than refusing the schema:
+byte-sized, non-register, non-zero-size. So the answer for a parameter is
+the same -- skip the struct that takes one and say so, rather than decline
+the file -- and it is a precedent to follow rather than a decision to
+take.
+
+**And that filter carries the warning to copy with it.** Its comment
+records `example/protobuf` being filtered out entirely, leaving a harness
+that compiled, ran under the smoke test, and exercised nothing: *16
+million executions at coverage 1, which is what an empty
+`LLVMFuzzerTestOneInput` looks like from the outside.* A per-struct skip
+that can empty the artifact has to fail rather than shrink.
+
+Recorded rather than done: it is a behaviour change to five generators,
+and entangling it with the view work would put two unrelated things under
+one message. It is the next piece, and it is what 0050's corpus line
+should say.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

@@ -32,8 +32,9 @@ from situc.diagnostics import Source
 from walker.image import load
 from walker import report, walk
 from walker.image import NONE, Image
-from walker.walk import (Refused, Unplaceable, acquire, offset_bits,
-                         read_bytes, read_scalar, size_bits)
+from walker.walk import (Refused, Unplaceable, Unsupplied, acquire,
+                         offset_bits, read_bytes, read_scalar,
+                         size_bits)
 
 COMPILER = shutil.which("cc") or shutil.which("gcc")
 WALKER   = ROOT / "walker" / "c"
@@ -2597,3 +2598,367 @@ def test_the_corpus_verdict_comparison_asked_something() -> None:
 	assert asked >= 100, (
 		f"only {asked} verdict pairs were compared across "
 		f"{len(VERDICTS_ASKED)} schemas ({declined} declined)")
+
+
+# ---------------------------------------------------------------------------
+# `parameter`: an argument the caller supplies (decision 0050)
+# ---------------------------------------------------------------------------
+
+#: One argument, one run sized by it, and one member AFTER the run. The last
+#: is what makes the schema a test: everything before it is right whether or
+#: not the parameter is spent, because everything before it starts at the
+#: front of the frame.
+PARAMETERISED = (
+	"target buffer;\n"
+	"endian big;\n"
+	"bit_order msb_first;\n"
+	"struct frame {\n"
+	"\tparameter u8 n [stream];\n"
+	"\tu8        body[n];\n"
+	"\tu8        tail;\n"
+	"}\n")
+
+#: The C walker's `acquire` has no view to hang the arguments on, so the
+#: driver has to call it -- which is the half of the C side `DRIVER` above
+#: cannot reach, every probe there walking a schema that takes none.
+#:
+#: The argument arrives on the command line so that one compile answers all
+#: three values, and the refusals are asked FIRST, before anything is bound:
+#: a read that answered a number where no argument had been supplied is the
+#: defaulting this construct exists to refuse, and it would be invisible
+#: afterwards.
+ARG_DRIVER = """#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "situ_walk.h"
+
+int main(int argc, char **argv)
+{
+	static uint8_t img[65536];
+	static uint8_t msg[512];
+
+	if (argc < 4) {
+		return 2;
+	}
+	FILE *f = fopen(argv[1], "rb");
+	if (!f) {
+		return 2;
+	}
+	const size_t n = fread(img, 1, sizeof img, f);
+	fclose(f);
+
+	situ_walk_image image;
+	memset(&image, 0xAA, sizeof image);
+	if (situ_walk_open(&image, img, (uint32_t)n) != SITU_WALK_OK) {
+		printf("malformed\\n");
+		return 1;
+	}
+
+	uint32_t len = 0;
+	for (const char *p = argv[2]; p[0] && p[1]; p += 2) {
+		char pair[3];
+		pair[0] = p[0];
+		pair[1] = p[1];
+		pair[2] = 0;
+		msg[len++] = (uint8_t)strtoul(pair, NULL, 16);
+	}
+
+	uint32_t first = 0;
+	uint32_t count = 0;
+	if (situ_walk_members(&image, 0u, &first, &count) != SITU_WALK_OK) {
+		return 1;
+	}
+
+	/* Before any argument is bound. */
+	uint64_t bare = 0;
+	uint32_t where = 0;
+	printf("unacquired-value %d\\n",
+	       (int)situ_walk_read(&image, msg, len, 0u, first, &bare));
+	printf("unacquired-offset %d\\n",
+	       (int)situ_walk_offset_bits(&image, msg, len, 0u, first + count - 1u,
+	                                  &where));
+
+	const int64_t arg  = (int64_t)strtol(argv[3], NULL, 10);
+	const int64_t two[2] = {arg, arg};
+	printf("none %d\\n", (int)situ_walk_acquire(&image, 0u, NULL, 0u));
+	printf("toomany %d\\n", (int)situ_walk_acquire(&image, 0u, two, 2u));
+	printf("acquire %d\\n", (int)situ_walk_acquire(&image, 0u, &arg, 1u));
+
+	for (uint32_t i = 0; i < count; i++) {
+		const uint32_t index = first + i;
+		uint32_t off = 0;
+		uint32_t bits = 0;
+		uint64_t value = 0;
+
+		const situ_walk_err eo = situ_walk_offset_bits(&image, msg, len, 0u,
+		                                               index, &off);
+		const situ_walk_err es = situ_walk_size_bits(&image, msg, len, 0u,
+		                                             index, &bits);
+
+		printf("member %u", i);
+		if (eo == SITU_WALK_OK) {
+			printf(" offset %u", off / 8u);
+		} else {
+			printf(" offset refused");
+		}
+		if (es == SITU_WALK_OK) {
+			printf(" span %u", bits / 8u);
+		} else {
+			printf(" span refused");
+		}
+		if (situ_walk_read(&image, msg, len, 0u, index, &value)
+		                == SITU_WALK_OK) {
+			printf(" value %llu", (unsigned long long)value);
+		} else {
+			printf(" value refused");
+		}
+
+		const uint8_t *at = NULL;
+		uint32_t       held = 0;
+		if (situ_walk_bytes(&image, msg, len, 0u, index, &at, &held)
+		                == SITU_WALK_OK) {
+			printf(" bytes ");
+			for (uint32_t k = 0; k < held; k++) {
+				printf("%02x", at[k]);
+			}
+			if (held == 0u) {
+				printf("-");
+			}
+		} else {
+			printf(" bytes refused");
+		}
+		printf("\\n");
+	}
+	return 0;
+}
+"""
+
+#: Five distinct bytes, so a member read one byte early or late is a
+#: different number rather than the same one twice.
+ARG_MESSAGE = bytes.fromhex("1122334455")
+
+#: Three arguments with no two consecutive, because a wrong offset chain is
+#: right at some arguments by coincidence: a parameter that spent its own
+#: byte would put `tail` at 2 for `n = 1`, which holds 0x33 and looks like
+#: an answer. 26.393 met the same thing from the generated side and says two
+#: of three can look plausible.
+ARG_VALUES = (0, 2, 4)
+
+
+def _python_parameter_walk(blob: bytes, message: bytes,
+		argument: int) -> list[str]:
+	"""The Python walker's answers, in the driver's own spelling."""
+	image = load(blob)
+	view  = acquire(image, message, 0, (argument,))
+	found = []
+	for ordinal, index in enumerate(image.members(image.structs[0])):
+		line = f"member {ordinal}"
+		for label, ask in (("offset", offset_bits), ("span", size_bits)):
+			try:
+				line += f" {label} {ask(view, index) // 8}"
+			except (Refused, Unplaceable):
+				line += f" {label} refused"
+		try:
+			line += f" value {read_scalar(view, index)}"
+		except (Refused, Unplaceable):
+			line += " value refused"
+		try:
+			line += f" bytes {read_bytes(view, index).hex() or '-'}"
+		except (Refused, Unplaceable):
+			line += " bytes refused"
+		found.append(line)
+	return found
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_both_walkers_place_a_run_by_its_argument(tmp_path: Path) -> None:
+	"""0050's construct, in both walkers, over the same five bytes.
+
+	A `parameter` occupies nothing and its row still says `offset_bits` and
+	`size_bits` -- the offset of the member AFTER it, and the width of the
+	argument. So there are two ways to be wrong and each looks like an
+	answer: spend the byte and everything past the run is one late, or read
+	the buffer at that offset and the argument comes back as the next
+	member's first byte. Neither refuses anything.
+
+	Held to the Python walker rather than to a table, which is what this
+	file is for -- two independent readers of one image. The table is here
+	as well, in `expected`, because two walkers that made the same mistake
+	would agree: agreement is evidence only where something could disagree,
+	and a value written down before either walker ran is that something.
+
+	Three arguments, and `tail` at each is the whole control. At `n = 0` a
+	walk that spends the parameter's byte reads `tail` as 0x22 rather than
+	0x11 -- one byte, no error, and the sort of wrong answer 26.32 rates
+	worst.
+	"""
+	schema = parse(Source("frame.situ", PARAMETERISED))
+	blob   = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	(tmp_path / "img").write_bytes(blob)
+	(tmp_path / "drive.c").write_text(ARG_DRIVER, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{WALKER}", str(tmp_path / "drive.c"),
+		 str(WALKER / "situ_walk.c"), "-o", str(tmp_path / "drive")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	#: What the schema says, written down before either walker ran.
+	expected = {
+		0: ["member 0 offset 0 span 0 value 0 bytes refused",
+		    "member 1 offset 0 span 0 value refused bytes -",
+		    "member 2 offset 0 span 1 value 17 bytes 11"],
+		2: ["member 0 offset 0 span 0 value 2 bytes refused",
+		    "member 1 offset 0 span 2 value refused bytes 1122",
+		    "member 2 offset 2 span 1 value 51 bytes 33"],
+		4: ["member 0 offset 0 span 0 value 4 bytes refused",
+		    "member 1 offset 0 span 4 value refused bytes 11223344",
+		    "member 2 offset 4 span 1 value 85 bytes 55"],
+	}
+
+	for argument in ARG_VALUES:
+		ran = subprocess.run(
+			[str(tmp_path / "drive"), str(tmp_path / "img"),
+			 ARG_MESSAGE.hex(), str(argument)],
+			capture_output=True, text=True)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		lines = ran.stdout.splitlines()
+
+		# The refusals, asked before anything was bound. SITU_WALK_ARGUMENT
+		# is 10, and it is its own code because it is a statement about the
+		# CALL: nothing has read a byte, so reporting it as BOUNDS or
+		# CONSTRAINT would be a verdict on a message nobody looked at.
+		assert lines[:5] == [
+			"unacquired-value 10", "unacquired-offset 10",
+			"none 10", "toomany 10", "acquire 0",
+		], f"the refusals, at n={argument}:\n" + ran.stdout
+
+		walked = _python_parameter_walk(blob, ARG_MESSAGE, argument)
+		assert lines[5:] == expected[argument], \
+			f"the C walk, at n={argument}"
+		assert walked == expected[argument], \
+			f"the Python walk, at n={argument}"
+
+
+#: Two structs, each taking one argument, so a walker keying its arguments
+#: positionally has something to get wrong. Neither is nested in the other:
+#: they are two top-level messages of one schema, which is the ordinary
+#: shape and not a contrived one.
+TWO_PARAMETERISED = (
+	"target buffer;\n"
+	"endian big;\n"
+	"bit_order msb_first;\n"
+	"struct one {\n"
+	"\tparameter u8 n [stream];\n"
+	"\tu8        body[n];\n"
+	"\tu8        tail;\n"
+	"}\n"
+	"struct two {\n"
+	"\tparameter u8 m [stream];\n"
+	"\tu8        body[m];\n"
+	"\tu8        tail;\n"
+	"}\n")
+
+#: Acquire for `one` and then ask `two` for its argument. The answer must be
+#: a refusal in both walkers; `4` is what a walker that took `one`'s
+#: argument would say.
+CROSS_DRIVER = """#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "situ_walk.h"
+
+int main(int argc, char **argv)
+{
+	static uint8_t img[65536];
+	const uint8_t msg[5] = {0x11, 0x22, 0x33, 0x44, 0x55};
+
+	if (argc < 2) {
+		return 2;
+	}
+	FILE *f = fopen(argv[1], "rb");
+	if (!f) {
+		return 2;
+	}
+	const size_t n = fread(img, 1, sizeof img, f);
+	fclose(f);
+
+	situ_walk_image image;
+	memset(&image, 0xAA, sizeof image);
+	if (situ_walk_open(&image, img, (uint32_t)n) != SITU_WALK_OK) {
+		return 1;
+	}
+
+	const int64_t four = 4;
+	uint32_t first = 0;
+	uint32_t count = 0;
+	uint64_t value = 0;
+
+	printf("acquire-one %d\\n",
+	       (int)situ_walk_acquire(&image, 0u, &four, 1u));
+	if (situ_walk_members(&image, 0u, &first, &count) != SITU_WALK_OK) {
+		return 1;
+	}
+	/* The read in its own statement, not inside the `printf` call: the
+	 * order arguments are evaluated in is unspecified, so `value` there is
+	 * read before the call that fills it as readily as after. */
+	situ_walk_err err = situ_walk_read(&image, msg, 5u, 0u, first, &value);
+	printf("one %d %llu\\n", (int)err, (unsigned long long)value);
+
+	value = 0;
+	if (situ_walk_members(&image, 1u, &first, &count) != SITU_WALK_OK) {
+		return 1;
+	}
+	err = situ_walk_read(&image, msg, 5u, 1u, first, &value);
+	printf("two %d %llu\\n", (int)err, (unsigned long long)value);
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_an_argument_belongs_to_the_struct_it_was_supplied_for(
+		tmp_path: Path) -> None:
+	"""One struct's argument is not another's.
+
+	The Python walker gets this free: its arguments live on a `View` under
+	the placement indices of the struct that view is over, so a placement
+	belonging to a different struct is simply not in the map. The C walker
+	has no view, binds the arguments to the image binding, and keys them by
+	ORDINAL -- so without the shape recorded beside them, `two`'s first
+	parameter reads `one`'s first argument. A number, not an error, and the
+	right number often enough to survive a corpus where the two structs
+	happen to want the same one.
+
+	The control is `one` in the same run: the binding it was made for still
+	answers 4, so this is a refusal that discriminates rather than a walker
+	that has stopped answering.
+	"""
+	schema = parse(Source("two.situ", TWO_PARAMETERISED))
+	blob   = pack(schema, resolve(schema, solve(schema)), metadata=True)[0]
+	(tmp_path / "img").write_bytes(blob)
+	(tmp_path / "drive.c").write_text(CROSS_DRIVER, encoding="ascii")
+
+	assert COMPILER is not None
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{WALKER}", str(tmp_path / "drive.c"),
+		 str(WALKER / "situ_walk.c"), "-o", str(tmp_path / "drive")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "drive"), str(tmp_path / "img")],
+	                     capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stdout + ran.stderr
+	assert ran.stdout.splitlines() == [
+		"acquire-one 0", "one 0 4", "two 10 0",
+	], ran.stdout
+
+	# And the Python walker, over the same image and the same two structs.
+	image = load(blob)
+	view  = acquire(image, bytes.fromhex("1122334455"), 0, (4,))
+	mine  = next(iter(image.members(image.structs[0])))
+	other = next(iter(image.members(image.structs[1])))
+
+	assert read_scalar(view, mine) == 4
+	with pytest.raises(Unsupplied):
+		read_scalar(view, other)

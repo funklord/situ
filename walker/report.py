@@ -20,9 +20,12 @@ while rendering nothing is the failure mode that has to be impossible.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from walker import vm
 from walker.image import NONE, Image, _string_at
-from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
+from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
+                         Unsupplied, View,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
@@ -32,9 +35,9 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable, View,
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
-SUPPORTED = ("no-view", "scalar", "bytes", "element", "run_element",
-             "arm_value", "sealed", "gated", "delimited", "varint",
-             "while_count", "nested", "tag", "marker", "validate",
+SUPPORTED = ("no-view", "needs-arguments", "scalar", "bytes", "element",
+             "run_element", "arm_value", "sealed", "gated", "delimited",
+             "varint", "while_count", "nested", "tag", "marker", "validate",
              "relation")
 
 #: `image_kind`: which placements are plain scalars a walk can read.
@@ -500,14 +503,30 @@ def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 	return found
 
 
-def listing(image: Image, buffer: bytes) -> str:
-	"""What this schema says about this buffer, one struct at a time."""
+def listing(image: Image, buffer: bytes, args: Sequence[int] = ()) -> str:
+	"""What this schema says about this buffer, one struct at a time.
+
+	`args` are the schema's `parameter` members (0050), positionally. One
+	list for the whole listing, which is what a per-stream fact is (26.394)
+	-- and a struct that takes a different number of them gets
+	`needs-arguments` rather than a view, because the alternative is reading
+	a layout the caller did not choose.
+	"""
 	lines: list[str] = []
 	for struct_index, _ in enumerate(image.structs):
 		name = image.struct_name(struct_index)
 		lines.append(f"-- {name}")
 		try:
-			view = acquire(image, buffer, struct_index)
+			view = acquire(image, buffer, struct_index, args)
+		except Unsupplied:
+			# Its own line and not `no-view`, because the two send a reader
+			# somewhere different: `no-view` is a frame too short for the
+			# struct, and this is a caller who has not said which layout the
+			# bytes are in. Reporting the second as the first is a verdict
+			# on bytes nobody read, which is the shape 26.394 moved `situ
+			# verify`'s own refusal for.
+			lines.append("needs-arguments")
+			continue
 		except Refused:
 			lines.append("no-view")
 			continue

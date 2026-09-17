@@ -68,7 +68,6 @@ from situc.traverse import (
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
-from situc.codegen import refuse_parameters
 from situc import __version__
 
 #: The id `check` reports when nothing refused. Distinguished from any real
@@ -143,16 +142,18 @@ class Generated:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ", materialize: bool = False,
 		messages: bool = False) -> Generated:
-	# A `parameter` is an argument the caller supplies (0050), and no
-	# backend can pass one yet: the view carries bytes and nothing else.
-	# Refused rather than emitted, because what an accessor would do is
-	# worse than nothing -- `_over_fields` reads a member "where it sits",
-	# and a parameter sits at the offset of the member AFTER it, so a size
-	# expression reading one compiles cleanly and measures the wrong byte.
+	# A `parameter` is an argument the caller supplies (0050). The view
+	# carries it as a field, `new` and `required` take it, and every
+	# expression that reads it renders `self.<name>` rather than a read
+	# at its offset -- which is the offset of the member AFTER it, a
+	# parameter occupying none.
 	#
-	# Whole-schema rather than per-member: a note beside the parameter
-	# leaves every expression that reads it still emitting that read.
-	refuse_parameters(schema)
+	# What this cost, because the refusal that stood here hid it: the
+	# accessor loop and the setter loop both had to learn to skip one,
+	# and until they did, `fn n()` sat beside the field `n` reading the
+	# payload's first byte, and `set_n` wrote over that byte while
+	# leaving the argument alone. A field and a method of one name is
+	# not a spelling a caller can disambiguate by reading.
 
 	return Generated(module=Emitter(schema, resolved, basename,
 	                                materialize, messages).module(),
@@ -510,10 +511,18 @@ class Emitter:
 			"/// this is outstanding does not compile.",
 			"pub struct " + name + "<'a> {",
 			"\tbytes: &'a [u8],",
+			# The arguments this format's shape follows, which the message
+			# does not carry (0050). `pub` because they ARE the value a
+			# caller supplied -- there is nothing to read them out of, so a
+			# getter would be a second name for one field.
+			*(f"\tpub {_ident(one.name)}: {self._rust_type(one.scalar)},"
+			  for one in self._arguments(struct) if one.scalar is not None),
 			"}",
 			"",
 			f"pub struct {name}Mut<'a> {{",
 			"\tbytes: &'a mut [u8],",
+			*(f"\tpub {_ident(one.name)}: {self._rust_type(one.scalar)},"
+			  for one in self._arguments(struct) if one.scalar is not None),
 			"}",
 			"",
 			f"impl<'a> {name}<'a> {{",
@@ -526,15 +535,25 @@ class Emitter:
 			 if not fixed else "\t/// The extent is the struct's own."),
 			("\t/// needs no second parameter saying where the frame ends."
 			 if not fixed else "\t///"),
-			f"\tpub fn new(bytes: &'a [u8]) -> Result<Self> {{",
+			f"\tpub fn new(bytes: &'a [u8]{self._argument_signature(struct)})"
+			f" -> Result<Self> {{",
 			f"\t\tif bytes.len() < Self::{'SIZE' if fixed else 'SIZE_MIN'} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			"\t\tOk(Self { bytes })",
+			f"\t\tOk(Self {{ bytes{self._argument_fields(struct)} }})",
 			"\t}",
 		]
 
 		for entry in own_entries(struct):
+			# A parameter is the caller's argument, carried as a field
+			# (0050). It occupies no bytes, so the offset an accessor
+			# would read is the offset of the member AFTER it -- and
+			# `Frame { n }` beside `fn n()` is a field and a method of
+			# one name, where the field is right and the method reads
+			# the payload. The struct field IS the accessor.
+			if entry.placement.parameter:
+				lines.extend(self._no_parameter_accessor(struct, entry))
+				continue
 			lines.extend(self._getter(struct, entry))
 
 		lines.extend(self._region_runs(struct))
@@ -554,22 +573,42 @@ class Emitter:
 			(f"\tpub const SIZE: usize = {layout.size_bytes};" if fixed
 			 else f"\tpub const SIZE_MIN: usize = {layout.size_bytes};"),
 			"",
-			f"\tpub fn new(bytes: &'a mut [u8]) -> Result<Self> {{",
+			f"\tpub fn new(bytes: &'a mut [u8]"
+			f"{self._argument_signature(struct)}) -> Result<Self> {{",
 			f"\t\tif bytes.len() < Self::{'SIZE' if fixed else 'SIZE_MIN'} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			"\t\tOk(Self { bytes })",
+			f"\t\tOk(Self {{ bytes{self._argument_fields(struct)} }})",
 			"\t}",
 			"",
 			"\t/// A read-only view of the same bytes.",
 			f"\tpub fn as_ref(&self) -> {name}<'_> {{",
-			f"\t\t{name} {{ bytes: self.bytes }}",
+			f"\t\t{name} {{ bytes: self.bytes"
+			f"{self._argument_copies(struct)} }}",
 			"\t}",
 		])
 
 		lines.extend(self._dirty_constants(struct))
 
 		for entry in own_entries(struct):
+			# No setter for a parameter (0050). It is the worse half of
+			# the accessor: `set_n(4)` would write 4 at the offset of the
+			# member the argument sizes, leave the argument itself
+			# unchanged, and so corrupt the payload while the very next
+			# read still used the old value -- under a name saying it had
+			# set the argument. A caller changes an argument by making a
+			# new view with it.
+			if entry.placement.parameter:
+				name = _ident(c_name(local_name(struct, entry.placement)))
+				lines.extend([
+					"",
+					f"\t// No set_{name}(): `{entry.placement.path}` is a"
+					" parameter.",
+					"\t// Make a new view with the argument you want; there"
+					" are no",
+					"\t// bytes here to store it in.",
+				])
+				continue
 			# Where a caller puts a computed sub-byte checksum. A byte-string
 			# tag is written through its slice; a five-bit one has no slice,
 			# so `compute` would hand back a value with nowhere to put it and
@@ -2635,6 +2674,29 @@ class Emitter:
 			"\t}",
 		]
 
+	def _no_parameter_accessor(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""Say why a `parameter` has no accessor of its own (0050).
+
+		The struct field is the accessor: `new` takes the argument and
+		stores it, so `view.n` answers. A generated `fn n()` would be a
+		method of the same name reading the bytes -- at the offset of the
+		member AFTER it, a parameter occupying none -- so the field would
+		be right and the method wrong, and nothing in the spelling says
+		which a caller reached for.
+		"""
+		name = _ident(c_name(local_name(struct, entry.placement)))
+		return [
+			"",
+			f"\t// No {name}(): `{entry.placement.path}` is a parameter, so"
+			" the field",
+			f"\t// `{name}` above IS its value -- the caller gave it to"
+			" `new`. A",
+			"\t// method reading the bytes would read the member after it,"
+			" which",
+			"\t// occupies the offset a parameter does not.",
+		]
+
 	def _getter(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		bounds = self._value_bounds(struct, entry.placement) \
 			if entry.placement.kind == "field" else []
@@ -4092,6 +4154,13 @@ class Emitter:
 			if name in consts:
 				return str(consts[name])
 			held_at = by_path[name]
+			# A parameter is the argument the caller gave `new`, carried on
+			# the view as a field (0050). A read at its offset would read
+			# the member after it, since a parameter occupies nothing.
+			if held_at.parameter:
+				return leaf(f"{held}.{_ident(c_name(name))}",
+				            held_at.scalar is not None
+				            and held_at.scalar.signed)
 			# A text number is digits, not bytes of an integer: reading it
 			# where it sits parses ASCII as a binary integer, which is a
 			# plausible number nobody wrote.
@@ -4668,7 +4737,13 @@ class Emitter:
 			"\t///",
 			"\t/// `Complete(n)` when one is present and `n` bytes long;",
 			"\t/// `Need(n)` when not, with `n` a lower bound on the total.",
-			"\tpub fn required(data: &[u8]) -> situ_rt::Framing {",
+			# The arguments too, where the struct takes any (0050): how far
+			# a message reaches can follow one, and a framer that could not
+			# be told would answer about a different message. Same order
+			# and spelling as `new`, so a caller holding both hands them on
+			# rather than remembering two shapes.
+			f"\tpub fn required(data: &[u8]"
+			f"{self._argument_signature(struct)}) -> situ_rt::Framing {{",
 			"\t\tlet have = data.len();",
 		]
 
@@ -4744,7 +4819,8 @@ class Emitter:
 			*([
 				"\t\t// A struct over what has arrived, so every length below",
 				"\t\t// reads through the same bounds the accessors do.",
-				f"\t\tlet probe = {name} {{ bytes: data }};",
+				f"\t\tlet probe = {name} {{ bytes: data"
+				f"{self._argument_fields(struct)} }};",
 			] if any("probe." in line for line in steps) else []),
 			*steps,
 			"",
@@ -5601,6 +5677,12 @@ class Emitter:
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None
+
+		# A `[stream]` driver is the argument the caller gave `new`, carried
+		# on the view (0050) -- the second of the two spellings, which is
+		# where one of them gets missed.
+		if driver.placement.parameter:
+			return f"self.{_ident(c_name(placement.sized_by or ''))} as usize"
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the
@@ -6471,6 +6553,36 @@ class Emitter:
 		        f" {scalar.bits // BITS_PER_BYTE}, {value});")
 
 	# -- validation ----------------------------------------------------
+
+	def _arguments(self, struct: ResolvedStruct) -> list[Placement]:
+		"""The `parameter`s this struct takes, in declaration order (0050).
+
+		Scalars by construction: `wellformed.check_parameters` refuses a
+		struct-typed one, so the callers below may ask for a Rust type
+		without a second guard for a case the front end has already closed.
+		"""
+		return [held for held in own_members(struct)
+		        if held.parameter and held.scalar is not None]
+
+	def _argument_signature(self, struct: ResolvedStruct) -> str:
+		"""What `new` adds for them, undefaulted: Rust has no default
+		argument and should not grow one here by convention -- situ does
+		not know the caller's block size, and a view built on a guessed
+		one reads the wrong bytes confidently."""
+		return "".join(
+			f", {_ident(one.name)}: {self._rust_type(one.scalar)}"
+			for one in self._arguments(struct) if one.scalar is not None)
+
+	def _argument_fields(self, struct: ResolvedStruct) -> str:
+		return "".join(f", {_ident(one.name)}"
+		               for one in self._arguments(struct))
+
+	def _argument_copies(self, struct: ResolvedStruct) -> str:
+		"""`as_ref` hands the same arguments on: the read-only view is the
+		same message under the same assumptions, and one that dropped them
+		would answer a different question about the same bytes."""
+		return "".join(f", {_ident(one.name)}: self.{_ident(one.name)}"
+		               for one in self._arguments(struct))
 
 	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:
 		"""One group per member that `validate` says anything about.

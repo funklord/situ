@@ -32,7 +32,6 @@ from dataclasses import dataclass, field
 
 from situc import ast, traverse
 from situc.capability import DOMAINS, Axis
-from situc.codegen import refuse_parameters
 from situc.diagnostics import SituError
 from situc.expr import evaluate
 from situc.invariant import paths_in
@@ -137,6 +136,21 @@ IS_TAG			= 1 << 6
 #: accessors; without the flag it cannot tell a pin from an ordinary bound, and
 #: clamping to every bound made it disagree with C about `arp`.
 PINNED			= 1 << 7
+
+# `image_placement.text_flags` began as a text number's own flags and has
+# been the placement's SECOND FLAG BYTE since `peek` took bit 5: `flags` is
+# full, and a fact about a member's span has to be carried where a walker
+# reads it rather than not at all. The rest of that byte is written inline
+# below, this being the one bit a name is worth.
+
+#: A `parameter` (0050): the caller supplies its value and the message does
+#: not carry it, so the member occupies no bytes and a walker must not read
+#: one at its offset. The row still says `offset_bits` and `size_bits`,
+#: those being where the member AFTER it begins and how wide the argument
+#: is -- which is exactly why the flag cannot be inferred from the row.
+#: Without it a walker reads the next member's first byte and calls it the
+#: argument, confidently.
+TEXT_PARAMETER		= 1 << 6
 
 #: `image_kind`, matching the enum in std/image.situ. A kind the walker does
 #: not know is an error there rather than a guess, which is why the schema
@@ -789,12 +803,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	rather than logged because a caller that cannot say how much of the
 	schema it encoded has not checked anything.
 	"""
-	# The same refusal the four backends make, and for the same reason: a
-	# walker reading this image would read a parameter off the buffer at
-	# the offset of the member after it. One function rather than five
-	# copies of the sentence (0050).
-	refuse_parameters(schema)
-
 	coverage = Coverage()
 	members  = _ast_members(schema)
 	# 0055's arms, keyed by the set's name. Only where unknown spellings are
@@ -2123,7 +2131,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			| (4 if placement.case_insensitive else 0) \
 			| (8 if is_bcd else 0) \
 			| (16 if placement.scaled else 0) \
-			| (32 if placement.peek else 0)
+			| (32 if placement.peek else 0) \
+			| (TEXT_PARAMETER if placement.parameter else 0)
 		placements_blob += _struct.pack(
 			"<BBBB",
 			_kind_of(placement),

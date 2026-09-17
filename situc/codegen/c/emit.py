@@ -71,7 +71,6 @@ from situc.traverse import (
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
-from situc.codegen import refuse_parameters
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -118,17 +117,6 @@ class Generated:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ", materialize: bool = False,
 		messages: bool = False) -> Generated:
-	# A `parameter` is an argument the caller supplies (0050), and no
-	# backend can pass one yet: the view carries bytes and nothing else.
-	# Refused rather than emitted, because what an accessor would do is
-	# worse than nothing -- `_over_fields` reads a member "where it sits",
-	# and a parameter sits at the offset of the member AFTER it, so a size
-	# expression reading one compiles cleanly and measures the wrong byte.
-	#
-	# Whole-schema rather than per-member: a note beside the parameter
-	# leaves every expression that reads it still emitting that read.
-	refuse_parameters(schema)
-
 	# Before anything is emitted: two constructs that flatten to one C
 	# identifier would otherwise surface as a redefinition error in generated
 	# code, naming a function nobody wrote.
@@ -1507,15 +1495,47 @@ class Emitter:
 		otherwise the only record of the rule is in the compiler's head.
 		"""
 		drivers = self._drivers(struct)
+		# A `parameter` drives a length and is not a byte, so no write can
+		# reach it (0050). Naming it beside the others would send a caller
+		# to a setter that does not exist and cannot: an argument is
+		# changed by acquiring the view again with a different one, which
+		# is not a write and leaves nothing stale.
+		arguments = [name for name in drivers
+		             if self._is_parameter(struct, name)]
+		written = [name for name in drivers if name not in arguments]
 
-		if not drivers:
+		def argument_note(alongside: bool) -> list[str]:
+			listed = ", ".join(f"`{name}`" for name in arguments)
+			single = len(arguments) == 1
+			verb = "decides" if single else "decide"
+			comes = "arrives" if single else "arrive"
+			one = "it" if single else "them"
+			lead = "also " if alongside else ""
 			return [
-				f"/* INVALIDATION: nothing invalidates a {struct.name} view.",
-				" * Every member has a fixed size, so no write can move another.",
-				" */",
+				f" * {listed} {lead}{verb} where later members start, and"
+				f" {comes}",
+				" * as an argument rather than as bytes: pass a different one"
+				" and",
+				" * the accessors answer differently on the spot. Nothing"
+				f" writes {one},",
+				" * so no view goes stale.",
 			]
 
-		listed = ", ".join(f"`{name}`" for name in drivers)
+		if not written:
+			if not arguments:
+				return [
+					f"/* INVALIDATION: nothing invalidates a {struct.name} view.",
+					" * Every member has a fixed size, so no write can move"
+					" another.",
+					" */",
+				]
+			return [
+				f"/* INVALIDATION: nothing invalidates a {struct.name} view.",
+				" * No write can move a member of it.",
+				" *",
+			] + argument_note(alongside=False) + [" */"]
+
+		listed = ", ".join(f"`{name}`" for name in written)
 		return [
 			f"/* INVALIDATION: a {struct.name} view, and every view derived from",
 			f" * it, is invalidated by writing {listed} -- those decide where the",
@@ -1524,8 +1544,8 @@ class Emitter:
 			" * is then caught on use in a SITU_CHECKED build.",
 			" *",
 			" * Re-acquire the view after any such write.",
-			" */",
-		]
+		] + ([" *"] + argument_note(alongside=True) if arguments else []) \
+			+ [" */"]
 
 	def _shifting_setters(self, struct: ResolvedStruct) -> list[str]:
 		"""Setters for fields that drive a length in this struct.
@@ -1536,7 +1556,15 @@ class Emitter:
 		therefore takes the message, which also makes the cost visible in the
 		signature rather than only in a comment.
 		"""
-		drivers = self._drivers(struct)
+		# A `parameter` drives a length and has no bytes to write it in
+		# (0050). This setter's whole job is to store the value and bump the
+		# generation; with no storage it would store over the member the
+		# argument sizes, under a name that says it is setting the argument.
+		# A caller changes the argument by building another view with a
+		# different one. Filtered here rather than in the loop, so a struct
+		# whose only driver is a parameter emits no heading either.
+		drivers = [path for path in self._drivers(struct)
+		           if not self._is_parameter(struct, path)]
 		if not drivers:
 			return []
 
@@ -1583,10 +1611,15 @@ class Emitter:
 				                   for tag in target.placement.covered_by)
 			) else []
 
+			# Where the store's own arithmetic reaches the caller's
+			# argument (0050) -- the same tail the getter for this member
+			# takes, since a setter writes where the getter reads.
+			taken = ("situ_msg_t *msg, situ_view_t view"
+			         + self._member_tail(struct, target.placement))
 			lines.extend([
 				f"static inline void "
 				f"{ident(self.prefix, struct.name, local, 'set')}"
-				f"(situ_msg_t *msg, situ_view_t view, {ctype} value)",
+				f"({taken}, {ctype} value)",
 				"{",
 				f"\t{store}",
 				"\tsitu_msg_touch(msg);",
@@ -1700,6 +1733,31 @@ class Emitter:
 
 	def _field_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
+
+		# A `parameter` is the caller's own value and occupies no bytes
+		# (0050), so there is nothing here to read or write. The accessors
+		# this branch declines are the reason every backend refused a
+		# parameter until now: emitted, `_get` reads the offset the member
+		# AFTER it begins at, and `_set` WRITES there -- over the first byte
+		# of the member the argument sizes, through a name that says it is
+		# setting the argument.
+		#
+		# Nor is a getter worth having with the right answer in it. The
+		# caller passed the value in; handing it back is a second name for
+		# something they hold.
+		if placement.parameter:
+			# "No accessor for" rather than a sentence naming the member
+			# first, and not for tidiness: `codegen.doc` binds a comment
+			# block to the declaration under it unless the block opens that
+			# way, so any other wording would document the NEXT member --
+			# which is the member this one sizes.
+			return [
+				"",
+				f"/* No accessor for `{placement.name}`: it is a `parameter`,",
+				" * which the caller supplies and which occupies no bytes.",
+				" * The accessors of this struct that read it take it as a",
+				" * trailing argument. */",
+			]
 
 		# A nested struct's members are emitted under their own struct, so only
 		# the aggregate itself gets an accessor here. The interior of a sealed
@@ -3277,7 +3335,13 @@ class Emitter:
 			return "0u"
 		local    = c_name(self._local(struct, placement))
 		argument = "gate.view" if gated else "view"
-		return f"{ident(self.prefix, struct.name, local, 'offset')}({argument})"
+		# The struct's arguments travel with the view (0050): an offset
+		# function sums the lengths in front of this member, and one of those
+		# lengths can be the caller's own number. Passed from here rather
+		# than at each of this method's callers, which is what keeps the one
+		# offset call in the tree in step with the one definition.
+		return (f"{ident(self.prefix, struct.name, local, 'offset')}"
+		        f"({argument}{self._argument_args(struct)})")
 
 	def _top_level(self, struct: ResolvedStruct) -> list[Placement]:
 		"""The struct's own members, in order, partitioning its bytes exactly.
@@ -4141,13 +4205,20 @@ class Emitter:
 			" arrived,",
 			" * which is the case every hand-written version of this gets"
 			" wrong. */",
+			# The arguments too, where the struct takes any (0050): how far
+			# a message reaches can follow one, and a framer that could not
+			# be told would answer about a different message. Same order and
+			# spelling as the accessors, so a caller holding both hands them
+			# on rather than remembering two shapes.
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, 'required')}"
-			"(const uint8_t *data, uint32_t have, uint32_t *need)",
+			f"(const uint8_t *data, uint32_t have, uint32_t *need"
+			f"{self._argument_tail(struct)})",
 			"{",
 			f"\tuint32_t at = {at};",
 			*(["\tsitu_view_t view;"] if uses_view else []),
 			"",
+			*self._argument_unused(struct, self._argument_tail(struct), *steps),
 			# Skipped where the minimum is zero: `have < 0u` is always false
 			# and `-Wtype-limits` says so.
 			*([] if struct.layout.size_bytes == 0 else [
@@ -4726,6 +4797,21 @@ class Emitter:
 					value = max(-0x7FFFFFFF, min(value, 0x7FFFFFFF))
 				return str(value)
 			placement = by_local[local]
+			# A parameter is the argument the caller supplied (0050),
+			# carried on the signature rather than read from the buffer. It
+			# occupies no bytes, so the offset it would be read at is where
+			# the member AFTER it begins -- a read there compiles and
+			# measures the wrong byte, which is why every backend refused
+			# one until it had somewhere to carry it.
+			#
+			# A bare identifier on purpose. Where a function that embeds
+			# this expression has not been given the tail, the generated C
+			# names an identifier that is not there and the compiler says
+			# so; the alternative shapes all read *something*.
+			if placement.parameter:
+				return leaf(self._argument_name(placement),
+				            placement.scalar is not None
+				            and placement.scalar.signed)
 			if "." not in local:
 				# A varint's `_get` is fallible and takes an out-parameter;
 				# `_value` is the read that cannot fail, which is what an
@@ -5914,8 +6000,9 @@ class Emitter:
 		inner = ident(self.prefix, struct.name, local,
 		              "start" if leads else "offset")
 
+		tail  = self._argument_tail(struct)
 		lines = [
-			f"static inline uint32_t {inner}(situ_view_t view)",
+			f"static inline uint32_t {inner}(situ_view_t view{tail})",
 			"{",
 			f"\tuint32_t offset = {constant}u;",
 		]
@@ -5949,9 +6036,10 @@ class Emitter:
 				" * that runs to the end of the view leaves the member outside",
 				" * it, and the accessors' own bounds check is what reports"
 				" that. */",
-				f"static inline uint32_t {outer}(situ_view_t view)",
+				f"static inline uint32_t {outer}(situ_view_t view{tail})",
 				"{",
-				f"\tconst uint32_t start = {inner}(view);",
+				f"\tconst uint32_t start = "
+				f"{inner}(view{self._argument_args(struct)});",
 				"",
 				f"\treturn situ_advance_u32(start, {lead}(view, start),"
 				" view.limit);",
@@ -5987,6 +6075,14 @@ class Emitter:
 				" * and how long it is is not something this can work out. */",
 			]
 
+		# `at expr` is the other place an argument moves a member (0050), and
+		# the one where it moves it without sizing anything: the offset is
+		# the expression, so an `at` over an argument reaches this and
+		# nothing else. Read off the rendered offset and length rather than
+		# from the struct, because a located member at a constant offset
+		# takes nothing.
+		taken = self._argument_tail_in(struct, offset, length)
+
 		return [
 			"",
 			f"/* `{placement.name}` sits at `{placement.located}` bytes from the",
@@ -6003,11 +6099,19 @@ class Emitter:
 			" * the map is telling you it costs. */",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'view')}"
-			"(const situ_msg_t *msg, situ_view_t view, situ_view_t *out)",
+			f"(const situ_msg_t *msg, situ_view_t view, situ_view_t *out"
+			f"{taken})",
 			"{",
 			f"\tconst uint32_t at = (uint32_t)({offset});",
 			f"\tconst uint32_t n  = (uint32_t)({length});",
 			"",
+			*self._argument_unused(struct, taken, offset, length),
+			# An `at` over an argument alone reads nothing from the frame,
+			# which leaves the view unused. Guarded on the struct having an
+			# argument as well as on the text, so a schema without one
+			# cannot reach a line it never had.
+			*(["\t(void)view;"] if self._arguments(struct)
+			  and "view" not in f"{offset}{length}" else []),
 			"\tif (n > msg->size || at > msg->size - n) {",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
@@ -6557,6 +6661,15 @@ class Emitter:
 		if target is None:
 			return f"{placement.array_count or 0}u"
 
+		# A `[stream]` driver is the argument the caller supplied (0050),
+		# carried on the signature. The second of the two spellings a length
+		# has -- `body[n]` arrives here and `body[n + 1]` goes through
+		# `_over_fields` above -- and this is the one a backend misses,
+		# because the arithmetic form is the one anybody writing the feature
+		# tries first (invariant 69).
+		if target.placement.parameter:
+			return f"({self._argument_name(target.placement)})"
+
 		# A varint driver has no scalar and no constant offset, so neither the
 		# load below nor the check above applies to it. It reached the `scalar
 		# is None` guard and returned zero, which made `u8 payload[n]` a
@@ -6819,11 +6932,19 @@ class Emitter:
 			lines.extend(self._remaining_count(struct, placement, local,
 			                                   base, nested or ""))
 		else:
+			# The caller's argument where this run's count follows one
+			# (0050) -- `item items[n]` is the same length in a different
+			# member kind, and a run of structs reaches it here rather than
+			# through `_array`.
+			counted = self._count_expression(struct, placement)
 			lines.extend([
 				f"static inline uint32_t "
-				f"{ident(self.prefix, struct.name, local, 'count')}(situ_view_t view)",
+				f"{ident(self.prefix, struct.name, local, 'count')}"
+				f"(situ_view_t view{self._argument_tail_in(struct, counted)})",
 				"{",
-				f"\treturn (uint32_t){self._count_expression(struct, placement)};",
+				*(["\t(void)view;"] if self._arguments(struct)
+				  and "view" not in counted else []),
+				f"\treturn (uint32_t){counted};",
 				"}",
 			])
 
@@ -6834,7 +6955,8 @@ class Emitter:
 		# whatever followed and report SITU_OK.
 		count = (macro(self.prefix, struct.name, local, "COUNT")
 		         if placement.array_count is not None
-		         else f"{ident(self.prefix, struct.name, local, 'count')}(view)")
+		         else f"{ident(self.prefix, struct.name, local, 'count')}"
+		              f"(view{self._member_args(struct, placement)})")
 
 		inner = self.resolved.structs.get(nested or "")
 		fixed = inner is not None and inner.layout.is_fixed_size
@@ -6950,7 +7072,8 @@ class Emitter:
 		lines.extend([
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'at')}"
-			"(situ_view_t view, uint32_t index, situ_view_t *out)",
+			f"(situ_view_t view, uint32_t index, situ_view_t *out"
+			f"{self._member_tail(struct, placement)})",
 			"{",
 			f"\tconst uint32_t stride = {macro(self.prefix, nested, 'SIZE_FIXED')};",
 			f"\tconst uint32_t base   = {base};",
@@ -7060,7 +7183,8 @@ class Emitter:
 		assert scalar is not None
 
 		gate  = self._gate_type(struct, placement)
-		taken = f"{gate} gate" if gate else "situ_view_t view"
+		taken = (f"{gate} gate" if gate else "situ_view_t view") \
+		        + self._member_tail(struct, placement)
 		held  = "gate.view" if gate else "view"
 
 		lines = []
@@ -7131,6 +7255,7 @@ class Emitter:
 				f"static inline uint8_t *"
 				f"{ident(self.prefix, struct.name, local, 'ptr')}({taken})",
 				"{",
+				*self._argument_unused(struct, taken, body),
 				body,
 				"}",
 			])
@@ -7292,7 +7417,8 @@ class Emitter:
 		ctype  = self._field_ctype(placement)
 		getter = ident(self.prefix, struct.name, local, "get")
 		gate   = self._gate_type(struct, placement)
-		taken  = f"{gate} gate" if gate else "situ_view_t view"
+		taken  = (f"{gate} gate" if gate else "situ_view_t view") \
+		         + self._member_tail(struct, placement)
 		base   = self._value_base(struct, placement, gated=gate is not None)
 		load   = self._load_expression(scalar, placement, base,
 		                               offset=self._value_offset(placement))
@@ -7385,6 +7511,11 @@ class Emitter:
 		local = c_name(self._local(struct, placement))
 		ctype = self._field_ctype(placement)
 		setter = ident(self.prefix, struct.name, local, "set")
+		# Where this member's own arithmetic reaches the caller's argument
+		# (0050). A setter is the read's mirror: it stores at the offset the
+		# getter loads from, so the two take the same fact or they write
+		# somewhere the getter does not look.
+		taken = "situ_view_t view" + self._member_tail(struct, placement)
 
 		base  = self._value_base(struct, placement)
 		store = self._store_statement(scalar, placement, base, "value",
@@ -7404,7 +7535,7 @@ class Emitter:
 				f"earlier message",
 				" * would put these bytes past that message's end, so this"
 				" refuses. */",
-				f"static inline situ_err_t {setter}(situ_view_t view, "
+				f"static inline situ_err_t {setter}({taken}, "
 				f"{ctype} value)",
 				"{",
 				f"\tif ({version}(view) < {placement.since}u) {{",
@@ -7433,7 +7564,7 @@ class Emitter:
 				" frame is",
 				" * somebody else's data. `validate` reports such a message"
 				" (26.27). */",
-				f"static inline void {setter}(situ_view_t view, {ctype} value)",
+				f"static inline void {setter}({taken}, {ctype} value)",
 				"{",
 				f"\tif ({fits}) {{",
 				f"\t\t{store}",
@@ -7442,7 +7573,7 @@ class Emitter:
 			]
 
 		return [
-			f"static inline void {setter}(situ_view_t view, {ctype} value)",
+			f"static inline void {setter}({taken}, {ctype} value)",
 			"{",
 			f"\t{store}",
 			"}",
@@ -7814,7 +7945,13 @@ class Emitter:
 			"/* Check every constraint this schema states: [must_eq], [max],",
 			" * [min], and the reserved-bit policy. Called on parse under",
 			" * SITU_CHECKED, and available explicitly in any build. */",
-			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}(situ_view_t view);",
+			# The arguments too, where the struct takes any (0050). A
+			# constraint may be stated over one, and every bound the checks
+			# read sits behind the members the argument places -- so a
+			# `validate` that could not be told the argument would be
+			# checking a different message.
+			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}"
+			f"(situ_view_t view{self._argument_tail(struct)});",
 		]
 		if not ids:
 			return lines
@@ -7828,7 +7965,8 @@ class Emitter:
 			" * the verdict alone. The id is the contract and the name is",
 			" * a macro, so nothing here costs a string (0051). */",
 			f"situ_err_t {ident(self.prefix, struct.name, 'check')}"
-			"(situ_view_t view, uint32_t *which);",
+			f"(situ_view_t view, uint32_t *which"
+			f"{self._argument_tail(struct)});",
 		])
 		lines.extend(
 			f"#define {macro(self.prefix, struct.name, member, 'CHECK')} {at}u"
@@ -7972,7 +8110,8 @@ class Emitter:
 	def _validate_body(self, struct: ResolvedStruct) -> list[str]:
 		named  = ident(self.prefix, struct.name, "check")
 		lines  = [
-			f"situ_err_t {named}(situ_view_t view, uint32_t *which)",
+			f"situ_err_t {named}(situ_view_t view, uint32_t *which"
+			f"{self._argument_tail(struct)})",
 			"{",
 			"\t/* One place rather than a guard at every refusal: a caller",
 			"\t * that does not want the identity passes NULL, and the",
@@ -8037,14 +8176,20 @@ class Emitter:
 		refusals = self._refuse_checks(struct)
 		if not reads_view and not refusals:
 			lines.append("\t(void)view;")
+		# And the same for an argument no check happens to read: the tail is
+		# this struct's rather than this function's, so `validate` takes it
+		# whether or not a constraint mentions it (0050).
+		lines.extend(self._argument_unused(
+			struct, self._argument_tail(struct), *checks, *refusals))
 		lines.extend(checks)
 		lines.extend(refusals)
 
 		lines.extend([
 			"\treturn SITU_OK;", "}", "",
-			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}(situ_view_t view)",
+			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}"
+			f"(situ_view_t view{self._argument_tail(struct)})",
 			"{",
-			f"\treturn {named}(view, NULL);",
+			f"\treturn {named}(view, NULL{self._argument_args(struct)});",
 			"}", "",
 		])
 		return lines
@@ -8815,6 +8960,177 @@ class Emitter:
 
 	def _prefix_args(self, placement: Placement) -> str:
 		return "" if placement.tag_prefix is None else " prefix, prefix_len,"
+
+	# -- external arguments (0050) --------------------------------------
+
+	def _arguments(self, struct: ResolvedStruct) -> list[Placement]:
+		"""The `parameter`s this struct takes, in declaration order.
+
+		Scalars by construction: `wellformed.check_parameters` refuses a
+		struct-typed one, so the callers below may ask for a C type without
+		a second guard for a case the front end has already closed.
+		"""
+		return [held for held in own_members(struct)
+		        if held.parameter and held.scalar is not None]
+
+	@staticmethod
+	def _argument_name(placement: Placement) -> str:
+		"""What the argument is called in a signature.
+
+		Prefixed, which the other three backends do not need. They put the
+		value on the view object, where a schema's name cannot collide with
+		anything; C has no such object and the bodies here declare locals --
+		`view`, `at`, `lead`, `size`, `depth`, and `n` in two loop prologues
+		-- out of the same flat namespace a schema names a parameter in.
+		`parameter u8 n` is the natural spelling and `n` is the one this
+		backend is likeliest to shadow.
+		"""
+		return f"arg_{c_name(placement.name)}"
+
+	def _argument_tail(self, struct: ResolvedStruct) -> str:
+		"""Every argument this struct takes, as a signature's trailing
+		parameters.
+
+		**Trailing parameters rather than a generated view type.** The other
+		three backends put the value on the view object they emit; C's view
+		is `situ_view_t`, the runtime's own, shared by every schema and by
+		callers who never compile this header -- so it has nowhere to put a
+		schema's fact and growing it would cost every user of the runtime.
+		A generated `{ situ_view_t v; uint8_t n; }` per struct was the
+		obvious answer and this is not it, for three measured reasons:
+
+		  * It needs wrapping twice more. A sealed region's interior
+		    accessors take the gate type rather than a view, and the
+		    shifting and covered setters take the message as well; each
+		    would need its own parameterised form.
+		  * Every body here says `view`, so a wrapper needs a prologue
+		    rebinding it in each of the hundred-odd functions that have one.
+		  * `prefix(...)` is the precedent, and 0050 names it: C already
+		    spells "a fact the message does not carry" as a trailing
+		    parameter, in `_prefix_tail` above.
+
+		**An unplumbed path is a compile error, not a wrong byte.** A read
+		of an argument renders as a bare identifier, so a function that
+		embeds one without having been given the tail names something that
+		is not there and gcc says so. That is what the whole-schema refusal
+		bought until now, kept: what it replaces is a refusal at `situc
+		build` with one at `cc`. The shapes that reach a function still
+		spelling `situ_view_t view` alone are a run of VARIABLE-sized
+		structs sized by an argument, whose `_span` walk is threaded through
+		the shared `_span_entries`, and a delimited or `while` run's stride
+		helpers. Neither has a schema in this tree.
+
+		Empty where the struct takes no parameter, which is every struct in
+		the corpus: the text a caller sees is what it was, byte for byte.
+		"""
+		parts = []
+		for held in self._arguments(struct):
+			assert held.scalar is not None
+			parts.append(f", {self._ctype(held.scalar)} "
+			             f"{self._argument_name(held)}")
+		return "".join(parts)
+
+	def _argument_args(self, struct: ResolvedStruct) -> str:
+		"""The same, as a call site's trailing arguments."""
+		return "".join(f", {self._argument_name(held)}"
+		               for held in self._arguments(struct))
+
+	def _argument_tail_in(self, struct: ResolvedStruct, *body: str) -> str:
+		"""The tail for a function built out of `body`: the arguments that
+		text names, and no others.
+
+		For the signatures that are not uniform across a struct -- a located
+		member's, where `at off` reaches the argument and `at 4` does not --
+		and it is the emitted text that decides, so the signature and what
+		is inside it cannot disagree.
+		"""
+		text  = "\n".join(one for one in body if one)
+		parts = []
+		for held in self._arguments(struct):
+			assert held.scalar is not None
+			name = self._argument_name(held)
+			if re.search(rf"\b{name}\b", text):
+				parts.append(f", {self._ctype(held.scalar)} {name}")
+		return "".join(parts)
+
+	def _member_reads_arguments(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether this member's accessors reach the caller's argument.
+
+		One answer for the definition and for every call, so the two cannot
+		disagree about the shape of a signature. A member at a constant
+		offset whose extent is a constant does not reach it, and an
+		argument such an accessor took would be an unused parameter.
+
+		Asked of the emitted arithmetic rather than of the placement,
+		because the question is exactly "does the text this function is
+		built from name one": an offset function carries the tail whenever
+		this struct has an argument, so a dynamically placed member answers
+		yes through its own base expression without this having to reason
+		about which of the members in front of it the argument sizes.
+		"""
+		if not self._arguments(struct):
+			return False
+
+		texts = [self._base_expression(struct, placement)]
+		if self._has_length(struct, placement):
+			length = self._length_expression(struct, placement)
+			if length is not None:
+				texts.append(length)
+
+		text = "\n".join(texts)
+		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
+		           for held in self._arguments(struct))
+
+	def _member_tail(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""What this member's accessors add to their signature."""
+		return (self._argument_tail(struct)
+		        if self._member_reads_arguments(struct, placement) else "")
+
+	def _member_args(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The same, as a call site's trailing arguments."""
+		return (self._argument_args(struct)
+		        if self._member_reads_arguments(struct, placement) else "")
+
+	def _argument_unused(self, struct: ResolvedStruct, taken: str,
+			*body: str) -> list[str]:
+		"""`(void)` for each argument in `taken` that `body` does not name.
+
+		A function that takes an argument and does not read it is an unused
+		parameter, which is an error under this project's flags. Some tails
+		are decided per struct rather than per function -- `validate` takes
+		the argument whether or not a constraint mentions it, so that a
+		caller has one shape to remember -- and this is what that costs: the
+		same `(void)view;` the emitter already writes where a body turns out
+		to read nothing.
+
+		Read off the signature rather than off the struct, because the
+		opposite mistake is silent in the other direction: a `(void)` for an
+		argument this function does NOT take names an identifier that is not
+		there, which is the same compile error one line up from where it
+		would otherwise have been.
+
+		Word boundaries, because `parameter u8 n` and `parameter u8 name`
+		give `arg_n` and `arg_name`, and a substring test would read the
+		second as a use of the first.
+		"""
+		text  = "\n".join(body)
+		lines = []
+		for held in self._arguments(struct):
+			name = self._argument_name(held)
+			if not re.search(rf"\b{name}\b", taken):
+				continue
+			if not re.search(rf"\b{name}\b", text):
+				lines.append(f"\t(void){name};")
+		return lines
+
+	def _is_parameter(self, struct: ResolvedStruct, path: str) -> bool:
+		"""Whether a member of this struct, named the way the decision
+		layer names one, is a `parameter`."""
+		target = self.resolved.find(f"{struct.name}.{path}")
+		return target is not None and target.placement.parameter
 
 	def _codec_call(self, struct: ResolvedStruct, placement: Placement,
 			codec: str) -> list[str]:

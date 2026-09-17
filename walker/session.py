@@ -45,6 +45,17 @@ class Reader:
 	struct: int
 	buffer: bytearray = field(default_factory=bytearray)
 	ready: int = 0
+	#: The arguments the struct's `parameter` members take (0050),
+	#: positionally. Here rather than only on `acquire` because how far a
+	#: message REACHES can follow one: a `[stream]` argument may move a
+	#: member, so `struct_extent` below is measuring a length that depends
+	#: on it, and a framer that could not be told would answer about a
+	#: different message. Rust's `required` needed the same thing for the
+	#: same reason (26.395).
+	#:
+	#: One list for the whole stream, which is exactly what `[stream]`
+	#: means: negotiated once and then fixed.
+	args: tuple[int, ...] = ()
 
 	def push(self, data: bytes) -> None:
 		self.advance()
@@ -68,7 +79,8 @@ class Reader:
 			return None
 
 		try:
-			probe = acquire(self.image, bytes(self.buffer), self.struct)
+			probe = acquire(self.image, bytes(self.buffer), self.struct,
+			                self.args)
 			need  = struct_extent(probe)
 		except Refused:
 			return None
@@ -77,7 +89,8 @@ class Reader:
 			return None
 
 		self.ready = need
-		return acquire(self.image, bytes(self.buffer[:need]), self.struct)
+		return acquire(self.image, bytes(self.buffer[:need]), self.struct,
+		               self.args)
 
 
 @dataclass

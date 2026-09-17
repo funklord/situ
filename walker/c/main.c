@@ -15,6 +15,9 @@
 
 #define IMAGE_MAX   (1u << 20)
 #define MESSAGE_MAX 4096u
+/* More arguments than any schema has a use for. A ceiling rather than an
+ * allocation, this program having none. */
+#define ARGS_MAX    16u
 
 static uint8_t image_bytes[IMAGE_MAX];
 static uint8_t message_bytes[MESSAGE_MAX];
@@ -27,6 +30,7 @@ static const char *why(situ_walk_err err)
 	case SITU_WALK_CONSTRAINT:  return "constraint";
 	case SITU_WALK_MALFORMED:   return "malformed";
 	case SITU_WALK_UNSUPPORTED: return "this build does not render it";
+	case SITU_WALK_ARGUMENT:    return "an argument nobody supplied";
 	default:                    return "unknown";
 	}
 }
@@ -51,7 +55,8 @@ static uint32_t from_hex(const char *text, uint8_t *out, uint32_t cap)
 int main(int argc, char **argv)
 {
 	if (argc < 3) {
-		fprintf(stderr, "usage: situ-walk-c <image> <hex> [struct]\n");
+		fprintf(stderr, "usage: situ-walk-c <image> <hex> [struct] "
+		                "[arg...]\n");
 		return 2;
 	}
 
@@ -73,6 +78,26 @@ int main(int argc, char **argv)
 	const uint32_t len   = from_hex(argv[2], message_bytes, MESSAGE_MAX);
 	const uint32_t shape = (argc > 3) ? (uint32_t)strtoul(argv[3], NULL, 10)
 	                                  : 0u;
+
+	/* The arguments the struct's `parameter` members take (decision 0050),
+	 * positionally and in declaration order -- the same order and spelling
+	 * the library's own `situ_walk_acquire` takes.
+	 *
+	 * Always called, even where there are none, because that is the case
+	 * worth getting a message for: a schema that takes an argument and a
+	 * caller that gave none is a walk that would read the wrong bytes, and
+	 * `situ_walk_acquire` is what says so before anything is read. */
+	static int64_t args[ARGS_MAX];
+	uint32_t       supplied = 0u;
+	for (int i = 4; i < argc && supplied < ARGS_MAX; i++) {
+		args[supplied] = (int64_t)strtoll(argv[i], NULL, 0);
+		supplied++;
+	}
+	err = situ_walk_acquire(&image, shape, args, supplied);
+	if (err != SITU_WALK_OK) {
+		fprintf(stderr, "situ-walk-c: struct %u: %s\n", shape, why(err));
+		return 1;
+	}
 
 	uint32_t first = 0u;
 	uint32_t count = 0u;

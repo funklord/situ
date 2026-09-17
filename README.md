@@ -782,15 +782,44 @@ is zero and stays zero until a person sets it: a dissector cannot know the
 argument and does not guess. `situc map` and `situc wire` name a parameter
 rather than placing it, since it occupies no bytes.
 
-**A Python view takes its arguments**: `frame.at(msg, offset, length, *,
-n)`, keyword-only and undefaulted, because a default would be a guess about
-somebody else's block size. `situc verify` supplies one with `--arg n=2`,
+**Every generated view takes its arguments**: `frame.at(msg, offset,
+length, *, n)`, `Frame::new(bytes, n)`, `frame::at(owner, 0, n, out)` and,
+in C, a trailing parameter on the accessors whose arithmetic reaches it --
+`situ_frame_body_len(view, arg_n)`. Undefaulted everywhere, because a
+default would be a guess about somebody else's block size. The framing
+helper takes them too -- how far a message reaches can follow an argument,
+and a framer that could not be told would answer about a different message.
+
+C takes a trailing parameter rather than a generated view type because its
+view is the runtime's `situ_view_t`, shared by every schema: wrapping it
+would mean three wrapper types, since a sealed region's interior accessors
+already take a gate in its place and the shifting setters take the message
+as well. A trailing parameter composes with all three, and `prefix(...)`
+already spells a caller's knowledge that way. The tail goes only on the
+accessors that read the argument, so the signature says which of them
+depend on the caller's fact -- and an unplumbed path names an identifier
+that is not there, so it fails at the compiler rather than reading a wrong
+byte.
+
+**A parameter gets no accessor of its own, in any backend.** It occupies
+no bytes, so a generated getter would read at the offset of the member
+*after* it, and a setter would write there -- storing over the payload
+while leaving the argument unchanged, under a name saying it had set the
+argument. The view field, or the argument itself, is the value.
+
+**Both walkers take it too**: `acquire(image, buffer, struct, args=())` in
+Python and `situ_walk_acquire(image, shape, args, count)` in C, each
+refusing a count that is not exactly what the struct takes and refusing
+again at the point of use, so a view built by hand cannot get a defaulted
+answer either. The packed image carries the flag in a free bit of a byte
+it already had, so the record did not grow and the committed map and wire
+signature are unchanged. `situc verify` supplies one with `--arg n=2`,
 in `--define`'s shape, and refuses up front rather than calling a vector
-non-conforming when the flag is the thing that is missing. C, C++ and Rust still refuse a schema carrying
-one rather than emitting an accessor that would read the buffer at the
-offset of the member after it -- a C view is the runtime's `situ_view_t`
-and has nowhere to put an argument. A struct that takes one cannot be a
-member of another yet, and is refused by name.
+non-conforming when the flag is the thing that is missing.
+
+A struct that takes an argument cannot be a member of another yet, and is
+refused by name: a nested view is built by the parent's accessor, which has
+no argument to pass.
 
 `require` is a compile-time assertion about the capability vector; `invariant`
 names a field situ *maintains* rather than one it merely checks. Writing a
@@ -1602,11 +1631,16 @@ today and which is a written-down design.
   a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
   are checked; the map and the wire signature name one; and the Wireshark
   dissector reads a `[stream]` one from a preference, which is the first
-  preference that generator has ever emitted. A Python view takes its
-  arguments; C, C++ and Rust refuse a schema carrying one rather than
-  emitting an accessor that would read the buffer at the offset of the
-  member after it, and a struct that takes one cannot be a member of
-  another yet.
+  preference that generator has ever emitted. All four views now take their
+  arguments -- Python and Rust by a field, C++ by a member, C by a trailing
+  parameter on the accessors that read it -- and none emits an accessor for
+  the parameter itself. The packed image and both walkers take it as well.
+  A struct that takes one cannot be a member of another yet; the separate
+  CLI generators (`situc edit`, `drive`, `frame`, `converse`, `qt`,
+  `relate`) still build a view with no arguments; and the generators that
+  emit a second artifact over a schema -- the differ, the C checks, fuzz
+  and tamper harnesses, the three `derived` emitters -- still decline a
+  schema carrying one, which is what a corpus struct is waiting on.
 
 **Designed and accepted, not yet built.**
 
