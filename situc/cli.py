@@ -375,6 +375,12 @@ def build_parser() -> argparse.ArgumentParser:
 		"--define", action="append", metavar="NAME=VALUE",
 		help="set a declared `const` before the layout is solved "
 		     "(decision 0050)")
+	verify_cmd.add_argument(
+		"--arg", action="append", metavar="NAME=VALUE",
+		help="supply a `parameter` the schema declares: an argument the "
+		     "message does not carry, which its layout follows (decision "
+		     "0050). One value for the whole corpus, which is what a "
+		     "per-stream fact is")
 	verify_cmd.add_argument("vectors", type=Path)
 
 	explain_cmd = sub.add_parser(
@@ -570,6 +576,29 @@ def cmd_wire(args: argparse.Namespace) -> int:
 	return 1
 
 
+def _arguments(given: list[str] | None) -> dict[str, int]:
+	"""`--arg name=value`, read into what a view constructor wants (0050).
+
+	`--define`'s shape, deliberately: both supply something the schema
+	declares and the message does not carry, and a reader who has met one
+	should not have to learn a second spelling. What differs is when it
+	lands -- a `const` before the layout is solved, an argument when a view
+	is acquired.
+	"""
+	found: dict[str, int] = {}
+	for one in given or []:
+		name, _, value = one.partition("=")
+		if not name or not value:
+			raise SystemExit(f"situc: --arg wants NAME=VALUE, not `{one}`")
+		try:
+			found[name.strip()] = int(value, 0)
+		except ValueError:
+			raise SystemExit(
+				f"situc: --arg {name.strip()} is not a number: `{value}`"
+			) from None
+	return found
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
 	"""`situc verify schema.situ corpus.vectors` -- the schema as a
 	specification, checked against bytes somebody else's implementation
@@ -588,8 +617,28 @@ def cmd_verify(args: argparse.Namespace) -> int:
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
 
+	given = _arguments(getattr(args, "arg", None))
+
+	# Once, before a vector is read, because an argument is per-corpus: it
+	# comes from the command line, so a missing one is a usage error rather
+	# than a verdict on somebody's bytes. Reported per vector it would have
+	# read as "does not conform ... from an implementation that is not this
+	# schema", which sends a reader to their bytes for a flag they did not
+	# type (0050).
+	from situc import traverse
+
+	wanted = {member.name: owner
+	          for owner, member in traverse.parameters(schema)}
+	missing = [name for name in wanted if name not in given]
+	if missing:
+		for name in missing:
+			print(f"situc: `{wanted[name]}` takes an argument `{name}` that "
+			      f"the message does not carry; supply it with "
+			      f"`--arg {name}=<value>`", file=sys.stderr)
+		return 2
+
 	found = verify.check(schema, resolved, args.schema.stem,
-	                     read_source(args.vectors))
+	                     read_source(args.vectors), given)
 	sys.stdout.write(verify.render(found, str(args.schema), str(args.vectors)))
 
 	return 0 if found and all(one.ok for one in found) else 1

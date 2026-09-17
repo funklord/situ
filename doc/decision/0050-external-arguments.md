@@ -6,10 +6,11 @@ Status: accepted 2026-09-04; the `--define` half built 2026-09-15
 (26.387, 26.390). The map and the wire signature name a parameter
 rather than placing it (26.390, 26.391), and the dissector takes a
 `[stream]` one from a preference (26.392). A PYTHON view takes its
-arguments as of 2026-09-17 (26.393); C, C++ and Rust still refuse, and
+arguments as of 2026-09-17 (26.393), and `situ verify` supplies one
+with `--arg` (26.394); C, C++ and Rust still refuse, and
 a struct that takes one cannot yet be a member. Still to do: those
-three backends' view constructor, the walker's `acquire`, `situ
-verify`'s argument, and a corpus struct -- which lands with the
+three backends' view constructor, the walker's `acquire`, and a
+corpus struct -- which lands with the
 backends rather than before them. What a change to `[stream]` means for wire
 compatibility is open, and 26.391 says why
 Date: 2026-09-04

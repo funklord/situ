@@ -30072,6 +30072,39 @@ first because its view is a generated class already -- and because `situ
 verify` builds one in memory, so it is the backend that unlocks the last
 consumer.
 
+### 26.394 `situ verify` takes the argument, and where the refusal goes
+
+**0050's spelling for this command, now that a Python view can take one.**
+`situc verify schema.situ corpus.vectors --arg n=2`, in `--define`'s shape
+and with its refusals: both supply something the schema declares and the
+message does not carry, and a reader who has met one should not have to
+learn a second spelling. What differs is when it lands -- a `const` before
+the layout is solved, an argument when a view is acquired.
+
+**The first version reported a missing argument as a verdict on the
+bytes**, which is the interesting part:
+
+    error: frame `two` does not conform
+        = frame takes `n`, which no `--arg` supplied
+        = 3 bytes, from an implementation that is not this schema
+
+That last line is this command's own sentence for "your bytes disagree with
+the schema", and it was printed about a flag the caller had not typed. The
+same shape openmlx4 met from the other direction: a red result that is not
+about the thing it names costs somebody two probes before they doubt the
+tool.
+
+**So the check moved to once, before a vector is read, and exits 2.** An
+argument is per-corpus -- it comes from the command line -- so a missing
+one is a usage error and not a per-vector question. The code matters as
+much as the wording: 1 is "these bytes are wrong", and a CI log that greps
+for it should not find one when nothing was checked.
+
+**One value for the whole corpus, which is what a per-stream fact is.** A
+`[stream]` argument is negotiated once and fixed, and that is the only kind
+that may move a member. Per-vector arguments would be a second syntax in
+the vectors format, and nothing yet needs one.
+
 ## 27. Questions, and how they were settled
 
 Recorded rather than resolved. Each needs a decision record before the phase

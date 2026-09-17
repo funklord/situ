@@ -784,7 +784,9 @@ rather than placing it, since it occupies no bytes.
 
 **A Python view takes its arguments**: `frame.at(msg, offset, length, *,
 n)`, keyword-only and undefaulted, because a default would be a guess about
-somebody else's block size. C, C++ and Rust still refuse a schema carrying
+somebody else's block size. `situc verify` supplies one with `--arg n=2`,
+in `--define`'s shape, and refuses up front rather than calling a vector
+non-conforming when the flag is the thing that is missing. C, C++ and Rust still refuse a schema carrying
 one rather than emitting an accessor that would read the buffer at the
 offset of the member after it -- a C view is the runtime's `situ_view_t`
 and has nowhere to put an argument. A struct that takes one cannot be a

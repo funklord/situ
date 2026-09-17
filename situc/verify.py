@@ -146,7 +146,8 @@ def _module(schema: ast.Schema, resolved: ResolvedSchema, name: str) -> object:
 
 
 def check(schema: ast.Schema, resolved: ResolvedSchema, name: str,
-		vectors: Source) -> list[Outcome]:
+		vectors: Source,
+		arguments: dict[str, int] | None = None) -> list[Outcome]:
 	"""Every vector in `vectors`, against the schema.
 
 	A vector conforms when the schema can acquire a view over its bytes, no
@@ -177,14 +178,14 @@ def check(schema: ast.Schema, resolved: ResolvedSchema, name: str,
 			continue
 
 		found.append(_outcome(schema, module, resolved, macros,
-		                      held, struct, case))
+		                      held, struct, case, arguments or {}))
 
 	return found
 
 
 def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 		macros: dict[str, int], held: object, struct: ResolvedStruct,
-		case: Case) -> Outcome:
+		case: Case, arguments: dict[str, int]) -> Outcome:
 	"""One vector: acquire, validate, measure, and read what it claims."""
 	unwalked = _unwalked(resolved, struct)
 	message  = getattr(module, "Message")
@@ -194,10 +195,25 @@ def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 		# A fixed-size struct's `at` takes no length: its extent is the
 		# constant, and offering one is a TypeError rather than a check.
 		fixed = getattr(held, "SIZE_BYTES", 0)
-		view  = (held.at(message(bytearray(case.data)), 0)   # type: ignore[attr-defined]
+		# The arguments this struct declares, which its layout follows and
+		# its bytes do not carry (0050). Missing ones are a refusal rather
+		# than a default: situ does not know the caller's block size, and a
+		# view built on a guessed one reads the wrong bytes confidently.
+		wants = [one.name for one in traverse.own_members(struct)
+		         if one.parameter]
+		absent = [one for one in wants if one not in arguments]
+		if absent:
+			return Outcome(
+				case,
+				f"{struct.name} takes {', '.join(f'`{one}`' for one in absent)}"
+				f", which no `--arg` supplied",
+				unwalked=unwalked)
+		gave = {one: arguments[one] for one in wants}
+
+		view  = (held.at(message(bytearray(case.data)), 0, **gave)   # type: ignore[attr-defined]
 		         if fixed else
 		         held.at(message(bytearray(case.data)), 0,   # type: ignore[attr-defined]
-		                 len(case.data)))
+		                 len(case.data), **gave))
 		# Before `validate`, and not inside its `try`: the messages are what
 		# the schema SAYS about these bytes, and a vector that `validate`
 		# refuses is exactly the one whose `refuse` message names why. A

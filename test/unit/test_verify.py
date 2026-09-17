@@ -520,3 +520,73 @@ def test_a_schema_that_says_nothing_reports_nothing(tmp_path: Path,
 	assert "1 vectors conform" in out
 	for severity in ("note:", "warn:", "refuse:"):
 		assert severity not in out
+
+
+# ---------------------------------------------------------------------------
+# An argument the corpus does not carry (0050)
+# ---------------------------------------------------------------------------
+
+TAKES = """target buffer;
+endian big;
+bit_order msb_first;
+
+struct frame {
+	parameter u8 n [stream];
+	u8        body[n];
+	u8        tail;
+}
+"""
+
+
+def test_verify_takes_the_argument_on_the_command_line(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""0050's spelling for this command, and the layout follows it.
+
+	The same three bytes conform under one argument and not under another,
+	which is the whole claim: `--arg n=2` leaves a one-byte `tail` and
+	`n=3` reaches past the vector.
+	"""
+	schema = tmp_path / "takes.situ"
+	schema.write_text(TAKES, encoding="ascii")
+	vectors = tmp_path / "takes.vectors"
+	vectors.write_text("frame two 11 22 33\n", encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors), "--arg", "n=2"]) == 0
+	assert "1 vectors conform" in capsys.readouterr().out
+
+	assert main(["verify", str(schema), str(vectors), "--arg", "n=3"]) == 1
+	assert "does not conform" in capsys.readouterr().out
+
+
+def test_a_missing_argument_is_a_usage_error_not_a_verdict(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""Once, before a vector is read, because the argument is per-corpus.
+
+	Reported per vector it read as "does not conform ... from an
+	implementation that is not this schema", which sends a reader to their
+	own bytes for a flag they did not type. The exit code is 2 rather than
+	1 for the same reason: 1 is "these bytes are wrong".
+	"""
+	schema = tmp_path / "takes.situ"
+	schema.write_text(TAKES, encoding="ascii")
+	vectors = tmp_path / "takes.vectors"
+	vectors.write_text("frame two 11 22 33\n", encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors)]) == 2
+
+	said = capsys.readouterr().err
+	assert "--arg n=<value>" in said
+	assert "does not conform" not in said
+
+
+def test_an_argument_that_is_not_a_number_is_refused(tmp_path: Path) -> None:
+	"""`--define`'s shape, and its refusals too: a reader who has met one
+	should not have to learn a second spelling."""
+	schema = tmp_path / "takes.situ"
+	schema.write_text(TAKES, encoding="ascii")
+	vectors = tmp_path / "takes.vectors"
+	vectors.write_text("frame two 11 22 33\n", encoding="ascii")
+
+	with pytest.raises(SystemExit) as refused:
+		main(["verify", str(schema), str(vectors), "--arg", "n=wide"])
+	assert "not a number" in str(refused.value)
