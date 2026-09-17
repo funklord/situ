@@ -16,8 +16,9 @@ for invalidation generally.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import arguments
 from situc.codegen.c.frame import framed_structs
-from situc.codegen.rust.emit import _pascal
+from situc.codegen.rust.emit import Emitter, _ident, _pascal
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
@@ -42,9 +43,41 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	# The spellings are the backend's own (`new`'s signature, the field
+	# names), asked of it rather than written again -- a reader built on a
+	# second answer would drift from the constructor it calls.
+	emitter = Emitter(schema, resolved, basename)
+
 	for struct in structs:
 		held = _pascal(struct.name)
 		name = f"{held}Reader"
+		args = arguments(struct)
+		# THE ARGUMENTS GO ON THE READER, NOT ON `next` (0050). `[stream]`
+		# says an argument is negotiated once and fixed for the stream, and a
+		# reader IS one stream -- so taking it per message would ask the
+		# caller to repeat a fact the schema has already said does not
+		# change, and would let two messages of one stream be framed under
+		# two layouts. The same answer `situ verify` gave for a corpus
+		# (26.394): one value for the whole run, because that is what a
+		# per-stream fact is.
+		#
+		# Public, for `new`'s own reason (26.395): the field IS the value the
+		# caller supplied, so a getter beside it would be a second name for
+		# one fact.
+		taken  = emitter._argument_signature(struct)
+		# `arguments()` yields only members carrying a scalar, which
+		# `wellformed.check_parameters` guarantees -- asserted rather than
+		# re-tested, the way the backends' own `_arguments` does.
+		fields = ["\t/// The caller's argument, fixed for this stream."] if args else []
+		for one in args:
+			assert one.scalar is not None
+			fields.append(f"\tpub {_ident(one.name)}: "
+			              f"{emitter._rust_type(one.scalar)},")
+		init   = "".join(f", {_ident(one.name)}" for one in args)
+		given  = "".join(f", self.{_ident(one.name)}" for one in args)
+		note   = (["///",
+		           "/// `new` takes the argument(s) this struct's layout",
+		           "/// follows, for the stream it is reading."] if args else [])
 		lines += [
 			f"/// A stream reader for `{struct.name}`.",
 			"///",
@@ -52,14 +85,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"/// `Error::Truncated`. There is no `advance`: `next` borrows the",
 			"/// reader for as long as the message lives, so dropping one",
 			"/// early does not compile rather than being warned about.",
+			*note,
 			f"pub struct {name}<'a> {{",
 			"\tbuf: &'a mut [u8],",
 			"\thave: usize,",
+			*fields,
 			"}",
 			"",
 			f"impl<'a> {name}<'a> {{",
-			"\tpub fn new(buf: &'a mut [u8]) -> Self {",
-			"\t\tSelf { buf, have: 0 }",
+			f"\tpub fn new(buf: &'a mut [u8]{taken}) -> Self {{",
+			f"\t\tSelf {{ buf, have: 0{init} }}",
 			"\t}",
 			"",
 			"\t/// Append what arrived. `Error::Bounds` where it does not fit,",
@@ -79,7 +114,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// `Error::Bounds` where a whole one needs more than this",
 			"\t/// buffer can ever hold: waiting never makes that true.",
 			"\tpub fn ready(&self) -> Result<usize> {",
-			f"\t\tmatch {held}::required(&self.buf[..self.have]) {{",
+			f"\t\tmatch {held}::required(&self.buf[..self.have]{given}) {{",
 			"\t\t\tFraming::Complete(n) => Ok(n),",
 			"\t\t\tFraming::Need(n) if n > self.buf.len() => Err(Error::Bounds),",
 			"\t\t\tFraming::Need(_) => Err(Error::Truncated),",
@@ -89,7 +124,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/// The next whole message. Borrows until it is dropped.",
 			f"\tpub fn next(&self) -> Result<{held}<'_>> {{",
 			"\t\tlet n = self.ready()?;",
-			f"\t\t{held}::new(&self.buf[..n])",
+			f"\t\t{held}::new(&self.buf[..n]{given})",
 			"\t}",
 			"",
 			"\t/// Drop the message `next` returned, which the borrow checker",

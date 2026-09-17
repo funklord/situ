@@ -13,7 +13,7 @@ plain compiler -- a harness nobody can build is the other way this rots.
 
 from __future__ import annotations
 
-from situc.codegen import refuse_parameters
+from situc.codegen import argued_sides, arguments, refuse_parameters
 from situc import __version__
 
 from collections.abc import Mapping
@@ -30,12 +30,6 @@ from situc.traverse import (
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> str:
-	# A parameter is an argument the caller supplies and no view carries
-	# one yet (0050). Refused here for the reason the four backends refuse
-	# it: what would be emitted reads the buffer at the parameter's offset,
-	# which is where the member after it begins.
-	refuse_parameters(schema)
-
 	# A register is a bus transaction, not bytes off a wire: it has no view,
 	# no `validate`, and its accessors take a device handle rather than one.
 	# `gen-dissector` has excluded them since it was written and this did not,
@@ -48,11 +42,39 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	# executions at coverage 1, which is what an empty `LLVMFuzzerTestOneInput`
 	# looks like from the outside. A struct with nothing to read is skipped
 	# below, where that is decided by what it reads rather than by a bound.
-	structs = [struct for struct in resolved.structs.values()
-	           if struct.layout.is_byte_sized
-	           and struct.layout.register is None
-	           and not (struct.layout.is_fixed_size
-	                    and struct.layout.size_bytes == 0)]
+	fuzzable = [struct for struct in resolved.structs.values()
+	            if struct.layout.is_byte_sized
+	            and struct.layout.register is None
+	            and not (struct.layout.is_fixed_size
+	                     and struct.layout.size_bytes == 0)]
+
+	# A `parameter` is an argument the caller supplies rather than bytes in
+	# the message (0050), and this harness has nothing but the fuzzer's
+	# bytes. Every accessor whose arithmetic reaches the argument takes it
+	# as a trailing parameter and the argument itself gets no accessor at
+	# all (26.397), so a harness over such a struct calls functions with the
+	# wrong arity and one that does not exist -- which is a compile error
+	# rather than a wrong byte, and still a harness nobody can build.
+	#
+	# Skipped per struct rather than declining the file, which is what this
+	# generator did until now: the corpus is meant to carry every construct
+	# so that gates can fail on it, and a whole-file refusal turns a
+	# `parameter` in `edges.situ` into four red sweeps rather than a gap
+	# being filled (26.402).
+	declined = [struct for struct in fuzzable if arguments(struct)]
+	structs  = [struct for struct in fuzzable if not arguments(struct)]
+
+	relation_lines, relation_names = _relation_harnesses(schema, resolved, prefix)
+
+	if declined and not structs and not relation_names:
+		# The skip above emptied the harness, and an empty harness is the
+		# one failure this file already knows by heart: `example/protobuf`
+		# was filtered out entirely and the result compiled, ran under the
+		# smoke test and exercised nothing -- 16 million executions at
+		# coverage 1. So the whole-schema refusal stays, fired only where
+		# there is nothing left to fuzz. One message rather than a second
+		# spelling of it, for `refuse_parameters`' own reason.
+		refuse_parameters(schema)
 
 	# The harnesses first: whether the sink is needed is a question about what
 	# they read, and a `static` function nobody calls is `-Werror` under
@@ -87,8 +109,6 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 	]
 
-	relation_lines, relation_names = _relation_harnesses(schema, resolved, prefix)
-
 	if any("situ_fuzz_sink(" in line
 	       for line in bodies + relation_lines):
 		lines.extend([
@@ -109,11 +129,35 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		lines.insert(lines.index(f'#include "{basename}.h"') + 1,
 		             f'#include "{basename}_relate.h"\t/* situc build --layer relate */')
 
+	lines.extend(_declined_notes(declined))
 	lines.extend(bodies)
 	lines.extend(relation_lines)
 	lines.extend(_entry_point(structs, basename, prefix, relation_names))
 	lines.extend(_standalone(basename))
 	return "\n".join(lines) + "\n"
+
+
+def _declined_notes(declined: list[ResolvedStruct]) -> list[str]:
+	"""Say in the file which structs got no harness, and why.
+
+	A silent absence is what the `example/protobuf` comment above is about:
+	the harness that fuzzed air looked exactly like one that had nothing to
+	fuzz. A reader wondering why their struct is not in the switch gets the
+	answer from the artifact rather than from the generator's source.
+
+	Worded as `No harness for ...`, which is what a relation with no
+	constant key offset already says a few hundred lines down.
+	"""
+	lines: list[str] = []
+	for struct in declined:
+		named = ", ".join(f"`{held.name}`" for held in arguments(struct))
+		lines += [
+			"",
+			f"/* No harness for {struct.name}: it takes {named}, an argument the",
+			" * caller supplies rather than bytes in the message, and this harness",
+			" * has only the fuzzer's bytes (decision 0050). */",
+		]
+	return lines
 
 
 def _harness(struct: ResolvedStruct, prefix: str,
@@ -1029,6 +1073,25 @@ def _relation_harnesses(schema: ast.Schema, resolved: ResolvedSchema,
 		try:
 			relation.plan(decl, resolved)
 		except relation.Refused:
+			continue
+
+		# A relation acquires a view of each message, so a participant that
+		# takes an argument reaches this harness by the same route a struct
+		# does and is declined for the same reason (0050). Asked here rather
+		# than left to the struct filter above: a relation harness calls the
+		# view and the predicate directly and never looks at that list.
+		#
+		# `argued_sides` rather than a fourth spelling of the question --
+		# rungs 3, 5 and 6 refuse on the same answer, and the predicate this
+		# harness calls is rung 3's, so the two cannot disagree about which
+		# relations exist.
+		taking = sorted({struct for _, struct in argued_sides(decl, resolved)})
+		if taking:
+			verb = "takes" if len(taking) == 1 else "take"
+			lines += ["", f"/* No harness for relation {decl.name}: "
+			              f"{', '.join(taking)} {verb} an",
+			          " * argument the caller supplies, and this harness has only",
+			          " * the fuzzer's bytes (decision 0050). */"]
 			continue
 
 		pairs  = relation.conversation_key(decl)

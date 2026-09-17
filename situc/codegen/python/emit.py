@@ -642,6 +642,7 @@ class Emitter:
 			return self._register(struct)
 
 		lines = ["", f"class {name}(View):", *self._class_doc(struct)]
+		lines.extend(self._argument_declarations(struct))
 		lines.extend(self._acquire(struct))
 		lines.extend(self._dirty_constants(struct))
 		lines.extend(self._offsets(struct))
@@ -1004,6 +1005,34 @@ class Emitter:
 		return ", *, " + ", ".join(
 			f"{py_name(one.name)}: int" for one in held)
 
+	def _argument_declarations(self, struct: ResolvedStruct) -> list[str]:
+		"""Declare each argument on the class, so a type checker sees it.
+
+		`at` assigns `view.<name> = <name>` and that is all there was:
+		an attribute set on an instance and declared nowhere, which
+		`mypy --strict` reads as "`negotiated` has no attribute `block`"
+		-- and the suite type-checks every generated module, so this was
+		a hard failure the moment a schema in the corpus declared a
+		parameter. Until one did, no gate could see it.
+
+		The other backends say it in their own way and always did: Rust a
+		`pub n: u8` field, C++ a data member. Python's way is an
+		annotation, and it is the same statement -- the argument is part
+		of what a view IS, not something stuck to it afterwards.
+		"""
+		held = self._arguments(struct)
+		if not held:
+			return []
+
+		lines = [
+			"",
+			"\t#: The arguments this view was acquired with (0050): the",
+			"\t#: caller supplies them and the message does not carry",
+			"\t#: them, so they are part of what a view IS.",
+		]
+		lines.extend(f"\t{py_name(one.name)}: int" for one in held)
+		return lines
+
 	def _argument_store(self, struct: ResolvedStruct) -> list[str]:
 		"""Put them on the view, which is what makes an accessor able to
 		read one: every expression over a parameter renders `self.<name>`,
@@ -1036,9 +1065,11 @@ class Emitter:
 				'\t\t"""The one bounds check. Everything after it trusts the',
 				"\t\textent -- and the arguments this format's shape follows,",
 				'\t\twhich the message does not carry (0050)."""',
-				"\t\tview = acquire(cls, msg, offset, cls.SIZE_BYTES)",
+				f"\t\tview: \"{py_name(struct.name)}\" = acquire("
+				"cls, msg, offset, cls.SIZE_BYTES)"
+				"  # type: ignore[assignment]",
 				*store,
-				"\t\treturn view  # type: ignore[return-value]",
+				"\t\treturn view",
 			]
 
 		return [
@@ -1058,9 +1089,11 @@ class Emitter:
 			' {length} given")',
 			*(["\t\treturn acquire(cls, msg, offset, length)"
 			   "  # type: ignore[return-value]"] if not store else [
-				"\t\tview = acquire(cls, msg, offset, length)",
+				f"\t\tview: \"{py_name(struct.name)}\" = acquire("
+				"cls, msg, offset, length)"
+				"  # type: ignore[assignment]",
 				*store,
-				"\t\treturn view  # type: ignore[return-value]"]),
+				"\t\treturn view"]),
 		]
 
 	# -- members -------------------------------------------------------
@@ -4580,7 +4613,14 @@ class Emitter:
 		name = py_name(struct.name)
 		head = [
 			"", "\t@classmethod",
-			"\tdef required(cls, data: bytes | bytearray | memoryview) -> int:",
+			# The arguments, in `at`'s own shape (0050). How far a message
+			# reaches can follow one, so a framer that could not be told
+			# would answer about a different message -- the reason the
+			# other three backends' `required` all take it. Python's did
+			# not, and could not have been noticed: until the corpus
+			# carried a parameter nothing generated this branch.
+			f"\tdef required(cls, data: bytes | bytearray | memoryview"
+			f"{self._argument_signature(struct)}) -> int:",
 			f'\t\t"""How many bytes a whole `{struct.name}` needs, given these.',
 			"",
 			"\t\tReturns the total length when a complete one is present, and",
@@ -4655,7 +4695,16 @@ class Emitter:
 			"",
 			"\t\t# A view over what has arrived, so every length below reads",
 			"\t\t# through the same bounds the accessors do.",
+			# Built directly rather than through `at`, which would apply
+			# `at`'s own minimum-length check and refuse the very short
+			# buffer this is measuring -- so the arguments have to be put
+			# on it here, the one thing `at` would otherwise have done.
+			# Without that the probe had no `block` attribute at all and
+			# the first size expression raised `AttributeError` naming a
+			# field the class does declare.
 			"\t\tprobe = cls(Message(bytearray(data)), 0, have)",
+			*[f"\t\tprobe.{py_name(one.name)} = {py_name(one.name)}"
+			  for one in self._arguments(struct)],
 			*steps,
 			"",
 			"\t\tif have < at:",

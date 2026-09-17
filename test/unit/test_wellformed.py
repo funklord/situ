@@ -2358,18 +2358,162 @@ def test_a_parameter_round_trips_through_the_unparser() -> None:
 #: its own that would each have to thread an argument through. None is on
 #: a `situc build` path. Derived from the source rather than carried, so a
 #: generator quietly gaining or losing the refusal fails this test.
+#: The ONE written list of which generators still decline a schema
+#: carrying a `parameter`, as importable module names. Two tests read it:
+#: one compares it against the source, so a generator changing its mind
+#: fails a test addressed to whoever changed it; the other imports each
+#: and watches it actually raise, so a name here that has quietly stopped
+#: refusing is caught too.
+#:
+#: It was two lists until 2026-09-17 -- this set and a `GENERATORS` list
+#: 130 lines below -- and they had already drifted: `differ` called the
+#: refusal and was in neither the older list nor anybody's mind. Two
+#: written enumerations of one fact are two things to keep true, which is
+#: the shape this file's own `evidence.md` calls one witness counted
+#: twice.
 REFUSING = {
-	"situc/codegen/c/checks.py",
-	"situc/codegen/c/derived.py",
-	"situc/codegen/c/fuzz.py",
-	"situc/codegen/c/tamper.py",
-	"situc/codegen/differ.py",
-	"situc/codegen/python/derived.py",
-	"situc/codegen/rust/derived.py",
+	"situc.codegen.c.checks",
+	"situc.codegen.c.fuzz",
+	"situc.codegen.c.tamper",
 }
 
-#: The generators that take an argument, as of 26.393 to 26.397.
+#: What a generator DOES with a schema carrying a `parameter`, measured
+#: by generating rather than by reading the source -- because what matters
+#: is what a caller gets back.
+#:
+#: Three cells, and it was a dichotomy until 2026-09-17. The differ, and
+#: then `c/checks` and `c/fuzz`, learned to SKIP the struct that takes an
+#: argument and generate for the rest -- which is neither taking nor
+#: refusing, so a test asserting "either takes or refuses" said nothing
+#: about any of them. That is 26.400's own failure repeating in the test
+#: written to avoid it: a partition asserted over a population that had
+#: grown a cell nobody renamed.
+#:
+#: GENERATES for both a mixed schema and an all-parameterised one. Two
+#: reasons live here and they are worth telling apart when reading:
+#: the four backends and the packer take the argument; the three
+#: `derived` emitters are simply unreachable by one (26.405).
+TAKES = [
+	("situc.codegen.c",            ("schema", "resolved", "name")),
+	("situc.codegen.cpp",          ("schema", "resolved", "name")),
+	("situc.codegen.python",       ("schema", "resolved", "name")),
+	("situc.codegen.rust",         ("schema", "resolved", "name")),
+	("situc.codegen.c.derived",    ("schema", "name")),
+	("situc.codegen.rust.derived", ("schema", "name")),
+	("situc.codegen.python.derived", ("schema", "name")),
+]
+
+#: GENERATES for a mixed schema, omitting the argued struct, and REFUSES
+#: one whose every struct is argued -- because an artifact that compared,
+#: checked or fuzzed nothing would pass exactly as loudly as a real one.
+SKIPS = [
+	("situc.codegen.c.checks",  ("schema", "resolved", "name")),
+	("situc.codegen.c.fuzz",    ("schema", "resolved", "name")),
+	("situc.codegen.differ",    ("schema", "resolved", "target")),
+	("situc.codegen.c.tamper",  ("schema", "resolved", "name")),
+]
+
+#: REFUSES either. Empty, and asserted empty rather than deleted.
+#:
+#: `c/tamper` sat here on the stated ground that nothing sweeps it over
+#: the corpus, so a `parameter` in `edges.situ` would cost it nothing.
+#: That was measured against `test_tamper.py` and `test/generated/`, and
+#: missed `test_cli.py::test_every_subcommand_runs_on_every_schema`, which
+#: runs EVERY subcommand over every schema. The corpus struct is what
+#: found it -- the construct landing in `edges.situ` turned a passing
+#: sweep red, which is the whole reason for putting it there.
+#:
+#: Kept as a named cell so that a generator which genuinely should decline
+#: outright has somewhere to go, and so that its emptiness is a claim
+#: somebody asserted rather than a list that quietly vanished.
+REFUSES: list[tuple[str, tuple[str, ...]]] = []
+
+#: The old name, kept for `situc pack`, which is not a codegen module.
 TAKING = ["c", "cpp", "python", "rust", "pack"]
+
+
+def _argued(only: bool) -> tuple[ast.Schema, ResolvedSchema]:
+	"""A schema whose structs are all argued, or only one of them.
+
+	Both carry an `authenticated` region and a `tag`, which is not
+	decoration: `c/tamper` emits nothing at all for a struct without one,
+	so an untagged fixture leaves it returning `{}` in both cases and the
+	cell tests below pass without it having done anything. A fixture that
+	cannot make a generator act is a fixture that tests the harness.
+	"""
+	argued = ("struct argued { parameter u8 n [stream];"
+	          " authenticated ab { u8 body[n]; }"
+	          " tag u8[16] covers(ab); }\n")
+	plain  = ("struct plain { authenticated pa { u8 a; u8 b; }"
+	          " tag u8[16] covers(pa); }\n")
+	schema = parse_text(PARAM + (argued if only else plain + argued))
+	return schema, resolve(schema, solve(schema))
+
+
+def _call(module: str, shape: tuple[str, ...], only: bool) -> object:
+	schema, resolved = _argued(only)
+	held = {"schema": schema, "resolved": resolved, "name": "unit",
+	        "target": "c"}
+	generate = __import__(module, fromlist=["generate"]).generate
+	return generate(*[held[one] for one in shape])
+
+
+@pytest.mark.parametrize("module,shape", TAKES,
+                         ids=[one for one, _ in TAKES])
+def test_a_generator_that_takes_an_argument_generates_for_either(
+		module: str, shape: tuple[str, ...]) -> None:
+	"""Both cases, because one of them passes for the wrong reason.
+
+	A generator that skipped the argued struct would still generate for
+	the MIXED schema -- it just would not mention it -- so asserting the
+	mixed case alone cannot tell taking from skipping. The
+	all-parameterised schema is what separates them: there is nothing left
+	to skip TO.
+	"""
+	assert _call(module, shape, only=False) is not None
+	assert _call(module, shape, only=True) is not None
+
+
+@pytest.mark.parametrize("module,shape", SKIPS,
+                         ids=[one for one, _ in SKIPS])
+def test_a_generator_that_skips_refuses_when_the_skip_empties_it(
+		module: str, shape: tuple[str, ...]) -> None:
+	"""The `example/protobuf` lesson as an assertion.
+
+	Each of these filters out the struct that takes an argument and
+	generates for the rest. What that must NOT do is shrink to nothing
+	quietly: an empty `LLVMFuzzerTestOneInput` ran 16 million executions
+	at coverage 1 and looked fine from outside, and a differential harness
+	comparing no structs goes green having compared nothing.
+
+	So: generates for a mixed schema, refuses one it would have emptied.
+	"""
+	assert _call(module, shape, only=False) is not None
+
+	with pytest.raises(SituError) as refused:
+		_call(module, shape, only=True)
+	assert "parameter n" in str(refused.value)
+
+
+def test_nothing_refuses_a_parameterised_schema_outright() -> None:
+	"""The empty cell, asserted rather than deleted.
+
+	Every generator that reads a schema now either takes the argument, is
+	unreachable by one, or skips the struct and refuses only what the skip
+	would have emptied. Nothing declines a mixed schema outright.
+
+	Asserted because a cell that empties is exactly where the next
+	generator will be put without anybody noticing: an entry added here
+	fails this test and has to say why declining is right for it, rather
+	than being absorbed by a parametrize over a list nobody reads.
+	"""
+	assert REFUSES == [], (
+		f"{[one for one, _ in REFUSES]} decline a parameterised schema "
+		f"outright. That is a real position -- it is what `c/tamper` did "
+		f"until the corpus gained a `parameter` and `test_cli`'s "
+		f"every-subcommand sweep went red -- but it needs saying out "
+		f"loud, so add the test that pins the reason and take this "
+		f"assertion out.")
 
 
 def _parameter_schema() -> tuple[ast.Schema, ResolvedSchema]:
@@ -2410,7 +2554,8 @@ def test_every_generator_is_either_taking_an_argument_or_refusing_one(
 		         if isinstance(node, python_ast.Call))
 		if any(isinstance(call.func, python_ast.Name)
 		       and call.func.id == "refuse_parameters" for call in calls):
-			found.add(str(one.relative_to(root)))
+			found.add(str(one.relative_to(root))[:-len(".py")]
+			          .replace("/", "."))
 
 	assert found == REFUSING, (
 		"a generator changed its mind about `parameter`. Added one that "
@@ -2452,22 +2597,32 @@ def test_a_refusing_generator_still_names_the_record() -> None:
 	"""A refusal whose message says only "not yet implemented" sends a
 	reader to the phase table rather than to the record that explains it.
 
-	One refuser stands for the set: they share `refuse_parameters`, and the
-	test above is what holds the set together.
-	"""
-	from situc.codegen import differ
+	`c/tamper` stands for the set, and the choice of stand-in is the
+	point. This named the DIFFER until 2026-09-17, on the stated grounds
+	that "they share `refuse_parameters`" -- and by then the differ had
+	stopped sharing it, raising its own error from `structs_of` instead.
+	The test stayed green, because that error also names the parameter and
+	cites 0050, which is honest and is not the thing the docstring
+	claimed. **A stand-in that has left the set it stands for tests one
+	member and reports on a population.**
 
-	schema, resolved = _parameter_schema()
-	# `differ.generate` takes a TARGET here, not a basename: the first
-	# draft passed "unit" and the test still went green, because the
-	# refusal raises before the target is looked up. It would have gone on
-	# passing with the refusal moved anywhere earlier in the function.
+	`c/tamper` is the last whole-schema caller of `refuse_parameters`, so
+	it is the shared message or nothing.
+	"""
+	from situc.codegen.c import tamper
+
+	schema, resolved = _argued(only=True)
 	with pytest.raises(SituError) as refused:
-		differ.generate(schema, resolved, "c")
+		tamper.generate(schema, resolved, "unit")
 
 	assert "parameter n" in str(refused.value)
 	assert any("decision 0050" in note
 	           for note in refused.value.diagnostic.notes)
+
+	# The control: it is the SHARED message being asserted, so the
+	# source-scan set above and this must name the same module. A
+	# stand-in quietly leaving that set is what this test just paid for.
+	assert "situc.codegen.c.tamper" in REFUSING
 
 
 def test_the_descriptions_that_need_no_view_still_work() -> None:
@@ -2490,26 +2645,41 @@ def test_the_descriptions_that_need_no_view_still_work() -> None:
 #: reaches for. Listed rather than discovered, because what is being asserted
 #: is that each has the refusal -- and a list derived from "modules with a
 #: `generate`" would grow a new one already exempt.
-GENERATORS = [
-	# The dissector is NOT here, and its absence is the point rather than
-	# an exemption: it is the one description that can take a `[stream]`
-	# argument, from a preference (26.392). It refuses a per-message one,
-	# and `test_dissector` asserts that -- beside a test that a `[stream]`
-	# one works, so this list shrinking is a capability arriving rather
-	# than a hole opening.
-	("situc.codegen.c.fuzz", ("schema", "resolved", "name")),
-	("situc.codegen.c.checks", ("schema", "resolved", "name")),
-	("situc.codegen.c.tamper", ("schema", "resolved", "name")),
-	("situc.codegen.c.derived", ("schema", "name")),
-	("situc.codegen.rust.derived", ("schema", "name")),
-	("situc.codegen.python.derived", ("schema", "name")),
-]
+#: How each generator's `generate` is called -- what its signature needs,
+#: which no source scan can answer. NOT a second list of who refuses:
+#: that is `REFUSING` above, and the parametrize below reads it.
+#:
+#: Entries may outlive a module's refusal. A call shape does not change
+#: when a generator learns to pass an argument, and keeping the row means
+#: the next person to add a refusal there does not have to rediscover it.
+#:
+#: The dissector is absent, and that is the point rather than an
+#: exemption: it is the one description that can take a `[stream]`
+#: argument, from a preference (26.392). It refuses a per-message one and
+#: `test_dissector` asserts that, beside a test that a `[stream]` one
+#: works -- so its absence is a capability arriving rather than a hole.
+SHAPES = {
+	"situc.codegen.c.fuzz":         ("schema", "resolved", "name"),
+	"situc.codegen.c.checks":       ("schema", "resolved", "name"),
+	"situc.codegen.c.tamper":       ("schema", "resolved", "name"),
+	"situc.codegen.differ":         ("schema", "resolved", "name"),
+	"situc.codegen.c.derived":      ("schema", "name"),
+	"situc.codegen.rust.derived":   ("schema", "name"),
+	"situc.codegen.python.derived": ("schema", "name"),
+}
 
 
-@pytest.mark.parametrize("module,shape", GENERATORS,
-                         ids=[one for one, _ in GENERATORS])
-def test_every_generator_refuses_a_parameter(module: str,
-		shape: tuple[str, ...]) -> None:
+def test_every_refusing_generator_has_a_call_shape() -> None:
+	"""`SHAPES` must cover `REFUSING`, or the test below silently skips
+	the one that was added -- a parametrize over a name it cannot call is
+	not a test that passed, it is a test that never ran."""
+	assert REFUSING <= set(SHAPES), (
+		f"no call shape for {sorted(REFUSING - set(SHAPES))}; add one to "
+		f"SHAPES so it can actually be invoked")
+
+
+@pytest.mark.parametrize("module", sorted(REFUSING))
+def test_every_generator_refuses_a_parameter(module: str) -> None:
 	"""The four backends and the packer were refused first, and that left
 	the other generators emitting what the backends would not.
 
@@ -2523,15 +2693,18 @@ def test_every_generator_refuses_a_parameter(module: str,
 
 	It has since learned to take one from a preference, which is why it is
 	not in the list above.
-	"""
-	schema   = parse_text(PARAM + "struct S { parameter u8 n [stream]; "
-	                      "u8 body[n]; }")
-	resolved = resolve(schema, solve(schema))
-	held     = {"schema": schema, "resolved": resolved, "name": "unit"}
 
-	generate = __import__(module, fromlist=["generate"]).generate
+	The fixture is the ALL-ARGUED one, and that is load-bearing. Every
+	member of `REFUSING` now skips the argued struct and calls the shared
+	refusal only for what the skip would have emptied, so a schema with an
+	ordinary struct beside the argued one no longer raises anywhere -- and
+	`c/tamper` needs a TAG as well, emitting nothing whatever without one.
+	A fixture that cannot make a generator act does not test it: this
+	passed for `c/tamper` against an untagged schema only while tamper
+	declined the file outright.
+	"""
 	with pytest.raises(SituError) as refused:
-		generate(*[held[one] for one in shape])
+		_call(module, SHAPES[module], only=True)
 
 	assert "parameter n" in str(refused.value)
 

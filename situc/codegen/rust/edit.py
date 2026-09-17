@@ -14,8 +14,9 @@ accident of translation.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import arguments
 from situc.codegen.c.edit import editable
-from situc.codegen.rust.emit import _ident, _pascal
+from situc.codegen.rust.emit import Emitter, _ident, _pascal
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import is_own_member, local_name
@@ -55,10 +56,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	# `new`'s signature is the backend's; asked of it rather than answered
+	# again, so this file and the constructor it calls cannot drift apart.
+	emitter = Emitter(schema, resolved, basename)
+
 	for struct in structs:
 		held  = _pascal(struct.name)
 		owned = f"{held}Owned"
 		runs  = _runs(struct)
+		args  = arguments(struct)
+		# The same order and spelling `new` takes them in, so a caller
+		# holding both hands them on rather than remembering two shapes.
+		taken = emitter._argument_signature(struct)
+		given = emitter._argument_fields(struct)
+		note  = (["\t///",
+		          "\t/// Both take the argument(s) this struct's layout follows."]
+		         if args else [])
 		members = [entry.placement for entry in struct.entries
 		           if is_own_member(struct, entry.placement)]
 
@@ -81,8 +94,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"impl<'a> {owned}<'a> {{",
 			"\t/// How many bytes the variable members need.",
-			"\tpub fn backing(data: &[u8]) -> Result<usize> {",
-			f"\t\tlet view = {held}::new(data)?;",
+			*note,
+			f"\tpub fn backing(data: &[u8]{taken}) -> Result<usize> {{",
+			f"\t\tlet view = {held}::new(data{given})?;",
 			"\t\tlet mut need = 0usize;",
 		]
 		for placement in runs:
@@ -96,9 +110,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t///",
 			"\t/// The backing goes in by mutable reference and comes back",
 			"\t/// borrowed, which is what stops it being freed underneath.",
-			f"\tpub fn decode(data: &[u8], store: &'a mut [u8]) -> Result<Self> {{",
-			f"\t\tlet view = {held}::new(data)?;",
-			f"\t\tlet need = Self::backing(data)?;",
+			f"\tpub fn decode(data: &[u8], store: &'a mut [u8]{taken})"
+			f" -> Result<Self> {{",
+			f"\t\tlet view = {held}::new(data{given})?;",
+			f"\t\tlet need = Self::backing(data{given})?;",
 			"\t\tif need > store.len() {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
@@ -127,6 +142,16 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			if placement in runs:
 				lines.append(f"\t\t\t{local}: &frozen[{local}_at..{local}_at "
 				             f"+ {local}_n],")
+			elif placement.parameter:
+				# THE FIELD IS THE VALUE (26.398), and this is the fault that
+				# entry records live in this backend: `view.n()` was emitted
+				# beside `pub n: u8` and read the payload's first byte, which
+				# is where the member the argument sizes begins. The view
+				# carries the caller's argument as a public field and there
+				# is no getter, deliberately. Carried into the owned copy
+				# rather than dropped, for the map's reason (26.390): a copy
+				# decoded under an assumption should say so.
+				lines.append(f"\t\t\t{local}: view.{local},")
 			elif placement.scalar is not None and placement.array_count is None:
 				lines.append(f"\t\t\t{local}: view.{local}(),")
 		lines += ["\t\t})", "\t}", "}", ""]

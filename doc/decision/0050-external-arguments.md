@@ -20,17 +20,47 @@ Status: accepted 2026-09-04. Built in four passes:
   `std/image.situ.map` and `.wire` are unchanged -- which is why the
   `[stream]` question below does not arrive through the image.
 
-Still to do: the separate CLI generators (`edit`, `drive`, `frame`,
-`converse`, `qt`, `relate`), which build a view with no arguments; lifting
-the refusal on a struct that takes one being a member of another; and a
-corpus struct -- which needs the four generators that SWEEP the corpus
-to skip a parameterised struct rather than decline the file, since a
-`parameter` in `edges.situ` today fails four passing sweeps rather than
-filling a gap (26.402). Two
+- The per-layer generators, 2026-09-17: 30 of them across four backends,
+  not the six layer names this record first guessed. Those that acquire a
+  whole message take the argument; the drivers refuse per relation,
+  because a driver builds a view of every datagram it receives and where
+  it would be told is a second design this record does not settle.
+- The corpus struct, 2026-09-17 (26.409). It needed six sweeping
+  generators changed first -- three taught to skip the argued struct,
+  three whose refusal was unnecessary (26.405, 26.407) -- which is not
+  what "lands with the backends" said.
+
+Still to do: lifting the refusal on a struct that takes an argument being
+a member of another, which needs a decision about how a parent's
+arguments compose with a child's; `situc gen-tamper`, which declines a
+schema carrying one and which nothing sweeps the corpus through, so it
+costs nothing today; and whether the two cross-checking harnesses should
+eventually COMPARE parameterised structs rather than skip them. Both ask
+the same question and neither is settled:
+
+- The four-way differ found 26.27, 26.31, 26.47 and 26.222, so it is
+  exactly where a fresh cross-backend disagreement is likely.
+- The two-walker identity sweep skips an argued struct for the same
+  reason (26.409).
+
+Where the argument comes from is the open half, and it is one decision
+for both: a driver's whole input is one hex string on argv, so the
+choices are a constant baked in (which compares one argument for ever --
+a fixture chosen so the right answer passes rather than so a wrong one
+differs), slicing it off the front of the draw (variation for free, but
+four languages must slice identically), or a second argv element
+(cleanest, and it changes an interface `fourway.answers`, `probe.py` and
+both walker suites share). Two
 shapes reach C functions that take a view alone and so fail at the
 compiler rather than silently -- a run of variable-sized structs sized by
 an argument, and a delimited or `while` run's stride helpers -- and no
-schema in this tree has either (26.397).
+schema in this tree has either (26.397). A THIRD was found and fixed, and
+a FOURTH found and left: a nested member behind a parameter now takes the
+tail, while a variant ARM holding a nested struct is broken in several
+sites at once and is recorded rather than half-fixed (26.408). That the
+list of unplumbed shapes grew from two to four the first time anybody
+looked is the argument for the corpus struct below, not a footnote to
+it.
 
 What a change to `[stream]` means for wire compatibility is open, and
 26.391 says why

@@ -25,7 +25,6 @@ import textwrap
 
 from math import lcm
 
-from situc.codegen import refuse_parameters
 from situc import ast
 from situc.codegen.c.names import ident, macro
 from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
@@ -40,11 +39,10 @@ from situc import __version__
 
 def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	"""Emit every derived implementation the schema binds."""
-	# A parameter is an argument the caller supplies and no view carries
-	# one yet (0050); a derived codec implementation is generated against
-	# the same accessors the four backends refuse to emit.
-	refuse_parameters(schema)
-
+	# `impls()` and `codecs()` decide everything this emits, and every
+	# helper below takes a `CodecDecl`: no struct and no member is read
+	# here, so a `parameter` -- an argument the caller supplies (0050) --
+	# has no path into the output and needs no refusal.
 	derived = {impl.codec for impl in schema.impls()
 	           if impl.kind is ast.ImplKind.DERIVED}
 

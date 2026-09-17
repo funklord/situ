@@ -32,6 +32,7 @@ better than pretending it was solved.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import ACQUIRES_DATAGRAMS, argued_refusal
 from situc.relation import key_layout
 from situc.codegen.c.names import ident, macro
 from situc.relation import Refused
@@ -65,6 +66,19 @@ def driven(schema: ast.Schema,
 		policy = policy_of(relation)
 		if policy is None:
 			continue
+		# A side that takes a `parameter` (0050). A driver owns the socket
+		# and BUILDS a view of each datagram it receives -- so unlike the
+		# rungs that are handed views, it must be told the argument, and
+		# every driver in every backend acquires through the same `at` or
+		# `new` that now takes one. Refused rather than emitted with the
+		# argument missing, which is a view of the right bytes under the
+		# wrong layout in three backends and a compile error in the fourth.
+		#
+		# This gate is the one the C drivers, the Qt driver and the asyncio
+		# driver all read, so filtering here is what makes the nine of them
+		# skip the same relation rather than nine copies of one test.
+		if argued_refusal(relation, resolved, ACQUIRES_DATAGRAMS):
+			continue
 		try:
 			key_layout(relation, resolved)
 		except Refused:
@@ -79,6 +93,10 @@ def refusals(schema: ast.Schema,
 	found = []
 	for relation in schema.relations():
 		if policy_of(relation) is None:
+			continue
+		argued = argued_refusal(relation, resolved, ACQUIRES_DATAGRAMS)
+		if argued:
+			found.append((relation.name, argued))
 			continue
 		try:
 			key_layout(relation, resolved)

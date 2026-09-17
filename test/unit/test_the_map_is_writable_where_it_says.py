@@ -126,6 +126,21 @@ def promised(struct: ResolvedStruct) -> list[str]:
 		# `[secret]` gets no accessor at all, which is the point (14.6).
 		if any(attr.name == "secret" for attr in placement.attrs):
 			continue
+		# A `parameter` is the caller's argument and occupies no bytes
+		# (0050), so there is nothing to write in place and no backend
+		# emits a setter -- deliberately, since one would store at the
+		# offset of the member AFTER it (26.398).
+		#
+		# Read the MAP's promise rather than the vector's, which is what
+		# this file is named for. The rendered map says
+		# `negotiated.block   parameter` and no axes at all: it names the
+		# member and places nothing, so it promises nothing to hold a
+		# backend to. The vector underneath still answers `InPlaceFixed`,
+		# describing a byte that is not there -- recorded at 26.404, where
+		# `situc explain` had the same reading and gained a sentence
+		# saying what its axes describe rather than suppressing them.
+		if placement.parameter:
+			continue
 
 		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
 			continue

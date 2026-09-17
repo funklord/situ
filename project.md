@@ -30217,6 +30217,32 @@ functions, so a caller has one shape to remember) an unread argument gets
 `(void)arg_n;`, which is the `(void)view;` this emitter already writes for
 the same reason.
 
+**That sentence was the design and not the code, and this entry asserted
+it as measured.** `required` was CONDITIONAL: its fixed-size branch hard
+-coded `(const uint8_t *data, uint32_t have, uint32_t *need)` with no
+tail at all. So a MEANING-ONLY parameter -- one that sizes nothing --
+left the struct fixed-size, reached that branch, and rung 4's reader
+passed an argument the header did not take: *too many arguments to
+function*, under `-Werror`. A `[stream]` parameter that sizes a member
+was fine, because then the extent arithmetic does read it and the
+conditional tail appears. **The gap was invisible in exactly the case
+the feature was built for**, which is why nothing in the arc that built
+it noticed.
+
+`required` takes the tail unconditionally now, with `(void)` for what it
+does not read -- which is what makes it uniform in fact rather than in
+intent, and what makes a generic framing caller correct. Found by the
+worker skipping parameterised structs in `c/checks` and `c/fuzz`, from a
+minimal reproduction, while this entry sat in the tree claiming
+otherwise.
+
+**The failure is mine and it has a name.** I wrote this paragraph from a
+worker's report without generating a header and reading the signature --
+*a claim about another tree is a measurement you did not take*, with a
+subagent's report standing in for the other tree. The report described
+the design accurately; the design was not what the code did. A relay is
+theirs and holds; anything I state as measured has to be measured.
+
 **An unplumbed path is a compile error, not a wrong byte.** Because a
 parameter read renders as the bare identifier `arg_n`, a function that
 embeds one without the tail names something that is not there and gcc says
@@ -30561,6 +30587,332 @@ Recorded rather than done: it is a behaviour change to five generators,
 and entangling it with the view work would put two unrelated things under
 one message. It is the next piece, and it is what 0050's corpus line
 should say.
+
+### 26.407 Skipping the struct rather than the schema, in checks and fuzz
+
+**The corpus struct's first blocker, removed.** `c/checks` and `c/fuzz`
+declined a whole schema carrying a `parameter`; they now skip the struct
+that takes one and generate for the rest, following `c/fuzz.py`'s own
+precedent -- the filter that already drops structs it cannot fuzz.
+
+**The skip reaches FOUR families, not one, and that was measured rather
+than assumed.** With the refusal bypassed, the emitted suite called
+`situ_P_mode_get` -- which does not exist, a parameter getting no
+accessor (26.398) -- and `situ_P_validate(view)` with the wrong arity,
+and named the struct again from the relation, conversation and framing
+families. So `checks` skips in `_struct_checks`, `_relation_checks`,
+`_converse_checks` and `_frame_checks`, and `fuzz` skips in the struct
+filter AND in `_relation_harnesses`, which calls the view directly and
+never consults the struct list. **A skip written only where the first
+symptom appeared would have left three families calling a function that
+is not there.**
+
+**The whole struct, not the members after the parameter.** The tail goes
+on the accessors whose arithmetic reaches the argument and not the rest,
+so a partial suite would be checking exactly the half whose signature
+happens not to have moved -- a passing check over the wrong population.
+
+**When the skip leaves nothing, the whole-schema refusal still fires**,
+which is the `example/protobuf` lesson turned from a comment into a
+guard: an empty `LLVMFuzzerTestOneInput` and a `test_nothing_to_check`
+placeholder both compile, run, and report a pass over nothing. Keeping
+`refuse_parameters` for that case also keeps one diagnostic rather than
+two (26.401), and keeps both files inside the partition
+`test_wellformed` asserts over -- so `REFUSING` did not have to change.
+
+**The two sabotages worth keeping failed through the COMPILER with the
+exact hazards claimed**: removing the skip gave *too few arguments to
+function `situ_box_validate`* and *implicit declaration of function
+`situ_box_n_get`*. Not an earlier step, and not a string assertion --
+the two faults the skip exists to prevent, named by gcc.
+
+**One honest imprecision, stated in the code:** `checks` cannot tell a
+schema its skip emptied from one that had nothing checkable anyway.
+Both refuse. Loud over precise; telling them apart would mean
+generating twice.
+
+**And one population assertion that is not yet a measurement.**
+`test_every_fuzzable_struct_reaches_the_harness` now requires an argued
+struct to carry a "No harness" note instead of a `fuzz_` entry -- but no
+corpus schema declares a parameter, so that branch is unexercised by the
+sweep. The real coverage is in the unit fixtures; the branch lights up
+the day `edges.situ` gains the struct, which is the point of adding it.
+
+### 26.408 A uniform tail is a rule with two halves, and only one was applied
+
+**Three functions took an argument they had no business taking or no way
+to name, and all three are the same half-applied rule.** 26.397 says the
+C tail is uniform across `validate`, `check`, `required` and the offset
+functions, so a caller has one shape to remember, and that a uniform tail
+costs a `(void)arg_n;` wherever the body does not read it. The first half
+was implemented in three places and the second in one.
+
+- **`required` took no tail at all** in its fixed-size branch, so a
+  meaning-only parameter left rung 4's reader passing an argument the
+  header did not take.
+- **The offset functions took the tail and never got the `(void)`**, so
+  `situ_frame_tail_offset(view, arg_mode)` was an unused parameter.
+- **The nested sub-view accessor took no tail** while embedding
+  `situ_frame_hdr_offset(view, arg_n)`, so `arg_n` was undeclared.
+
+**All three are invisible in the case the feature was built for.** A
+`[stream]` parameter that sizes a member is read by the extent
+arithmetic, by the offset terms, and by the base expression -- so the
+conditional tail appears, the `(void)` is not needed, and everything
+compiles. It is the MEANING-ONLY parameter, and the member placed AFTER
+a sized one, that reach the other branch. The arc that built this
+feature tested the construct it was built for.
+
+**The nested one matters most, because an ordinary schema reaches it.**
+`_argument_tail`'s docstring names two unplumbed shapes -- a run of
+variable-sized structs, a delimited run's stride helpers -- and says no
+schema in this tree has either, which was offered as reassurance. This
+is a third, and `struct frame { parameter u8 n [stream]; u8 body[n];
+head hdr; }` is a fixed header after a variable body: not exotic, just
+absent from a corpus that carries no parameter at all.
+
+**The definition and its caller now ask one question.** `_member_tail`
+and `_member_args` both come from `_member_reads_arguments`, so the
+signature and the call cannot disagree. Computing the tail from the
+rendered offset separately in each place is precisely how two spellings
+of one fact drift apart.
+
+**A fourth shape was found, reproduced, and deliberately NOT fixed.** A
+variant ARM holding a nested struct is broken in more than one site --
+the arm's own accessors call the discriminant getter without a tail as
+well -- so plumbing the sub-view alone turns *undeclared `arg_n`* into
+*too few arguments* without making anything compile. A speculative edit
+to that path was made and then reverted: no schema in this tree reaches
+it, so nothing would have caught a half-fix, and **a change nobody can
+prove is worse than an absence somebody has written down.**
+
+Found by the worker converting the per-layer generators, from minimal
+reproductions, in a file that was not its own.
+
+### 26.409 The construct is in the corpus, and what it took to get there
+
+**`edges.situ` carries a `parameter` now**, which is what that file is
+for: a construct the corpus does not hold is one no gate can fail on.
+
+**The cost of its absence, measured rather than argued.** Between 0050's
+view work landing and this struct arriving, the C backend alone had FOUR
+shapes where a parameter reached a function that did not take it --
+`required`'s fixed-size branch, the offset functions' missing `(void)`,
+the nested sub-view accessor, and a variant arm. Three were found in one
+afternoon, by hand, by people constructing fixtures. None could have been
+found by a gate. `_argument_tail`'s docstring named two unplumbed shapes
+and said no schema in this tree reaches either, which was true and was
+offered as reassurance; the list doubled the first time anybody looked.
+
+**Both spellings, deliberately.** `payload[block]` resolves through
+`sized_by`; `trailer[block + 1]` goes through the expression renderer.
+They are different code paths in every backend, and every backend that
+built this feature got one and missed the other -- so a fixture carrying
+only the bare form is a proof about half the code. A `u16` after both
+means a wrong width for either shows up as a wrong BYTE rather than as a
+length nobody reads back.
+
+**Getting it in took four generators changed first, and that was not
+0050's estimate.** The record said the corpus struct "lands with the
+backends". Measured, it lands with every generator that SWEEPS the
+corpus: `c/checks` and `c/fuzz` through the conventions sweep, `differ`
+through `fourway`, and the three `derived` emitters through the
+refuse-the-same-members sweep. Six, of which three needed a per-struct
+skip and three needed their refusal deleted as unnecessary (26.405,
+26.407). The number moved from four to six to three across this arc, each
+time because somebody re-derived it instead of quoting it.
+
+**The map and the wire signature name it rather than placing it**, which
+is the committed contract working: `parameter -  u8  block [stream]` and
+`negotiated.block  parameter`, against `payload` at `@0x0000`. Both
+artifacts were regenerated and the wire diff reports the change as
+compatible.
+
+**One assertion in the tree was waiting for this and is now live.**
+`test_every_fuzzable_struct_reaches_the_harness` requires an argued
+struct to carry a "No harness" note instead of a `fuzz_` entry; until
+now no corpus schema could exercise that branch, so it was a population
+assertion rather than a measurement (26.407). It measures something as
+of this commit.
+
+**And it went red within the hour, which is the point.** `c/tamper` kept
+its whole-schema refusal on the stated ground that nothing sweeps it over
+the corpus -- measured against `test_tamper.py` and `test/generated/`,
+and missing `test_cli.py::test_every_subcommand_runs_on_every_schema`,
+which runs EVERY subcommand over every schema. The struct landed and that
+sweep failed. Tamper skips the argued struct now, refusing only what the
+skip would empty, which is what its three siblings already do.
+
+**That is the third time in this arc a "which generators sweep the
+corpus" count has been wrong** -- four, then six, then three, then a
+seventh nobody had counted -- and every correction came from measuring
+again rather than from anybody re-reading the claim. The struct is what
+turned the last one from a claim into a red test.
+
+**A fixture that cannot make a generator act does not test it.** Moving
+tamper into the skipping cell failed three tests whose fixture had no
+`tag`, and tamper emits nothing at all for a struct without one: it had
+been "passing" for tamper only while tamper declined the file outright.
+The shared fixture carries an `authenticated` region and a tag now. The
+same shape as a gate over an empty file list, one level up -- the test
+ran, and there was nothing for it to run against.
+
+**And then it found two real defects in the PYTHON view**, which had been
+built, tested, gated and committed a day earlier:
+
+- **`at` assigned an attribute the class declared nowhere.** `view.<name>
+  = <name>`, and nothing else. `mypy --strict` runs over every generated
+  module in this suite and says *"negotiated" has no attribute "block"* --
+  a hard failure, available from the moment any corpus schema declared a
+  parameter, and not before. Rust says it with `pub n: u8` and C++ with a
+  data member; Python's way is an annotation, and it is the same
+  statement.
+- **`required` took no argument at all**, while its body reads
+  `probe.<name>` -- so it raised `AttributeError` naming a field the
+  class does declare. The probe is built directly rather than through
+  `at`, because `at`'s minimum-length check would refuse the very short
+  buffer `required` is measuring, so the one thing `at` does for free had
+  to be done again here.
+
+The second was predicted, in writing, by the worker converting the
+per-layer generators: it could not run the Python stream reader end to
+end and said so under *what I did not verify*, naming this as the cause.
+**A worker's honest "I could not check this" is a finding**, and it was
+right.
+
+**And a seventh, in a gate rather than in a backend.**
+`test_every_writable_member_has_a_setter` reads each member's MUTATE axis
+and requires a setter from every backend for anything `InPlaceFixed`. A
+parameter's vector answers `InPlaceFixed` -- describing a byte that is not
+there -- so the gate demanded a setter that no backend emits and none can,
+one storing at the offset of the member AFTER it (26.398).
+
+The check was the thing at fault, and the file's own name says why: it is
+*the map is writable where it says*, and the rendered map says
+`negotiated.block   parameter` with no axes at all. It names the member
+and places nothing, so it promises nothing to hold a backend to. The gate
+was reading the vector underneath instead of the promise the map makes.
+That is 26.404 again -- `situc explain` had the same reading and gained a
+sentence saying what its axes describe -- and it is *suspect the check
+before the code* paying out: changing four backends to satisfy it would
+have been a defect propagated rather than fixed.
+
+**An eighth, and the guard that caught it was written for exactly this.**
+`walk.Unsupplied` is deliberately NOT a `Refused` -- everything else in
+that module answers a question about BYTES and this is the caller's
+omission -- and the two-walker identity sweep catches `(Refused,
+Unplaceable)`. So the new exception fell through and aborted the whole
+`edges` comparison rather than skipping one struct.
+
+What said so was `test_the_identity_comparison_asked_something`:
+*only 117 refusals were compared ... it was 197 when written*. Its
+docstring gives the reason it exists -- "a comparison that quietly
+stopped having anything to compare would pass exactly as loudly as one
+that agreed" -- and losing 80 comparisons is precisely the silence it
+was built against. **A population guard earned its keep on a shrink
+nobody predicted.**
+
+The walker's own author could not have found it: their tests exercise
+`Unsupplied` directly and pass, and no corpus schema declared a parameter
+for the sweep to trip over. Same shape as the two Python faults -- code
+that passed its own gates, with the gap reachable only once the corpus
+carried the construct.
+
+It is an explicit skip now. Comparing the two walkers under a SUPPLIED
+argument is the better test and is its own piece of work, since the C
+driver takes its arguments as trailing argv and both sides would have to
+agree how one is passed -- recorded beside the differ's version of the
+same question rather than decided in passing.
+
+**There were two such sites, and the second was found by consequence
+rather than by looking.** `_verdict_pair` catches `(AssertionError,
+IndexError, Refused, Unplaceable)` and `Unsupplied` escaped that too.
+The general shape is worth more than either instance: **adding an
+exception type to a module means auditing every `except` clause that
+catches its siblings** -- and `Unsupplied` was added deliberately NOT to
+be a `Refused`, so every such clause in the tree predates it and none
+mentions it.
+
+Swept for the rest afterwards rather than waiting for a third to fail:
+the corpus sweeps that reach a walker are these two and
+`test_dissector`, which goes through `report.listing` -- already taught
+to answer `needs-arguments` by the walker's own author. The remaining
+`except Refused` sites are inside `walk.py` and `report.py`, where
+`Unsupplied` propagating is the intended behaviour.
+
+That makes EIGHT defects this construct's absence was hiding -- four in C
+(26.408), two in Python, two in gates -- against a corpus struct that
+took an afternoon to make landable.
+
+### 26.405 Three refusals that were never needed, and a tripwire that proved it
+
+**The three `derived` emitters refused a `parameter` and could not have
+been affected by one.** They emit codec kernel implementations from
+`schema.impls()` and `schema.codecs()`; every helper in them takes a
+`CodecDecl`. The refusal was defensive copying of the backends' one, and
+its comment said so -- "a derived codec implementation is generated
+against the same accessors the four backends refuse to emit" -- which was
+true while the backends refused and stopped being true on 2026-09-17.
+
+**The proof that carries weight is a tripwire rather than a comparison.**
+Byte-identity between a parameterised schema and an unparameterised one
+shows the parameter did not change the output; it cannot show that no
+path exists. So every `StructDecl` in the schema was replaced with a
+subclass whose `__getattribute__` raises on any non-dunder read, and all
+three emitters ran to completion with every struct poisoned, producing
+identical output. **They do not read a struct declaration at all**, so a
+member of a struct has no route in whatever the schema says. The control
+is `traverse.parameters` on the same poisoned schema, which trips
+immediately.
+
+**Its first version failed for the wrong reason**, which is the lesson
+worth keeping: poisoning `__class__` broke `isinstance`, so all three
+emitters "touched a struct" and the red said nothing about the question.
+Letting dunders through is what turned it into a test of data reads. A
+tripwire that fires on the machinery rather than on the access is a
+control that cannot discriminate.
+
+**And a path nobody wrote for it agreed.** C's `derived.py` has a second
+entry point, `declarations()`, which never carried the refusal at all --
+and `c/emit.py` calls it while writing the header. So a `situc build` of
+a parameterised schema has been running code in this module since the C
+backend learned to take an argument, and the output is correct. The
+"three derived emitters refuse" description was never quite true of C,
+and the half that did not refuse is the half that had been exercised.
+
+### 26.406 Two written lists of one fact, and they had already drifted
+
+**`test_wellformed.py` enumerated the refusing generators twice**, 130
+lines apart: a `REFUSING` set added on 2026-09-17 that reads the source
+and compares, and an older `GENERATORS` list that imports each one and
+watches it raise. Two written enumerations of one fact are two things to
+keep true.
+
+**They had drifted before anybody noticed.** `differ` called
+`refuse_parameters` and was in `GENERATORS` not at all -- so the test
+that proves a refuser actually refuses had never run against it. The
+source-scan set is what exposed that, which is the argument for deriving
+a population rather than carrying one, made by the carried one being
+wrong.
+
+**The fix is one written list and two questions asked of it.** `REFUSING`
+holds module names; the scan compares against it, and the parametrize
+reads it. What stays separate is `SHAPES` -- how each generator's
+`generate` is called -- because a signature is not something a scan can
+answer, and a call shape does not change when a generator stops
+refusing, so those rows are allowed to outlive a refusal.
+
+**A parametrize over a name it cannot call is not a test that passed.**
+So a guard asserts `SHAPES` covers `REFUSING`: without it, adding a
+refuser with no call shape would have produced a `KeyError` at collection
+or, worse, a silently absent case. Sabotaged by adding a module in
+neither -- three tests fired, and the guard is the one that says what to
+do about it.
+
+Found by the worker sent to remove the `derived` refusals, reading the
+file it had been told not to touch in order to report what its change
+would break. **The instruction not to edit a shared file is what made it
+read that file carefully**, which is not why the instruction was given.
 
 ## 27. Questions, and how they were settled
 

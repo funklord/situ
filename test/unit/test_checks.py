@@ -700,3 +700,117 @@ def test_the_handle_a_table_returns_is_the_callers_own() -> None:
 
 	assert "_record(&table, request_view, 7u)" in emitted
 	assert "assert_int_equal(id, 7u);" in emitted
+
+
+# -- a struct that takes an argument ----------------------------------------
+
+#: A schema mixing the two, which is the case the skip exists for. `n` is
+#: 0050's own example -- a `[stream]` parameter sizing a member -- so the
+#: fixture is the construct rather than a cheaper relative of it.
+ARGUED = """struct box {
+	parameter u8 n [stream];
+	u16 id;
+	u8  body[n];
+}
+
+struct plain {
+	u16 a;
+	u8  b;
+}
+
+relation pair(x: box, y: box) {
+	must y.id == x.id;
+}
+"""
+
+
+def test_a_struct_that_takes_an_argument_is_skipped_and_the_rest_checked(
+		) -> None:
+	"""The point of the skip (26.402): the corpus is meant to carry every
+	construct so that gates can fail on it, and a whole-file refusal turns a
+	`parameter` in `edges.situ` into a red sweep rather than a gap filled.
+
+	So the assertion is the partition rather than the absence: `plain` is
+	checked and `box` is not, from one schema.
+	"""
+	emitted = emit(ARGUED)
+
+	assert "check_plain_a_occupies_its_claimed_bytes" in emitted
+	assert "check_plain_b_round_trips_in_place"       in emitted
+	assert "check_box" not in emitted
+
+
+def test_nothing_in_the_suite_names_a_struct_that_takes_an_argument() -> None:
+	"""Stronger than "no check_box_", and the reason is what the skip is
+	for: `situ_box_mode_get` does not exist at all -- a `parameter` gets no
+	accessor (26.397) -- and `situ_box_validate` grew a trailing argument,
+	so a suite naming either is a suite that does not compile.
+
+	Measured before the skip, with the refusal commented out: the emitted
+	file called both.
+	"""
+	assert "situ_box_" not in emit(ARGUED)
+
+
+def test_the_skip_says_so_in_the_file_and_names_the_record() -> None:
+	"""A silent absence is what this project dislikes, and the `Not checked
+	here, and why` block already exists to say it. All four families that
+	name a struct answer the same question, so all four appear."""
+	emitted = emit(ARGUED)
+
+	assert "/* Not checked here, and why:" in emitted
+	assert "struct box: takes `n`, an argument the caller supplies" in emitted
+	assert "relation pair: names box, which takes an argument"         in emitted
+	assert "conversation pair: names box, which takes an argument"     in emitted
+	assert "framing box: takes `n`"                                    in emitted
+	assert emitted.count("decision 0050") == 4
+
+
+def test_a_schema_with_nothing_left_to_check_refuses_rather_than_shrinking(
+		) -> None:
+	"""The warning `c/fuzz.py` paid for, applied to the generator that can
+	empty itself the same way: `example/protobuf` was filtered out entirely
+	and the harness compiled, ran under the smoke test and exercised
+	nothing.
+
+	`_render` would have emitted its `test_nothing_to_check` placeholder
+	here, which is honest for a schema that genuinely has nothing checkable
+	and a lie for one whose every struct was declined: a suite that
+	compiles, runs, reports a pass and holds the backend to nothing.
+
+	The refusal is the shared `refuse_parameters`, so there is one message
+	to reword rather than two.
+	"""
+	from situc.diagnostics import SituError
+
+	with pytest.raises(SituError) as refused:
+		emit("struct only { parameter u8 n [stream]; u8 body[n]; }")
+
+	assert "parameter n" in str(refused.value)
+	assert any("decision 0050" in note
+	           for note in refused.value.diagnostic.notes)
+
+
+def test_a_mixed_schema_does_not_refuse() -> None:
+	"""The control for the test above. Without it a refusal moved anywhere
+	earlier in `generate` would pass it, and the skip would be gone with the
+	test still green -- which is how the empty case reads from outside."""
+	assert "check_plain_a_occupies_its_claimed_bytes" in emit(ARGUED)
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_skipped_suite_still_compiles(tmp_path: Path) -> None:
+	"""An unused static under `-Werror` is the hazard a per-struct skip
+	invites, so the proof is the compiler's rather than a string match --
+	and the suite is run, because a group cmocka refuses to start would
+	otherwise read as a pass from here.
+
+	It compiles rung 4's header too, `plain` being frameable: the suite
+	includes it, so a reader emitted for `box` is compiled here even though
+	no check names one.
+	"""
+	run = build(tmp_path, ARGUED)
+
+	assert run.returncode == 0, run.stdout + run.stderr
+	assert "check_plain_a_occupies_its_claimed_bytes" in run.stdout
+	assert "[  FAILED  ]" not in run.stdout

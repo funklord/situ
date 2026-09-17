@@ -2565,6 +2565,45 @@ def test_an_argument_is_not_counted_in_the_struct_s_extent(
 	assert resolved.structs["S"].layout.size_bytes == 2
 
 
+def test_the_argument_is_declared_on_the_class_and_reaches_required(
+		) -> None:
+	"""Two faults the corpus struct found within the hour of landing.
+
+	`at` did `view.<name> = <name>` and the class declared the attribute
+	nowhere, so `mypy --strict` -- which this suite runs over every
+	generated module -- said *"negotiated" has no attribute "block"*. The
+	other backends always said it in their own way: Rust a `pub n: u8`
+	field, C++ a data member. Python's way is an annotation, and it is the
+	same statement: the argument is part of what a view IS.
+
+	And `required` took no argument at all, while its body reads
+	`probe.<name>` -- so it raised `AttributeError` naming a field the
+	class does declare. The other three backends' `required` all take it,
+	for the reason 26.395 gives: how far a message reaches can follow an
+	argument, and a framer that could not be told would answer about a
+	different message.
+
+	Neither could be caught before `test/schema/edges.situ` carried a
+	`parameter`, because nothing else in the tree generated this branch.
+	"""
+	module = emit(TAKES)
+
+	# Declared, not merely assigned.
+	assert "\tn: int" in module
+	# `required` takes it, in `at`'s keyword-only shape.
+	assert "def required(cls, data: bytes | bytearray | memoryview, *," \
+		" n: int) -> int:" in module
+	# ...and puts it on the probe, which is built directly rather than
+	# through `at` and so gets none of `at`'s work for free.
+	assert "\t\tprobe.n = n" in module
+
+	# The control: a struct with no parameter grows none of it, so a
+	# declaration emitted unconditionally fails here.
+	plain = emit("struct frame { u8 n; u8 body[n]; }")
+	assert "\tn: int" not in plain
+	assert "probe.n = n" not in plain
+
+
 def test_a_struct_that_takes_an_argument_cannot_be_a_member() -> None:
 	"""Refused by name until a parent can carry it (0050).
 

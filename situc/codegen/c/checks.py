@@ -24,7 +24,7 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
-from situc.codegen import refuse_parameters
+from situc.codegen import argued_sides, arguments, refuse_parameters
 from situc import __version__
 
 import re
@@ -47,6 +47,20 @@ from situc.traverse import (
 )
 
 WORD_WIDTHS = (8, 16, 32, 64)
+
+
+def _declined(struct: ResolvedStruct) -> str:
+	"""Why a struct that takes an argument gets no checks, in the file.
+
+	The whole struct rather than the members in front of the parameter: the
+	tail goes on the accessors whose arithmetic reaches the argument and not
+	on the rest (26.397), so a partial suite would be checking the half
+	whose signature happens not to have moved, which is the passing check
+	that inspected the wrong thing.
+	"""
+	named = ", ".join(f"`{held.name}`" for held in arguments(struct))
+	return (f"takes {named}, an argument the caller supplies and these "
+	        "checks have none to pass (decision 0050)")
 
 
 @dataclass
@@ -74,17 +88,22 @@ class Suite:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> str:
-	# A parameter is an argument the caller supplies and no view carries
-	# one yet (0050). Refused here for the reason the four backends refuse
-	# it: what would be emitted reads the buffer at the parameter's offset,
-	# which is where the member after it begins.
-	refuse_parameters(schema)
-
 	suite = Suite()
+
+	# A struct that takes an argument is skipped and says so, rather than
+	# the whole schema being declined as it was until now. The corpus is
+	# meant to carry every construct so that gates can fail on it, and a
+	# whole-file refusal turns a `parameter` in `edges.situ` into four red
+	# sweeps rather than a gap being filled (26.402). The other three check
+	# families ask the same question where they name a struct.
+	declined = []
 
 	for name in sorted(resolved.structs):
 		struct = resolved.structs[name]
-		if struct.layout.register is not None:
+		if arguments(struct):
+			declined.append(name)
+			suite.skip(f"struct {name}", _declined(struct))
+		elif struct.layout.register is not None:
 			_register_checks(suite, struct, prefix)
 		else:
 			_struct_checks(suite, schema, resolved, struct, prefix)
@@ -92,6 +111,20 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	_relation_checks(suite, schema, resolved, basename, prefix)
 	_converse_checks(suite, schema, resolved, basename, prefix)
 	_frame_checks(suite, resolved, basename, prefix)
+
+	if declined and not suite.names:
+		# Nothing survived the skip. `_render` would emit the empty group
+		# with its `test_nothing_to_check` placeholder, which is honest for
+		# a schema that genuinely has nothing checkable and a lie here: the
+		# suite would compile, run, report a pass, and hold the backend to
+		# nothing at all -- the shape `example/protobuf` cost `gen-fuzz`.
+		#
+		# A schema whose every struct takes an argument and one that had
+		# nothing checkable anyway are not told apart here, and both refuse.
+		# The refusal is the shared one rather than a second spelling: same
+		# message, and `situc gen-checks` declining a schema carrying a
+		# parameter is still true of the cell that is left.
+		refuse_parameters(schema)
 
 	return _render(suite, basename)
 
@@ -191,6 +224,22 @@ def _relation_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 					and struct.layout.is_fixed_size):
 				extent = _buffer_size(struct.layout)
 			params.append((param.name, struct, extent))
+
+		# Before the extent question below, so the note names the construct
+		# that was declined rather than a consequence of it: a parameter
+		# that sizes a member makes the extent dynamic too, and "no fixed
+		# buffer" would be true and would send a reader to the wrong record.
+		#
+		# `argued_sides` rather than a spelling of our own: rung 3 refuses
+		# to emit the predicate on the same answer, so a check asking a
+		# different question could name a predicate that is not there.
+		taking = sorted({held for _, held in argued_sides(relation, resolved)})
+		if taking:
+			verb = "takes" if len(taking) == 1 else "take"
+			suite.skip(f"relation {name}", f"names {', '.join(taking)}, which "
+			           f"{verb} an argument these checks have none to pass "
+			           "(decision 0050)")
+			continue
 
 		if any(extent is None for _, _, extent in params):
 			suite.skip(f"relation {name}", "names a message whose extent is "
@@ -310,6 +359,16 @@ def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 				extent = _buffer_size(struct.layout)
 			params.append((param.name, struct, extent))
 
+		# Above the extent question for the reason the relation one is, and
+		# asked of rung 5 the same way the relation one asks rung 3.
+		taking = sorted({held for _, held in argued_sides(relation, resolved)})
+		if taking:
+			verb = "takes" if len(taking) == 1 else "take"
+			suite.skip(f"conversation {name}", f"names {', '.join(taking)}, "
+			           f"which {verb} an argument these checks have none to "
+			           "pass (decision 0050)")
+			continue
+
 		if any(extent is None for _, _, extent in params):
 			suite.skip(f"conversation {name}", "names a message whose extent "
 			           "is decided by the data, so a fixed buffer cannot "
@@ -395,6 +454,14 @@ def _frame_checks(suite: Suite, resolved: ResolvedSchema, basename: str,
 	for struct in frame.framed_structs(resolved):
 		name   = struct.name
 		layout = struct.layout
+
+		if arguments(struct):
+			# Rung 4 takes the argument on `reader_init`, so the reader
+			# exists and this check still has nothing to hand it -- and a
+			# stream framed under the wrong argument is a wrong cut rather
+			# than a failed one, which is the case worth not guessing at.
+			suite.skip(f"framing {name}", _declined(struct))
+			continue
 
 		if not (layout.is_byte_sized and layout.is_fixed_size):
 			suite.skip(f"framing {name}", "has no fixed extent, so a stream of "

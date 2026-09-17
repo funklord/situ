@@ -46,6 +46,7 @@ fire every retransmission at once or suspend them for hours.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import ACQUIRES_DATAGRAMS, argued_refusal
 from situc.codegen.rust.drive import _policy
 from situc.codegen.rust.emit import _pascal
 from situc.relation import Refused, key_layout
@@ -64,6 +65,13 @@ def _driven(schema: ast.Schema,
 	for relation in schema.relations():
 		policy = _policy(relation)
 		if policy is None:
+			continue
+		# A side that takes a `parameter` (0050). This loop BUILDS a view of
+		# every datagram it receives, so it has to be told the argument
+		# `Frame::new` now takes -- which the driver has nowhere to get. The
+		# same gate `c/drive.driven` applies for the other eight drivers;
+		# this one carries its own copy because it already did.
+		if argued_refusal(relation, resolved, ACQUIRES_DATAGRAMS):
 			continue
 		try:
 			key_layout(relation, resolved)

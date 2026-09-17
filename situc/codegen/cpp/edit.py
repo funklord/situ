@@ -9,8 +9,10 @@ returns.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import arguments
 from situc.codegen.c.edit import editable
 from situc.codegen.c.names import c_name
+from situc.codegen.cpp.emit import Emitter
 from situc.codegen.cpp.names import class_name
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -23,6 +25,18 @@ __all__ = ["generate"]
 def _runs(struct: ResolvedStruct) -> list[Placement]:
 	from situc.codegen.c.edit import _runs as runs_of
 	return runs_of(struct)
+
+
+def _emitter(schema: ast.Schema, resolved: ResolvedSchema,
+		basename: str) -> Emitter:
+	"""The backend's own emitter, for the argument spellings alone.
+
+	`at` and `required` decide what an argument is called and what type it
+	has; asking them rather than answering again is what stops this file and
+	the header it calls drifting apart. The namespace is the default, and
+	nothing asked of it here reads one.
+	"""
+	return Emitter(schema, resolved, basename, "situ")
 
 
 def _scalar(placement: Placement) -> str:
@@ -62,10 +76,24 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	emitter = _emitter(schema, resolved, basename)
 	for struct in structs:
 		held = class_name(struct)
 		name = f"{c_name(struct.name)}_owned"
 		runs = _runs(struct)
+		args = arguments(struct)
+		# The same order and spelling `at` takes them in, so a caller holding
+		# both hands them on rather than remembering two shapes (26.395).
+		taken = emitter._argument_signature(struct)
+		given = emitter._argument_values(struct)
+		# The one-line doc block stays one line where there is nothing to
+		# add, so a schema with no parameter gets the header it always got.
+		doc   = (["\t/** How many bytes the variable members need. */"]
+		         if not args else
+		         ["\t/** How many bytes the variable members need.",
+		          "\t *",
+		          "\t * Both take the argument(s) this struct's layout follows.",
+		          "\t */"])
 		members = [entry.placement for entry in struct.entries
 		           if is_own_member(struct, entry.placement)]
 
@@ -87,14 +115,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"struct {name} {{",
 			*fields,
 			"",
-			"\t/** How many bytes the variable members need. */",
+			*doc,
 			"\t[[nodiscard]] static ::situ::rt::err backing(",
 			"\t\t\tconst std::uint8_t *data, std::uint32_t len,",
-			"\t\t\tstd::uint32_t &need) noexcept",
+			f"\t\t\tstd::uint32_t &need{taken}) noexcept",
 			"\t{",
 			f"\t\t::situ::rt::message owner(const_cast<std::uint8_t *>(data), len);",
 			f"\t\t::situ::{held} view;",
-			f"\t\tconst ::situ::rt::err err = ::situ::{held}::at(owner, 0u, len,",
+			f"\t\tconst ::situ::rt::err err = ::situ::{held}::at(owner, 0u, "
+			f"len{given},",
 			"\t\t                                                 view);",
 			"\t\tif (err != ::situ::rt::err::ok) {",
 			"\t\t\treturn err;",
@@ -113,10 +142,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t/** Copy into your backing. `err::bounds` where it does not fit. */",
 			"\t[[nodiscard]] ::situ::rt::err decode(",
 			"\t\t\tconst std::uint8_t *data, std::uint32_t len,",
-			"\t\t\tstd::uint8_t *store, std::uint32_t cap) noexcept",
+			f"\t\t\tstd::uint8_t *store, std::uint32_t cap{taken}) noexcept",
 			"\t{",
 			"\t\tstd::uint32_t need = 0u;",
-			"\t\t::situ::rt::err err = backing(data, len, need);",
+			f"\t\t::situ::rt::err err = backing(data, len, need{given});",
 			"\t\tif (err != ::situ::rt::err::ok) {",
 			"\t\t\treturn err;",
 			"\t\t}",
@@ -126,7 +155,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			f"\t\t::situ::rt::message owner(const_cast<std::uint8_t *>(data), len);",
 			f"\t\t::situ::{held} view;",
-			f"\t\terr = ::situ::{held}::at(owner, 0u, len, view);",
+			f"\t\terr = ::situ::{held}::at(owner, 0u, len{given}, view);",
 			"\t\tif (err != ::situ::rt::err::ok) {",
 			"\t\t\treturn err;",
 			"\t\t}",
@@ -147,6 +176,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 					"\t\t\tat += static_cast<std::uint32_t>(src.size());",
 					"\t\t}",
 				]
+			elif placement.parameter:
+				# THE MEMBER IS THE VALUE (26.398): the view carries the
+				# caller's argument as a data member, and `view.n()` is a
+				# method the header deliberately does not emit -- a parameter
+				# occupies no bytes, so a getter would read the first byte of
+				# the member it sizes. Carried rather than dropped, for the
+				# map's reason (26.390): a copy decoded under an assumption
+				# should say so.
+				lines.append(f"\t\t{local} = view.{local};")
 			elif placement.scalar is not None and placement.array_count is None:
 				lines.append(f"\t\t{local} = view.{local}();")
 

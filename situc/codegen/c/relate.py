@@ -27,13 +27,38 @@ type, and when there is no correct one, is `situc.relation`'s call.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import argued_refusal
 from situc.codegen.c.names import ident
 from situc.relation import (Constraint, Read, ReadBytes, SubView, plans,
-                            refusals, render)
+                            refusals as expressible, render)
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
 __all__ = ["generate", "refusals", "signature"]
+
+
+def refusals(schema: ast.Schema,
+		resolved: ResolvedSchema) -> list[tuple[str, str]]:
+	"""Every relation that gets no C predicate, and why.
+
+	`situc.relation`'s list, plus this backend's own: a side that takes a
+	`parameter` (0050). The other three take views that carry the caller's
+	argument, so their predicates read the right bytes whatever the schema
+	says; C is handed a bare `situ_view_t`, reads through the generated
+	getters, and the getters behind an argument take it as a trailing
+	parameter -- which the predicate has nowhere to get and no signature to
+	take it on.
+
+	Refused per relation rather than per schema, which is the shape
+	`c/fuzz.py` already uses for a struct it cannot handle (26.402): the
+	rungs below this one still generate, and a caller who asked for rung 3
+	is told which relation declined and why, not handed a file that does
+	not compile.
+	"""
+	return sorted(expressible(schema, resolved)
+	              + [(relation.name, argued_refusal(relation, resolved))
+	                 for relation in schema.relations()
+	                 if argued_refusal(relation, resolved)])
 
 
 def signature(relation: ast.Relation, prefix: str) -> str:
@@ -142,8 +167,15 @@ def _comment(relation: ast.Relation) -> list[str]:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> dict[str, str]:
 	"""The relation header and source, or nothing if none is expressible."""
-	ready = plans(schema, resolved)
-	if not ready:
+	ready = [(relation, constraints)
+	         for relation, constraints in plans(schema, resolved)
+	         if not argued_refusal(relation, resolved)]
+	# Emitted for the declined ones too, and that is the point: with every
+	# relation declined this file would otherwise not exist at all, and a
+	# caller who asked for rung 3 would have nothing to read.
+	declined = [relation for relation in schema.relations()
+	            if argued_refusal(relation, resolved)]
+	if not ready and not declined:
 		return {}
 
 	guard  = ident(prefix, basename, "RELATE_H").upper()
@@ -173,6 +205,27 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 	for relation, _ in ready:
 		header += [*_comment(relation), f"{signature(relation, prefix)};", ""]
+
+	# Named in the artifact rather than left as an absence. `situc build`
+	# prints `situc.relation`'s refusal list, which is the same in all four
+	# backends and does not carry this one -- so without these lines a
+	# caller would find a predicate missing and conclude the generator was
+	# broken, which is the reason `owned.py` gives for reporting its own.
+	for relation in declined:
+		header += [
+			f"/* No predicate for `{relation.name}`: a side takes a "
+			f"`parameter`.",
+			" *",
+			" * A parameter is an argument the caller supplies, and this",
+			" * predicate is handed bare `situ_view_t`s rather than the bytes",
+			" * to acquire them from -- so there is no call of its own the",
+			" * argument could arrive on, and the getters behind one take it",
+			" * as a trailing parameter (decision 0050). The other three",
+			" * backends take views that carry the argument, so their",
+			" * predicates are emitted.",
+			" */",
+			"",
+		]
 
 	header += [
 		"#ifdef __cplusplus",

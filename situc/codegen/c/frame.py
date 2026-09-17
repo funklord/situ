@@ -23,7 +23,10 @@ dies. Two calls, and the cost is visible rather than surprising.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import arguments
+from situc.codegen.c.emit import Emitter
 from situc.codegen.c.names import ident, macro
+from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import frameable
 from situc import __version__
@@ -53,10 +56,37 @@ def framed_structs(resolved: ResolvedSchema) -> list[ResolvedStruct]:
 	        and frameable(resolved.structs, struct)]
 
 
-def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
+def _one(struct: ResolvedStruct, prefix: str,
+		emitter: Emitter) -> list[str]:
 	name     = ident(prefix, struct.name, "reader")
 	required = ident(prefix, struct.name, "required")
 	view     = ident(prefix, struct.name, "view")
+	args     = arguments(struct)
+
+	# THE ARGUMENTS GO ON `init`, NOT ON `next` (0050). `[stream]` says an
+	# argument is negotiated once and fixed for the stream, and a reader IS
+	# one stream -- so taking it per message would ask the caller to repeat
+	# a fact the schema has already said does not change, and would let two
+	# messages of one stream be framed under two layouts. It is the same
+	# answer `situ verify` gave for a corpus (26.394): one value for the
+	# whole run, because that is what a per-stream fact is.
+	# The name and the type are the emitter's: `init` hands these straight
+	# on to `required`, so a second spelling here would be a second thing to
+	# be wrong about one fact.
+	stored = []
+	for held in args:
+		assert held.scalar is not None
+		stored.append(f"\t{emitter._ctype(held.scalar):<8} "
+		              f"{emitter._argument_name(held)};"
+		              f"\t/* the caller's argument, fixed for this stream */")
+	taken  = emitter._argument_tail(struct)
+	given  = "".join(f", reader->{emitter._argument_name(held)}"
+	                 for held in args)
+	init   = [f"\treader->{emitter._argument_name(held)} = "
+	          f"{emitter._argument_name(held)};" for held in args]
+	note   = ([" *",
+	           " * `init` takes the argument(s) this struct's layout follows."]
+	          if args else [])
 
 	return [
 		f"/* A stream reader for `{struct.name}`.",
@@ -64,21 +94,24 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		" * The buffer is yours and so is its size. Push bytes as they arrive,",
 		" * call `next` until it answers SITU_ERR_TRUNCATED, and call",
 		" * `advance` when you are finished with each message.",
+		*note,
 		" */",
 		f"typedef struct {{",
 		"\tuint8_t  *buf;",
 		"\tuint32_t  cap;",
 		"\tuint32_t  have;",
 		"\tuint32_t  ready;\t/* bytes `next` handed out, 0 when none */",
+		*stored,
 		f"}} {name}_t;",
 		"",
 		f"static inline void {name}_init({name}_t *reader, uint8_t *buf,",
-		"                               uint32_t cap)",
+		f"                               uint32_t cap{taken})",
 		"{",
 		"\treader->buf   = buf;",
 		"\treader->cap   = cap;",
 		"\treader->have  = 0u;",
 		"\treader->ready = 0u;",
+		*init,
 		"}",
 		"",
 		"/* Drop the message `next` last returned.",
@@ -128,7 +161,8 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		f"\t{name}_advance(reader);",
 		"",
 		"\tuint32_t need = 0u;",
-		f"\tsitu_err_t err = {required}(reader->buf, reader->have, &need);",
+		f"\tsitu_err_t err = {required}(reader->buf, reader->have, &need"
+		f"{given});",
 		"\tif (err != SITU_OK) {",
 		"\t\tif (need > reader->cap) {",
 		"\t\t\treturn SITU_ERR_BOUNDS;",
@@ -181,8 +215,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 	]
 
+	emitter = Emitter(schema, resolved, basename, prefix)
 	for struct in structs:
-		lines.extend(_one(struct, prefix))
+		lines.extend(_one(struct, prefix, emitter))
 
 	lines += [
 		"#ifdef __cplusplus",

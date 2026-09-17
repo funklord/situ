@@ -1277,3 +1277,32 @@ when versioned.length > 4096
 when versioned.ver == 1
 	note legacy_framing
 	"v1 counts the header in `length`; every later version does not";
+
+// An argument the caller supplies (0050), which is the construct this file
+// exists for: a member of zero width, whose value the message does not
+// carry and every layout question after it depends on. No schema in the
+// tree declared one until now, and the cost of that is measured -- the C
+// backend alone had four shapes where a parameter reached a function that
+// did not take it, three of them found in one afternoon by hand, because
+// no gate could fail on a construct the corpus does not hold.
+//
+// Both spellings of a size over an argument are here deliberately. A bare
+// reference and an arithmetic one go through different renderers in every
+// backend, and every backend that built this feature got one and missed
+// the other; a fixture carrying only `payload[block]` is a proof about
+// half the code.
+struct negotiated {
+	parameter u8 block [stream];
+
+	// The bare spelling: the size names the argument, and `sized_by`
+	// resolves it.
+	u8  payload[block];
+
+	// The arithmetic spelling, which the expression renderer walks
+	// instead.
+	u8  trailer[block + 1];
+
+	// A member after both, so a wrong width for either shows up here as a
+	// wrong BYTE rather than as a length nobody reads back.
+	u16 checksum;
+}

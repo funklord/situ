@@ -24,7 +24,11 @@ answer would eventually disagree with the first.
 
 from __future__ import annotations
 
+import re
+
 from situc import ast
+from situc.codegen import arguments
+from situc.codegen.c.emit import Emitter
 from situc.codegen.c.names import ident, macro
 from situc.codegen.c.owned import owned_structs
 from situc.layout import Placement
@@ -33,6 +37,20 @@ from situc.traverse import is_own_member, local_name
 from situc import __version__
 
 __all__ = ["editable", "generate", "refusals"]
+
+
+def _unused(emitter: Emitter, args: list[Placement],
+		body: list[str]) -> list[str]:
+	"""`(void)` for each argument this function took and did not read.
+
+	The tail is uniform across `backing` and `decode` so that a caller has
+	one shape to remember, and an argument no accessor in the body reached is
+	then an unused parameter -- an error under this project's flags. The same
+	`(void)view;` the ordinary emitter writes for the same reason.
+	"""
+	text = "\n".join(body)
+	return [f"\t(void){emitter._argument_name(held)};" for held in args
+	        if not re.search(rf"\b{emitter._argument_name(held)}\b", text)]
 
 
 def _runs(struct: ResolvedStruct) -> list[Placement]:
@@ -122,10 +140,23 @@ def _fields(struct: ResolvedStruct, runs: list[Placement],
 	return lines
 
 
-def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
+def _one(struct: ResolvedStruct, prefix: str, emitter: Emitter) -> list[str]:
 	runs  = _runs(struct)
 	name  = ident(prefix, struct.name, "edit")
 	view  = ident(prefix, struct.name, "view")
+
+	# THE TAILS ARE THE EMITTER'S ANSWER, NOT A SECOND ONE (0050). Which
+	# accessors take the caller's argument is decided per member over the
+	# arithmetic that was emitted, so asking the emitter is the only way the
+	# call here and the definition there cannot disagree -- the same reason
+	# this file reads `_len` and `_ptr` rather than recomputing an offset.
+	args  = arguments(struct)
+	taken = emitter._argument_tail(struct)
+	given = emitter._argument_args(struct)
+	note  = ([" *",
+	          " * Both take the argument(s) this struct's layout follows, in",
+	          " * the order and spelling the accessors take them."]
+	         if args else [])
 
 	lines = [
 		f"/* `{struct.name}`, decoded into storage you own.",
@@ -135,6 +166,7 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		" * because this struct's extent is decided by its own bytes. The",
 		" * message may go afterwards;",
 		" * the backing is yours and outlives it, which is the whole trade.",
+		*note,
 		" */",
 		"typedef struct {",
 		*_fields(struct, runs, prefix),
@@ -142,7 +174,8 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		"",
 		"/* How much backing a whole one needs, from the bytes. */",
 		f"static inline situ_err_t {name}_backing(const situ_msg_t *msg,",
-		"                                        uint32_t len, uint32_t *need)",
+		f"                                        uint32_t len, uint32_t *need"
+		f"{taken})",
 		"{",
 		"\tsitu_view_t view;",
 		f"\tconst situ_err_t err = {view}(msg, 0u, len, &view);",
@@ -152,10 +185,20 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		"",
 		"\t*need = 0u;",
 	]
-	for placement in runs:
-		local = local_name(struct, placement)
-		lines.append(f"\t*need += {ident(prefix, struct.name, local, 'len')}"
-		             f"(view);")
+	sums = [f"\t*need += {ident(prefix, struct.name, local, 'len')}"
+	        f"(view{emitter._member_args(struct, placement)});"
+	        for local, placement in ((local_name(struct, one), one)
+	                                 for one in runs)]
+	# `backing` takes the whole tail so that it and `decode` have one shape,
+	# which is what `validate` does for the same reason -- and an argument no
+	# run's length reaches is then an unused parameter under `-Werror`.
+	#
+	# Asked of the BODY and not of the whole function: the signature names
+	# every argument by construction, so a search that included it would
+	# find each one used and emit nothing -- a guard that cannot fire,
+	# which is what the first version of this was.
+	lines.extend(_unused(emitter, args, sums))
+	lines.extend(sums)
 	lines += [
 		"\treturn SITU_OK;",
 		"}",
@@ -165,7 +208,7 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		f"static inline situ_err_t {name}_decode(const situ_msg_t *msg,",
 		"                                       uint32_t len,",
 		"                                       uint8_t *backing, uint32_t cap,",
-		f"                                       {name}_t *out)",
+		f"                                       {name}_t *out{taken})",
 		"{",
 		"\tsitu_view_t view;",
 		f"\tsitu_err_t err = {view}(msg, 0u, len, &view);",
@@ -174,7 +217,7 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 		"\t}",
 		"",
 		"\tuint32_t need = 0u;",
-		f"\terr = {name}_backing(msg, len, &need);",
+		f"\terr = {name}_backing(msg, len, &need{given});",
 		"\tif (err != SITU_OK) {",
 		"\t\treturn err;",
 		"\t}",
@@ -191,8 +234,9 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 			continue
 		local = local_name(struct, placement)
 		if placement in runs:
-			length = f"{ident(prefix, struct.name, local, 'len')}(view)"
-			source = f"{ident(prefix, struct.name, local, 'ptr')}(view)"
+			reach  = emitter._member_args(struct, placement)
+			length = f"{ident(prefix, struct.name, local, 'len')}(view{reach})"
+			source = f"{ident(prefix, struct.name, local, 'ptr')}(view{reach})"
 			lines += [
 				f"\tout->{local}_len = {length};",
 				f"\tout->{local}     = backing + at;",
@@ -201,10 +245,26 @@ def _one(struct: ResolvedStruct, prefix: str) -> list[str]:
 				"\t}",
 				f"\tat += out->{local}_len;",
 			]
+		elif placement.parameter:
+			# THE ARGUMENT IS THE VALUE, so the owned copy takes it from the
+			# caller and not from a getter -- which is what 26.398 records
+			# the Rust backend having got wrong, live, in work that had just
+			# removed the whole-schema refusal. A parameter occupies nothing,
+			# so `_get` would read the first byte of the member it sizes, and
+			# the accessor it would call is one the header deliberately does
+			# not emit. Carried rather than dropped, for the map's reason
+			# (26.390): a copy decoded under an assumption should say so.
+			lines.append(f"\tout->{local} = "
+			             f"{emitter._argument_name(placement)};")
 		elif placement.scalar is not None and placement.array_count is None:
 			lines.append(f"\tout->{local} = "
-			             f"{ident(prefix, struct.name, local, 'get')}(view);")
+			             f"{ident(prefix, struct.name, local, 'get')}"
+			             f"(view{emitter._member_args(struct, placement)});")
 
+	# No `(void)` sweep here, and that is a statement rather than an
+	# omission: `decode` assigns every argument to its own field above, so
+	# there is no argument its body can fail to name. A guard that cannot
+	# fire would read exactly like one that never had to.
 	lines += ["\t(void)at;", "\treturn SITU_OK;", "}", ""]
 	return lines
 
@@ -242,8 +302,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"",
 	]
 
+	emitter = Emitter(schema, resolved, basename, prefix)
 	for struct in structs:
-		lines.extend(_one(struct, prefix))
+		lines.extend(_one(struct, prefix, emitter))
 
 	lines += ["#ifdef __cplusplus", "}", "#endif", "",
 	          f"#endif /* {guard} */"]

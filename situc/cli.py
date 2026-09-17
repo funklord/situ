@@ -14,6 +14,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Protocol, cast
 
 from situc import __version__, ast, capmap, requirements
 from situc import layers
@@ -923,8 +924,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 		from situc import relation as relation_module
 
 		files.update(_relate(parse(source), resolved, args))
-		# `_relate` has already printed these; this only counts them.
-		for name, _why in relation_module.refusals(parse(source), resolved):
+		# `_relate` has already printed these; this only counts them --
+		# and it has to count the SAME ones, so it asks the same module
+		# rather than the shared list `_relate` used to use.
+		del relation_module
+		for name, _why in _backend_module(
+				"relate", args.target).refusals(parse(source), resolved):
 			ungenerated.append((name, "predicate"))
 
 	if args.layer in ("frame", "converse", "drive"):
@@ -935,7 +940,8 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 		parsed = parse(source)
 		files.update(_converse(parsed, resolved, args))
-		for name, why in converse.refusals(parsed, resolved):
+		for name, why in _backend_module(
+				"converse", args.target).refusals(parsed, resolved):
 			print(f"situc: no conversation table for `{name}`: {why}",
 			      file=sys.stderr)
 			ungenerated.append((name, "conversation table"))
@@ -952,6 +958,20 @@ def cmd_build(args: argparse.Namespace) -> int:
 		files.update(emit(parsed, resolved, args.schema.stem) if emit
 		             else drive.generate(parsed, resolved, args.schema.stem,
 		                                 args.prefix))
+		# C's, for every target, and deliberately: `drive` is the one of
+		# the three layers where only the C backend defines `refusals` at
+		# all, and its reason -- "no driver for this relation" -- is true
+		# in all four languages. `relate` and `converse` are not like
+		# that: all four define their own, so asking C's for a C++ build
+		# reports another language's reasons, which is what the helper
+		# above exists for.
+		#
+		# Measured before this comment was written, after widening the
+		# helper to `drive` broke two asyncio tests with
+		# `module 'situc.codegen.python.drive' has no attribute
+		# 'refusals'`. Three layers, four backends, and the shape differs
+		# per layer: relate is c=own + three re-exports, converse is four
+		# of their own, drive is C alone.
 		for name, why in drive.refusals(parsed, resolved):
 			print(f"situc: no driver for relation `{name}`: {why}",
 			      file=sys.stderr)
@@ -1302,6 +1322,42 @@ def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 	return 0
 
 
+class _Refusing(Protocol):
+	"""What `cli` needs of a `relate`/`converse`/`drive` module.
+
+	A Protocol rather than `ModuleType`, so mypy checks the call this
+	makes rather than waving it through: the four backends' signatures
+	agree today and a fifth that did not would be caught here instead of
+	at run time in whichever `--target` nobody tried.
+	"""
+
+	def refusals(self, schema: ast.Schema,
+			resolved: ResolvedSchema) -> list[tuple[str, str]]:
+		...
+
+
+def _backend_module(layer: str, target: str) -> _Refusing:
+	"""The `layer` module belonging to `target`.
+
+	Each of `relate`, `converse` and `drive` defines its own `refusals`
+	in all four backends -- they are not re-exports of one shared list --
+	so asking C's for a C++ build reports reasons that belong to another
+	language. `cli` imported C's and printed it whatever `--target` said,
+	which was invisible while the four happened to agree and stopped being
+	so when the C `relate` and `converse` grew reasons of their own
+	(0050): a C++ caller was told there was no predicate for a relation
+	whose predicate had just been emitted.
+
+	Picked by name rather than by four inline dicts, because four copies
+	of "which module belongs to this target" is four things to be wrong.
+	"""
+	import importlib
+
+	backend = target if target in ("c", "cpp", "python", "rust") else "c"
+	return cast(_Refusing,
+	            importlib.import_module(f"situc.codegen.{backend}.{layer}"))
+
+
 def cmd_explain(args: argparse.Namespace) -> int:
 	"""`situc explain Message.recs[].value` -- one field's full vector plus the
 	blame chain for every axis not at its strongest value (section 18.2)."""
@@ -1419,7 +1475,8 @@ def _relate(schema: ast.Schema, resolved: ResolvedSchema,
 	from situc.codegen.python import relate as relate_py
 	from situc.codegen.rust import relate as relate_rs
 
-	for name, why in relation.refusals(schema, resolved):
+	relate_backend = _backend_module("relate", args.target)
+	for name, why in relate_backend.refusals(schema, resolved):
 		print(f"situc: no predicate for relation `{name}`: {why}",
 		      file=sys.stderr)
 

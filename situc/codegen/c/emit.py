@@ -2872,6 +2872,15 @@ class Emitter:
 				lines.extend(self._arm_extent(struct, placement, local, base,
 				                              nested.name))
 
+			# NOT given an argument tail, deliberately. A variant ARM
+			# holding a nested struct is a fourth unplumbed shape (0050)
+			# and it is not one site: the arm's own accessors call
+			# `<disc>_get` without a tail as well, so plumbing the view
+			# alone turns *undeclared `arg_n`* into *too few arguments*
+			# without making anything compile. Reproduced and recorded
+			# rather than half-fixed; a schema in this tree reaches none
+			# of it, and a change nobody can prove is worse here than an
+			# absence somebody has written down.
 			lines.extend([
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'view')}"
@@ -4364,9 +4373,22 @@ class Emitter:
 			" * a struct that gains a length field later keeps the same call. */",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, 'required')}"
-			"(const uint8_t *data, uint32_t have, uint32_t *need)",
+			"(const uint8_t *data, uint32_t have, uint32_t *need"
+			f"{self._argument_tail(struct)})",
 			"{",
 			"\t(void)data;",
+			# The tail is unconditional here, where an accessor's is not.
+			# `required` is called by generic framing code -- rung 4's
+			# reader -- which cannot know whether THIS struct's extent
+			# happens to read the argument, so one shape for every struct is
+			# the whole point of it. It was conditional until 2026-09-17 and
+			# a MEANING-ONLY parameter, one that sizes nothing, left the
+			# struct fixed-size and reached this branch: the reader passed an
+			# argument the header did not take, and `-Werror` called it *too
+			# many arguments*. A `[stream]` one that sizes a member was fine,
+			# because then the extent arithmetic does read it -- so the bug
+			# was invisible in exactly the case the feature was built for.
+			*self._argument_unused(struct, self._argument_tail(struct)),
 			f"\t*need = {size};",
 			# A struct of no bytes is in every buffer, including an empty one,
 			# and saying that as `have >= 0` is a comparison the compiler
@@ -6024,6 +6046,24 @@ class Emitter:
 
 		if not terms:
 			lines.append("\t(void)view;")
+		# The tail here is UNIFORM across a struct -- every offset function
+		# takes every argument, so a caller has one shape to remember -- and
+		# a uniform tail costs a `(void)` for whatever this particular
+		# offset does not read. That companion was missing: a MEANING-ONLY
+		# parameter, one whose value sizes nothing, reaches no term of any
+		# offset, so `situ_frame_tail_offset(view, arg_mode)` took an
+		# argument it never named and `-Werror=unused-parameter` refused the
+		# header. Same half-applied rule as `required` had, one function
+		# along, and invisible for the same reason: a `[stream]` parameter
+		# that sizes a member IS a term, so the case the feature was built
+		# for never showed it.
+		#
+		# `lines[1:]` and not `lines`: the signature is `lines[0]` and it
+		# spells every argument by definition, so passing it as body text
+		# makes every argument look used and the guard emits nothing. The
+		# helper's own docstring warns about reading the wrong side of
+		# this; the first version of this call made exactly that mistake.
+		lines.extend(self._argument_unused(struct, tail, *lines[1:]))
 
 		lines.extend(["", "\treturn offset;", "}"])
 
@@ -7182,7 +7222,7 @@ class Emitter:
 				" * is left, to give the extent function something to measure,",
 				" * and once at the size it reports. */",
 				f"static inline situ_err_t {name}(situ_view_t view, "
-				"situ_view_t *out)",
+				f"situ_view_t *out{self._member_tail(struct, placement)})",
 				"{",
 				"\tsitu_view_t whole;",
 				"\tsitu_err_t  e;",
@@ -7203,9 +7243,21 @@ class Emitter:
 				" * known and nothing after it can be placed. */",
 			]
 
+		# A nested member's offset can be a sum that reaches an argument
+		# (0050), and both signatures here were hard-coded with no tail --
+		# so `struct frame { parameter u8 n [stream]; u8 body[n]; head
+		# hdr; }` emitted `situ_frame_hdr_offset(view, arg_n)` inside a
+		# function that never declared `arg_n`. A THIRD shape past the two
+		# `_argument_tail`'s docstring names, and the only one of the three
+		# an ordinary schema reaches: a fixed header after a variable body
+		# is a normal thing to write.
+		#
+		# Conditional rather than uniform, which is the accessor rule --
+		# the tail goes where the arithmetic reaches the argument, so a
+		# signature says which accessors depend on the caller's fact.
 		return [
 			f"static inline situ_err_t {name}(situ_view_t view, "
-			"situ_view_t *out)",
+			f"situ_view_t *out{self._member_tail(struct, placement)})",
 			"{",
 			f"\treturn situ_view_sub(view, {base}, "
 			f"{macro(self.prefix, nested, 'SIZE_FIXED')}, out);",
@@ -9384,8 +9436,13 @@ class Emitter:
 			f"\t/* {placement.path} : {nested} -- its own constraints */",
 			"\t{",
 			"\t\tsitu_view_t nested;",
+			# `_member_args` is `_member_tail`'s other half: the
+			# definition above and this call ask ONE question, so they
+			# cannot disagree about whether the signature carries a tail.
+			# Computing it from the rendered offset in each place
+			# separately is how the two drift.
 			f"\t\tsitu_err_t err = {ident(self.prefix, struct.name, local, 'view')}"
-			"(view, &nested);",
+			f"(view, &nested{self._member_args(struct, placement)});",
 			"",
 			"\t\tif (err != SITU_OK) {",
 			"\t\t\treturn err;",

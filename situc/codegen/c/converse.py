@@ -26,6 +26,7 @@ evicting something the caller still wanted.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import argued_refusal
 from situc.codegen.c.names import ident, macro
 from situc.relation import (KeyLayout, Read, ReadBytes, Refused,
                             Side, key_layout)
@@ -201,8 +202,26 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> dict[str, str]:
 	"""The conversation header, or nothing where no relation carries a key."""
 	ready = []
+	declined = []
 	needs_string_h = False
 	for relation in schema.relations():
+		# A side that takes a `parameter` (0050). This table reads the
+		# conversation key off two bare `situ_view_t`s through the generated
+		# getters, and a getter behind an argument takes it as a trailing
+		# parameter -- which none of these functions has a signature to take
+		# or a caller to be given it by. Rung 3 declines for the same reason
+		# and in the same words; the other three backends are handed views
+		# that carry the argument, so their tables are emitted.
+		#
+		# NOT added to `refusals()`, and that is deliberate rather than an
+		# oversight: `situc build` prints THIS module's list whatever the
+		# target, so an entry here would tell a C++ caller there is no
+		# conversation table for a relation whose table was just emitted.
+		# The note below carries the reason instead, which is the copy the
+		# C caller actually reads.
+		if argued_refusal(relation, resolved):
+			declined.append(relation)
+			continue
 		try:
 			layout = key_layout(relation, resolved)
 			ready.append(_table(relation, resolved, prefix))
@@ -210,7 +229,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		except Refused:
 			continue
 
-	if not ready:
+	# Emitted for the declined ones too: with every relation declined this
+	# header would otherwise not exist at all, and a caller who asked for
+	# rung 5 would have nothing to read.
+	if not ready and not declined:
 		return {}
 
 	guard = macro(prefix, basename, "CONVERSE_H")
@@ -242,6 +264,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 	for block in ready:
 		lines.extend(block)
+
+	for relation in declined:
+		lines += [
+			f"/* No conversation table for `{relation.name}`: a side takes a",
+			" * `parameter`.",
+			" *",
+			" * A parameter is an argument the caller supplies. This table",
+			" * reads the conversation key off two views it is handed rather",
+			" * than off bytes it acquires, so there is no call of its own",
+			" * the argument could arrive on -- and the getters behind one",
+			" * take it as a trailing parameter (decision 0050). The other",
+			" * three backends take views that carry the argument, so their",
+			" * tables are emitted.",
+			" */",
+			"",
+		]
 
 	lines += [
 		"#ifdef __cplusplus",

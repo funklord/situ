@@ -806,7 +806,14 @@ def test_every_fuzzable_struct_reaches_the_harness(path: Path) -> None:
 
 	Registers are the one exclusion and are excluded here too: a register is a
 	bus transaction, not bytes off a wire (26.27).
+
+	A struct that takes a `parameter` is the second, and it is asserted
+	rather than skipped: it must carry a note saying so, because a struct
+	that quietly stops being fuzzed is the failure above wearing a smaller
+	hat. No schema in this tree declares one today, so that branch is
+	unexercised here and `test_codegen_c`'s own fixtures cover it (26.402).
 	"""
+	from situc.codegen import arguments
 	from situc.codegen.c import fuzz
 
 	source   = Source(str(path), path.read_text(encoding="ascii"))
@@ -820,6 +827,10 @@ def test_every_fuzzable_struct_reaches_the_harness(path: Path) -> None:
 		if struct.layout.register is not None or not struct.layout.is_byte_sized:
 			continue
 		if struct.layout.is_fixed_size and struct.layout.size_bytes == 0:
+			continue
+		if arguments(struct):
+			assert f"/* No harness for {name}:" in text, \
+				f"{path.name}: `{name}` was dropped without saying why"
 			continue
 		# `c_name`, because a namespaced struct is `wire::framed_body` and
 		# `::` is not an identifier in C -- which the harness emitted anyway,
@@ -5352,6 +5363,95 @@ def test_a_located_member_generates_a_header_that_compiles(
 	compile_generated(tmp_path, body)
 
 
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_meaning_only_parameter_does_not_leave_an_unused_argument(
+		tmp_path: Path) -> None:
+	"""A uniform tail costs a `(void)` for whatever does not read it.
+
+	The offset functions take every argument the struct has, so a caller
+	has one shape to remember. A MEANING-ONLY parameter -- one whose value
+	sizes nothing -- is a term of no offset at all, so
+	`situ_S_tail_offset(view, arg_mode)` took an argument it never named
+	and `-Werror=unused-parameter` refused the header.
+
+	Invisible for the same reason `required`'s was: a `[stream]` parameter
+	that sizes a member IS a term, so the case the feature was built for
+	never showed it. Both kinds are compiled here.
+	"""
+	compile_generated(
+		tmp_path, "struct S { parameter u8 mode; u8 len; u8 body[len];"
+		" u8 tail; }")
+	compile_generated(
+		tmp_path, "struct S { parameter u8 n [stream]; u8 body[n];"
+		" u8 tail; }")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_nested_member_behind_a_parameter_takes_the_argument(
+		tmp_path: Path) -> None:
+	"""A fixed header after a variable body, which is a normal thing to
+	write and did not compile.
+
+	`head hdr;` after `u8 body[n]` sits at an offset that reaches the
+	argument, so its sub-view accessor embeds
+	`situ_S_hdr_offset(view, arg_n)` -- inside a function whose signature
+	was hard-coded with no tail, so `arg_n` was undeclared. A third shape
+	past the two `_argument_tail`'s docstring names, and the only one of
+	the three an ordinary schema reaches.
+
+	The definition and its caller in `check` ask ONE question --
+	`_member_tail` and `_member_args`, both from
+	`_member_reads_arguments` -- so they cannot disagree about whether the
+	signature carries a tail. Computing it from the rendered offset
+	separately in each place is how the two drift.
+	"""
+	compile_generated(
+		tmp_path,
+		"struct head { u16 msg; }\n"
+		"struct S { parameter u8 n [stream]; u8 body[n]; head hdr; }")
+
+	# The control: with the parameter gone, the same shape still compiles
+	# and no tail appears -- so a tail emitted unconditionally fails here.
+	header, _ = emit("struct head { u16 msg; }\n"
+	                 "struct S { u8 n; u8 body[n]; head hdr; }")
+	assert "situ_S_hdr_view(situ_view_t view, situ_view_t *out)" in header
+
+
+def test_required_takes_the_argument_even_when_it_reads_nothing(
+		tmp_path: Path) -> None:
+	"""The tail on `required` is uniform, and an accessor's is not.
+
+	An accessor takes the argument only where its arithmetic reaches it,
+	so the signature says which accessors depend on the caller's fact.
+	`required` is the opposite case: rung 4's reader calls it from generic
+	framing code that cannot know whether THIS struct's extent happens to
+	read the argument, so one shape per struct is the whole point.
+
+	It was conditional until 2026-09-17, and the gap was invisible in
+	exactly the case the feature was built for. A `[stream]` parameter
+	that sizes a member IS read by the extent arithmetic, so `required`
+	took the tail and everything worked. A MEANING-ONLY parameter -- one
+	that sizes nothing -- leaves the struct fixed-size and reaches the
+	other branch, where the reader passed an argument the header did not
+	take and `-Werror` called it *too many arguments*.
+
+	Both kinds are here, because one of them passes either way.
+	"""
+	sizes  = "struct S { parameter u8 n [stream]; u16 id; u8 body[n]; }"
+	means  = "struct S { parameter u8 n; u16 id; u8 a [max = 3]; }"
+
+	for body in (sizes, means):
+		header, _ = emit(body)
+		assert ("situ_S_required(const uint8_t *data, uint32_t have,"
+		        " uint32_t *need, uint8_t arg_n)" in header), body
+
+	# It has to COMPILE, not merely say the right words: an argument a
+	# body does not read is an unused parameter, which is an error under
+	# this project's flags -- so the uniform tail is only correct if it
+	# also carries the `(void)`.
+	compile_generated(tmp_path, means)
+
+
 def test_a_located_member_says_why_check_cannot_contain_it() -> None:
 	"""The note, not just the absence.
 
@@ -5452,3 +5552,117 @@ def test_a_struct_with_no_parameter_keeps_the_signatures_it_had() -> None:
 
 	taking, _ = emit(PARAMETER)
 	assert "arg_n" in taking
+
+
+# -- gen-fuzz and a struct that takes an argument ----------------------------
+
+#: A schema mixing the two. `n` is the real 0050 case -- a `[stream]`
+#: parameter sizing a member -- which the harness can use freely because it
+#: includes only the schema's own header and rung 3's, never rung 4's.
+ARGUED = """struct box { parameter u8 n [stream]; u16 id; u8 body[n]; }
+struct plain { u16 a; u8 b; }
+"""
+
+
+def test_a_struct_that_takes_an_argument_gets_no_harness() -> None:
+	"""Skipped per struct rather than the file being declined (26.402): the
+	corpus exists so that gates can fail on every construct, and a
+	whole-file refusal makes a `parameter` in `edges.situ` four red sweeps
+	instead of a gap being filled.
+
+	The partition, not the absence: `plain` is fuzzed from the same schema.
+	"""
+	text = fuzz_source(ARGUED)
+
+	assert "static void fuzz_plain(" in text
+	assert "fuzz_plain(data + 1, size - 1u);" in text
+	assert "fuzz_box" not in text
+	assert "data[0] % 1u" in text
+
+
+def test_nothing_in_the_harness_names_a_struct_that_takes_an_argument() -> None:
+	"""Stronger than "no fuzz_box", and the reason is what the skip is for:
+	`situ_box_validate` takes the argument as a trailing parameter and
+	`situ_box_n_get` does not exist at all, a `parameter` getting no
+	accessor (26.397). A harness naming either does not compile."""
+	assert "situ_box_" not in fuzz_source(ARGUED)
+
+
+def test_the_skipped_struct_says_so_in_the_harness() -> None:
+	"""A silent absence is what emptied `example/protobuf`'s harness and
+	went unnoticed for as long as `gen-fuzz` existed. The reader of the
+	artifact gets the answer from the artifact."""
+	text = fuzz_source(ARGUED)
+
+	assert "/* No harness for box: it takes `n`, an argument the" in text
+	assert "decision 0050" in text
+
+
+def test_a_relation_over_an_argued_struct_gets_no_harness() -> None:
+	"""A relation harness calls the view and the predicate directly and
+	never looks at the struct list, so it has to ask the same question
+	itself or it reaches the struct by the one route the filter misses."""
+	text = fuzz_source(
+		"struct box { parameter u8 mode; u16 id; }\n"
+		"struct plain { u16 a; u8 b; }\n"
+		"relation pair(x: box, y: box) { must y.id == x.id; }\n")
+
+	assert "/* No harness for relation pair: box takes an" in text
+	assert "fuzz_rel_pair" not in text
+	assert "situ_box_" not in text
+
+
+def test_a_harness_with_nothing_left_to_fuzz_refuses_rather_than_shrinking(
+		) -> None:
+	"""The warning this file already carries, made a guard.
+
+	`example/protobuf` was filtered out entirely and the result compiled,
+	ran under the smoke test and exercised nothing -- 16 million executions
+	at coverage 1, which is what an empty `LLVMFuzzerTestOneInput` looks
+	like from the outside. A per-struct skip can empty the harness the same
+	way, so where it does the whole-schema refusal stays.
+
+	It is the shared `refuse_parameters` rather than a second spelling of
+	it, which is also what keeps `gen-fuzz` inside the partition
+	`test_wellformed` asserts over `situc/codegen`.
+	"""
+	from situc.diagnostics import SituError
+
+	with pytest.raises(SituError) as refused:
+		fuzz_source("struct only { parameter u8 n [stream]; u8 body[n]; }")
+
+	assert "parameter n" in str(refused.value)
+	assert any("decision 0050" in note
+	           for note in refused.value.diagnostic.notes)
+
+
+def test_a_mixed_schema_does_not_refuse() -> None:
+	"""The control for the test above. A refusal moved anywhere earlier in
+	`generate` passes that one and takes the skip with it, and from outside
+	an all-refusing generator reads exactly like a working one."""
+	assert "static void fuzz_plain(" in fuzz_source(ARGUED)
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_the_skipped_harness_compiles_and_runs(tmp_path: Path) -> None:
+	"""The `-Werror` half. A skip that leaves a `static` nobody calls is a
+	build error here, not a warning -- which is how the sink came to be
+	emitted conditionally in the first place -- so the proof is the
+	compiler's and the run's rather than a string match."""
+	header, source = emit(ARGUED)
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "unit_fuzz.c").write_text(fuzz_source(ARGUED), encoding="ascii")
+
+	binary = tmp_path / "fuzz"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, "-DSITU_FUZZ_STANDALONE",
+		 f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "unit_fuzz.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	for payload in (b"", b"\x00", b"\x00" * 64, bytes(range(64))):
+		run = subprocess.run([str(binary)], input=payload, capture_output=True)
+		assert run.returncode == 0, run.stderr

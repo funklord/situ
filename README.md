@@ -1634,13 +1634,12 @@ today and which is a written-down design.
   preference that generator has ever emitted. All four views now take their
   arguments -- Python and Rust by a field, C++ by a member, C by a trailing
   parameter on the accessors that read it -- and none emits an accessor for
-  the parameter itself. The packed image and both walkers take it as well.
-  A struct that takes one cannot be a member of another yet; the separate
-  CLI generators (`situc edit`, `drive`, `frame`, `converse`, `qt`,
-  `relate`) still build a view with no arguments; and the generators that
-  emit a second artifact over a schema -- the differ, the C checks, fuzz
-  and tamper harnesses, the three `derived` emitters -- still decline a
-  schema carrying one, which is what a corpus struct is waiting on.
+  the parameter itself. The packed image and both walkers take it as well,
+  the per-layer generators take it or say why they cannot, and
+  `test/schema/edges.situ` carries one, so every gate now covers the
+  construct. What remains: a struct that takes an argument cannot be a
+  member of another yet, and `situc gen-tamper` declines a schema carrying
+  one -- nothing sweeps the corpus through it, so that costs nothing.
 
 **Designed and accepted, not yet built.**
 

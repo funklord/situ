@@ -13,12 +13,27 @@ this language does not need -- the same reasoning 26.30 records for why
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import arguments
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.python.emit import py_name
+from situc.layout import Placement
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
 __all__ = ["generate"]
+
+
+def _name(placement: Placement) -> str:
+	"""What the caller calls an argument here: the schema's own spelling,
+	which is what `at` takes it under (26.393)."""
+	return py_name(placement.name)
+
+
+def _held(placement: Placement) -> str:
+	"""Where the reader keeps it. `_arg_`-prefixed rather than `_`-prefixed
+	because this reader's own slots are `_buf` and `_ready`, and `parameter
+	u8 buf` is a name a schema may use."""
+	return f"_arg_{py_name(placement.name)}"
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -44,6 +59,30 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	for struct in structs:
 		held = py_name(struct.name)
+		args = arguments(struct)
+		# THE ARGUMENTS GO ON THE READER, NOT ON `next` (0050). `[stream]`
+		# says an argument is negotiated once and fixed for the stream, and a
+		# reader IS one stream -- so taking it per message would ask the
+		# caller to repeat a fact the schema has already said does not
+		# change, and would let two messages of one stream be framed under
+		# two layouts. The same answer `situ verify` gave for a corpus
+		# (26.394): one value for the whole run, because that is what a
+		# per-stream fact is.
+		#
+		# Keyword-only and undefaulted, which is `at`'s own shape and both
+		# halves of its reasoning (26.393): named facts rather than a second
+		# positional list, and no default, because situ does not know the
+		# caller's block size and a reader built on the wrong one frames the
+		# wrong messages confidently.
+		taken = ("" if not args
+		         else ", *, " + ", ".join(f"{_name(one)}: int" for one in args))
+		store = [f"\t\tself.{_held(one)} = {_name(one)}" for one in args]
+		slots = ", ".join(
+			'"' + one + '"'
+			for one in ["_buf", "_ready", *(_held(one) for one in args)])
+		given = "".join(f", {_name(one)}=self.{_held(one)}" for one in args)
+		note  = (["", "\tThe reader takes the argument(s) this struct's layout",
+		          "\tfollows, for the stream it is reading."] if args else [])
 		lines += [
 			"",
 			f"class {held}_reader:",
@@ -53,13 +92,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tTruncatedError. Call `advance` when done with each message:",
 			"\tthe view it returned reads the buffer, and dropping a message",
 			"\tmoves what follows down over it.",
+			*note,
 			'\t"""',
 			"",
-			"\t__slots__ = (\"_buf\", \"_ready\")",
+			f"\t__slots__ = ({slots})",
 			"",
-			"\tdef __init__(self) -> None:",
+			f"\tdef __init__(self{taken}) -> None:",
 			"\t\tself._buf   = bytearray()",
 			"\t\tself._ready = 0",
+			*store,
 			"",
 			"\tdef push(self, data: bytes) -> None:",
 			"\t\tself.advance()",
@@ -73,12 +114,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\tdef next(self) -> {held}:",
 			'\t\t"""The next whole message, or TruncatedError."""',
 			"\t\tself.advance()",
-			f"\t\tneed = {held}.required(bytes(self._buf))",
+			f"\t\tneed = {held}.required(bytes(self._buf){given})",
 			"\t\tif need > len(self._buf):",
 			"\t\t\traise TruncatedError(",
 			f"\t\t\t\t\"{struct.name}: the stream has not carried one yet\",",
 			"\t\t\t\tneed)",
-			f"\t\tview = {held}.at(Message(bytearray(self._buf[:need])), 0)",
+			f"\t\tview = {held}.at(Message(bytearray(self._buf[:need])), 0"
+			f"{', need' if not struct.layout.is_fixed_size else ''}{given})",
 			"\t\tself._ready = need",
 			"\t\treturn view",
 		]

@@ -109,6 +109,16 @@ def build(tmp_path: Path, schema: Path) -> dict[str, list[str]]:
 	source, resolved, _ = analyse(schema)
 	parsed = parse(source)
 
+	# An empty answer means this schema has nothing a driver can acquire --
+	# `std/codecs.situ` declares signatures and no structs -- and returning
+	# an empty command map is how the callers pass such a schema over.
+	#
+	# It does NOT mean "everything was skipped". The differ holds a struct
+	# that takes a `parameter` out of the comparison, and it refuses rather
+	# than returning an empty list when that takes the last one, precisely
+	# so this line cannot turn an emptied harness into a schema the sweep
+	# reports as swept (26.402). The guard has to live there, because a
+	# schema in that state never reaches `differ.generate` from here.
 	if not differ.structs_of(resolved):
 		return {}
 

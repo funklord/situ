@@ -32,7 +32,7 @@ the caller's, per 14.6, and no generated test can reach them.
 
 from __future__ import annotations
 
-from situc.codegen import refuse_parameters
+from situc.codegen import refuse_parameters, takes_arguments
 from situc import ast
 from situc.codegen.c.names import c_name, ident, macro
 from situc.layout import Placement
@@ -55,14 +55,30 @@ def _is_fixed(resolved_struct: ResolvedStruct) -> bool:
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> dict[str, str]:
 	"""The tamper header, or nothing where no struct carries a tag."""
-	# A parameter is an argument the caller supplies and no view carries
-	# one yet (0050). Refused here for the reason the four backends refuse
-	# it: what would be emitted reads the buffer at the parameter's offset,
-	# which is where the member after it begins.
-	refuse_parameters(schema)
+	# A struct that takes an argument (0050) is skipped rather than the
+	# schema declined, the way `c/checks` and `c/fuzz` skip one: what
+	# would be emitted for it reads the buffer at the parameter's offset,
+	# which is where the member AFTER it begins, and calls accessors whose
+	# arity has moved.
+	#
+	# This refused the whole schema until 2026-09-17, on the stated ground
+	# that nothing sweeps `tamper` over the corpus so a `parameter` in
+	# `edges.situ` would cost it nothing. That was wrong twice over:
+	# `test_cli.py::test_every_subcommand_runs_on_every_schema` runs every
+	# subcommand over every schema, `gen-tamper` included, and the corpus
+	# now carries one.
+	argued = [name for name, struct in sorted(resolved.structs.items())
+	          if _tags(struct) and takes_arguments(struct)]
+	ready  = [(name, struct) for name, struct in sorted(resolved.structs.items())
+	          if _tags(struct) and not takes_arguments(struct)]
 
-	ready = [(name, struct) for name, struct in sorted(resolved.structs.items())
-	         if _tags(struct)]
+	# An empty `ready` is the ordinary answer for a schema with no tags at
+	# all, so emptiness alone cannot be loud here. Emptied BY the skip is
+	# a different thing and is: a caller who asked for a tamper header for
+	# a tagged struct would otherwise get silence indistinguishable from
+	# "this schema has nothing to tamper with".
+	if argued and not ready:
+		refuse_parameters(schema)
 	if not ready:
 		return {}
 

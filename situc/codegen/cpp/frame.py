@@ -10,13 +10,28 @@ is the only part that is merely spelling.
 from __future__ import annotations
 
 from situc import ast
+from situc.codegen import arguments
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.c.names import c_name
+from situc.codegen.cpp.emit import Emitter
 from situc.codegen.cpp.names import class_name
+from situc.layout import Placement
 from situc.resolve import ResolvedSchema
 from situc import __version__
 
 __all__ = ["generate"]
+
+
+def _member(placement: Placement) -> str:
+	"""Where the reader keeps an argument.
+
+	The constructor's parameter is the backend's own `_argument_local`
+	spelling, asked of the emitter; this is the member it is stored in, and
+	it needs a name of its own because every member of this reader already
+	ends in an underscore -- `parameter u8 cap` would otherwise be `cap_`
+	twice, once as the reader's capacity and once as the argument.
+	"""
+	return f"arg_{c_name(placement.name)}_"
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -45,9 +60,49 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 	]
 
+	# The spellings `at` and `required` take their arguments under are the
+	# backend's own; asked of it rather than answered again, so the reader
+	# and the constructor it calls cannot drift apart.
+	emitter = Emitter(schema, resolved, basename, "situ")
+
 	for struct in structs:
 		held = class_name(struct)
 		name = f"{c_name(struct.name)}_reader"
+		args = arguments(struct)
+		# THE ARGUMENTS GO ON THE CONSTRUCTOR, NOT ON `next` (0050).
+		# `[stream]` says an argument is negotiated once and fixed for the
+		# stream, and a reader IS one stream -- so taking it per message
+		# would ask the caller to repeat a fact the schema has already said
+		# does not change, and would let two messages of one stream be framed
+		# under two layouts. The same answer `situ verify` gave for a corpus
+		# (26.394): one value for the whole run, because that is what a
+		# per-stream fact is.
+		#
+		# `<name>_` for the constructor's parameter is the backend's own
+		# spelling for a function-local (26.396); the member takes `arg_` as
+		# well, because every member here already ends in an underscore and
+		# `parameter u8 cap` would otherwise be `cap_` twice.
+		taken  = emitter._argument_signature(struct)
+		init   = "".join(
+			f", {_member(one)}({emitter._argument_local(struct, one)})"
+			for one in args)
+		given  = "".join(f", {_member(one)}" for one in args)
+		# `arguments()` yields only members carrying a scalar, which
+		# `wellformed.check_parameters` guarantees -- asserted rather than
+		# re-tested, the way the backends' own `_arguments` does.
+		stored = []
+		for one in args:
+			assert one.scalar is not None
+			stored.append(f"\t{emitter._ctype(one.scalar)} {_member(one)};"
+			              f"\t/* the caller's argument, fixed for this stream */")
+		note   = ([" *",
+		           " * The constructor takes the argument(s) this struct's",
+		           " * layout follows."] if args else [])
+		# A variable-extent struct is TOLD its length; a fixed one knows it.
+		# This emitted the fixed form for both until 2026-09-17, so the C++
+		# reader never compiled for the struct it exists for -- the C reader
+		# beside it has had the branch since it was written.
+		length = "" if struct.layout.is_fixed_size else ", need"
 		lines += [
 			f"/** A stream reader for `{struct.name}`.",
 			" *",
@@ -58,11 +113,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			" * THE VIEW `next` FILLS DIES AT THE FOLLOWING `advance` OR",
 			" * `push`: it points into this buffer, and dropping a message",
 			" * moves what follows down over it.",
+			*note,
 			" */",
 			f"class {name} {{",
 			"public:",
-			f"\t{name}(std::uint8_t *buf, std::uint32_t cap) noexcept",
-			"\t\t: buf_(buf), cap_(cap), have_(0u), ready_(0u), owner_(buf, cap)",
+			f"\t{name}(std::uint8_t *buf, std::uint32_t cap{taken}) noexcept",
+			"\t\t: buf_(buf), cap_(cap), have_(0u), ready_(0u), "
+			f"owner_(buf, cap){init}",
 			"\t{}",
 			"",
 			"\tvoid advance() noexcept",
@@ -97,7 +154,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 			"\t\tstd::uint32_t need = 0u;",
 			f"\t\tconst ::situ::rt::err err = ::situ::{held}::required(",
-			"\t\t\tbuf_, have_, need);",
+			f"\t\t\tbuf_, have_{given}, need);",
 			"\t\tif (err != ::situ::rt::err::ok) {",
 			"\t\t\tif (need > cap_) {",
 			"\t\t\t\treturn ::situ::rt::err::bounds;",
@@ -105,7 +162,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\t\treturn err;",
 			"\t\t}",
 			"",
-			f"\t\tconst ::situ::rt::err got = ::situ::{held}::at(owner_, 0u, out);",
+			f"\t\tconst ::situ::rt::err got = ::situ::{held}::at(owner_, 0u"
+			f"{length}{given}, out);",
 			"\t\tif (got != ::situ::rt::err::ok) {",
 			"\t\t\treturn got;",
 			"\t\t}",
@@ -119,6 +177,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tstd::uint32_t      have_;",
 			"\tstd::uint32_t      ready_;",
 			"\t::situ::rt::message owner_;",
+			*stored,
 			"};",
 			"",
 		]

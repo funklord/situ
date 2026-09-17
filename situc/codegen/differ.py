@@ -76,6 +76,14 @@ Three shapes met there -- an out-parameter and an error in C and C++, a
 `Result` in Rust, a property that raises in Python -- and they agree, which is
 worth knowing rather than assuming.
 
+**What is skipped, and where it says so.** A struct that takes a `parameter`
+is held out of the comparison rather than declining the whole schema, because
+the driver's whole input is one hex string and there is nothing in it to hand
+the view constructor (0050). Every driver prints a line naming what it left
+out, and `structs_of` refuses a schema whose every acquirable struct takes one
+-- a differential that shrinks to nothing goes green having compared nothing,
+which is what `c/fuzz.py`'s filter comment records paying for (26.402).
+
 Adding a kind is cheap and pays immediately. The four spellings have to be
 looked up once, and looking them up is itself the check: `tlv` counts were a
 method in Python and a property everywhere else in that same backend, and a
@@ -90,13 +98,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from situc.codegen import refuse_parameters
 from situc import ast
+from situc.codegen import arguments
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.codegen.rust.emit import _ident as rust_ident
 from situc.codegen.python.emit import py_name
 from situc.codegen.rust.emit import _pascal
 from situc.capability import Axis
+from situc.diagnostics import SituError, error
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
@@ -803,11 +812,15 @@ _SCALAR_TYPES = frozenset({
 })
 
 
-def structs_of(resolved: ResolvedSchema) -> list[ResolvedStruct]:
-	"""Every struct a driver can acquire over a whole buffer.
+def _acquirable(resolved: ResolvedSchema) -> list[ResolvedStruct]:
+	"""Every struct a driver could acquire, before asking what it needs.
 
-	A register is a bus transaction rather than bytes off a wire, and a
-	zero-length struct is every buffer at once.
+	Split out of `structs_of` so that what the harness COMPARES and what it
+	DECLINES are two halves of one population rather than two lists built
+	from two conditions. A struct held out here was never in the harness at
+	all -- a register is a bus transaction rather than bytes off a wire, and
+	a zero-length struct is every buffer at once -- so it is not something
+	the harness skipped, and no note below names it.
 	"""
 	order = containment_order(resolved.structs, sorted(resolved.structs))
 	return [resolved.structs[name] for name in order
@@ -817,20 +830,143 @@ def structs_of(resolved: ResolvedSchema) -> list[ResolvedStruct]:
 	                 and resolved.structs[name].layout.size_bytes == 0)]
 
 
+def skipped_of(resolved: ResolvedSchema) -> list[ResolvedStruct]:
+	"""The acquirable structs this harness declines, in the same order.
+
+	A driver's whole input is one hex string on argv. A `parameter` is a
+	fact the caller supplies and the message does not carry (0050), so
+	there is nothing in that hex string to hand the view constructor, and an
+	invented argument is a view over the wrong bytes reported confidently.
+
+	Per struct, where `traverse.parameters` is per schema -- which is the
+	whole difference between declining a file and skipping a struct. The
+	question stays local because `wellformed.check_parameter_nesting`
+	refuses a parameterised struct being a member of another one, so no
+	struct kept here can reach one held out.
+
+	Skipped rather than the file declined, which is the shape `c/fuzz.py`
+	already uses for the structs it cannot handle (26.402). All four
+	backends DO take their arguments now, so comparing these is possible
+	and is a larger piece of work than this one -- the drivers print what
+	was left out so that the gap is in the harness's own output rather than
+	in nobody's.
+
+	**Removing the skip fails at `cc`, not silently**, which is worth
+	knowing before anybody takes that larger piece. Measured by deleting
+	the filter and building the mixed fixture: `asks` still emits a SCALAR
+	probe for the parameter ITSELF, and no backend emits an accessor for
+	one (26.398), so the C driver asks for `situ_framed_n_get` and gcc says
+	*implicit declaration* -- beside five *too few arguments* for the
+	accessors whose tail the argument goes on. So `asks` is where comparing
+	an argument starts, before any question of threading one.
+	"""
+	return [struct for struct in _acquirable(resolved)
+	        if arguments(struct)]
+
+
+def structs_of(resolved: ResolvedSchema) -> list[ResolvedStruct]:
+	"""Every struct this harness compares over a whole buffer.
+
+	`_acquirable` less `skipped_of`, and the refusal below is why the
+	subtraction is guarded HERE rather than in `generate`. An empty result
+	used to mean one thing -- this schema has no struct a driver can
+	acquire, which is `std/codecs.situ` -- and `fourway.build` turns that
+	into "nothing to compare, carry on". With a skip in the way it could
+	also mean "everything it had was skipped", and the caller cannot tell
+	the two apart: it would report a schema swept over a harness that had
+	been emptied. `generate` is never reached for such a schema, so a guard
+	there would not fire.
+
+	The precedent is `c/fuzz.py`'s filter, and so is the warning its comment
+	carries: `example/protobuf` was filtered out of fuzzing entirely, and
+	the harness still compiled, still ran under the smoke test, and
+	exercised nothing -- 16 million executions at coverage 1. A per-struct
+	skip that can empty the artifact has to fail rather than shrink.
+
+	The line is drawn at the struct population rather than at a probe count,
+	because a struct that is kept always compares something: `no-view` or
+	`validate`, in four languages, whatever else it has.
+	"""
+	acquirable = _acquirable(resolved)
+	kept       = [struct for struct in acquirable
+	              if not arguments(struct)]
+	if acquirable and not kept:
+		raise _nothing_to_compare(acquirable)
+	return kept
+
+
+def _nothing_to_compare(acquirable: list[ResolvedStruct]) -> SituError:
+	"""The refusal `structs_of` raises when the skip empties the harness.
+
+	Blames the first parameter of the first struct, which is where
+	`codegen.refuse_parameters` pointed while this generator declined the
+	whole file -- so a reader who met that refusal and meets this one is
+	sent to the same member.
+	"""
+	struct = acquirable[0]
+	held   = arguments(struct)[0]
+	return error(
+		f"`parameter {held.name}` in `{struct.name}`: every struct this "
+		f"harness could compare takes an argument",
+		held.span,
+		"nothing would be left to compare",
+		[
+			"the four-way driver's whole input is one hex string on argv, "
+			"so it has no argument to hand a view constructor "
+			"(decision 0050)",
+			"a struct that takes one is skipped and the drivers say which, "
+			"but a harness with every struct skipped compiles, runs, and "
+			"compares nothing -- which a sweep reports as a pass "
+			"(project.md 26.402)",
+			"`situc build` does take its arguments; what declines here is "
+			"the cross-backend differential, which builds calls of its own",
+		])
+
+
+def _skip_notes(resolved: ResolvedSchema) -> list[str]:
+	"""One line per skipped struct, printed by every driver before its
+	first section.
+
+	Printed rather than only left as a comment in the source, and that is
+	the load-bearing half: what this harness IS is a diff of four outputs,
+	so a note in the output is read by whoever reads the harness at all,
+	while a comment is read by whoever opens the generated file -- nobody,
+	while the sweep is green.
+
+	The four spell it from this one list, so their agreeing about WHICH
+	structs is construction rather than evidence. What the diff does catch
+	is a renderer that learned the filter and forgot the note.
+
+	`-- ` because that is what a line ABOUT a struct looks like here --
+	`-- frame`, `-- write frame` -- and a member is free to be called
+	`skipped`, whose probe line would otherwise read as this one.
+	"""
+	return [f"-- skipped {struct.name}: takes a parameter (0050)"
+	        for struct in skipped_of(resolved)]
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
 		prefix: str = "situ") -> str:
 	"""A driver in `target` that prints what this schema says about a buffer.
 
-	Argv is one hex string. Every acquirable struct gets a section: a header
-	line naming it, then one line per probe, or `no-view` where the frame is
-	refused. The four drivers print the same text for the same bytes, or one
-	of them is wrong.
+	Argv is one hex string. Every struct this harness compares gets a
+	section: a header line naming it, then one line per probe, or `no-view`
+	where the frame is refused. The four drivers print the same text for the
+	same bytes, or one of them is wrong.
+
+	Ahead of the first section, a `-- skipped <name>` line for each struct
+	it declines -- so what it did NOT compare is in the same output as what
+	it did.
 	"""
-	# A parameter is an argument the caller supplies and no view carries
-	# one yet (0050). Refused here for the reason the four backends refuse
-	# it: what would be emitted reads the buffer at the parameter's offset,
-	# which is where the member after it begins.
-	refuse_parameters(schema)
+	# A struct taking a `parameter` is SKIPPED rather than the schema
+	# declined: `structs_of` holds it out, each driver prints a line saying
+	# which, and a schema whose every acquirable struct takes one is refused
+	# there rather than emitted as a harness that compares nothing (26.402).
+	#
+	# `schema` is unread and still taken. The signature is the one every
+	# generator here has, three callers pass it positionally, and comparing
+	# an argument -- which all four backends can now be handed -- needs it
+	# back rather than needing it removed.
 
 	renderer = {
 		"c": _c, "cpp": _cpp, "rust": _rust, "python": _python,
@@ -875,6 +1011,16 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 		"\tsitu_msg_init(&msg, raw, n);",
 		"",
 	]
+
+	notes = _skip_notes(resolved)
+	if notes:
+		lines.extend([
+			"\t/* What this harness does not compare, said out loud: a",
+			"\t * differential that quietly compares fewer structs goes",
+			"\t * green having compared less (26.402). */",
+			*(f'\tprintf("{note}\\n");' for note in notes),
+			"",
+		])
 
 	for struct in structs_of(resolved):
 		name   = struct.name
@@ -1174,6 +1320,16 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 		"\t::situ::rt::message msg(raw, n);",
 		"",
 	]
+
+	notes = _skip_notes(resolved)
+	if notes:
+		lines.extend([
+			"\t/* What this harness does not compare, said out loud: a",
+			"\t * differential that quietly compares fewer structs goes",
+			"\t * green having compared less (26.402). */",
+			*(f'\tstd::printf("{note}\\n");' for note in notes),
+			"",
+		])
 
 	for struct in structs_of(resolved):
 		name  = struct.name
@@ -1510,6 +1666,16 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 		"",
 	]
 
+	notes = _skip_notes(resolved)
+	if notes:
+		lines.extend([
+			"\t// What this harness does not compare, said out loud: a",
+			"\t// differential that quietly compares fewer structs goes",
+			"\t// green having compared less (26.402).",
+			*(f'\tprintln!("{note}");' for note in notes),
+			"",
+		])
+
 	for struct in structs_of(resolved):
 		name = struct.name
 		lines.extend([
@@ -1723,6 +1889,16 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 		"msg = situ_runtime.Message(raw)",
 		"",
 	]
+
+	notes = _skip_notes(resolved)
+	if notes:
+		lines.extend([
+			"# What this harness does not compare, said out loud: a",
+			"# differential that quietly compares fewer structs goes green",
+			"# having compared less (26.402).",
+			*(f'print("{note}")' for note in notes),
+			"",
+		])
 
 	for struct in structs_of(resolved):
 		name  = struct.name

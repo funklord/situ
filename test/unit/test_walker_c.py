@@ -2494,6 +2494,27 @@ def test_the_two_walkers_agree_about_which_check_refused(
 				view = acquire(image, packet, which)
 			except (Refused, Unplaceable):
 				continue
+			except Unsupplied:
+				# A struct that takes a `parameter` cannot be acquired
+				# without being told it (0050), and neither walker can
+				# guess: a view built on a guessed argument reads the
+				# wrong bytes confidently. So there is no pair to compare
+				# and this is a skip rather than a disagreement.
+				#
+				# Caught here and not folded into the line above, because
+				# `Unsupplied` is deliberately NOT a `Refused`: everything
+				# else in that module answers a question about BYTES and
+				# this is the caller's omission. Letting it fall through
+				# aborted the whole schema rather than skipping one
+				# struct, and the population guard below is what noticed
+				# -- 117 refusals compared where 197 were expected.
+				#
+				# Comparing them under a SUPPLIED argument is the better
+				# test and is its own piece of work: the C driver takes
+				# its arguments as trailing argv, so the two sides would
+				# have to agree on how one is passed. Recorded beside the
+				# differ's version of the same question in 0050.
+				continue
 			try:
 				p_said = report.failed_check(image, view, which)
 			except (Refused, Unplaceable):
@@ -2571,6 +2592,18 @@ def _verdict_pair(tmp_path: Path, blob: bytes, message: bytes,
 		c_said = c_verdict(tmp_path, blob, message, shape)
 		p_said = python_verdict(blob, message, shape)
 	except (AssertionError, IndexError, Refused, Unplaceable):
+		return None
+	except Unsupplied:
+		# A struct that takes a `parameter` cannot be acquired without
+		# being told it (0050), and neither walker may guess -- a view
+		# built on a guessed argument reads the wrong bytes confidently.
+		# So there is no pair, which is what None means here.
+		#
+		# Its own clause because `Unsupplied` is deliberately not a
+		# `Refused`: the others on that line are answers about BYTES and
+		# this is the caller's omission. Folded in, it would read as the
+		# same thing; left out, it escaped and took the whole schema's
+		# comparison with it.
 		return None
 	return c_said, p_said
 

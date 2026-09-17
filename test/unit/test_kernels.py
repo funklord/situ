@@ -25,8 +25,10 @@ from pathlib import Path
 
 import pytest
 
-from situc import ast, kernels
+from situc import ast, kernels, traverse
 from situc.codegen.c import derived, generate
+from situc.codegen.python import derived as py_derived
+from situc.codegen.rust import derived as rs_derived
 from situc.diagnostics import SituError
 from situc.dump import dump
 from situc.layout import solve
@@ -1297,3 +1299,132 @@ int main(void)
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(binary)]).returncode == 0
+
+
+# -- a `parameter` cannot reach any of the three emitters (0050) ------------
+
+#: Two codec families, so the comparison is over an output with something in
+#: it: a one's-complement kernel and a polynomial one are what all three
+#: emitters write, and Python and Rust write nothing else.
+BOUND = ("codec ic { kernel = ones_complement(width = 16); }\n"
+	"impl ic derived;\n"
+	"codec crc32 { kernel = polynomial(width = 32, poly = 0x04C11DB7,\n"
+	"                                  init = 0xFFFFFFFF, xorout = 0xFFFFFFFF,\n"
+	"                                  reflect); }\nimpl crc32 derived;\n")
+
+#: The same schema with an argument and without one. Every way a parameter
+#: can be READ is in the first: it sizes an array, it is an `at` offset, and
+#: a `require` names it. A fixture that only DECLARED one would pass for a
+#: schema whose parameter no expression touches, which is not the case that
+#: worried anybody.
+WITH_ARGUMENT = HEAD + BOUND + """struct S {
+	parameter u8 block [stream];
+	u8 body[block];
+	u8 tail at block;
+}
+require block > 0;
+"""
+
+NO_ARGUMENT = HEAD + BOUND + """struct S {
+	u8 body[4];
+	u8 tail at 4;
+}
+"""
+
+#: What a real difference looks like, for the control: one more derived impl.
+ONE_MORE = HEAD + BOUND + ("codec crc16 { kernel = polynomial(width = 16,"
+	" poly = 0x8005, reflect); }\nimpl crc16 derived;\n"
+	"struct S { u8 a; }\n")
+
+#: The three emitters this covers. C++ is not among them: it calls the C
+#: implementation rather than writing one (see `WRITES_THE_KERNEL` in
+#: `test_backends_refuse_the_same_members.py`).
+DERIVED_EMITTERS = {"c": derived, "python": py_derived, "rust": rs_derived}
+
+
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_a_parameter_does_not_change_what_a_derived_emitter_writes(
+		language: str) -> None:
+	"""All three refused a schema carrying one until 2026-09-17, and the
+	refusal was answering a question about the four `situc build` backends
+	rather than about this file.
+
+	A relationship rather than a value: the argument may not move a byte of
+	what these emit, whatever they emit. The control below is what says the
+	comparison can report a difference at all -- two identical strings are
+	as loud from a comparison that cannot fail as from one that can.
+	"""
+	emitter = DERIVED_EMITTERS[language]
+
+	assert emitter.generate(parse_text(WITH_ARGUMENT), "unit") \
+		== emitter.generate(parse_text(NO_ARGUMENT), "unit"), (
+		f"{language}'s derived emitter wrote something different for a "
+		f"schema carrying a `parameter`. It reads `impls()` and `codecs()` "
+		f"and nothing else, so either that stopped being true or an "
+		f"argument now reaches the output -- in which case it needs "
+		f"passing, not ignoring (0050)")
+
+	assert emitter.generate(parse_text(ONE_MORE), "unit") \
+		!= emitter.generate(parse_text(NO_ARGUMENT), "unit"), (
+		f"CONTROL: {language}'s output did not change for an extra derived "
+		f"impl, so the comparison above compared nothing")
+
+
+class _PoisonedStruct(ast.StructDecl):
+	"""A struct declaration that raises the moment a field of it is read.
+
+	`isinstance` reads the type rather than the instance, so `codecs()` and
+	`impls()` still filter these out and `structs()` still returns them --
+	which is what lets the control fire while the emitter runs.
+	"""
+
+	def __getattribute__(self, name: str) -> object:
+		# The dunders go through: `__class__` is what `isinstance` falls
+		# back to for a subclass, so poisoning it would stop the schema
+		# being readable at all and the test would pass for that reason.
+		# Every data field -- `name`, `members`, `attrs`, `span` -- trips.
+		if name.startswith("__") and name.endswith("__"):
+			return object.__getattribute__(self, name)
+		raise AssertionError(f"a derived emitter read StructDecl.{name}")
+
+
+def _poisoned(schema: ast.Schema) -> ast.Schema:
+	return ast.Schema(span=schema.span, decls=[
+		object.__new__(_PoisonedStruct)
+		if isinstance(decl, ast.StructDecl) else decl
+		for decl in schema.decls])
+
+
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_no_derived_emitter_reads_a_struct_declaration_at_all(
+		language: str) -> None:
+	"""The structural half, and the reason the test above is not enough.
+
+	Equal output for one fixture says a parameter did not reach it; it
+	cannot say none could. A `parameter` is a member of a struct, so an
+	emitter that never reads a struct declaration has no path to one
+	whatever the schema says -- and this fails the day somebody gives one
+	of these emitters a struct to read, which is the change that would make
+	an argument reachable.
+	"""
+	poisoned = _poisoned(parse_text(WITH_ARGUMENT))
+
+	# The control, first: something that DOES read structs must trip the
+	# poison, or the emitters below are being cleared by a tripwire that
+	# cannot fire.
+	with pytest.raises(AssertionError) as tripped:
+		traverse.parameters(poisoned)
+	assert "read StructDecl." in str(tripped.value)
+
+	emitter = DERIVED_EMITTERS[language]
+	assert emitter.generate(poisoned, "unit") \
+		== emitter.generate(parse_text(WITH_ARGUMENT), "unit")
+
+	# C's module has a second entry point, and it never carried the
+	# refusal: `emit.py` calls it while writing the header, so a `situc
+	# build` of a parameterised schema has been running it since the
+	# backends learned to take an argument. It reads the same two lists,
+	# and this says so rather than leaving it inferred.
+	if language == "c":
+		assert emitter.declarations(poisoned, "situ") \
+			== emitter.declarations(parse_text(WITH_ARGUMENT), "situ")
