@@ -1599,7 +1599,9 @@ today and which is a written-down design.
   verdict in all six descriptions at once, which is why it could not land in
   any one of them first. The `messages` sibling reports all three severities
   without short-circuiting, the Wireshark dissector emits them as expert
-  info, and the editor shows them per document.
+  info, the editor shows them per document, and `situc verify` prints them
+  beside each vector -- the ids from the generated module and the words
+  from the schema, so the module it builds carries no strings at all.
 
 - **A byte run as a value** (decision 0052). `u8 sig[4] [must_eq = "WOZ2"]`
   is one span comparison taking one check id, `enum format : u8[2] { bmp =
