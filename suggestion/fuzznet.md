@@ -1261,3 +1261,20 @@ supported (a card signing over an already-signed hop is a real and common
 shape) or refused, the crash is the bug -- a StopIteration escaping
 resolve_coverage rather than a diagnostic. Nothing else needed; we can bind
 our five non-nested signed objects today and are holding the card on this.
+
+## Update 2026-09-18: the five are bound, so this crash is the only gap left
+
+The "today" above happened -- fuzznet bound all five non-nested signed
+objects' signatures (its commit 23659bd): hop, revocation, manifest, record
+and prekey each carry `authenticated body { ... }` and
+`checksum u8 signature[64] covers(body)`, and situc's own map confirms the
+coverage on every field. So the provisioning card is now the ONE remaining
+signature in the whole signed-object set, and this crash is the only thing
+between it and complete coverage.
+
+Recorded not as an urgency claim -- the fix is yours to schedule -- but so
+whoever picks the bug up knows it is the last blocker on a shipping piece
+rather than a hypothetical shape: fuzznet's card-signature binding waits on
+this crash and on nothing else. When it is fixed, the card binds the same way
+the other five did (its body wraps a hop and a prekey that each already carry
+their own coverage), so the nested-coverage case is exactly what has to work.
