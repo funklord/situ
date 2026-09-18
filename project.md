@@ -30711,6 +30711,63 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.433 A varint arm: every backend calls an accessor none of them emits
+
+**Continuing 26.432's sweep into the backends, with the same instrument:
+build a construct as a MEMBER and as an ARM and compare.** The instrument
+needed a control first -- a plain `u8 x;` with no attribute, which must
+score its backend's baseline and nothing more. The first version had no
+control, reported all-zero columns for C++ and Python, and those zeros
+were a broken block-extraction regex rather than a finding. **Each probe
+schema holds exactly one struct now, so the count is over the whole file
+and there is no extraction to get wrong.**
+
+Five constructs came back clean -- `must_eq`, `min`/`max`,
+`nul_terminated`, `encoding`, `secret` -- every arm scoring above its
+backend's baseline, which is 26.414 through 26.423 having already closed
+them. **That is an empty result with its method recorded, which is worth
+more than the bare fact that nothing was found.**
+
+The sixth was not clean.
+
+    member   C=2  C++=2  Rs=2  Py=2
+    arm      C=3  C++=2  Rs=2  Py=2      baseline: C=1, others=3
+
+**C++, Rust and Python scored BELOW their baseline**, which is not "fewer
+checks" but less machinery -- and reading the object rather than the
+count, the bounds `300` and `9000` appear four times in C's output and
+**zero times in the other three**. C alone refuses a varint arm outside
+its declared range.
+
+**Then the plain case, with no bounds at all, turned out not to build.**
+
+    s.h:103: implicit declaration of `situ_one_held_x_len`
+    plain.hpp: 14 errors
+
+Placing what follows a variant means asking each arm how long it is, and
+a varint's length is decided by its own bytes. **All four emit the call --
+extent arithmetic, offset terms, bounds check -- and not one of them
+defines the accessor.** `situc build` reported success for every one.
+
+**26.410 had this recorded as *unchecked* and that was too kind.** Its
+reasoning was that silence agrees with the backends, so writing a
+constraint row would be a check with nobody to agree with -- sound, and
+it presumed the backends emit working code and merely write no
+constraints. They emit code that does not build, so there was never
+anything to agree with.
+
+**Refused, on 26.430's precedent.** A varint as an ordinary member is
+fully supported; the message says so and says how to move it. Implementing
+the arm form is accessors, extent, packer and both walkers, and that is
+its own piece of work rather than something to half-land behind a
+refusal that already reads as honest.
+
+**The enum-typed arm is the recorded sibling and is NOT covered here.**
+26.411 has it: an enum-typed scalar arm still gives C++ 11 errors on a
+minimal schema, while `edges.typed_kind` builds because its enum carries
+`default = error`. Two sub-shapes, one open entry, and not this one's to
+close.
+
 ### 26.432 The lens from the last bug found two more, and one was a disagreement
 
 **26.423 and 26.430 are the same shape in different layers: a loop over a
@@ -31931,6 +31988,12 @@ agree with. It belongs with that defect rather than ahead of it -- the
 same reasoning that kept the four other arm shapes (a run of wide values,
 a delimited or varint arm, an arm behind `[since]`) unchecked in 26.410,
 where silence agrees with the backends and a check would not.
+
+Three of those four have since moved, and one moved the other way: the
+run of wide values and the delimited arm are checked now (26.422,
+26.423), the `[since]` arm is gated (26.424), and the varint arm turned
+out not to BUILD in any backend, so it is refused rather than unchecked
+(26.433).
 
 **The census moved and said so.** `ARM_SHAPES` went from 12 to 14 in the
 `("scalar", "not-struct", "")` cell, which is the population guard doing

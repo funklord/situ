@@ -1341,11 +1341,16 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 
 	**What the four backends check on an arm, and no more.** A pinned span,
 	a run's span checks (26.425), a delimited arm's delimiter and encoding
-	(26.423), and the value comparisons. An arm shape outside those -- a run
-	of wide values, a varint arm, an arm behind `[since]` -- gets no check in
-	any backend either; 26.410 records that rather than this half-answering
-	it, because a fifth description refusing what the other four accept is
-	the disagreement the differential exists to find.
+	(26.423), and the value comparisons. An arm shape outside those gets no
+	check in any backend either; 26.410 records that rather than this
+	half-answering it, because a fifth description refusing what the other
+	four accept is the disagreement the differential exists to find.
+
+	The examples that sentence used to name have all moved, which is why it
+	no longer names any: a run of wide values and a delimited arm are
+	checked (26.422, 26.423), an arm behind `[since]` is gated (26.424), and
+	a varint arm is refused outright, no backend having ever emitted the
+	length accessor all four called (26.433).
 
 	The list grows from the backend side, and this sentence has twice been
 	the thing that was stale: it said "the two families ... and no more"

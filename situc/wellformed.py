@@ -70,6 +70,7 @@ def check(schema: ast.Schema) -> None:
 	check_peeked_members(schema)
 	check_parameters(schema)
 	check_parameter_nesting(schema)
+	check_varint_arms(schema)
 	check_checksum_codecs(schema)
 	check_region_arguments(schema)
 	check_encoding_element_width(schema)
@@ -2696,6 +2697,62 @@ def check_parameters(schema: ast.Schema) -> None:
 							"meaning: a constraint, an enum's reading, "
 							"whether a member is required",
 						])
+
+
+def check_varint_arms(schema: ast.Schema) -> None:
+	"""A varint cannot be a variant arm yet (26.433).
+
+	Every backend places whatever follows a variant by asking each arm how
+	long it is, and for a varint arm that is a `_len` accessor decided by
+	the bytes themselves. **No backend emits one.** All four emit the CALL
+	-- it is in the extent arithmetic, the offset terms and the bounds
+	check -- so all four produce a description naming a function none of
+	them defines:
+
+	    s.h:103: implicit declaration of `situ_one_held_x_len`
+	    plain.hpp: 14 errors
+
+	Refused rather than left, because `situc build` reported success for
+	every one of them. 26.410 recorded a varint arm as merely *unchecked*,
+	on the reasoning that silence agrees with the backends -- which
+	presumed the backends emit working code and write no constraints. They
+	do not emit working code at all, and there is nothing to check in a
+	description that cannot be built.
+
+	The bounds make it worse rather than better: C writes `[min]` and
+	`[max]` for such an arm and the other three write neither, so the four
+	disagree about the schema's meaning as well as failing to build.
+	"""
+	varints = {decl.name for decl in schema.varints()}
+	if not varints:
+		return
+
+	for struct in schema.structs():
+		for member in struct.members:
+			if not isinstance(member, ast.Variant):
+				continue
+			for arm in member.arms:
+				held = arm.member
+				if held is None:
+					continue		# `default: error;` names no member
+				named = getattr(getattr(held, "type_ref", None), "name", None)
+				if named not in varints:
+					continue
+				raise error(
+					f"`{named}` is a varint, so it cannot be a variant arm "
+					"yet",
+					held.span,
+					f"`{struct.name}.{getattr(held, 'name', '?')}` is a "
+					f"`{named}`",
+					[
+						"placing what follows the variant means asking each "
+						"arm its length, and a varint's length is decided "
+						"by its own bytes -- no backend emits that accessor "
+						"for an arm, though all four call it",
+						"a varint as an ordinary member is fully supported; "
+						"move it out of the variant, or give the arm a "
+						"struct that holds it",
+					])
 
 
 def _members_and_arms(struct: ast.StructDecl) -> list[ast.Member]:

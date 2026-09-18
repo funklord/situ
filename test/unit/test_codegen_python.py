@@ -2760,6 +2760,46 @@ def test_a_parameter_cannot_be_declared_in_a_variant_arm() -> None:
 	           "default: error; } }")
 
 
+VARINT_PRE = ("varint_type vt { encoding = be128; max_bits = 64; "
+              "max_bytes = 9; }\n")
+
+
+def test_a_varint_cannot_be_a_variant_arm() -> None:
+	"""No backend emits the accessor all four call (26.433).
+
+	Placing what follows a variant means asking each arm its length, and a
+	varint's length is decided by its own bytes. Every backend puts that
+	`_len` call in the extent arithmetic, the offset terms and the bounds
+	check, and none of them defines it -- so `situc build` reported
+	success and the C would not compile:
+
+	    implicit declaration of `situ_one_held_x_len`
+
+	26.410 had recorded a varint arm as merely *unchecked*, which presumed
+	the backends emit working code and simply write no constraints. They
+	emit code that does not build.
+
+	Two controls. A varint as an ordinary MEMBER is fully supported and
+	must still go through -- otherwise this refuses the type rather than
+	the position. And a non-varint arm beside it must be unaffected.
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + VARINT_PRE + "struct one { u8 pick; "
+		           "variant held switch (pick) { case 1: vt x; "
+		           "case 2: u8 fixed[3]; default: error; } u8 after; }")
+
+	assert "cannot be a variant arm" in str(refused.value)
+
+	# Control one: the same varint as a member of the same struct.
+	parse_text(PREAMBLE + VARINT_PRE + "struct fine { u8 pick; vt x; "
+	           "u8 after; }")
+
+	# Control two: a variant whose arms hold no varint is untouched.
+	parse_text(PREAMBLE + VARINT_PRE + "struct plain { u8 pick; "
+	           "variant held switch (pick) { case 1: u8 a; "
+	           "case 2: u8 fixed[3]; default: error; } u8 after; }")
+
+
 # -- a constraint declared on a variant ARM (26.414) -------------------------
 
 #: A schema whose two arms are a byte-run enum and a bounded scalar, sharing
