@@ -1518,6 +1518,318 @@ int main()
 	assert subprocess.run([str(binary)]).returncode == 0
 
 
+ARM_CONSTRAINTS = """
+enum sig : u8[2] { bmp = "BM", pe = "MZ" }
+struct frame {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  sig marker;
+		case 2:  u8  flag [min = 2, max = 7];
+		default: error;
+	}
+	u8 trailer;
+}
+"""
+
+
+def test_a_constrained_arm_is_checked_under_its_discriminant() -> None:
+	"""A constraint on a non-struct arm reached no backend (26.414).
+
+	`_arm_validation` covers an arm that is a STRUCT, by calling the nested
+	type's own `validate`. A byte-run enum arm and a scalar arm have no
+	nested type, so their constraints were declared by the schema and
+	enforced by nobody -- while `situc gen-checks` wrote a test asserting
+	they were, which is two generators disagreeing about one schema.
+
+	Both shapes are asserted to be UNDER a gate rather than merely present.
+	Emitting them ungated is the regression this construct has already had
+	once: `example/packet` compared the `connect` arm's magic inline and
+	refused every packet that was not a CONNECT, whatever the discriminant
+	said.
+	"""
+	header = emit(ARM_CONSTRAINTS)
+
+	assert "if (held_marker(_arm) == ::situ::rt::err::ok) {" in header
+	assert '/* frame.held.marker [must_eq = "BM" | "MZ"] */' in header
+
+	assert "const ::situ::rt::err got = held_flag(held_flag_value);" in header
+	assert "/* frame.held.flag [min = 2] */" in header
+	assert "/* frame.held.flag [max = 7] */" in header
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_constrained_arm_refuses_only_the_arm_it_holds(
+		tmp_path: Path) -> None:
+	"""Run, not read, and the last pair is what the other two are for.
+
+	Each arm's bytes would fail the other arm's constraint. `MZ` is 0x4D
+	0x5A, and the accessor writes nothing into the local for an arm the
+	discriminant did not select, so an ungated `[min = 2]` refuses the
+	zero it was initialised with; 0x05 0x59 is neither signature. A message holding one arm and
+	refused for the other arm's constraint is 26.414's trap, and it is
+	what the gate exists to prevent.
+
+	The probe reports WHICH case refused wrongly, because "the binary
+	returned non-zero" is a fact about the run rather than about the
+	check -- and a sabotage of either branch has to be read off it.
+	"""
+	schema   = parse_text(PREAMBLE + ARM_CONSTRAINTS)
+	resolved = resolve(schema, solve(schema))
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "main.cpp").write_text("""
+#include "unit.hpp"
+
+static ::situ::rt::err verdict(std::uint8_t kind, std::uint8_t one,
+		std::uint8_t two)
+{
+	std::uint8_t raw[4] = { kind, one, two, 0 };
+	situ::rt::message msg(raw, sizeof raw);
+	situ::frame held;
+	if (situ::frame::at(msg, 0, sizeof raw, held) != ::situ::rt::err::ok) {
+		return ::situ::rt::err::stage;
+	}
+	return held.validate();
+}
+
+int main()
+{
+	/* The arm the discriminant selects, holding what it declared. */
+	if (verdict(1u, 'B', 'M') != ::situ::rt::err::ok) return 1;
+	if (verdict(2u, 7u, 0x59u) != ::situ::rt::err::ok) return 2;
+
+	/* ...and holding what it did not. */
+	if (verdict(1u, 'X', 'Y') != ::situ::rt::err::constraint) return 3;
+	if (verdict(2u, 9u, 0x59u) != ::situ::rt::err::constraint) return 4;
+	if (verdict(2u, 1u, 0x59u) != ::situ::rt::err::constraint) return 5;
+
+	/* The arm that is NOT selected is nothing to check. */
+	if (verdict(1u, 'M', 'Z') != ::situ::rt::err::ok) return 6;
+	if (verdict(2u, 5u, 0x59u) != ::situ::rt::err::ok) return 7;
+
+	/* And the discriminant itself still answers for a value no arm
+	 * claims. */
+	if (verdict(3u, 'B', 'M') != ::situ::rt::err::version) return 8;
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CXX is not None
+	built = subprocess.run(
+		[HOST_CXX, *WARNINGS, f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}",
+		 f"-I{tmp_path}", str(tmp_path / "main.cpp"),
+		 str(RUNTIME / "c" / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(tmp_path / "probe")], check=False)
+	assert run.returncode == 0, f"case {run.returncode} answered wrongly"
+
+
+#: The same schema with the trailing member taken off, which is what makes
+#: the frame's minimum its SHORTEST arm and leaves the longer one hanging
+#: over the end of a message that was accepted.
+ARM_AT_THE_EDGE = """
+enum sig : u8[2] { bmp = "BM", pe = "MZ" }
+struct frame {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  sig marker;
+		case 2:  u8  flag [max = 7];
+		default: error;
+	}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_pinned_arm_is_not_compared_past_the_frame(tmp_path: Path) -> None:
+	"""`size_min` is the shortest arm's, so the longest arm can hang over.
+
+	The arm question and the frame question are two -- the sentence the
+	scalar arm accessor already carries (26.325), arriving at the pinned
+	run. Acquisition accepts a two-byte `frame` because one arm fits in
+	two bytes; `marker` is two bytes at offset one and comparing it reads
+	byte 2. Reported in C and in Rust and reproduced here: without the
+	guard this is a heap-buffer-overflow inside `check`, which is why the
+	buffer is malloc'd to the exact length and the sanitizer is on.
+
+	Nothing in the corpus has the shape, which is why nothing was red --
+	and the check this file adds is what creates the read, so it is this
+	change's to bound.
+	"""
+	result = compiles(tmp_path, ARM_AT_THE_EDGE, extra="""
+#include <cstdlib>
+#include "unit.hpp"
+
+static ::situ::rt::err verdict(std::uint32_t len, const std::uint8_t *from)
+{
+	std::uint8_t *buf = static_cast<std::uint8_t *>(std::malloc(len));
+	for (std::uint32_t i = 0; i < len; ++i) { buf[i] = from[i]; }
+
+	situ::rt::message msg(buf, len);
+	situ::frame held;
+	::situ::rt::err answer = ::situ::rt::err::stage;
+	if (situ::frame::at(msg, 0, len, held) == ::situ::rt::err::ok) {
+		answer = held.validate();
+	}
+	std::free(buf);
+	return answer;
+}
+
+int main()
+{
+	/* Two bytes is a view, and `marker` is not in it. */
+	const std::uint8_t edge[2] = { 1u, 'B' };
+	if (verdict(2u, edge) != ::situ::rt::err::bounds) return 1;
+
+	/* The short arm in the same two bytes IS in it. */
+	const std::uint8_t shorter[2] = { 2u, 3u };
+	if (verdict(2u, shorter) != ::situ::rt::err::ok) return 2;
+
+	/* And a frame that holds the run is still asked about it. */
+	const std::uint8_t whole[3] = { 1u, 'B', 'M' };
+	if (verdict(3u, whole) != ::situ::rt::err::ok) return 3;
+	const std::uint8_t wrong[3] = { 1u, 'X', 'Y' };
+	if (verdict(3u, wrong) != ::situ::rt::err::constraint) return 4;
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "edge"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *WARNINGS, "-fsanitize=address",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, (
+		f"case {run.returncode} answered wrongly:\n"
+		+ run.stdout + run.stderr)
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_scalar_arm_check_reports_a_frame_too_short_for_it(
+		tmp_path: Path) -> None:
+	"""The scalar path needs no guard of its own, and that is measured.
+
+	Its accessor asks `situ_in_bounds` before loading, so the refusal
+	already exists -- what the check has to do is pass it on rather than
+	swallow it, which is why `version` is the only refusal it treats as
+	nothing to check. `u16 wide` at offset one in a two-byte frame is the
+	span case's shape with a scalar in it.
+	"""
+	result = compiles(tmp_path, """
+struct frame {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  u8  flag [max = 7];
+		case 2:  u16 wide [max = 500];
+		default: error;
+	}
+}
+""", extra="""
+#include <cstdlib>
+#include "unit.hpp"
+
+int main()
+{
+	std::uint8_t *buf = static_cast<std::uint8_t *>(std::malloc(2));
+	buf[0] = 2u; buf[1] = 0xFFu;
+
+	situ::rt::message msg(buf, 2u);
+	situ::frame held;
+	::situ::rt::err answer = ::situ::rt::err::stage;
+	if (situ::frame::at(msg, 0, 2u, held) == ::situ::rt::err::ok) {
+		answer = held.validate();
+	}
+	std::free(buf);
+	return answer == ::situ::rt::err::bounds ? 0 : 1;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "scalar_edge"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *WARNINGS, "-fsanitize=address",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, (
+		"a short frame was not reported:\n" + run.stdout + run.stderr)
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_a_bound_naming_a_sibling_is_not_shadowed_by_an_arm_check(
+		tmp_path: Path) -> None:
+	"""The local the check binds cannot take a member's name.
+
+	A bound may name a sibling, and a sibling read is that member's
+	accessor called by name -- so a local called `value` and a member
+	called `value` are the same identifier, and `value > value()` asks a
+	`std::uint8_t` to be a function. C cannot meet this, its sibling reads
+	being `situ_frame_value_get(view)`, so the hazard is this backend's
+	alone and the local is spelled `<member>_value` for it.
+	"""
+	result = compiles(tmp_path, """
+struct frame {
+	u8 value;
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  u8 flag [max = value];
+		default: error;
+	}
+	u8 trailer;
+}
+""")
+
+	assert result.returncode == 0, result.stderr
+
+
+def test_an_enum_arms_membership_is_asked_under_the_discriminant() -> None:
+	"""`default = error` on an arm's own type, which C asks for too.
+
+	Read rather than run, and the reason is a fault next door rather than
+	a choice: `_arm_member` loads a scalar arm as its BACKING type, so
+	`out = static_cast<std::uint8_t>(...)` is assigned to an
+	`::situ::level &` and an enum-typed scalar arm produces a header that
+	does not compile -- at HEAD, with none of this in it, and for any
+	schema that writes one. No corpus schema does. So this pins that the
+	membership question is asked, and under the gate; what it cannot pin
+	is the answer, until the accessor is fixed.
+	"""
+	header = emit("""
+enum level : u8 {
+	low  = 1,
+	high = 2,
+	default = error,
+}
+struct frame {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  level lvl;
+		default: error;
+	}
+	u8 trailer;
+}
+""")
+
+	assert "const ::situ::rt::err got = held_lvl(held_lvl_value);" in header
+	assert "if (!is_known(held_lvl_value)) {" in header
+
+
 # -- every example, compiled ------------------------------------------------
 
 

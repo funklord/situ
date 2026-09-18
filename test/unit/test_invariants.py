@@ -160,16 +160,16 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: behind its argument -- one struct arm and one scalar arm, which is why
 #: two cells moved by exactly one each and no cell appeared.
 #:
-#: A byte-run enum arm will land in the first cell when one arrives -- the
-#: cell asks whether the placement carries a scalar and a byte-run enum's
-#: does, being `u8` with a count. "scalar" here means the placement has
-#: one, not that the member is a single value. `edges` has no such arm
-#: yet: 26.414 holds it back until a constraint on a non-struct arm is
-#: enforced by something. That struct is
-#: 0050's corpus entry, and the variant was added to it to reach a member
-#: read that needs an argument tail; it went on to find a crash in three of
-#: the four backends' arm emitters (26.412), which is the same thing this
-#: guard is for one level down.
+#: A byte-run enum arm will land in the first cell when one arrives, and so
+#: will a constrained scalar arm: the cell asks whether the PLACEMENT
+#: carries a scalar, and a byte-run enum's does -- it is `u8` with a count.
+#: "scalar" here means the placement has one, not that the member is a
+#: single value. `edges` has no such arm yet; 26.417 says what it waits on.
+#:
+#: `edges.negotiated` is 0050's corpus entry, and the variant was added to
+#: it to reach a member read that needs an argument tail; it went on to
+#: find a crash in three of the four backends' arm emitters (26.412),
+#: which is the same thing this guard is for one level down.
 #:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {

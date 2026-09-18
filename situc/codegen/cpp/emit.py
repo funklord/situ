@@ -100,6 +100,22 @@ WORD_WIDTHS = (8, 16, 32, 64)
 
 
 
+def _deeper(lines: list[str], levels: int = 2) -> list[str]:
+	"""Nest emitted lines, counting the ones that carry their own newlines.
+
+	A check helper hands back lines to be dropped into `check` at its own
+	depth, and a caller that wraps one in a guard has to move all of it. One
+	element is not always one line -- `_pinned_run_check` builds its table of
+	wanted runs as a single joined string -- so prefixing the element
+	indented the first row and left the rest at the old column.
+	"""
+	held: list[str] = []
+	for one in lines:
+		for part in one.split("\n"):
+			held.append(("\t" * levels) + part if part.strip() else part)
+	return held
+
+
 def _is_run(placement: Placement) -> bool:
 	"""A member whose bytes are a run rather than one value.
 
@@ -7488,7 +7504,159 @@ class Emitter:
 			if member is not None:
 				found.extend(self._arm_fits_check(struct, member))
 				found.extend(self._arm_validation(struct, member))
+				found.extend(self._arm_member_checks(struct, member))
+				found.extend(self._arm_pinned_check(struct, member))
 		return found
+
+	def _arm_member_checks(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A FIELD arm's own constraints, behind the discriminant.
+
+		`_arm_validation` next door does this for a STRUCT arm by calling
+		the arm's accessor and passing over `err::version`. A field arm has
+		an accessor of the same shape -- an out-parameter and an error -- so
+		the gate is the same and only the thing checked differs.
+
+		They were not skipped by an oversight but SUPPRESSED, and the reason
+		is recorded on C's pinned-run branch: `example/packet` emitted the
+		`connect` arm's magic inline and refused every packet that was not a
+		CONNECT, whatever the discriminant said. The answer to a check asked
+		unconditionally is to ask it conditionally, not to delete it.
+
+		The value goes to `_attr_checks` as a LOCAL rather than as an
+		accessor call, which is a route that helper already names: "an
+		ordinary accessor, an infallible `_value`, or a local bound behind a
+		version gate". A delimited text number reaches it the same way.
+		"""
+		scalar = placement.scalar
+		# Exactly the shape `_arm_member` gives a scalar getter to. A run
+		# has no `T &out` accessor to gate on, and asking for one names a
+		# function nothing defines.
+		if scalar is None or placement.array_count is not None \
+				or placement.sized_by is not None \
+				or data_sized(placement):
+			return []
+		if self._offset_expression(struct, placement) is None:
+			return []
+
+		# `<member>_value` rather than a bare `value`, which is the
+		# spelling `_behind_a_version` settled on next door: a bound may
+		# name a SIBLING, and a sibling read is that member's accessor
+		# called by name, so a local called `value` shadows a member called
+		# `value` and the guard stops compiling. C spells it `value` and
+		# cannot meet this, its sibling reads being prefixed calls.
+		name  = bare_name(local_name(struct, placement))
+		held  = f"{name}_value"
+		inner = [*self._arm_enum_check(placement, held),
+		         *self._attr_checks(struct, placement, held)]
+		if not inner:
+			return []
+
+		ctype = self._field_ctype(placement)
+		return [
+			f"\t\t/* {placement.path}: the arm the discriminant selects",
+			"\t\t * carries its own constraints. A different arm is nothing",
+			"\t\t * to check, which is what `err::version` says. */",
+			"\t\t{",
+			f"\t\t\t{ctype} {held}{{}};",
+			f"\t\t\tconst ::situ::rt::err got = {name}({held});",
+			"",
+			"\t\t\tif (got == ::situ::rt::err::ok) {",
+			*_deeper(inner),
+			"\t\t\t} else if (got != ::situ::rt::err::version) {",
+			"\t\t\t\treturn got;",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+	def _arm_enum_check(self, placement: Placement,
+			value: str) -> list[str]:
+		"""An enum with `default = error` admits its members and nothing else.
+
+		The same lines `_member_check` writes for an ordinary member, against
+		a local rather than an accessor call. Two spellings of one rule would
+		be two places that have to agree about what section 8.7 means.
+		"""
+		enum = self.enums.get(placement.type_name or "")
+		if enum is None or enum.effective_default is not ast.EnumDefault.ERROR:
+			return []
+		return [
+			f"\t\t/* {placement.path}: `{enum.name}` rejects unknown values"
+			f" (section 8.7) */",
+			f"\t\tif (!is_known({value})) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
+
+	def _arm_pinned_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A pinned SPAN arm: a byte-run enum's membership, or `[must_eq]`.
+
+		The member's own check, wrapped in the arm's guard, rather than a
+		second byte comparison written here: the two would be two places
+		that have to agree about what `[must_eq = "BM" | "MZ"]` means.
+
+		Gated through the accessor rather than by re-deriving the
+		discriminant test, which is what `_arm_fits_check` next door does
+		and for the same reason -- it refuses the arm that is not present,
+		so `ok` is "the discriminant selected this one" and nothing else
+		has to be spelled twice.
+		"""
+		pinned = pinned_runs(placement)
+		scalar = placement.scalar
+		if pinned is None or scalar is None:
+			return []
+		# The span accessor's own shape: a byte run whose count is a
+		# constant. `_arm_member` emits `err name(::situ::rt::bytes &out)`
+		# for exactly this, and for anything else there is no `ok` to gate
+		# on.
+		if scalar.bits != BITS_PER_BYTE or placement.array_count is None:
+			return []
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+
+		inner = self._pinned_run_check(struct, placement, pinned)
+		if not any(_REFUSES.match(one) for one in inner):
+			return []		# a note rather than a check; nothing to gate
+
+		# The arm question and the frame question are two, which is the
+		# sentence the scalar arm ACCESSOR already carries (26.325). A
+		# struct's minimum is its SHORTEST arm's, so a fixed-size arm
+		# longer than that sits outside a frame acquisition accepted --
+		# `frame` with a two-byte `marker` arm has a minimum of two, and
+		# comparing the run in a two-byte message reads byte 2. Measured
+		# under AddressSanitizer as a heap-buffer-overflow in `check`, and
+		# the feature this file adds is what creates the read: an ordinary
+		# pinned member at a dynamic offset is covered by `_fits_check`
+		# and `_arm_fits_check` reaches only a `sized_by` arm.
+		#
+		# `situ_in_bounds` rather than the span's own length, because that
+		# is what this backend already writes for a member that may not
+		# fit, and the arm accessor CLAMPS its span rather than refusing --
+		# so `ok` says the discriminant chose this arm and says nothing
+		# about the frame holding it.
+		width = len(pinned[0])
+		# `_arm` rather than `held`: a member may be CALLED `held`, and the
+		# accessor and the local would then share a name. The nested-member
+		# branch pays for that lesson with `_held`.
+		name = bare_name(local_name(struct, placement))
+		return [
+			f"\t\t/* {placement.path}: checked where the discriminant",
+			"\t\t * selects this arm, and nothing to check where it does",
+			"\t\t * not -- and only where the frame holds the run, the",
+			"\t\t * struct's minimum being its shortest arm's. */",
+			"\t\t{",
+			"\t\t\t::situ::rt::bytes _arm;",
+			"",
+			f"\t\t\tif ({name}(_arm) == ::situ::rt::err::ok) {{",
+			f"\t\t\t\tif (!situ_in_bounds(raw(), ({start}), {width}u)) {{",
+			"\t\t\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t\t\t}",
+			*_deeper(inner),
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _arm_validation(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

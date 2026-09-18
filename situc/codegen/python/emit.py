@@ -2601,6 +2601,44 @@ class Emitter:
 			return "memoryview"
 		return py_name(placement.type_name or "object")
 
+	def _arm_guard(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm) -> tuple[str, str] | None:
+		"""Two tests: this arm is NOT the one present, and this arm IS.
+
+		Both from one place. The accessors ask the first and `validate` asks
+		the second, and a negation written out twice is two places that have
+		to go on agreeing about what a `default` arm is -- which is not a
+		value of its own but the negation of every `case` beside it.
+
+		None where the variant cannot be dispatched on: a `default` arm with
+		no matched value to negate is present always and never at once, and
+		`_arm_member` has declined to emit an accessor for it since it was
+		written.
+		"""
+		held = self._over_fields(struct, variant.discriminant or "", "self")
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return None
+			return (" or ".join(f"{held} == {one.value}" for one in matched),
+			        " and ".join(f"{held} != {one.value}" for one in matched))
+		return f"{held} != {arm.value}", f"{held} == {arm.value}"
+
+	def _scalar_arm(self, struct: ResolvedStruct, placement: Placement) -> bool:
+		"""Whether this arm is the plain scalar one, whose accessor is a
+		property handing back an `int`.
+
+		Asked by `validate` as well as by the emitter, because `validate`
+		reads that property: a second spelling of the same dispatch is how a
+		check comes to name an accessor this backend declined to write.
+		`data_sized` is in it for 26.47's reason -- `i32 run[n + 1]` names
+		neither a count nor a size and is still a run rather than a scalar.
+		"""
+		scalar = placement.scalar
+		return (scalar is not None and placement.array_count is None
+		        and placement.sized_by is None and not data_sized(placement)
+		        and self._offset_expression(struct, placement) is not None)
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, raising where the arm is not the one present.
@@ -2610,14 +2648,10 @@ class Emitter:
 		and reading the arm that is not there is the same mistake from the
 		other end.
 		"""
-		held = self._over_fields(struct, variant.discriminant or "", "self")
-		if arm.value is None:
-			matched = matched_values(variant)
-			if not matched:
-				return []
-			test = " or ".join(f"{held} == {one.value}" for one in matched)
-		else:
-			test = f"{held} != {arm.value}"
+		guard = self._arm_guard(struct, variant, arm)
+		if guard is None:
+			return []
+		test, _present = guard
 
 		name   = py_name(local_name(struct, placement))
 		scalar = placement.scalar
@@ -2635,15 +2669,15 @@ class Emitter:
 			' the one present")',
 		]
 
-		# `data_sized` in the guard, not just the two spellings that name a
-		# count: `i32 run[n + 1]` sets neither `array_count` nor `sized_by`,
-		# so an arm that is a run of values looked exactly like a scalar arm
-		# and got a getter for the first element. The same sentence 26.47
-		# wrote about the ordinary member dispatch, in the parallel one an
-		# arm has.
-		if scalar is not None and placement.array_count is None \
-				and placement.sized_by is None \
-				and not data_sized(placement):
+		# `data_sized` is in `_scalar_arm`, not just the two spellings that
+		# name a count: `i32 run[n + 1]` sets neither `array_count` nor
+		# `sized_by`, so an arm that is a run of values looked exactly like a
+		# scalar arm and got a getter for the first element. The same
+		# sentence 26.47 wrote about the ordinary member dispatch, in the
+		# parallel one an arm has. It is a named predicate rather than a
+		# condition here because `validate` asks it too (26.414).
+		if self._scalar_arm(struct, placement):
+			assert scalar is not None		# `_scalar_arm` asked it
 			# The arm question and the frame question are two. A struct's
 			# minimum is its shortest arm's, so an arm past that minimum sits
 			# outside a frame acquisition accepted -- `dnsname`'s `label` is
@@ -5808,6 +5842,25 @@ class Emitter:
 			f'{len(decl.members)} spelling(s)")',
 		]
 
+	def _enum_check(self, placement: Placement, read: str) -> list[str]:
+		"""An enum with `default = error` admits its members and nothing else.
+
+		A helper rather than a chunk of `_member_check` because a variant ARM
+		can be typed by such an enum too, and the arm's check reads a local
+		where the member's reads a property (26.414). Two spellings of one
+		membership test would be two places that have to agree about what
+		`default = error` means.
+		"""
+		enum = self.enums.get(placement.type_name or "")
+		if enum is None or enum.effective_default is not ast.EnumDefault.ERROR:
+			return []
+		return [
+			f"\t\tif not known_enum({py_name(enum.name)}, int({read})):",
+			f"\t\t\traise ConstraintError("
+			f"f\"{placement.path} is {{int({read})}}, not a"
+			f" {enum.name}\")",
+		]
+
 	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
 			read: str) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
@@ -5914,10 +5967,12 @@ class Emitter:
 		if placement.kind != "variant":
 			return []
 		found: list[str] = []
-		for _, member in arm_members(struct, placement):
+		for arm, member in arm_members(struct, placement):
 			if member is not None:
 				found.extend(self._arm_fits_check(struct, member))
 				found.extend(self._arm_validation(struct, member))
+				found.extend(self._arm_member_checks(struct, placement,
+				                                     arm, member))
 		return found
 
 	def _arm_validation(self, struct: ResolvedStruct,
@@ -5948,6 +6003,97 @@ class Emitter:
 			f"\t\t\tself.{name}.validate()",
 			"\t\texcept VersionError:",
 			f"\t\t\tpass\t\t# not the arm this message carries",
+		]
+
+	def _arm_member_checks(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""A FIELD arm's own constraints, behind the discriminant (26.414).
+
+		`_arm_validation` above does this for a STRUCT arm, through the
+		nested type's own `validate`. A field arm has no nested type to ask:
+		it is a scalar or a byte run, and it is not a member of the enclosing
+		struct either, so its `[max]`, its `[must_eq]` and its enum
+		membership reached neither route. `gen-checks` meanwhile writes a
+		test asserting they are enforced, so two generators disagreed about
+		one schema.
+
+		Asked CONDITIONALLY rather than not at all, which is the whole of the
+		fix. `example/packet` is why the unconditional version was removed:
+		it emitted the `connect` arm's magic inline and refused every packet
+		that was not a CONNECT, whatever the discriminant said, and the
+		four-way differential caught it. The answer to a check asked
+		unconditionally is to ask it conditionally, not to delete it.
+		"""
+		guard = self._arm_guard(struct, variant, arm)
+		if guard is None:
+			return []
+		_absent, present = guard
+
+		# A pinned SPAN -- a byte-run enum's membership (0052), or a
+		# `[must_eq]` on a run. The MEMBER's own check, wrapped: a second
+		# byte comparison written here would be a second place that has to
+		# agree with it about what `[must_eq = "BM" | "MZ"]` means.
+		pinned = pinned_runs(placement)
+		if pinned is not None:
+			inner = self._pinned_run_check(struct, placement, pinned)
+			# ...and the span has to be HERE before it is compared. A
+			# struct's minimum is its shortest arm's, so a frame exactly
+			# `SIZE_MIN` long with a longer arm selected does not hold it,
+			# and neither existing bounds check covers that: `_fits_check`
+			# skips a dotted path, and `_arm_fits_check` answers only for an
+			# arm whose length the message declares. A FIXED-size arm ending
+			# past the minimum had nothing.
+			#
+			# Python does not read off the end -- a slice clamps -- so the
+			# symptom here is not the overread C and Rust get. It is worse
+			# in one way and better in another: measured, a two-byte VIEW
+			# inside a longer buffer read the two bytes AFTER the frame and
+			# answered OK, so the wrong verdict came from bytes the caller
+			# had said were not part of the message. The other three report
+			# bounds, and this is where Python says the same thing.
+			start = self._offset_expression(struct, placement)
+			bound = ([f"\t\tif self._len < ({start}) + {len(pinned[0])}:",
+			          f'\t\t\traise BoundsError("{placement.path}: outside'
+			          ' the frame")']
+			         if start is not None else [])
+			return [
+				f"\t\t# {placement.path}: checked where the discriminant",
+				"\t\t# selects this arm, and nothing to check where it does",
+				"\t\t# not.",
+				f"\t\tif {present}:",
+				*[f"\t{one}" for one in bound],
+				*[f"\t{one}" for one in inner],
+			]
+
+		# A scalar arm. The gate is the arm's own property, which already
+		# raises `VersionError` for the arm that is not present -- the same
+		# thing `_arm_validation` leans on, one construct down. Anything else
+		# it raises is a fault in the message and propagates, which is what
+		# C's `got != SITU_ERR_VERSION` says.
+		if not self._scalar_arm(struct, placement):
+			return []
+
+		name  = py_name(local_name(struct, placement))
+		local = f"{name}_value"
+		inner = [*self._enum_check(placement, local),
+		         *self._attr_checks(struct, placement, local)]
+		if not inner:
+			return []
+
+		# A name per arm rather than one reused, for `_arm_validation`'s
+		# reason: mypy --strict reads a second assignment to one local as a
+		# type error rather than as a new variable, and the suite runs it
+		# over every generated module.
+		return [
+			f"\t\t# {placement.path}: the arm the discriminant selects",
+			"\t\t# carries its own constraints. A different arm is nothing to",
+			"\t\t# check, which is what the accessor's VersionError says.",
+			"\t\ttry:",
+			f"\t\t\t{local} = self.{name}",
+			"\t\texcept VersionError:",
+			f"\t\t\t{local} = None",
+			f"\t\tif {local} is not None:",
+			*[f"\t{one}" for one in inner],
 		]
 
 	def _arm_fits_check(self, struct: ResolvedStruct,
@@ -6067,14 +6213,7 @@ class Emitter:
 			                                 f"self.{name}_digits"))
 			lines.append(f"\t\t_ = self.{name}")
 
-		enum = self.enums.get(placement.type_name or "")
-		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
-			lines.extend([
-				f"\t\tif not known_enum({py_name(enum.name)}, int({read})):",
-				f"\t\t\traise ConstraintError("
-				f"f\"{placement.path} is {{int({read})}}, not a"
-				f" {enum.name}\")",
-			])
+		lines.extend(self._enum_check(placement, read))
 
 		# A BCD field can hold a bit pattern that is not a number: a nibble
 		# above nine. The getter cannot report that -- it decodes either way

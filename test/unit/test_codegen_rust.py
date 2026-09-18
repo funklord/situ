@@ -2507,3 +2507,165 @@ fn main() {
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
 	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# A constraint on a variant ARM (26.414)
+# ---------------------------------------------------------------------------
+
+#: The shape 26.414 names, and it carries both kinds of arm at once. A
+#: byte-run enum arm, whose membership is a pinned span; and a scalar arm
+#: with an ordinary `[max]`. `trailer` sits after the variant so that a
+#: wrongly sized arm is a wrong byte rather than only a wrong number.
+ARM_CONSTRAINED = """enum sig : u8[2] { bmp = "BM", pe = "MZ" }
+
+struct frame {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  sig marker;
+		case 2:  u8  flag [max = 7];
+		default: error;
+	}
+	u8 trailer;
+}
+"""
+
+
+def test_an_arms_own_constraint_reaches_validate() -> None:
+	"""Both kinds of arm, and both are new (26.414).
+
+	`validate` was the discriminant and the trailer's bounds: a byte-run
+	enum arm's membership and a scalar arm's `[max]` were declared by the
+	schema and enforced by nobody, while `situc gen-checks` already wrote a
+	test asserting they were. Two generators disagreeing about one schema.
+	"""
+	module = emit(ARM_CONSTRAINED)
+	body   = module[module.index("pub fn check_which"):]
+
+	# The span, through the member's own comparison rather than a second
+	# one written here: one place decides what `[must_eq]` means.
+	assert 'frame.held.marker [must_eq = "BM" | "MZ"]' in body
+	assert "const WANT: [[u8; 2]; 2] = [[0x42, 0x4D], [0x4D, 0x5A]];" in body
+	# The scalar, through the arm's own accessor.
+	assert "match self.held_flag() {" in body
+	assert "Ok(value) => {" in body
+	assert "if value > 7 {" in body
+
+
+def test_an_arms_constraint_is_asked_under_the_discriminant() -> None:
+	"""The `packet`/CONNECT regression, read off the source.
+
+	These checks were SUPPRESSED rather than gated, and the reason is on
+	C's equivalent branch: `example/packet` emitted the `connect` arm's
+	magic inline and refused every packet that was not a CONNECT, whatever
+	the discriminant said. The answer to a check asked unconditionally is
+	to ask it conditionally, so what the emitter had to grow is the
+	condition -- and this asserts the condition rather than the check,
+	because a check with no condition round it passes the test next door.
+
+	`== 1` rather than `!(... != 1)`: the accessor wants the refusal and
+	`validate` wants the test, so `_arm_guard` answers in both polarities
+	instead of `validate` wrapping C's spelling in a `!`.
+	"""
+	module = emit(ARM_CONSTRAINED)
+	body   = module[module.index("pub fn check_which"):]
+
+	assert "if (self.kind() as usize) == 1 {" in body
+	assert "if !((self.kind() as usize) != 1)" not in body
+	# The scalar arm's gate is the accessor's own refusal, which is what
+	# `_arm_validation` leans on for a struct arm.
+	assert "Err(Error::Version) => {}" in body
+	assert "Err(other) => return Err(other)," in body
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_an_arms_own_constraint_refuses(tmp_path: Path) -> None:
+	"""Run, not read, and under `-D warnings`.
+
+	Each refusal is paired with the same arm satisfied, because a validator
+	that refused everything would pass the refusals alone.
+	"""
+	built = build(tmp_path, ARM_CONSTRAINED, """
+use situ_rt::Error;
+
+fn verdict(buf: &[u8]) -> Result<(), Error> {
+	unit::Frame::new(buf)?.validate()
+}
+
+fn main() {
+	// kind=1 selects `sig marker`, and "XY" is neither "BM" nor "MZ".
+	assert_eq!(verdict(&[1, b'X', b'Y', 0]), Err(Error::Constraint),
+		"kind=1 'XY': the marker's membership must refuse");
+	assert_eq!(verdict(&[1, b'B', b'M', 0]), Ok(()), "kind=1 'BM' is valid");
+	assert_eq!(verdict(&[1, b'M', b'Z', 0]), Ok(()), "kind=1 'MZ' is valid");
+
+	// kind=2 selects `u8 flag [max = 7]`, and 9 is over it.
+	assert_eq!(verdict(&[2, 9, 0]), Err(Error::Constraint),
+		"kind=2 flag=9: [max = 7] must refuse");
+	assert_eq!(verdict(&[2, 7, 0]), Ok(()), "kind=2 flag=7 is valid");
+}
+""")
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_arm_the_discriminant_did_not_select_is_not_checked(
+		tmp_path: Path) -> None:
+	"""The `packet`/CONNECT regression, run rather than read.
+
+	This is the assertion the whole shape exists for. Deleting the guard
+	passes the refusal test next door and fails here, which is the only
+	arrangement that tells the two apart.
+
+	The two arms overlap at offset 1 -- that is what a variant IS -- so
+	each case is bytes one arm would refuse and the other accepts, and a
+	check asked unconditionally cannot survive either of them. 0x42 is 66,
+	which is not a near miss against `[max = 7]`.
+	"""
+	built = build(tmp_path, ARM_CONSTRAINED, """
+use situ_rt::Error;
+
+fn verdict(buf: &[u8]) -> Result<(), Error> {
+	unit::Frame::new(buf)?.validate()
+}
+
+fn main() {
+	// kind=2 -> `flag`, which is happy with 0. Bytes 1..3 are 00 00,
+	// which is no signature at all: the marker's membership asked
+	// unconditionally refuses this message.
+	assert_eq!(verdict(&[2, 0x00, 0x00]), Ok(()),
+		"kind=2: bytes that are not a signature belong to an arm that is \
+		 not here");
+
+	// kind=1 -> `marker`, holding "BM". Byte 1 is 0x42 = 66, far over
+	// [max = 7]: the flag's bound asked unconditionally refuses this.
+	assert_eq!(verdict(&[1, b'B', b'M', 0]), Ok(()),
+		"kind=1: 0x42 where `flag` would be belongs to an arm that is \
+		 not here");
+}
+""")
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "out")]).returncode == 0
+
+
+def test_an_unconstrained_arm_says_nothing_new() -> None:
+	"""The control for the corpus measurement: no schema in this repository
+	has a constrained arm, so the right churn figure is zero, and a change
+	that emitted something for every arm would give zero too if nothing
+	looked. This is what makes the zero a measurement -- an arm with no
+	constraint on it still gets no line."""
+	module = emit("""struct frame {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  u8 a;
+		case 2:  u8 b;
+		default: error;
+	}
+}
+""")
+	body = module[module.index("pub fn validate"):]
+
+	assert "frame.held.a" not in body
+	assert "frame.held.b" not in body
+	assert "match self.held_a()" not in body

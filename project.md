@@ -29641,6 +29641,24 @@ returning a code, so the identity belongs on the exception, and 52 of its
 balancing parentheses forward from the `raise`, with an assertion that the
 balance closed. Neither is hard and neither is this entry.
 
+**The exemption this left behind has since grown to cover a construct it
+was not written for.** `test_backends_refuse_the_same_members` pops every
+struct containing a `variant` or `authenticated` entry from the id
+comparison, because C groups over every entry it walks and the other three
+over `own_entries`. When arm constraints became enforceable (26.415), C
+gained an id per constrained arm -- `SITU_FRAME_HELD_MARKER_CHECK` -- while
+C++, Python and Rust fold an arm's refusal into the variant's group. That
+is a NEW divergence, and the carve-out hides it by construction: nothing
+compares the ids of a struct holding a variant.
+
+Reported independently by the workers on C++, Python and Rust, each of
+whom folded into the variant group because their backend's own
+`_arm_validation` and `_arm_fits_check` already do, and each of whom said
+matching C would be this entry's decision rather than theirs. They are
+right, and it is still open. What has changed is that the question is no
+longer only about which member a refusal names -- it is about whether a
+carve-out written for one shape should keep absorbing new ones.
+
 ### 26.384 The same identity in Rust, and a fault the comparison found twice more
 
 **26.231's half in the third backend**, and it needed a restructure first.
@@ -30689,10 +30707,136 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.417 Four descriptions of six, and the differential said so
+
+**The corpus entry is held back a second time, and this time the thing
+that caught it is the differential rather than a generated check.**
+
+With `edges.signed_kind` present, `test_the_walker_agrees_with_the_
+compiled_backends` reported:
+
+    signed_kind validate --  walker: 0   C: 2
+
+on a buffer whose marker is `e4 1d`. C refuses it now and the WALKER does
+not, because the feature reached four descriptions and not six.
+
+**The packer suppresses arm constraints for the same structural reason
+the three other backends did.** `pack.py` iterates
+`traverse.own_entries(rstruct)`, which drops a dotted path before the
+pinned-run emission is reached, so `signed_kind.held.marker` carries zero
+pinned runs in the image where `edges.kind` carries two. The walkers then
+have nothing to check, and both report clean.
+
+**That is 26.390's shape with the polarity flipped.** That entry records
+refusing four backends and leaving the fifth description emitting the
+read. Here four backends REFUSE and the fifth and sixth pass -- and the
+packer's own comment beside the pinned-run code names exactly this
+outcome: *"a fifth description agreeing wrongly is what the differential
+exists to catch, and it cannot catch a disagreement nobody expresses"*.
+This time it could, because the corpus entry made one.
+
+**So the remaining work is named rather than guessed:** `pack.py` to
+carry an arm's constraints into the image, and both walkers to check them
+under the discriminant -- the same gate the four backends use, which for
+a walker means asking which arm the discriminant selected before reading
+the span. The packer already has the honest fallback for a construct it
+cannot encode (`whole = False`, disown rather than report clean), so a
+schema it cannot carry need not become a wrong answer.
+
+**The entry waits, as 0050's struct waited (26.402) and as this one
+waited for 26.414.** Twice now the corpus entry has been written, found a
+real gap, and been held back -- which is the entry doing its job both
+times, at the cost of the construct still not being in the tree. It goes
+in when the sixth description can speak for it.
+
+### 26.415 Arm constraints, gated rather than suppressed
+
+**26.414's gap is closed in all four backends.** A constraint declared on
+a variant arm -- a byte-run enum's membership, a `[min]`/`[max]` on a
+scalar arm -- is now enforced where the discriminant selects that arm, and
+nowhere else.
+
+**The fix is the one the old comment implied.** Arm constraints were
+suppressed because `example/packet` "emitted the `connect` arm's magic
+inline and refused every packet that was not a CONNECT, whatever the
+discriminant said", caught by the four-way differential. The answer to a
+check asked unconditionally is to ask it conditionally: each backend gates
+on the arm's OWN accessor, which already refuses for the arm that is not
+present, and the span case wraps the EXISTING member check rather than
+writing a second byte comparison -- two would be two places that must
+agree about what `[must_eq = "BM" | "MZ"]` means.
+
+**The design was proven in C before anyone was briefed on it.** The
+previous round's lesson: a design handed out unproven was at the wrong
+layer and two workers had to stop. This time C was implemented, compiled
+and run first, and the brief carried the measured shape.
+
+**Three things the workers corrected in that brief, each independently.**
+
+- **The guard I described exists in one backend of four.** C reaches an
+  arm through its per-entry loop and skips it with a dotted-path test.
+  C++, Python and Rust iterate `own_entries`, which drops a dotted path
+  before the member dispatch is reached at all -- the suppression is
+  STRUCTURAL there, not conditional. Three workers each found that and
+  said so rather than forcing my description onto their file.
+- **My "not selected" fixtures could not have worked.** The arms overlap
+  at offset 1, which is what a variant IS, so `kind=2` with `"XY"` makes
+  `flag = 0x58 = 88` and `[max = 7]` correctly refuses it. Both fixtures
+  would have failed for the RIGHT reason and read as a regression. What
+  discriminates is bytes one arm accepts and the other would refuse.
+- **`[max]` alone makes an ungated check undetectable.** The local the
+  accessor writes is untouched when the arm is not selected, so it holds
+  its zero and passes `max`. `[min = 2]` is what makes the gate
+  load-bearing. Reported from C++, where the local is zero-initialised; in
+  C it is INDETERMINATE, so an ungated check there is undefined behaviour
+  -- and the C sabotage duly fails at the compiler,
+  *`value` may be used uninitialized*, which is a stronger guarantee than
+  a test.
+
+### 26.416 The feature's own bounds hazard, in three flavours
+
+**Emitting the check is what made it reachable.** A struct's `SIZE_MIN` is
+its SHORTEST arm, so a fixed-size arm longer than that ends past a frame
+the view accepted. An ordinary pinned member is covered by the fits
+check, and a `sized_by` arm by the arm-fits check; a FIXED-size arm past
+the minimum is the cell neither reaches, and nothing had ever looked
+there because the check was not emitted.
+
+Found by the Rust worker, who reproduced it and did NOT fix it -- patching
+Rust alone would have made Rust answer bounds where C read garbage, which
+is the divergence the four-way differential exists to catch. Then measured
+in each backend, and the three failure modes are not equally loud:
+
+    Rust    panics on the slice                     loud
+    C       reads past the buffer                   loud only under ASan
+    C++     reads past the buffer                   loud only under ASan
+    Python  clamps, and answers from the WRONG      silent
+            bytes
+
+**Python's is the one worth remembering.** It does not overread, so there
+is no crash to find: a two-byte VIEW inside a longer buffer read the two
+bytes AFTER the frame and answered OK. The verdict came from bytes the
+caller had declared were not part of the message -- the shape 26.32 rates
+worst, and the only one of the four with nothing to announce it.
+
+All four now answer the bounds error, and C's is pinned by a test that
+builds under `-fsanitize=address` against an exact-length `malloc`, so
+the sanitizer can see the read at all. Sabotaging the guard reproduces
+`heap-buffer-overflow ... in situ_S_check`.
+
+**And a vacuous test of my own, caught by reading.** The first C test
+handed its probe to `compile_generated`, which passes `-c`: the probe was
+compiled, never linked, never executed, and every assertion in its `main`
+was inert. It passed. It builds, links and runs now, and its exit code
+names which case answered wrongly.
+
 ### 26.414 A constraint on a non-struct variant arm is enforced by nobody
 
-**Found by trying to put 26.413's shape in the corpus, and it is why the
-entry is not there yet.** `edges.signed_kind` with a byte-run enum arm
+**Closed by 26.415; this entry is the diagnosis.** The corpus entry it
+held back is in as of the same commit.
+
+**Found by trying to put 26.413's shape in the corpus, and it was why the
+entry was not there.** `edges.signed_kind` with a byte-run enum arm
 made `make test-c` red on a check the generator itself writes:
 
     check_signed_kind_held_marker_must_eq_is_enforced
@@ -30724,11 +30868,10 @@ any such schema and no schema had one, so nothing ever ran it. That is
 the corpus argument again, and this time it fired before the entry could
 land rather than after.
 
-**The corpus entry is held back until this is fixed**, the way 0050's
+**The corpus entry was held back until this was fixed**, the way 0050's
 struct waited for the generators that would have turned red on it
-(26.402). Adding it now means committing a red `make test-c`, and the
-fix is its own piece: teaching `check` to enforce a field arm's
-constraints, in at least the C backend and probably all four.
+(26.402). It is in now: `make test-c` reports 2185 OK where it reported
+2180, the five new checks being the ones this gap had made unhonourable.
 
 One thing the attempt settled on the way: the first draft wrote `peek u8
 kind`, copying `edges.kinded`. `kinded` peeks because each arm's own
@@ -30796,9 +30939,9 @@ container inside one -- and `parse_variant_arm` calls the full
 `parse_member`, so `positional { ... }` there is legal. The plausible
 one-level fix would have looked right.
 
-`edges.signed_kind` carries the shape now, with a `trailer` after the
-variant so a wrongly-sized arm is a wrong BYTE rather than only a wrong
-number. The corpus had `signature` and had variants and never one inside
+The corpus entry that would carry this is written and held back: with it
+present the walker disagrees with the four backends, because the packer
+and both walkers do not have the feature yet (26.417). The corpus had `signature` and had variants and never one inside
 the other, which is 26.411's own sentence for the third time: **the
 population is not constructs but their products.**
 

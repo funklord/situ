@@ -3018,6 +3018,243 @@ int main(void)
 	assert run.returncode == 0, run.stderr
 
 
+ARM_CONSTRAINTS = """
+enum sig : u8[2] { bmp = "BM", pe = "MZ" }
+struct S {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  sig marker;
+		case 2:  u8  flag [min = 2, max = 7];
+		default: error;
+	}
+	u8 trailer;
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_an_arms_own_constraints_are_enforced_under_its_discriminant(
+		tmp_path: Path) -> None:
+	"""A constraint on a variant ARM was declared by the schema and
+	enforced by nobody, while `gen-checks` wrote a test asserting it was.
+
+	It was SUPPRESSED rather than gated, and the comment on the pinned-run
+	branch says why: `example/packet` "emitted the `connect` arm's magic
+	inline and refused every packet that was not a CONNECT, whatever the
+	discriminant said". The answer to a check asked unconditionally is to
+	ask it conditionally -- and the arm's own getter already refuses
+	`SITU_ERR_VERSION` for the arm that is not present, which is what
+	`_arm_validation` leans on for a struct arm.
+
+	Both directions are asserted, and the second is the one that matters:
+	the fixtures are chosen so that each arm's constraint would REFUSE the
+	bytes the other arm accepts. `kind=1 "BM"` puts 0x42 = 66 where `flag`
+	would be, far over `[max = 7]`; `kind=2 flag=5` leaves `05 59` where
+	`marker` would be, which is neither signature. So a check that lost its
+	gate fails here rather than passing quietly.
+
+	`[min = 2]` and not `[max = 7]` alone, which is not cosmetic: the local
+	the getter writes is untouched when the arm is not selected, so a
+	`max`-only constraint passes against whatever it holds and an ungated
+	check is undetectable. Reported by the worker doing the same change in
+	C++, where the local is zero-initialised; in C it is indeterminate,
+	which is worse.
+	"""
+	probe = """#include "unit.h"
+
+static int verdict(uint8_t k, uint8_t b1, uint8_t b2, situ_err_t want)
+{
+	uint8_t raw[4];
+	situ_msg_t msg;
+	situ_view_t view;
+
+	raw[0] = k; raw[1] = b1; raw[2] = b2; raw[3] = 0x00u;
+	situ_msg_init(&msg, raw, (uint32_t)sizeof raw);
+	if (situ_S_view(&msg, 0u, (uint32_t)sizeof raw, &view) != SITU_OK)
+		return 1;
+	return situ_S_validate(view) == want ? 0 : 1;
+}
+
+int main(void)
+{
+	/* The arm the discriminant selects is checked. */
+	if (verdict(1u, 0x42u, 0x4Du, SITU_OK))          return 2;
+	if (verdict(1u, 0x4Du, 0x5Au, SITU_OK))          return 3;
+	if (verdict(1u, 0x58u, 0x59u, SITU_ERR_CONSTRAINT)) return 4;
+	if (verdict(2u, 0x05u, 0x00u, SITU_OK))          return 5;
+	if (verdict(2u, 0x09u, 0x00u, SITU_ERR_CONSTRAINT)) return 6;
+	if (verdict(2u, 0x01u, 0x00u, SITU_ERR_CONSTRAINT)) return 7;
+
+	/* And the arm it does NOT select is not. Each line carries bytes the
+	 * other arm's constraint would refuse. */
+	if (verdict(2u, 0x05u, 0x59u, SITU_OK))          return 8;
+	if (verdict(1u, 0x42u, 0x4Du, SITU_OK))          return 9;
+
+	/* The discriminant still answers first. */
+	if (verdict(3u, 0x42u, 0x4Du, SITU_ERR_VERSION)) return 10;
+	return 0;
+}
+"""
+	# Built and RUN, not merely compiled. `compile_generated` passes `-c`,
+	# so a probe handed to it is compiled and never executed and every
+	# assertion in its `main` is inert -- which is what the first draft of
+	# this test did, and it passed.
+	(tmp_path / "unit.h").write_text(emit(ARM_CONSTRAINTS)[0], encoding="ascii")
+	(tmp_path / "unit.c").write_text(emit(ARM_CONSTRAINTS)[1], encoding="ascii")
+	(tmp_path / "probe.c").write_text(probe, encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	# The exit code names which case answered wrongly, so a failure here
+	# says what broke rather than that something did.
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, f"probe case {run.returncode} answered wrongly"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_an_enum_typed_arm_declares_the_member_s_type(tmp_path: Path) -> None:
+	"""The local the check binds is the MEMBER's C type, not the scalar's.
+
+	An enum-typed arm's getter takes `situ_<enum>_t *out`, and the first
+	draft declared the underlying `uint8_t` -- *passing argument 2 from
+	incompatible pointer type*, which this project builds as an error. It
+	compiled at HEAD and stopped compiling with the check, so it was a
+	regression the feature introduced rather than a gap it exposed.
+
+	Found by checking a report from the worker doing the same change in
+	C++, which said an enum-typed arm does not compile THERE. It does not,
+	for a different reason and one that predates all of this -- but asking
+	the same question of C is what turned up mine.
+
+	The membership is enforced, which is the point of declaring it right:
+	`level` has arms 1 and 2, so 9 under `kind=1` is refused and 9 under
+	`kind=2` is not looked at.
+	"""
+	body = """
+enum level : u8 { low = 1, high = 2, default = error }
+struct S {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  level sel;
+		case 2:  u8    flag;
+		default: error;
+	}
+	u8 trailer;
+}
+"""
+	probe = """#include "unit.h"
+
+static int verdict(uint8_t k, uint8_t b, situ_err_t want)
+{
+	uint8_t raw[3];
+	situ_msg_t msg;
+	situ_view_t view;
+
+	raw[0] = k; raw[1] = b; raw[2] = 0x00u;
+	situ_msg_init(&msg, raw, (uint32_t)sizeof raw);
+	if (situ_S_view(&msg, 0u, &view) != SITU_OK)
+		return 1;
+	return situ_S_validate(view) == want ? 0 : 1;
+}
+
+int main(void)
+{
+	if (verdict(1u, 1u, SITU_OK))                    return 2;
+	if (verdict(1u, 2u, SITU_OK))                    return 3;
+	if (verdict(1u, 9u, SITU_ERR_CONSTRAINT))        return 4;
+	if (verdict(2u, 9u, SITU_OK))                    return 5;
+	return 0;
+}
+"""
+	(tmp_path / "unit.h").write_text(emit(body)[0], encoding="ascii")
+	(tmp_path / "unit.c").write_text(emit(body)[1], encoding="ascii")
+	(tmp_path / "probe.c").write_text(probe, encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert build.returncode == 0, build.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, f"probe case {run.returncode} answered wrongly"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_span_arm_longer_than_the_struct_minimum_is_bounds_checked(
+		tmp_path: Path) -> None:
+	"""A struct's `SIZE_MIN` is its SHORTEST arm, so a fixed-size arm
+	longer than that ends past a frame the view accepted.
+
+	Without the guard the comparison reads byte 2 of a two-byte frame, and
+	AddressSanitizer calls it a heap-buffer-overflow in `situ_S_check`.
+	Reachable only because the check above is now emitted at all -- an
+	ordinary pinned member is covered by `_fits_check` and a `sized_by` arm
+	by `_arm_fits_check`, and a fixed-size arm past the minimum is the cell
+	neither reaches.
+
+	The buffer is exactly two bytes from `malloc` rather than a longer
+	array, so the sanitizer can see the read at all.
+	"""
+	short = """
+enum sig : u8[2] { bmp = "BM", pe = "MZ" }
+struct S {
+	u8 kind;
+	variant held switch (kind) {
+		case 1:  sig marker;
+		case 2:  u8  flag [min = 2, max = 7];
+		default: error;
+	}
+}
+"""
+	(tmp_path / "unit.h").write_text(emit(short)[0], encoding="ascii")
+	(tmp_path / "unit.c").write_text(emit(short)[1], encoding="ascii")
+	(tmp_path / "probe.c").write_text("""#include <stdlib.h>
+#include "unit.h"
+
+int main(void)
+{
+	uint8_t *raw = malloc(2);
+	situ_msg_t msg;
+	situ_view_t view;
+	situ_err_t got;
+
+	raw[0] = 0x01u;		/* the two-byte arm, in a two-byte frame */
+	raw[1] = 0x42u;
+	situ_msg_init(&msg, raw, 2u);
+	if (situ_S_view(&msg, 0u, 2u, &view) != SITU_OK) {
+		free(raw);
+		return 0;	/* refusing the frame outright is also correct */
+	}
+	got = situ_S_validate(view);
+	free(raw);
+	return got == SITU_ERR_BOUNDS ? 0 : 1;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	build = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, "-fsanitize=address",
+		 f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	if build.returncode != 0 and "sanitize" in build.stderr:
+		pytest.skip("no address sanitizer")
+	assert build.returncode == 0, build.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stdout + run.stderr
+
+
 # -- the second accessor family (decision 0022) -----------------------------
 
 INDEXED_RUN = """

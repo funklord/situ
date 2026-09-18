@@ -2409,6 +2409,36 @@ class Emitter:
 					lines.extend(self._arm_member(struct, variant, arm, member))
 		return lines
 
+	def _arm_guard(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, selected: bool = False) -> str | None:
+		"""Whether this arm is NOT the one present -- or, given `selected`,
+		whether it is.
+
+		Lifted out of `_arm_member` so that `validate` can reuse the same
+		sentence rather than write a second one. An arm's accessor and the
+		arm's own constraints have to agree about which arm is there, and
+		two spellings of one discriminant test are two places to be wrong
+		about it. C keeps the same pair, under the same name.
+
+		Both polarities from one place, because the two callers want
+		opposite answers and C's spelling does not survive the trip: an
+		accessor refuses the arm that is absent, while a check runs for the
+		arm that is present, and wrapping the refusal gives `!(x != 1)`
+		where Rust says `x == 1`. The negation is unavoidable only for a
+		`default` arm, which is present exactly when nothing else matched.
+
+		None where the variant is one this cannot dispatch on: with no
+		`case` to negate, a `default` arm has no test to write.
+		"""
+		held = self._over_fields(struct, variant.discriminant or "", "self")
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return None
+			joined = " || ".join(f"{held} == {one.value}" for one in matched)
+			return f"!({joined})" if selected else joined
+		return f"{held} {'==' if selected else '!='} {arm.value}"
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, as a `Result`: the arm may not be the one there.
@@ -2417,14 +2447,9 @@ class Emitter:
 		reading an arm that is not present is the same mistake from the other
 		end.
 		"""
-		held = self._over_fields(struct, variant.discriminant or "", "self")
-		if arm.value is None:
-			matched = matched_values(variant)
-			if not matched:
-				return []
-			test = " || ".join(f"{held} == {one.value}" for one in matched)
-		else:
-			test = f"{held} != {arm.value}"
+		test = self._arm_guard(struct, variant, arm)
+		if test is None:
+			return []
 
 		name   = _ident(c_name(local_name(struct, placement)))
 		scalar = placement.scalar
@@ -5186,6 +5211,101 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _arm_member_checks(self, struct: ResolvedStruct, variant: Placement,
+			arm: Arm, placement: Placement) -> list[str]:
+		"""A FIELD arm's own constraints, behind the discriminant.
+
+		`_arm_validation` above does this for a STRUCT arm by calling the
+		arm's accessor and passing over `Error::Version`. A field arm has no
+		nested type to validate through: it is a scalar or a span, so its
+		`[max]`, its `[must_eq]` and a byte-run enum's membership were
+		declared by the schema and enforced by no backend (26.414) --
+		while `situc gen-checks` wrote a test asserting they were, so two
+		generators disagreed about one schema.
+
+		They were SUPPRESSED rather than gated, and the reason is recorded
+		on C's equivalent branch: `example/packet` emitted the `connect`
+		arm's magic inline and refused every packet that was not a CONNECT,
+		whatever the discriminant said. **The answer to a check asked
+		unconditionally is to ask it conditionally**, not to delete it --
+		so what is new here is the condition, and neither shape below
+		writes a comparison of its own:
+
+		  * A SPAN -- a byte-run enum's membership, or `[must_eq]` on a run
+		    -- reuses `_pinned_run_check` under `_arm_guard`. A second byte
+		    comparison would be two places that have to agree about what
+		    `[must_eq = "BM" | "MZ"]` means.
+		  * A SCALAR goes through the arm's own accessor, which already
+		    refuses `Error::Version` for the arm that is not present, and
+		    hands the value to `_attr_checks` as a local -- a route that
+		    helper's docstring already names ("a raw load, an infallible
+		    `_value`, a bound local"). Any other error is the arm the
+		    discriminant DID select failing to fit, which is malformed and
+		    is carried out (invariant 42), exactly as `_arm_validation`
+		    carries it out for a struct arm.
+		"""
+		scalar = placement.scalar
+		guard  = self._arm_guard(struct, variant, arm, selected=True)
+		if guard is None:
+			return []
+		name = _ident(c_name(local_name(struct, placement)))
+
+		pinned = pinned_runs(placement)
+		if pinned is not None:
+			inner = self._pinned_run_check(struct, placement, name, pinned)
+			# A note rather than a check: `_pinned_run_check` declines where
+			# it cannot resolve the offset, and an `if` wrapped round a
+			# comment is an empty block that refuses nothing.
+			if not any(_REFUSES.match(one) for one in inner):
+				return []
+			return [
+				f"\t\t// {placement.path}: checked where the discriminant",
+				"\t\t// selects this arm, and nothing to check where it does",
+				"\t\t// not.",
+				f"\t\tif {guard} {{",
+				*[f"\t{one}" for one in inner],
+				"\t\t}",
+			]
+
+		# The scalar arm an accessor IS emitted for, and only that one. A
+		# run of values or a message-sized span has a different accessor
+		# shape, and naming this one for them is a validator calling what
+		# its own backend declined to emit -- which is the fault
+		# `_arm_validation` records one method up, as a compile error.
+		if scalar is None or placement.array_count is not None \
+				or placement.sized_by is not None \
+				or data_sized(placement):
+			return []
+		if self._offset_expression(struct, placement) is None:
+			return []
+
+		mine: list[str] = []
+		enum = self.enums.get(placement.type_name or "")
+		if enum is not None \
+				and enum.effective_default is ast.EnumDefault.ERROR:
+			mine.extend([
+				f"\t\tif !{_pascal(enum.name)}::is_known(value) {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
+		mine.extend(self._attr_checks(struct, placement, "value"))
+		if not mine:
+			return []
+
+		return [
+			f"\t\t// {placement.path}: the arm the discriminant selects",
+			"\t\t// carries its own constraints. A different arm is nothing",
+			"\t\t// to check, which is what the accessor's `Error::Version`",
+			"\t\t// says.",
+			f"\t\tmatch self.{name}() {{",
+			"\t\t\tOk(value) => {",
+			*[f"\t\t{one}" for one in mine],
+			"\t\t\t}",
+			"\t\t\tErr(Error::Version) => {}",
+			"\t\t\tErr(other) => return Err(other),",
+			"\t\t}",
+		]
+
 	def _is_arm_struct(self, placement: Placement) -> bool:
 		"""Whether an arm is one struct rather than a run of them.
 
@@ -7181,20 +7301,24 @@ class Emitter:
 			# Each arm in declaration order, which is where the other
 			# three emit theirs: `own_entries` drops a dotted path, so an
 			# arm member never reaches this loop on its own.
-			for _, member in arm_members(struct, placement):
+			for arm, member in arm_members(struct, placement):
 				if member is not None:
 					out.extend(self._arm_fits_check(struct, member))
 					out.extend(self._arm_validation(struct, member))
+					out.extend(self._arm_member_checks(
+						struct, placement, arm, member))
 			return out
 
 		if check is Check.NOTHING:
 			return out
 		if check is Check.DISCRIMINANT:
 			out.extend(self._discriminant_check(struct, placement))
-			for _, member in arm_members(struct, placement):
+			for arm, member in arm_members(struct, placement):
 				if member is not None:
 					out.extend(self._arm_fits_check(struct, member))
 					out.extend(self._arm_validation(struct, member))
+					out.extend(self._arm_member_checks(
+						struct, placement, arm, member))
 			return out
 		if check is Check.DELIMITED:
 			out.extend(self._delimiter_checks(struct, placement))

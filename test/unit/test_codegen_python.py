@@ -2663,3 +2663,306 @@ def test_a_struct_that_takes_an_argument_cannot_be_a_member() -> None:
 		           "u8 body[n]; }\nstruct outer { u8 a; inner it; }")
 
 	assert "cannot be a member yet" in str(refused.value)
+
+
+# -- a constraint declared on a variant ARM (26.414) -------------------------
+
+#: A schema whose two arms are a byte-run enum and a bounded scalar, sharing
+#: the offset the discriminant chooses between them.
+#:
+#: The overlap is what makes the not-selected assertions below mean anything:
+#: with `kind = 2` the bytes `07 00` are a legal `flag` and an illegal
+#: `marker`, and with `kind = 1` the bytes `BM` are a legal `marker` whose
+#: first byte read as `flag` is 66. So each message violates the arm it did
+#: not select, and a check asked unconditionally refuses it.
+ARM_CONSTRAINTS = (
+	'enum sig : u8[2] { bmp = "BM", pe = "MZ" }\n'
+	"struct frame {\n"
+	"\tu8 kind;\n"
+	"\tvariant held switch (kind) {\n"
+	"\t\tcase 1:  sig marker;\n"
+	"\t\tcase 2:  u8  flag [max = 7];\n"
+	"\t\tdefault: error;\n"
+	"\t}\n"
+	"\tu8 trailer;\n"
+	"}\n")
+
+
+def _framed(module: ModuleType, kind: int, first: int, second: int) -> Any:
+	"""One `frame`, with the two bytes the arms share written directly."""
+	return module.frame.at(
+		module.Message(bytearray([kind, first, second, 0xFF])), 0, 4)
+
+
+def test_a_field_arms_constraints_are_enforced_behind_the_discriminant(
+		tmp_path: Path) -> None:
+	"""`validate` enforces a constraint declared on a FIELD arm (26.414).
+
+	`_arm_validation` reaches a STRUCT arm through the nested type's own
+	`validate`. A byte-run enum arm and a bounded scalar arm have no nested
+	type, and they are not members of the enclosing struct either, so
+	neither route reached them: the schema declared `[max = 7]` and
+	`sig`'s membership, and no backend asked. `situc gen-checks` was
+	meanwhile writing a test asserting both were enforced, so two
+	generators disagreed about one schema.
+
+	Executed rather than matched. Reading the emitter is how the gap
+	survived: the branch that would have checked these was present and
+	returned nothing.
+	"""
+	module = load(tmp_path, ARM_CONSTRAINTS)
+
+	# The span arm: a byte-run enum admits its members and nothing else.
+	_framed(module, 1, ord("B"), ord("M")).validate()
+	_framed(module, 1, ord("M"), ord("Z")).validate()
+	with pytest.raises(module.ConstraintError, match="must_eq"):
+		_framed(module, 1, ord("X"), ord("Y")).validate()
+
+	# The scalar arm: its own `[max]`.
+	_framed(module, 2, 7, 0).validate()
+	with pytest.raises(module.ConstraintError, match="max 7"):
+		_framed(module, 2, 9, 0).validate()
+
+
+def test_an_arm_that_is_not_selected_is_not_checked(tmp_path: Path) -> None:
+	"""The regression the suppression was written for, and why it is a
+	GUARD rather than a deletion.
+
+	`example/packet` emitted the `connect` arm's magic inline and refused
+	every packet that was not a CONNECT, whatever the discriminant said;
+	the four-way differential caught it, and the check was removed rather
+	than made conditional. So the answer to a check asked unconditionally
+	is to ask it conditionally, and this is the assertion that says so.
+
+	Both messages below are valid, and each violates the arm it did not
+	select -- which is exactly what an unconditional check reads. Remove
+	either `if` from `_arm_member_checks` and this goes red while the test
+	above stays green, because that one only ever looks at the arm the
+	discriminant chose.
+	"""
+	module = load(tmp_path, ARM_CONSTRAINTS)
+
+	# `kind = 2` selects `flag`, and 7 is within `[max = 7]`. The same two
+	# bytes read as `marker` are b'\x07\x00', which is neither 'BM' nor
+	# 'MZ' -- so an unconditional membership check refuses this message.
+	_framed(module, 2, 7, 0).validate()
+
+	# `kind = 1` selects `marker`, and 'BM' is a member. Byte 1 read as
+	# `flag` is 0x42 = 66, well past `[max = 7]` -- so an unconditional
+	# bound refuses this one.
+	_framed(module, 1, ord("B"), ord("M")).validate()
+	_framed(module, 1, ord("M"), ord("Z")).validate()
+
+	# And a discriminant selecting no arm is still the variant's own
+	# refusal, not a constraint borrowed from an arm nobody chose.
+	with pytest.raises(module.VersionError, match="no arm for this kind"):
+		_framed(module, 3, ord("X"), ord("Y")).validate()
+
+
+def test_an_enum_arms_membership_is_enforced_behind_the_discriminant(
+		tmp_path: Path) -> None:
+	"""The same gap for a SCALAR enum arm, which is the other half of it.
+
+	A byte-run enum arm goes through the pinned-run comparison and a
+	scalar enum arm through `known_enum`, so the two shapes reach
+	`validate` by different branches and one working says nothing about
+	the other. The membership test is the emitter's own helper, shared
+	with an ordinary member, rather than a second spelling here.
+	"""
+	module = load(tmp_path, (
+		"enum code : u8 { one = 1, two = 2, default = error }\n"
+		"struct s {\n"
+		"\tu8 kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1:  code sel;\n"
+		"\t\tcase 2:  u8   raw;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"\tu8 tail;\n"
+		"}\n"))
+
+	def held(kind: int, byte: int) -> Any:
+		# Fixed size, every arm being one byte, so `at` needs no length.
+		return module.s.at(module.Message(bytearray([kind, byte, 0xFF])))
+
+	held(1, 1).validate()
+	held(1, 2).validate()
+	with pytest.raises(module.ConstraintError, match="not a code"):
+		held(1, 3).validate()
+
+	# `raw` is an unconstrained `u8`, so 3 is a fine message under `kind =
+	# 2` -- and it is the same byte the membership test refuses above.
+	held(2, 3).validate()
+
+
+@pytest.mark.skipif(not HAS_MYPY, reason="no mypy")
+def test_a_module_with_a_constrained_arm_type_checks(tmp_path: Path) -> None:
+	"""`--strict` over the shape, because no corpus schema carries it yet.
+
+	`test_every_generated_module_type_checks` sweeps the corpus, and the
+	corpus has no constrained arm -- 26.414 records the entry being held
+	back until this is fixed. So the sweep is green about a construct it
+	has never seen, and this is where that construct is type-checked until
+	the entry lands.
+
+	The branch at risk is a real one: the scalar arm's value is bound to a
+	local and then set to `None` where the arm is not present, which is a
+	second assignment of another type to one name. `_arm_validation` above
+	it names the same hazard for a different reason.
+	"""
+	shutil.copy(RUNTIME / "python" / "situ_runtime.py",
+	            tmp_path / "situ_runtime.py")
+	(tmp_path / "arms.py").write_text(emit(ARM_CONSTRAINTS), encoding="ascii")
+
+	checked = subprocess.run(
+		[sys.executable, "-m", "mypy", "--strict", "--no-pretty",
+		 "--no-error-summary", str(tmp_path)],
+		capture_output=True, text=True)
+
+	assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_a_default_arm_carries_its_constraints_too(tmp_path: Path) -> None:
+	"""The other half of `_arm_guard`, which nothing else here reaches.
+
+	A `case` arm is present when the discriminant equals one value, so its
+	guard is one comparison and its negation is one comparison. A `default`
+	arm is present when NO case matched, so its guard is the negation of
+	every case at once -- a different expression built by a different
+	branch, and a backend can have the first right and the second wrong.
+
+	The default arm here is a SPAN deliberately. A scalar arm's gate is its
+	own accessor raising `VersionError`, so a scalar default arm exercises
+	the accessor and not the guard at all: sabotaging the guard's `default`
+	branch leaves such a test green, which is how this one came to be
+	rewritten. The span arm reads the bytes directly and the guard is the
+	only thing standing between it and every message.
+	"""
+	module = load(tmp_path, (
+		'enum sig : u8[2] { bmp = "BM", pe = "MZ" }\n'
+		"struct s {\n"
+		"\tu8 kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1:  u8  narrow [min = 4];\n"
+		"\t\tdefault: sig other;\n"
+		"\t}\n"
+		"\tu8 tail;\n"
+		"}\n"))
+
+	def held(kind: int, first: int, second: int) -> Any:
+		buf = bytearray([kind, first, second, 0xFF])
+		return module.s.at(module.Message(buf), 0, 4)
+
+	# Nothing matched, so the default arm is the one present.
+	held(7, ord("B"), ord("M")).validate()
+	with pytest.raises(module.ConstraintError, match="must_eq"):
+		held(7, ord("X"), ord("Y")).validate()
+
+	# `kind = 1` claims the bytes for `narrow`, where 4 is legal. Read as
+	# `other` they are b'\x04\x00', a member of nothing -- so a default
+	# arm whose guard were the wrong way round, or absent, refuses this.
+	held(1, 4, 0).validate()
+	with pytest.raises(module.ConstraintError, match="min 4"):
+		held(1, 3, 0).validate()
+
+
+def test_a_span_arm_longer_than_the_minimum_reports_bounds(
+		tmp_path: Path) -> None:
+	"""A fixed-size arm can end past the struct's minimum, and the check
+	this feature adds is what reads there.
+
+	`SIZE_MIN` is the SHORTEST arm's, so the two-byte frame below is
+	accepted and `case 1`'s two-byte marker at offset 1 is not in it.
+	Neither existing bounds check covers that: `_fits_check` skips a dotted
+	path, and `_arm_fits_check` answers only for an arm whose length the
+	message declares.
+
+	The other three backends overread -- C's was caught under
+	AddressSanitizer as a `heap-buffer-overflow` in `situ_frame_check`, and
+	Rust panics on the slice. Python does not: a slice clamps. Its symptom
+	is the second case below, which is worse for being quiet -- a two-byte
+	VIEW inside a longer buffer read the bytes after the frame and called
+	the message valid, so the verdict came from bytes the caller had said
+	were not part of it.
+
+	`BoundsError` and not `ConstraintError`, because that is what the other
+	three report: a frame that does not hold the member is short, not a
+	value the schema forbids. A differential over random buffers is what
+	makes that distinction load-bearing rather than cosmetic.
+
+	The scalar arm needs no such guard and is asserted here rather than
+	assumed: its accessor bounds-checks itself, and `validate` catches only
+	`VersionError`, so the bounds refusal propagates.
+	"""
+	module = load(tmp_path, (
+		'enum sig : u8[2] { bmp = "BM", pe = "MZ" }\n'
+		"struct frame {\n"
+		"\tu8 kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1:  sig marker;\n"
+		"\t\tcase 2:  u8  flag [max = 7];\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n"))
+
+	assert module.frame.SIZE_MIN == 2, "the shortest arm's, which is the" \
+		" whole premise: a two-byte frame is accepted"
+
+	def view(buf: bytes, length: int) -> Any:
+		return module.frame.at(module.Message(bytearray(buf)), 0, length)
+
+	# The frame is the buffer, and the marker is half here.
+	with pytest.raises(module.BoundsError, match="outside the frame"):
+		view(b"\x01B", 2).validate()
+
+	# The bytes exist and are a valid signature -- and they are past the
+	# frame the caller declared. Before the guard this answered OK.
+	with pytest.raises(module.BoundsError, match="outside the frame"):
+		view(b"\x01BM\xFF\xFF\xFF", 2).validate()
+
+	# A frame that does hold it is unaffected, in both directions.
+	view(b"\x01BM", 3).validate()
+	with pytest.raises(module.ConstraintError, match="must_eq"):
+		view(b"\x01XY", 3).validate()
+
+	# ...and the short arm is still judged on its own length.
+	view(b"\x02\x07", 2).validate()
+	with pytest.raises(module.ConstraintError, match="max 7"):
+		view(b"\x02\x09", 2).validate()
+
+
+def test_a_scalar_arm_past_the_minimum_reports_bounds_through_its_accessor(
+		tmp_path: Path) -> None:
+	"""The same hazard for a SCALAR arm, which needs no guard of its own.
+
+	Measured rather than assumed, because "it goes through the accessor" is
+	the kind of claim that is true until somebody changes the accessor. A
+	`u32` arm at offset 1 needs five bytes and the struct's minimum is two,
+	so this is the scalar spelling of the case above -- and the refusal has
+	to survive `validate`'s `except VersionError`, which is the part a
+	wider `except` would silently break.
+	"""
+	module = load(tmp_path, (
+		"struct frame {\n"
+		"\tu8 kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1:  u32 wide [max = 7];\n"
+		"\t\tcase 2:  u8  flag [max = 7];\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n"))
+
+	assert module.frame.SIZE_MIN == 2
+
+	def view(buf: bytes, length: int) -> Any:
+		return module.frame.at(module.Message(bytearray(buf)), 0, length)
+
+	with pytest.raises(module.BoundsError, match="outside the frame"):
+		view(b"\x01\x00", 2).validate()
+	# The bytes are in the buffer and not in the frame.
+	with pytest.raises(module.BoundsError, match="outside the frame"):
+		view(b"\x01\x00\x00\x00\x03\xFF", 2).validate()
+
+	view(b"\x01\x00\x00\x00\x03", 5).validate()
+	with pytest.raises(module.ConstraintError, match="max 7"):
+		view(b"\x01\x00\x00\x00\x09", 5).validate()

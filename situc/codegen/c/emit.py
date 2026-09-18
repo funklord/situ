@@ -8566,9 +8566,63 @@ class Emitter:
 		# constraint where the other three said ok, which is the one shape
 		# that test exists to find.
 		pinned = pinned_runs(placement)
-		if pinned is not None \
-				and "." not in placement.path[len(struct.name) + 1:]:
-			return self._pinned_run_check(struct, placement, pinned)
+		if pinned is not None:
+			dotted = "." in placement.path[len(struct.name) + 1:]
+			if not dotted:
+				return self._pinned_run_check(struct, placement, pinned)
+			# A pinned SPAN inside a variant arm -- a byte-run enum's
+			# membership, or a `[must_eq]` on a run. Suppressed until now
+			# for the reason the comment above gives, and the answer to a
+			# check asked unconditionally is to ask it conditionally.
+			#
+			# `_arm_guard` hands back the test the arm's own accessors use
+			# to refuse `SITU_ERR_VERSION`, which is "NOT this arm", so the
+			# check runs under its negation. Reusing the member's check
+			# verbatim rather than writing a second byte comparison: the
+			# two would then be two places that have to agree about what
+			# `[must_eq = "BM" | "MZ"]` means.
+			guard = self._arm_guard(struct, placement)
+			if guard is None:
+				return []
+			test, _name = guard
+			inner = self._pinned_run_check(struct, placement, pinned)
+			# And the span has to BE there before it is compared. A
+			# struct's `SIZE_MIN` is its SHORTEST arm, so a fixed-size arm
+			# longer than that ends past a frame the view accepted --
+			# `u8 kind; variant { case 1: sig marker; case 2: u8 flag; }`
+			# has SIZE_MIN 2 and a two-byte marker at offset 1. Without
+			# this guard the comparison below reads byte 2 of a two-byte
+			# frame: AddressSanitizer calls it a heap-buffer-overflow, and
+			# Rust panics on the same slice.
+			#
+			# An ordinary pinned member does not need it because
+			# `_fits_check` covers one at a dynamic offset, and
+			# `_arm_fits_check` covers a `sized_by` arm. A FIXED-size arm
+			# past the minimum is the cell neither reaches -- and it is
+			# reachable only now, because until this branch existed the
+			# check was not emitted at all.
+			width = byte_span(placement)
+			guard_lines = []
+			if width is not None:
+				guard_lines = [
+					f"\t\tif (!situ_in_bounds(view,"
+					f" {self._base_expression(struct, placement)},"
+					f" {width[1]}u)) {{",
+					"\t\t\treturn SITU_ERR_BOUNDS;",
+					"\t\t}",
+				]
+			return [
+				f"\t/* {placement.path}: checked where the discriminant",
+				"\t * selects this arm, and nothing to check where it does",
+				"\t * not. */",
+				f"\tif (!({test})) {{",
+				*guard_lines,
+				# A blank separator stays blank: indenting it makes a
+				# line holding one tab, which the style gate reads as
+				# trailing whitespace -- and does, correctly.
+				*[f"\t{one}" if one.strip() else one for one in inner],
+				"\t}",
+			]
 
 		if scalar is not None and placement.kind == "reserved" \
 				and "." not in placement.path[len(struct.name) + 1:] \
@@ -8626,8 +8680,22 @@ class Emitter:
 			return []
 		if placement.kind == "marker":
 			return []
+		# A dotted path under this struct is one of two different things.
+		# A nested struct's field belongs to the nested type and is checked
+		# under it. A variant ARM is this struct's own member, and its
+		# constraints were declared here and enforced by nobody.
+		#
+		# They were SUPPRESSED rather than gated, and the comment on the
+		# pinned-run branch says why: `packet` emitted the `connect` arm's
+		# magic inline and refused every packet that was not a CONNECT.
+		# The answer to a check asked unconditionally is to ask it
+		# conditionally, and the arm's own getter already refuses
+		# `SITU_ERR_VERSION` for the arm that is not present -- which is
+		# exactly what `_arm_validation` leans on for a STRUCT arm.
 		if "." in placement.path[len(struct.name) + 1 :]:
-			return []
+			if arm_of(struct, placement) is None:
+				return []
+			return self._arm_member_checks(struct, entry)
 
 		local  = c_name(self._local(struct, placement))
 		lines  = []
@@ -8721,6 +8789,58 @@ class Emitter:
 			f" (section 8.7) */",
 			f"\tif (!{ident(self.prefix, enum.name)}_is_known({value})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
+	def _arm_member_checks(self, struct: ResolvedStruct,
+			entry: Resolved) -> list[str]:
+		"""A FIELD arm's own constraints, behind the discriminant.
+
+		`_arm_validation` does this for a struct arm by calling the arm's
+		`_view` and passing over `SITU_ERR_VERSION`. A field arm has a
+		getter of the same shape -- an out-parameter and an error -- so the
+		gate is the same and only the thing checked differs.
+
+		The value goes to `_attr_checks` as a LOCAL rather than as a
+		getter call, which is a route that helper already has: its
+		docstring names "a plain getter, an infallible `_value`, a local
+		behind a version gate", and a delimited text number reaches it the
+		same way. That one was the same defect in another construct --
+		`[min]` and `[max]` on a delimited text number "reached no
+		backend" until the value expression was changed.
+		"""
+		placement = entry.placement
+		scalar    = placement.scalar
+		if scalar is None or placement.array_count is not None:
+			return []		# spans go through the pinned-run branch
+
+		local  = c_name(self._local(struct, placement))
+		getter = ident(self.prefix, struct.name, local, "get")
+		inner  = [*self._enum_check(placement, "value"),
+		          *self._attr_checks(struct, placement, "value",
+		                             self.resolved.layout.env)]
+		if not inner:
+			return []
+
+		return [
+			f"\t/* {placement.path}: the arm the discriminant selects carries",
+			"\t * its own constraints. A different arm is nothing to check,",
+			"\t * which is what the getter's SITU_ERR_VERSION says. */",
+			"\t{",
+			# The MEMBER's C type, not the scalar's. An enum-typed arm's
+			# getter takes `situ_<enum>_t *`, and declaring the underlying
+			# `uint8_t` here passed an incompatible pointer -- a warning
+			# this project builds as an error. The ordinary member path
+			# asks the same question the same way.
+			f"\t\t{self._field_ctype(placement)} value;",
+			f"\t\tconst situ_err_t got = {getter}(view, &value"
+			f"{self._member_args(struct, placement)});",
+			"",
+			"\t\tif (got == SITU_OK) {",
+			*[f"\t\t{one}" if one.strip() else one for one in inner],
+			"\t\t} else if (got != SITU_ERR_VERSION) {",
+			"\t\t\treturn got;",
+			"\t\t}",
 			"\t}",
 		]
 
