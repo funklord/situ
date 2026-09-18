@@ -2294,7 +2294,15 @@ class Emitter:
 
 		array = self._delimiter_array(placement)
 
-		def walk_from(base: str) -> list[str]:
+		# A run of a RECURSIVE record needs the depth counter the other two
+		# run emitters already carry (26.428). `_repeat_while` and
+		# `_variable` both branch on `is_recursive` and emit the `_at`
+		# forms; this one never learned to, so `extent_at` called a
+		# `{name}_span_at` nothing declared and the generated C++ did not
+		# compile at all. Rust had the same hole for the same reason.
+		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+
+		def walk_from(base: str, depth: str | None = None) -> list[str]:
 			return [
 			self._delimiter_decl(placement, "\t\t"),
 			f"\t\tstd::uint32_t at = {base};",
@@ -2311,8 +2319,11 @@ class Emitter:
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-			f"\t\t\tconst std::uint32_t size = "
-			f"::{self.namespace}::{inner}(raw).extent();",
+			(f"\t\t\tconst std::uint32_t size = "
+			 f"::{self.namespace}::{inner}(raw).extent();"
+			 if depth is None else
+			 f"\t\t\tconst std::uint32_t size = "
+			 f"::{self.namespace}::{inner}(raw).extent_at({depth} + 1);"),
 			"\t\t\tif (size == 0u || at + size > raw_.limit) {",
 			"\t\t\t\t/* A zero-extent element would walk here forever, and",
 			"\t\t\t\t * one running past the limit was never in this frame. */",
@@ -2321,7 +2332,7 @@ class Emitter:
 			]
 
 		walk  = walk_from(start)
-		from_ = walk_from("start")
+		from_ = walk_from("start", "depth" if deep else None)
 
 		return [
 			"",
@@ -2362,8 +2373,10 @@ class Emitter:
 			"\t * accumulates offsets holds `at` already, and the plain",
 			"\t * `_span` re-resolves it by rescanning every member before",
 			"\t * the run. */",
-			f"\t[[nodiscard]] std::uint32_t {name}_span_from(std::uint32_t start)"
-			" const noexcept",
+			f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+			+ ("(std::uint32_t start) const noexcept" if not deep else
+			   "_at(std::uint32_t start, std::uint32_t depth)"
+			   " const noexcept"),
 			"\t{",
 			*from_,
 			"\t\t\tat += size;",
@@ -2379,10 +2392,33 @@ class Emitter:
 			"\t\treturn at - start;",
 			"\t}",
 			"",
-			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
-			"\t{",
-			f"\t\treturn {name}_span_from({start});",
-			"\t}",
+			*( [
+				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from({start});",
+				"\t}",
+			] if not deep else [
+				# The element names itself, so the walk descends and the
+				# depth travels with it. The plain forms start it at zero
+				# for a caller with no business knowing it exists -- the
+				# same four entry points `_repeat_while` emits.
+				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
+				"(std::uint32_t start) const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from_at(start, 0);",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span_at"
+				"(std::uint32_t depth) const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from_at({start}, depth);",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+				"\t{",
+				f"\t\treturn {name}_span_from_at({start}, 0);",
+				"\t}",
+			]),
 		]
 
 	def _required(self, struct: ResolvedStruct) -> list[str]:

@@ -30707,6 +30707,74 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.429 A struct named `list` broke the module that described it
+
+**The Python backend emits `class list(View)` for a struct called `list`,
+which rebinds the name for the rest of the module -- including this
+emitter's own `list[int]` annotations.** `example/sexpr` names a struct
+`list`, because that is what a Lisp list is called, and mypy refused the
+generated module: *"list" expects no type arguments, but 1 given*.
+
+**The guard existed and read the wrong population.**
+`_shadowed_builtins` collected MEMBER names and compared them against a
+`SHADOWABLE` tuple, aliasing `_situ_int = int` and rewriting annotations
+where a member had taken a builtin's name. A STRUCT name was never in
+that set -- and it shadows harder, because a member's annotation is local
+to one class while `class list(View)` rebinds the name module-wide.
+
+**The obvious fix is backwards, and the corpus said so within a minute.**
+Widening `SHADOWABLE` to include struct names rewrites every annotation
+that says `list` to `_situ_list` -- but where a struct is named `list`,
+those annotations mean THE STRUCT. It broke `example/json`, which names a
+struct `object`: *"object" has no attribute "validate"*. Reverted.
+
+**The two mechanisms are opposites and no regex can tell them apart.** A
+bare `list` in a user's annotation means the struct; the same word in a
+generated one means the builtin; the text is identical. So the eight
+annotations THIS EMITTER writes are spelled `_situ_list` at the point
+they are written, and the alias is unconditional -- one line, and a
+struct named after a builtin is not rare enough to make it conditional.
+Nothing a schema writes is rewritten.
+
+**json escaped for a reason worth stating**: it names a struct `object`
+and this emitter never annotates with `object`, so the collision was
+real and harmless. `list` is the first name a schema has taken that the
+emitter itself uses.
+
+### 26.428 The delimited-run emitter never learned about recursion, in three backends
+
+**`example/sexpr` generated C++, Rust and Python that did not compile**,
+and the cause is one emitter missing a branch its two siblings have.
+
+    C++    error: `items_span_at` was not declared in this scope
+    Rust   error[E0599]: no method named `items_span_at` found
+    Python error: "list" has no attribute "items_span_at"
+    C      compiles -- it emits the accessor
+
+A recursive struct's `extent_at(depth)` calls `{run}_span_at(depth)`.
+`_repeat_while` and `_variable` both branch on `is_recursive` and emit
+the depth-carrying `_span_from_at` / `_span_at` forms beside the plain
+ones. **`_record_run` -- the emitter for a run ending at a delimiter --
+never did**, in any of the three. It emitted the plain pair and the
+extent called the other.
+
+**Why the corpus missed it, for the fifth time in this arc in the same
+shape.** `edges.situ` carries recursion and carries delimited runs;
+`example/json` carries a recursive run and it is a `while` run, which is
+`_repeat_while`. Nothing carried a DELIMITED run of a RECURSIVE struct
+until an s-expression list, which is exactly that: `sexpr items[] until
+")"`.
+
+**The diagnosis was wrong first, and only a probe corrected it.** The
+generated text was matched against the emitters by eye and pointed at
+`_repeat_while`, whose branch was then confirmed correct --
+`is_recursive("sexpr")` answers True, `type_name` is `sexpr`. A temporary
+`stderr` print inside that function printed NOTHING: it never ran for
+this schema. `_record_run` was the emitter, identified by a comment in
+the generated header that only it writes. **Reasoning from generated
+output back to the emitter is a proxy; the probe is the object**, and the
+proxy had already been agreed with once.
+
 ### 26.426 EVERY value constraint on a varint is accepted, promised, and checked by nobody
 
 **Found while sweeping the arm shapes, and it is not about arms at all.**

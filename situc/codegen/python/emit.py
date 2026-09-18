@@ -593,11 +593,30 @@ class Emitter:
 	#: being a type. The runtime `View` also owns `bytes`, so such a member
 	#: overrode it and the generated `self._span` read the member instead.
 	#: Found by `std/image.situ` (26.80).
+	#: `list` and `dict` are here for the same reason as the rest and were
+	#: added later (26.429): this emitter's own annotations say `list[...]`,
+	#: so a schema naming something `list` breaks the module's type checking
+	#: rather than merely its own accessors. `example/sexpr` names a struct
+	#: `list`, which is what a Lisp list is called.
 	SHADOWABLE = ("bytes", "bytearray", "memoryview", "int", "str", "bool",
 	              "float")
 
 	def _shadowed_builtins(self) -> list[str]:
-		"""Builtins some struct also uses as a member name."""
+		"""Builtins this module gives another meaning to.
+
+		MEMBERS AND STRUCT NAMES BOTH, which is the whole of 26.429. The
+		guard read only member names, and a STRUCT named `list` shadows the
+		builtin exactly as a member does -- harder, in fact: a member's
+		annotation is local to one class and `class list(View)` rebinds the
+		name for the rest of the module, including this emitter's own
+		`list[...]` annotations. `example/sexpr` was the first schema to
+		name a struct after a builtin and mypy refused the module it
+		produced.
+
+		An enum's name is in the same position and is covered here for the
+		same reason -- `_shadowed_enums` beside this one answers a different
+		question, which is which ENUM a member has hidden.
+		"""
 		members = {py_name(entry.placement.name)
 		           for struct in self.resolved.structs.values()
 		           for entry in struct.entries}
@@ -614,11 +633,29 @@ class Emitter:
 		member actually took one.
 		"""
 		shadowed = self._shadowed_builtins()
-		if not shadowed:
-			return text
 
 		import re as _re
-		alias = "".join(f"_situ_{name} = {name}\n" for name in shadowed)
+		# `_situ_list` UNCONDITIONALLY, and it is not in `SHADOWABLE`
+		# because the two mechanisms are opposites (26.429). The alias
+		# below rewrites annotations that mean a BUILTIN where a member
+		# took its name; this one is for annotations THIS EMITTER writes,
+		# which mean the builtin whatever the schema calls its structs.
+		#
+		# A struct named `list` rebinds the name for the rest of the
+		# module -- `class list(View)` -- so `starts: list[int]` stopped
+		# type-checking and `{name}_all() -> list[T]` promised the struct.
+		# Rewriting those by regex is impossible after the fact: a bare
+		# `list` in a user annotation means the STRUCT and the same word in
+		# a generated one means the builtin, and nothing in the text tells
+		# them apart. So the generated ones are spelled `_situ_list` at the
+		# point they are written, and only they are.
+		#
+		# `example/sexpr` is the first schema to name a struct after a
+		# builtin this emitter uses. `example/json` names one `object`,
+		# which this emitter never annotates with, and is why widening
+		# `SHADOWABLE` to cover struct names broke json and was reverted.
+		alias = "_situ_list = list\n"
+		alias += "".join(f"_situ_{name} = {name}\n" for name in shadowed)
 		text  = text.replace("\nfrom situ_runtime import",
 		                     f"\n{alias}\nfrom situ_runtime import", 1)
 		for name in shadowed:
@@ -4505,7 +4542,7 @@ class Emitter:
 			'\t\tzero-extent element."""',
 			"\t\tself._check()",
 			"\t\tat     = start",
-			"\t\tstarts: list[int] = []",
+			"\t\tstarts: _situ_list[int] = []",
 			"",
 			f"\t\twhile at < self._len{cap}:",
 			f"\t\t\t_element = {inner}(self._msg, self._at + at, self._len - at)",
@@ -4520,7 +4557,7 @@ class Emitter:
 			"\t\tstarts.append(at)",
 			"\t\treturn starts",
 			"",
-			f"\tdef _{name}_walk(self) -> list[int]:",
+			f"\tdef _{name}_walk(self) -> _situ_list[int]:",
 			f"\t\treturn self._{name}_walk_from({start})",
 			"",
 			"\t@property",
@@ -4573,7 +4610,7 @@ class Emitter:
 		name = py_name(local_name(struct, placement))
 		return [
 			"",
-			f"\tdef {name}_all(self) -> list[{inner}]:",
+			f"\tdef {name}_all(self) -> _situ_list[{inner}]:",
 			f'\t\t"""Every `{placement.type_name}` in `{placement.path}`,',
 			"",
 			"\t\twalked once. The map calls this run `access = Sequential`,",
@@ -4595,6 +4632,11 @@ class Emitter:
 			        f" `{placement.type_name}` has no extent",
 			        "\t# this backend can compute, so the run cannot be walked."]
 
+		# The depth counter the other run emitters carry (26.428): a run
+		# of a RECURSIVE record needs it, and this emitter never had it, so
+		# `_extent_at` called a `_span_at` nothing defined.
+		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+
 		name  = py_name(local_name(struct, placement))
 		delim = placement.delimiter
 		inner = py_name(placement.type_name or "")
@@ -4605,7 +4647,10 @@ class Emitter:
 
 		return [
 			"",
-			f"\tdef _{name}_walk_from(self, start: int) -> list[int]:",
+			(f"\tdef _{name}_walk_from(self, start: int)"
+			 " -> _situ_list[int]:" if not deep else
+			 f"\tdef _{name}_walk_from_at(self, start: int, depth: int)"
+			 " -> _situ_list[int]:"),
 			f'\t\t"""Where each `{placement.type_name}` starts, and where the run'
 			" ends,",
 			"\t\tfrom a base the caller already knows.",
@@ -4617,14 +4662,15 @@ class Emitter:
 			'\t\tempty occupies no bytes, and this would not return."""',
 			"\t\tself._check()",
 			"\t\tat     = start",
-			"\t\tstarts: list[int] = []",
+			"\t\tstarts: _situ_list[int] = []",
 			"",
 			f"\t\twhile at + {len(delim)} <= self._len:",
 			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
 			f"self._at + at + {len(delim)}]) == {delim!r}:",
 			"\t\t\t\tbreak",
 			f"\t\t\t_element = {inner}(self._msg, self._at + at, self._len - at)",
-			"\t\t\tsize    = _element._extent",
+			("\t\t\tsize    = _element._extent" if not deep else
+			 "\t\t\tsize    = _element._extent_at(depth + 1)"),
 			"\t\t\tif size == 0 or at + size > self._len:",
 			"\t\t\t\tbreak",
 			"\t\t\tstarts.append(at)",
@@ -4634,8 +4680,23 @@ class Emitter:
 			" <= self._len else 0))",
 			"\t\treturn starts",
 			"",
-			f"\tdef _{name}_walk(self) -> list[int]:",
-			f"\t\treturn self._{name}_walk_from({start})",
+			*( [
+				f"\tdef _{name}_walk(self) -> _situ_list[int]:",
+				f"\t\treturn self._{name}_walk_from({start})",
+			] if not deep else [
+				f"\tdef _{name}_walk_from(self, start: int)"
+				" -> _situ_list[int]:",
+				f"\t\treturn self._{name}_walk_from_at(start, 0)",
+				"",
+				f"\tdef _{name}_walk(self) -> _situ_list[int]:",
+				f"\t\treturn self._{name}_walk_from_at({start}, 0)",
+				"",
+				f"\tdef {name}_span_at(self, depth: int) -> int:",
+				f'\t\t"""The span, carrying the depth an element spends'
+				' (26.428)."""',
+				f"\t\treturn self._{name}_walk_from_at({start},"
+				" depth)[-1] - " + str(start),
+			]),
 			"",
 			"\t@property",
 			f"\tdef {name}_count(self) -> int:",
@@ -5702,11 +5763,11 @@ class Emitter:
 			for at, when in enumerate(held))
 		lines.extend([
 			"",
-			"\tdef messages(self) -> list[int]:",
+			"\tdef messages(self) -> _situ_list[int]:",
 			'\t\t"""Every message the schema states about this frame whose',
 			"\t\tpredicate holds, in declaration order and without stopping",
 			'\t\tat the first (0051)."""',
-			"\t\tfound: list[int] = []",
+			"\t\tfound: _situ_list[int] = []",
 		])
 		for when in held:
 			source = unparse_expr(when.expr, explicit=True)

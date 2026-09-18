@@ -4550,7 +4550,14 @@ class Emitter:
 
 		bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
 
-		def walk_from(from_: str) -> list[str]:
+		# A run of a RECURSIVE record carries the depth counter the other
+		# two run emitters already carry (26.428). Without it `extent_at`
+		# called a `_span_at` nothing defined and the generated Rust did
+		# not compile -- C++ had the same hole, in the same emitter, for
+		# the same reason.
+		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+
+		def walk_from(from_: str, depth: str | None = None) -> list[str]:
 			return [
 			f"\t\tlet mut at = {from_};",
 			"\t\tlet mut n  = 0usize;",
@@ -4560,7 +4567,8 @@ class Emitter:
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
-			"\t\t\tlet size = element.extent();",
+			("\t\t\tlet size = element.extent();" if depth is None else
+			 f"\t\t\tlet size = element.extent_at({depth} + 1);"),
 			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
 			"\t\t\t\t// A zero-extent element would loop here forever, and",
 			"\t\t\t\t// one past the end was never in this frame.",
@@ -4599,9 +4607,11 @@ class Emitter:
 			"",
 			"\t/// Every element plus the terminator: where the next member",
 			"\t/// starts. Where the run ran out of buffer there is none to add.",
-			f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
-			" -> usize {",
-			*walk_from("start"),
+			(f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
+			 " -> usize {" if not deep else
+			 f"\tpub fn {_ident(f'{base}_span_from_at')}(&self,"
+			 " start: usize, depth: usize) -> usize {"),
+			*walk_from("start", "depth" if deep else None),
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
 			"\t\t}",
@@ -4612,9 +4622,29 @@ class Emitter:
 			"\t\tat - start",
 			"\t}",
 			"",
-			f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
-			f"\t\tself.{_ident(f'{base}_span_from')}({start})",
-			"\t}",
+			*( [
+				f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+				f"\t\tself.{_ident(f'{base}_span_from')}({start})",
+				"\t}",
+			] if not deep else [
+				# The element names itself, so the walk descends and the
+				# depth travels with it (26.428). Four entry points, as the
+				# other two run emitters already have: the `_at` forms carry
+				# the counter and the plain ones start it at zero.
+				f"\tpub fn {_ident(f'{base}_span_from')}(&self, start: usize)"
+				" -> usize {",
+				f"\t\tself.{_ident(f'{base}_span_from_at')}(start, 0)",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(f'{base}_span_at')}(&self, depth: usize)"
+				" -> usize {",
+				f"\t\tself.{_ident(f'{base}_span_from_at')}({start}, depth)",
+				"\t}",
+				"",
+				f"\tpub fn {_ident(f'{base}_span')}(&self) -> usize {{",
+				f"\t\tself.{_ident(f'{base}_span_from_at')}({start}, 0)",
+				"\t}",
+			]),
 		]
 
 	def _delimiter_checks(self, struct: ResolvedStruct,
