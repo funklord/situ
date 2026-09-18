@@ -4662,6 +4662,24 @@ class Emitter:
 				lines.extend(self._arm_member(struct, variant, arm, member))
 		return lines
 
+	def _arm_typed(self, scalar: ScalarType, placement: Placement,
+			struct: ResolvedStruct) -> str:
+		"""An arm's value, in the type the schema declared for it.
+
+		One line of difference from the raw load, and it is the member
+		path's own line rather than a second spelling of it: an enum-typed
+		field's read is the number `static_cast` to the enum. Kept as a
+		helper so the arm and the member cannot drift about which types get
+		the cast.
+		"""
+		load = self._load(
+			scalar, placement,
+			self._offset_expression(struct, placement)
+			if placement.offset_bits is None else None)
+		if placement.type_name in self.enums:
+			return f"static_cast<{self._field_ctype(placement)}>({load})"
+		return load
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, behind the test that its arm is the one present.
@@ -4741,7 +4759,17 @@ class Emitter:
 				# carries variants and carries data-sized runs, and never
 				# one after the other (26.411's lesson, one construct
 				# along).
-				f"\t\tout = {self._load(scalar, placement, self._offset_expression(struct, placement) if placement.offset_bits is None else None)};",
+				# CAST TO THE ARM'S DECLARED TYPE, which for an enum-typed
+				# arm is the enum and not the scalar behind it. `_load`
+				# answers the number; the member path wraps it in exactly
+				# this `static_cast` and the arm path did not, so C++
+				# refused to compile a schema with an enum-typed scalar
+				# arm at all -- *cannot convert `uint8_t` to `situ::level`
+				# in assignment*. C compiles the same shape only because
+				# its enum is a typedef, and Rust and Python compile it
+				# and hand back the raw number, losing the type the
+				# schema declared (26.420).
+				f"\t\tout = {self._arm_typed(scalar, placement, struct)};",
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			]

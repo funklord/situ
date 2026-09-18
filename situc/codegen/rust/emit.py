@@ -2439,6 +2439,28 @@ class Emitter:
 			return f"!({joined})" if selected else joined
 		return f"{held} {'==' if selected else '!='} {arm.value}"
 
+	@staticmethod
+	def _ok_wrapped(load: str) -> str:
+		"""`Ok(...)` around a load that may open with its own comment.
+
+		An enum load is a `match` with two comment lines above it, and
+		wrapping the whole thing put `Ok(` in front of a `//` -- legal
+		Rust that reads as though the comment were the value. The comments
+		keep their place above the expression and only the expression is
+		wrapped.
+		"""
+		lines   = load.split("\n")
+		leading = 0
+		while leading < len(lines) and lines[leading].lstrip().startswith("//"):
+			leading += 1
+		# The first line carries no indent of its own: every caller embeds
+		# it after a `\t\t`, so lifting it out of the expression leaves it
+		# at column zero unless it is given one here.
+		above = [one if one.startswith("\t") else f"\t\t{one}"
+		         for one in lines[:leading]]
+		body  = "\n".join(lines[leading:]).lstrip("\t")
+		return "\n".join([*above, f"\t\tOk({body})"])
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, as a `Result`: the arm may not be the one there.
@@ -2487,9 +2509,49 @@ class Emitter:
 			          "\t\t\treturn Err(Error::Bounds);",
 			          "\t\t}"]
 			         if span is not None else [])
+			# AN ENUM-TYPED ARM ANSWERS WHAT THE MEMBER ANSWERS (26.420).
+			# Two settled decisions compose here rather than a new one
+			# being taken. The member's getter hands back `Option<T>`,
+			# because section 8.7 admits a value no member names, and
+			# ships a `_bits` accessor beside it, because `Option<T> as
+			# u64` is not a cast Rust has -- `_enum_bits` argues both. An
+			# arm's getter hands back `Result<T>`, because it has a second
+			# thing to report: the discriminant selects another arm, or
+			# the frame is short. So an enum arm is `Result<Option<T>>`
+			# and its bits are `Result<T>`.
+			#
+			# It answered `Result<u8>` until now: the value right and the
+			# type the schema declared gone, so a caller of `plain` got
+			# `Level::Low` where a caller of `held_lvl` got `1`.
+			enumed = placement.type_name in self.enums
+			rtype  = (self._field_type(placement) if enumed
+			          else self._rust_type(scalar))
+			offset = (self._offset_expression(struct, placement)
+			          if placement.offset_bits is None else None)
+			value  = (
+				self._ok_wrapped(self._load(placement, scalar, offset))
+				if enumed else
+				f"\t\tOk({self._unparen(self._raw_load(placement, scalar, offset))}"
+				f" as {self._rust_type(scalar)})")
+			bits = ([] if not enumed else [
+				"",
+				f"\t/// The bits behind `{name}`, whatever they spell.",
+				"\t///",
+				"\t/// The getter answers `None` for a value section 8.7 does",
+				"\t/// not name; a key or a comparison still has to see it. The",
+				"\t/// arm gate is asked first, as the getter asks it: reading",
+				"\t/// the bits of an arm that is not present is the same",
+				"\t/// mistake as reading its value.",
+				f"\tpub fn {name}_bits(&self) -> Result<{self._rust_type(scalar)}> {{",
+				*refuse,
+				*bound,
+				f"\t\tOk({self._unparen(self._raw_load(placement, scalar, offset))}"
+				f" as {self._rust_type(scalar)})",
+				"\t}",
+			])
 			return [
 				*head,
-				f"\tpub fn {name}(&self) -> Result<{self._rust_type(scalar)}> {{",
+				f"\tpub fn {name}(&self) -> Result<{rtype}> {{",
 				*refuse,
 				*bound,
 				# `as` the field's type: `read_be` hands back a `u64` and
@@ -2502,9 +2564,9 @@ class Emitter:
 				# after ANY data-sized member raised `AssertionError` out
 				# of `situc build`. Three of four backends had it; C alone
 				# did not (26.412).
-				f"\t\tOk({self._unparen(self._raw_load(placement, scalar, self._offset_expression(struct, placement) if placement.offset_bits is None else None))}"
-				f" as {self._rust_type(scalar)})",
+				value,
 				"\t}",
+				*bits,
 			]
 
 		if scalar is not None and indexed_elements(placement):
@@ -5292,12 +5354,24 @@ class Emitter:
 		if not mine:
 			return []
 
+		# The BITS accessor where the arm is enum-typed, because every
+		# check below is about the number: `is_known` takes the backing
+		# integer and `_attr_checks` compares against one. The getter now
+		# answers `Option<T>` (26.420), which is right for a reader and is
+		# not what a check asks -- and the member path already passes a raw
+		# read to the same two helpers for the same reason.
+		#
+		# Found by compiling: `Level::is_known(value)` stopped type-checking
+		# the moment the getter's type changed, which is the good direction.
+		# A backend whose validator had taken the value less strictly would
+		# have gone on compiling and asked the question of the wrong thing.
+		reads = f"{name}_bits" if placement.type_name in self.enums else name
 		return [
 			f"\t\t// {placement.path}: the arm the discriminant selects",
 			"\t\t// carries its own constraints. A different arm is nothing",
 			"\t\t// to check, which is what the accessor's `Error::Version`",
 			"\t\t// says.",
-			f"\t\tmatch self.{name}() {{",
+			f"\t\tmatch self.{reads}() {{",
 			"\t\t\tOk(value) => {",
 			*[f"\t\t{one}" for one in mine],
 			"\t\t\t}",

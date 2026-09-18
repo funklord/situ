@@ -2593,9 +2593,18 @@ class Emitter:
 		return lines
 
 	def _arm_hint(self, placement: Placement, scalar: ScalarType | None) -> str:
-		"""What an arm accessor hands back, as an annotation."""
+		"""What an arm accessor hands back, as an annotation.
+
+		An enum-typed arm answers what the MEMBER path answers -- the enum
+		where the value names one and the plain number where it does not,
+		which is what `as_enum` hands back and section 8.7 requires. It
+		said `int` until 26.420, so an arm and a member of the same enum
+		type disagreed about what they returned.
+		"""
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None:
+			if placement.type_name in self.enums:
+				return f"{py_name(placement.type_name)} | int"
 			return "int"
 		if scalar is not None:
 			return "memoryview"
@@ -2698,8 +2707,14 @@ class Emitter:
 			# member raised `AssertionError` out of `situc build`. Not a
 			# diagnostic and not a wrong byte: a traceback. Three of four
 			# backends had it; C alone did not (26.412).
+			# `_load` and not `_raw_load`: the member path's read, which
+			# wraps an enum in `as_enum` and a BCD field in `bcd_decode`.
+			# The arm used the raw one, so an enum-typed arm handed back a
+			# plain number where the member of the same type hands back the
+			# enum -- the value right, the type the schema declared gone
+			# (26.420).
 			return [*head, *bound,
-			        f"\t\treturn {self._raw_load(placement, scalar, self._offset_expression(struct, placement) if placement.offset_bits is None else None)}"]
+			        f"\t\treturn {self._load(placement, scalar, self._offset_expression(struct, placement) if placement.offset_bits is None else None)}"]
 
 		if scalar is not None and indexed_elements(placement):
 			# A run of values wider than a byte, which the slice below is not

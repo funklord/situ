@@ -30707,6 +30707,86 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.420 An enum-typed variant arm answers in the enum's type
+
+**An arm declared with an enum type handed back the number behind it, and
+the four backends disagreed about how badly.** Measured with a fixture
+carrying the same enum BOTH as an arm and as an ordinary member, so each
+backend's two answers can be read side by side:
+
+    backend  MEMBER `plain`                    ARM `held_lvl`
+    C        situ_level_t                      situ_level_t *out      fine
+    C++      ::situ::level, static_cast        NO cast: DOES NOT COMPILE
+    Rust     Option<Level>, plus plain_bits()  Result<u8>: no enum
+    Python   level | int via as_enum           int: no enum
+
+C++ refused outright -- *cannot convert `uint8_t` to `situ::level` in
+assignment*. C compiled only because its enum is a typedef, so the
+implicit conversion carried it; the arm emitter was no more right there
+than anywhere else. **Rust and Python compiled and answered a plain
+number**, so a caller of `plain` got `Level::Low` where a caller of
+`held_lvl` got `1`: the value right, the type the schema declared gone,
+and with it the membership check.
+
+**26.411's pattern exactly, one construct along.** That entry recorded C
+and C++ failing loudly while Rust and Python read one byte of a two-byte
+span silently. This is weaker -- the number is right -- and the shape is
+the same: the two backends whose type system happened to notice are the
+two that failed safely, which is luck about the target language rather
+than care in the emitter.
+
+**Three of the four fixes are the member path's own line.** C++ wraps the
+load in the `static_cast` the member already uses; Python calls `_load`
+rather than `_raw_load`, which is where `as_enum` lives; C needed
+nothing. Each is one expression, and each is now reached through a helper
+so the arm and the member cannot drift about which types get the
+treatment.
+
+**Rust is the one that is not a line, and it is a composition rather than
+a decision.** Its member getter answers `Option<T>`, because section 8.7
+admits a value no member names, and ships a `_bits` accessor beside it,
+because `Option<T> as u64` is not a cast Rust has. An arm's getter
+answers `Result<T>`, because it has a second thing to report: another arm
+is selected, or the frame is short. Composing two settled decisions gives
+`Result<Option<T>>` for the getter and `Result<T>` for the bits, and the
+bits accessor asks the arm gate first -- reading the bits of an arm that
+is not present is the same mistake as reading its value.
+
+**Recorded as an assumption rather than asserted as a choice.** The
+alternatives were `Result<T>` with `Error::Constraint` for an unnamed
+value, which collapses two different failures that 8.7 keeps apart, and
+leaving `Result<u8>` beside a new `_enum` accessor, which would make the
+arm and the member disagree about which spelling is primary. If the
+holder wants one of those instead it is a contained change to one
+emitter.
+
+**The Rust change found a second fault by refusing to compile, which is
+the good direction.** `validate` called `Level::is_known(value)` on the
+arm getter, and the moment that getter's type changed the call stopped
+type-checking. The checks are about the NUMBER -- `is_known` takes the
+backing integer and the attribute comparisons compare against one -- so
+the validator wants `_bits`, which is what the member path already passes
+it. **A backend whose validator had taken the value less strictly would
+have gone on compiling and asked the question of the wrong thing.**
+
+**Verified by running, not by reading.** All four backends generate, all
+four compile, and C++, Python and Rust were each executed against a frame
+whose arm holds `high` and whose member holds `low`: `level::high`,
+`level.high`, `Some(High)` with `held_lvl_bits() == 2`. The corpus output
+is byte-for-byte unchanged in every backend, because **no corpus schema
+has an enum-typed scalar arm** -- which is 26.411's point and is why this
+survived.
+
+**What it unblocks, and what is deliberately still undone.**
+`situc/pack.py`'s arm pass writes `must_eq`, `min` and `max` for an arm
+and deliberately not `ENUM_KNOWN`, because no schema could carry the
+construct; the four backends DO emit `_enum_check` for a scalar arm, so
+they would have refused a value both walkers accept and nothing could
+pose the case. With this fixed the packer can write the row and both
+walkers can check it -- and `edges.situ` can gain an enum-typed scalar
+arm, at which point the differential starts comparing it. That is the
+next step and it is not in this change.
+
 ### 26.418 The sixth description, and the pass that was nearly too wide
 
 **26.417's gap is closed: the packer carries an arm's constraints and
