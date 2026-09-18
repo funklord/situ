@@ -6305,6 +6305,32 @@ class Emitter:
 				return [f"\t\t# {placement.path}: no accessor to validate through."]
 			return [f"\t\tself.{name}.validate()"]
 
+		# A VARINT'S VALUE BOUNDS (26.426). It has no `scalar` -- its width
+		# is in the bytes -- so every read below refuses it, and the check
+		# reads the value through the property this backend already emits.
+		# That property raises where the varint is truncated or overlong,
+		# and a bound on a value nobody could read is nothing to check
+		# rather than something that failed.
+		if placement.varint is not None:
+			reads  = py_name(local_name(struct, placement))
+			bounds = self._attr_checks(struct, placement, "_value")
+			if not bounds:
+				return []
+			return [
+				f"\t\t# {placement.path}: the bounds on a varint's value,"
+				" read through",
+				"\t\t# its own property -- there is no fixed width to load"
+				" from.",
+				# A varint the frame does not hold is a MALFORMED message
+				# rather than a bound nobody can test, so the read's own
+				# error stands rather than being swallowed: both walkers
+				# answer Bounds for such bytes and all four backends
+				# answered OK, which `edges.bounded_varint` surfaced on its
+				# first differential draw.
+				f"\t\t_value = self.{reads}",
+				*[one for one in bounds],
+			]
+
 		assert scalar is not None
 
 		if check is Check.RESERVED:

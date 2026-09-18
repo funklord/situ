@@ -7532,6 +7532,36 @@ class Emitter:
 			out.append(f"\t\tself.{name}()?.validate()?;")
 			return out
 
+		# A VARINT'S VALUE BOUNDS (26.426). It has no `scalar` -- its width
+		# is in the bytes -- so every read below refuses it, and the check
+		# reads the value through the accessor this backend already emits.
+		# That accessor answers a `Result`, because a varint can be
+		# truncated or overlong, and a bound on a value nobody could read
+		# is nothing to check rather than something that failed.
+		if placement.varint is not None:
+			reads  = _ident(c_name(local_name(struct, placement)))
+			bounds = self._attr_checks(struct, placement, "value")
+			if not bounds:
+				return []
+			return [
+				f"\t\t// {placement.path}: the bounds on a varint's value,"
+				" read through",
+				"\t\t// its own accessor -- there is no fixed width to load"
+				" from.",
+				# A varint the frame does not hold is a MALFORMED message
+				# rather than a bound nobody can test: both walkers answer
+				# Bounds for such bytes and all four backends answered Ok.
+				f"\t\tmatch self.{reads}() {{",
+				"\t\t\tOk(value) => {",
+				*[f"\t\t{one}" for one in bounds],
+				"\t\t\t}",
+				"\t\t\tErr(e) => {",
+				f"\t\t\t\t*which = Self::{_ident(f'check_{reads}').upper()};",
+				"\t\t\t\treturn Err(e);",
+				"\t\t\t}",
+				"\t\t}",
+			]
+
 		assert scalar is not None
 
 		# The same offset the accessor uses. A member after a

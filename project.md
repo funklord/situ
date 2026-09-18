@@ -31030,8 +31030,84 @@ only ever been green has no demonstrated ability to be anything else, and
 this one starts green BY CONSTRUCTION -- which is the shape that needs
 the sabotage rather than the shape that excuses it.
 
-**Not fixed here, and the reason is the same question 26.423 raises.**
-Either the four learn to check a varint's value bounds -- the value is
+**Fixed in all six, and it was one line plus four renderings as
+predicted.** `classify_check` answers `CONSTRAINED` for a varint carrying
+a value attribute, and the packer follows from that alone -- it asks the
+same function, so the rows appeared without the packer being touched.
+Each backend reads the value through the accessor it already emitted:
+
+    C       if (situ_bits_vn_get(view, &value) == SITU_OK) { ... }
+    C++     if (got == ::situ::rt::err::ok) { ... }
+    Rust    if let Ok(value) = self.vn() { ... }
+    Python  try: _value = self.vn ... if _value is not None:
+
+Each guards on the read succeeding, because a varint can be truncated or
+overlong and a bound on a value nobody could read is nothing to check
+rather than something that failed.
+
+**BOTH WALKERS NEEDED NOTHING, and this entry said otherwise.** It
+recorded that `read_scalar` does not route to the varint reader. It does
+-- `if index in view.image.varints: return varint(view, index)[1]` -- and
+the C walk has the same branch with a comment naming the exact hazard:
+*"`ac 02` answered 172 where leb128 says 300, and a one-byte encoding
+answered correctly by coincidence, which is how this survived a
+differential."* The claim came from reading a 32-line window of a longer
+function and stopping inside it. **A window is a measurement choice, and
+a short one manufactures an absence.**
+
+**`edges.bounded_varint` carries a bound ABOVE 127 on purpose**, because
+the coincidence that comment describes is the whole hazard: `min = 300`
+needs two bytes in this encoding, so a reader taking the first byte for
+the value answers 172 and passes a message that should be refused.
+Measured: `0x82 0x2C` validates and `0x81 0x48` refuses.
+
+**Inert on `example/` and `std/`**, measured with the same corpus on both
+sides -- which took two attempts, the first having compared against a
+baseline captured before `versioned_arm` existed. That is the third
+stale-baseline slip of the day and the reason the method is now to stash
+only the change under test.
+
+**The repair cost a self-inflicted detour worth recording.** Renaming a
+local with a blind string replace over the enclosing block hit `inner` in
+code that had nothing to do with this change, in three files at once --
+`if inner is None:` became `if boundsis None:`, which is a syntax error,
+and several unrelated locals were renamed silently. The files still
+parsed after the first repair, which is what makes this the dangerous
+kind: a gratuitous rename that compiles. The three were stashed rather
+than discarded and re-inserted with the final name from the start, and
+each diff is now pure insertion -- 28, 21 and 24 lines, no deletions,
+which is the property that proves nothing else moved.
+
+**AND THE CORPUS ENTRY CAUGHT A SECOND HAZARD IT WAS NOT AIMED AT.**
+`min = 300` was chosen to force a TWO-BYTE varint, so that a reader
+taking the first byte for the value would be caught. A two-byte varint is
+also the shape a short frame can cut in half, and the differential drew
+one on its first run:
+
+    edges.situ: the walker and C disagree about ('bounded_varint', 'validate')
+      walker: 'validate 1'      BOUNDS
+      C:      'validate 0'      OK
+      buffer: 03c3a9
+
+`03 c3 a9` is a complete `small` and a `large` whose continuation bit
+promises a byte the frame has not got. **The four backends accepted a
+truncated varint and both walkers refused it** -- and the four agreed
+with each other, which is why nothing had reported it.
+
+**Not caused by this change, which was checked rather than assumed.**
+Stashing the fix and rebuilding gives the same `0` from C, so the entry
+exposed a divergence that predates it.
+
+**The first guard written here was the wrong instinct and the
+differential said so immediately.** It read `if (get(...) == SITU_OK)`,
+on the reasoning that a bound on a value nobody can read is nothing to
+check. That is true of the BOUND and false of the MESSAGE: the schema
+says a varint stands here and the bytes do not hold one, which is
+malformed. All four propagate the read's own error now, and answer BOUNDS
+where the walkers do.
+
+**What remains is the question 26.423 raises.** Either the four learn to
+check a varint's value bounds -- the value is
 decoded by an accessor that already exists, so this is plumbing rather
 than design -- or `situc` refuses the attribute on a varint the way it
 refuses `[must_be_zero]` on an ordinary field. What must not stand is the

@@ -67,6 +67,11 @@ struct beats size=4..14
   @0x0000   2..12     beat       pulse  big while=kind==0x33 while-max=6
   ~         2         u16        after  big
 
+struct bounded_varint size=3..19
+  @0x0000   1..9      edge_varint small  varint=edge_varint max=100
+  ~         1..9      edge_varint large  varint=edge_varint min=300
+  ~         1         u8         tail
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling

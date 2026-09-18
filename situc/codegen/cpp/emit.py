@@ -7982,6 +7982,41 @@ class Emitter:
 				"\t\t}",
 			]
 
+		# A VARINT'S VALUE BOUNDS (26.426). It has no `scalar` -- its width
+		# is in the bytes -- so every read below refuses it, and the check
+		# reads the value through the accessor this backend already emits.
+		# That accessor answers an error, because a varint can be truncated
+		# or overlong, and a bound on a value nobody could read is nothing
+		# to check rather than something that failed.
+		if placement.varint is not None:
+			local  = bare_name(local_name(struct, placement))
+			held   = f"{local}_value"
+			bounds = self._attr_checks(struct, placement, held)
+			if not bounds:
+				return []
+			return [
+				f"\t\t/* {placement.path}: the bounds on a varint's value,"
+				" read",
+				"\t\t * through its own accessor -- there is no fixed width"
+				" to load",
+				"\t\t * from. */",
+				"\t\t{",
+				f"\t\t\tstd::uint64_t {held}{{}};",
+				f"\t\t\tconst ::situ::rt::err got = {local}({held});",
+				"",
+				# A varint the frame does not hold is a MALFORMED message
+				# rather than a bound nobody can test. Both walkers answer
+				# BOUNDS for such bytes and all four backends answered OK,
+				# which `edges.bounded_varint` surfaced on its first
+				# differential draw.
+				"\t\t\tif (got != ::situ::rt::err::ok) {",
+				"\t\t\t\t*which_ = " + f"check_{local};",
+				"\t\t\t\treturn got;",
+				"\t\t\t}",
+				*_deeper(bounds, 1),
+				"\t\t}",
+			]
+
 		assert scalar is not None
 		lines: list[str] = []
 

@@ -410,6 +410,17 @@ class Check(Enum):
 	NOTHING    = "nothing"
 
 
+#: The attributes that state something about a member's VALUE, as opposed to
+#: its shape or its bytes. A varint carries no others that mean anything, so
+#: this is what decides whether one needs checking at all (26.426).
+_VALUE_ATTRS = frozenset({"must_eq", "min", "max"})
+
+
+def _value_attrs(placement: Placement) -> bool:
+	"""Whether this member states a bound on its value."""
+	return any(attr.name in _VALUE_ATTRS for attr in placement.attrs)
+
+
 def classify_check(struct: ResolvedStruct, placement: Placement,
 		structs: Container[str]) -> Check:
 	"""What to validate for this member, in the order that is safe."""
@@ -456,6 +467,29 @@ def classify_check(struct: ResolvedStruct, placement: Placement,
 		return Check.REPEATED if placement.scalar is not None else Check.NOTHING
 
 	if placement.scalar is None:
+		# A VARINT HAS NO SCALAR AND STILL HAS A VALUE (26.426). Its width
+		# is in the bytes rather than in the type, so `scalar` is None and
+		# its `type_name` is the varint TYPE's name rather than a struct's
+		# -- which sent every varint out of this function as `NOTHING`,
+		# and `NOTHING` here means checked by NOBODY: not the four
+		# generated backends, not the packed image, and therefore not
+		# either walker.
+		#
+		# So `vl n [max = 100]` compiled without a diagnostic and the
+		# literal reached none of the five generated files, while the
+		# generated header promised "Check every constraint this schema
+		# states". Swept by type with a distinct bound each, every other
+		# type carried its own: u8, u16, an enum, a decimal text number, a
+		# bit field. It was all three value attributes on a varint and
+		# nothing else.
+		#
+		# Six descriptions agreed because ONE decision was wrong, which is
+		# the shape a shared decision layer fails in: the differential
+		# compares backends against each other and the two-walker sweep
+		# compares walkers, and a decision taken before either runs makes
+		# them all agree. Only this function could be asked.
+		if placement.varint is not None and _value_attrs(placement):
+			return Check.CONSTRAINED
 		return (Check.NESTED if placement.type_name in structs
 		        else Check.NOTHING)
 

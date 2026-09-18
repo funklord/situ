@@ -8729,6 +8729,46 @@ class Emitter:
 		text_number = (scalar is not None and placement.radix is not None
 		               and not placement.delimiters)
 
+		# A VARINT'S VALUE BOUNDS (26.426), before the bail below: it has no
+		# `scalar` -- its width is in the bytes -- so it fell out here and
+		# this backend emitted nothing, silently, while the header promised
+		# "Check every constraint this schema states". The value is read
+		# through the accessor already emitted for it, which answers an
+		# error because a varint can be truncated or overlong; a bound on a
+		# value nobody could read is nothing to check rather than something
+		# that failed.
+		if placement.varint is not None:
+			local  = c_name(self._local(struct, placement))
+			getter = ident(self.prefix, struct.name, local, "get")
+			inner  = self._attr_checks(struct, placement, "value",
+			                           self.resolved.layout.env)
+			if not inner:
+				return []
+			return [
+				f"\t/* {placement.path}: the bounds on a varint's value,"
+				" read through",
+				"\t * its own accessor -- there is no fixed width to load"
+				" from. */",
+				"\t{",
+				"\t\tuint64_t value;",
+				f"\t\tconst situ_err_t got = {getter}(view, &value);",
+				"",
+				# A varint the frame does not hold is a MALFORMED message
+				# rather than a bound nobody can test, and the four accepting
+				# one was a divergence `edges.bounded_varint` surfaced on its
+				# first differential draw: `03 c3 a9` is a complete `small`
+				# and a `large` whose continuation bit promises a byte the
+				# frame has not got. Both walkers answered BOUNDS for those
+				# bytes while all four backends answered OK -- and they
+				# agreed, which is why nothing had reported it.
+				"\t\tif (got != SITU_OK) {",
+				f"\t\t\t*which = {macro(self.prefix, struct.name, local, 'check')};",
+				"\t\t\treturn got;",
+				"\t\t}",
+				*[f"\t{one}" if one.strip() else one for one in inner],
+				"\t}",
+			]
+
 		if scalar is None or (placement.array_count is not None
 		                      and not text_number):
 			return []

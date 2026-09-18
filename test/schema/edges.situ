@@ -742,6 +742,37 @@ struct varint_driver {
 	u16          tail;
 }
 
+// A VARINT CARRYING BOUNDS ON ITS VALUE (26.426), which the file has had
+// the halves of since `edge_varint` landed and never the product.
+//
+// `varint_driver` above uses a varint and constrains nothing; every other
+// type in this file carries `[min]`, `[max]` or `[must_eq]` somewhere. A
+// varint with a bound on it was the combination nothing wrote, and it was
+// enforced by NOBODY -- not the four backends, not the packed image, and so
+// not either walker.
+//
+// One line said so. `traverse.classify_check` is the shared decision layer,
+// and a varint has no `scalar` -- its width is in the bytes -- while its
+// type name is the varint TYPE's rather than a struct's, so it fell out as
+// `Check.NOTHING`, which means checked by nobody. Every description then
+// faithfully emitted nothing, and each was right to: they were obeying the
+// module whose whole purpose is to answer that question once.
+//
+// Which is why nothing caught it. The four-way differential compares
+// backends against each other and the two-walker sweep compares walkers; a
+// decision taken before either runs makes all six agree, and agreement is
+// what those gates look for.
+//
+// A bound above 127 on purpose: `min = 300` needs two bytes in this
+// encoding, so a reader that took the first byte for the value would answer
+// 172 and pass a message that should be refused. The walkers document that
+// coincidence and this is the corpus case for it.
+struct bounded_varint {
+	edge_varint  small  [max = 100];
+	edge_varint  large  [min = 300];
+	u8           tail;
+}
+
 // A run of values the message counts, whose elements are wider than a byte.
 //
 // `edges.samples[4]` at the top of this file is the same array with its count
