@@ -1291,7 +1291,7 @@ def _arm_selects(image: Image, view: View, index: int,
 			inner = View(image, view.buffer, arm_type,
 			             view.at + at // 8, view.limit)
 			return _validate(image, inner, arm_type) or OK
-		return OK
+		return _arm_constraints(image, view, chosen)
 
 	# No `case` matched. Where the schema wrote `default: <member>` that is
 	# not a refusal, and the member it selects is the one that has to
@@ -1301,6 +1301,98 @@ def _arm_selects(image: Image, view: View, index: int,
 		return _arm_validates(image, view, index, fallback)
 
 	return ERR_VERSION
+
+
+def _arm_constraints(image: Image, view: View, chosen: int) -> int:
+	"""The selected SCALAR arm's own constraints (26.418).
+
+	Reached only from `_arm_selects`, and only for the arm the discriminant
+	actually chose. That gate is the whole of why reading the arm's bytes
+	here is safe: every arm of a variant is placed at the same offset, so
+	the readers answer for an unselected arm exactly as readily as for a
+	selected one -- and answer nonsense. Measured on `signed_kind`, whose
+	arms are a two-byte `marker` and a one-byte `flag`: with `kind = 2` the
+	marker's span reads the flag and the trailer as `b'\\x05\\t'`, and with
+	`kind = 1` the flag reads `marker`'s first byte as 66. Neither is a
+	value the message states, and checking either would refuse frames all
+	four backends accept.
+
+	**The two families the four backends check on an arm, and no more.** A
+	pinned span, and the value comparisons -- which is what `_arm_guard`
+	and `_arm_member_checks` emit in C. An arm shape outside those two (a
+	run of wide values, a delimited or varint arm, an arm behind `[since]`)
+	gets no check in any backend either; 26.410 records that rather than
+	this half-answering it, because a fifth description refusing what the
+	other four accept is the disagreement the differential exists to find.
+	"""
+	held = image.constraints.get(chosen)
+	if not held:
+		return OK
+
+	placement = image.placements[chosen]
+
+	for check, against in held:
+		if check != PINNED_RUN:
+			continue
+		try:
+			data = _span_bytes(image, view, chosen)
+		except Refused:
+			return ERR_BOUNDS
+		arms = image.pinned_runs.get(chosen, [])
+		# `against` is how many the packer wrote, and a different number
+		# here means this walk misread the section rather than that the
+		# message is wrong -- an error about the image, as the member path
+		# spells it.
+		if len(arms) != against:
+			raise Refused(
+				f"placement {chosen}: {against} pinned run(s) declared, "
+				f"{len(arms)} found")
+		# Case folding belongs to the SET rather than to the member (0055),
+		# so an arm of that set folds for the same reason a member does.
+		if placement.text_flags & CASE_INSENSITIVE:
+			if data.lower() not in [one.lower() for one in arms]:
+				return ERR_CONSTRAINT
+		elif data not in arms:
+			return ERR_CONSTRAINT
+
+	# The member path's list, kept whole rather than trimmed to what the
+	# packer writes today -- which for an arm is `must_eq`, `min` and `max`
+	# and nothing else, the three C's own `arm_constraints` switch accepts.
+	# The other three are therefore unreachable here and are left in so that
+	# this stays one copy of the member path's decision rather than a second
+	# one that has to be kept in step with it.
+	#
+	# ENUM_KNOWN is the interesting absence and it is not an oversight: the
+	# C BACKEND does emit `_enum_check` for a scalar arm, so a schema with an
+	# enum-typed scalar arm would be refused by the four and accepted here.
+	# No such schema can exist -- one does not compile in C++ at all (26.411)
+	# -- so the corpus cannot carry the case and the differential cannot pose
+	# it. When 26.411 is fixed, the packer's arm pass is what has to learn
+	# the row; this line already reads it.
+	values = [pair for pair in held
+	          if pair[0] in (MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO,
+	                         MUST_BE_ONE, ENUM_KNOWN)]
+	if not values:
+		return OK
+	try:
+		value = read_scalar(view, chosen)
+	except Refused:
+		return ERR_BOUNDS
+	for check, against in values:
+		if check == MUST_EQ and value != against:
+			return ERR_CONSTRAINT
+		if check == MINIMUM and value < against:
+			return ERR_CONSTRAINT
+		if check == MAXIMUM and value > against:
+			return ERR_CONSTRAINT
+		if check == MUST_BE_ZERO and value != 0:
+			return ERR_CONSTRAINT
+		if check == MUST_BE_ONE and value != against:
+			return ERR_CONSTRAINT
+		if check == ENUM_KNOWN \
+				and value not in image.enum_values.get(against, set()):
+			return ERR_CONSTRAINT
+	return OK
 
 
 def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:

@@ -173,7 +173,7 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                12,
+	("scalar", "not-struct", ""):                14,
 	("no-scalar", "struct", "fixed"):            48,
 	("no-scalar", "struct", "unmeasurable"):     20,
 	("no-scalar", "not-struct", ""):              1,
@@ -229,14 +229,16 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 
 	`_arm_member` declines an arm with `if structs.get(type_name) is None`,
 	and 26.209 restricted the offset accessor to a *struct* arm on the
-	strength of that reading. The condition's text names **13** of the
-	corpus's 81 arm members -- every one whose type is not a struct. What it
-	means is the last cell alone, and it behaves correctly on the other 12
+	strength of that reading. The condition's text names **15** of the
+	corpus's 83 arm members -- every one whose type is not a struct. What it
+	means is the last cell alone, and it behaves correctly on the other 14
 	only because three scalar branches return before control reaches it.
 
-	Those counts are the kind that rot, and they have: they read 12 of 70
-	before `edges` gained a parameterised variant on 2026-09-18. They are
-	re-derivable from `_arm_shapes()` in one call, which is why the
+	Those counts are the kind that rot, and they have twice: they read 12
+	of 70 before `edges` gained a parameterised variant on 2026-09-18, and
+	13 of 81 before it gained `signed_kind`'s constrained arms later the
+	same day. They are re-derivable from `_arm_shapes()` in one call, which
+	is why the
 	assertion below is on the census rather than on the prose -- and why
 	correcting them here is bookkeeping rather than a finding.
 

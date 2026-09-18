@@ -30707,6 +30707,136 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.418 The sixth description, and the pass that was nearly too wide
+
+**26.417's gap is closed: the packer carries an arm's constraints and
+both walkers check them under the discriminant.** `edges.signed_kind` is
+in the tree, and the six descriptions agree about it.
+
+**The image needed no format change, which was worth establishing before
+anything was written.** An arm placement already carries the variant
+member's offset and the arm's own width, and `image.arms` already names
+which placement each case selects -- so `offset_bits`, `size_bits`,
+`_span_bytes` and `read_scalar` all answer correctly for an arm, and the
+constraint and pinned-run sections are keyed by placement index without
+caring whether the placement is a member. What was missing was only that
+the packer never wrote the rows.
+
+**The first attempt widened the wrong loop, and the measurement is the
+entry.** `pack.py`'s constraint loop iterates `traverse.own_entries`, so
+the obvious change is to iterate `rstruct.entries` instead. It works --
+`signed_kind.held.marker` gains its two pinned runs -- and it does more
+than that. Packed across the whole corpus and diffed image by image,
+**six schemas changed rather than one**: nine arm runs across
+`dnsname`, `dtls`, `icmp`, `keystore` and `packet` acquired a
+`fits_frame` row, because the loop body does far more than emit
+constraints and every part of it ran for the arms. `fits_frame` on an arm
+is a claim no backend makes, and one `_arm_selects` already answers from
+the variant member's own span.
+
+So it is a second, narrow pass over the entries `own_entries` drops,
+writing the two families the four backends check and nothing else. Re-run
+over the corpus, **one image changes and its diff is three rows**: the
+pinned pair on `marker`, and `min`/`max` on `flag`. Nothing else moved --
+not a placement, not a struct, not the arm table, and `signed_kind` stays
+`validatable`.
+
+**The corpus diff is the instrument here, not the test suite.** Both
+versions passed everything that was green before; what separated them was
+packing 41 schemas twice and comparing the images field by field. A
+change that adds rows cannot fail a gate that only reads the rows it
+expects, so the way to see scope creep in a packer is to diff its output
+over the whole corpus rather than to ask whether anything went red.
+
+**Both halves are load-bearing and neither is dangerous alone.** With the
+packer pass reverted, the walker's new check is simply never reached and
+every cell returns OK; with the walker's check reverted, the extra rows
+sit in the image unread. Measured both ways. That matters because it says
+the ordering was free: the packer half could have landed first without
+any window in which a walker refused something a backend accepts.
+
+**What makes reading an arm's bytes safe is the discriminant gate, and
+the corpus carries its own positive control.** Every arm of a variant
+sits at the same offset, so the readers answer for an unselected arm
+exactly as readily as for a selected one -- and answer nonsense. With
+`kind = 2` the two-byte `marker` span reads the flag and the trailer as
+`05 09`; with `kind = 1` the one-byte `flag` reads `marker`'s first byte
+as 66, which `[max = 7]` refuses. So `signed_kind`'s two ordinary cells
+are not only cases that should pass: **a build that has lost the gate
+refuses them**, and it refuses them with a constraint error naming the
+arm the message never selected.
+
+**Enum membership is deliberately not written for an arm.** An
+enum-typed scalar arm does not compile in C++ at all (26.411), so the
+corpus carries none and a row here would be a check with no backend to
+agree with. It belongs with that defect rather than ahead of it -- the
+same reasoning that kept the four other arm shapes (a run of wide values,
+a delimited or varint arm, an arm behind `[since]`) unchecked in 26.410,
+where silence agrees with the backends and a check would not.
+
+**The census moved and said so.** `ARM_SHAPES` went from 12 to 14 in the
+`("scalar", "not-struct", "")` cell, which is the population guard doing
+exactly what it was written for: the failure arrived addressed to whoever
+added the entry rather than being absorbed. Its prose counts have now
+rotted twice in one day -- 12 of 70, then 13 of 81, now 15 of 83 -- which
+is why the assertion is on the census and not on the prose.
+
+**The ordering invariant is what the first version actually broke, and
+an existing gate found it.** Both the constraint table and the pinned
+table are BINARY-SEARCHED by the C walk -- `table_row` finds a row and
+`first_pinned` walks outward from it -- so each must ascend by placement
+and keep one placement's rows together. Appending an arm's rows where the
+arm is met puts them straight after its own struct's members, and
+`test_pack.py::test_the_constraint_table_is_written_in_placement_order`
+refused `edges` at index 83: placement 233 before 209.
+
+**The assumption that would have looked safe is false, and one command
+says so.** "Arm placements are numbered after their struct's members" is
+true for `dnsname`, `icmp`, `json`, `modbus`, `mqtt` and `netlink` -- six
+of the eight corpus schemas that have arms at all -- and false for
+`keystore` (arms 12..13, members to 15) and `edges` (arms 220..236,
+members to 230). Six agreeing schemas is the shape of a proxy fitted to
+the cases that were checked, and the two that disagree are the ones that
+matter.
+
+So both tables are merged once every struct has been walked, with a
+STABLE sort: the rows a placement already had keep the order they were
+written in, because `radix_minimal` before `radix_max` and a pad's bounds
+before its content policy are orders later checks depend on, and a sort
+keyed on anything else would permute them silently.
+
+**What makes this worth an entry is which gate caught it.** The three
+sabotages proved the new check could fail; none of them could have found
+this, because the check works perfectly on a table nobody has searched
+yet -- the Python walk keys a dict and does not care where a row sits.
+The gate that spoke was written for `[encoding = from(f)]` breaking the
+same invariant in 26.351, over a construct with nothing in common with
+this one. A corpus-wide invariant outlives the defect it was written for,
+which is the argument for asserting the property rather than the case.
+
+**And it surfaced a hole next door, which is recorded rather than
+widened.** `failed_check` answers `cannot-say` for every variant refusal,
+including the two this entry adds and including the unknown-discriminant
+case that predates all of it -- because `_arm_selects` returns its code
+directly instead of through `fail`, so nothing records an identity.
+`cannot-say` is supposed to mean the image was packed without every check
+the struct states; here the walk HAS the check and ran it.
+
+What makes it worth its own entry is why nobody saw it. The two-walker
+identity sweep compares `(member, check)` pairs and **skips the pair
+whenever the Python side says `cannot-say`** -- so the C walker, which
+does `record(why, index, CHECK_ARM_SELECTED)` for exactly this case, has
+its identity thrown away before the comparison. A whole class is
+uncompared by construction, and the skip reads as agreement. That is the
+vacuous pass wearing a sweep's clothes: the population the sweep reports
+on is the population that already agreed.
+
+Fixing it means threading `found` through `_arm_selects`,
+`_arm_validates` and the nested `_validate` beneath them, at which point
+every variant in the corpus starts being compared rather than skipped --
+a change to behaviour for json, mqtt, icmp and packet alike, not just for
+`signed_kind`. So it is the next piece rather than a rider on this one.
+
 ### 26.417 Four descriptions of six, and the differential said so
 
 **The corpus entry is held back a second time, and this time the thing
@@ -30743,11 +30873,11 @@ the span. The packer already has the honest fallback for a construct it
 cannot encode (`whole = False`, disown rather than report clean), so a
 schema it cannot carry need not become a wrong answer.
 
-**The entry waits, as 0050's struct waited (26.402) and as this one
-waited for 26.414.** Twice now the corpus entry has been written, found a
-real gap, and been held back -- which is the entry doing its job both
-times, at the cost of the construct still not being in the tree. It goes
-in when the sixth description can speak for it.
+**~~The entry waits, as 0050's struct waited (26.402) and as this one
+waited for 26.414.~~ It is in the tree.** Twice the corpus entry was
+written, found a real gap, and was held back -- which is the entry doing
+its job both times. 26.418 is the sixth description learning to speak for
+it, and `edges.signed_kind` landed with it.
 
 ### 26.415 Arm constraints, gated rather than suppressed
 

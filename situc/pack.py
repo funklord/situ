@@ -1164,6 +1164,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# in, and a struct is flagged only where *every* check `traverse` says
 	# it makes is one this image carries -- the same taxonomy the C backend
 	# emits from, rather than a second opinion about what a check is.
+	# An arm's rows, held back rather than appended (26.418). Both tables
+	# are BINARY-SEARCHED by the C walk -- `table_row` then walks outward --
+	# so each must ascend by placement and keep one placement's rows
+	# together. Arm placements are not numbered after their struct's
+	# members: measured over the corpus, `keystore` and `edges` interleave
+	# them, so appending an arm's rows where the arm is met puts a high
+	# index before a lower one and the C walk stops finding either. These
+	# are merged in placement order once every struct has been walked.
+	arm_checks: list[tuple[int, bytes]] = []
+	arm_pinned: list[tuple[int, bytes]] = []
 	constraints_blob = bytearray()
 	enum_blob        = bytearray()
 	enum_ids: dict[str, int] = {}
@@ -1785,11 +1795,102 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				nests.setdefault(name, set()).add(placement.type_name)
 				continue
 			whole = False		# a check this image does not carry yet
+
+		# A VARIANT ARM's own constraints (26.418). The loop above walks
+		# `own_entries`, which drops a dotted path -- so an arm's checks
+		# were never written, and a walk reported `clean` for bytes the
+		# four backends refuse.
+		#
+		# A SECOND, NARROW PASS rather than widening that loop, and the
+		# difference was measured. Iterating every entry runs the whole
+		# body for an arm and writes rows that belong to a member: a
+		# `fits_frame` appeared on nine arm runs across five schemas --
+		# `label.body.text`, `record.sealed.fragment`, three of icmp's --
+		# which is a claim no backend makes about an arm and which
+		# `_arm_selects` already answers from the variant member's own
+		# span. So this writes the two families the four backends check on
+		# an arm and nothing else.
+		#
+		# Every arm is placed at the same offset, so these rows describe
+		# bytes that belong to whichever arm the discriminant selected.
+		# THE GATE IS THE READER'S, and both walkers apply it: with
+		# `signed_kind`'s `kind = 2` the two-byte `marker` spans the flag
+		# and the trailer, and checking it there would refuse a frame all
+		# four backends accept.
+		for entry in rstruct.entries:
+			placement = entry.placement
+			if traverse.is_own_member(rstruct, placement):
+				continue	# the loop above already wrote this one
+			at = placement_index.get(placement.path)
+			if at is None:
+				continue
+			kind = traverse.classify_check(rstruct, placement,
+			                               set(resolved.structs))
+
+			# A byte-run enum arm: one row per alternative, keyed by the
+			# arm's placement, exactly as a member's pinned run is written.
+			pinned = traverse.pinned_runs(placement)
+			if pinned is not None:
+				if any(len(run) > PINNED_OCTETS for run in pinned):
+					whole = False
+					continue
+				for run in pinned:
+					arm_pinned.append((at, _struct.pack(
+						f"<IB{PINNED_OCTETS}s", at, len(run), run)))
+				arm_checks.append((at, _struct.pack(
+					"<IqBxxx", at, len(pinned), 14)))
+				continue
+
+			# A scalar arm's value comparisons. Enum membership is
+			# deliberately NOT written: an enum-typed scalar arm does not
+			# compile in C++ at all (26.411), so the corpus carries none
+			# and a row here would be a check with no backend to agree
+			# with. It belongs with that defect rather than ahead of it.
+			if kind is not traverse.Check.CONSTRAINED:
+				# Everything else an arm can be -- a run of wide values, a
+				# delimited or varint arm, a nested struct -- is checked by
+				# the arm's own validator or not at all (26.410). Not a
+				# reason to disown the struct: the four backends check no
+				# more than this, so silence here agrees with them.
+				continue
+			for attr in placement.attrs:
+				code = {"must_eq": 0, "min": 1, "max": 2}.get(attr.name)
+				if code is None or attr.value is None:
+					continue
+				try:
+					held = evaluate(attr.value, resolved.layout.env)
+				except SituError:
+					whole = False
+					continue
+				arm_checks.append((at, _struct.pack(
+					"<IqBxxx", at, int(held), code)))
+
 		# A `refuse` this image could not encode is a refusal the walk
 		# cannot make, and `validate` is the one probe that cannot be
 		# rendered by halves -- a partial one answers OK where the schema
 		# says no.
 		validatable[name] = whole and name not in refusal_lost
+
+	# Merge the arms' rows into both tables in placement order. A STABLE
+	# sort, so that the rows a placement already had keep the order they
+	# were written in -- `radix_minimal` before `radix_max`, a pad's bounds
+	# before its content policy -- which several checks depend on and which
+	# re-sorting by anything else would silently permute.
+	def _merged(blob: bytearray, extra: list[tuple[int, bytes]],
+			width: int) -> bytearray:
+		if not extra:
+			return blob
+		rows = [(_struct.unpack_from("<I", blob, off)[0],
+		         bytes(blob[off:off + width]))
+		        for off in range(0, len(blob), width)]
+		out = bytearray()
+		for _, row in sorted(rows + extra, key=lambda pair: pair[0]):
+			out += row
+		return out
+
+	constraints_blob = _merged(constraints_blob, arm_checks,
+	                           CONSTRAINT_BYTES)
+	pinned_blob      = _merged(pinned_blob, arm_pinned, PINNED_BYTES)
 
 	for _ in range(len(order) + 1):
 		changed = False

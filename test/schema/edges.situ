@@ -1162,6 +1162,37 @@ struct kinded {
 	}
 }
 
+// A byte-run enum AS a variant arm, and a scalar arm carrying a range.
+// This file held both halves and never the product: `signature` has been
+// here since byte-run enums landed and variants since 26.27, and no schema
+// ever put one inside the other.
+//
+// It reaches two things nothing else does. The parser widens a byte-run
+// enum field into the run it denotes, and its recursion missed variant
+// arms, so the arm was sized at one byte and every description reported
+// that faithfully (26.413). And a constraint declared on an arm -- this
+// enum's membership, and `flag`'s range -- was enforced by no backend at
+// all, while `gen-checks` wrote a test asserting it was (26.414).
+//
+// The discriminant is SPENT rather than peeked. `kinded` above peeks
+// because each arm's own first member IS the tag; here the arms are a
+// separate span and a separate scalar, so peeking would put the
+// discriminant and the marker's first byte at the same offset and no
+// message could both select the arm and hold a valid signature.
+struct signed_kind {
+	u8         kind;
+	variant held switch (kind) {
+		case 1:  signature  marker;
+		case 2:  u8         flag [min = 2, max = 7];
+		default: error;
+	}
+
+	// After the variant, and load-bearing twice: a wrongly-sized arm shows
+	// up here as a wrong BYTE, and the struct's minimum covers the longer
+	// arm, so the span check has the bytes it compares.
+	u8  trailer;
+}
+
 // A checksum whose coverage has NO single byte range, which is the shape
 // nothing in this tree had: two covered regions with a member between them
 // AND an `is <codec>` clause naming something to compute.

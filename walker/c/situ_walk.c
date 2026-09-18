@@ -2986,6 +2986,203 @@ static void record(situ_walk_why *why, uint32_t placement, uint8_t check)
 	}
 }
 
+/* The selected SCALAR or byte-run arm's own constraints (26.417).
+ *
+ * `report._arm_constraints` is what this mirrors, down to which families are
+ * asked and which are deliberately left alone.
+ *
+ * Reached only from `arm_validates`, and only for the arm the discriminant
+ * actually chose. THAT GATE IS THE WHOLE OF WHY READING THE ARM'S BYTES HERE
+ * IS SAFE: every arm of a variant sits at the SAME offset, so these readers
+ * answer for an unselected arm exactly as readily as for a selected one --
+ * and answer nonsense. Measured on `edges.signed_kind`, whose arms are a
+ * two-byte `marker` and a one-byte `flag`: with `kind = 2` the marker's span
+ * reads the flag and the trailer as `05 09`, and with `kind = 1` the flag
+ * reads `marker`'s first byte as 66, which `[max = 7]` refuses. Neither is a
+ * value the message states, so a build that has lost the gate REFUSES the
+ * two ordinary cells -- frames all four code backends accept.
+ *
+ * TWO FAMILIES AND NO MORE, which is what the packer writes for an arm and
+ * what the four backends emit: a pinned span, and the value comparisons.
+ * Enum membership is deliberately not among them -- an enum-typed scalar arm
+ * does not compile in C++ at all (26.411), so the corpus carries none and a
+ * check here would have no backend to agree with. Any OTHER kind on an arm
+ * is passed over rather than refused: the backends check no more than these
+ * two, so silence agrees with them, where UNSUPPORTED would decline every
+ * struct `report._arm_constraints` answers for.
+ *
+ * Measured through the ARM rather than through the variant member, which is
+ * the other way round from `arm_validates` above and is what the Python walk
+ * does. An arm placement carries the variant member's offset where the image
+ * knows one and refuses where it does not, so both walkers answer BOUNDS for
+ * an arm at a dynamic offset rather than one of them reading bytes the other
+ * declines.
+ */
+static situ_walk_err arm_constraints(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t chosen,
+                                     const situ_walk_placement *arm,
+                                     situ_walk_err *verdict,
+                                     situ_walk_why *why)
+{
+	uint32_t       rows   = 0u;
+	const uint8_t *checks = check_rows(image, chosen, &rows);
+	uint32_t       pinned = 0u;
+	uint32_t       values = 0u;
+	uint64_t       value  = 0u;
+	situ_walk_err  err;
+
+	if (checks == NULL) {
+		return SITU_WALK_OK;
+	}
+
+	for (uint32_t c = 0u; c < rows; c++) {
+		const uint8_t kind = checks[c * image->constraint_stride + 12];
+
+		if (kind == CHECK_PINNED_RUN) {
+			pinned += 1u;
+		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
+		                || kind == CHECK_MAXIMUM) {
+			values += 1u;
+		}
+	}
+
+	/* The span before the value, in the Python walk's order: the first
+	 * failure is the answer, so which question is asked first decides which
+	 * refusal is reported. */
+	if (pinned > 0u) {
+		uint32_t       at      = 0u;
+		uint32_t       wide    = 0u;
+		uint32_t       content;
+		const uint8_t *data;
+
+		err = situ_walk_offset_bits(image, message, len, shape, chosen, &at);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			record(why, chosen, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		err = situ_walk_size_bits(image, message, len, shape, chosen, &wide);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			record(why, chosen, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+
+		/* A delimited arm's span is its content PLUS its delimiter, because
+		 * that is where the next member starts, and a delimiter is no part
+		 * of what the schema called text. `report._span_bytes` makes the
+		 * same cut for a member and the backends pass `_len` here. */
+		content = wide / 8u;
+		if (delimiter_rules(image, chosen) != NULL) {
+			int      terminated = 0;
+			uint32_t took       = 0u;
+
+			err = situ_walk_scan(image, message, len, chosen, at / 8u,
+			                     &content, &terminated, &took);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				record(why, chosen, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+		}
+		if (at / 8u > len || content > len - at / 8u) {
+			record(why, chosen, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		data = message + at / 8u;
+
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t *row  = checks + c * image->constraint_stride;
+			const int64_t  want = i64_at(row + 4);
+			uint32_t       seen = 0u;
+			int            bad  = 1;
+
+			if (row[12] != CHECK_PINNED_RUN) {
+				continue;
+			}
+			/* Case folding belongs to the SET rather than to the member
+			 * (0055), so an arm of that set folds for the same reason a
+			 * member does. */
+			for (const uint8_t *one = first_pinned(image, chosen);
+			     one != NULL
+			     && one < image->pinned_runs
+			              + (size_t)image->pinned_run_count
+			                * image->pinned_run_stride
+			     && u32_at(one) == chosen;
+			     one += image->pinned_run_stride) {
+				seen += 1u;
+				if (same_run(one + 5, one[4], data, content,
+				             (arm->text_flags & TEXT_CASE_INSENSITIVE)
+				             != 0u)) {
+					bad = 0;
+				}
+			}
+			/* `want` is how many the packer wrote, and a different number
+			 * found here means this build misread the section rather than
+			 * that the message is wrong. So it declines the struct rather
+			 * than refusing the frame: an answer about the IMAGE. */
+			if ((int64_t)seen != want) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			if (bad) {
+				record(why, chosen, CHECK_PINNED_RUN);
+				*verdict = SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
+	}
+
+	if (values == 0u) {
+		return SITU_WALK_OK;
+	}
+	err = situ_walk_read(image, message, len, shape, chosen, &value);
+	if (err == SITU_WALK_UNSUPPORTED) {
+		return err;
+	}
+	if (err != SITU_WALK_OK) {
+		record(why, chosen, SITU_WALK_NO_CHECK);
+		*verdict = SITU_WALK_BOUNDS;
+		return SITU_WALK_OK;
+	}
+	for (uint32_t c = 0u; c < rows; c++) {
+		const uint8_t *row  = checks + c * image->constraint_stride;
+		const int64_t  want = i64_at(row + 4);
+		const uint8_t  kind = row[12];
+		int            broken = 0;
+
+		switch (kind) {
+		case CHECK_MUST_EQ:
+			broken = ((int64_t)value != want);
+			break;
+		case CHECK_MINIMUM:
+			broken = ((int64_t)value < want);
+			break;
+		case CHECK_MAXIMUM:
+			broken = ((int64_t)value > want);
+			break;
+		default:
+			continue;	/* not a family this arm's rows are checked for */
+		}
+		if (broken) {
+			record(why, chosen, kind);
+			*verdict = SITU_WALK_CONSTRAINT;
+			return SITU_WALK_OK;
+		}
+	}
+	return SITU_WALK_OK;
+}
+
 /* The selected arm's own `validate`, through its own type.
  *
  * Split out because the matched and the default paths reach it the same way
@@ -3062,9 +3259,13 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	}
 
 	/* A struct-typed arm carries its own constraints and its own validator
-	 * is what knows them. A run has none beyond the fit just checked. */
+	 * is what knows them. A SCALAR or byte-run arm has no validator to
+	 * descend into and its own rows are what say whether it holds -- asking
+	 * nothing was 26.417's gap, and it is why json's `yes` arm, pinned to
+	 * `[must_eq = "rue"]`, accepted `txyz` for as long as the file existed. */
 	if (arm_type == SITU_WALK_NONE) {
-		return SITU_WALK_OK;
+		return arm_constraints(image, message, len, shape, chosen, &arm,
+		                       verdict, why);
 	}
 	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
 	                     depth + 1u, verdict, why);

@@ -1156,6 +1156,62 @@ def test_the_walk_checks_a_byte_run_enum() -> None:
 	assert report.failed_check(image, view, si) == ("t", "must_eq")
 
 
+def test_a_variant_arms_own_constraints_are_checked_under_the_discriminant(
+		) -> None:
+	"""An arm's `[min]`/`[max]` and a byte-run arm's membership (26.418).
+
+	**The two cross-arm cells are the point of this test, not the four
+	ordinary ones.** Every arm of a variant sits at the SAME offset, so the
+	readers answer for an unselected arm exactly as readily as for a
+	selected one -- and answer nonsense. With `kind = 1` the one-byte `flag`
+	reads `marker`'s first byte, which for `"BM"` is 66 and which
+	`[max = 7]` refuses; with `kind = 2` the two-byte `marker` span reads
+	the flag and the trailer. So `01 42 4D 09` and `02 02 09` are not merely
+	messages that ought to pass: **a walk that has lost the discriminant
+	gate REFUSES them**, naming an arm the message never selected.
+
+	The differential is what caught the original gap and is what guards the
+	general case, but it draws at random -- so it is unlikely to produce
+	either boundary of `[min = 2, max = 7]` or a cross-arm collision on
+	purpose. These eight cells are chosen for the disagreement rather than
+	for the answer.
+	"""
+	source = ('enum signature : u8[2] { bmp = "BM", pe = "MZ" }\n'
+	          "struct S {\n"
+	          "\tu8 kind;\n"
+	          "\tvariant held switch (kind) {\n"
+	          "\t\tcase 1: signature marker;\n"
+	          "\t\tcase 2: u8 flag [min = 2, max = 7];\n"
+	          "\t\tdefault: error;\n"
+	          "\t}\n"
+	          "\tu8 trailer;\n"
+	          "}")
+	parsed   = parse_text("target buffer;\nendian big;\n"
+	                      "bit_order msb_first;\n" + source)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	si = next(i for i in range(len(image.structs))
+	          if image.struct_name(i) == "S")
+
+	for frame in (b"\x01BM\x09", b"\x01MZ\x09",	# the arm the case selects
+	              b"\x02\x02\x09", b"\x02\x07\x09"):	# the inclusive bounds
+		view = acquire(image, frame, si)
+		assert report._validate(image, view, si) == report.OK, frame
+
+	for frame in (b"\x01XY\x09",		# in neither arm of the byte-run enum
+	              b"\x02\x01\x09", b"\x02\x08\x09"):	# outside the bounds
+		view = acquire(image, frame, si)
+		assert report._validate(image, view, si) == report.ERR_CONSTRAINT, \
+			frame
+
+	# The discriminant naming no arm is VERSION and not CONSTRAINT: a
+	# message this build cannot read rather than one that breaks a rule.
+	view = acquire(image, b"\x09\x05\x09", si)
+	assert report._validate(image, view, si) == report.ERR_VERSION
+
+
 def test_a_pass_default_enum_carries_no_membership_check() -> None:
 	"""`default = pass` says unknown values are accepted, so there is
 	nothing to check -- and a check emitted anyway would refuse messages the
