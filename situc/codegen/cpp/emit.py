@@ -4813,6 +4813,9 @@ class Emitter:
 			if at is None:
 				return [*head, f"\t/* ...and `{placement.name}` starts where"
 				        " this backend cannot resolve. */"]
+			room  = f"situ_remaining_u32(raw_.limit, ({at}))"
+			cap   = (room if placement.delimiter_cap is None
+			         else f"situ_min_u32({placement.delimiter_cap}u, {room})")
 			return [
 				*head,
 				f"\t[[nodiscard]] std::uint32_t {name}_len()"
@@ -4820,7 +4823,10 @@ class Emitter:
 				"\t{",
 				f"\t\tstatic constexpr std::uint8_t {sym}[] = {{{byts}}};",
 				f"\t\treturn situ_scan(situ_base(raw_) + ({at}),",
-				f"\t\t\tsitu_remaining_u32(raw_.limit, ({at})), {sym},"
+				# The CAP, which the arm ignored while the identical member
+				# applied it (26.431): `until " " max 4` bounds the scan,
+				# and without it the arm ran to the end of the frame.
+				f"\t\t\t{cap}, {sym},"
 				f" {len(delim)}u);",
 				"\t}",
 				"",
@@ -4833,8 +4839,7 @@ class Emitter:
 				"\t{",
 				f"\t\tconst std::uint32_t content = {name}_len();",
 				"",
-				"\t\treturn content + (content < situ_remaining_u32("
-				f"raw_.limit, ({at}))",
+				f"\t\treturn content + (content < {cap}",
 				f"\t\t\t? {len(delim)}u : 0u);",
 				"\t}",
 				"",
@@ -4850,8 +4855,7 @@ class Emitter:
 				f"\t[[nodiscard]] bool {name}_terminated()"
 				" const noexcept",
 				"\t{",
-				f"\t\treturn {name}_len() < situ_remaining_u32("
-				f"raw_.limit, ({at}));",
+				f"\t\treturn {name}_len() < {cap};",
 				"\t}",
 				"",
 				f"\t[[nodiscard]] ::situ::rt::err {name}"

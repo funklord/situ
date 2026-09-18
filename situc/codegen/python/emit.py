@@ -2773,6 +2773,15 @@ class Emitter:
 				return [*head, f"\t\t# ...and `{placement.name}` starts where"
 				        " this backend cannot resolve.",
 				        "\t\traise VersionError(\"unreachable\")"]
+			# The CAP, which the arm ignored while the identical MEMBER
+			# applied it (26.431): `until " " max 4` bounds the scan, and
+			# without it the arm ran to the end of the frame. Measured on
+			# `wide_delim_arm`, where the four answered len=6 over an
+			# unterminated frame and the walker answered 4.
+			room = (f"max(0, self._len - ({at}))"
+			        if placement.delimiter_cap is None
+			        else f"min({placement.delimiter_cap},"
+			             f" max(0, self._len - ({at})))")
 			return [
 				*head,
 				f"\t\tstart = {at}",
@@ -2784,7 +2793,7 @@ class Emitter:
 				f"\tdef {name}_len(self) -> int:",
 				f'\t\t"""To the first {delim!r}, or the whole run."""',
 				f"\t\treturn scan(self._msg.buffer[self._at + ({at}):],",
-				f"\t\t\tmax(0, self._len - ({at})), {delim!r})",
+				f"\t\t\t{room}, {delim!r})",
 				"",
 				"\t@property",
 				f"\tdef {name}_span(self) -> int:",
@@ -2793,7 +2802,7 @@ class Emitter:
 				'\t\tto add -- the arm ran to the end of the frame."""',
 				f"\t\tcontent = self.{name}_len",
 				f"\t\treturn content + ({len(delim)}"
-				f" if content < max(0, self._len - ({at})) else 0)",
+				f" if content < {room} else 0)",
 				"",
 				# The delimiter is THERE, and the content UNGATED. A
 				# delimited member has had both all along and an arm had
@@ -2808,7 +2817,7 @@ class Emitter:
 				'\t\t"""Whether the delimiter is within the frame: one that',
 				"\t\tdoes not hold it was cut short, and the scan above",
 				'\t\tstopped at the end rather than at the member\'s end."""',
-				f"\t\treturn self.{name}_len < max(0, self._len - ({at}))",
+				f"\t\treturn self.{name}_len < {room}",
 				"",
 				"\t@property",
 				f"\tdef {name}_raw(self) -> bytes:",

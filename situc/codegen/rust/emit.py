@@ -2538,11 +2538,23 @@ class Emitter:
 			if at is None:
 				return [*head, f"\t// ...and `{placement.name}` starts where"
 				        " this backend cannot resolve."]
+			# The CAP, which the arm ignored while the identical MEMBER
+			# applied it (26.431): `until " " max 4` bounds the scan, and
+			# without it the arm ran to the end of the frame. Measured on
+			# `wide_delim_arm`, where the four answered len=6 over an
+			# unterminated frame and the walker answered 4.
+			room = (f"self.bytes.len().saturating_sub({at})"
+			        if placement.delimiter_cap is None
+			        else f"core::cmp::min({placement.delimiter_cap},"
+			             f" self.bytes.len().saturating_sub({at}))")
+			upto = ("" if placement.delimiter_cap is None
+			        else f"core::cmp::min({at} + {placement.delimiter_cap},"
+			             " self.bytes.len())")
 			return [
 				*head,
 				f"\tpub fn {name}_len(&self) -> usize {{",
 				f"\t\tsitu_rt::scan(&self.bytes[core::cmp::min({at},"
-				" self.bytes.len())..],",
+				f" self.bytes.len())..{upto}],",
 				f'\t\t\tb"{lit}")',
 				"\t}",
 				"",
@@ -2553,7 +2565,7 @@ class Emitter:
 				f"\tpub fn {name}_span(&self) -> usize {{",
 				f"\t\tlet content = self.{name}_len();",
 				"",
-				f"\t\tif content < self.bytes.len().saturating_sub({at}) {{",
+				f"\t\tif content < {room} {{",
 				f"\t\t\tcontent + {len(delim)}",
 				"\t\t} else {",
 				"\t\t\tcontent",
@@ -2584,8 +2596,7 @@ class Emitter:
 				"\t}",
 				"",
 				f"\tpub fn {name}_terminated(&self) -> bool {{",
-				f"\t\tself.{name}_len() < self.bytes.len()"
-				f".saturating_sub({at})",
+				f"\t\tself.{name}_len() < {room}",
 				"\t}",
 				"",
 				f"\tpub fn {name}(&self) -> Result<&[u8]> {{",

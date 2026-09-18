@@ -1002,6 +1002,35 @@ struct ranged_code {
 	u8           rest[remaining];
 }
 
+// THE SAME MEMBER AS A VARIANT ARM (26.431), which is the product this file
+// again had both halves of and never the combination -- `ranged_code` above
+// and `delimited_arm` earlier, for as long as it has had either.
+//
+// It could not be written until the differ learned to probe it. A delimited
+// arm names no count, so the driver generator fell past every byte-run
+// clause to the scalar probe and asked for a `_get` taking an
+// out-parameter, of a member whose accessor is a pointer and a length: the
+// driver did not compile, so no schema carrying this shape could be added
+// to the corpus at all. That is why the arm answering ONE BYTE went unseen
+// -- the instrument that would have caught it could not be pointed here.
+//
+// The value bounds are deliberately NOT checked on an arm, by all four
+// alike: the helpers that check them read the member's parsed value, and an
+// arm's accessor of that name answers its bytes. What IS checked is the
+// terminator, which is what this entry pins.
+struct wide_delim_arm {
+	u8 pick;
+	variant held switch (pick) {
+		case 1:  decimal u32  code[] until " " max 4  [min = 200, max = 599];
+		case 2:  u8           fixed[3];
+		default: error;
+	}
+
+	// After the variant, so an arm framed at the wrong width shows up here
+	// as a wrong byte rather than as bytes nobody reads back.
+	u8  after;
+}
+
 // A `positional` block, which the grammar has had since the beginning and no
 // schema in the tree wrote. Section 4 calls mixed paradigms in one schema a
 // feature and says positional layout is what makes canonical encoding a

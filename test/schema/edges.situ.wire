@@ -446,6 +446,15 @@ struct versioned_arm size=2..3 version=rev
   held case 2: later u8
   held case default: error
 
+struct wide_delim_arm size=3..6
+  @0x0000   1         u8         pick
+  @0x0001   1..4      variant    held
+  ~         1         u8         after
+  held switch: pick
+  held case 1: code u32
+  held case 2: fixed u8
+  held case default: error
+
 struct wide_run size=7..31
   @0x0000   1         u8         n  max=4
   @0x0001   0..8      u16        a  sized-by=n

@@ -2812,7 +2812,14 @@ class Emitter:
 				f"static inline uint32_t {scan}(situ_view_t view)",
 				"{",
 				f"\treturn situ_scan(situ_base(view) + {at},",
-				f"\t\tsitu_remaining_u32(view.limit, {at}), {sym},"
+				# `_scan_limit`, not `situ_remaining_u32`: a delimited run
+				# may cap its scan -- `until " " max 4` -- and the arm's
+				# accessor ignored the cap while the identical MEMBER
+				# applied it (26.431). Measured on `wide_delim_arm`: over an
+				# unterminated frame the four answered len=6 where the
+				# walker answered 4, so the arm ran past its own declared
+				# maximum and `after` was read from the wrong byte.
+				f"\t\t{self._scan_limit(placement, at)}, {sym},"
 				f" {len(delim)}u);",
 				"}",
 				"",
@@ -2823,8 +2830,8 @@ class Emitter:
 				"{",
 				f"\tconst uint32_t content = {scan}(view);",
 				"",
-				f"\treturn content + (content < situ_remaining_u32(view.limit,"
-				f" {at})",
+				f"\treturn content + (content"
+				f" < {self._scan_limit(placement, at)}",
 				f"\t\t? {len(delim)}u : 0u);",
 				"}",
 				"",
@@ -2841,8 +2848,8 @@ class Emitter:
 				" * the end rather than at the end of the member. */",
 				f"static inline int {term_fn}(situ_view_t view)",
 				"{",
-				f"	return {scan}(view) < situ_remaining_u32(view.limit,"
-				f" {at});",
+				f"\treturn {scan}(view)"
+				f" < {self._scan_limit(placement, at)};",
 				"}",
 				"",
 				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'ptr')}"

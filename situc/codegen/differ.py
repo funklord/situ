@@ -682,19 +682,31 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 		# which asks a getter that takes an out-parameter of a member whose
 		# accessor is a pointer and a length. The same missing spelling, in
 		# the file whose job is to ask four backends one question.
-		# ...and a DELIMITED arm, which is the fourth spelling of a byte run
-		# and the one this list was missing (26.423). `u8 line[] until "\n"`
-		# names no count at all, so it fell past every clause here to the
-		# scalar probe below and the driver asked for a `_get` taking an
-		# out-parameter -- of a member whose accessor is a pointer and a
+		# A DELIMITED arm, at ANY element width, and before the clauses
+		# below because it is not a question about width (26.423, 26.431).
+		# Every backend gives such an arm the same span-shaped accessors --
+		# `_len`, `_span`, `_terminated` and a pointer-and-length getter --
+		# whether it is `u8 line[] until "\n"` or `decimal u32 code[]
+		# until " "`, because what the scan finds is bytes either way.
+		#
+		# It named no count at all, so it fell past every clause here to
+		# the scalar probe and the driver asked for a `_get` taking an
+		# out-parameter of a member whose accessor is a pointer and a
 		# length. It did not compile, which is the good outcome; what it
-		# means is that the four backends were never asked about a delimited
-		# arm at all, and the differential that would have caught the arm
-		# answering ONE BYTE could not run.
+		# means is that the four backends were never asked about a
+		# delimited arm at all, and the differential that would have caught
+		# the arm answering ONE BYTE could not run.
+		#
+		# The width gate this used to sit behind was wrong for the same
+		# reason the clause it was bolted onto is about runs with a count:
+		# a delimited arm HAS no count, so neither test describes it.
+		if member.delimiters:
+			found.append(Ask(Probe.ARM_BYTES, local))
+			continue
+
 		if scalar.bits == BITS_PER_BYTE \
 				and (member.sized_by is not None
 				     or member.array_count is not None
-				     or member.delimiters
 				     or data_sized(member)):
 			found.append(Ask(Probe.ARM_BYTES, local))
 		elif indexed_elements(member) \

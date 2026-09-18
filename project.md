@@ -30711,6 +30711,63 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.431 The corpus entry could not be written, and then it found the bug
+
+**A construct the instrument cannot express is a construct the corpus
+cannot hold, and that is a stronger kind of blind spot than a missing
+test.** 26.423 recorded that `edges` should carry a delimited arm of a
+WIDE element and did not. The reason was not an oversight: the differ's
+driver generator could not probe one, so any schema carrying the shape
+produced a driver that did not compile, and the corpus physically could
+not accept it.
+
+    error: implicit declaration of function
+           `situ_radix_arm_held_num_get`
+
+**`_arms` sorted an arm by element WIDTH, and a delimited arm has no
+width question to answer.** A delimited run names no count, so it fell
+past the byte-run clause and the indexed-run clause to the scalar probe,
+which asks for a getter taking an out-parameter -- of a member whose
+accessor is a pointer and a length. 26.423 half-fixed this by adding
+`delimiters` to the byte-run clause, which is right for `u8 line[]` and
+still wrong for `decimal u32 code[]`. Every backend gives a delimited arm
+the same span-shaped accessors whatever the element width, because what a
+scan finds is bytes either way, so the test belongs before the width
+clauses rather than inside one.
+
+**With the instrument fixed the corpus entry went in, and disagreed on
+its first run.**
+
+    edges.situ: the walker and C disagree about
+      ('wide_delim_arm', 'after')
+      walker: 'after 243'
+      C:      'after 0'
+
+**A delimited run may CAP its scan -- `until " " max 4` -- and the arm's
+accessors ignored the cap.** The identical member applies it:
+
+    MEMBER  situ_min_u32(4u, situ_remaining_u32(view.limit, at))
+    ARM     situ_remaining_u32(view.limit, 1u)
+
+So over an unterminated frame the four backends scanned to the end and
+answered `len=6` where the walker answered 4, the arm ran past its own
+declared maximum, and `after` was read from the wrong byte. All four had
+it, because all four arm accessors were written from the same reading of
+the member's -- which is the 26.423 defect's own shape reappearing inside
+26.423's own fix.
+
+**This one was mine, shipped in `4b385fb` and caught within minutes of
+the corpus entry landing.** That is the whole argument for the entry: not
+that it proves the feature works, but that it is the only thing in the
+tree positioned to disagree. `_scan_limit` and its three siblings are
+used by every arm accessor now, and all five descriptions agree on both
+frames.
+
+**The order is the lesson.** The instrument came first, then the corpus
+entry, then the bug -- and the bug was already in the tree, pushed, with
+every gate green. Nothing else was going to report it, because the shape
+that would have asked could not be written down.
+
 ### 26.430 The nesting refusal had a hole exactly where an arm goes
 
 **`situc build` reported success and C emitted a header naming an
@@ -31398,12 +31455,10 @@ backend that crashes, in a shape no corpus schema carries and no gate could
 therefore report.
 
 All four decline the value checks on a delimited arm now, and all four check
-its terminator, its encoding and its token set. **The corpus does not carry
-this shape and should**: the differ's own probe would need teaching first,
-because a `decimal u32` arm is neither a byte run nor an indexed run to it
-and falls through to the scalar probe -- the same hole that hid the first
-half of this entry. Recorded rather than done, because it is the differ's
-question rather than this one's.
+its terminator, its encoding and its token set. **The corpus did not carry
+this shape and could not**, the differ's probe being unable to express it --
+which 26.431 fixed, added `edges.wide_delim_arm`, and was rewarded with a
+defect in this entry's own accessors on the first run.
 
 **And one thing believed dead was not.** An `_encoding_check` branch added
 earlier for this entry was measured across the whole corpus -- 39 schemas,
