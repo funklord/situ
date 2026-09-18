@@ -7557,6 +7557,81 @@ class Emitter:
 		version gate". A delimited text number reaches it the same way.
 		"""
 		scalar = placement.scalar
+
+		# A run of WIDE values carrying an encoding -- `[encoding =
+		# utf16be]` over a `u16` run (26.422). `_utf16_check` reads the
+		# view's bytes from a static offset rather than through an
+		# accessor, so there is nothing to bind and the discriminant test
+		# is the whole gate.
+		#
+		# Separate from the byte-run branch below because a `u16` arm has
+		# NO span accessor -- the element is ValueConverted, so this
+		# backend emits per-element getters and no `bytes &out` -- which
+		# means the `err::version` gate the rest of this function leans on
+		# is not available. The test is built the way `_arm_member` builds
+		# it, from the same `arm_of` the accessors use.
+		if scalar is not None and scalar.bits != BITS_PER_BYTE \
+				and placement.array_count is not None:
+			inner = self._utf16_check(struct, placement)
+			if not inner:
+				return []
+			found = arm_of(struct, placement)
+			if found is None:
+				return []
+			variant, arm = found
+			held = self._over_fields(struct, variant.discriminant or "")
+			if arm.value is None:
+				matched = matched_values(variant)
+				if not matched:
+					return []
+				test = "(" + " || ".join(f"{held} == {one.value}u"
+				                         for one in matched) + ")"
+				keep = f"!{test}"
+			else:
+				keep = f"{held} == {arm.value}u"
+			return [
+				f"\t\t/* {placement.path}: checked where the discriminant",
+				"\t\t * selects this arm, and nothing to check where it"
+				" does",
+				"\t\t * not. */",
+				f"\t\tif ({keep}) {{",
+				*[f"\t{one}" if one.strip() else one for one in inner],
+				"\t\t}",
+			]
+
+		# A BYTE-RUN arm's span constraints (26.422). Its accessor is the
+		# `bytes &out` shape rather than the `T &out` one below, and the
+		# gate is the same: `err::version` from the getter is "not this
+		# arm". This backend emitted NOTHING for such an arm, so a
+		# `[nul_terminated]` arm with no terminator validated clean --
+		# while C asked both arms' questions of every message and refused
+		# the ones that were fine.
+		if scalar is not None and scalar.bits == BITS_PER_BYTE \
+				and placement.array_count is not None \
+				and self._offset_expression(struct, placement) is not None:
+			held  = f"{bare_name(local_name(struct, placement))}_span"
+			inner = self._array_checks(struct, placement, scalar,
+			                           f"{held}.data()")
+			if not inner:
+				return []
+			name = bare_name(local_name(struct, placement))
+			return [
+				f"\t\t/* {placement.path}: the arm the discriminant selects",
+				"\t\t * carries its own constraints. A different arm is"
+				" nothing",
+				"\t\t * to check, which is what `err::version` says. */",
+				"\t\t{",
+				f"\t\t\t::situ::rt::bytes {held}{{}};",
+				f"\t\t\tconst ::situ::rt::err got = {name}({held});",
+				"",
+				"\t\t\tif (got == ::situ::rt::err::ok) {",
+				*_deeper(inner),
+				"\t\t\t} else if (got != ::situ::rt::err::version) {",
+				"\t\t\t\treturn got;",
+				"\t\t\t}",
+				"\t\t}",
+			]
+
 		# Exactly the shape `_arm_member` gives a scalar getter to. A run
 		# has no `T &out` accessor to gate on, and asking for one names a
 		# function nothing defines.
@@ -8085,7 +8160,16 @@ class Emitter:
 		]
 
 	def _array_checks(self, struct: ResolvedStruct, placement: Placement,
-			scalar: ScalarType) -> list[str]:
+			scalar: ScalarType, span: str | None = None) -> list[str]:
+		"""The span checks a byte run carries: an encoding, a terminator.
+
+		`span` names where the bytes are, and defaults to the member's own
+		accessor. A variant ARM passes the local its gated getter filled,
+		because an arm's accessor takes an out-parameter and returns an
+		error rather than handing the bytes back (26.422) -- and because a
+		second copy of these three checks written for arms would be a
+		second thing to be wrong about what `[encoding = utf8]` means.
+		"""
 		if placement.kind == "reserved":
 			if scalar.bits != BITS_PER_BYTE:
 				return []
@@ -8102,6 +8186,7 @@ class Emitter:
 
 		name  = bare_name(local_name(struct, placement))
 		count = placement.array_count or 0
+		where = span if span is not None else f"{name}().data()"
 		lines: list[str] = []
 
 		for attr in placement.attrs:
@@ -8110,7 +8195,7 @@ class Emitter:
 				if named in ("ascii", "utf8"):
 					lines.extend([
 						f"\t\t/* {placement.path} [encoding = {named}] */",
-						f"\t\tif (!situ_{named}_valid({name}().data(),"
+						f"\t\tif (!situ_{named}_valid({where},"
 						f" {count})) {{",
 						"\t\t\treturn ::situ::rt::err::constraint;",
 						"\t\t}",
@@ -8123,11 +8208,11 @@ class Emitter:
 				elif _encoding_source(attr) is not None:
 					lines.extend(self._declared_encoding_check(
 						struct, placement, attr,
-						f"{name}().data()", f"{count}"))
+						where, f"{count}"))
 			if attr.name == "nul_terminated":
 				lines.extend([
 					f"\t\t/* {placement.path} [nul_terminated] */",
-					f"\t\tif (!situ_nul_terminated({name}().data(), {count})) {{",
+					f"\t\tif (!situ_nul_terminated({where}, {count})) {{",
 					"\t\t\treturn ::situ::rt::err::constraint;",
 					"\t\t}",
 				])

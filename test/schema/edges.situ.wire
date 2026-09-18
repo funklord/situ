@@ -337,6 +337,16 @@ struct signed_number size=2..9
   @0x0000   until:2c  i16        offset  radix=10 minimal cap=8
   ~         1         u8         tail
 
+struct spanned_arm size=6
+  @0x0000   1         u8         pick
+  @0x0001   4         variant    held
+  @0x0005   1         u8         after
+  held switch: pick
+  held case 1: label u8
+  held case 2: text u8
+  held case 3: wide u16
+  held case default: error
+
 struct split_coverage size=8
   @0x0000   2         u16        a  big
   @0x0002   2         u16        between  big

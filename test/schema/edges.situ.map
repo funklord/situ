@@ -353,6 +353,14 @@ struct signed_number size=2..9 access=Sequential mutate=Shifting address=Unstabl
   signed_number.offset                   offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
   signed_number.tail                     offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable
 
+struct spanned_arm size=6 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  spanned_arm.pick                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  spanned_arm.held                       offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  spanned_arm.held.label                 offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
+  spanned_arm.held.text                  offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  spanned_arm.held.wide                  offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  spanned_arm.after                      offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
 struct split_coverage size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(sum)
   split_coverage.first                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sum)
   split_coverage.a                       offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(sum)

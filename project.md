@@ -30707,6 +30707,135 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.425 The corpus entry caught the walkers lagging, on the first draw
+
+**26.422 fixed four descriptions and left two behind, and the gate said so
+the moment the corpus could express it.** `edges.spanned_arm` went in and
+`test_the_walker_agrees_with_the_compiled_backends` reported:
+
+    edges.situ: the walker and C disagree about ('spanned_arm', 'validate')
+      walker: 'validate 0'
+      C:      'validate 2'
+      buffer: 01e41da0dd...
+
+`pick = 1` selects `label[4] [nul_terminated]` and the four bytes are
+`e4 1d a0 dd`, which hold no terminator. C refuses; the walkers had no row
+to refuse with, because the packer's arm pass wrote a pinned run, the
+value comparisons and an enum's membership and not the two SPAN rows.
+
+**This is 26.417's shape repeating exactly, one construct along** -- and
+it repeated because 26.422 was written as a fix to the backends rather
+than as a feature reaching all six descriptions. The entry's own closing
+sentence said the corpus should carry the construct; it did not say that
+carrying it would need the image to grow.
+
+**No new record, again.** `image_constraint` already holds
+`nul_terminated` (11) and `encoded_as` (12) keyed by placement, and the
+arm's placement is in the table like any other; the arm pass simply had
+to write the member path's two rows. Both walkers read them over the
+arm's own span, which is safe for the reason the whole gated block is:
+the discriminant selected this arm.
+
+**Seven cells, both walkers, agreeing with the four backends:** a
+terminated `label` and an unterminated one, valid and invalid utf8 in
+`text`, valid utf16 and a lone surrogate in `wide`, and an unknown
+discriminant. The differential is green over the corpus again -- 38
+passed -- which is the gate that found it answering.
+
+**And `[encoding = from(f)]` on an arm is disowned rather than
+half-written.** That form puts a row on the arm AND a mapping on the
+SOURCE member, and the source's rows were written in the loop above, so
+adding one now would reopen a placement's run and break the ordering
+26.418 had to fix. `whole = False` is the honest answer: the walk cannot
+speak for that struct, rather than speaking wrongly. No corpus schema
+writes it on an arm.
+
+### 26.422 A span constraint on a RUN arm: C refuses the wrong messages, the other three refuse nothing
+
+**Found by asking what the four backends do with the arm shapes 26.418
+left unchecked, rather than by assuming the silence there was agreed.**
+It is not: the four disagree three ways, and C's answer is the one that
+refuses valid messages.
+
+The fixture is two byte-run arms carrying the span constraints an
+ordinary member can carry:
+
+    struct frame {
+        u8 kind;
+        variant held switch (kind) {
+            case 1:  u8  name[4] [nul_terminated];
+            case 2:  u8  txt[4]  [encoding = utf8];
+            default: error;
+        }
+        u8 tail;
+    }
+
+**C emits both checks with NO discriminant gate**, straight into
+`situ_frame_check`, one after the other over the same four bytes:
+
+    if (!situ_nul_terminated((situ_base(view)) + 1u, 4u)) { ... }
+    if (!situ_utf8_valid((situ_base(view)) + 1u, 4u)) { ... }
+
+So every message is judged against BOTH arms. Compiled and run:
+
+    kind=1  name="ab\0\xff"   err=2  which=2   <- refused by `txt`
+    kind=2  txt="abcd"         err=2  which=1   <- refused by `name`
+
+**Each message is refused by the constraint belonging to the arm it did
+not select**, and the identity says so out loud. The first holds a
+terminator and is refused for not being UTF-8; the second is valid UTF-8
+and is refused for holding no terminator. Neither message is malformed.
+
+**C++, Rust and Python emit no check for the arm at all.** Their
+`validate` tests the discriminant and stops; `check_held` is the only id
+C++ publishes for that struct. So the same two frames are accepted, and
+so is a `name` arm with no terminator and a `txt` arm that is not UTF-8
+-- which the schema does state and which three of the four descriptions
+do not enforce.
+
+**The worst pairing of the two failure directions.** One backend refuses
+what it should accept and three accept what they should refuse, on one
+construct, with nothing in between. 26.418 gated the SCALAR arm's
+comparisons and the byte-run enum's membership and recorded that other
+arm shapes were unchecked -- reading that silence as the four backends
+agreeing to check nothing. They do not agree, and the entry that said so
+was inferring rather than measuring.
+
+**Why the corpus missed it, again in the same shape.** `edges.situ`
+carries run arms (`arm_run` has three) and carries span constraints on
+ordinary members (`nul_terminated`, `encoding`, several). It has never
+carried a constraint ON a run arm. The population is not constructs but
+their products, for the fourth time in this arc.
+
+**Fixed in all four, and each verified by compiling and running the same
+five cells** -- the two cross-arm frames, the two selected-arm
+violations, and an unknown discriminant.
+
+C's span checks reach `check` through the ordinary member path, which
+sits ABOVE the dotted-path dispatch at the foot of `_member_checks`, so
+an arm arrived there first and returned them bare. They are wrapped in
+the same `_arm_guard` the pinned-run branch already uses. The other three
+needed the check emitted at all: C++ gates on its getter's
+`err::version`, Rust on `if let Ok(span)`, Python on the discriminant.
+
+**Reusing the member's check rather than writing a second one cost a
+parameter and found a second fault.** `_array_checks` hard-coded the
+member's own accessor as the span it reads, so C++ and Rust gained a
+`span` argument -- the arm passes the local its gated getter filled.
+Python and Rust then both broke on the TERMINATOR check, which reads a
+`{name}_len` accessor that a member has and an arm does not. Python's
+first attempt shipped `self.held_name_len` and raised `AttributeError`
+out of generated code, **which is the one failure a generator should
+never ship**, and it was caught by running the output rather than by
+reading it. Python emits the arm's `_len` property now; Rust computes
+`nul_len` over the binding.
+
+**Inert on the corpus in all four backends**, measured with the same
+corpus on both sides -- which took two attempts, the first having
+compared against a baseline captured before `typed_kind` existed and
+shown 151 phantom lines. The narrower signal held throughout: zero span
+checks were added to any existing schema.
+
 ### 26.421 The enum arm's membership, and the gap that ran the other way
 
 **With 26.420's fix the construct is buildable, so the corpus takes it and

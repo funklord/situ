@@ -8661,6 +8661,37 @@ class Emitter:
 				  if _has_attr(placement.attrs, "encoding") else []),
 			]
 			if attributed:
+				# GATED WHERE THE MEMBER IS A VARIANT ARM (26.422). This
+				# block sits above the dotted-path dispatch at the foot of
+				# this function, so an arm reaches it first and returned
+				# these checks bare -- every arm's span constraint asked of
+				# every message, whichever arm the discriminant selected.
+				#
+				# Measured: `case 1: u8 name[4] [nul_terminated]` beside
+				# `case 2: u8 txt[4] [encoding = utf8]` refused `kind = 1`
+				# for not being UTF-8 and `kind = 2` for holding no
+				# terminator, each message judged by the arm it did not
+				# select, and `*which` naming that other arm.
+				#
+				# The same gate the pinned-run branch above uses, for the
+				# same reason: the answer to a check asked unconditionally
+				# is to ask it conditionally.
+				if arm_of(struct, placement) is not None:
+					guard = self._arm_guard(struct, placement)
+					if guard is None:
+						return []
+					test, _name = guard
+					return [
+						f"\t/* {placement.path}: checked where the"
+						" discriminant",
+						"\t * selects this arm, and nothing to check where"
+						" it does",
+						"\t * not. */",
+						f"\tif (!({test})) {{",
+						*[f"\t{one}" if one.strip() else one
+						  for one in attributed],
+						"\t}",
+					]
 				return attributed
 
 		# A fixed-width text number is one number in N digits, not N numbers,

@@ -1841,6 +1841,46 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					"<IqBxxx", at, len(pinned), 14)))
 				continue
 
+			# A RUN arm's span constraints -- a terminator, a declared
+			# encoding (26.425). The four backends check these behind the
+			# discriminant since 26.422, and the packer wrote no row, so
+			# the differential caught `spanned_arm` the moment the corpus
+			# carried one: `walker: 0  C: 2` over a `label[4]` holding no
+			# terminator. The member path's own two rows, keyed by the
+			# arm's placement.
+			#
+			# `array_count` and a static offset are the member path's
+			# conditions too: the check names the bytes it scans, and a
+			# run the message sizes has neither a capacity nor a constant
+			# to scan from.
+			text_attrs = {a.name for a in placement.attrs}
+			if text_attrs & {"encoding", "nul_terminated"} \
+					and placement.array_count:
+				if "nul_terminated" in text_attrs:
+					if placement.offset_bits is None:
+						whole = False
+						continue
+					arm_checks.append((at, _struct.pack(
+						"<IqBxxx", at, 0, 11)))
+				spoken = next((a for a in placement.attrs
+				               if a.name == "encoding"), None)
+				if spoken is not None:
+					spelling = getattr(spoken.value, "name", None)
+					code = (ENCODING_CODE.get(spelling)
+					        if spelling is not None else None)
+					if code is not None:
+						arm_checks.append((at, _struct.pack(
+							"<IqBxxx", at, code, 12)))
+					else:
+						# `[encoding = from(f)]` on an ARM writes rows on
+						# the SOURCE as well, and the source is a member
+						# whose rows were written in the loop above -- so
+						# this one cannot be added here without reopening
+						# that placement's run. Disowned rather than
+						# half-written.
+						whole = False
+						continue
+
 			# A scalar arm's value comparisons, and its enum membership.
 			if kind is not traverse.Check.CONSTRAINED:
 				# Everything else an arm can be -- a run of wide values, a

@@ -1369,6 +1369,21 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	# -- so the corpus cannot carry the case and the differential cannot pose
 	# it. When 26.411 is fixed, the packer's arm pass is what has to learn
 	# the row; this line already reads it.
+	# A RUN arm's span checks -- a terminator, a declared encoding
+	# (26.425). Read over the ARM's own span, which is safe here for the
+	# reason the whole function is: the discriminant selected this arm.
+	span = [pair for pair in held if pair[0] in (NUL_TERMINATED, ENCODED_AS)]
+	if span:
+		try:
+			data = _span_bytes(image, view, chosen)
+		except Refused:
+			return ERR_BOUNDS
+		for check, against in span:
+			if check == NUL_TERMINATED and 0 not in data:
+				return ERR_CONSTRAINT
+			if check == ENCODED_AS and not _encoded_ok(data, against):
+				return ERR_CONSTRAINT
+
 	values = [pair for pair in held
 	          if pair[0] in (MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO,
 	                         MUST_BE_ONE, ENUM_KNOWN)]

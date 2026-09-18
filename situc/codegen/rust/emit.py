@@ -5329,6 +5329,56 @@ class Emitter:
 				"\t\t}",
 			]
 
+		# A run of WIDE values carrying an encoding -- `[encoding =
+		# utf16be]` over a `u16` run (26.422). `_utf16_checks` reads the
+		# message bytes from a static offset rather than through an
+		# accessor, so unlike the byte-run branch below there is nothing to
+		# bind: the discriminant test is the whole gate.
+		#
+		# Split out because a `u16` arm has no slice accessor at all -- the
+		# element is ValueConverted -- so the `if let Ok(span)` shape below
+		# names a method this backend does not emit.
+		if scalar is not None and scalar.bits != BITS_PER_BYTE \
+				and placement.array_count is not None:
+			inner = self._utf16_checks(struct, placement, scalar)
+			if inner:
+				return [
+					f"\t\t// {placement.path}: checked where the"
+					" discriminant",
+					"\t\t// selects this arm, and nothing to check where it"
+					" does not.",
+					f"\t\tif {guard} {{",
+					*[f"\t{one}" for one in inner],
+					"\t\t}",
+				]
+			return []
+
+		# A BYTE-RUN arm's span constraints (26.422). Its getter answers
+		# `Result<&[u8]>`, so the gate is the `Ok` binding rather than the
+		# `match` a scalar arm uses, and the binding is what the checks
+		# read. This backend emitted nothing for such an arm, so a
+		# `[nul_terminated]` arm with no terminator validated clean --
+		# while C asked every arm's question of every message and refused
+		# the ones that were fine.
+		if scalar is not None and scalar.bits == BITS_PER_BYTE \
+				and placement.array_count is not None \
+				and placement.sized_by is None \
+				and not data_sized(placement) \
+				and self._offset_expression(struct, placement) is not None:
+			inner = self._array_checks(struct, placement, name, "span")
+			if not inner:
+				return []
+			return [
+				f"\t\t// {placement.path}: the arm the discriminant selects",
+				"\t\t// carries its own constraints. A different arm is"
+				" nothing",
+				"\t\t// to check, which is what the getter's"
+				" `Error::Version` says.",
+				f"\t\tif let Ok(span) = self.{name}() {{",
+				*[f"\t{one}" for one in inner],
+				"\t\t}",
+			]
+
 		# The scalar arm an accessor IS emitted for, and only that one. A
 		# run of values or a message-sized span has a different accessor
 		# shape, and naming this one for them is a validator calling what
@@ -7224,7 +7274,16 @@ class Emitter:
 		]
 
 	def _array_checks(self, struct: ResolvedStruct, placement: Placement,
-			name: str) -> list[str]:
+			name: str, span: str | None = None) -> list[str]:
+		"""The span checks a byte run carries: an encoding, a terminator.
+
+		`span` names the slice, and defaults to the member's own accessor.
+		A variant ARM passes the binding its gated getter produced, because
+		an arm's getter answers `Result<&[u8]>` rather than the slice
+		(26.422) -- and the terminator check reads `nul_len` over that
+		binding for the same reason, an arm having no `_len` accessor of
+		its own.
+		"""
 		checks: list[str] = []
 		if placement.kind == "reserved":
 			return [*self._pad_bounds_checks(struct, placement),
@@ -7243,13 +7302,16 @@ class Emitter:
 		count = placement.array_count
 		if count is None:
 			return checks
+		where = span if span is not None else f"self.{name}()"
+		holds = (f"situ_rt::nul_len({where})" if span is not None
+		         else f"self.{name}_len()")
 
 		for attr in placement.attrs:
 			if attr.name == "encoding":
 				named = getattr(attr.value, "name", None)
 				if named in ("ascii", "utf8"):
 					checks.extend([
-						f"\t\tif !situ_rt::{named}_valid(self.{name}()) {{",
+						f"\t\tif !situ_rt::{named}_valid({where}) {{",
 						"\t\t\treturn Err(Error::Constraint);",
 						"\t\t}",
 					])
@@ -7259,10 +7321,10 @@ class Emitter:
 				# `named is None` test reads a declared encoding as none.
 				elif _encoding_source(attr) is not None:
 					checks.extend(self._declared_encoding_checks(
-						struct, placement, attr, f"self.{name}()"))
+						struct, placement, attr, where))
 			if attr.name == "nul_terminated":
 				checks.extend([
-					f"\t\tif self.{name}_len() >= {count} {{",
+					f"\t\tif {holds} >= {count} {{",
 					"\t\t\treturn Err(Error::Constraint);",
 					"\t\t}",
 				])

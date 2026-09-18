@@ -2775,7 +2775,20 @@ class Emitter:
 				f"\t\tstop  = start + min(({length}),"
 				f" max(0, self._len - ({start})))",
 				"\t\treturn self._msg.buffer[start:stop]",
-			]
+			] + ([
+				# The SAME derived accessor a member with this attribute
+				# gets (26.422). `validate` asks a nul-terminated run for
+				# its content length, and without this the arm's check
+				# named an attribute that did not exist -- an
+				# `AttributeError` out of generated code, which is the one
+				# failure a generator should never ship.
+				"", "\t@property",
+				f"\tdef {name}_len(self) -> int:",
+				f'\t\t"""Content length: to the first zero byte, or'
+				f' {length}."""',
+				f"\t\treturn nul_len(self.{name}, {length})",
+			] if any(attr.name == "nul_terminated"
+			         for attr in placement.attrs) else [])
 
 		# A struct-typed arm -- `case msg_type.hello: Hello hello;`, section
 		# 9.6's own example. Its members belong to its type, so handing back
@@ -6077,6 +6090,31 @@ class Emitter:
 				"\t\t# not.",
 				f"\t\tif {present}:",
 				*[f"\t{one}" for one in bound],
+				*[f"\t{one}" for one in inner],
+			]
+
+		# A RUN arm's span constraints -- a terminator, a declared encoding
+		# (26.422). The MEMBER's own check, wrapped, for the same reason the
+		# pinned branch above wraps rather than rewrites: `_array_check` is
+		# where `nul_terminated` and `encoding` are decided for a run, and a
+		# second copy here would be a second thing to be wrong.
+		#
+		# Emitted at all is the change. This backend asked NOTHING of a run
+		# arm, so a `[nul_terminated]` arm with no terminator validated
+		# clean -- while C asked both arms' questions of every message and
+		# refused the ones that were fine. Three of the four were silent and
+		# the fourth was wrong; the schema states the constraint either way.
+		if placement.array_count is not None and placement.scalar is not None:
+			inner = self._array_check(struct, placement,
+			                          placement.scalar,
+			                          py_name(local_name(struct, placement)))
+			if not inner:
+				return []
+			return [
+				f"\t\t# {placement.path}: checked where the discriminant",
+				"\t\t# selects this arm, and nothing to check where it does",
+				"\t\t# not.",
+				f"\t\tif {present}:",
 				*[f"\t{one}" for one in inner],
 			]
 

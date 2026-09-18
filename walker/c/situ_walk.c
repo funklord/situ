@@ -3045,7 +3045,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 	for (uint32_t c = 0u; c < rows; c++) {
 		const uint8_t kind = checks[c * image->constraint_stride + 12];
 
-		if (kind == CHECK_PINNED_RUN) {
+		if (kind == CHECK_PINNED_RUN || kind == CHECK_NUL_TERMINATED
+		                || kind == CHECK_ENCODED_AS) {
 			pinned += 1u;
 		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
 		                || kind == CHECK_MAXIMUM
@@ -3115,6 +3116,40 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			uint32_t       seen = 0u;
 			int            bad  = 1;
 
+			/* A terminator and a declared encoding, over the same span
+			 * the pinned compare reads (26.425). The four backends check
+			 * these behind the discriminant since 26.422 and the image
+			 * carried no row, so the differential caught `spanned_arm` on
+			 * the first draw: `walker: 0  C: 2` over a `label[4]` with no
+			 * terminator in it. */
+			if (row[12] == CHECK_NUL_TERMINATED) {
+				int seen_nul = 0;
+				for (uint32_t b = 0u; b < content; b++) {
+					if (data[b] == 0u) {
+						seen_nul = 1;
+						break;
+					}
+				}
+				if (!seen_nul) {
+					record(why, chosen, CHECK_NUL_TERMINATED);
+					*verdict = SITU_WALK_CONSTRAINT;
+					return SITU_WALK_OK;
+				}
+				continue;
+			}
+			if (row[12] == CHECK_ENCODED_AS) {
+				const int ok = encoded_ok(data, content, want);
+
+				if (ok < 0) {
+					return SITU_WALK_UNSUPPORTED;
+				}
+				if (!ok) {
+					record(why, chosen, CHECK_ENCODED_AS);
+					*verdict = SITU_WALK_CONSTRAINT;
+					return SITU_WALK_OK;
+				}
+				continue;
+			}
 			if (row[12] != CHECK_PINNED_RUN) {
 				continue;
 			}

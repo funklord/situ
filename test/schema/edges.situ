@@ -1220,6 +1220,36 @@ struct typed_kind {
 	u8  tail;
 }
 
+// SPAN constraints on variant arms, in both widths (26.422).
+//
+// The file has carried run arms since `arm_run` and span constraints on
+// ordinary members since it was written, and never a constraint ON a run
+// arm. That absence hid a three-way split: C emitted both arms' checks
+// with no discriminant gate and refused every message by the arm it did
+// not select, while C++, Rust and Python emitted nothing at all and
+// accepted what the schema refuses.
+//
+// Two widths on purpose. A BYTE run is checked through a span accessor
+// the arm has; a run of WIDE values has none -- its element is
+// ValueConverted, so the backends emit per-element getters -- and its
+// encoding is read from the view's bytes at a static offset instead. The
+// two reach different emitters in every backend, so an entry carrying
+// only one proves half the code, which is the lesson 26.410 paid for
+// with `payload[block]` against `trailer[block + 1]`.
+struct spanned_arm {
+	u8 pick;
+	variant held switch (pick) {
+		case 1:  u8   label[4] [nul_terminated];
+		case 2:  u8   text[4]  [encoding = utf8];
+		case 3:  u16  wide[2]  [encoding = utf16be];
+		default: error;
+	}
+
+	// After the variant, so a wrongly-sized arm shows up here as a wrong
+	// byte rather than as bytes nobody reads back.
+	u8  after;
+}
+
 // A checksum whose coverage has NO single byte range, which is the shape
 // nothing in this tree had: two covered regions with a member between them
 // AND an `is <codec>` clause naming something to compute.
