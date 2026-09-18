@@ -30689,6 +30689,135 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.414 A constraint on a non-struct variant arm is enforced by nobody
+
+**Found by trying to put 26.413's shape in the corpus, and it is why the
+entry is not there yet.** `edges.signed_kind` with a byte-run enum arm
+made `make test-c` red on a check the generator itself writes:
+
+    check_signed_kind_held_marker_must_eq_is_enforced
+      buf[1]=0x42 buf[2]=0x4d  kind=1  -> validate OK      (passes)
+      buf[1]=0x00              kind=1  -> ERR_CONSTRAINT   (FAILS: OK)
+
+`gen-checks` believes a byte-run enum arm's membership is enforced.
+`situ_signed_kind_check` validates the discriminant and the trailer's
+bounds and never looks at the marker. Two generators disagreeing about
+the same schema.
+
+**The gap has a shape and `_arm_validation`'s own docstring names half of
+it.** That function was added because "a variant's check was the
+discriminant and nothing else, so every constraint inside an arm ... was
+declared by the schema and enforced by no backend", and it fixed the case
+by validating an arm **through its own type** -- calling the nested
+struct's `validate`. A byte-run enum arm has no nested struct: it is a
+FIELD with a span, and a field arm's own constraints are reached by
+neither that path nor the ordinary member-constraint loop, since the arm
+is not a member of the enclosing struct.
+
+An ordinary byte-enum member is checked -- `edges.kind` emits
+`/* edges.kind [must_eq = "BM" | "MZ"] */` -- so this is the same shape
+as 26.413 one layer up: a per-member fact that does not reach a variant
+arm.
+
+**Pre-existing, and unreachable until now.** The check is generated for
+any such schema and no schema had one, so nothing ever ran it. That is
+the corpus argument again, and this time it fired before the entry could
+land rather than after.
+
+**The corpus entry is held back until this is fixed**, the way 0050's
+struct waited for the generators that would have turned red on it
+(26.402). Adding it now means committing a red `make test-c`, and the
+fix is its own piece: teaching `check` to enforce a field arm's
+constraints, in at least the C backend and probably all four.
+
+One thing the attempt settled on the way: the first draft wrote `peek u8
+kind`, copying `edges.kinded`. `kinded` peeks because each arm's own
+first member IS the tag; here the arm is a separate two-byte span, so
+peeking puts the discriminant and the marker's first byte at the same
+offset and no message can both select the arm and hold a valid
+signature. The generated check found that within a minute -- it set
+`kind = 1` over the `0x42` it had just written and then asserted the
+message was valid.
+
+### 26.413 One line of recursion, six descriptions wrong, no cross-check able to see it
+
+**26.411 was diagnosed at the wrong layer and this is the correction.**
+That entry reads as four backends mishandling a byte-run enum arm. They
+were not: `situc map` said `size=Fixed(1)` for a `u8[2]` enum arm, and
+the four backends, both walkers and the packer all reported that
+faithfully. **One bug in the parser, six correct readers.**
+
+`_widen_byte_enum_fields` turns `sig marker;` into `sig marker[2]` --
+0052's "a field typed by a byte-run enum is the run it denotes", done in
+the parser deliberately so that nothing downstream needs teaching. Its
+recursion is `getattr(member, "members", None)`. Six `ast.Member`
+subclasses hold nested members; five spell the field `members` --
+`Authenticated`, `Coded`, `Indexed`, `PositionalBlock`, `Sealed` -- and
+**`Variant` alone spells it `arms`**. So the walk reached five of six,
+and every variant arm in the tree kept `array=None`.
+
+**What it cost, beyond a number in the map.** The struct was declared
+FIXED-size one byte short, so the generated front door handed back a view
+clamped to the wrong length; and a member after the variant was given a
+static offset that is wrong whenever the wide arm is present. The Python
+walker answered `value=66` and the C walker `+1 = 66` -- `0x42`, the
+first byte of `42 4D`.
+
+**And no cross-check in this tree could have reached it.** The four-way
+differential compares backends against each other; the two-walker sweep
+compares walkers against each other. All six were wrong identically, so
+every comparison agreed. *Corroboration has to be independent* at its
+sharpest: six witnesses, one error. What found it was asking the SCHEMA
+what it had declared -- `situc map` against `enum sig : u8[2]` -- which
+is the one reading no differential contains.
+
+**The diagnosis was mine and it was wrong, and two workers were briefed
+on it.** I told them four emitters mishandled a span and asked them to
+teach each one. Both stopped, touched nothing, and reached the parser
+independently. One of them then measured the thing that settles it: they
+grafted the widened span accessor into the UNWIDENED header -- the
+emitter-only fix as briefed -- and ran it. It returns **one byte**,
+because the clamp against `view.limit` is the wrong `SIZE_FIXED`. So the
+compensation would have silenced the two loud compile failures, moved C
+and C++ into the silent-wrong camp beside Python and Rust, and still
+returned the wrong bytes. **"It would have hidden the real bug" is an
+argument; that is a measurement.**
+
+**The emitters needed no change at all.** Both `_arm_member`s already
+dispatch on `array_count`: with it set, the scalar branch is skipped and
+the byte-span branch fires, and each backend emits the member's own
+answer. `situ_sig_t` and `::situ::sig` are never named because nothing
+selects the branch that names them -- the second-order problem dissolves
+rather than needing a fix.
+
+**The sabotage that earns the second test.** Widening the arm's own
+member WITHOUT recursing passes a test on a direct arm and fails only a
+container inside one -- and `parse_variant_arm` calls the full
+`parse_member`, so `positional { ... }` there is legal. The plausible
+one-level fix would have looked right.
+
+`edges.signed_kind` carries the shape now, with a `trailer` after the
+variant so a wrongly-sized arm is a wrong BYTE rather than only a wrong
+number. The corpus had `signature` and had variants and never one inside
+the other, which is 26.411's own sentence for the third time: **the
+population is not constructs but their products.**
+
+**Two siblings of the same blind spot, found and not fixed.**
+`layers.py:_walk` and `pack.py:walk` recurse the same way and miss
+variant arms identically -- measured, not inferred: `_walk` over a
+`positional` block inside an arm reaches `kind` and `held` and stops. No
+corpus schema puts a container in an arm, so neither miss costs anything
+today, and neither is provable by a gate. Recorded with the reproduction
+rather than changed.
+
+**And one gap this fix exposed rather than caused.** A byte-run enum arm
+is now correctly a span, and no walker path renders it: `_arm_values` is
+documented as "a variant's SCALAR arms" and excludes a byte run by name,
+which is right, and `_runs` does not pick an arm up. Before the fix the
+arm was a one-byte scalar, so that loop read it and printed a wrong
+value; now it prints nothing. A fallback added there is unreachable --
+written, tested by running, found dead and reverted.
+
 ### 26.412 The C++ backend crashed on a variant arm at a dynamic offset
 
 **Not a wrong byte and not a diagnostic -- a traceback out of `situc
@@ -30772,9 +30901,38 @@ holds twice over is still absent in the combination, which is a sharper
 version of 26.402 than that entry states: the population is not
 constructs, it is their products.
 
-Recorded rather than fixed: it is a separate defect from 0050, and the
-fixture that found it was changed to a struct arm so that this arc's
-corpus addition proves what it is for.
+**Asked of every backend afterwards, and it is worse than a build
+failure in two of them.** C and C++ refuse to compile -- loud, and the
+good direction. **Rust and Python compile and read ONE byte of the
+two-byte span**, silently. Measured by running the generated Python:
+`held_marker` answers `0x42` where the arm's bytes are `0x42 0x4D`
+("BM"). A plausible wrong answer from code a compiler accepts, which is
+the shape 26.32 rates worst, and the two backends that fail safely are
+the two whose type system happened to notice.
+
+**The target shape is already settled in all four**, which is what makes
+this a wiring gap rather than a design question. An ordinary byte-enum
+MEMBER is a span and every backend says so:
+
+    C       uint8_t *situ_frame_marker_ptr(situ_view_t view)
+    C++     ::situ::rt::bytes marker() const noexcept
+    Python  def marker(self) -> memoryview
+    Rust    pub fn marker(&self) -> &[u8]
+
+So a byte-enum ARM wants the member's answer gated on the discriminant,
+and nobody had asked the arm emitter for it. The arm emitters assume
+every enum arm has a scalar type; a byte-run enum has none, which is
+why C and C++ name a `_t` that was never emitted and why Rust and Python
+fall through to a one-byte scalar read.
+
+**This entry has the layer wrong, and 26.413 is the correction.** It
+reads as four emitters mishandling a span. They were not: the parser
+never widened a byte-run enum inside a variant arm, so the LAYOUT said
+one byte and all six descriptions reported that faithfully. The emitters
+needed no change. Kept as written because the measurements in it are
+sound and only the conclusion was wrong -- and because the wrong
+conclusion is what two workers were briefed on, which is the part worth
+being able to find again.
 
 ### 26.410 The fourth shape, and why the half-fix had to be reverted first
 

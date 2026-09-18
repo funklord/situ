@@ -158,7 +158,14 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #:
 #: Both moved by one on 2026-09-18, when `edges.negotiated` gained a variant
 #: behind its argument -- one struct arm and one scalar arm, which is why
-#: two cells moved by exactly one each and no cell appeared. That struct is
+#: two cells moved by exactly one each and no cell appeared.
+#:
+#: A byte-run enum arm will land in the first cell when one arrives -- the
+#: cell asks whether the placement carries a scalar and a byte-run enum's
+#: does, being `u8` with a count. "scalar" here means the placement has
+#: one, not that the member is a single value. `edges` has no such arm
+#: yet: 26.414 holds it back until a constraint on a non-struct arm is
+#: enforced by something. That struct is
 #: 0050's corpus entry, and the variant was added to it to reach a member
 #: read that needs an argument tail; it went on to find a crash in three of
 #: the four backends' arm emitters (26.412), which is the same thing this
@@ -222,10 +229,16 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 
 	`_arm_member` declines an arm with `if structs.get(type_name) is None`,
 	and 26.209 restricted the offset accessor to a *struct* arm on the
-	strength of that reading. The condition's text names **12** of the
-	corpus's 70 arm members -- every one whose type is not a struct. What it
-	means is the last cell alone, and it behaves correctly on the other 11
+	strength of that reading. The condition's text names **13** of the
+	corpus's 81 arm members -- every one whose type is not a struct. What it
+	means is the last cell alone, and it behaves correctly on the other 12
 	only because three scalar branches return before control reaches it.
+
+	Those counts are the kind that rot, and they have: they read 12 of 70
+	before `edges` gained a parameterised variant on 2026-09-18. They are
+	re-derivable from `_arm_shapes()` in one call, which is why the
+	assertion below is on the census rather than on the prose -- and why
+	correcting them here is bookkeeping rather than a finding.
 
 	So the text and the meaning are not the same set, and the corpus holds
 	exactly one witness to the difference: `nl_message.body.rest`, which is

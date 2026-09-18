@@ -1618,6 +1618,87 @@ def test_a_byte_run_enum_names_spans() -> None:
 	assert enum.width == 2
 
 
+def test_a_byte_run_enum_is_the_run_it_denotes_inside_a_variant_arm(
+		) -> None:
+	"""The widening walks into variant arms, which it did not.
+
+	`_widen_byte_enum_fields` recurses with `getattr(member, "members")`.
+	Six `ast.Member` subclasses hold nested members and five spell the
+	field `members` -- `Authenticated`, `Coded`, `Indexed`,
+	`PositionalBlock`, `Sealed`. **`Variant` alone spells it `arms`**, so
+	the walk reached five of the six and every variant arm in the tree
+	kept `array=None`.
+
+	What that cost is not a parser detail. `situc map` said
+	`size=Fixed(1)` for a `u8[2]` enum arm, the struct was declared
+	fixed-size at one byte too small, and a member after the variant was
+	given a static offset that is wrong whenever the wide arm is present.
+	All four backends, both walkers and the packer reported it faithfully:
+	the Python walker answered `value=66` and the C walker `+1 = 66`,
+	which is `0x42`, the first byte of `42 4D`.
+
+	**No cross-check here could have caught it.** The four-way
+	differential compares backends against each other and the two-walker
+	sweep compares walkers against each other, and all six were wrong
+	identically -- six witnesses, one error. What found it was asking the
+	schema what it had declared.
+	"""
+	schema = parse_text(
+		'enum m : u8[2] { bmp = "BM", pe = "MZ" }\n'
+		"struct S {\n"
+		"\tu8 kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1:  m  marker;\n"
+		"\t\tcase 2:  u8 flag;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n", path="s.situ")
+
+	variant = list(schema.structs())[0].members[1]
+	assert isinstance(variant, ast.Variant)
+	arm = variant.arms[0].member
+	assert isinstance(arm, ast.Field)
+	assert arm.array is not None, "the byte-run enum arm was not widened"
+	assert isinstance(arm.array.size, ast.IntLiteral)
+	assert arm.array.size.value == 2
+
+	# The control: the scalar arm beside it is untouched, so a widening
+	# that fired on everything would fail here.
+	other = variant.arms[1].member
+	assert isinstance(other, ast.Field)
+	assert other.array is None
+
+
+def test_the_widening_reaches_a_container_inside_a_variant_arm() -> None:
+	"""An arm may hold a container -- `parse_variant_arm` calls the full
+	`parse_member`, so `positional { ... }` is legal there -- and the
+	widening has to descend through it as well as into the arm.
+
+	Asserted because the fix could have been one level deep: widening the
+	arm's own member and not recursing would pass the test above and miss
+	this. No corpus schema has either shape, so nothing else would say so.
+	"""
+	schema = parse_text(
+		'enum m : u8[2] { bmp = "BM", pe = "MZ" }\n'
+		"struct S {\n"
+		"\tu8 kind;\n"
+		"\tvariant held switch (kind) {\n"
+		"\t\tcase 1:  positional { m marker; u8 pad; }\n"
+		"\t\tcase 2:  u8 flag;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n", path="s.situ")
+
+	variant = list(schema.structs())[0].members[1]
+	assert isinstance(variant, ast.Variant)
+	block = variant.arms[0].member
+	inner = getattr(block, "members")[0]
+	assert isinstance(inner, ast.Field)
+	assert inner.array is not None, "not widened inside the arm's container"
+	assert isinstance(inner.array.size, ast.IntLiteral)
+	assert inner.array.size.value == 2
+
+
 def test_a_byte_run_enum_field_is_the_run_it_denotes() -> None:
 	"""The field declares no array and is two bytes, because the enum says
 	how wide one of its values is."""

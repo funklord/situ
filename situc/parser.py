@@ -3124,6 +3124,27 @@ def _widen_byte_enum_fields(schema: ast.Schema) -> None:
 			held = getattr(member, "members", None)
 			if held is not None:
 				member = replace(member, members = widen(held))  # type: ignore[type-var]
+			# A variant holds its members under `arms`, not `members`, so
+			# the line above walked past every one of them. Six Member
+			# subclasses carry nested members -- `Authenticated`, `Coded`,
+			# `Indexed`, `PositionalBlock` and `Sealed` under `members`,
+			# and `Variant` alone under `arms` -- and a `getattr` keyed on
+			# the common name reaches five of the six.
+			#
+			# So a byte-run enum AS a variant arm was never widened, and
+			# every downstream reader was told it is one byte wide. That
+			# is not a backend bug even though it looks like four: `situc
+			# map` said `size=Fixed(1)` for a `u8[2]` enum, and the four
+			# backends, both walkers and the packer all reported it
+			# faithfully. **No cross-check here could catch it** -- the
+			# four-way differential compares backends against each other
+			# and the two-walker sweep compares walkers against each
+			# other, and all six were wrong identically.
+			if isinstance(member, ast.Variant):
+				member = replace(member, arms = tuple(
+					arm if arm.member is None
+					else replace(arm, member = widen((arm.member,))[0])
+					for arm in member.arms))
 			if isinstance(member, ast.Field):
 				width = widths.get(member.type_ref.name)
 				if width is not None and member.array is None:
