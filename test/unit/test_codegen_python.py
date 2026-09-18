@@ -2665,6 +2665,34 @@ def test_a_struct_that_takes_an_argument_cannot_be_a_member() -> None:
 	assert "cannot be a member yet" in str(refused.value)
 
 
+def test_a_struct_that_takes_an_argument_cannot_be_a_variant_arm() -> None:
+	"""The same refusal, reached through an arm (26.430).
+
+	`check_parameter_nesting` walked `struct.members`, and a variant's ARM
+	is not in that list -- so the refusal above covered `inner it;` and not
+	`case 1: inner it;`. All four backends accepted the arm form and C
+	emitted a header naming an undeclared `arg_n`, which is the state 0050
+	exists to prevent: a wrong number rather than a refusal, except that
+	here it was not even a number.
+
+	The control is the member form above. Both must refuse, and a fix that
+	covers only one of them leaves `situc` reporting success for a schema
+	it has decided it cannot compile.
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + "struct inner { parameter u8 n [stream]; "
+		           "u8 body[n]; }\nstruct outer { u8 pick; "
+		           "variant held switch (pick) { case 1: inner it; "
+		           "case 2: u8 fixed[3]; default: error; } }")
+
+	assert "cannot be a member yet" in str(refused.value)
+	# The caret lands on the ARM's member rather than on the variant, so
+	# the author is pointed at what they have to change. Read from the
+	# rendered diagnostic rather than from `str()`, which carries the
+	# headline alone.
+	assert "outer.it" in refused.value.diagnostic.render()
+
+
 # -- a constraint declared on a variant ARM (26.414) -------------------------
 
 #: A schema whose two arms are a byte-run enum and a bounded scalar, sharing

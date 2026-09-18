@@ -2658,6 +2658,25 @@ def check_parameters(schema: ast.Schema) -> None:
 						])
 
 
+def _members_and_arms(struct: ast.StructDecl) -> list[ast.Member]:
+	"""A struct's members, and the member each variant arm holds.
+
+	An ARM is not in `struct.members`, so a loop over that alone is a loop
+	with a hole in it -- the shape 26.423 found in four backends' check
+	emitters on the same day this was written. Here it meant the nesting
+	refusal below covered `kid inner;` and not `case 1: kid inner;`, so a
+	schema situc had decided it could not compile was accepted, and C
+	emitted a header naming an undeclared `arg_n`.
+	"""
+	found: list[ast.Member] = []
+	for member in struct.members:
+		found.append(member)
+		if isinstance(member, ast.Variant):
+			found.extend(arm.member for arm in member.arms
+			             if arm.member is not None)
+	return found
+
+
 def check_parameter_nesting(schema: ast.Schema) -> None:
 	"""A struct that takes an argument is not a member yet (0050).
 
@@ -2679,7 +2698,7 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 		return
 
 	for struct in schema.structs():
-		for member in struct.members:
+		for member in _members_and_arms(struct):
 			named = getattr(getattr(member, "type_ref", None), "name", None)
 			if named not in takes or struct.name == named:
 				continue

@@ -30695,17 +30695,71 @@ signature and the call cannot disagree. Computing the tail from the
 rendered offset separately in each place is precisely how two spellings
 of one fact drift apart.
 
-**A fourth shape was found, reproduced, and deliberately NOT fixed.** A
-variant ARM holding a nested struct is broken in more than one site --
-the arm's own accessors call the discriminant getter without a tail as
-well -- so plumbing the sub-view alone turns *undeclared `arg_n`* into
-*too few arguments* without making anything compile. A speculative edit
-to that path was made and then reverted: no schema in this tree reaches
-it, so nothing would have caught a half-fix, and **a change nobody can
-prove is worse than an absence somebody has written down.**
+**A fourth shape was found, reproduced, and deliberately NOT fixed here
+-- correctly, and for a better reason than the one given at the time.** A
+variant ARM holding a nested struct is broken in more than one site, so
+plumbing the sub-view alone turns *undeclared `arg_n`* into *too few
+arguments* without making anything compile. A speculative edit to that
+path was made and then reverted, on the grounds that **a change nobody
+can prove is worse than an absence somebody has written down.**
+
+That reasoning held, and it was aimed at the wrong question. The shape
+needed no plumbing at all: 0050 had already decided such a struct cannot
+be nested, and the refusal simply was not reaching an arm. 26.430 closes
+it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.430 The nesting refusal had a hole exactly where an arm goes
+
+**`situc build` reported success and C emitted a header naming an
+undeclared identifier.** `situ_kid_extent` reads `arg_n` and takes no
+parameter, so the generated code does not compile:
+
+    p.h:78: error: `arg_n` undeclared (first use in this function)
+    p.c:71: error: too few arguments to function `situ_kid_validate`
+
+**But plumbing the argument through was never the fix, which is what
+26.408 could not see when it reverted a speculative half-fix there.**
+`check_parameter_nesting` already refuses this schema -- decision 0050
+says a struct taking a `parameter` cannot be a member of another, because
+a nested view is built by the parent's accessor and the parent has no
+argument to pass. The refusal is correct and it was not reaching the case:
+
+    struct outer { kid inner; }                     refused, all four
+    variant held switch (pick) { case 1: kid inner; }   ACCEPTED, all four
+
+**`check_parameter_nesting` loops over `struct.members`, and a variant's
+ARM is not in that list.** So the same schema situ had decided it cannot
+compile was accepted through the arm spelling, and four backends went on
+to emit whatever they could.
+
+**It is the same shape as 26.423, found the same day, in unrelated
+code.** There it was four backends' check emitters dropping a dotted
+path; here it is one well-formedness pass iterating a list an arm is not
+in. Both are a loop over a struct's own members, both are right about
+every case except the arm, and neither announces the omission -- the code
+reads as complete because for members it IS complete. **Two instances in
+one day in two layers is a class rather than a coincidence**, and the
+thing to grep for is a loop over `struct.members` or `own_entries` whose
+body decides something an arm can also be.
+
+**Fixed where the decision lives, not where the symptom appeared.** One
+helper walks a struct's members and each variant arm's member, and the
+refusal uses it. The caret lands on the arm's member rather than on the
+variant, so the author is pointed at what they have to change.
+
+**Measured, both directions.** All 42 corpus schemas still build on all
+four targets, so nothing legal was caught by the widening. And the new
+test was watched failing: with the loop put back to `struct.members` the
+arm case goes red while the member case -- its control -- stays green, so
+the test fails through the change under test rather than through
+something else.
+
+**This closes 26.408's fourth shape as a refusal rather than as support.**
+Nesting a parameterised struct is still the case 0050 says waits; what
+was wrong was that one spelling of it slipped past the waiting room.
 
 ### 26.429 A struct named `list` broke the module that described it
 
