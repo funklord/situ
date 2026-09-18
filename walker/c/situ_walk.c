@@ -3002,14 +3002,20 @@ static void record(situ_walk_why *why, uint32_t placement, uint8_t check)
  * value the message states, so a build that has lost the gate REFUSES the
  * two ordinary cells -- frames all four code backends accept.
  *
- * TWO FAMILIES AND NO MORE, which is what the packer writes for an arm and
- * what the four backends emit: a pinned span, and the value comparisons.
- * Enum membership is deliberately not among them -- an enum-typed scalar arm
- * does not compile in C++ at all (26.411), so the corpus carries none and a
- * check here would have no backend to agree with. Any OTHER kind on an arm
- * is passed over rather than refused: the backends check no more than these
- * two, so silence agrees with them, where UNSUPPORTED would decline every
- * struct `report._arm_constraints` answers for.
+ * THREE FAMILIES, which is what the packer writes for an arm and what the
+ * four backends emit: a pinned span, the value comparisons, and an enum's
+ * membership. Any OTHER kind on an arm is passed over rather than refused:
+ * the backends check no more than these, so silence agrees with them, where
+ * UNSUPPORTED would decline every struct `report._arm_constraints` answers
+ * for.
+ *
+ * Membership was the LAST of the three and its absence ran the other way
+ * round from the rest of 26.417. The four backends have always emitted
+ * `_enum_check` for a scalar arm, so they refused values both walkers took
+ * -- and nothing could observe it, because an enum-typed scalar arm did not
+ * compile in C++ at all (26.411) and no schema could carry one. 26.420 made
+ * the construct buildable and 26.421 taught the image to carry the row;
+ * `edges.typed_kind` is the case.
  *
  * Measured through the ARM rather than through the variant member, which is
  * the other way round from `arm_validates` above and is what the Python walk
@@ -3042,7 +3048,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		if (kind == CHECK_PINNED_RUN) {
 			pinned += 1u;
 		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
-		                || kind == CHECK_MAXIMUM) {
+		                || kind == CHECK_MAXIMUM
+		                || kind == CHECK_ENUM_KNOWN) {
 			values += 1u;
 		}
 	}
@@ -3129,11 +3136,20 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 				}
 			}
 			/* `want` is how many the packer wrote, and a different number
-			 * found here means this build misread the section rather than
-			 * that the message is wrong. So it declines the struct rather
-			 * than refusing the frame: an answer about the IMAGE. */
+			 * found here means the IMAGE disagrees with itself rather than
+			 * that the message is wrong.
+			 *
+			 * MALFORMED and not UNSUPPORTED, which is what the member path
+			 * answers for the identical condition a few hundred lines
+			 * below. The two spellings mean different things -- UNSUPPORTED
+			 * is a construct this build does not render, MALFORMED is an
+			 * image that does not hold together -- and this is the second.
+			 * They diverged because the brief this function was written to
+			 * named the wrong one; both are unreachable in a correct image
+			 * and both render as `cannot-say` through the harness, so
+			 * nothing would have measured the difference later. */
 			if ((int64_t)seen != want) {
-				return SITU_WALK_UNSUPPORTED;
+				return SITU_WALK_MALFORMED;
 			}
 			if (bad) {
 				record(why, chosen, CHECK_PINNED_RUN);
@@ -3170,6 +3186,14 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			break;
 		case CHECK_MAXIMUM:
 			broken = ((int64_t)value > want);
+			break;
+		case CHECK_ENUM_KNOWN:
+			/* The packer writes this for an arm only since 26.421: an
+			 * enum-typed scalar arm did not compile in C++ at all until
+			 * 26.420, so no schema could carry one. The four backends
+			 * have always emitted the check, so the gap ran their way --
+			 * they refused a value both walkers took. */
+			broken = !enum_admits(image, (uint32_t)want, (int64_t)value);
 			break;
 		default:
 			continue;	/* not a family this arm's rows are checked for */

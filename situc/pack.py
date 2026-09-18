@@ -1841,11 +1841,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					"<IqBxxx", at, len(pinned), 14)))
 				continue
 
-			# A scalar arm's value comparisons. Enum membership is
-			# deliberately NOT written: an enum-typed scalar arm does not
-			# compile in C++ at all (26.411), so the corpus carries none
-			# and a row here would be a check with no backend to agree
-			# with. It belongs with that defect rather than ahead of it.
+			# A scalar arm's value comparisons, and its enum membership.
 			if kind is not traverse.Check.CONSTRAINED:
 				# Everything else an arm can be -- a run of wide values, a
 				# delimited or varint arm, a nested struct -- is checked by
@@ -1864,6 +1860,41 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					continue
 				arm_checks.append((at, _struct.pack(
 					"<IqBxxx", at, int(held), code)))
+
+			# Membership, on the same terms as a member's (26.421). Only
+			# where the enum REJECTS an unknown value: `default = pass`
+			# admits one by design (section 8.7), and an unstated default
+			# IS `error`, which is why this tests for PASS rather than for
+			# the absence of ERROR -- reading `None` as `pass` is the bug
+			# the member path above records.
+			#
+			# It was left unwritten until now because an enum-typed scalar
+			# arm did not compile in C++ at all (26.411/26.420), so no
+			# schema could carry the construct and a row here would have
+			# been a check with no backend to agree with. The four
+			# backends DO emit it for such an arm, so the gap ran the
+			# other way: they would refuse a value both walkers accepted,
+			# and nothing could pose the case.
+			held_enum = schema_enums.get(placement.type_name or "")
+			if held_enum is not None \
+					and held_enum.default is ast.EnumDefault.PASS:
+				held_enum = None
+			if held_enum is not None:
+				if held_enum.name not in enum_ids:
+					enum_ids[held_enum.name] = len(enum_ids)
+					for member in held_enum.members:
+						named_value = getattr(member.value, "value", None)
+						if named_value is None:
+							whole = False
+							continue
+						# Appended rather than merged: `enum_admits` scans
+						# this table linearly, so unlike the constraint and
+						# pinned tables it carries no ordering requirement.
+						enum_blob += _struct.pack(
+							"<IqI", enum_ids[held_enum.name],
+							int(named_value), 0)
+				arm_checks.append((at, _struct.pack(
+					"<IqBxxx", at, enum_ids[held_enum.name], 5)))
 
 		# A `refuse` this image could not encode is a refusal the walk
 		# cannot make, and `validate` is the one probe that cannot be

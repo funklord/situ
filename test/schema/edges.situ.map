@@ -387,6 +387,13 @@ struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic au
   two_tags.sequence                      offset=AbsoluteStatic(0x13) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(checksum)
   two_tags.checksum                      offset=AbsoluteStatic(0x15) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
+struct typed_kind size=3 atomic=NonAtomic
+  typed_kind.tag                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  typed_kind.held                        offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  typed_kind.held.named                  offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  typed_kind.held.raw                    offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  typed_kind.tail                        offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+
 struct unknown_reserved size=4 repr=ValueConverted canonical=NonCanonical
   unknown_reserved.version               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   unknown_reserved.<reserved0>           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical

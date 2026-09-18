@@ -1193,6 +1193,33 @@ struct signed_kind {
 	u8  trailer;
 }
 
+// An enum-typed SCALAR arm: the construct 26.411 found unbuildable, 26.420
+// made buildable, and 26.421 taught the image to carry.
+//
+// It reaches two things nothing else in this file does. The arm must answer
+// in the ENUM'S OWN TYPE -- C++ refused to compile the assignment at all,
+// while Rust and Python compiled and handed back a plain number, so a caller
+// of a member got `ArmKind::First` where a caller of an arm got `0x11`. And
+// the enum's MEMBERSHIP must be checked behind the discriminant: the four
+// backends have always emitted that check for a scalar arm, and the packer
+// wrote no row for it, so they refused a value both walkers accepted and no
+// schema could pose the case.
+//
+// `arm_kind` states `default = error`, which is what makes an unknown value
+// a refusal rather than a value the schema admits.
+struct typed_kind {
+	u8 tag;
+	variant held switch (tag) {
+		case 1:  arm_kind  named;
+		case 2:  u8        raw [max = 3];
+		default: error;
+	}
+
+	// After the variant, so a wrongly-sized arm shows up here as a wrong
+	// byte, and the struct's minimum covers both arms.
+	u8  tail;
+}
+
 // A checksum whose coverage has NO single byte range, which is the shape
 // nothing in this tree had: two covered regions with a member between them
 // AND an `is <codec>` clause naming something to compute.

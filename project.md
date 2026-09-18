@@ -30707,6 +30707,84 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.421 The enum arm's membership, and the gap that ran the other way
+
+**With 26.420's fix the construct is buildable, so the corpus takes it and
+the image learns to carry its membership check.** `edges.typed_kind` is an
+enum-typed scalar arm beside a plain one, and the six descriptions agree
+about it.
+
+**The gap this closes ran the OPPOSITE way from 26.417's, which is why it
+could not have been found the same way.** There, four backends refused and
+the two walkers passed. Here the four backends have ALWAYS emitted
+`_enum_check` for a scalar arm -- so they refused a value both walkers
+accepted -- and the disagreement was unobservable, because no schema could
+carry an enum-typed scalar arm at all: C++ would not compile one. **A
+divergence that no corpus entry can express is not caught by the
+differential; it is caught by making the construct expressible.** That is
+26.411's lesson arriving as a consequence rather than as a diagnosis.
+
+**The packer writes membership on the member path's own terms.** Only
+where the enum REJECTS an unknown value, which means testing for `PASS`
+rather than for the absence of `ERROR`: an unstated default IS `error`
+(section 8.7), and reading `None` as `pass` is the bug the member path
+beside it already records.
+
+**One thing checked rather than assumed.** The constraint and pinned
+tables are binary-searched and had to be merged in placement order
+(26.418); the enum-value table is not. `enum_admits` scans it linearly, so
+an arm registering a new enum id can append, and no third merge was
+needed. Reading the C walker answered that in one look, where assuming
+either way would have been a coin toss.
+
+**Both ordinary cells are cross-arm controls, which is luck worth
+naming.** `arm_kind` spells `0x11` and `0x22`, and the other arm is
+`u8 raw [max = 3]`. So a walk that lost the discriminant gate refuses
+`tag = 1, named = 0x11` -- 17 against `max = 3` -- and refuses
+`tag = 2, raw = 3` -- 3 against a set holding neither 3 nor anything near
+it. The passing cells fail in both directions if the gate goes, without a
+fixture being chosen for it.
+
+**Four sabotages, each through the check under test.** Reverting 26.420's
+C++ cast makes `edges.hpp` fail to compile, which is the corpus entry
+earning its place against an EXISTING gate rather than one written for the
+occasion. Reverting the packer's enum row makes `0x99` pass in both
+walkers while `raw = 4` still fails, so the sabotage is targeted rather
+than broad. Removing the C walker's `CHECK_ENUM_KNOWN` case does the same
+to C alone.
+
+**Two faults in the C walker came from the brief rather than from the
+code, and the worker stopped on one rather than working around it.**
+
+The first is a claim that outlived its subject by about four hours. The
+function's own comment said *enum membership is deliberately not among
+them -- an enum-typed scalar arm does not compile in C++ at all* -- and
+26.421 then added the very case it denies, two screens below it. The
+worker was told to stop and say so rather than route around a brief that
+had gone wrong, and did; the comment now states the three families and
+why membership was last.
+
+The second is subtler and nothing would have caught it. The brief said a
+pinned-row count mismatch should answer `SITU_WALK_UNSUPPORTED`; **the
+member path answers `SITU_WALK_MALFORMED` for the identical condition**,
+and the two spellings are not synonyms -- UNSUPPORTED is a construct this
+build does not render, MALFORMED is an image that does not hold together.
+An image whose pinned rows disagree with the count it declares is the
+second. Both are unreachable in a correct image and both render as
+`cannot-say` through the harness, **so no test measures the difference and
+none ever would have**: a divergence invisible to every gate is exactly
+the kind that survives. It answers MALFORMED now.
+
+**And the third of those nearly reported the opposite of the truth.**
+`case CHECK_ENUM_KNOWN:` appears twice in the C walker -- once on the
+member path, once on the arm's -- so a replace keyed on that string
+asserted uniqueness and refused. The build then ran against an UNSABOTAGED
+copy and printed a clean sweep, which reads exactly like *the check is not
+load-bearing*. The assertion is what separated the two, and the fix is to
+scope the edit to `arm_constraints`' own text and count the marker
+afterwards. **A sabotage that did not apply and a check that cannot fail
+are indistinguishable from the output.**
+
 ### 26.420 An enum-typed variant arm answers in the enum's type
 
 **An arm declared with an enum type handed back the number behind it, and

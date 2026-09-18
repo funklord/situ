@@ -370,6 +370,15 @@ struct two_tags size=23
   tag covers: <reserved0> flags inner kind
   checksum covers: outer sequence
 
+struct typed_kind size=3
+  @0x0000   1         u8         tag
+  @0x0001   1         variant    held
+  @0x0002   1         u8         tail
+  held switch: tag
+  held case 1: named arm_kind
+  held case 2: raw u8
+  held case default: error
+
 struct unknown_reserved size=4
   @0x0000   1         u8         version
   @0x0001   1         u8         <reserved0>
