@@ -2228,6 +2228,35 @@ def test_an_unbounded_expansion_names_the_member_that_needs_storage() -> None:
 	assert layers.floor(schema) == "edit"
 
 
+def test_a_region_inside_a_variant_arm_still_needs_storage() -> None:
+	"""`_walk` reached five of the six nesting members (26.434).
+
+	Six `ast.Member` subclasses hold nested members; five spell the field
+	`members` and `Variant` alone spells it `arms`, so a `getattr` keyed on
+	the common name walks past every arm in the tree. Here that decided
+	`floor()`: an unbounded-codec region inside an arm was invisible, so
+	the schema was reported emittable at rung 1.
+
+	    member form   allocating={'packed_up.body'}   floor=edit
+	    arm form      allocating=set()                floor=view
+
+	A wrong answer rather than a missing check -- `no_alloc(X)` is one of
+	the four predicates section 16 has the compiler name. The member form
+	above is the control, and it must keep answering `edit`.
+	"""
+	schema = parse_text(CASE_E.replace(
+		"\tcoded body(squeeze) { u8 raw[4]; }",
+		"\tu8 pick;\n"
+		"\tvariant held switch (pick) {\n"
+		"\t\tcase 1:  coded body(squeeze) { u8 raw[4]; }\n"
+		"\t\tcase 2:  u8 fixed[3];\n"
+		"\t\tdefault: error;\n"
+		"\t}"))
+
+	assert layers.allocating(schema) == {"packed_up.body"}
+	assert layers.floor(schema) == "edit"
+
+
 def test_a_schema_of_bounded_constructs_needs_nothing() -> None:
 	assert layers.allocating(checked(GOOD)) == set()
 	assert layers.floor(checked(GOOD)) == "view"

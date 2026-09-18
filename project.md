@@ -30711,6 +30711,52 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.434 The sweep at the root cause: five of six, and `floor()` was wrong
+
+**26.411's re-diagnosis names the fact the whole family rests on, and it
+was written down before any of today's instances.** Six `ast.Member`
+subclasses hold nested members. Five spell the field `members` --
+`Authenticated`, `Coded`, `Indexed`, `PositionalBlock`, `Sealed` -- and
+**`Variant` alone spells it `arms`**. So anything written against the
+common name reaches five of the six.
+
+That is a sharper lens than "check whether arms are handled", because it
+names a string to grep for rather than a property to judge. Three sites
+in the tree recurse on `getattr(..., "members", ...)`:
+
+    situc/parser.py   `_widen_byte_enum_fields`   fixed, and says so
+    situc/pack.py     the size-program walk       handles `arms` already
+    situc/layers.py   `_walk`                     reached five of six
+
+**The third decided `floor()`.**
+
+    member form   allocating={'packed_up.body'}   floor=edit
+    arm form      allocating=set()                floor=view
+
+A region whose codec expands without bound needs storage rung 1 cannot
+give. Inside a variant ARM it was invisible, so `allocating` returned
+nothing and the schema was reported emittable at the `view` rung. **That
+is a wrong answer rather than a missing check** -- `no_alloc(X)` is one of
+the four predicates section 16 has the compiler name, and it was
+answering about a schema it had not fully read.
+
+**Inert on the corpus, measured rather than assumed.** All 42 schemas
+return an empty `allocating` either way: `std/codecs.situ` declares
+`deflate` and `lz4` as unbounded and nothing in the tree puts an
+unbounded codec inside a region. So the test carries this case alone, and
+deliberately: giving `edges` such a region would move that schema to
+`floor=edit` and every generator and CLI path that reads the floor would
+move with it. **A corpus entry that changes what the whole corpus IS is a
+different piece of work from one that adds a shape.**
+
+**The sweep is complete for this spelling and that is a narrow claim.**
+Three sites, one broken, and the other two read rather than assumed --
+`pack.py` handles `arms` a dozen lines above the `members` recursion, and
+would have looked exactly like a fault to a grep that stopped at the
+first hit. What is NOT swept is every loop that iterates `struct.members`
+without recursing, which is where 26.432 found its two and where the
+remaining ~147 sites live.
+
 ### 26.433 A varint arm: every backend calls an accessor none of them emits
 
 **Continuing 26.432's sweep into the backends, with the same instrument:

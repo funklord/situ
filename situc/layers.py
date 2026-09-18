@@ -34,10 +34,30 @@ def unbounded_codecs(schema: ast.Schema) -> set[str]:
 
 
 def _walk(members: tuple[ast.Member, ...]) -> list[ast.Member]:
+	"""Every member, and everything nested under it.
+
+	Six `ast.Member` subclasses hold nested members. Five spell the field
+	`members` and **`Variant` alone spells it `arms`**, so a `getattr` keyed
+	on the common name reaches five of the six -- the parser's
+	`_widen_byte_enum_fields` met the same fact and says so at length.
+
+	Here it decided `floor()`. A region with an unbounded codec inside a
+	variant ARM was invisible, so `allocating` returned nothing and the
+	schema was reported emittable at rung 1:
+
+	    member form   allocating=['one.body']   floor=edit
+	    arm form      allocating=[]             floor=view
+
+	That is a wrong answer rather than a missing check -- `no_alloc(X)` is
+	one of the four predicates section 16 has the compiler name (26.434).
+	"""
 	found: list[ast.Member] = []
 	for member in members:
 		found.append(member)
 		found.extend(_walk(getattr(member, "members", ())))
+		found.extend(_walk(tuple(
+			arm.member for arm in getattr(member, "arms", ())
+			if arm.member is not None)))
 	return found
 
 
