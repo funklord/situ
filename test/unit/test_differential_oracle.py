@@ -1194,6 +1194,27 @@ UNORACLED = {
 	# catalogue's check value and its residue (26.373), and every constant
 	# cited from a header in the tree rather than recalled.
 	"usb":       "wire-level bus packets; host tooling reads URBs, not PIDs",
+	# THE FORMAT HAS NO SPECIFICATION TO ORACLE AGAINST, which is a
+	# different excuse from every other entry here and is why it is spelled
+	# out. Textual s-expressions are not standardised: every Lisp defines
+	# its own reader, and Scheme, Common Lisp, Emacs Lisp and Clojure
+	# disagree about `#`-syntax, about whether `[` delimits, about which
+	# characters a symbol may hold and about string escapes. The one
+	# STANDARDISED s-expression -- Rivest's canonical form, RFC 9804 -- is
+	# a length-prefixed binary encoding and a different format entirely.
+	#
+	# So an oracle would compare against one dialect's reader and call that
+	# agreement, which is picking an implementation rather than checking a
+	# specification. The schema says which subset it describes -- the core
+	# grammar the dialects share -- and a reader that implements more would
+	# disagree about every comment and every reader macro, none of which is
+	# a fault in either.
+	#
+	# If this tree ever takes a dependency on a specific reader, oracling
+	# the SUBSET against it is worth doing and the schema's header says
+	# exactly which inputs would be fair.
+	"sexpr":     "textual s-expressions are per-dialect; the standardised "
+	             "one (RFC 9804) is a different, binary format",
 	"codecs":    "codec property signatures, not a message format",
 	"kernels":   "as codecs -- and the codecs it derives are exactly what the "
 	             "CRC and base-N oracles above compare against zlib, "

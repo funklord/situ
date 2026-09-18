@@ -66,6 +66,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   example/png/png.situ \
 		   example/protobuf/protobuf.situ \
 		   example/register/register.situ example/rtc/rtc.situ example/smtp/smtp.situ \
+		   example/sexpr/sexpr.situ \
 		   example/sqlite/sqlite.situ \
 		   example/slip/slip.situ \
 		   example/tcp/tcp.situ \

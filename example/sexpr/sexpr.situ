@@ -1,0 +1,155 @@
+// S-expressions, as far as a layout language reaches.
+//
+// Here because they are a FORMAT rather than a curiosity: s-expressions are
+// used in this workspace as dynamic data stores and configuration, so the
+// bytes on disk are something programs read, write and eventually edit. That
+// is what a layout description is for.
+//
+// It is the second recursive text schema in this directory, and it is far
+// shorter than the first. `example/json` paid for the constructs -- `peek`
+// (0057) so an arm owns the byte it was chosen by, recursion through a
+// variant arm (0054 as amended), and a run of structs with a delimiter --
+// and this schema is what those constructs look like once they exist.
+//
+// WHICH SUBSET, stated rather than implied, because json.situ's header is
+// right that a schema quietly describing a subset is worse than one that
+// says which. This describes the core reader grammar:
+//
+//     sexpr  := list | text | symbol
+//     list   := '(' sexpr* ')'
+//     text   := '"' ... '"'
+//     symbol := anything up to whitespace or a paren
+//
+// NOT described, and each for the same reason -- they are reader macros,
+// which expand before a value exists and so are a grammar's business rather
+// than a layout's: `;` and `#| |#` comments, `#(...)` vectors, `#\a`
+// characters, quasiquote and unquote. `'x` and `(a . b)` FRAME correctly --
+// their extents are exact -- but the quote is a symbol to this schema and
+// the dot is a symbol too. Framing is not interpreting, which is the same
+// division of labour json.situ records for `a`: six bytes here, one
+// character to a reader.
+//
+// AN F-EXPRESSION IS NOT A DIFFERENT FORMAT, which is worth writing down
+// once so it is not asked again. An f-expr (an operative) is a combiner that
+// receives its operands unevaluated together with the dynamic environment --
+// a property of an interpreter's calling convention, not of bytes. On disk
+// an f-expr form is s-expression text and this schema describes it exactly.
+// What makes it operative happens in the evaluator, where situ has nothing
+// to say and no construct that could say it. A schema can carry a FLAG that
+// records the distinction, and situ will describe the flag precisely while
+// staying silent about what it means.
+
+target buffer;
+endian big;
+
+// The structural bytes are the same value in both, which is what makes
+// declaring the pair a checked fact rather than an assumption.
+encoding ascii | utf8;
+
+// What may stand between two forms. A lead belongs to the token it precedes,
+// so the whitespace before a form is part of that form's frame and the form
+// before it is finished.
+whitespace ' ' | '\t' | '\r' | '\n';
+
+// The first byte says which kind of form this is, and it belongs to the ARM:
+// `peek` reads it and does not spend it, so `list` opens with its own paren
+// and `text` with its own quote. A symbol has no opening byte of its own and
+// is the `default` arm for exactly that reason.
+//
+// `[depth]` bounds the recursion, and situ requires a bound: a walk spends
+// real stack per level, and a message deeper than this is well formed and
+// refused anyway (26.284). Lisp's own grammar admits arbitrary depth, so
+// this is the one place the description is narrower than the language by
+// construction rather than by omission. 64 counts nested STRUCTS and the
+// cycle here is sexpr -> list -> sexpr, two structs per level of parens, so
+// this is about thirty-two levels deep. Measured: forty levels refuses with
+// SITU_ERR_DEPTH rather than reading past its own stack.
+struct sexpr [depth = 64] {
+	peek u8  kind  skip;
+	variant body switch (kind) {
+		case '(':  list    as_list;
+		case '"':  text    as_text;
+		default:   symbol  as_symbol;
+	}
+}
+
+// A list is forms until the closing paren.
+//
+// `until ")"` and NOT an element wrapper holding a trailing byte, which is
+// the shape this schema was first written with and is worth recording as the
+// wrong one: giving every element its own closing byte conflates the
+// separator between forms with the terminator that ends the list, and a
+// nested list then spends a paren twice. It measured `(a b c)` and
+// `((((a))))` exactly and `(a (b))` one byte short -- correct wherever
+// nesting had no sibling beside it, which is the hardest kind of wrong to
+// notice. A separator belongs to neither side and a terminator belongs to
+// the run; `until` says the second.
+struct list [depth = 64] {
+	u8     open;
+	sexpr  items[]  until ")";
+}
+
+// The quote opens the arm, so `chars` is the content and the closing quote
+// is the delimiter. Escapes are framed and not decoded: `\n` is two bytes
+// here and one character to a reader.
+struct text {
+	u8  open   skip;
+	u8  chars[]  until "\"";
+}
+
+// Anything up to whitespace or a paren. `before` rather than `until`,
+// because the byte that ends a symbol belongs to neither the symbol nor the
+// form after it -- a separator, not a terminator.
+//
+// BOTH parens, and the opening one is the half that is easy to forget:
+// `(a(b))` is valid and has no whitespace in it, so a symbol ended only by
+// space or `)` swallows `a(b` and the document measures five bytes of six.
+// Measured -- every spaced form was already exact, which is what made the
+// omission invisible until an unspaced one was tried.
+struct symbol {
+	u8  name[]  before ' ' | '(' | ')' [trim];
+}
+
+// ---------------------------------------------------------------------------
+//
+// WHAT THE CAPABILITY MAP SAYS ABOUT OPERATIONS, which is the question this
+// schema exists to answer for a data store rather than for a parser.
+//
+// `access=Sequential`, `offset=Scanned`, `size=Unbounded`: a form is walked,
+// not indexed. Finding the n'th member of a list means reading the n-1
+// before it, and that is a property of the format rather than of this
+// description -- a list has no length prefix and nothing says where its
+// members begin.
+//
+// `mutate=Shifting`, `address=Unstable`: changing a form's bytes moves
+// everything after it. An in-place edit is available only where the
+// replacement is the same length, which for text is the normal case and for
+// a symbol or a number rarely is. Anything else is a rewrite of the tail.
+//
+// TRAILING whitespace belongs to nobody, which is the honest remaining edge
+// and json.situ has the same one. `(a) ` is four bytes and this schema
+// measures three: a lead belongs to the form that FOLLOWS it, and after the
+// last form there is none. The document is three bytes; a caller framing a
+// stream has to step over the fourth itself.
+
+// What a dynamic data store in this format costs, recorded the way
+// `json.situ` records its own: each of these FAILS, and the failure is the
+// measurement. They are written as `assert` rather than `require` because a
+// requirement the format cannot meet is a demand on nobody -- these are the
+// prices, stated where somebody deciding to store data this way will see
+// them.
+
+// A list is walked, not indexed. There is no length prefix and nothing says
+// where a member begins, so the n'th form costs the n-1 before it. This is
+// the one that matters most for a store: a lookup is a scan.
+assert random_access(list.items);
+
+// And editing one moves the rest. A form's bytes are not a fixed width, so
+// replacing a symbol with a longer one shifts everything after it -- an
+// in-place write is available only where the replacement is the same length.
+assert in_place(symbol.name);
+
+// A form's first TOKEN is not at a fixed offset, because whitespace may
+// precede it. `( a)` and `(a)` both have a symbol and it starts in different
+// places. Same cost json.situ records for the same reason.
+assert absolute_static(sexpr.kind);

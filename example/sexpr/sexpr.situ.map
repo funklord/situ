@@ -1,0 +1,35 @@
+# situ capability map v1
+# schema: sexpr.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct list size=2.. mutate=Shifting atomic=NonAtomic effect=EffectOnRead
+  list.open                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  list.items                             offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
+
+struct sexpr size=1.. access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic canonical=NonCanonical effect=EffectOnRead
+  sexpr.kind                             offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
+  sexpr.body                             offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  sexpr.body.as_list                     offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
+  sexpr.body.as_list.open                offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  sexpr.body.as_list.items               offset=FrameStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable effect=EffectOnRead
+  sexpr.body.as_text                     offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  sexpr.body.as_text.open                offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
+  sexpr.body.as_text.chars               offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  sexpr.body.as_symbol                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
+  sexpr.body.as_symbol.name              offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable canonical=NonCanonical effect=EffectOnRead
+
+struct symbol size=1.. mutate=Shifting canonical=NonCanonical effect=EffectOnRead
+  symbol.name                            offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
+
+struct text size=2.. access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
+  text.open                              offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable effect=EffectOnRead
+  text.chars                             offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead

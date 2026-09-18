@@ -30775,6 +30775,133 @@ the generated header that only it writes. **Reasoning from generated
 output back to the emitter is a proxy; the probe is the object**, and the
 proxy had already been agreed with once.
 
+### 26.427 S-expressions describe in twenty lines, and an f-expr is not a format
+
+**Asked by the copyright holder, who stores data in both**, so this is a
+question about a format in use rather than an exercise. `example/sexpr`
+is the answer to the first half and this entry is the answer to the
+second.
+
+**S-expressions cost twenty lines, because `example/json` already paid.**
+`peek` (0057) so an arm owns the byte it was chosen by, recursion through
+a variant arm (0054 as amended), a run of structs with a delimiter, and
+`before` for a separator that belongs to neither side. Every construct
+this schema needs was bought by the harder one, and the second recursive
+text format in the tree is a fifth the size of the first. **That is what
+a language paying off looks like**, and it is worth recording because the
+JSON entry recorded only the cost.
+
+**The subset is stated rather than implied**, which is json.situ's rule:
+the core reader grammar is described and the reader MACROS are not --
+`;` and `#| |#` comments, `#(...)` vectors, `#\a` characters,
+quasiquote. `'x` and `(a . b)` frame exactly and mean nothing: the quote
+is a symbol to this schema and so is the dot. Framing is not
+interpreting.
+
+**A second omission, found the same way and worth the same warning.**
+The symbol terminator was `before ' ' | ')'` -- whitespace or a CLOSING
+paren -- and an opening paren also ends a symbol. `(a(b))` is valid, has
+no whitespace in it, and measured five bytes of six: the symbol scan
+swallowed `a(b`. Every spaced form was already exact, which is what made
+it invisible. It is `before ' ' | '(' | ')'` now, and C and Python agree
+on all nine probe documents byte for byte.
+
+**The wrong shape is recorded beside the right one, because it was
+correct wherever it was easy to check.** The first version gave every
+element its own trailing byte, which conflates the separator between
+forms with the terminator that ends a list, so a nested list spent a
+paren twice. It measured `(a b c)` exactly, and `((((a))))` exactly, and
+`(a (b))` one byte short -- **right on flat lists and on pure nesting,
+wrong only where nesting had a sibling beside it.** Eight cells across
+two shapes are what separated the two, and a fixture carrying only
+`((((a))))` would have proved the wrong schema correct.
+
+**Bounded depth is the one place the description is narrower than the
+language by construction.** `[depth = 64]` is required; Lisp's grammar
+admits arbitrary nesting and a walk spends real stack per level.
+Measured: forty levels of parens refuses with `SITU_ERR_DEPTH` rather
+than reading past its own frame, which is the right answer and is not the
+grammar's answer.
+
+**AN F-EXPRESSION IS NOT A DIFFERENT FORMAT.** An operative is a combiner
+that receives its operands unevaluated together with the dynamic
+environment -- a property of an interpreter's calling convention, not of
+bytes. On disk an f-expr form is s-expression text and `example/sexpr`
+describes it exactly. What makes it operative happens in the evaluator,
+where situ has nothing to say and no construct that could say it. A
+schema can carry a FLAG recording the distinction and situ will describe
+the flag precisely while staying silent about what it means. Written into
+the schema's header as well, so the question is answered where it will be
+asked.
+
+**THE STANDING REQUIREMENT, and it is not built.** The holder's software
+uses both as dynamic data stores, and situ will eventually need to do
+simple OPERATIONS on these files rather than only describe them. What the
+capability map already says about that is in the schema's footer and is
+the honest starting point:
+
+- `access=Sequential`, `offset=Scanned`, `size=Unbounded` -- a lookup is
+  a scan. There is no length prefix and nothing says where a member
+  begins, so the n'th form costs the n-1 before it. That is the format's
+  property, not the description's.
+- `mutate=Shifting`, `address=Unstable` -- an edit moves everything after
+  it. In-place is available only where the replacement is the same
+  length, which for text is common and for a symbol rarely is.
+
+So "simple operations" on this format is not the same question as on a
+fixed-layout one. Measured against the generated C rather than reasoned
+about:
+
+**READS ARE COMPLETE AND WORK TODAY.** `situ_list_items_count`,
+`situ_list_items_at`, `situ_sexpr_kind_get`, `situ_sexpr_extent` and the
+three `as_*` arm views are a whole walker. Run over `(a bb (c d) "e")`
+it indexes all four forms, names each one's kind and measures its extent,
+and refuses index 4. `access=Sequential` means a lookup COSTS a scan, not
+that it is unavailable -- the accessor is generated and counts from the
+front. Worth knowing because the axis name reads like a refusal and is a
+price.
+
+An extent includes the form's LEAD: `[1]` of that document is `" bb"` at
+three bytes, not `"bb"` at two. A lead belongs to the form it precedes,
+which is the same rule the trailing-whitespace edge comes from.
+
+**WRITES ARE NOT GENERATED AT ALL, AND THE HEADER SAYS WHY.**
+`situ_text_chars_ptr` returns `const uint8_t *`, and above it:
+
+    /* No setter: mutate is Shifting.
+     *   caused by: a member that ends at a delimiter
+     *   remedy:    `until D max N` bounds the scan, which makes the
+     *              member statically allocatable
+
+**That remedy was tried and it is about allocation, not mutation.**
+Bounding both scans at `max 64` moves `size=Unbounded` to
+`size=Bounded(1, 64)`, gives `symbol` a `1..64` extent and
+`address=FrameStable` -- and `mutate` stays `Shifting`, no setter
+appears, and the same comment is still there. The length lives in the
+DATA, and a bound on it is still not the schema fixing it. Only a member
+whose width the schema states -- `u8 name[16]` -- is writable, and
+s-expression text is not that.
+
+**So the honest gap is narrower and more interesting than "no writes":
+an equal-length replace is SAFE and situ declines it.** The caller knows
+the length of what it is writing; `situ_text_chars_len` tells it the
+length of what is there; and overwriting N bytes with N bytes moves
+nothing. situ refuses because `mutate=Shifting` is a property of the
+MEMBER rather than of the operation, so the const pointer is the same
+answer whether the replacement fits or not.
+
+That is the well-scoped candidate for the standing requirement: a checked
+`replace(view, bytes, len)` that refuses unless `len` equals the member's
+current length. It needs no new layout construct, it cannot shift
+anything by construction, and it is the operation a data store performs
+most -- updating a value to the same width. An insert, a delete or a
+longer replacement remains a tail rewrite, which situ has no construct
+for and which is a language decision rather than a backend one.
+
+**Recorded rather than designed. Whether the equal-length replace is
+wanted, and whether a tail rewrite belongs in a layout language at all,
+is the holder's to decide.**
+
 ### 26.426 EVERY value constraint on a varint is accepted, promised, and checked by nobody
 
 **Found while sweeping the arm shapes, and it is not about arms at all.**
