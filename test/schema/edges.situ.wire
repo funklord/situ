@@ -423,6 +423,15 @@ struct versioned size=3..9 version=ver
   @0x0007   2         u16        extra  big since=3
   versioned refuses: zero_version when versioned.ver == 0
 
+struct versioned_arm size=2..3 version=rev
+  @0x0000   1         u8         rev
+  @0x0001   1         u8         pick
+  @0x0002   1         variant    held
+  held switch: pick
+  held case 1: always u8
+  held case 2: later u8
+  held case default: error
+
 struct wide_run size=7..31
   @0x0000   1         u8         n  max=4
   @0x0001   0..8      u16        a  sized-by=n

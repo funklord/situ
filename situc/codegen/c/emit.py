@@ -3041,13 +3041,36 @@ class Emitter:
 		variant, arm = found
 
 		held = self._over_fields(struct, variant.discriminant or "", "view")
+
+		# `[since]` ON THE ARM, folded into the same condition (26.424).
+		# Every arm accessor asks `_arm_guard` whether this arm is absent
+		# and answers SITU_ERR_VERSION when it is -- and an arm the
+		# message's own version predates is absent in exactly that sense,
+		# so the two belong in one test rather than two.
+		#
+		# Without it a version-1 message was judged by a version-2 rule:
+		# `case 2: u8 b [since = 2, must_eq = 9]` refused `ver = 1` for
+		# holding the wrong byte, when at version 1 the field is not there
+		# at all. The ordinary member's accessor has always emitted this
+		# test, and says why in its own generated comment -- "a field that
+		# is not there is not a field that is wrong". An arm's had only
+		# the discriminant.
+		older = ""
+		if placement.since and placement.version_field:
+			reads = ident(self.prefix, struct.name,
+			              c_name(placement.version_field), "get")
+			older = f" || {reads}(view) < {placement.since}u"
+
 		if arm.value is None:
 			# A `default` arm: present when nothing else matched.
 			matched = matched_values(variant)
 			if not matched:
 				return None
 			test = " || ".join(f"{held} == {one.value}u" for one in matched)
-			return f"({test})", arm.source or "default"
+			return f"({test}{older})", arm.source or "default"
+		if older:
+			return (f"({held} != {arm.value}u{older})",
+			        arm.source or str(arm.value))
 		return f"{held} != {arm.value}u", arm.source or str(arm.value)
 
 	def _varint_field(self, struct: ResolvedStruct,

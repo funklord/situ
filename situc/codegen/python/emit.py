@@ -2648,7 +2648,8 @@ class Emitter:
 		return py_name(placement.type_name or "object")
 
 	def _arm_guard(self, struct: ResolvedStruct, variant: Placement,
-			arm: Arm) -> tuple[str, str] | None:
+			arm: Arm,
+			placement: Placement | None = None) -> tuple[str, str] | None:
 		"""Two tests: this arm is NOT the one present, and this arm IS.
 
 		Both from one place. The accessors ask the first and `validate` asks
@@ -2662,13 +2663,36 @@ class Emitter:
 		written.
 		"""
 		held = self._over_fields(struct, variant.discriminant or "", "self")
+
+		# `[since]` ON THE ARM, in both sentences (26.424). An arm the
+		# message's own version predates is ABSENT in exactly the sense
+		# this pair already answers, so the version test belongs here
+		# rather than in each caller -- and the two polarities need it
+		# spelled opposite ways, which is the reason this helper returns
+		# both rather than one and a negation.
+		#
+		# A version-1 message was otherwise judged by a version-2 rule:
+		# `case 2: u8 b [since = 2, must_eq = 9]` refused `ver = 1` for
+		# holding the wrong byte, when at version 1 the field is not there
+		# at all.
+		absent = present = ""
+		if placement is not None and placement.since \
+				and placement.version_field:
+			reads   = self._over_fields(struct, placement.version_field,
+			                            "self")
+			absent  = f" or {reads} < {placement.since}"
+			present = f" and {reads} >= {placement.since}"
+
 		if arm.value is None:
 			matched = matched_values(variant)
 			if not matched:
 				return None
-			return (" or ".join(f"{held} == {one.value}" for one in matched),
-			        " and ".join(f"{held} != {one.value}" for one in matched))
-		return f"{held} != {arm.value}", f"{held} == {arm.value}"
+			no  = " and ".join(f"{held} != {one.value}" for one in matched)
+			yes = " or ".join(f"{held} == {one.value}" for one in matched)
+			return (f"({yes}){absent}" if absent else yes,
+			        f"({no}){present}" if present else no)
+		return (f"{held} != {arm.value}{absent}",
+		        f"{held} == {arm.value}{present}")
 
 	def _scalar_arm(self, struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether this arm is the plain scalar one, whose accessor is a
@@ -2694,7 +2718,7 @@ class Emitter:
 		and reading the arm that is not there is the same mistake from the
 		other end.
 		"""
-		guard = self._arm_guard(struct, variant, arm)
+		guard = self._arm_guard(struct, variant, arm, placement)
 		if guard is None:
 			return []
 		test, _present = guard
@@ -6113,7 +6137,7 @@ class Emitter:
 		four-way differential caught it. The answer to a check asked
 		unconditionally is to ask it conditionally, not to delete it.
 		"""
-		guard = self._arm_guard(struct, variant, arm)
+		guard = self._arm_guard(struct, variant, arm, placement)
 		if guard is None:
 			return []
 		_absent, present = guard

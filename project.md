@@ -31076,11 +31076,43 @@ agreement; the packed image carries `since` per placement and the walkers
 read it for members, so a corpus entry would surface the walkers
 disagreeing with the four -- but only if a schema had one, and none does.
 
-**The shape of the fix is settled elsewhere in the same emitters**, which
-is what makes this a wiring gap rather than a question: the member
-accessor already emits the version test, and the arm accessor already
-emits a gate. It needs the two composed, and the arm's `SITU_ERR_VERSION`
-already means exactly "not for this message" in both senses.
+**Fixed in all six descriptions, and the fix is one condition rather than
+a new test.** The member accessor already emitted the version test and the
+arm accessor already emitted a gate; the arm's `SITU_ERR_VERSION` already
+means "not for this message" in both senses, so the two compose:
+
+    if ((kind() != 2u || ver() < 2u))      /* C and C++ */
+    if self.kind != 2 or self.ver < 2      /* Python    */
+
+**Three backends had a shared `_arm_guard` and one did not**, which
+decided where each change went. C, Rust and Python each build that test
+in one helper used by BOTH the accessor and the check, so folding the
+version in there fixes both at once -- and in the negated direction it
+reads correctly without further thought: `!(kind != 2 || ver < 2)` is
+`kind == 2 && ver >= 2`, which is exactly "present, so check it". C++
+builds the test inline in two places, so it got a small `_arm_since`
+helper for the version half and both sites ask for it.
+
+**The two walkers needed it separately, and the reason is structural.**
+The four fold the version into the discriminant test, so their accessor
+answers VERSION for both reasons at once; a walk has already matched the
+discriminant by the time it knows which arm it has, so it asks the
+version afterwards. The image was carrying everything needed --
+`versioned_arm.held.later` has `since=2` and the versions table names the
+`rev` field -- and neither walker looked.
+
+**Measured before the corpus entry existed and after.** The fix is inert
+on every corpus schema in all four backends, because no schema had a
+`[since]` arm; `edges.versioned_arm` is that schema now, and the five
+cells run identically in C, C++, Rust, Python and both walkers.
+
+**The corpus entry cost one refusal on the way in, correctly.** It was
+written with a trailing `u8` after the variant, to catch a wrongly-placed
+arm as a wrong byte the way the other entries do, and `situc` refused it:
+*`tail` arrives in version 1, after a member that arrives in 2*.
+`[since]` is append-only because position carries identity, so a member
+of version 1 may not follow one of version 2. The diagnostic is right and
+the entry carries no trailing member.
 
 ### 26.423 A DELIMITED arm's encoding is enforced by nobody, and no gate can say so
 

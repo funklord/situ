@@ -3274,6 +3274,53 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 
+	/* AND THE MESSAGE'S OWN VERSION HAS TO REACH IT (26.424). An arm
+	 * carrying `[since]` is absent from a message older than that, in
+	 * exactly the sense an unselected arm is absent -- so it is nothing to
+	 * check rather than something that failed, which is what the member
+	 * loop in `validate_deep` already says for an ordinary member: a field
+	 * that is not there is not a field that is wrong.
+	 *
+	 * The four backends fold this into the discriminant test itself, so
+	 * their accessor answers VERSION for both reasons at once. This walk
+	 * asks separately, because the discriminant has already been matched
+	 * by the time the arm is known. */
+	{
+		const uint8_t *prow  = image->placements
+		                       + chosen * image->placement_stride;
+		const uint16_t since = u16_at(prow + 44u);
+
+		if (since != 0u) {
+			uint32_t carries = SITU_WALK_NONE;
+			uint64_t version = 0u;
+
+			for (uint32_t v = 0u; v < image->version_count; v++) {
+				const uint8_t *row = image->versions
+				                     + v * image->version_stride;
+				if (u32_at(row) == shape) {
+					carries = u32_at(row + 4);
+					break;
+				}
+			}
+			if (carries == SITU_WALK_NONE) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			err = situ_walk_read(image, message, len, shape, carries,
+			                     &version);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				record(why, chosen, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+			if (version < (uint64_t)since) {
+				return SITU_WALK_OK;	/* not in this message */
+			}
+		}
+	}
+
 	if (situ_walk_placement_at(image, chosen, &arm) != SITU_WALK_OK) {
 		return SITU_WALK_UNSUPPORTED;
 	}

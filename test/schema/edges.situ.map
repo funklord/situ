@@ -435,6 +435,13 @@ struct versioned size=3..9 repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.flags                        offset=AbsoluteStatic(0x03) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.extra                        offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
 
+struct versioned_arm size=2..3 atomic=NonAtomic stage=ParseTime
+  versioned_arm.rev                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  versioned_arm.pick                     offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  versioned_arm.held                     offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+  versioned_arm.held.always              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  versioned_arm.held.later               offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord stage=ParseTime
+
 struct wide_run size=7..31 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   wide_run.n                             offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   wide_run.a                             offset=AbsoluteStatic(0x01) size=Bounded(0, 8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting

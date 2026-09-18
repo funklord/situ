@@ -4716,6 +4716,26 @@ class Emitter:
 			return f"static_cast<{self._field_ctype(placement)}>({load})"
 		return load
 
+	def _arm_since(self, struct: ResolvedStruct, placement: Placement,
+			selected: bool) -> str:
+		"""The `[since]` half of an arm's gate, or nothing (26.424).
+
+		An arm the message's own version predates is ABSENT in exactly the
+		sense the discriminant test already answers, so the two belong in
+		one condition. This backend builds that test inline in two places
+		rather than sharing a helper the way C, Rust and Python do, so the
+		version half is shared instead and both sites ask for it.
+
+		`selected` picks the polarity: an accessor refuses the arm that is
+		absent and a check runs for the arm that is present, and the
+		version condition inverts with them.
+		"""
+		if not placement.since or not placement.version_field:
+			return ""
+		reads = self._over_fields(struct, placement.version_field)
+		return (f" && {reads} >= {placement.since}u" if selected
+		        else f" || {reads} < {placement.since}u")
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, behind the test that its arm is the one present.
@@ -4734,6 +4754,10 @@ class Emitter:
 			                         for one in matched) + ")"
 		else:
 			test = f"{held} != {arm.value}u"
+
+		older = self._arm_since(struct, placement, selected=False)
+		if older:
+			test = f"({test}{older})"
 
 		name   = bare_name(local_name(struct, placement))
 		scalar = placement.scalar
@@ -7625,6 +7649,9 @@ class Emitter:
 				keep = f"!{test}"
 			else:
 				keep = f"{held} == {arm.value}u"
+			newer = self._arm_since(struct, placement, selected=True)
+			if newer:
+				keep = f"({keep}{newer})"
 			return [
 				f"\t\t/* {placement.path}: checked where the discriminant",
 				"\t\t * selects this arm, and nothing to check where it"

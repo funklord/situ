@@ -370,6 +370,39 @@ struct constrained [version = rev] {
 	u8       pad    [since = 3, must_eq = 0];
 }
 
+// A `[since]` member inside a VARIANT ARM, which is the product the two
+// versioned structs above never made (26.424).
+//
+// `constrained` has `[since]` members carrying constraints, and `kinded` has
+// a variant; neither has a constraint on an arm that a version gates. The
+// arm's accessor gated on the DISCRIMINANT and not on the version, so a
+// version-1 message was judged by a version-2 rule: `later` was refused for
+// holding the wrong byte, when at version 1 the field is not there at all.
+// That is the failure `[since]` exists to prevent -- the construct is
+// append-only precisely so an older message stays valid.
+//
+// The ordinary member's accessor has always emitted both tests, and its
+// generated comment says why: a field that is not there is not a field that
+// is wrong. All four backends now fold the version into the same condition
+// the discriminant test uses, because an arm the message's version predates
+// is ABSENT in exactly that sense.
+//
+// NO MEMBER AFTER THE VARIANT, and the compiler is why: `[since]` is
+// append-only because position carries identity, so a member arriving in
+// version 1 may not follow one arriving in version 2. A trailing `u8` was
+// written here first, to catch a wrongly-placed arm as a wrong byte, and
+// `situc` refused it with exactly that reasoning. The structs above carry
+// that job; this one carries the version gate.
+struct versioned_arm [version = rev] {
+	u8  rev;
+	u8  pick;
+	variant held switch (pick) {
+		case 1:  u8  always [max = 7];
+		case 2:  u8  later  [since = 2, must_eq = 9];
+		default: error;
+	}
+}
+
 // A run that ends after the element failing a test, and an element sized by
 // arithmetic over one of its own fields.
 //

@@ -2410,7 +2410,8 @@ class Emitter:
 		return lines
 
 	def _arm_guard(self, struct: ResolvedStruct, variant: Placement,
-			arm: Arm, selected: bool = False) -> str | None:
+			arm: Arm, selected: bool = False,
+			placement: Placement | None = None) -> str | None:
 		"""Whether this arm is NOT the one present -- or, given `selected`,
 		whether it is.
 
@@ -2431,13 +2432,34 @@ class Emitter:
 		`case` to negate, a `default` arm has no test to write.
 		"""
 		held = self._over_fields(struct, variant.discriminant or "", "self")
+
+		# `[since]` ON THE ARM, in the same sentence (26.424). An arm the
+		# message's own version predates is ABSENT, which is what this test
+		# already answers about an arm the discriminant did not select --
+		# so the two belong in one condition rather than two, and both
+		# callers get it without either asking.
+		#
+		# Without it a version-1 message was judged by a version-2 rule:
+		# `case 2: u8 b [since = 2, must_eq = 9]` refused `ver = 1` for
+		# holding the wrong byte, when at version 1 the field is not there.
+		# The ordinary member's accessor has always emitted the version
+		# test; an arm's had only the discriminant.
+		older = ""
+		if placement is not None and placement.since \
+				and placement.version_field:
+			reads = self._over_fields(struct, placement.version_field, "self")
+			older = (f" && {reads} >= {placement.since}" if selected
+			         else f" || {reads} < {placement.since}")
+
 		if arm.value is None:
 			matched = matched_values(variant)
 			if not matched:
 				return None
 			joined = " || ".join(f"{held} == {one.value}" for one in matched)
-			return f"!({joined})" if selected else joined
-		return f"{held} {'==' if selected else '!='} {arm.value}"
+			base   = f"!({joined})" if selected else joined
+			return f"({base}{older})" if older else base
+		base = f"{held} {'==' if selected else '!='} {arm.value}"
+		return f"({base}{older})" if older else base
 
 	@staticmethod
 	def _ok_wrapped(load: str) -> str:
@@ -2469,7 +2491,8 @@ class Emitter:
 		reading an arm that is not present is the same mistake from the other
 		end.
 		"""
-		test = self._arm_guard(struct, variant, arm)
+		test = self._arm_guard(struct, variant, arm,
+		                       placement=placement)
 		if test is None:
 			return []
 
@@ -5337,7 +5360,8 @@ class Emitter:
 		    carries it out for a struct arm.
 		"""
 		scalar = placement.scalar
-		guard  = self._arm_guard(struct, variant, arm, selected=True)
+		guard  = self._arm_guard(struct, variant, arm, selected=True,
+		                         placement=placement)
 		if guard is None:
 			return []
 		name = _ident(c_name(local_name(struct, placement)))

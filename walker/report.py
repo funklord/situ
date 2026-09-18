@@ -1255,6 +1255,28 @@ def _arm_selects(image: Image, view: View, index: int,
 			continue		# the default arm names no case
 		if case != value:
 			continue
+		# AND THE MESSAGE'S OWN VERSION HAS TO REACH IT (26.424). An arm
+		# carrying `[since]` is absent from a message older than that, in
+		# exactly the sense an unselected arm is absent -- so it is nothing
+		# to check rather than something that failed, which is what the
+		# member loop above says in its own words: a field that is not
+		# there is not a field that is wrong.
+		#
+		# The four backends fold this into the discriminant test itself, so
+		# their accessor answers VERSION for both reasons at once. This
+		# walk asks separately because the discriminant has already been
+		# matched by the time the arm is known.
+		since = image.placements[chosen].since if chosen != NONE else 0
+		if since:
+			carries = image.versions.get(view.struct)
+			if carries is None:
+				return OK	# the packer should not have said yes
+			try:
+				if read_scalar(view, carries) < since:
+					return OK
+			except Refused:
+				return ERR_BOUNDS
+
 		# The arm the discriminant selects has to fit the frame. The
 		# accessor clamps; this is where a message that does not fit is
 		# called malformed, and it is BOUNDS rather than VERSION -- the
