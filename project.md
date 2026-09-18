@@ -30741,8 +30741,8 @@ its declared range.
 
 **Then the plain case, with no bounds at all, turned out not to build.**
 
-    s.h:103: implicit declaration of `situ_one_held_x_len`
-    plain.hpp: 14 errors
+    s.h:103:  implicit declaration of `situ_one_held_x_len`
+    plain.hpp:79: `held_x_len` was not declared in this scope
 
 Placing what follows a variant means asking each arm how long it is, and
 a varint's length is decided by its own bytes. **All four emit the call --
@@ -30762,11 +30762,29 @@ the arm form is accessors, extent, packer and both walkers, and that is
 its own piece of work rather than something to half-land behind a
 refusal that already reads as honest.
 
-**The enum-typed arm is the recorded sibling and is NOT covered here.**
-26.411 has it: an enum-typed scalar arm still gives C++ 11 errors on a
-minimal schema, while `edges.typed_kind` builds because its enum carries
-`default = error`. Two sub-shapes, one open entry, and not this one's to
-close.
+**A correction to this entry, made within the hour and worth keeping.**
+It first reported the C++ side as *14 errors*, and reported the
+enum-typed arm of 26.411 as still broken at *11 errors* on a minimal
+schema. **Both numbers came from a compile command missing
+`-I runtime/c`**, so the C++ runtime header could not see the C one and
+produced errors of its own. The control that caught it is the one this
+file keeps asking for and I nearly skipped: a schema with no enum and no
+variant at all, compiled the same way, which scored **9**. A baseline of
+nine is not a finding about anybody's schema.
+
+Re-measured with both include paths: the varint arm is **4** errors, all
+of them `held_x_len was not declared`, so this entry's substance stands
+and only its arithmetic was wrong. **26.411 is 0 errors in all four
+backends and has been fixed** -- by the entry above that re-diagnosed it,
+where `_widen_byte_enum_fields` recursed on `members` and `Variant`
+alone spells it `arms`. That is this same family's root cause, recorded
+before any of today's instances.
+
+**So the enum sibling was not an open defect I was leaving alone; it was
+a closed one I measured wrongly.** A failing check is not evidence until
+you know it could have passed, and a number that arrives already attached
+to a conclusion is the one nobody re-derives -- including its author, an
+hour later, in his own entry.
 
 ### 26.432 The lens from the last bug found two more, and one was a disagreement
 
