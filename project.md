@@ -30711,6 +30711,70 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.432 The lens from the last bug found two more, and one was a disagreement
+
+**26.423 and 26.430 are the same shape in different layers: a loop over a
+struct's own members, deciding something an arm can also be.** One was
+four backends' check emitters dropping a dotted path; the other was a
+well-formedness refusal iterating `struct.members`. Both are right about
+every case except the arm, and neither announces the omission, because
+for members they ARE right.
+
+So the lens for the next sweep was not chosen in advance, it was handed
+over by the last defect -- and it paid twice.
+
+**Scoped before it was run, which is the part worth copying.** Grepping
+the tree for that loop shape gives 147 sites, which is the wrong way to
+use it. **The sharp question is which of those loops decide a REFUSAL**,
+because a refusal that misses an arm ACCEPTS a schema the language
+forbids, where a codegen loop that misses one merely emits less.
+`wellformed.py` holds five such loops in two functions. Five is a sweep;
+147 is a reading list.
+
+**The first: a parameter that moves an ARM.**
+
+    struct plain { parameter u8 n; u8 body[n]; }        refused
+    variant held { case 1: u8 body[n]; }                ACCEPTED
+
+`case 1: u8 body[n];` moves whatever follows the variant exactly as
+`u8 body[n];` does. 0050 refuses a non-`[stream]` parameter in that
+position because a per-message fact that moves a member leaves a
+dissector unable to place anything after it -- and the refusal could not
+see an arm, so C emitted `situ_armed_held_body_ptr` naming an undeclared
+`arg_n`. The same symptom as 26.430, by the same mechanism, one function
+away.
+
+**The second is not a missing refusal at all, and is the better find.** A
+`parameter` DECLARED inside an arm is accepted by every backend, and they
+do not agree on what it means:
+
+    C                 emits nothing at all for the field
+    C++, Rust, Python emit an ordinary arm accessor, `held_n`
+
+So three of the four silently reread `parameter u8 n [stream]` as a plain
+member and one drops it. **Four backends, three answers, and a schema
+stating something none of them implemented** -- which is the property
+every backend claims, broken quietly, in a shape the corpus does not
+carry so no differential could pose it.
+
+It is refused now. An argument is a per-message fact the caller supplies,
+and the caller supplies it before the discriminant has been read, so "this
+message takes an argument when `pick` is 1" is not something anybody can
+honour. The message says where to put it instead.
+
+**Four instances in one day across three layers** -- four check emitters,
+a nesting refusal, a moving-expression refusal, and a declaration nobody
+validated. The helper that walks a struct's members and each arm's member
+is one function; what took the day was believing the shape was a
+coincidence the first two times.
+
+**What was NOT swept, so the next reader knows.** Only `wellformed.py`'s
+five loops. The codegen backends hold most of the remaining 147, and a
+missed arm there is a quieter fault than a missed refusal -- less code
+rather than a wrong answer -- but 26.423 was exactly that fault and cost
+a day, so the list is worth working through rather than declaring
+finished.
+
 ### 26.431 The corpus entry could not be written, and then it found the bug
 
 **A construct the instrument cannot express is a construct the corpus
@@ -30801,6 +30865,9 @@ reads as complete because for members it IS complete. **Two instances in
 one day in two layers is a class rather than a coincidence**, and the
 thing to grep for is a loop over `struct.members` or `own_entries` whose
 body decides something an arm can also be.
+
+That grep was run, and 26.432 is what it found: two more, one of them a
+four-way disagreement rather than a missing refusal.
 
 **Fixed where the decision lives, not where the symptom appeared.** One
 helper walks a struct's members and each variant arm's member, and the

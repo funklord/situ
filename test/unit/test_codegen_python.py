@@ -2693,6 +2693,73 @@ def test_a_struct_that_takes_an_argument_cannot_be_a_variant_arm() -> None:
 	assert "outer.it" in refused.value.diagnostic.render()
 
 
+def test_a_parameter_that_moves_a_variant_arm_must_be_stream() -> None:
+	"""The `[stream]` refusal, reached through an arm (26.432).
+
+	`case 1: u8 body[n];` moves whatever follows the variant exactly as
+	`u8 body[n];` does, and `check_parameters` walked `struct.members`,
+	which an arm is not in. So the member form was refused and the arm form
+	accepted, and C emitted an accessor naming an undeclared `arg_n`.
+
+	Two controls, because one alone would not separate the cases. The
+	member form must still refuse -- otherwise the widening broke the
+	original -- and the `[stream]` form must still be ACCEPTED, or the
+	refusal has stopped being about `[stream]` and started being about
+	arms.
+	"""
+	armed = ("struct armed {{ parameter u8 n{}; u8 pick; "
+	         "variant held switch (pick) {{ case 1: u8 body[n]; "
+	         "case 2: u8 fixed[3]; default: error; }} u8 after; }}")
+
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + armed.format(""))
+	assert "must be `[stream]`" in str(refused.value)
+	# The caret is on the ARM's size expression, not on the variant.
+	assert "case 1" in refused.value.diagnostic.render()
+
+	# Control one: the same parameter moving an ordinary member.
+	with pytest.raises(SituError) as member:
+		parse_text(PREAMBLE + "struct plain { parameter u8 n; "
+		           "u8 body[n]; u8 after; }")
+	assert "must be `[stream]`" in str(member.value)
+
+	# Control two: `[stream]` says it is fixed for a stream, which is
+	# exactly what the refusal asks for -- so this must go through.
+	parse_text(PREAMBLE + armed.format(" [stream]"))
+
+
+def test_a_parameter_cannot_be_declared_in_a_variant_arm() -> None:
+	"""An argument the caller supplies cannot be conditional (26.432).
+
+	The caller supplies it before the discriminant is read, so "this
+	message takes an argument when `pick` is 1" is not something anybody
+	can honour.
+
+	Found by sweeping for the shape 26.430 and 26.423 share, and it was
+	not a missing refusal but a silent DISAGREEMENT: C emitted nothing at
+	all for such a field while C++, Rust and Python emitted an ordinary
+	arm accessor, rereading `parameter u8 n [stream]` as a plain member.
+	Four backends, three answers, and a schema saying something none of
+	them implemented.
+
+	The control is the same declaration among the struct's own members,
+	which is where it belongs and must still go through.
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + "struct pinned { u8 pick; "
+		           "variant held switch (pick) { "
+		           "case 1: parameter u8 n [stream]; "
+		           "case 2: u8 fixed[3]; default: error; } }")
+
+	assert "cannot be declared in a variant arm" in str(refused.value)
+
+	# The control: declared where it applies to every message.
+	parse_text(PREAMBLE + "struct fine { parameter u8 n [stream]; "
+	           "u8 pick; variant held switch (pick) { "
+	           "case 1: u8 body[n]; case 2: u8 fixed[3]; "
+	           "default: error; } }")
+
+
 # -- a constraint declared on a variant ARM (26.414) -------------------------
 
 #: A schema whose two arms are a byte-run enum and a bounded scalar, sharing

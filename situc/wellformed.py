@@ -2614,6 +2614,40 @@ def check_parameters(schema: ast.Schema) -> None:
 	describing the rest of the struct. 14.5's rule pointed the other way.
 	"""
 	for struct in schema.structs():
+		# A `parameter` DECLARED INSIDE AN ARM is refused before anything
+		# else (26.432). An argument is a per-message fact the caller
+		# supplies, and the caller supplies it before the discriminant has
+		# been read -- so "this message takes an argument when `pick` is 1"
+		# is not something anybody can honour.
+		#
+		# Refused rather than ignored, because ignoring it diverged: C
+		# emitted nothing at all for such a field, while C++, Rust and
+		# Python emitted an ordinary arm accessor and so silently reread
+		# the declaration as a plain member. Four backends, three answers,
+		# and a schema saying something none of them implemented.
+		for member in struct.members:
+			if not isinstance(member, ast.Variant):
+				continue
+			for arm in member.arms:
+				held = arm.member
+				if not isinstance(held, ast.Field) or not held.parameter:
+					continue
+				raise error(
+					f"`parameter {held.name}` cannot be declared in a "
+					"variant arm",
+					held.span,
+					f"`{member.name}` selects this arm at run time",
+					[
+						"an argument is a per-message fact the caller "
+						"supplies, and it is supplied before the "
+						"discriminant is read -- so an argument only some "
+						"messages take is one no caller can provide "
+						"(decision 0050)",
+						f"declare `parameter {held.type_ref.name} "
+						f"{held.name};` among the struct's own members, "
+						"where it applies to every message",
+					])
+
 		named = {member.name: member for member in struct.members
 		         if isinstance(member, ast.Field) and member.parameter}
 		if not named:
@@ -2630,7 +2664,13 @@ def check_parameters(schema: ast.Schema) -> None:
 					 "struct-typed one would be a second message, which is "
 					 "what a `relation` is for (decision 0030)"])
 
-		for member in struct.members:
+		# ...and each variant ARM's member, which is not in `struct.members`
+		# (26.432). `case 1: u8 body[n];` moves whatever follows the variant
+		# exactly as `u8 body[n];` does, and this loop could not see it: the
+		# member form was refused and the arm form accepted, so C emitted
+		# `situ_armed_held_body_ptr` naming an undeclared `arg_n`. Third
+		# instance of one shape in a day -- see `_members_and_arms`.
+		for member in _members_and_arms(struct):
 			for moves, what in _moving_expressions(member):
 				for path in paths_in(moves):
 					first = path.partition(".")[0]
