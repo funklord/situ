@@ -19,19 +19,20 @@ from typing import Callable, Protocol
 
 import pytest
 
-from every_schema import ROOT
+from every_schema import ROOT, SCHEMAS, ids
 from situc.codegen.c.emit import generate as generate_c
 from situc.codegen.cpp.emit import generate as generate_cpp
 from situc.codegen.python.emit import generate as generate_py
 from situc.codegen.rust.emit import generate as generate_rs
 from situc.layout import solve
-from situc.parser import parse_text
+from situc.parser import parse, parse_text
 from situc import ast
 from situc.capability import Axis
 from situc.resolve import ResolvedSchema, resolve
-from situc.diagnostics import SituError
+from situc.diagnostics import Source, SituError
 from situc.invariant import BUILTINS, OPERATORS
-from situc.traverse import arm_members, obligations, own_members
+from situc.traverse import (arm_members, classify_check, Check,
+                            obligations, own_members)
 
 PREAMBLE = "target buffer;\nendian big;\nbit_order msb_first;\n"
 
@@ -222,6 +223,69 @@ def _arm_shapes() -> tuple[dict[tuple[str, str, str], int], list[str]]:
 					if cell == ("no-scalar", "not-struct", ""):
 						declined.append(member.path)
 	return dict(cells), sorted(declined)
+
+
+#: The attributes that state something about a member's VALUE or BYTES, as
+#: opposed to its shape. A placement carrying one of these has had a claim
+#: made about it that some description is supposed to enforce.
+STATED = frozenset({
+	"max", "min", "must_eq", "must_be_zero", "must_be_one",
+	"nul_terminated", "encoding",
+})
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_no_schema_states_a_constraint_the_classifier_silences(
+		path: Path) -> None:
+	"""A declared constraint must reach at least one description (26.426).
+
+	`traverse.classify_check` is the shared decision layer: every backend
+	and the packer ask it what a member needs checked, so a member it calls
+	`Check.NOTHING` is checked by NOBODY -- not the four generated
+	backends, not the packed image, and therefore not either walker. A
+	schema that declares a constraint on such a member says something no
+	description enforces, which section 14.5 calls worse than saying
+	nothing.
+
+	**Every instrument this project has is blind to it**, which is why this
+	is asserted rather than left to them. The four-way differential
+	compares backends against each other and the two-walker sweep compares
+	walkers; a decision taken before any of them run makes all six agree,
+	and agreement is what those gates are looking for. Only the classifier
+	itself can be asked.
+
+	Found by a varint: `vl n [max = 100]` is accepted by the compiler, and
+	the literal appears in none of the five generated files, because a
+	varint has no `scalar` and its type name is not a struct's, so
+	`classify_check` falls out at `Check.NOTHING`. The generated header
+	meanwhile promises "Check every constraint this schema states".
+
+	Asserted over the whole corpus rather than over varints, because what
+	is wrong is the STATE -- a claim with no enforcer -- and any type that
+	falls to `NOTHING` while carrying an attribute is in it. It starts
+	green: swept 2026-09-18, no corpus schema has one. That is the point.
+	A population guard over an empty cell is the failure `evidence.md`
+	warns about, so this asserts the population -- classify every
+	placement, and let a member that acquires a silenced constraint arrive
+	as a failure addressed to whoever added it.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	names    = set(resolved.structs)
+
+	silenced = [
+		(placement.path, sorted({a.name for a in placement.attrs} & STATED))
+		for struct in resolved.structs.values()
+		for placement in (entry.placement for entry in struct.entries)
+		if classify_check(struct, placement, names) is Check.NOTHING
+		and {a.name for a in placement.attrs} & STATED
+	]
+
+	assert not silenced, (
+		f"{path.name} states constraints that reach no description at all "
+		f"-- `classify_check` answers NOTHING for these, so no backend, no "
+		f"packed image and neither walker enforces them: {silenced}")
 
 
 def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:

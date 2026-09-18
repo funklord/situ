@@ -30707,6 +30707,229 @@ prove is worse than an absence somebody has written down.**
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.426 EVERY value constraint on a varint is accepted, promised, and checked by nobody
+
+**Found while sweeping the arm shapes, and it is not about arms at all.**
+A varint-typed ORDINARY member carrying a bound:
+
+    varint_type vlen { encoding = leb128; max_bits = 28; max_bytes = 4; }
+
+    struct vmember {
+        vlen  n [max = 100];
+    }
+
+`situc` accepts it without a diagnostic, and **the literal 100 appears
+nowhere in any of the five generated files** -- not the C header or
+source, not the C++ header, not the Rust module, not the Python module.
+`situ_vmember_check` is `(void)view; return SITU_OK;`.
+
+**Swept by type rather than sampled, which moved the claim.** The first
+version of this entry said `[max]`; a fixture giving every type a
+DISTINCT bound and grepping the generated C for each says it is wider
+and narrower at once:
+
+    u8  [max = 101]              reaches the code
+    u16 [max = 102]              reaches the code
+    enum [max = 103]             reaches the code
+    decimal u16 text[4] [105]    reaches the code
+    u4 bit field [max = 11]      reaches the code
+    varint [max = 104]           ABSENT
+    varint [min = 107]           ABSENT
+    varint [must_eq = 108]       ABSENT
+
+So it is not one attribute, it is **every value constraint on a varint**;
+and it is not a general weakness in bounds, since every other type
+carries its own. A distinct literal per member is what makes that a grep
+rather than a reading.
+
+**The generated header promises otherwise, in its own words**, a few
+lines above that function:
+
+    /** Check every constraint this schema states: [must_eq], [max], ...
+
+So the artifact states the guarantee it is not providing, which is worse
+than the silence: a reader checking whether their bound is enforced finds
+a comment saying it is.
+
+**Wider than the arm gaps around it.** 26.423 and 26.424 need an arm to
+reach; this needs only a varint with a bound, which is an ordinary thing
+to write -- MQTT's `remaining_length` is a varint and the standard's own
+limit on it is exactly a maximum. The corpus does not carry one, because
+`example/mqtt` expresses its ceiling as `max_bits`/`max_bytes` on the
+varint TYPE, which is a different statement: those bound the encoding,
+this bounds the value.
+
+**Consistent across all four, so no gate can report it**, which is the
+same structural blindness as 26.423. The differential compares backends
+against each other; four silences agree.
+
+**And they agree because ONE line tells them to**, which is a better
+finding than four backends independently forgetting. `classify_check` in
+`traverse.py` -- the shared decision layer, which exists precisely
+because three backends once shipped the same two bugs -- ends with:
+
+    if placement.scalar is None:
+        return (Check.NESTED if placement.type_name in structs
+                else Check.NOTHING)
+
+A varint has no `scalar`, and its `type_name` is the varint TYPE's name
+rather than a struct's, so it falls out as `Check.NOTHING`. Every backend
+then faithfully emits nothing, and each is right to: they are obeying the
+module whose whole purpose is to answer this question once.
+
+Measured directly, the same three members that reach no generated code:
+
+    bits.vn  varint='vl' scalar=False attrs=['max']      classify=NOTHING
+    bits.vm  varint='vl' scalar=False attrs=['min']      classify=NOTHING
+    bits.ve  varint='vl' scalar=False attrs=['must_eq']  classify=NOTHING
+
+**It reaches SIX descriptions, not four**, because `pack.py` asks the
+same function. The packed image for that fixture carries the bit field's
+bound and nothing for any varint:
+
+    bits.nib  constraints=[(2, 11)]     <- u4 [max = 11]
+    bits.vn   constraints=None          <- varint [max = 104]
+    bits.vm   constraints=None          <- varint [min = 107]
+    bits.ve   constraints=None          <- varint [must_eq = 108]
+
+So both walkers are silent too -- and silent in AGREEMENT with the four,
+which is why neither the four-way differential nor the two-walker sweep
+can see it. Every instrument this project has for catching a description
+that disagrees is defeated by a decision taken before any of them run.
+
+So the fix is one line of classification, four renderings and a packer
+row, not four independent repairs -- and the renderings are plumbing,
+since each backend already emits an accessor that decodes the value.
+**Asking the shared layer what it thinks is what turned a four-backend
+report into a one-line one**, and it is the first thing to try whenever
+all four agree on something wrong. The corollary is the uncomfortable
+one: `traverse.py` exists so that a decision is made once, and a wrong
+decision made once is wrong in six places with nothing left to disagree
+with it.
+
+**Zero in the corpus, which is why nothing fired.** Swept every
+placement of every schema in `example/`, `std/` and `test/schema/`,
+asking `classify_check` for its verdict and comparing against the value
+attributes the placement carries: **no corpus schema has a constraint the
+classifier silences.** So the tree is self-consistent today and the gap
+is latent -- reachable by writing one varint with a bound, which nobody
+has.
+
+**That sweep is a test waiting to be written**, and a better one than a
+fixture for varints specifically. A schema whose declared constraint
+reaches no description is exactly the state section 14.5 forbids, and it
+is decidable from the resolved layout without generating anything:
+classify to `NOTHING` while carrying a value attribute, and the schema
+says something no description enforces. As a population guard it starts
+green over the whole corpus and refuses the next member that acquires
+one -- which is what the varint case needed and did not have.
+
+**Seen to fail before being believed.** Pointed at a schema carrying the
+three varint members, it names them and their attributes:
+
+    w2.situ states constraints that reach no description at all:
+    [('bits.vn', ['max']), ('bits.vm', ['min']), ('bits.ve', ['must_eq'])]
+
+while all 41 corpus schemas stay green in the same run. A guard that has
+only ever been green has no demonstrated ability to be anything else, and
+this one starts green BY CONSTRUCTION -- which is the shape that needs
+the sabotage rather than the shape that excuses it.
+
+**Not fixed here, and the reason is the same question 26.423 raises.**
+Either the four learn to check a varint's value bounds -- the value is
+decoded by an accessor that already exists, so this is plumbing rather
+than design -- or `situc` refuses the attribute on a varint the way it
+refuses `[must_be_zero]` on an ordinary field. What must not stand is the
+third state it is in now: accepted, documented as checked, and enforced
+nowhere.
+
+### 26.424 A `[since]` arm judges a version-1 message by a version-2 rule
+
+**All four backends refuse a message for breaking a rule that does not
+apply to it**, and they agree, so nothing compares them and notices.
+
+    struct sinced [version = ver] {
+        u8   ver;
+        u8   kind;
+        variant held switch (kind) {
+            case 1:  u8  a [must_eq = 7];
+            case 2:  u8  b [since = 2, must_eq = 9];
+            default: error;
+        }
+    }
+
+Compiled and run, C and Python measured, C++ and Rust read:
+
+    ver=1 kind=2 byte=5   REFUSED   <- `b` is [since = 2]; absent at v1
+    ver=2 kind=2 byte=9   ok
+    ver=2 kind=2 byte=5   refused   <- correct
+
+**The first row is a version-1 peer's perfectly good message called
+malformed.** That is the failure `[since]` exists to prevent: the
+construct is append-only precisely so that an older message stays valid.
+
+**The arm's getter gates on the discriminant and not on the version.**
+The ORDINARY member's accessor does both, and its generated check says
+why in as many words -- *"a message older than that does not carry it,
+and a field that is not there is not a field that is wrong"*. An arm's
+getter carries only the `kind` test. So the constraint behind `[since]`
+is asked of a message that never claimed to have the field.
+
+**Invisible to every gate, like 26.423 and unlike 26.422.** All four
+backends do the same wrong thing, so the four-way differential sees
+agreement; the packed image carries `since` per placement and the walkers
+read it for members, so a corpus entry would surface the walkers
+disagreeing with the four -- but only if a schema had one, and none does.
+
+**The shape of the fix is settled elsewhere in the same emitters**, which
+is what makes this a wiring gap rather than a question: the member
+accessor already emits the version test, and the arm accessor already
+emits a gate. It needs the two composed, and the arm's `SITU_ERR_VERSION`
+already means exactly "not for this message" in both senses.
+
+### 26.423 A DELIMITED arm's encoding is enforced by nobody, and no gate can say so
+
+**The same sweep that found 26.422 found a second shape, and this one
+does not disagree with itself.** A delimited run carrying an encoding:
+
+    case 1:  u8  line[] until "\n" [encoding = utf8];
+
+Measured across all four backends, against the identical member for
+comparison:
+
+    backend   ARM   MEMBER
+    C          0      1
+    C++        0      1
+    Rust       0      1
+    Python     0      1
+
+**Consistently silent, which is worse than 26.422's disagreement for one
+specific reason: nothing can catch it.** The four-way differential
+compares the backends against each other and they agree; the two-walker
+sweep compares walkers, and the packer writes no row either. A schema
+that says `[encoding = utf8]` about a delimited arm is a claim no
+description enforces and no gate reports -- which is precisely what
+section 14.5 calls worse than saying nothing, arriving through a
+construct rather than through an oversight in one emitter.
+
+**So the remedy is not another differential case.** Either the four learn
+to check it, gated the way 26.422's shapes now are, or `situc` refuses
+the attribute in that position the way it already refuses `[must_be_zero]`
+on an ordinary field and `[encoding]` on a scalar. **The second is a
+one-line diagnostic and the first is four branches**, and which is right
+is a question about the language rather than about the emitters: a
+delimited arm is a perfectly sensible thing to want an encoding on.
+
+**An instrument note, because it nearly became a false finding.** The
+first fixture wrote `u8 line until "\n"` without the brackets, which
+parses as a SCALAR -- and `situc` refused it with *a single scalar has no
+text to have an encoding*, correctly. Read quickly that looks like the
+compiler failing to recognise a delimited run, and it is the compiler
+being right about a schema that was wrong. The spelling is `u8 line[]
+until "\n"`, which `edges.situ` has used since the construct landed.
+Suspecting the instrument first is what turned a reported defect into a
+corrected fixture.
+
 ### 26.425 The corpus entry caught the walkers lagging, on the first draw
 
 **26.422 fixed four descriptions and left two behind, and the gate said so
