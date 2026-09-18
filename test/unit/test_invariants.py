@@ -175,7 +175,7 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                21,
+	("scalar", "not-struct", ""):                23,
 	("no-scalar", "struct", "fixed"):            48,
 	("no-scalar", "struct", "unmeasurable"):     23,
 	("no-scalar", "not-struct", ""):              1,
@@ -294,21 +294,20 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 
 	`_arm_member` declines an arm with `if structs.get(type_name) is None`,
 	and 26.209 restricted the offset accessor to a *struct* arm on the
-	strength of that reading. The condition's text names **20** of the
-	corpus's 88 arm members -- every one whose type is not a struct. What it
-	means is the last cell alone, and it behaves correctly on the other 19
+	strength of that reading. The condition's text names **24** of the
+	corpus's 95 arm members -- every one whose type is not a struct. What it
+	means is the last cell alone, and it behaves correctly on the other 23
 	only because three scalar branches return before control reaches it.
 
-	Those counts are the kind that rot, and they have SIX times in one day
-	-- 12 of 70, 13 of 81, 15 of 83, 17 of 85, 20 of 88, 22 of 90 -- as
-	`edges` gained a parameterised variant, `signed_kind`'s constrained
-	arms, `typed_kind`'s enum-typed one, `spanned_arm`'s three
-	span-constrained ones and `versioned_arm`'s two, and `example/sexpr`
-	arrived with three unmeasurable struct arms, all on 2026-09-18. Six
-	rots in a day is the argument for asserting the census rather than for
-	writing better prose. Four rots in a day is the argument for the assertion below
-	rather than for better prose: they are re-derivable from
-	`_arm_shapes()` in one call, which is why the
+	Those counts are the kind that rot, and they have SEVEN times in one
+	day -- 12 of 70, 13 of 81, 15 of 83, 17 of 85, 20 of 88, 22 of 90, now
+	24 of 95 -- as `edges` gained a parameterised variant, `signed_kind`'s
+	constrained arms, `typed_kind`'s enum-typed one, `spanned_arm`'s three
+	span-constrained ones, `versioned_arm`'s two and `delimited_arm`'s two,
+	and `example/sexpr` arrived with three unmeasurable struct arms, all on
+	2026-09-18. Seven rots in one day is the whole argument for asserting
+	the census rather than for writing better prose: the numbers are
+	re-derivable from `_arm_shapes()` in one call, which is why the
 	assertion below is on the census rather than on the prose -- and why
 	correcting them here is bookkeeping rather than a finding.
 

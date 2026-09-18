@@ -742,6 +742,46 @@ struct varint_driver {
 	u16          tail;
 }
 
+// A DELIMITED member as a variant ARM (26.423), which the file has had the
+// halves of for as long as it has had both constructs.
+//
+// It answered ONE BYTE. `u8 line[] until "\n"` has a scalar and no
+// `array_count`, so it satisfied the scalar branch of every arm emitter and
+// got a one-byte getter: over `"hello\n"` the arm handed back 104 -- the
+// letter `h` -- where the identical member hands back a five-byte span. Not
+// one of the four arm emitters mentioned delimiters at all, so all four did
+// it and all four agreed, which is why no differential could see it.
+//
+// Three accessors now, as a delimited member has: `_len` and `_span`
+// ungated, because the extent arithmetic reaches them only inside its own
+// test on the discriminant and a length has no room to say VERSION; and the
+// bytes through the gated accessor that refuses the arm that is not present.
+//
+// And `[encoding]` ON THE ARM, which is the check half of the same entry.
+// It reached nobody: a delimited member's checks are written by each
+// backend's delimiter-check helper, and every one of those opens by dropping
+// a dotted path. That is right for an element inside a run -- it is checked
+// under the element's own struct -- and wrong for an arm, which no other
+// route reaches. So all four were silent, all four agreed, and the schema
+// stated a constraint no description enforced, which section 14.5 calls
+// worse than stating nothing.
+//
+// Gated rather than dropped, which is the answer this tree has now reached
+// four times: the answer to a check asked unconditionally is to ask it
+// conditionally, not to delete it.
+struct delimited_arm {
+	u8 pick;
+	variant held switch (pick) {
+		case 1:  u8  line[] until "\n" [encoding = utf8];
+		case 2:  u8  fixed[3];
+		default: error;
+	}
+
+	// After the variant, so an arm framed at the wrong width shows up here
+	// as a wrong byte rather than as bytes nobody reads back.
+	u8  after;
+}
+
 // A VARINT CARRYING BOUNDS ON ITS VALUE (26.426), which the file has had
 // the halves of since `edge_varint` landed and never the product.
 //

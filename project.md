@@ -31106,13 +31106,13 @@ says a varint stands here and the bytes do not hold one, which is
 malformed. All four propagate the read's own error now, and answer BOUNDS
 where the walkers do.
 
-**What remains is the question 26.423 raises.** Either the four learn to
-check a varint's value bounds -- the value is
-decoded by an accessor that already exists, so this is plumbing rather
-than design -- or `situc` refuses the attribute on a varint the way it
-refuses `[must_be_zero]` on an ordinary field. What must not stand is the
-third state it is in now: accepted, documented as checked, and enforced
-nowhere.
+**Answered the same way 26.423 answered it: the four learned to check.**
+The value is decoded by an accessor that already existed, so this was
+plumbing rather than design, and the alternative -- `situc` refusing the
+attribute on a varint the way it refuses `[must_be_zero]` on an ordinary
+field -- would have narrowed the language to spare the emitters. What did
+not stand is the third state this was in: accepted, documented as checked,
+and enforced nowhere.
 
 ### 26.424 A `[since]` arm judges a version-1 message by a version-2 rule
 
@@ -31190,7 +31190,175 @@ arm as a wrong byte the way the other entries do, and `situc` refused it:
 of version 1 may not follow one of version 2. The diagnostic is right and
 the entry carries no trailing member.
 
-### 26.423 A DELIMITED arm's encoding is enforced by nobody, and no gate can say so
+### 26.423 A DELIMITED arm answered one byte, and four copies of one right line dropped its checks
+
+**THIS ENTRY HAD THE DEFECT WRONG, and the correction is worth more than
+what it said.** It reported that a delimited arm's `[encoding]` reaches no
+description. True, and the smaller half. Measured afterwards over
+`"hello\n"`:
+
+    ARM     held_line -> 104          one byte, the letter `h`
+    MEMBER  line      -> memoryview   line_len -> 5
+
+**The arm was not recognised as delimited at all.** `u8 line[] until "\n"`
+has a `scalar` and no `array_count`, so it satisfied the scalar branch of
+every arm emitter and got a one-byte getter. Not one of the four arm
+emitters mentioned delimiters anywhere -- so all four did it, and all four
+agreed, which is why no differential could see it. The encoding was
+unchecked because there was nothing recognised to check.
+
+**Fixed: a delimited arm answers its span.** Three accessors in each
+backend, as a delimited member has. `_len` and `_span` are UNGATED, which
+was checked rather than assumed: the generated extent arithmetic reaches
+them only inside its own test on the discriminant -- `kind == 1 ?
+held_line_span(view) : ...` -- so the scan never runs for an arm the
+message did not select. They could not gate anyway, a length being a bare
+`uint32_t` with nowhere to put `SITU_ERR_VERSION`, which is exactly why
+the value comes out through the gated accessor's parameters.
+
+**`_span` surfaced only by failing to compile.** The design was one `_ptr`
+accessor; emitting it alone broke the C build, because `_required` calls
+`held_line_span` for its extent arithmetic. A backend that had not needed
+it would have shipped the incomplete set.
+
+**Both walkers needed nothing**, checked and not assumed: C and the Python
+walk already frame a delimited arm identically -- 8 and 5 bytes on the two
+probe documents. That is three times the walkers were already right
+against twice they lagged, so the rule cuts both ways.
+
+**THE CHECK HALF IS CLOSED, and the cause was one line repeated four
+times.** Every backend writes a delimited member's checks in a delimiter-
+check helper, and every one of those helpers opens by dropping a dotted
+path:
+
+    if "." in placement.path[len(struct.name) + 1:]:
+        return []       # checked under the element's own struct
+
+The comment is true and the line is right -- for an element inside a run,
+whose members are checked under the element's own struct. **An arm is not
+an element, and no other route reaches it.** So a delimited arm's
+terminator, its `[encoding]` and its token set were all dropped, in four
+backends, by four copies of one correct sentence applied to a case it did
+not mean.
+
+Gated rather than dropped, which is the fourth time this tree has written
+that sentence: the answer to a check asked unconditionally is to ask it
+conditionally, not to delete it.
+
+**Four things had to move, and only the first was the one this entry was
+about.**
+
+  - THE CHECK, in all four backends, behind the discriminant.
+  - A `_terminated` ACCESSOR, which a delimited member has had all along
+    and an arm had none of -- so the arm's own check had nothing to ask.
+    C, C++ and Rust each gained one; Rust gained an ungated `_raw` beside
+    it, because its member checks name `_raw` and the arm's gated getter
+    answers `Result`.
+  - THE ARM'S EXTENT in C++ and Rust. `_length_expression` has no
+    delimiter case, so the extent chain returned None and `delimited_arm.
+    after` reported *its offset cannot be resolved* -- in those two
+    backends only, C having named the span accessor there all along. One
+    declined member, and the differential driver named it and did not
+    compile.
+  - THE DIFFER'S OWN PROBE. A delimited arm names no count, so it fell
+    past every byte-run clause to the scalar probe, and the driver asked
+    for a `_get` taking an out-parameter of a member whose accessor is a
+    pointer and a length. **That is why 26.423's first half went unseen:
+    the four backends were never asked about a delimited arm at all.**
+
+**Then the packer and both walkers**, which the corpus entry caught on the
+first draw exactly as 26.425 predicted it would: `walker: 1  C: 2`, the
+walk reporting the FOLLOWING member out of bounds where C reported this
+one's missing delimiter. The packer writes the member path's own two rows
+keyed by the arm's placement; both walkers read them, terminator first,
+because that is the order C emits and the terminator decides whether
+there is a content span to ask anything else about.
+
+**`edges.delimited_arm` carries `[encoding = utf8]` now**, which the entry
+above says it deliberately did not.
+
+**READING GENERATED TEXT IS NOT COMPILING IT, and this cost three rounds.**
+The C check was inspected by eye, looked right, and named
+`situ_..._terminated` and a one-argument `_ptr` -- one function that did
+not exist and one whose signature is `(view, const uint8_t **out,
+uint32_t *len)`, because an arm's getter needs somewhere to put
+`SITU_ERR_VERSION` and a member's does not. C++ then named
+`held_line_offset()` for the same reason. Both were found by the build,
+not by the reading, and the reading had been careful. **A generated
+function call is a claim about another file**; the compiler is the cheap
+instrument that checks it, and it was two commands away the whole time.
+
+**AND COMPILING IT IS NOT RUNNING IT, which is the same lesson one step
+further and cost a fourth round.** With C, C++ and Rust building, the work
+looked done. Python built too -- and Python builds a MODULE, so a name
+that does not exist is not an error until something reaches the line:
+
+    AttributeError: 'delimited_arm' object has no attribute
+                    'held_line_terminated'
+
+The other three each refused to build until the accessor existed. Python
+imported clean, and the gap waited for a message. **So "it builds" is
+evidence about three backends and about none of Python**, and the asymmetry
+is structural rather than a property of this change: an accessor set is a
+claim about another file, three of the four have a compiler to check the
+claim, and the fourth has only the message.
+
+What found it was a four-line probe over a hand-built buffer, and the same
+probe is the positive control this entry would otherwise be missing:
+
+    case              C  C++  Rust   Py      (0 ok, 2 constraint)
+    valid utf8        0    0     0    0
+    invalid utf8      2    2     2    2
+    no delimiter      2    2     2    2
+    other arm         0    0     0    0
+
+The last row is the one that makes the other three mean anything: with
+`pick = 2` the check is not applied at all, so the gate is doing its job
+rather than the checks being unconditional. **A check is untested until it
+has been seen to fail, and a gated check is untested until it has also
+been seen to stay quiet.**
+
+**A PARTIAL PORT IS WORSE THAN THE GAP, caught before it was committed
+and only because the shape was constructed deliberately.** C and C++ have
+their arm checks written by hand, for the accessor reason above; Python and
+Rust reuse the member's helper behind a flag. Those helpers also check a
+TEXT NUMBER -- the digits parse, the `[min]`, the `[max]` -- against the
+member's parsed value. An arm's accessor of that name answers its BYTES.
+
+    struct radix_arm {
+        u8 pick;
+        variant held switch (pick) {
+            case 1:  decimal u32 num[] until "," max 4 [min = 200, max = 599];
+            case 2:  u8  fixed[3];
+            default: error;
+        }
+        u8  after;
+    }
+
+Generated for that schema, Python wrote `if self.held_num < 200:` against a
+`bytes` -- a `TypeError` waiting for a message -- while C emitted no such
+comparison at all. **Before this entry all four checked NOTHING on a
+delimited arm, so they agreed.** Half-porting the member's checks would have
+replaced an honest four-way silence with a three-way disagreement and one
+backend that crashes, in a shape no corpus schema carries and no gate could
+therefore report.
+
+All four decline the value checks on a delimited arm now, and all four check
+its terminator, its encoding and its token set. **The corpus does not carry
+this shape and should**: the differ's own probe would need teaching first,
+because a `decimal u32` arm is neither a byte run nor an indexed run to it
+and falls through to the scalar probe -- the same hole that hid the first
+half of this entry. Recorded rather than done, because it is the differ's
+question rather than this one's.
+
+**And one thing believed dead was not.** An `_encoding_check` branch added
+earlier for this entry was measured across the whole corpus -- 39 schemas,
+byte-identical with it removed, including the one schema written to
+exercise it -- and recorded as dead code. It was: the member's route
+served every case that then existed. The moment the arm stopped reusing
+the member's accessors it became the only thing that could write the arm's
+check. **A measurement of reachability is a measurement of today's callers**,
+and it was correct and expired within the hour.
 
 **The same sweep that found 26.422 found a second shape, and this one
 does not disagree with itself.** A delimited run carrying an encoding:
@@ -31215,13 +31383,14 @@ description enforces and no gate reports -- which is precisely what
 section 14.5 calls worse than saying nothing, arriving through a
 construct rather than through an oversight in one emitter.
 
-**So the remedy is not another differential case.** Either the four learn
-to check it, gated the way 26.422's shapes now are, or `situc` refuses
-the attribute in that position the way it already refuses `[must_be_zero]`
-on an ordinary field and `[encoding]` on a scalar. **The second is a
-one-line diagnostic and the first is four branches**, and which is right
-is a question about the language rather than about the emitters: a
-delimited arm is a perfectly sensible thing to want an encoding on.
+**The remedy was the first of the two this entry offered**: the four learn
+to check it, gated the way 26.422's shapes are. The alternative was for
+`situc` to refuse the attribute in that position, as it already refuses
+`[encoding]` on a scalar -- a one-line diagnostic against four branches.
+It was the wrong trade, and the reason is the one the entry itself gave: a
+delimited arm is a perfectly sensible thing to want an encoding on, so
+refusing it would have answered a question about the emitters by narrowing
+the language.
 
 **An instrument note, because it nearly became a false finding.** The
 first fixture wrote `u8 line until "\n"` without the brackets, which

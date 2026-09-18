@@ -2638,6 +2638,10 @@ class Emitter:
 		said `int` until 26.420, so an arm and a member of the same enum
 		type disagreed about what they returned.
 		"""
+		# A delimited arm hands back its span, not a number (26.423). Tested
+		# before the scalar shape below, which it otherwise matches.
+		if placement.delimiters and scalar is not None:
+			return "memoryview"
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None:
 			if placement.type_name in self.enums:
@@ -2746,6 +2750,78 @@ class Emitter:
 		# sentence 26.47 wrote about the ordinary member dispatch, in the
 		# parallel one an arm has. It is a named predicate rather than a
 		# condition here because `validate` asks it too (26.414).
+		# A DELIMITED ARM (26.423), before the scalar branch below, which it
+		# otherwise satisfies: `u8 line[] until "\n"` has a `scalar` and no
+		# `array_count`, so it took that branch and answered ONE BYTE -- 104
+		# for `"hello\n"`, the letter `h` -- where the identical member
+		# answers a five-byte memoryview. Not one of the four arm emitters
+		# mentioned delimiters at all.
+		#
+		# Three accessors, as the member has: `_len` and `_span` ungated,
+		# because the extent arithmetic reaches them only inside its own
+		# test on the discriminant; and the bytes through a gated property
+		# that raises `VersionError` for the arm that is not present.
+		if placement.delimiters and placement.scalar is not None:
+			if len(placement.delimiters) > 1:
+				return [*head, f"\t\t# ...and `{placement.name}` ends at one"
+				        " of several delimiters,", "\t\t# which this backend"
+				        " does not scan for inside an arm yet.",
+				        "\t\traise VersionError(\"unreachable\")"]
+			delim = placement.delimiter
+			at    = self._offset_expression(struct, placement)
+			if at is None:
+				return [*head, f"\t\t# ...and `{placement.name}` starts where"
+				        " this backend cannot resolve.",
+				        "\t\traise VersionError(\"unreachable\")"]
+			return [
+				*head,
+				f"\t\tstart = {at}",
+				f"\t\tstop  = start + self.{name}_len",
+				"\t\treturn self._msg.buffer[self._at + start:"
+				"self._at + stop]",
+				"",
+				"\t@property",
+				f"\tdef {name}_len(self) -> int:",
+				f'\t\t"""To the first {delim!r}, or the whole run."""',
+				f"\t\treturn scan(self._msg.buffer[self._at + ({at}):],",
+				f"\t\t\tmax(0, self._len - ({at})), {delim!r})",
+				"",
+				"\t@property",
+				f"\tdef {name}_span(self) -> int:",
+				'\t\t"""Content plus the delimiter: where the next member',
+				"\t\tstarts. Where the delimiter is missing there is nothing",
+				'\t\tto add -- the arm ran to the end of the frame."""',
+				f"\t\tcontent = self.{name}_len",
+				f"\t\treturn content + ({len(delim)}"
+				f" if content < max(0, self._len - ({at})) else 0)",
+				"",
+				# The delimiter is THERE, and the content UNGATED. A
+				# delimited member has had both all along and an arm had
+				# neither, so the arm's own checks named two properties
+				# nothing defined (26.423). Found by running the generated
+				# module, not by reading it: this backend raises
+				# `AttributeError` at the call rather than failing to
+				# compile, so it is the one of the four where the gap
+				# survives every build and waits for a message.
+				"\t@property",
+				f"\tdef {name}_terminated(self) -> bool:",
+				'\t\t"""Whether the delimiter is within the frame: one that',
+				"\t\tdoes not hold it was cut short, and the scan above",
+				'\t\tstopped at the end rather than at the member\'s end."""',
+				f"\t\treturn self.{name}_len < max(0, self._len - ({at}))",
+				"",
+				"\t@property",
+				f"\tdef {name}_raw(self) -> bytes:",
+				'\t\t"""The content, ungated -- what the arm\'s own checks',
+				"\t\tread. The gated property beside it is the caller's and",
+				"\t\traises for the arm that is not present; a check already",
+				'\t\tinside its own discriminant test has no use for that."""',
+				f"\t\tstart = {at}",
+				f"\t\tstop  = start + self.{name}_len",
+				"\t\treturn bytes(self._msg.buffer[self._at + start:"
+				"self._at + stop])",
+			]
+
 		if self._scalar_arm(struct, placement):
 			assert scalar is not None		# `_scalar_arm` asked it
 			# The arm question and the frame question are two. A struct's
@@ -5823,14 +5899,19 @@ class Emitter:
 		return lines
 
 	def _delimiter_check(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+			placement: Placement, for_arm: bool = False) -> list[str]:
 		"""The delimiter is there, and a text number's digits are digits.
 
 		Terminated first, and deliberately: for a frame cut short before the
 		digits both are wrong, and "this frame stops early" is the more useful
 		of the two answers. C reports it in that order and so does this.
 		"""
-		if "." in placement.path[len(struct.name) + 1:]:
+		# `for_arm`: an ARM's delimited member is not a dotted path this
+		# should drop (26.423). The line below reads as "an element's members
+		# are checked under the element's own struct", which is true -- and
+		# an arm is not an element. `_arm_validation` asks for the lines and
+		# gates them, the way it already does for a pinned span and a run.
+		if not for_arm and "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
 
 		name  = py_name(local_name(struct, placement))
@@ -5865,6 +5946,20 @@ class Emitter:
 		else:
 			lines.extend(self._declared_encoding_check(
 				struct, placement, named, f"self.{name}_raw"))
+
+		# A TEXT NUMBER on an ARM is out of scope here, and saying so is
+		# what keeps the four agreeing (26.423). The blocks below read the
+		# member's parsed `self.{name}`; an arm's property of that name
+		# answers its BYTES, so reusing them generated `self.held_num < 200`
+		# against a `bytes` -- a TypeError waiting for a message, and a
+		# divergence besides, C and C++ writing their arm checks by hand and
+		# emitting no such comparison. Before this entry all four checked
+		# NOTHING on a delimited arm, so they agreed; a partial port is the
+		# one outcome worse than the gap. The terminator, the encoding and
+		# the token set above are checked for a radix arm; its value is not,
+		# by all four alike.
+		if for_arm and placement.radix is not None:
+			return lines
 
 		if placement.radix_minimal:
 			# The *digits*, which is what the predicate reads. This passed
@@ -6176,6 +6271,29 @@ class Emitter:
 				f"\t\tif {present}:",
 				*[f"\t{one}" for one in bound],
 				*[f"\t{one}" for one in inner],
+			]
+
+		# A DELIMITED arm: its terminator, its `[encoding]`, its token set
+		# (26.423). The member's own check, wrapped, for the same reason the
+		# two branches around it wrap rather than rewrite.
+		#
+		# It had nothing at all, in every backend. A delimited member's
+		# checks are written by `_delimiter_check`, and that function drops
+		# a dotted path -- correctly, for an element inside a run, and
+		# wrongly for an arm, which is not reached by any other route. So a
+		# schema could declare `[encoding = utf8]` on an arm and no
+		# description of six enforced it, while `edges` carried a delimited
+		# arm and an encoded member for months and never the two together.
+		if placement.delimiters:
+			inner = self._delimiter_check(struct, placement, for_arm=True)
+			if not inner:
+				return []
+			return [
+				f"\t\t# {placement.path}: checked where the discriminant",
+				"\t\t# selects this arm, and nothing to check where it does",
+				"\t\t# not.",
+				f"\t\tif {present}:",
+				*[f"\t{one}" if one.strip() else one for one in inner],
 			]
 
 		# A RUN arm's span constraints -- a terminator, a declared encoding

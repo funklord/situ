@@ -2772,6 +2772,91 @@ class Emitter:
 		# and got a getter for the first element. The same sentence 26.47
 		# wrote about the ordinary member dispatch, in the parallel one an
 		# arm has.
+		# A DELIMITED ARM (26.423), before the scalar branch below, which it
+		# otherwise satisfies: `u8 line[] until "\n"` has a `scalar` and no
+		# `array_count`, so it took that branch and got a ONE-BYTE getter.
+		# Measured over `"hello\n"`, the arm answered 104 -- the letter `h`
+		# -- where the identical member answers a five-byte span. Not one of
+		# the four arm emitters mentioned delimiters at all, so all four did
+		# it, and they agreed.
+		#
+		# The `_ptr` shape a fixed-count byte-run arm already gets, with the
+		# length coming from a scan rather than a constant: pointer and
+		# length out through parameters, because the gate needs an error
+		# return and `_len` hands back a bare `uint32_t` that cannot carry
+		# one.
+		if placement.delimiters and scalar is not None:
+			if len(placement.delimiters) > 1:
+				return [*head, f"/* ...and `{placement.name}` ends at one of"
+				        " several delimiters,", "   which this backend does"
+				        " not scan for inside an arm yet. */"]
+			delim  = placement.delimiter
+			bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+			sym    = ident(self.prefix, struct.name, local, "delim")
+			scan   = ident(self.prefix, struct.name, local, "len")
+			span_fn = ident(self.prefix, struct.name, local, "span")
+			term_fn = ident(self.prefix, struct.name, local, "terminated")
+			at     = self._base_expression(struct, placement, gated=False)
+			return [
+				*head,
+				f"static const uint8_t {sym}[{len(delim)}] = {{{bytes_}}};",
+				"",
+				# UNGATED, and that is safe for the reason the extent
+				# arithmetic is: `_required` reaches these only inside its
+				# own test on the discriminant -- `kind == 1 ?
+				# held_line_span : ...` -- so the scan never runs for an arm
+				# the message did not select. They could not gate anyway: a
+				# length is a `uint32_t` with no room to say
+				# `SITU_ERR_VERSION`, which is why the value itself comes
+				# out through `_ptr`'s parameters instead.
+				f"static inline uint32_t {scan}(situ_view_t view)",
+				"{",
+				f"\treturn situ_scan(situ_base(view) + {at},",
+				f"\t\tsitu_remaining_u32(view.limit, {at}), {sym},"
+				f" {len(delim)}u);",
+				"}",
+				"",
+				"/* Content plus the delimiter: where the next member starts.",
+				" * Where the delimiter is missing there is nothing to add --",
+				" * the arm ran to the end of what the view holds. */",
+				f"static inline uint32_t {span_fn}(situ_view_t view)",
+				"{",
+				f"\tconst uint32_t content = {scan}(view);",
+				"",
+				f"\treturn content + (content < situ_remaining_u32(view.limit,"
+				f" {at})",
+				f"\t\t? {len(delim)}u : 0u);",
+				"}",
+				"",
+				# The delimiter is THERE, which is what separates a complete
+				# frame from one cut short. A delimited member has had this
+				# accessor all along and an arm had none, so the arm's own
+				# check had nothing to ask (26.423). Ungated for the same
+				# reason `_len` is, and a `bool` could not carry
+				# `SITU_ERR_VERSION` even if it wanted to. `int` rather
+				# than `bool` to match the member's, whose spelling is the
+				# one this header's includes support.
+				"/* Whether the delimiter is within the view: a frame that does",
+				" * not hold it was cut short, and the scan above stopped at",
+				" * the end rather than at the end of the member. */",
+				f"static inline int {term_fn}(situ_view_t view)",
+				"{",
+				f"	return {scan}(view) < situ_remaining_u32(view.limit,"
+				f" {at});",
+				"}",
+				"",
+				f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'ptr')}"
+				"(situ_view_t view, const uint8_t **out, uint32_t *len)",
+				"{",
+				f"\tif ({test}) {{",
+				"\t\treturn SITU_ERR_VERSION;",
+				"\t}",
+				f"\t*out = situ_base(view) + {at};",
+				f"\t*len = {scan}(view);",
+				"\treturn SITU_OK;",
+				"}",
+			]
+
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None \
 				and not data_sized(placement):
@@ -8528,14 +8613,59 @@ class Emitter:
 		# because the map names them, and carrying the delimiter through so
 		# the map reads consistently brought them into this loop as well.
 		if placement.delimiters:
-			if "." in placement.path[len(struct.name) + 1:]:
-				return []
 			# A token set rides on the delimiter check rather than replacing
 			# it: the two say different things, and both can fail. A frame
 			# with no delimiter is truncated, and a complete frame holding a
 			# word nobody declared is a constraint (0055).
-			return [*self._delimiter_check(struct, placement),
-			        *self._token_check(struct, placement)]
+			if "." not in placement.path[len(struct.name) + 1:]:
+				return [*self._delimiter_check(struct, placement),
+				        *self._token_check(struct, placement)]
+
+			# A DELIMITED ARM used to `return []` here (26.423), which is
+			# the whole of why its `[encoding]` reached nobody: the line
+			# read as "an arm's members belong to the arm" and meant "check
+			# nothing". Gated rather than dropped, which is the answer this
+			# file has reached four times now -- the answer to a check asked
+			# unconditionally is to ask it conditionally, not to delete it.
+			#
+			# Written here rather than by reusing `_delimiter_check`, and
+			# that is not a preference: a MEMBER's `_ptr` hands back a bare
+			# pointer, while an ARM's takes the pointer and the length out
+			# through parameters so that the gate has somewhere to put
+			# `SITU_ERR_VERSION`. The member's lines name a function of the
+			# same name and a different signature, so reusing them compiled
+			# on nobody's machine -- measured, after reading the generated
+			# text and believing it.
+			if arm_of(struct, placement) is None:
+				return []
+			guard = self._arm_guard(struct, placement)
+			if guard is None:
+				return []
+			test, _name = guard
+			term = (ident(self.prefix, struct.name,
+			              c_name(self._local(struct, placement)), "terminated")
+			        if must_be_terminated(placement) else None)
+			inner = [
+				*([f"\t/* `{placement.name}` runs to"
+				   f" {render_delimiter(placement.delimiter)}, and a frame",
+				   "\t * without it was cut short. */",
+				   f"\tif (!{term}(view)) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if term else []),
+				*(self._encoding_check(struct, placement, scalar)
+				  if scalar is not None else []),
+				*self._token_check(struct, placement),
+			]
+			if not inner:
+				return []
+			return [
+				f"\t/* {placement.path}: checked where the discriminant",
+				"\t * selects this arm, and nothing to check where it does",
+				"\t * not. */",
+				f"\tif (!({test})) {{",
+				*[f"\t{one}" if one.strip() else one for one in inner],
+				"\t}",
+			]
 
 		# A struct-typed member carries its own constraints, and they are not
 		# this function's to restate: delegate to the type's own validator.
@@ -9181,6 +9311,14 @@ class Emitter:
 		width = scalar.bits // BITS_PER_BYTE
 		if placement.array_count is not None:
 			count = f"{placement.array_count * width}u"
+		elif placement.delimiters:
+			# The scan's own answer (26.423). `_length_expression` has no
+			# delimiter case, so a delimited ARM reached here with no count
+			# at all -- and a delimited MEMBER never reached here, being
+			# served by the delimited branch which asks its `_len` directly.
+			# Both emit `_len`, so asking it is one sentence for both.
+			count = (f"{ident(self.prefix, struct.name, c_name(self._local(struct, placement)), 'len')}"
+			         "(view)")
 		else:
 			count = self._length_expression(struct, placement)
 		ptr = ("(situ_base(view)) + "

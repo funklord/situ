@@ -91,6 +91,13 @@ struct declared_text size=2.. access=Sequential mutate=Shifting address=Unstable
   declared_text.says                     offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
   declared_text.body                     offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable effect=EffectOnRead
 
+struct delimited_arm size=3.. mutate=Shifting address=Unstable atomic=NonAtomic effect=EffectOnRead
+  delimited_arm.pick                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  delimited_arm.held                     offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  delimited_arm.held.line                offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting effect=EffectOnRead
+  delimited_arm.held.fixed               offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  delimited_arm.after                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
 struct derived size=13 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(invariant total, tag)
   derived.total                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord mutate=Immutable
   derived.a                              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord auth=Covered(invariant total)

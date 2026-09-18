@@ -1853,6 +1853,40 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# conditions too: the check names the bytes it scans, and a
 			# run the message sizes has neither a capacity nor a constant
 			# to scan from.
+			# A DELIMITED arm: the delimiter is there, and the content is
+			# in the encoding it claims (26.423). The member path writes
+			# exactly these two rows a few hundred lines above; the four
+			# backends check both behind the discriminant now, and the
+			# packer wrote neither, so the walk reported the FOLLOWING
+			# member out of bounds where C reported this one's missing
+			# delimiter -- `walker: 1  C: 2`, the same shape `spanned_arm`
+			# produced when its rows were missing.
+			#
+			# No `array_count` condition here, and that is the point: a
+			# delimited member has no count, which is why the clause below
+			# could never reach it. The scan is what bounds the read, and
+			# both walkers already have it.
+			if placement.delimiters and placement.scalar is not None \
+					and placement.type_name not in resolved.structs:
+				if traverse.must_be_terminated(placement):
+					arm_checks.append((at, _struct.pack(
+						"<IqBxxx", at, 0, 7)))
+				spelled = next((a for a in placement.attrs
+				                if a.name == "encoding"), None)
+				if spelled is not None:
+					how = getattr(spelled.value, "name", None)
+					code = ENCODING_CODE.get(how) if how is not None else None
+					if code is not None:
+						arm_checks.append((at, _struct.pack(
+							"<IqBxxx", at, code, 12)))
+					else:
+						# `[encoding = from(f)]` needs a row on the SOURCE
+						# too, which is a member whose run was closed in
+						# the loop above. Disowned rather than half-written,
+						# exactly as the counted form below disowns it.
+						whole = False
+						continue
+
 			text_attrs = {a.name for a in placement.attrs}
 			if text_attrs & {"encoding", "nul_terminated"} \
 					and placement.array_count:

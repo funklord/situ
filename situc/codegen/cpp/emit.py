@@ -3054,6 +3054,16 @@ class Emitter:
 				continue		# `default: error`; falls to the zero above
 			if member.is_fixed_size:
 				length = f"{member.size_bits // BITS_PER_BYTE}u"
+			elif member.delimiters:
+				# A DELIMITED arm's extent is its scan plus the delimiter,
+				# which is what `_span` answers (26.423). `_length_expression`
+				# has no delimiter case, so this returned None and every
+				# member after such a variant reported that its offset could
+				# not be resolved -- in this backend only, C having named the
+				# span accessor here all along. Measured on `edges`: one
+				# declined member, and the differential driver named it and
+				# did not compile.
+				length = f"{bare_name(local_name(struct, member))}_span()"
 			else:
 				# The depth travels into the arm too, or a tagged tree
 				# restarts the counter at every level of itself.
@@ -4780,6 +4790,80 @@ class Emitter:
 		# and got a getter for the first element. The same sentence 26.47
 		# wrote about the ordinary member dispatch, in the parallel one an
 		# arm has.
+		# A DELIMITED ARM (26.423), before the scalar branch below, which it
+		# otherwise satisfies: `u8 line[] until "\n"` has a `scalar` and no
+		# `array_count`, so it took that branch and got a ONE-BYTE getter
+		# where the identical member answers a span. Not one of the four arm
+		# emitters mentioned delimiters at all.
+		#
+		# Three functions, as the member has: `_len` and `_span` ungated,
+		# because the extent arithmetic reaches them only inside its own
+		# test on the discriminant and a `uint32_t` has no room to say
+		# `err::version`; and the value through a gated accessor that hands
+		# back a span.
+		if placement.delimiters and scalar is not None:
+			if len(placement.delimiters) > 1:
+				return [*head, f"\t/* ...and `{placement.name}` ends at one"
+				        " of several delimiters, which this", "\t * backend"
+				        " does not scan for inside an arm yet. */"]
+			delim = placement.delimiter
+			byts  = ", ".join(f"0x{one:02X}" for one in delim)
+			sym   = f"situ_delim_{delim.hex()}"
+			at    = self._offset_expression(struct, placement)
+			if at is None:
+				return [*head, f"\t/* ...and `{placement.name}` starts where"
+				        " this backend cannot resolve. */"]
+			return [
+				*head,
+				f"\t[[nodiscard]] std::uint32_t {name}_len()"
+				" const noexcept",
+				"\t{",
+				f"\t\tstatic constexpr std::uint8_t {sym}[] = {{{byts}}};",
+				f"\t\treturn situ_scan(situ_base(raw_) + ({at}),",
+				f"\t\t\tsitu_remaining_u32(raw_.limit, ({at})), {sym},"
+				f" {len(delim)}u);",
+				"\t}",
+				"",
+				"\t/** Content plus the delimiter: where the next member",
+				"\t * starts. Where the delimiter is missing there is",
+				"\t * nothing to add -- the arm ran to the end of what the",
+				"\t * view holds. */",
+				f"\t[[nodiscard]] std::uint32_t {name}_span()"
+				" const noexcept",
+				"\t{",
+				f"\t\tconst std::uint32_t content = {name}_len();",
+				"",
+				"\t\treturn content + (content < situ_remaining_u32("
+				f"raw_.limit, ({at}))",
+				f"\t\t\t? {len(delim)}u : 0u);",
+				"\t}",
+				"",
+				# The delimiter is THERE, which separates a complete frame
+				# from one cut short. A delimited MEMBER has had this all
+				# along and an arm had none, so the arm's own check had
+				# nothing to ask (26.423). Ungated for the same reason
+				# `_len` is.
+				"\t/** Whether the delimiter is within the view: a frame",
+				"\t * that does not hold it was cut short, and the scan",
+				"\t * above stopped at the end of the view rather than at",
+				"\t * the end of the member. */",
+				f"\t[[nodiscard]] bool {name}_terminated()"
+				" const noexcept",
+				"\t{",
+				f"\t\treturn {name}_len() < situ_remaining_u32("
+				f"raw_.limit, ({at}));",
+				"\t}",
+				"",
+				f"\t[[nodiscard]] ::situ::rt::err {name}"
+				"(::situ::rt::bytes &out) const noexcept",
+				"\t{",
+				*refuse,
+				f"\t\tout = ::situ::rt::bytes(situ_base(raw_) + ({at}),"
+				f" {name}_len());",
+				"\t\treturn ::situ::rt::err::ok;",
+				"\t}",
+			]
+
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None \
 				and not data_sized(placement):
@@ -7338,15 +7422,47 @@ class Emitter:
 			              "\t\t}", "\t}"])
 		return lines
 
+	def _arm_keep(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""The test that this arm IS the one present, or None.
+
+		Written out by the `u16` branch of the arm checks before this
+		existed; 26.423 needed the same sentence a second time, and a
+		negation spelled twice is two places that have to go on agreeing
+		about what a `default` arm is -- which is not a value of its own but
+		the negation of every `case` beside it.
+		"""
+		found = arm_of(struct, placement)
+		if found is None:
+			return None
+		variant, arm = found
+		held = self._over_fields(struct, variant.discriminant or "")
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return None
+			test = "(" + " || ".join(f"{held} == {one.value}u"
+			                        for one in matched) + ")"
+			keep = f"!{test}"
+		else:
+			keep = f"{held} == {arm.value}u"
+		newer = self._arm_since(struct, placement, selected=True)
+		return f"({keep}{newer})" if newer else keep
+
 	def _delimiter_check(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+			placement: Placement, for_arm: bool = False) -> list[str]:
 		"""The delimiter is there, and a text number's digits are digits.
 
 		That the content excludes the delimiter needs no check: the scan stops
 		at the first one, so it holds by construction. A missing delimiter is
 		the truncated-frame case, and is the only thing parse can catch.
 		"""
-		if "." in placement.path[len(struct.name) + 1:]:
+		# `for_arm`: an ARM's delimited member is not a dotted path this
+		# should drop (26.423). The line below means "an element's members
+		# are checked under the element's own struct", which is true -- and
+		# an arm is not an element. The arm-check function asks for the lines
+		# and gates them, as it already does for a run.
+		if not for_arm and "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
 
 		name  = bare_name(local_name(struct, placement))
@@ -7362,29 +7478,41 @@ class Emitter:
 			"\t\t}",
 		] if must_be_terminated(placement) else []
 
-		# The encoding, over the span the scan found. See the C backend for
-		# why this lives here: the fixed-width check needs a static offset
-		# and a declared count, and a delimited member has neither, so
-		# `[encoding = ascii]` on one was accepted and never checked.
-		named = next((attr for attr in placement.attrs
-		              if attr.name == "encoding"), None)
-		spelling = getattr(named.value, "name", None) if named else None
-		if spelling in ("ascii", "utf8", "utf16le", "utf16be"):
-			lines.extend([
-				f"\t\t/* {placement.path} [encoding = {spelling}] */",
-				f"\t\tif (!situ_{spelling}_valid(situ_base(raw_) + {name}_offset(),"
-				f" {name}_len())) {{",
-				"\t\t\treturn ::situ::rt::err::constraint;",
-				"\t\t}",
-			])
-		else:
-			lines.extend(self._declared_encoding_check(
-				struct, placement, named,
-				f"situ_base(raw_) + {name}_offset()", f"{name}_len()"))
+		lines.extend(self._span_encoding_check(
+			struct, placement, f"situ_base(raw_) + {name}_offset()",
+			f"{name}_len()"))
 
 		lines.extend(self._text_number_check(struct, placement, name))
 		lines.extend(self._token_check(placement, name))
 		return lines
+
+	def _span_encoding_check(self, struct: ResolvedStruct,
+			placement: Placement, ptr: str, count: str) -> list[str]:
+		"""`[encoding]` over a span the scan found, given its bytes.
+
+		`ptr` and `count` are the caller's because a MEMBER names them
+		through `_offset()` and an ARM has no such accessor -- its base is an
+		expression the arm's own getters carry. Taking them as arguments is
+		what let an arm ask this question at all (26.423); before it, reuse
+		named a function nothing defines and did not compile.
+
+		It lives here rather than with the fixed-width check for the reason
+		the C backend gives: that one needs a static offset and a declared
+		count, and a delimited member has neither, so `[encoding = ascii]`
+		on one was accepted and never checked.
+		"""
+		named = next((attr for attr in placement.attrs
+		              if attr.name == "encoding"), None)
+		spelling = getattr(named.value, "name", None) if named else None
+		if spelling in ("ascii", "utf8", "utf16le", "utf16be"):
+			return [
+				f"\t\t/* {placement.path} [encoding = {spelling}] */",
+				f"\t\tif (!situ_{spelling}_valid({ptr}, {count})) {{",
+				"\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t}",
+			]
+		return self._declared_encoding_check(struct, placement, named,
+		                                     ptr, count)
 
 	def _declared_encoding_check(self, struct: ResolvedStruct,
 			placement: Placement, named: "ast.Attr | None",
@@ -7630,6 +7758,46 @@ class Emitter:
 		# means the `err::version` gate the rest of this function leans on
 		# is not available. The test is built the way `_arm_member` builds
 		# it, from the same `arm_of` the accessors use.
+		# A DELIMITED arm: its terminator, its `[encoding]`, its token set
+		# (26.423). The member's own check, wrapped. It had nothing at all,
+		# in every backend, because a delimited member's checks are written
+		# by `_delimiter_check` and that function drops a dotted path --
+		# right for an element inside a run, wrong for an arm, which no
+		# other route reaches. The gate is built the way the branch below
+		# builds it, from the same `arm_of` the accessors use.
+		# Written out rather than by reusing `_delimiter_check`, and that is
+		# not a preference: a MEMBER names `line_offset()`, which an arm does
+		# not have, and reuse named a function nothing defines. Measured by
+		# compiling, after reading the generated text and believing it.
+		if placement.delimiters and scalar is not None:
+			keep = self._arm_keep(struct, placement)
+			at   = self._offset_expression(struct, placement)
+			if keep is None or at is None:
+				return []
+			name  = bare_name(local_name(struct, placement))
+			inner = [
+				*([f"\t\t/* {placement.path} runs to"
+				   f" {render_delimiter(placement.delimiter)}; a frame",
+				   "\t\t * without it was cut short. */",
+				   f"\t\tif (!{name}_terminated()) {{",
+				   "\t\t\treturn ::situ::rt::err::constraint;",
+				   "\t\t}"] if must_be_terminated(placement) else []),
+				*self._span_encoding_check(struct, placement,
+				                           f"situ_base(raw_) + ({at})",
+				                           f"{name}_len()"),
+			]
+			if not inner:
+				return []
+			return [
+				f"\t\t/* {placement.path}: checked where the discriminant",
+				"\t\t * selects this arm, and nothing to check where it"
+				" does",
+				"\t\t * not. */",
+				f"\t\tif ({keep}) {{",
+				*[f"\t{one}" if one.strip() else one for one in inner],
+				"\t\t}",
+			]
+
 		if scalar is not None and scalar.bits != BITS_PER_BYTE \
 				and placement.array_count is not None:
 			inner = self._utf16_check(struct, placement)

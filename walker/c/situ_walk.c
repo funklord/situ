@@ -3046,7 +3046,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		const uint8_t kind = checks[c * image->constraint_stride + 12];
 
 		if (kind == CHECK_PINNED_RUN || kind == CHECK_NUL_TERMINATED
-		                || kind == CHECK_ENCODED_AS) {
+		                || kind == CHECK_ENCODED_AS
+		                || kind == CHECK_TERMINATED) {
 			pinned += 1u;
 		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
 		                || kind == CHECK_MAXIMUM
@@ -3063,6 +3064,9 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		uint32_t       wide    = 0u;
 		uint32_t       content;
 		const uint8_t *data;
+		/* A member with no delimiter cannot be unterminated, so the
+		 * default is the answer for everything but the scan below. */
+		int            terminated = 1;
 
 		err = situ_walk_offset_bits(image, message, len, shape, chosen, &at);
 		if (err == SITU_WALK_UNSUPPORTED) {
@@ -3089,7 +3093,6 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		 * same cut for a member and the backends pass `_len` here. */
 		content = wide / 8u;
 		if (delimiter_rules(image, chosen) != NULL) {
-			int      terminated = 0;
 			uint32_t took       = 0u;
 
 			err = situ_walk_scan(image, message, len, chosen, at / 8u,
@@ -3109,6 +3112,26 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 		data = message + at / 8u;
+
+		/* THE DELIMITER IS THERE (26.423), and asked before the span
+		 * checks below because that is the order `report._arm_constraints`
+		 * asks it in and the order C emits: the terminator decides whether
+		 * there is a content span to ask anything else about. A delimited
+		 * arm had no row and no reader, so a frame whose arm ran to the end
+		 * of the buffer was reported by the FOLLOWING member's bounds
+		 * rather than by this one's missing delimiter -- `walker: 1  C: 2`
+		 * on the first draw the corpus offered. */
+		if (!terminated) {
+			for (uint32_t c = 0u; c < rows; c++) {
+				if (checks[c * image->constraint_stride + 12]
+				                != CHECK_TERMINATED) {
+					continue;
+				}
+				record(why, chosen, CHECK_TERMINATED);
+				*verdict = SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+		}
 
 		for (uint32_t c = 0u; c < rows; c++) {
 			const uint8_t *row  = checks + c * image->constraint_stride;

@@ -98,6 +98,15 @@ struct declared_text size=2..
   @0x0000   until:3b  document_charset says
   ~         until:00  u8         body  encoding=from(says)
 
+struct delimited_arm size=3..
+  @0x0000   1         u8         pick
+  @0x0001   1..       variant    held
+  ~         1         u8         after
+  held switch: pick
+  held case 1: line u8
+  held case 2: fixed u8
+  held case default: error
+
 struct derived size=13
   @0x0000   2         u16        total  big
   @0x0002   1         u8         a

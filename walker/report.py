@@ -1339,13 +1339,18 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	value the message states, and checking either would refuse frames all
 	four backends accept.
 
-	**The two families the four backends check on an arm, and no more.** A
-	pinned span, and the value comparisons -- which is what `_arm_guard`
-	and `_arm_member_checks` emit in C. An arm shape outside those two (a
-	run of wide values, a delimited or varint arm, an arm behind `[since]`)
-	gets no check in any backend either; 26.410 records that rather than
-	this half-answering it, because a fifth description refusing what the
-	other four accept is the disagreement the differential exists to find.
+	**What the four backends check on an arm, and no more.** A pinned span,
+	a run's span checks (26.425), a delimited arm's delimiter and encoding
+	(26.423), and the value comparisons. An arm shape outside those -- a run
+	of wide values, a varint arm, an arm behind `[since]` -- gets no check in
+	any backend either; 26.410 records that rather than this half-answering
+	it, because a fifth description refusing what the other four accept is
+	the disagreement the differential exists to find.
+
+	The list grows from the backend side, and this sentence has twice been
+	the thing that was stale: it said "the two families ... and no more"
+	while the backends had learned a third. So read it as a claim about what
+	the emitters do, and check the emitters rather than the sentence.
 	"""
 	held = image.constraints.get(chosen)
 	if not held:
@@ -1391,6 +1396,22 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	# -- so the corpus cannot carry the case and the differential cannot pose
 	# it. When 26.411 is fixed, the packer's arm pass is what has to learn
 	# the row; this line already reads it.
+	# A DELIMITED arm's delimiter is THERE (26.423). The member path asks
+	# this with the same scan a few hundred lines above; an arm had no row
+	# to read and no reader for it, so a frame whose arm ran to the end of
+	# the buffer was reported by its FOLLOWING member's bounds rather than
+	# by this one's missing delimiter -- `walker: 1  C: 2`.
+	#
+	# Before the span checks below, and before the value ones, because that
+	# is the order C emits: the terminator decides whether there is a
+	# content span to ask anything else about.
+	if any(check == TERMINATED for check, _ in held):
+		try:
+			if not scan(view, chosen)[1]:
+				return ERR_CONSTRAINT
+		except Refused:
+			return ERR_BOUNDS
+
 	# A RUN arm's span checks -- a terminator, a declared encoding
 	# (26.425). Read over the ARM's own span, which is safe here for the
 	# reason the whole function is: the discriminant selected this arm.

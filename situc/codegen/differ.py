@@ -682,9 +682,19 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 		# which asks a getter that takes an out-parameter of a member whose
 		# accessor is a pointer and a length. The same missing spelling, in
 		# the file whose job is to ask four backends one question.
+		# ...and a DELIMITED arm, which is the fourth spelling of a byte run
+		# and the one this list was missing (26.423). `u8 line[] until "\n"`
+		# names no count at all, so it fell past every clause here to the
+		# scalar probe below and the driver asked for a `_get` taking an
+		# out-parameter -- of a member whose accessor is a pointer and a
+		# length. It did not compile, which is the good outcome; what it
+		# means is that the four backends were never asked about a delimited
+		# arm at all, and the differential that would have caught the arm
+		# answering ONE BYTE could not run.
 		if scalar.bits == BITS_PER_BYTE \
 				and (member.sized_by is not None
 				     or member.array_count is not None
+				     or member.delimiters
 				     or data_sized(member)):
 			found.append(Ask(Probe.ARM_BYTES, local))
 		elif indexed_elements(member) \

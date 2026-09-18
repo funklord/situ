@@ -2517,6 +2517,86 @@ class Emitter:
 		# and got a getter for the first element. The same sentence 26.47
 		# wrote about the ordinary member dispatch, in the parallel one an
 		# arm has.
+		# A DELIMITED ARM (26.423), before the scalar branch below, which it
+		# otherwise satisfies: `u8 line[] until "\n"` has a `scalar` and no
+		# `array_count`, so it took that branch and answered ONE BYTE where
+		# the identical member answers a span. Not one of the four arm
+		# emitters mentioned delimiters at all.
+		#
+		# Three functions, as the member has: `_len` and `_span` ungated,
+		# because the extent arithmetic reaches them only inside its own
+		# test on the discriminant and a `usize` has no room to say
+		# `Error::Version`; and the slice through a gated accessor.
+		if placement.delimiters and scalar is not None:
+			if len(placement.delimiters) > 1:
+				return [*head, f"\t// ...and `{placement.name}` ends at one"
+				        " of several delimiters, which", "\t// this backend"
+				        " does not scan for inside an arm yet."]
+			delim = placement.delimiter
+			lit   = "".join(f"\\x{one:02x}" for one in delim)
+			at    = self._offset_expression(struct, placement)
+			if at is None:
+				return [*head, f"\t// ...and `{placement.name}` starts where"
+				        " this backend cannot resolve."]
+			return [
+				*head,
+				f"\tpub fn {name}_len(&self) -> usize {{",
+				f"\t\tsitu_rt::scan(&self.bytes[core::cmp::min({at},"
+				" self.bytes.len())..],",
+				f'\t\t\tb"{lit}")',
+				"\t}",
+				"",
+				"\t/// Content plus the delimiter: where the next member",
+				"\t/// starts. Where the delimiter is missing there is",
+				"\t/// nothing to add -- the arm ran to the end of the",
+				"\t/// slice.",
+				f"\tpub fn {name}_span(&self) -> usize {{",
+				f"\t\tlet content = self.{name}_len();",
+				"",
+				f"\t\tif content < self.bytes.len().saturating_sub({at}) {{",
+				f"\t\t\tcontent + {len(delim)}",
+				"\t\t} else {",
+				"\t\t\tcontent",
+				"\t\t}",
+				"\t}",
+				"",
+				# The delimiter is THERE, which separates a complete frame
+				# from one cut short. A delimited MEMBER has had this all
+				# along and an arm had none, so the arm's own check had
+				# nothing to ask (26.423). Ungated for the same reason
+				# `_len` is.
+				"\t/// Whether the delimiter is within the slice: a frame",
+				"\t/// that does not hold it was cut short, and the scan",
+				"\t/// above stopped at the end of the slice rather than",
+				"\t/// at the end of the member.",
+				# ...and the content itself, ungated, which is what the
+				# arm's own checks read. The GATED `{name}` beside it is
+				# the caller's accessor and answers `err::version` for the
+				# arm that is not present; a check already inside its own
+				# test on the discriminant has nothing to do with that
+				# answer, and the member's checks name `_raw`.
+				f"\tpub fn {name}_raw(&self) -> &[u8] {{",
+				f"\t\tlet at  = {at};",
+				f"\t\tlet end = core::cmp::min(at + self.{name}_len(),"
+				" self.bytes.len());",
+				"",
+				"\t\t&self.bytes[core::cmp::min(at, end)..end]",
+				"\t}",
+				"",
+				f"\tpub fn {name}_terminated(&self) -> bool {{",
+				f"\t\tself.{name}_len() < self.bytes.len()"
+				f".saturating_sub({at})",
+				"\t}",
+				"",
+				f"\tpub fn {name}(&self) -> Result<&[u8]> {{",
+				*refuse,
+				f"\t\tlet at  = {at};",
+				f"\t\tlet end = core::cmp::min(at + self.{name}_len(),"
+				" self.bytes.len());",
+				"\t\tOk(&self.bytes[core::cmp::min(at, end)..end])",
+				"\t}",
+			]
+
 		if scalar is not None and placement.array_count is None \
 				and placement.sized_by is None \
 				and not data_sized(placement):
@@ -4671,14 +4751,19 @@ class Emitter:
 		]
 
 	def _delimiter_checks(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str]:
+			placement: Placement, for_arm: bool = False) -> list[str]:
 		"""The delimiter is there, and a text number's digits are digits.
 
 		Terminated first: for a frame cut short before the digits both are
 		wrong, and "this frame stops early" is the more useful answer. The
 		other three report it in that order too.
 		"""
-		if "." in placement.path[len(struct.name) + 1:]:
+		# `for_arm`: an ARM's delimited member is not a dotted path this
+		# should drop (26.423). The line below means "an element's members
+		# are checked under the element's own struct", which is true -- and
+		# an arm is not an element. `_arm_validation` asks for the lines and
+		# gates them, as it already does for a pinned span and a run.
+		if not for_arm and "." in placement.path[len(struct.name) + 1:]:
 			return []		# checked under the element's own struct
 
 		base  = c_name(local_name(struct, placement))
@@ -4706,7 +4791,15 @@ class Emitter:
 				struct, placement, named,
 				f"self.{_ident(f'{base}_raw')}()"))
 
-		lines.extend(self._text_number_checks(struct, placement, base))
+		# A TEXT NUMBER on an ARM is out of scope, and saying so is what
+		# keeps the four agreeing (26.423). These read the member's parsed
+		# value, and an arm's accessor of that name answers its BYTES -- so
+		# reusing them diverges from C and C++, which write their arm checks
+		# by hand and emit no such comparison. Before this entry all four
+		# checked NOTHING on a delimited arm, so they agreed; a partial port
+		# is the one outcome worse than the gap.
+		if not for_arm:
+			lines.extend(self._text_number_checks(struct, placement, base))
 		lines.extend(self._token_checks(placement, base))
 		return lines
 
@@ -5383,6 +5476,27 @@ class Emitter:
 				"\t\t}",
 			]
 
+		# A DELIMITED arm: its terminator, its `[encoding]`, its token set
+		# (26.423). The member's own check, wrapped, for the same reason the
+		# branches around it wrap rather than rewrite.
+		#
+		# It had nothing at all, in every backend, because a delimited
+		# member's checks are written by `_delimiter_checks` and that
+		# function drops a dotted path -- right for an element inside a run,
+		# wrong for an arm, which no other route reaches.
+		if placement.delimiters:
+			inner = self._delimiter_checks(struct, placement, for_arm=True)
+			if not any(_REFUSES.match(one) for one in inner):
+				return []
+			return [
+				f"\t\t// {placement.path}: checked where the discriminant",
+				"\t\t// selects this arm, and nothing to check where it does",
+				"\t\t// not.",
+				f"\t\tif {guard} {{",
+				*[f"\t{one}" if one.strip() else one for one in inner],
+				"\t\t}",
+			]
+
 		# A run of WIDE values carrying an encoding -- `[encoding =
 		# utf16be]` over a `u16` run (26.422). `_utf16_checks` reads the
 		# message bytes from a static offset rather than through an
@@ -5696,6 +5810,16 @@ class Emitter:
 				continue		# `default: error`; falls to the zero above
 			if member.is_fixed_size:
 				length = str(member.size_bits // BITS_PER_BYTE)
+			elif member.delimiters:
+				# A DELIMITED arm's extent is its scan plus the delimiter,
+				# which is what `_span` answers (26.423).
+				# `_length_expression` has no delimiter case, so this
+				# returned None and every member after such a variant
+				# reported that its offset could not be resolved -- in this
+				# backend and in C++, C having named the span accessor here
+				# all along.
+				length = (f"self.{_ident(c_name(local_name(struct, member)))}"
+				          "_span()")
 			else:
 				# The depth travels into the arm too, or a tagged tree
 				# restarts the counter at every level of itself.
