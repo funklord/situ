@@ -6780,6 +6780,26 @@ class Emitter:
 		       for member in rule.variable):
 			return None
 
+		# A VARIANT INTERIOR WITH NO CLOSED-FORM LENGTH, asked here for the
+		# same reason and in the same place (26.441). `_content_length_
+		# expression` asserts "callers check _has_length first" for a
+		# variant whose length is None -- and the caller that did not check
+		# is this function, reached from `_has_length` itself, so the
+		# assertion fired while the question was being answered.
+		#
+		# Recursion is what produces the None: `case 1: node child` inside
+		# the region makes the variant's length inexpressible, and the
+		# assert then reported it as a traceback rather than a decline. C
+		# alone; the other three build the same schema.
+		#
+		# Asked of `_variant_length` directly rather than of `_has_length`,
+		# which would re-enter this function for a recursive struct and not
+		# terminate.
+		if any(member.kind == "variant"
+		       and self._variant_length(struct, member, held) is None
+		       for member in rule.variable):
+			return None
+
 		terms = [f"{rule.constant}u"]
 		terms += [f"({self._length_expression(struct, member, held)})"
 		          for member in rule.variable]

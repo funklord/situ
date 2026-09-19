@@ -30711,6 +30711,84 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.442 A constraint the image cannot carry, and the one description that died
+
+**`map`, `wire`, `doc` and all four backends accept these schemas and
+emit code. Only `situc pack` dies**, which is the asymmetry that makes
+this worth fixing rather than the crash itself: five of the six
+descriptions agree and the walker image is absent.
+
+The image carries a constraint's value in a SIGNED 64-bit slot -- the
+`q` of every `_struct.pack` in that file -- and a schema may
+legitimately name a value outside it:
+
+    hex u64 v[16];                              its own derived ceiling
+    u64 v [must_eq = 18446744073709551615];     an all-ones sentinel
+    enum slot : u64 { unset = 0xFFFF...FFFF }   the same, in an enum
+    case 18446744073709551615:                  a u64 discriminant's label
+
+**The first needs no attribute at all.** `radix_max` is derived from the
+field's own width, so an ASCII-hex `u64` crashes on sight, and
+`example/cpio` -- the tree's only text-number schema -- is `u32`, so the
+case had never been packed.
+
+**The fix already existed thirty lines above the first offender.** The
+`must_be_one` mask is guarded by `whole = False; continue`, which is this
+file's established way of saying the image cannot carry a check and the
+struct is therefore not fully validatable. Six sites never got it and
+have it now, each demonstrated by a reproduction rather than guarded on
+suspicion.
+
+**Two of the eight sites with that shape are still unguarded**, and are
+named rather than silently covered: the `radix_max` and `must_eq` packs
+in the arm pass. A `hex u64` arm reaches the arm pass and packs clean, so
+whatever guards those in practice, I could not construct a schema that
+gets there -- and a guard with no reproduction is a claim about code
+nobody has run.
+
+**Found by a static survey with controls worth copying.** It verified its
+own detector by injecting a crash and confirming the CLI emits a bare
+traceback; it ran the 42-schema corpus through 39 subcommands each -- 1638
+runs, zero tracebacks -- to show the corpus is clean and the findings lie
+outside it; and it traced line coverage to show all five original sites
+ARE executed by the corpus and still wrong, because no example schema
+carries a constant above 2**63-1. **A coverage number would have called
+those lines fine.**
+
+**One claim in that report did not survive checking**, which is why they
+get checked: it said omitting `default = error` made the enum case pack
+cleanly, implying two spellings of one thing took different paths. Both
+crash. Five of five crash sites were real; that secondary inconsistency
+was not.
+
+### 26.441 An assert that fired while the question it guards was being answered
+
+**C alone, and it is an `AssertionError` rather than a diagnostic:**
+
+    AssertionError: callers check _has_length first
+    situc/codegen/c/emit.py:6695, in _content_length_expression
+
+The caller that did not check is `_region_length` -- reached **from
+`_has_length` itself**. So the assertion fired midway through computing
+the answer it exists to protect, which is why "callers check first" was
+both true and no help.
+
+Reproduced with a variant inside a sealed region, one of whose arms is
+the struct itself. The recursion makes the variant's length
+inexpressible, `_variant_length` answers None, and the assert turns that
+into a traceback. C++, Rust and Python build the same schema.
+
+**Asked of `_variant_length` directly and not of `_has_length`**, which
+would re-enter `_region_length` for a recursive struct and not
+terminate. It sits beside 26.440's gate in the same function and for the
+same reason: this function renders terms it has not first established
+exist, and `_length_expression` cannot report a miss -- it can only
+substitute, or assert.
+
+**An assert reachable from schema text is not a diagnostic**, which is
+the general form and was on the static survey's list of what to look
+for. Inert on the corpus: every generated file byte-identical to HEAD.
+
 ### 26.440 A sealed region's interior length: a wrong parser, and a traceback beside it
 
 **Two spellings of one schema, two different failures, one cause.**

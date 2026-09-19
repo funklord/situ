@@ -468,6 +468,61 @@ def test_no_backend_invents_a_length_it_cannot_read(spelling: str) -> None:
 			f"{backend} neither emits the length nor says it declined it")
 
 
+#: A variant inside a sealed region, one of whose arms is the struct
+#: itself. The recursion makes the variant's length inexpressible.
+SEALED_RECURSION = """
+target buffer;
+endian big;
+
+codec aead {
+	tag_bytes   = 16;
+	nonce_bytes = 12;
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aead extern "x";
+
+struct node [depth = 2] {
+	u8 k;
+	u8 nonce[12];
+	sealed(aead, nonce = nonce) {
+		variant b switch (k) { case 1: node child; default: u8 leaf; }
+	}
+	tag u8[16];
+}
+"""
+
+
+def test_an_inexpressible_variant_length_is_declined_not_asserted() -> None:
+	"""C raised `AssertionError: callers check _has_length first` (26.441).
+
+	The caller that did not check was `_region_length`, reached from
+	`_has_length` itself -- so the assertion fired while the question it
+	guards was being answered. The other three build the same schema, so C
+	was alone.
+
+	Asked of `_variant_length` rather than of `_has_length`, which would
+	re-enter `_region_length` for a recursive struct and not terminate. An
+	assert reachable from schema text is not a diagnostic.
+	"""
+	source   = Source("<sealed-recursion>", SEALED_RECURSION)
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	# The premise: each of these must produce output at all. Before the fix
+	# C raised out of the generator rather than returning a header.
+	for name, built in (
+			("c", generate_c(schema, resolved, "u").header),
+			("cpp", generate_cpp(schema, resolved, "u").header),
+			("python", generate_py(schema, resolved, "u").module),
+			("rust", generate_rs(schema, resolved, "u").module)):
+		assert built, f"{name} produced nothing for a recursive sealed arm"
+
+
 def test_a_remaining_run_still_gets_its_length() -> None:
 	"""The control, and it is the half that caught two wrong fixes.
 

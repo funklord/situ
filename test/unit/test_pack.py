@@ -372,6 +372,81 @@ def test_a_relation_the_planner_refuses_is_reported() -> None:
 	assert "unsigned" in why and "signed" in why, why
 
 
+#: Schemas whose constraint values do not fit the image's signed 64-bit
+#: slot. Each reaches a different `_struct.pack("<...q...")` and each was
+#: a `struct.error` out of `cmd_pack` (26.442). `map`, `wire` and all four
+#: backends accept every one of them, so the image was the only
+#: description that died.
+OVER_Q = {
+	"text number's own ceiling":
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct s { hex u64 v[16]; u8 name[8]; }\n",
+	"must_eq on a member":
+		"target buffer;\nendian big;\n\nstruct s {\n"
+		"\tu64 v [must_eq = 18446744073709551615];\n\tu32 body;\n}\n",
+	"an enum's sentinel arm":
+		"target buffer;\nendian big;\n\n"
+		"enum slot : u64 { unset = 0xFFFFFFFFFFFFFFFF, first = 1,\n"
+		"\tdefault = error, }\n\nstruct s { slot which; u32 body; }\n",
+	"a variant case label":
+		"target buffer;\nendian big;\n\nstruct s {\n\tu64 kind;\n"
+		"\tvariant body switch (kind) {\n"
+		"\t\tcase 18446744073709551615: u32 a;\n\t\tcase 1: u16 b;\n"
+		"\t\tdefault: error;\n\t}\n}\n",
+	"must_eq on a variant arm":
+		"target buffer;\nendian big;\n\nstruct s {\n\tu8 kind;\n"
+		"\tvariant body switch (kind) {\n"
+		"\t\tcase 0: u64 v [must_eq = 18446744073709551615];\n"
+		"\t\tdefault: error;\n\t}\n}\n",
+	"an enum arm's sentinel":
+		"target buffer;\nendian big;\n\n"
+		"enum slot : u64 { unset = 0xFFFFFFFFFFFFFFFF, first = 1,\n"
+		"\tdefault = error, }\n\nstruct s {\n\tu8 pick;\n"
+		"\tvariant b switch (pick) {\n\t\tcase 1: slot which;\n"
+		"\t\tcase 2: u8 fixed[3];\n\t\tdefault: error;\n\t}\n"
+		"\tu8 tail;\n}\n",
+}
+
+
+@pytest.mark.parametrize("what", sorted(OVER_Q))
+def test_a_value_too_wide_for_the_image_is_disowned_not_crashed(
+		what: str) -> None:
+	"""The image carries a constraint in a SIGNED 64-bit slot (26.442).
+
+	A schema may legitimately name a value outside it -- a `u64` all-ones
+	sentinel is an ordinary thing to pin -- and packing one raised
+	`struct.error`. The established answer in `pack.py` is `whole = False`:
+	the image cannot carry this check, so the struct is not fully
+	validatable and says so. The `must_be_one` guard has done that since it
+	was written; these sites never got it.
+
+	The first case needs no attribute at all: `hex u64 v[16]` derives its
+	ceiling from its own width.
+	"""
+	schema, resolved = _resolved(OVER_Q[what])
+
+	blob, _ = packer.pack(schema, resolved)
+
+	assert blob, f"{what}: packed nothing"
+
+
+def test_a_value_inside_the_slot_is_still_carried() -> None:
+	"""The control: the guard must refuse the value, not the construct.
+
+	One below the boundary, where the image can hold it -- so a guard that
+	disowned every `must_eq` would fail here.
+	"""
+	schema, resolved = _resolved(
+		"target buffer;\nendian big;\n\nstruct s {\n"
+		"\tu64 v [must_eq = 9223372036854775807];\n\tu32 body;\n}\n")
+
+	blob, coverage = packer.pack(schema, resolved)
+
+	assert blob
+	assert packer.fits_q(9223372036854775807)
+	assert not packer.fits_q(9223372036854775808)
+
+
 def test_the_whole_tree_encodes_every_expression_it_carries() -> None:
 	"""No schema in the tree has an expression the bytecode cannot say.
 

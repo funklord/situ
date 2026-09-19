@@ -68,6 +68,26 @@ ENUM_VALUE_BYTES = 16
 PINNED_BYTES	= 32
 PINNED_OCTETS	= 27
 
+#: The image carries a constraint's value in a SIGNED 64-bit slot -- the
+#: `q` of every `_struct.pack` below. A schema may legitimately name a
+#: value outside it: `u64 v [must_eq = 18446744073709551615]`, a `u64`
+#: enum's all-ones sentinel, a `u64` variant case, and the ceiling a wide
+#: text number derives from its own width. Packing one raised
+#: `struct.error` out of `cmd_pack`, and only there: `map`, `wire`, `doc`
+#: and all four backends accept those schemas and emit code, so the walker
+#: image was the one description that died (26.442).
+#:
+#: The established answer in this file is `whole = False; continue` -- the
+#: image cannot carry this check, so the struct is not fully validatable
+#: and says so. The `must_be_one` guard above has done that since it was
+#: written; these sites never got it.
+Q_MIN, Q_MAX = -(1 << 63), (1 << 63) - 1
+
+
+def fits_q(value: int) -> bool:
+	"""Whether a constraint value fits the image's signed 64-bit slot."""
+	return Q_MIN <= value <= Q_MAX
+
 #: The `against` value an ENCODED_AS (kind 12) constraint carries per encoding
 #: name -- the image's contract with both walkers, which read the same codes
 #: (walker/report.py and walker/c/situ_walk.c). ascii and utf8 predate 0044
@@ -1374,6 +1394,13 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				# four backends have always checked here: `decimal u16
 				# code[3]` holds 0..999, and an image carrying 65535 made
 				# the walker accept a value C refuses.
+				# A wide text number's ceiling is derived from its own
+				# width, so `hex u64 v[16]` reaches this with no attribute
+				# written anywhere and 2**64-1 to carry (26.442).
+				if placement.radix_max is None \
+						or not fits_q(placement.radix_max):
+					whole = False
+					continue
 				constraints_blob += _struct.pack(
 					"<IqBxxx", at, placement.radix_max, 9)
 
@@ -1395,6 +1422,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					try:
 						held = evaluate(attr.value, resolved.layout.env)
 					except SituError:
+						whole = False
+						continue
+					if not fits_q(int(held)):
 						whole = False
 						continue
 					constraints_blob += _struct.pack(
@@ -1421,6 +1451,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						for member in held_enum.members:
 							named_value = getattr(member.value, "value", None)
 							if named_value is None:
+								whole = False
+								continue
+							if not fits_q(int(named_value)):
 								whole = False
 								continue
 							enum_blob += _struct.pack(
@@ -1932,6 +1965,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				except SituError:
 					whole = False
 					continue
+				if not fits_q(int(held)):
+					whole = False
+					continue
 				arm_checks.append((at, _struct.pack(
 					"<IqBxxx", at, int(held), code)))
 
@@ -1959,6 +1995,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					for member in held_enum.members:
 						named_value = getattr(member.value, "value", None)
 						if named_value is None:
+							whole = False
+							continue
+						if not fits_q(int(named_value)):
 							whole = False
 							continue
 						# Appended rather than merged: `enum_admits` scans
@@ -2081,6 +2120,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		selects = chose[0] if chose is not None and not chose[1] else None
 		for arm in placement.arm_cases:
 			value, chosen, arm_kind = _arm_fields(arm)
+			# A `u64` discriminant may name a case above the slot: the
+			# label rides in the same signed 64-bit field (26.442). The
+			# arm table is what tells a walk WHICH arm a value selects, so
+			# dropping one row would make the walk choose differently from
+			# the four backends -- the whole struct is disowned instead.
+			if not fits_q(value):
+				whole = False
+				continue
 			arms_blob += _struct.pack(
 				"<IIqIB3x", at, _u32(placement_index.get(chosen or "")),
 				value, _u32(selects), arm_kind)
