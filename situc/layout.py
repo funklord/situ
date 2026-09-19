@@ -1750,6 +1750,37 @@ class Solver:
 			arm_cases.append(Arm(source, value,
 			                     f"{prefix}.{variant.name}.{_arm_name(arm)}"))
 			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant, state)
+			# AN ARM IS A WHOLE NUMBER OF BYTES (26.435), which is what makes
+			# the byte-aligned start above worth checking: everything after
+			# the variant then lands on a byte boundary whichever arm the
+			# message selects. A four-bit arm gives the next member a bit
+			# phase decided by the discriminant, and `check_alignment` refuses
+			# exactly that for an ordinary member -- `u4 x; u8 after;` is
+			# *`u8` must start on a byte boundary* -- while saying nothing
+			# about the same field inside a `case`.
+			#
+			# Measured before it was refused: C declined the whole struct
+			# with *20 bits, not a whole number of bytes, so no accessors are
+			# generated*, and C++, Rust and Python emitted accessors for it.
+			# One honest decline and three descriptions of a layout situ
+			# cannot express.
+			if extent.lo % BITS_PER_BYTE != 0 \
+					or (extent.hi is not None
+					    and extent.hi % BITS_PER_BYTE != 0):
+				raise error(
+					f"arm `{_arm_name(arm)}` must be a whole number of bytes",
+					arm.span,
+					label = (f"{extent.lo} bits" if extent.hi == extent.lo
+					         else f"{extent.lo}..{extent.hi} bits"),
+					notes = [
+						"the variant starts on a byte boundary, so an arm "
+						"that is not a whole number of bytes gives every "
+						"member after it a bit phase the discriminant "
+						"decides -- and situ inserts no implicit padding "
+						"(section 8.4)",
+						"widen the arm to a whole number of bytes, or close "
+						"it with a `reserved` field",
+					])
 			low    = extent.lo if low is None else min(low, extent.lo)
 			if extent.hi is None or high is None:
 				high = None

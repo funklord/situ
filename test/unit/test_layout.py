@@ -236,6 +236,45 @@ def test_nested_struct_after_an_unclosed_byte_rejected() -> None:
 		"struct Inner { u8 x; } struct S { u3 a; Inner b; }")
 
 
+def test_a_sub_byte_variant_arm_is_rejected() -> None:
+	"""The same rule, reached through a `case` (26.435).
+
+	`u4 x; u8 after;` is refused for the member above -- no implicit
+	padding, so a whole-byte type cannot be nudged into place. The same
+	field inside an arm said nothing, and a four-bit arm gives every member
+	after the variant a bit phase the DISCRIMINANT decides, which is worse
+	than the member case rather than better.
+
+	It showed as a four-way split before it was refused: C declined the
+	whole struct with *20 bits, not a whole number of bytes*, and the other
+	three emitted accessors for a layout situ cannot express.
+	"""
+	report = rendered("struct S { u8 pick; "
+	                  "variant held switch (pick) { case 1: u4 x; "
+	                  "case 2: u8 fixed[3]; default: error; } u8 after; }")
+
+	assert "must be a whole number of bytes" in report
+	assert "situ inserts no implicit padding" in report
+
+
+def test_an_arm_that_closes_its_own_byte_is_legal() -> None:
+	"""The control, and it is the half that says what was refused.
+
+	An arm built from sub-byte fields is fine as long as the arm itself is
+	a whole number of bytes -- the rule is about the arm's extent, not
+	about bit packing, and without this the refusal above would read as
+	banning sub-byte fields from variants entirely.
+	"""
+	placed = layout("struct Nibbles { u4 a; u4 b; } "
+	                "struct S { u8 pick; "
+	                "variant held switch (pick) { case 1: Nibbles n; "
+	                "case 2: u8 fixed[3]; default: error; } u8 after; }")
+
+	# It lays out, which is the assertion -- `rendered` would demand a
+	# refusal, and the point here is that there is none.
+	assert "S" in placed.structs
+
+
 # -- missing directives (section 17.0) --------------------------------------
 
 

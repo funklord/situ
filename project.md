@@ -30711,6 +30711,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.435 A four-bit arm, and a layout situ cannot express
+
+**The member-versus-arm probe again, and this time the MEMBER form was
+refused.** That is the mirror of every instance before it, and it took a
+moment to read: `u4 x; u8 after;` is
+
+    error: `u8` must start on a byte boundary
+         = situ inserts no implicit padding (section 8.4)
+
+while the same field inside a `case` laid out silently. **A four-bit arm
+gives every member after the variant a bit phase the DISCRIMINANT
+decides**, which is worse than the member case rather than better -- the
+member's phase is at least a constant.
+
+**What the four backends did with it, which is the part that settles it:**
+
+    C                  declines the whole struct, with a note:
+                       "one is 20 bits, not a whole number of bytes,
+                        so no accessors are generated for it"
+    C++, Rust, Python  emit accessors
+
+One honest decline and three descriptions of a layout situ cannot
+express. `test_backends_refuse_the_same_members` exists to catch exactly
+that disagreement and could not: it compares which MEMBERS each backend
+declines, and here a whole STRUCT was declined by one of them.
+
+**Refused at the layout, where the member rule already lives.** An arm
+must be a whole number of bytes. That is what makes the variant's
+byte-aligned start -- already checked, a few lines above -- worth
+checking: every member after the variant then lands on a byte boundary
+whichever arm the message selects.
+
+**The control is the half that says what was refused.** An arm built FROM
+sub-byte fields is still legal as long as the arm itself closes its byte:
+
+    case 1: Nibbles n;      struct Nibbles { u4 a; u4 b; }   accepted
+    case 1: u4 x;                                            refused
+
+The rule is about the arm's extent, not about bit packing, and without
+that test the refusal would read as banning sub-byte fields from variants
+altogether. Inert on the corpus, which builds unchanged on all four.
+
+**This narrows the language, and that is the holder's to reverse.** The
+alternative is to support a sub-byte arm by padding it to the byte --
+which is `[equalize]`'s existing bargain, stated in 17.0, applied one
+level down. The cost is that padding would be implicit, which section 8.4
+says situ does not do, so it would want saying out loud rather than
+inheriting. What is refused today is the state where four descriptions
+disagree about a schema situ accepted.
+
 ### 26.434 The sweep at the root cause: five of six, and `floor()` was wrong
 
 **26.411's re-diagnosis names the fact the whole family rests on, and it
