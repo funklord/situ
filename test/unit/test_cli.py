@@ -1121,6 +1121,39 @@ def test_the_lowest_rung_refuses_what_it_cannot_put_anywhere(
 	assert "--layer edit" in said
 
 
+def test_the_lowest_rung_refuses_such_a_region_inside_a_variant_arm(
+		tmp_path: Path) -> None:
+	"""The same refusal, reached through a `case` (26.434).
+
+	`layers._walk` recursed on `members`, and `Variant` alone spells the
+	field `arms`, so a region behind an unbounded codec was invisible when
+	it sat in an arm. The consequence was not a wrong set but an accepted
+	BUILD: the member form above was refused and this one emitted a rung-1
+	description of a schema situ had itself decided rung 1 cannot express.
+
+	Asserted at the CLI rather than only on `allocating()`, because a
+	correct helper is not a working refusal -- what was broken here is
+	whether the front door asks.
+	"""
+	schema = tmp_path / "a.situ"
+	schema.write_text(ALLOCATING.replace(
+		"\tcoded body(squash) {\n\t\tu8 content[n];\n\t}",
+		"\tu8 pick;\n"
+		"\tvariant held switch (pick) {\n"
+		"\t\tcase 1:  coded body(squash) { u8 content[n]; }\n"
+		"\t\tcase 2:  u8 fixed[3];\n"
+		"\t\tdefault: error;\n"
+		"\t}"), encoding="ascii")
+
+	with pytest.raises(SystemExit) as refused:
+		main(["build", str(schema), "--target", "c", "--layer", "view",
+		      "--out", str(tmp_path / "out")])
+
+	said = str(refused.value)
+	assert "--layer view cannot emit `payload.body`" in said
+	assert "--layer edit" in said
+
+
 def test_the_rung_above_it_takes_the_same_schema(tmp_path: Path) -> None:
 	"""The other half, without which the refusal could be unconditional.
 

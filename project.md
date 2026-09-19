@@ -30839,6 +30839,20 @@ is a wrong answer rather than a missing check** -- `no_alloc(X)` is one of
 the four predicates section 16 has the compiler name, and it was
 answering about a schema it had not fully read.
 
+**And the two numbers above are not what it cost; this is.** Reverting
+the fix and building both spellings at the default layer:
+
+    member form   refused: "--layer view cannot emit `one.body`. Its
+                  codec expands without a bound ... Build it at
+                  --layer edit, which is what that rung is for"
+    arm form      BUILT
+
+So situ emitted a rung-1 description of a schema it had itself decided
+rung 1 cannot express, and said nothing. **The `allocating` set was the
+symptom and the accepted build is the fault** -- worth running rather
+than reasoning about, because a set that should have held one path and
+held none reads as a detail until you watch the compiler act on it.
+
 **Inert on the corpus, measured rather than assumed.** All 42 schemas
 return an empty `allocating` either way: `std/codecs.situ` declares
 `deflate` and `lz4` as unbounded and nothing in the tree puts an
