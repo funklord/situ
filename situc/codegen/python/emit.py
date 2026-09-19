@@ -1812,7 +1812,7 @@ class Emitter:
 				"\t\tbeing papered over with a range covering bytes the tag",
 				'\t\tdoes not."""',
 				"\t\tself._check()",
-				f"\t\tstart = {self._offset_expression(struct, first) or '0'}",
+				f"\t\tstart = {self._region_start(struct, first)}",
 				f"\t\tend   = {self._region_end(struct, last)}",
 				"",
 				"\t\tif end < start or end > self._len:",
@@ -2157,6 +2157,38 @@ class Emitter:
 			'computed {found:#x}")',
 		]
 
+	def _region_start(self, struct: ResolvedStruct,
+			region: Placement) -> str:
+		"""Where a region begins.
+
+		Its first member's offset, since a region consumes no bytes of its
+		own. An EMPTY one has no first member, and the region's own offset
+		expression answers with the struct's SIZE_MIN plus its variable
+		part -- the END of the frame rather than the region's position. The
+		range came out empty either way, so nothing was mis-authenticated
+		here; C placed it at 0 and covered the whole frame, which is the
+		half that mattered (26.448).
+		"""
+		members = [entry.placement for entry in own_entries(struct)]
+		inside  = [held for held in members
+		           if region.name in held.regions]
+		if inside:
+			found = self._offset_expression(struct, inside[0])
+			return found if found is not None else '0'
+
+		order = list(struct.layout.placements)
+		here  = next((i for i, held in enumerate(order)
+		              if held.path == region.path), None)
+		if here is not None:
+			top   = {held.path for held in members}
+			after = next((held for held in order[here + 1:]
+			              if held.path in top), None)
+			if after is not None:
+				found = self._offset_expression(struct, after)
+				if found is not None:
+					return found
+		return "self._len"
+
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts."""
 		if region.is_fixed_size and region.offset_bits is not None:
@@ -2176,7 +2208,9 @@ class Emitter:
 			inside = [i for i, held in enumerate(members)
 			          if region.name in held.regions]
 			if not inside:
-				return "self._len"
+				# EMPTY: it ends where it starts, so a tag over it
+				# covers nothing (26.448).
+				return self._region_start(struct, region)
 			index = inside[-1]
 
 		if index + 1 < len(members):

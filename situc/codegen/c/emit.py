@@ -1058,7 +1058,12 @@ class Emitter:
 			inside = [i for i, held in enumerate(members)
 			          if region.name in held.regions]
 			if not inside:
-				return "view.limit"
+				# EMPTY: it ends where it starts, so a tag over it covers
+				# nothing -- which is what the static-and-empty case
+				# already produced (`start = 1u; end = 1u`) and what this
+				# dynamic one answered `view.limit` to, handing the tag
+				# the whole frame (26.448).
+				return self._base_expression(struct, region)
 			index = inside[-1]
 
 		if index + 1 < len(members):
@@ -3472,6 +3477,23 @@ class Emitter:
 		             or placement.repeat_while is not None
 		             or data_sized(placement)))
 
+	def _member_after_region(self, struct: ResolvedStruct,
+			region: Placement) -> Placement | None:
+		"""The first top-level member declared after `region`, or None.
+
+		An empty region's position, which nothing else in the struct
+		states: it has no interior to borrow a start from, and the member
+		following it begins exactly where it would have.
+		"""
+		order = list(struct.layout.placements)
+		here  = next((i for i, held in enumerate(order)
+		              if held.path == region.path), None)
+		if here is None:
+			return None
+		top = {held.path for held in self._top_level(struct)}
+		return next((held for held in order[here + 1:]
+		             if held.path in top), None)
+
 	def _base_expression(self, struct: ResolvedStruct, placement: Placement,
 			gated: bool = False) -> str:
 		"""Where this member starts, in bytes, as a C expression.
@@ -3492,7 +3514,26 @@ class Emitter:
 			          if placement.name in held.regions]
 			if inside:
 				return self._base_expression(struct, inside[0], gated)
-			return "0u"
+			# An EMPTY region has no first member to take a position from,
+			# and `0u` is not a position -- it is the start of the struct.
+			# A tag covering it was handed the whole frame, its own bytes
+			# included, which is the one range a tag must never be given.
+			#
+			# It needs BOTH halves to go wrong: an empty region AND a
+			# dynamic one. Static-and-empty returns above on
+			# `offset_bits`, and dynamic-and-non-empty takes the branch
+			# above this. Measured over the four cells (26.448).
+			#
+			# Where it sits is where the member after it begins: the
+			# region consumes no bytes, so its start, its end and that
+			# member's offset are one number. Declaration order comes
+			# from the layout, which carries the region; `_top_level`
+			# drops it, which is why the list is filtered rather than
+			# indexed.
+			after = self._member_after_region(struct, placement)
+			if after is not None:
+				return self._base_expression(struct, after, gated)
+			return "view.limit"
 		local    = c_name(self._local(struct, placement))
 		argument = "gate.view" if gated else "view"
 		# The struct's arguments travel with the view (0050): an offset

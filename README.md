@@ -1466,7 +1466,15 @@ Python standard library:
 
     python3 ~/src/fmake/fmake    # libsitu.a and situ-walk-c
 
-**Not `/usr/bin/fmake`**, which is older than the two fixes this tree needs.
+**Check which `fmake` you have**, because both copies call themselves
+`1.0` and only the content hash tells them apart:
+
+    fmake --version                       # the installed one
+    python3 ~/src/fmake/fmake --version   # this checkout's
+
+The installed one has been behind what this tree needs; whether it still
+is, the two hashes answer and nothing else does.
+
 `fmake.toml` says only what finding `main()` cannot: that runtime/c is a
 static archive and is the deliverable, since nothing in the tree links it,
 and that walker/c's program is called situ-walk-c rather than `c`.

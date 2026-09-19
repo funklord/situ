@@ -6382,7 +6382,7 @@ class Emitter:
 				"\t\t\tstd::uint32_t &len) const noexcept",
 				"\t{",
 				f"\t\tconst std::uint32_t start ="
-				f" {self._offset_expression(struct, first) or '0'};",
+				f" {self._region_start(struct, first)};",
 				f"\t\tconst std::uint32_t end   ="
 				f" {self._region_end(struct, last)};",
 				"",
@@ -6793,6 +6793,33 @@ class Emitter:
 			"\t}",
 		]
 
+	def _region_start(self, struct: ResolvedStruct,
+			region: Placement) -> str:
+		"""Where a region begins, as a C++ expression.
+
+		Its first member's offset, since a region consumes no bytes of its
+		own. An EMPTY one has no first member, and asking for the region's
+		own offset answered with the struct's SIZE_MIN plus the variable
+		part -- the END of the frame rather than the region's position. The
+		range came out empty, so nothing was mis-authenticated here, and it
+		disagreed with C, which places it correctly (26.448).
+		"""
+		members = [entry.placement for entry in own_entries(struct)]
+		inside  = [held for held in members if region.name in held.regions]
+		if inside:
+			return self._offset_expression(struct, inside[0]) or "0"
+
+		order = list(struct.layout.placements)
+		here  = next((i for i, held in enumerate(order)
+		              if held.path == region.path), None)
+		if here is not None:
+			top   = {held.path for held in members}
+			after = next((held for held in order[here + 1:]
+			              if held.path in top), None)
+			if after is not None:
+				return self._offset_expression(struct, after) or "raw_.limit"
+		return "raw_.limit"
+
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
 		"""Where a region stops, taken from where the next member starts.
 
@@ -6818,7 +6845,9 @@ class Emitter:
 			inside = [i for i, held in enumerate(members)
 			          if region.name in held.regions]
 			if not inside:
-				return "raw_.limit"
+				# EMPTY: it ends where it starts, so a tag over it covers
+				# nothing. `raw_.limit` said the opposite (26.448).
+				return self._region_start(struct, region)
 			index = inside[-1]
 
 		if index + 1 < len(members):

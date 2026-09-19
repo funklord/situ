@@ -30711,6 +30711,93 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.448 A tag that could not say what it covered
+
+**`edges.covered_tail.mac_covered()` refused every message in three of the
+four backends, and had done for as long as the struct has existed.** Not
+"covered the wrong bytes" -- the range came out INVERTED, `mac covers
+10..6`, so the accessor returned BOUNDS whatever it was handed and that MAC
+could not be computed at all outside C.
+
+    struct covered_tail {
+        u8  n [max = 4];
+        u8  pad[n];
+        authenticated body { beacon head; }
+        tag u8 mac[4] covers(body);
+    }
+
+Measured by running the generated Python against the fixed tree and against
+`e9f52c2`: `BoundsError: mac covers 10..6` before, `(3, 3)` after, and C
+answers `(3, 3)` too -- compiled and run, not read.
+
+**One cause, and it is a category error about what a region is.** An
+`authenticated` region consumes no bytes of its own, so `own_members` drops
+it. C asks `_base_expression`, which has a branch for exactly that and
+returns the region's first member's offset. C++, Rust and Python asked
+`_offset_expression` for the REGION placement, and the answer to that is the
+struct's `SIZE_MIN` plus its variable part -- the END of the frame. For
+`covered_tail` that is `advance(8, n)` against an end of `advance(4, n)`,
+which is where the inversion comes from: 8 is `1 + 3 + 4`, the whole struct.
+
+**The empty-region case is the same fault with no member to ask for, and
+there C is the broken one.** With nothing inside, C's branch fell through to
+`return "0u"` and `_region_end` to `view.limit`, so a tag over an empty
+region was handed **the whole frame, its own bytes included** -- the one
+range a tag must never be given. The other three landed on the frame's end
+with a zero length, which is wrong about position and harmless in effect.
+
+**Four cells, and only the product of both conditions reaches C's `0u`:**
+
+    region      position     before                    after
+    non-empty   dynamic      inverted in three         (3, 3) in four
+    empty       dynamic      C: whole frame; 3: end    (3, 0) in four
+    non-empty   static       correct in four           unchanged
+    empty       static       correct in four           unchanged
+
+The two static rows are the controls and are asserted, not assumed: they
+were right before the fix and have to stay right after it, or the dynamic
+path was paid for out of theirs.
+
+**Why nothing caught it is the sharper half.** The `_covered` accessors ARE
+exercised -- `edges_checks.c` asserts them for `sealed_run` and
+`unverified`, and two Python tests call `checksum_covered` and
+`crc_covered`. Every one of those calls is in a backend and on a struct
+where the code was right. **Nothing in the tree compares a covered range
+BETWEEN backends**, and `covered_tail.mac_covered` had no caller in any of
+the four. An interface is only as wired as its least-used method, and a
+method wired in one backend of four is the same hole one axis over.
+
+That gap is not closed here. The test added covers all four cells in
+Python, which is the backend the corpus fault was measured in; C++ and Rust
+are the same code path and are verified only by generation and by the corpus
+diff. A cross-backend comparison of covered ranges is the instrument this
+wants and does not have.
+
+**Swept for other sites, and the empty result has a method.** The
+question a reader asks next is whether anything ELSE hands a region
+placement to an offset function. `covered_run` is what produces one, and
+it has exactly one span site per backend -- all four fixed here -- plus a
+None-test that computes nothing. C's two callers both go through
+`_base_expression` and are fixed together. To check the other three
+without trusting that reading, both region shapes were generated in each
+and every `advance(base, ...)` in the output enumerated: for the empty
+struct `SIZE_MIN` is 5 and for the non-empty one 6, and the only bases
+emitted are 1 and 2 -- the real positions of `x` and `mac`. A frame-end
+base appears nowhere, so no site is left asking a region for its own
+offset.
+
+**Found while fixing the empty region, which was the smaller half.** The
+corpus defect was not on anybody's list: the generated-output diff named
+`edges` in three backends, and reading why is what turned a cosmetic
+position fix into a tag nobody could compute.
+
+**Whether an empty `authenticated { }` should be REFUSED rather than
+placed is left open**, deliberately, and no corpus entry settles it -- the
+same treatment 26.447 gave `nul_terminated`. A tag over zero bytes
+authenticates nothing, which is more likely an author's mistake than an
+intent, but nothing in this tree says so and inventing the refusal here
+would be deciding it by implementation.
+
 ### 26.447 An encoding nobody checks, in three backends and three ways
 
 **`[encoding = ascii]` on a run the message sizes was enforced by C and by
