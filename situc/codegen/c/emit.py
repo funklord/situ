@@ -36,7 +36,8 @@ from situc.expr import Env
 from situc.layout import (
 	BITS_PER_BYTE, IndexTable, Placement, TlvGrammar, ValueRule,
 )
-from situc.names import c_spelling, expand_calls, over_fields, render_delimiter
+from situc.names import (UnknownName, c_spelling, expand_calls,
+                         over_fields, render_delimiter)
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
@@ -6756,10 +6757,27 @@ class Emitter:
 		unbounded one -- because then the length genuinely is not computable
 		without decoding, and a wrong number here would silently misplace every
 		member after it.
+
+		And None where an interior member's own length cannot be read from
+		this view, which is the same sentence arriving by a second route
+		(26.440). `u8 body[len]` inside a sealed region is sized by a field
+		inside that region, whose getter takes the GATE -- and this
+		arithmetic runs on the plain view, where there is none. The count
+		path answered `array_count or 0` for it, so the region measured
+		`1u + ((uint32_t)0u)` and the tag after it was read from a fixed
+		offset whatever `len` said. C++, Rust and Python declined the member
+		outright, so C was alone, and alone in answering wrongly.
 		"""
 		rule = region_extent(struct, region,
 		                     self.codecs.get(region.type_name), self.resolved.structs)
 		if rule is None:
+			return None
+
+		# Asked before anything is rendered: `_length_expression` cannot
+		# report a miss, it can only substitute, which is how the zero got
+		# in.
+		if any(not self._length_is_readable(struct, member)
+		       for member in rule.variable):
 			return None
 
 		terms = [f"{rule.constant}u"]
@@ -6776,6 +6794,40 @@ class Emitter:
 		# Whole groups only, so a partial one still costs a full group.
 		return (f"((({inner}) + {rule.group_in - 1}u)"
 		        f" / {rule.group_in}u) * {rule.group_out}u")
+
+	def _length_is_readable(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether every name this member's extent depends on is readable.
+
+		Asked of the RENDERER rather than re-deriving the name table, so the
+		two cannot drift: `_over_fields` raises `UnknownName` for exactly
+		the names it would fail to emit, which is the question.
+
+		A bare count and a constant need nothing looked up, and a driver
+		that resolves is the ordinary case -- this says no only where the
+		schema names something the view has no accessor for.
+		"""
+		if placement.size_expr is not None:
+			try:
+				self._over_fields(struct, placement.size_expr, "view")
+			except UnknownName:
+				return False
+			return True
+
+		if placement.sized_by is None:
+			return True
+		# `remaining` is a KEYWORD in that slot, not a field name: the rest
+		# of the frame, which every view can measure. Treating it as a
+		# driver to look up made this say no for tcp's payload, icmp's
+		# rest, mqtt's and three more -- caught by diffing the corpus's
+		# generated C against HEAD, not by any test.
+		if placement.sized_by == "remaining":
+			return True
+		# A driver whose path does not resolve from this struct. The count
+		# path fell back to `array_count or 0` here, which for a member that
+		# HAS a driver means zero -- the silent half of 26.440.
+		return self.resolved.find(
+			f"{struct.name}.{placement.sized_by}") is not None
 
 	def _has_length(self, struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether a member's runtime extent has a closed form."""
@@ -6819,6 +6871,26 @@ class Emitter:
 			if (placement.repeat_while is not None
 					or self._is_record_run(placement) or nested_member):
 				return has_computable_extent(self.resolved.structs, element)
+
+		# A LENGTH THIS VIEW CANNOT READ is not a length (26.440). A member
+		# inside a `sealed` region is reached through the gate, so its
+		# getter takes one -- and the extent arithmetic that places whatever
+		# follows the region runs on the plain view, where no gate exists.
+		# From outside the seal the interior is the codec's output, so this
+		# is not a plumbing gap: the bytes are genuinely not readable there.
+		#
+		# C answered anyway, and answered ZERO. `u8 body[len]` inside a
+		# sealed region emitted `situ_min_u32((uint32_t)0u, ...)` and the
+		# region's extent became `1u + ((uint32_t)0u)`, so the tag after it
+		# was read from a fixed offset whatever `len` said -- a wrong parser
+		# that compiles and runs, while C++, Rust and Python all declined
+		# the member and said so. The arithmetic spelling `body[len + 1]`
+		# raised `UnknownName` out of the renderer in all four instead.
+		#
+		# Both are this one question answered wrongly, so it is asked here,
+		# where the other three already ask it.
+		if not self._length_is_readable(struct, placement):
+			return False
 
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement) is not None
@@ -7405,6 +7477,24 @@ class Emitter:
 		scalar    = placement.scalar
 		count     = placement.array_count
 		assert scalar is not None
+
+		# A RUN WHOSE LENGTH THIS VIEW CANNOT READ gets no accessors, which
+		# is what C++, Rust and Python already do (26.440). `u8 body[len]`
+		# inside a sealed region is driven by a field inside that region,
+		# and the count path substituted `array_count or 0` for it -- so
+		# `_len` was emitted returning `situ_min_u32((uint32_t)0u, ...)`,
+		# zero for every message. Declining is the honest answer and the
+		# one the other three give.
+		#
+		# `_length_is_readable` and NOT `_has_length`, which is weaker on
+		# purpose: `_has_length` is already False for `payload[remaining]`,
+		# whose length has no closed form and is nonetheless perfectly
+		# resolvable as the rest of the frame. Gating on it declined tcp's
+		# payload, icmp's, mqtt's and three more -- measured against HEAD
+		# before this line was narrowed.
+		if count is None and not self._length_is_readable(struct, placement):
+			return [f"/* {placement.path}: this backend cannot resolve its"
+			        " length. */"]
 
 		gate  = self._gate_type(struct, placement)
 		taken = (f"{gate} gate" if gate else "situ_view_t view") \

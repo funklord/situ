@@ -30711,6 +30711,58 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.440 A sealed region's interior length: a wrong parser, and a traceback beside it
+
+**Two spellings of one schema, two different failures, one cause.**
+
+    u8 body[len]      C:    situ_min_u32((uint32_t)0u, ...)  -- zero, always
+                      three: declined, and said so
+    u8 body[len + 1]  all four: UnknownName out of the renderer
+
+**The silent half is the damaging one.** With the bare spelling C
+computed the region's extent as `1u + ((uint32_t)0u)`, so
+`situ_probe_tag_offset` placed the tag at a fixed offset whatever `len`
+said -- a wrong parser that compiles and runs, for a schema C++, Rust
+and Python all declined. The crash at least stops.
+
+**And the three are right.** `len` sits inside the sealed region, so its
+getter takes the GATE; the arithmetic that places whatever follows the
+region runs on the plain view, where there is none. From outside the
+seal the interior is the codec's output. The bytes are genuinely not
+readable there, so this is not a plumbing gap and C was substituting
+zero for *I do not know*.
+
+**Asked of the renderer rather than of a second name table.**
+`_over_fields` raises `UnknownName` for exactly the names it could not
+emit, which IS the question -- so the predicate calls it and catches,
+and the two cannot drift. Each backend already had a decline path for a
+length it could not form; all four take it now, for both spellings.
+
+**TWO WRONG FIXES ON THE WAY, both caught by diffing the corpus's
+generated C against HEAD and neither by a test.**
+
+  - Gating on `_has_length`, which is ALREADY false for
+    `payload[remaining]` -- a length with no closed form that is
+    perfectly resolvable as the rest of the frame. Declined tcp's
+    payload, icmp's rest, mqtt's, ipv6ext's, message's and edges'.
+  - Then treating `sized_by == "remaining"` as a driver to look up.
+    `remaining` is a KEYWORD in that slot, not a field name, so the same
+    six went again.
+
+Six files is a loud wrong answer and I would have shipped it on the
+strength of *all four build*. The corpus diff is the instrument that
+caught both, and the `[remaining]` control is that diff kept as a test.
+
+**Inert on the corpus, in the end**: every generated file, all four
+backends, byte-identical to HEAD.
+
+**Reported by a survey worker, verified here before acting.** It gave
+the reduction, the three C call sites and the `authenticated` control
+that localises the cause to the sealed interior. The verification was
+worth doing for its own sake: the report described the arithmetic crash,
+and the bare spelling's silent zero -- the worse half -- only showed up
+when I built the control it named.
+
 ### 26.439 A `when` over a member no view can read, in four tracebacks
 
 **The most ordinary schema of its family, and it crashed every backend.**

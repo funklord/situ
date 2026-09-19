@@ -3190,8 +3190,16 @@ class Emitter:
 
 		if placement.size_expr is not None:
 			# Bounded leaves, signed arithmetic, one clamp (14.2b).
-			counted = self._over_fields(struct, placement.size_expr,
-			                            bounded=True)
+			# A name this view cannot read is not a length (26.440): a
+			# member inside a `sealed` region has its getter on the gate,
+			# and this arithmetic runs where there is none. The renderer
+			# raises `UnknownName` for exactly those names, and this
+			# function already answers None for a length it cannot form.
+			try:
+				counted = self._over_fields(struct, placement.size_expr,
+				                            bounded=True)
+			except UnknownName:
+				return None
 			each    = element_bytes(placement)
 			signed  = counted if each == 1 else f"({counted}) * {each}"
 			return f"::situ::rt::nonneg({signed})"
@@ -3292,7 +3300,16 @@ class Emitter:
 		# looked up (invariant 69, in the fourth place that spells this
 		# question two ways).
 		if placement.sized_by is None and placement.size_expr is not None:
-			return self._over_fields(struct, placement.size_expr)
+			# A name this view cannot read is not a count (26.440). The
+			# renderer raises `UnknownName` for exactly the names it could
+			# not emit -- a member inside a `sealed` region, whose getter
+			# takes the gate this arithmetic has no access to -- and the
+			# caller above already knows how to decline a count of None.
+			# Left to raise, it was a traceback out of the code generator.
+			try:
+				return self._over_fields(struct, placement.size_expr)
+			except UnknownName:
+				return None
 
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:

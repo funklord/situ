@@ -404,6 +404,89 @@ def test_a_declined_decode_names_the_entry_point_in_every_backend() -> None:
 		f"else's job and not whose")
 
 
+#: A sealed region whose interior is sized by a field inside that region.
+#: The driver's getter takes the GATE, and the arithmetic that places what
+#: follows the region runs on the plain view, where there is none.
+SEALED_LENGTH = """
+target buffer;
+endian big;
+
+codec aead {
+	tag_bytes   = 16;
+	nonce_bytes = 12;
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+impl aead extern "x";
+
+struct probe {
+	u8 nonce[12];
+	sealed(aead, nonce = nonce) {
+		u8 len;
+		u8 body[SPELLING];
+	}
+	tag u8[16];
+}
+"""
+
+
+@pytest.mark.parametrize("spelling", ["len", "len + 1"])
+def test_no_backend_invents_a_length_it_cannot_read(spelling: str) -> None:
+	"""Both spellings failed, and differently, which is why both are here.
+
+	C answered `situ_min_u32((uint32_t)0u, ...)` for the bare form -- zero
+	for every message -- so the region measured `1u + ((uint32_t)0u)` and
+	the tag after it was read from a fixed offset whatever `len` said. A
+	wrong parser that compiles and runs, while C++, Rust and Python all
+	declined the member. The arithmetic form raised `UnknownName` out of the
+	renderer in all four instead (26.440).
+
+	From outside the seal the interior is the codec's output, so this is not
+	a plumbing gap: the bytes genuinely cannot be read there, and declining
+	is the honest answer the other three already gave.
+	"""
+	source   = Source("<sealed>", SEALED_LENGTH.replace("SPELLING", spelling))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	outputs = {
+		"c":      generate_c(schema, resolved, "u").header,
+		"cpp":    generate_cpp(schema, resolved, "u").header,
+		"python": generate_py(schema, resolved, "u").module,
+		"rust":   generate_rs(schema, resolved, "u").module,
+	}
+
+	for backend, text in outputs.items():
+		assert "body_len" not in text, (
+			f"{backend} emits a length for `body`, whose driver sits inside "
+			f"the sealed region and is not readable from this view")
+		assert "cannot resolve" in text, (
+			f"{backend} neither emits the length nor says it declined it")
+
+
+def test_a_remaining_run_still_gets_its_length() -> None:
+	"""The control, and it is the half that caught two wrong fixes.
+
+	`payload[remaining]` has no closed-form length either, and it is
+	perfectly resolvable: the rest of the frame. Gating the decline on
+	`_has_length` declined it, and treating `remaining` as a driver to look
+	up declined it again -- tcp, icmp, mqtt, ipv6ext, message and edges,
+	caught by diffing the corpus's generated C rather than by any test.
+	This is that diff, kept.
+	"""
+	source   = Source("<remaining>", "target buffer;\nendian big;\n\n"
+	                  "struct frame {\n\tu8 kind;\n"
+	                  "\tu8 payload[remaining];\n}\n")
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	assert "payload_len" in generate_c(schema, resolved, "u").header
+
+
 def test_the_exemptions_are_still_divergences() -> None:
 	"""An exemption for something no longer split is a note claiming a
 	difference that is not there. Invariant 11, one level up."""
