@@ -1429,6 +1429,33 @@ class Solver:
 		if not regions:
 			return
 
+		# A TAG THIS STRUCT DID NOT DECLARE arrives here from a nested struct
+		# that covers its own region: laying `outer` out inlines `inner`'s
+		# placements, `isig` among them, and `tag_fields(decl.members)` does
+		# not reach into a referenced struct's members -- it recurses through
+		# regions, not through types. So its coverage is resolved FIRST, from
+		# what the nested layout already worked out, and this struct's own
+		# tags are resolved from the AST as they always were.
+		#
+		# Before this the second loop below asked `next()` for such a tag with
+		# no default and got `StopIteration` -- a traceback rather than a
+		# diagnostic, for a shape the language allows (26.437).
+		own = {tag.name: tag for tag in tag_fields(decl.members)}
+
+		for index, held in enumerate(layout.placements):
+			if held.kind not in ("tag", "checksum"):
+				continue
+			tag = own.get(held.name)
+			if tag is None:
+				# The nested struct's own layout resolved it; `tag_covers`
+				# came across with the placement, and re-deriving it here
+				# from this struct's members would be deriving it from the
+				# wrong declaration.
+				continue
+			layout.placements[index] = replace(
+				held, tag_covers=coverage_of(tag, regions),
+				tag_prefix=tag.prefix)
+
 		# region name -> the tags covering it. A region may appear under more
 		# than one tag when coverage nests (decision 0011).
 		covering: dict[str, list[str]] = {}
@@ -1438,11 +1465,18 @@ class Solver:
 		# input to the outer one.
 		order: dict[str, tuple[int, int]] = {}
 
-		for position, tag in enumerate(tag_fields(decl.members)):
-			covers = coverage_of(tag, regions)
-			order[tag.name] = (len(covers), position)
-			for region in covers:
-				covering.setdefault(region, []).append(tag.name)
+		# Built from the PLACEMENTS rather than from `decl.members`, which is
+		# what lets a nested struct's tag stale the bytes it covers. Reading
+		# only this struct's own members left `outer.nested.a` reported as
+		# staling `osig` and not `isig`, though it sits inside `ibody` -- a
+		# dirty bit that is wrong rather than absent, which 14.1 says is the
+		# one outcome this pass must not produce.
+		for position, held in enumerate(layout.placements):
+			if held.kind not in ("tag", "checksum") or not held.tag_covers:
+				continue
+			order[held.name] = (len(held.tag_covers), position)
+			for region in held.tag_covers:
+				covering.setdefault(region, []).append(held.name)
 
 		for index, held in enumerate(layout.placements):
 			tags = {name for region in held.regions
@@ -1459,14 +1493,6 @@ class Solver:
 			layout.placements[index] = replace(
 				held, covered_by=tuple(sorted(tags, key=lambda name: order[name])))
 
-		for index, held in enumerate(layout.placements):
-			if held.kind not in ("tag", "checksum"):
-				continue
-			tag = next(field for field in tag_fields(decl.members)
-			           if field.name == held.name)
-			layout.placements[index] = replace(
-				held, tag_covers=coverage_of(tag, regions),
-				tag_prefix=tag.prefix)
 
 	def _codec_counts_bits(self, codec: str | None) -> bool:
 		"""Whether `codec` can run over a span that is not whole bytes."""

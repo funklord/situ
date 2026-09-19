@@ -365,6 +365,23 @@ struct signed_number size=2..9 access=Sequential mutate=Shifting address=Unstabl
   signed_number.offset                   offset=AbsoluteStatic(0x00) size=Bounded(1, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting
   signed_number.tail                     offset=Scanned size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential address=Unstable
 
+struct signed_part size=11 mutate=Immutable atomic=NonAtomic auth=Covered(part_sig)
+  signed_part.part_body                  offset=AbsoluteStatic(0x00) size=Fixed(9) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig)
+  signed_part.a                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(part_sig)
+  signed_part.b                          offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig)
+  signed_part.part_sig                   offset=AbsoluteStatic(0x09) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
+struct signed_whole size=16 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(whole_sig, part_sig)
+  signed_whole.whole_body                offset=AbsoluteStatic(0x00) size=Fixed(14) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(whole_sig)
+  signed_whole.version                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(whole_sig)
+  signed_whole.piece                     offset=AbsoluteStatic(0x01) size=Fixed(11) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(whole_sig, part_sig)
+  signed_whole.piece.part_body           offset=AbsoluteStatic(0x01) size=Fixed(9) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig, whole_sig)
+  signed_whole.piece.a                   offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(part_sig, whole_sig)
+  signed_whole.piece.b                   offset=AbsoluteStatic(0x02) size=Fixed(8) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig, whole_sig)
+  signed_whole.piece.part_sig            offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  signed_whole.stamp                     offset=AbsoluteStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord auth=Covered(whole_sig)
+  signed_whole.whole_sig                 offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
 struct spanned_arm size=6 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   spanned_arm.pick                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   spanned_arm.held                       offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic

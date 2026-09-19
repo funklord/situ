@@ -98,6 +98,64 @@ def test_the_tag_is_not_covered_by_itself() -> None:
 	assert "sum" not in held.placement.covered_by
 
 
+#: A self-covered struct nested inside another self-covered struct (26.437).
+#: `piece.a` is inside both regions; `stamp` is inside the outer one only.
+NESTED = """
+struct part {
+	authenticated part_body { u8 a; u8 b[8]; }
+	checksum u8 part_sig[2] covers(part_body);
+}
+
+struct whole {
+	authenticated whole_body { u8 version; part piece; u16 stamp; }
+	checksum u8 whole_sig[2] covers(whole_body);
+}
+"""
+
+
+def test_a_self_covered_struct_nests() -> None:
+	"""It raised `StopIteration` out of `resolve_coverage` (26.437).
+
+	`tag_fields` recurses through REGIONS, not through TYPES, so laying
+	`whole` out inlined `part`'s placements -- `part_sig` among them -- and
+	then looked that name up in `whole`'s own members and did not find it.
+	A bare `next()` with no default made the miss a traceback rather than a
+	diagnostic, for a shape the language allows.
+	"""
+	schema   = parse_text(PREAMBLE + NESTED)
+	resolved = resolve(schema, solve(schema))
+
+	held = resolved.find("whole.piece.part_sig")
+	assert held is not None
+	# Resolved by `part`'s own layout and carried across by inlining, which
+	# is why this pass must not re-derive it from `whole`'s members.
+	assert held.placement.tag_covers == ("part_body",)
+
+
+def test_a_nested_tag_stales_the_bytes_it_covers() -> None:
+	"""The dirty bit is the half that was silently wrong, not the crash.
+
+	`piece.a` sits inside BOTH regions, so writing it stales the inner
+	checksum and the outer one, innermost first. Building the covering map
+	from this struct's own members alone reported only the outer tag --
+	wrong rather than missing, which is the one outcome 14.1 says this pass
+	must never produce.
+
+	`stamp` is the control: it is in the outer region only, so a fix that
+	simply added every tag to everything would fail here.
+	"""
+	schema   = parse_text(PREAMBLE + NESTED)
+	resolved = resolve(schema, solve(schema))
+
+	inside = resolved.find("whole.piece.a")
+	assert inside is not None
+	assert inside.placement.covered_by == ("part_sig", "whole_sig")
+
+	outside = resolved.find("whole.stamp")
+	assert outside is not None
+	assert outside.placement.covered_by == ("whole_sig",)
+
+
 #: What each backend calls the two things only the compiler knows.
 EMITS = {
 	"c":      ("situ_m_sum_self_span", "SITU_M_SUM_SELF_AS"),

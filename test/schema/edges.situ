@@ -91,6 +91,44 @@ struct two_tags {
 
 require size(two_tags) == 23;
 
+// A SELF-COVERED STRUCT NESTED INSIDE ANOTHER (26.437), which is the product
+// this file has had both halves of since `two_tags` landed: a struct that
+// covers its own region, and a struct that holds another struct. Never the
+// two together, and the combination raised `StopIteration` out of
+// `resolve_coverage` rather than laying out or refusing.
+//
+// The lookup searched `tag_fields(decl.members)`, which recurses through
+// REGIONS and not through TYPES, so `covered.inner_sig` -- contributed by
+// inlining `signed_part` -- was a placement whose tag this struct does not
+// declare.
+//
+// The dirty bit is the half worth the corpus entry rather than the crash.
+// `signed_whole.piece.a` sits inside BOTH regions, so writing it stales the
+// inner checksum and the outer one, innermost first; `signed_whole.stamp`
+// sits in the outer region alone. Reading only this struct's own members
+// reported the first as staling the outer tag and not the inner -- a dirty
+// bit that is wrong rather than missing, which 14.1 says is the one outcome
+// that pass must never produce.
+struct signed_part {
+	authenticated part_body {
+		u8  a;
+		u8  b[8];
+	}
+	checksum u8 part_sig[2] covers(part_body);
+}
+
+struct signed_whole {
+	authenticated whole_body {
+		u8            version;
+		signed_part   piece;
+		u16           stamp;
+	}
+	checksum u8 whole_sig[2] covers(whole_body);
+}
+
+require size(signed_part) == 11;
+require size(signed_whole) == 16;
+
 // Text with the two attributes section 8.6 offers, which no protocol here uses
 // and which were both parsed and dropped on the floor until they were not.
 //

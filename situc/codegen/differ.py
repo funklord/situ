@@ -496,6 +496,25 @@ def _region_walks(struct: ResolvedStruct, region: Placement,
 	           and entry.placement.kind != "element")
 
 
+def _tag_accessors(struct: ResolvedStruct) -> dict[str, str]:
+	"""Tag name -> the local name its accessors are spelled with.
+
+	`covered_by` carries a tag's BARE name, which is what a tag this struct
+	DECLARES is called. A tag contributed by a NESTED struct is not: it sits
+	at `whole.piece.part_sig`, and a local name carrying a dot is how this
+	pass tells the two apart (26.437).
+	"""
+	found: dict[str, str] = {}
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.kind in ("tag", "checksum"):
+			# NOT `c_name`d: the dot is the whole signal, and `c_name`
+			# turns it into an underscore, which is how the first version
+			# of this filter matched nothing.
+			found[placement.name] = local_name(struct, placement)
+	return found
+
+
 def writes(struct: ResolvedStruct,
 		structs_by_name: dict[str, ResolvedStruct] | None = None) -> list[Ask]:
 	"""Which members this struct can be *written*, in declaration order.
@@ -538,6 +557,15 @@ def writes(struct: ResolvedStruct,
 		struct.name, set())
 
 	found: list[Ask] = []
+	# A tag a NESTED struct contributed is left out of the covered probe,
+	# because the four backends do not agree where its dirty bit lives and
+	# this pass may only assert agreement that exists. C puts it on the
+	# parent as well as the child -- `situ_signed_whole_piece_part_sig_is_dirty`
+	# beside `situ_signed_part_part_sig_is_dirty` -- while C++, Rust and
+	# Python put it on the child's type alone. Recorded as 26.438; the write
+	# is still probed, and the OUTER tag it stales is still asserted, so what
+	# is given up here is one claim and not the case.
+	named: dict[str, str] = _tag_accessors(struct)
 
 	# Nothing after a region whose interior cannot be measured from outside
 	# it: no backend can place what follows, and the read pass stops there
@@ -586,7 +614,8 @@ def writes(struct: ResolvedStruct,
 		# spelled `invariant total`, whose recompute is section 16.1's rather
 		# than 14.2's and whose accessors are named after the invariant. One
 		# question at a time.
-		covers = [one for one in placement.covered_by if " " not in one]
+		covers = [one for one in placement.covered_by
+		          if " " not in one and "." not in named.get(one, one)]
 		kind   = Probe.COVERED if covers else Probe.WRITE
 		if placement.covered_by and not covers:
 			continue		# an invariant's obligation, not a tag's
@@ -602,7 +631,8 @@ def writes(struct: ResolvedStruct,
 	for entry in struct.entries:
 		placement = entry.placement
 		scalar    = placement.scalar
-		covers    = [one for one in placement.covered_by if " " not in one]
+		covers    = [one for one in placement.covered_by
+		             if " " not in one and "." not in named.get(one, one)]
 
 		if "." not in local_name(struct, placement) or not covers:
 			continue

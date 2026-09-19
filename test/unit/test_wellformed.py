@@ -79,6 +79,72 @@ def test_a_when_names_a_field_that_exists() -> None:
 		'when packet.nope == 3 note bad "x";')
 
 
+#: A struct whose members sit where a view cannot read them unconditionally.
+CONDITIONAL = ("endian big;\n"
+               "codec aead { tag_bytes = 16; nonce_bytes = 12;\n"
+               "\tgranularity = byte; length_preserving; seekable;\n"
+               "\tauthenticated; invertible; deterministic; }\n"
+               "impl aead extern \"x\";\n"
+               "struct probe {\n"
+               "\tu8 k;\n"
+               "\tu8 nonce[12];\n"
+               "\tvariant b switch (k) { case 1: u8 armed; default: error; }\n"
+               "\tsealed(aead, nonce = nonce) { u8 hidden; }\n"
+               "\ttag u8[16];\n"
+               "\tauthenticated body { u8 shown; }\n"
+               "\tchecksum u8[2] covers(body);\n"
+               "}\n")
+
+
+def _conditional_refused(body: str) -> str:
+	with pytest.raises(SituError) as caught:
+		parse_text(CONDITIONAL + body + "\n")
+	return caught.value.diagnostic.render()
+
+
+def test_a_when_may_not_read_a_variant_arm() -> None:
+	"""It raised `UnknownName` out of the code generator (26.439).
+
+	Whether an arm member is there at all is the discriminant's answer, so
+	a predicate over the whole view cannot read it. `map` printed the path
+	and all four backends then failed to emit the check -- a traceback for
+	the most ordinary schema of its family, a constraint on an optional
+	field.
+	"""
+	report = _conditional_refused('when probe.armed == 0 refuse bad "x";')
+
+	assert "which is inside a variant arm" in report
+	assert "not readable from a view of `probe`" in report
+
+
+def test_a_when_may_not_read_a_sealed_interior() -> None:
+	"""Same refusal, same reason: the interior is reached through the gate,
+	and every accessor on it takes that gate (26.439)."""
+	assert "inside a `sealed` region" in _conditional_refused(
+		'when probe.hidden == 0 refuse bad "x";')
+
+
+def test_a_when_may_read_an_authenticated_interior() -> None:
+	"""The control, and the half that says what was refused.
+
+	An `authenticated` region is not a gate: its members sit at the offsets
+	they would have had anyway and the view reads them directly. A refusal
+	keyed on "inside a region" rather than on readability would fail here,
+	and this shape builds in all four backends today.
+	"""
+	schema = parse_text(CONDITIONAL
+	                    + 'when probe.shown == 0 refuse bad "x";\n')
+
+	assert schema is not None
+
+
+def test_a_when_may_read_a_plain_member() -> None:
+	"""The second control: the ordinary case must stay ordinary."""
+	schema = parse_text(CONDITIONAL + 'when probe.k == 3 note fine "x";\n')
+
+	assert schema is not None
+
+
 def test_a_when_needs_a_severity_the_language_has() -> None:
 	"""Three and no fourth: a fourth would be situ adopting one consumer's
 	presentation model."""

@@ -1224,6 +1224,29 @@ def check_whens(schema: ast.Schema) -> None:
 					         "exist, so nothing could evaluate it"],
 				)
 
+			holder = _conditional_holder(struct, field) if field else None
+			if holder is not None:
+				raise error(
+					f"`{held.name}` reads `{path}`, which is inside "
+					f"{holder}",
+					held.span,
+					label = f"`{field}` is not readable from a view of "
+					        f"`{struct_name}`",
+					notes = [
+						"a `when` is evaluated in `validate`, against the "
+						"whole view, so every path it reads has to be "
+						"readable there without asking anything first "
+						"(0051)",
+						"until this was refused, all four backends raised "
+						"`UnknownName` out of the code generator instead: "
+						"the map printed the path and nothing could emit "
+						"the check (26.439)",
+						"move the predicate to a member the view can read, "
+						"or constrain the field where it is declared with "
+						"`[min]`, `[max]` or `[must_eq]`",
+					],
+				)
+
 		if owner is None:
 			raise error(
 				f"`{held.name}` reads no member of any message",
@@ -1538,6 +1561,53 @@ def _calls_in(expr: ast.Expr) -> list[ast.Call]:
 	if isinstance(expr, ast.Access):
 		return _calls_in(expr.base)
 	return []
+
+
+def _conditional_holder(struct: ast.StructDecl, name: str) -> str | None:
+	"""What makes `name` unreadable from a view of `struct`, or None.
+
+	`_find_member` answers whether a member EXISTS. Three places it can
+	exist and still not be readable unconditionally from the enclosing
+	view, which is what a `when` needs (26.439):
+
+	  * a variant ARM -- whether it is there at all is the discriminant's
+	    answer, not the schema's;
+	  * a SEALED region -- its interior is reached through the gate, and
+	    every accessor on it takes that gate;
+	  * a CODED region -- its bytes are the transform's output, so reading
+	    a member means decoding first.
+
+	An `authenticated` region, a `positional` block and an `indexed` block
+	are NOT in this list, measured rather than assumed: a `when` over a
+	member in any of those builds in all four backends today.
+	"""
+	def walk(members: tuple[ast.Member, ...], holder: str | None
+			) -> str | None:
+		for member in members:
+			if getattr(member, "name", None) == name and holder:
+				return holder
+			if isinstance(member, ast.Variant):
+				for arm in member.arms:
+					if arm.member is None:
+						continue
+					found = walk((arm.member,), holder or "a variant arm")
+					if found:
+						return found
+				continue
+			inner = nested(member)
+			if not inner:
+				continue
+			deeper = holder
+			if isinstance(member, ast.Sealed):
+				deeper = holder or "a `sealed` region"
+			elif isinstance(member, ast.Coded):
+				deeper = holder or "a `coded` region"
+			found = walk(inner, deeper)
+			if found:
+				return found
+		return None
+
+	return walk(struct.members, None)
 
 
 def _find_member(struct: ast.StructDecl, name: str) -> ast.Member | None:

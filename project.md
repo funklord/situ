@@ -30711,6 +30711,169 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.439 A `when` over a member no view can read, in four tracebacks
+
+**The most ordinary schema of its family, and it crashed every backend.**
+A constraint on an optional field:
+
+    struct probe {
+    	u8 k;
+    	variant b switch (k) { case 1: u8 x; default: error; }
+    }
+
+    when probe.x == 0 refuse bad "x must not be zero";
+
+`situc map` prints the path happily. All four backends then raise
+`situc.names.UnknownName: 'x'` out of `_over_fields`, reached from each
+one's `when` emitter. Well-formedness accepted the path because
+`_find_member` answers whether a member EXISTS, and `x` does.
+
+**Three places a member can exist and not be readable**, found by
+crossing the `when` clause against every construct that holds members:
+
+    a variant ARM        whether it is there is the discriminant's answer
+    a `sealed` region    the interior is reached through the gate
+    a `coded` region     the bytes are the transform's output
+
+**And three where it IS readable, which is the half that shapes the
+fix**: an `authenticated` region, a `positional` block and an `indexed`
+block all build in all four today. So the rule is not "inside a region" --
+a refusal keyed on that would break the authenticated case, which is why
+the test carries it as a control.
+
+**Refused, on 26.430's precedent.** `over_fields` raises `UnknownName`
+as a deliberate sentinel so a caller can decline to emit an accessor;
+these call sites do not catch it, and teaching four backends to gate a
+whole-struct predicate on a discriminant is a feature rather than a fix.
+What is not acceptable is the traceback. The diagnostic names the holder,
+says why a `when` cannot read it, and says what to do instead --
+constrain the field where it is declared.
+
+**The option this closes off, named because it is a real one.** A `when`
+over an arm member is a sensible thing to want: it would have to be
+emitted inside the arm's own discriminant gate, the way 26.423 and
+26.424 gate an arm's other checks, and that is four branches rather than
+one refusal. The refusal is what stops the crash today; it is not a
+judgement that the feature is wrong.
+
+**Found by a survey rather than by a user**, crossing constructs against
+each other in a scratch copy. It is the same lesson as 26.437 one layer
+up: the population is products. `when` alone works, a variant alone
+works, and nothing in the tree had put a `when` over an arm.
+
+### 26.438 Where a nested tag's dirty bit lives: C says the parent, three say the child
+
+**Found by 26.437's corpus entry on its first run, which is the entry
+earning its keep twice.** Adding `signed_whole` turned three tests red,
+and the cause was not the layout fix but a divergence the corpus had
+never been able to pose.
+
+    C       situ_signed_part_part_sig_is_dirty         on the child
+            situ_signed_whole_piece_part_sig_is_dirty  AND on the parent
+    C++     signed_part::part_sig_is_dirty             child only
+    Rust    SignedPart::part_sig_is_dirty              child only
+    Python  signed_part.part_sig_is_dirty              child only
+
+So a caller who writes `whole.piece.a` through the parent's setter can
+ask the parent whether the inner checksum went stale **in C and in no
+other backend**. Three of the four make them build a `signed_part` view
+to ask.
+
+**NOT FIXED HERE, and the reason is scope rather than doubt.** Exposing
+a nested tag's dirty bit on the parent is a feature addition in three
+backends, and this entry exists because a crash fix needed a corpus
+entry, not because the write surface was being worked on. What it must
+not do is let the differential assert an agreement that does not exist.
+
+**So the differ leaves that one claim out and says so.** A tag a nested
+struct contributed is dropped from the covered probe -- detected by its
+local name carrying a dot, which is what distinguishes
+`whole.piece.part_sig` from a tag this struct declares. The write is
+still probed and the OUTER tag it stales is still asserted:
+
+    covered  local=piece_a   inside=('whole_sig',)
+
+so what is given up is one claim, not the case.
+
+**The filter was wrong once in the way worth recording.** It first tested
+`c_name(local_name(...))`, which turns the dot into an underscore, so
+`piece_part_sig` contains no dot and nothing was ever dropped -- a filter
+that matched nothing and looked right. It stores the raw local name now.
+
+### 26.437 A self-covered struct nested in another: a traceback, and a wrong dirty bit behind it
+
+**`situc map` raised `StopIteration` rather than laying the schema out or
+refusing it**, for a shape the language allows:
+
+    situc/layout.py:1465, in resolve_coverage
+        tag = next(field for field in tag_fields(decl.members)
+                   if field.name == held.name)
+    StopIteration
+
+**`tag_fields` recurses through REGIONS, not through TYPES.** Laying
+`whole` out inlines `part`'s placements -- `part_sig` among them, at path
+`whole.piece.part_sig` -- and the loop then looked that name up in
+`whole`'s own members, which do not contain it. Measured before fixing:
+
+    tag_fields(decl.members) = ['whole_sig']
+    placements of kind tag/checksum:
+      name='part_sig'   path='whole.piece.part_sig'
+      name='whole_sig'  path='whole.whole_sig'
+
+**The crash is the half that announces itself. The other half is worse.**
+Skipping the miss makes it lay out, and the answer is then quietly wrong:
+`whole.piece.a` sits inside BOTH regions, so writing it stales the inner
+checksum and the outer one -- and the covering map was built from
+`tag_fields(decl.members)` too, so it knew only `whole_sig` and reported
+
+    whole.piece.a   Covered(whole_sig)        <- missing the inner tag
+    whole.stamp     Covered(whole_sig)        <- correct, outer region only
+
+A dirty bit that is WRONG rather than absent is the one outcome 14.1 says
+this pass must never produce: it tells a caller that writing those bytes
+leaves the inner checksum valid.
+
+**Fixed by resolving in the other order.** This struct's own tags get
+their coverage from the AST as before; a tag it did not declare keeps
+what the nested struct's own layout already worked out and carried across
+with the placement -- re-deriving it here would derive it from the wrong
+declaration. Then the covering map is built from the PLACEMENTS rather
+than from `decl.members`, which is what lets a nested tag stale the bytes
+it covers:
+
+    whole.piece.a   Covered(part_sig, whole_sig)     innermost first
+    whole.stamp     Covered(whole_sig)
+
+**SUPPORTED, not refused, and that was measured rather than chosen.** All
+four backends build the shape, C and C++ compile it with no errors,
+Python parses, and C emits both recomputations --
+`situ_signed_whole_piece_part_sig_is_dirty` beside
+`situ_signed_whole_whole_sig_is_dirty`. The nested layout was already
+carrying `tag_covers` correctly through inlining; only the enclosing
+pass was failing to read it.
+
+**Inert on the corpus, measured both ways.** All 42 schemas produce a
+byte-identical capability map before and after, because none of them
+nested a self-covered struct -- which is exactly why the crash survived:
+`edges` has carried a struct that covers its own region since `two_tags`
+landed, and a struct that holds another struct for longer, and never the
+two together. **The population is products.** `edges.signed_whole` is the
+entry now.
+
+**Two controls, because one alone would pass a wrong fix.** Reverting to
+the bare `next()` fails the crash test with `StopIteration`; reverting
+only the covering map leaves that test green and fails the dirty-bit test
+alone. And `whole.stamp` is the control inside the second test: a fix
+that simply added every tag to every placement would report it as covered
+by `part_sig` too, and does not.
+
+**Found by another project, not by this one.** A fuzznet session needed a
+provision card signature, hit this, and has been polling situ's
+origin/master for the answer since 2026-09-18 -- so the shape reached a
+real format before the corpus had it. Their watcher branches on whether
+the probe maps clean or is cleanly refused; the answer it will now get is
+the first.
+
 ### 26.436 A resolved decision that one backend of four implements
 
 **NOT FIXED, and deliberately: this is a contradiction between the

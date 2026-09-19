@@ -351,6 +351,20 @@ struct signed_number size=2..9
   @0x0000   until:2c  i16        offset  radix=10 minimal cap=8
   ~         1         u8         tail
 
+struct signed_part size=11
+  @0x0000   1         u8         a
+  @0x0001   8         u8         b  big
+  @0x0009   2         u8         part_sig
+  part_sig covers: a b part_body
+
+struct signed_whole size=16
+  @0x0000   1         u8         version
+  @0x0001   11        signed_part piece  big
+  @0x000c   2         u16        stamp  big
+  @0x000e   2         u8         whole_sig
+  part_sig covers: a b part_body
+  whole_sig covers: piece a b part_body part_sig stamp version whole_body
+
 struct spanned_arm size=6
   @0x0000   1         u8         pick
   @0x0001   4         variant    held
