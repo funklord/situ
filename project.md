@@ -30887,6 +30887,23 @@ backend's baseline, which is 26.414 through 26.423 having already closed
 them. **That is an empty result with its method recorded, which is worth
 more than the bare fact that nothing was found.**
 
+**Seven more came back clean afterwards and are listed so the next
+reader knows the lens is spent on them**: `trim`, a `while` run, a
+nested struct arm, a scalar enum arm, a byte-run enum arm, a `coded`
+region arm behind a bounded codec, and an `opaque` arm. The last two are
+the interesting empties -- all four decline a `coded` region's accessors
+in BOTH spellings, and all four decline an `opaque` arm with a note,
+C saying *`body` is not a shape this backend reaches into yet* where
+Rust and Python say they cannot resolve where the region is. Declining
+in four different sentences is not a divergence; declining in three and
+emitting in one is, which is what the earlier entries found.
+
+**Two probe schemas were wrong before any of that was true**, and
+reporting them would have manufactured an absence: four constructs came
+back "refused in both forms" purely because the schema lacked
+`bit_order` or put two fields in one `case`. A refusal that names *no
+bit order in scope* is a fact about the probe.
+
 The sixth was not clean.
 
     member   C=2  C++=2  Rs=2  Py=2
