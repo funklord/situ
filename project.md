@@ -30711,6 +30711,55 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.436 A resolved decision that one backend of four implements
+
+**NOT FIXED, and deliberately: this is a contradiction between the
+document and the code, and which of them is wrong is not mine to
+decide.** Recorded with the measurement so that whoever decides has it.
+
+Open question 10 above is marked RESOLVED, and its resolution is a
+sentence about all four backends:
+
+> A struct whose size is not a whole number of bytes gets no accessors in
+> any backend
+
+Measured on `struct one { u4 a; }`, four bits:
+
+    C                  declines, with a note in the emitted file:
+                       "one is 4 bits, not a whole number of bytes,
+                        so no accessors are generated for it"
+    C++, Rust, Python  emit accessors
+
+**One backend of four implements the resolution.** The reasoning given
+for it -- a caller has no way to hold a bit-phase boundary -- is C's
+reasoning, and C is the backend whose view type is a byte pointer and a
+length. The other three have types that could hold one, which may be why
+nobody ever made them refuse, and that is a guess rather than a finding.
+
+**Nested, it becomes a field three backends can read and C cannot.**
+
+    struct half  { u4 a; }
+    struct whole { half lo; u4 hi; u8 after; }
+
+All four lay `whole` out and all four place `lo` at bit 0. C emits
+`situ_whole_lo_view` -- and `half` has no accessors, so the view leads
+nowhere and `whole.lo.a` is unreachable in C alone. **An accessor that
+leads nowhere is this file's own recurring shape**, and here it is not a
+wiring slip but the honest consequence of a rule one backend keeps.
+
+**Why the corpus never said so: it holds no sub-byte struct at all**,
+measured across all 42 schemas. So every gate agrees, because none of
+them is asked.
+
+**Three answers, and the third is why this is not being closed quietly.**
+Teach the other three to decline, which makes the resolution true and
+costs them a capability they currently have. Or revise the resolution and
+teach C to emit, which is the larger change and reopens the question the
+decision closed. Or a third the decision does not name: accessors where a
+sub-byte struct is byte-ALIGNED within its parent, which `half` above is,
+and refusal only where its phase is non-zero. **The measurement does not
+choose between them and neither should this entry.**
+
 ### 26.435 A four-bit arm, and a layout situ cannot express
 
 **The member-versus-arm probe again, and this time the MEMBER form was
@@ -32939,6 +32988,12 @@ about it.
    size is not a whole number of bytes gets no accessors in any backend, and
    `gen-checks` says so in the emitted file rather than skipping quietly:
    `s: not a whole number of bytes, so it has no accessors`.
+
+   **Measured 2026-09-19: only C does this.** C++, Rust and Python emit
+   accessors for a sub-byte struct, so the sentence above is true of one
+   backend of four. The corpus holds no such struct, which is why no gate
+   says so. 26.436 has the measurement and the three ways it could be
+   settled; it is not settled here.
 
    Bit *fields* are another matter and are fully supported: they are read by
    value through a shift and a mask, never by pointer, which is what
