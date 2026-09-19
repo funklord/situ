@@ -1341,7 +1341,7 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 
 	**What the four backends check on an arm, and no more.** A pinned span,
 	a run's span checks (26.425), a delimited arm's delimiter and encoding
-	(26.423), and the value comparisons. An arm shape outside those gets no
+	(26.423), the value comparisons, and an enum's membership. An arm shape outside those gets no
 	check in any backend either; 26.410 records that rather than this
 	half-answering it, because a fifth description refusing what the other
 	four accept is the disagreement the differential exists to find.
@@ -1394,13 +1394,19 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	# this stays one copy of the member path's decision rather than a second
 	# one that has to be kept in step with it.
 	#
-	# ENUM_KNOWN is the interesting absence and it is not an oversight: the
-	# C BACKEND does emit `_enum_check` for a scalar arm, so a schema with an
-	# enum-typed scalar arm would be refused by the four and accepted here.
-	# No such schema can exist -- one does not compile in C++ at all (26.411)
-	# -- so the corpus cannot carry the case and the differential cannot pose
-	# it. When 26.411 is fixed, the packer's arm pass is what has to learn
-	# the row; this line already reads it.
+	# ENUM_KNOWN was the interesting ABSENCE and is now simply read. This
+	# comment used to say no schema with an enum-typed scalar arm could
+	# exist, one not compiling in C++ at all (26.411), so the corpus could
+	# not carry the case and the differential could not pose it. **All three
+	# clauses have since stopped being true**: 26.420 made the construct
+	# buildable, 26.421 taught the image to carry the row, and
+	# `edges.typed_kind` is the case. Measured 2026-09-19 -- four placements
+	# in `edges` carry an ENUM_KNOWN row, and a minimal enum arm compiles in
+	# all four backends with no errors.
+	#
+	# The C walk's own comment had the corrected story and this one did not,
+	# which is the two-copies failure: `situ_walk.c` says exactly what
+	# 26.420 and 26.421 changed, a few lines above the same dispatch.
 	# A DELIMITED arm's delimiter is THERE (26.423). The member path asks
 	# this with the same scan a few hundred lines above; an arm had no row
 	# to read and no reader for it, so a frame whose arm ran to the end of

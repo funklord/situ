@@ -3002,12 +3002,20 @@ static void record(situ_walk_why *why, uint32_t placement, uint8_t check)
  * value the message states, so a build that has lost the gate REFUSES the
  * two ordinary cells -- frames all four code backends accept.
  *
- * THREE FAMILIES, which is what the packer writes for an arm and what the
- * four backends emit: a pinned span, the value comparisons, and an enum's
- * membership. Any OTHER kind on an arm is passed over rather than refused:
+ * WHAT THE PACKER WRITES FOR AN ARM AND WHAT THE FOUR BACKENDS EMIT, which
+ * is currently a pinned span, a run's span checks, a delimited arm's
+ * terminator, the value comparisons, and an enum's membership -- eight
+ * check kinds. Any OTHER kind on an arm is passed over rather than refused:
  * the backends check no more than these, so silence agrees with them, where
  * UNSUPPORTED would decline every struct `report._arm_constraints` answers
  * for.
+ *
+ * THE LIST IS NOT A CONSTANT AND THIS SENTENCE HAS BEEN WRONG TWICE. It
+ * said "three families" while the emitters had learned two more -- the run
+ * span checks of 26.425 and the delimited terminator of 26.423 -- because
+ * the Python docstring this mirrors was corrected and its mirror here was
+ * not. So read it as a claim about what the emitters do, and count
+ * `CHECK_` cases in the body rather than trusting the number in the prose.
  *
  * Membership was the LAST of the three and its absence ran the other way
  * round from the rest of 26.417. The four backends have always emitted
