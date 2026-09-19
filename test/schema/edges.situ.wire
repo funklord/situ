@@ -221,6 +221,13 @@ struct linked size=4..
   @0x0000   4..6144   link       chain  big while=kind==0x11||kind==0x22 while-max=6
   ~         0..       u8         tail  sized-by=remaining
 
+struct located_tail size=3..258
+  @0x0000   1         u8         n
+  @0x0001   0..255    u8         v  sized-by=n
+  ~         1         u8         spot
+  ~         2         u8         payload  big at=spot
+  ~         1         u8         tail
+
 struct marked size=5..17
   @0x0000   2         edge_order edge_order
   @0x0002   1         u8         n  endian-from=edge_order max=4
@@ -330,6 +337,15 @@ struct segments size=3..65283
   @0x0000   1         u8         count
   @0x0001   0..65280  segment    parts  sized-by=count
   ~         2         u16        after  big
+
+struct separated_arm size=3..
+  @0x0000   1         u8         pick
+  @0x0001   1..       variant    held
+  ~         1         u8         after
+  held switch: pick
+  held case 1: line u8
+  held case 2: fixed u8
+  held case default: error
 
 struct shadowing size=20
   @0x0000   4         u32        base  big

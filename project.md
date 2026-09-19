@@ -30711,6 +30711,122 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.446 A located member reaches past the frame, in five of six readers
+
+**Six descriptions of one layout, and five of them had each independently
+assumed a struct's frame is its message.** `project.md` says the opposite
+in as many words -- "a `located` member reaches past the frame by
+construction (9.8)" -- and the sentence was written for 26.424, where the
+same assumption had cost three artifacts in one entry. It cost five more
+here, in three separate places, and the three failed in two different
+directions.
+
+    u8 off;
+    u8 payload[2] at off;
+    u8 tail;
+
+**C++ and Python refused a frame the other four accept.** Their
+`_fits_check` asked whether a declared run fits the frame, and a located
+run declares a size like any other: `validate` came back 1 where C, Rust
+and both walkers said 0. The valid five-byte frame above is the case. Both
+now return `[]` for a located member, which is what C and Rust already
+did.
+
+**Both walkers refused an out-of-range offset that all four backends
+accept**, and by their own arithmetic rather than by anything the packer
+told them. The check is the fixed-size-at-a-dynamic-offset one, and a
+located member satisfies both halves of its pair by construction -- `at
+off` *is* a dynamic offset, and `payload[2]` *is* fixed size -- so the
+check fires on exactly the construct it was never meant to see. The two
+carry `located_code` already; neither consulted it.
+
+**And the packer wrote a FITS_FRAME row for a located member**, which is a
+third copy of the same mistake at a third layer. It did not fire while the
+walkers' own check fired first, and that is the whole reason to mind it:
+removing only the walkers' arithmetic left the row behind, and the sabotage
+that proves this says so -- with the packer guard reverted and both walkers
+fixed, the Python walk goes back to refusing at 1. **A check hidden behind
+another check is not a check that has been removed.**
+
+**The sabotage found a seventh reader disagreeing with the sixth, which
+nothing else would have.** In that same reverted state the two walkers
+disagree with *each other* -- Python 1, C 0 -- so the C walker had been
+treating that row differently all along. It is inert now that no such row
+is written, and it is recorded rather than chased: the next person to make
+the packer emit one will meet it.
+
+**The payoff is in the worked example rather than in a fixture.** BMP is
+the format the located construct exists for, and its image lost exactly one
+sixteen-byte row -- the only corpus image that changed at all. A BMP
+truncated to 60 bytes was refused by the walk at `fba9ee5` and accepted by
+all four backends; all six agree at 0 now.
+
+**That is a permissive change and it is the design's, not an oversight.**
+`validate` no longer calls a short file malformed on account of its pixels,
+because the pixel accessor asks the message on every call and answers len=0
+-- which is where 9.8 puts the question. A schema wanting the stricter
+answer has `require` and the file's own declared size, which is what BMP's
+two assertions already do.
+
+**The control is the narrowness.** A fixed-size member at a dynamic offset
+that is *not* located must still be refused, and a frame chosen to clear the
+struct's minimum so that the check under test is the only thing that can
+answer -- `u8 n; u8 v[n]; u8 tag[4]` over six bytes with n=4 -- is refused
+by all six. The first control written for this was weaker and said so: it
+was short enough to fail the struct's own minimum, so the four answered
+`no-view` and the check under test never ran.
+
+### 26.445 A located member joins the offset chain it says it is not in
+
+**All four backends read every member after a located one from the wrong
+place, and only when something before it was variable-length.** The walkers
+said 34 and the four said 119, which is the located member's own offset
+leaking into the running sum of what precedes the next member.
+
+`preceding_parts` in `situc/traverse.py` walks earlier members adding up
+their extents. A located member has no extent to contribute -- that is what
+`at off` means, and the C walker's own comment says so at the corresponding
+site: "a located member joins no offset chain: it says where it is." The
+shared traversal did not skip it, so every backend built from it inherited
+the same wrong sum.
+
+**The all-static control is what proved which answer was intended**, rather
+than an argument from the document: with nothing variable before the located
+member, all six already agreed at 17, so the intended semantics were
+available to read off a case that worked. The fix brings the variable case
+to 34 in all six and leaves the control at 17.
+
+**One decision layer, six readers, one line.** This is the shape 26.434 and
+26.445 share and the reason `traverse.py` is worth the indirection: a wrong
+decision there is wrong in six places at once, and a right one is right in
+six. The corpus generated output and the capability maps were both
+unchanged, which says no corpus schema puts a variable member before a
+located one -- the construct existed and the combination did not, which is
+26.437's lesson again. **The population is products, not constructs.**
+
+### 26.444 `before` became `until` inside a variant arm, and nowhere else
+
+**My own regression from 26.423, found by asking the same question twice in
+two places.** All four backends spelled a delimited arm's span as though the
+delimiter belonged to the arm, so every member after the variant was read
+one byte late. The same backends get it right for a delimited member at the
+top level, which is what made it findable: one schema, two spellings, and
+the answer differed only inside the arm.
+
+`until` is a terminator and belongs to the member it ends, so it is
+consumed. `before` is a separator and belongs to neither side, so it is
+not. The distinction is a flag the placement already carries --
+`placement.delimiter_consumed` -- and the arm-span code I added in 26.423
+did not consult it. Three cases now agree across all five descriptions:
+`before` in an arm 10, `until` in an arm 11, `before` at the top level 10.
+
+**The lesson is not about delimiters.** 26.423 taught the four backends to
+answer a question inside an arm that they already answered outside it, and
+the new answer was written fresh rather than derived from the old one. A
+second implementation of a decision already made is a second chance to make
+it differently, and it took the difference. The corpus diff was inert, so
+nothing in the corpus puts a `before` inside an arm either.
+
 ### 26.443 The paren depth limit: recorded, NOT fixed, and why
 
 **Measured by bisection: 69 nested parentheses parse, 70 raise

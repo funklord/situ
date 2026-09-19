@@ -20,7 +20,7 @@ from situc.traverse import (
 	Check, Member, byte_span, classify, classify_check, container_bits,
 	declared_value_bounds,
 	has_computable_extent, is_own_member, local_name, obligation, obligations,
-	own_members, span_bits,
+	own_members, preceding_parts, span_bits,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -587,3 +587,57 @@ def test_pinned_runs_reads_a_byte_run_and_nothing_else() -> None:
 		== (b"WOZ2",)
 	assert run_of("struct S { u8 sig[4]; }", "sig") is None
 	assert run_of("struct S { u32 a [must_eq = 7]; }", "a") is None
+
+
+def _before(body: str, struct: str, field: str) -> int:
+	"""The fixed bytes `preceding_parts` says lie before `field`."""
+	resolved = structs(body)[struct]
+	held = next(p for p in resolved.layout.placements
+	            if local_name(resolved, p) == field)
+	parts = preceding_parts(resolved, held)
+	assert parts is not None
+	return sum(part for part in parts if isinstance(part, int))
+
+
+def test_a_located_member_contributes_no_extent_to_what_follows() -> None:
+	"""`at off` says where it is, so it joins no offset chain (26.445).
+
+	The C walker has carried that sentence at the corresponding site for
+	as long as it has had one -- "a located member joins no offset chain:
+	it says where it is" -- and this shared walk did not, so all four
+	backends summed a located member's own size into the offset of every
+	member after it. The four said `tail 119` where both walkers said 34.
+
+	It only showed with something VARIABLE before the located member: with
+	everything static the struct's own offsets are constants and nobody
+	consults this function, which is why the construct had existed for a
+	long time and the combination had not.
+	"""
+	body = """struct s {
+	u8 n;
+	u8 v[n];
+	u8 payload[64] at n;
+	u8 tail;
+}
+"""
+	# `n` is one byte and `v` is variable; `payload` is located and adds
+	# nothing, so `tail` has exactly the one fixed byte before it.
+	assert _before(body, "s", "tail") == 1
+
+
+def test_a_member_that_is_not_located_does_contribute() -> None:
+	"""The control: the same struct with `at n` removed.
+
+	Without it this test file would pass just as loudly against a
+	`preceding_parts` that had learned to skip every array -- which is a
+	fix nobody wrote and the assertion above cannot tell apart from the
+	one somebody did.
+	"""
+	body = """struct s {
+	u8 n;
+	u8 v[n];
+	u8 payload[64];
+	u8 tail;
+}
+"""
+	assert _before(body, "s", "tail") == 65

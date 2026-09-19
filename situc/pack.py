@@ -1644,8 +1644,17 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				sized = (field.array.size
 				         if isinstance(field, ast.Field) and field.array
 				         else None)
+				# NOT for a LOCATED member, which "reaches past the frame
+				# by construction" (9.8): `at off` puts its bytes where the
+				# message says, so whether this frame holds them is the
+				# wrong question, and its accessor asks the right one
+				# against the message on every call. All four backends
+				# exclude it -- `declares_its_own_length` carries
+				# `placement.located is None` -- and the packer did not, so
+				# the walk refused frames every backend accepts (26.446).
 				if sized is not None and isinstance(field, ast.Field) \
 						and not isinstance(sized, ast.Remaining) \
+						and placement.located is None \
 						and field.repeat is None:
 					constraints_blob += _struct.pack("<IqBxxx", at, 0, 6)
 				continue

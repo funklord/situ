@@ -175,7 +175,7 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                25,
+	("scalar", "not-struct", ""):                27,
 	("no-scalar", "struct", "fixed"):            48,
 	("no-scalar", "struct", "unmeasurable"):     23,
 	("no-scalar", "not-struct", ""):              1,
@@ -294,18 +294,19 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 
 	`_arm_member` declines an arm with `if structs.get(type_name) is None`,
 	and 26.209 restricted the offset accessor to a *struct* arm on the
-	strength of that reading. The condition's text names **26** of the
-	corpus's 97 arm members -- every one whose type is not a struct. What it
-	means is the last cell alone, and it behaves correctly on the other 25
+	strength of that reading. The condition's text names **28** of the
+	corpus's 99 arm members -- every one whose type is not a struct. What it
+	means is the last cell alone, and it behaves correctly on the other 27
 	only because three scalar branches return before control reaches it.
 
-	Those counts are the kind that rot, and they have EIGHT times across
-	two days -- 12 of 70, 13 of 81, 15 of 83, 17 of 85, 20 of 88, 22 of 90,
-	24 of 95, now 26 of 97 -- as `edges` gained a parameterised variant,
-	`signed_kind`'s constrained arms, `typed_kind`'s enum-typed one,
-	`spanned_arm`'s three span-constrained ones, `versioned_arm`'s two,
-	`delimited_arm`'s two and `wide_delim_arm`'s two, and `example/sexpr`
-	arrived with three unmeasurable struct arms. Eight rots is the whole
+	Those counts are the kind that rot, and they have NINE times across
+	three days -- 12 of 70, 13 of 81, 15 of 83, 17 of 85, 20 of 88, 22 of
+	90, 24 of 95, 26 of 97, now 28 of 99 -- as `edges` gained a
+	parameterised variant, `signed_kind`'s constrained arms, `typed_kind`'s
+	enum-typed one, `spanned_arm`'s three span-constrained ones,
+	`versioned_arm`'s two, `delimited_arm`'s two, `wide_delim_arm`'s two and
+	`separated_arm`'s two, and `example/sexpr` arrived with three
+	unmeasurable struct arms. Nine rots is the whole
 	argument for asserting the census rather than for writing better prose:
 	the numbers are re-derivable from `_arm_shapes()` in one call, which is
 	why the assertion below is on the census rather than on the prose --
@@ -315,6 +316,13 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 	free: `wide_delim_arm` could not be added to the corpus at all until
 	the differ learned to probe a delimited arm, so the census stood still
 	for a shape the tree could not express (26.431).
+
+	The ninth is `separated_arm`, added to hold 26.444 -- a `before`
+	delimiter inside an arm, where all four backends were spelling the
+	separator as a terminator. It is the same two cells `delimited_arm`
+	moved, which is the point of the pair: the two structs differ in one
+	keyword and the census cannot tell them apart, so what distinguishes
+	them has to be a test about the delimiter rather than a count.
 
 	So the text and the meaning are not the same set, and the corpus holds
 	exactly one witness to the difference: `nl_message.body.rest`, which is

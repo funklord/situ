@@ -865,6 +865,42 @@ def test_they_agree_about_a_versioned_member(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_located_offset_past_the_frame_is_not_bounds(tmp_path: Path) -> None:
+	"""The sixth description of 26.446, and it had the fault twice over.
+
+	`at off` reaches past the frame by construction (9.8), and both
+	walkers refused an out-of-range one from their own fixed-size-at-a-
+	dynamic-offset arithmetic -- a pair a located member satisfies by
+	construction. All four backends accept it.
+
+	The control differs in nothing but `at`: `tag[4]` behind a variable
+	`v[n]` is the same pair without the construct that excuses it, and it
+	must still be BOUNDS. Its frame is six bytes rather than four so that
+	the struct's own minimum is met and this check is the only thing that
+	can answer -- a shorter one is refused on entry and proves nothing.
+	"""
+	located = tmp_path / "located.situ"
+	located.write_text("target buffer;\nendian big;\n\n"
+	                   "struct s {\n\tu8 off;\n\tu8 payload[2] at off;\n"
+	                   "\tu8 tail;\n}\n", encoding="ascii")
+	plain = tmp_path / "plain.situ"
+	plain.write_text("target buffer;\nendian big;\n\n"
+	                 "struct s {\n\tu8 n;\n\tu8 v[n];\n\tu8 tag[4];\n}\n",
+	                 encoding="ascii")
+
+	for path, message, want in (
+			(located, bytes.fromhex("ff0203"),       "0"),
+			(located, bytes.fromhex("0102030405"),   "0"),
+			(plain,   bytes.fromhex("01aa01020304"), "0"),
+			(plain,   bytes.fromhex("04aabbccdd01"), "1"),
+	):
+		blob    = image_for(path)
+		verdict = c_verdict(tmp_path, blob, message)
+		assert verdict == python_verdict(blob, message), message.hex()
+		assert verdict == want, (path.name, message.hex())
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_they_agree_about_an_encoding_the_message_names(tmp_path: Path) -> None:
 	"""`[encoding = from(f)]`: the check the message's own field picks (0058).
 

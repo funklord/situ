@@ -2797,12 +2797,21 @@ class Emitter:
 				"",
 				"\t@property",
 				f"\tdef {name}_span(self) -> int:",
-				'\t\t"""Content plus the delimiter: where the next member',
-				"\t\tstarts. Where the delimiter is missing there is nothing",
-				'\t\tto add -- the arm ran to the end of the frame."""',
-				f"\t\tcontent = self.{name}_len",
-				f"\t\treturn content + ({len(delim)}"
-				f" if content < {room} else 0)",
+				# `before` is a SEPARATOR belonging to neither side and
+				# `until` a terminator belonging to the member it ends
+				# (26.291). The arm span added the delimiter either way, so
+				# `before` answered as `until` inside an arm alone (26.444).
+				*(['\t\t"""Content plus the delimiter: where the next member',
+				   "\t\tstarts. Where the delimiter is missing there is"
+				   " nothing",
+				   '\t\tto add -- the arm ran to the end of the frame."""',
+				   f"\t\tcontent = self.{name}_len",
+				   f"\t\treturn content + ({len(delim)}"
+				   f" if content < {room} else 0)"]
+				  if placement.delimiter_consumed else
+				  ['\t\t"""The content alone: `before` makes the delimiter',
+				   '\t\ta separator belonging to neither side."""',
+				   f"\t\treturn self.{name}_len"]),
 				"",
 				# The delimiter is THERE, and the content UNGATED. A
 				# delimited member has had both all along and an arm had
@@ -5355,6 +5364,22 @@ class Emitter:
 		short. Clamping alone silently turns a lie into a truncation.
 		"""
 		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+
+		# A LOCATED member's bytes are not in this frame's sequence at all:
+		# `at off` puts them where the MESSAGE says, so whether the view
+		# holds them is not a question the view can answer. Its own
+		# accessor bounds-checks against the message on every call, which
+		# is where the question belongs (section 9.8) -- and C says exactly
+		# that in a comment beside the check it declines to emit.
+		#
+		# This emitted the generic dynamic-offset check instead, against
+		# the offset the member would have had if `at` were absent, and
+		# refused every frame: `u8 payload[2] at off` with `off = 1` in a
+		# five-byte message was BOUNDS in C++ and Python while C, Rust and
+		# the walker read it correctly (26.446). A false refusal, which
+		# blocks a schema outright rather than answering it wrongly.
+		if placement.located is not None:
 			return []
 
 		# The other half of the same sentence: a member *placed* after a

@@ -3698,9 +3698,15 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * offset is either within the struct's own minimum, already checked
 		 * on entry, or a `[since]` member the version admits: the packer, the
 		 * Python walk and every backend leave that one unchecked, so a second
-		 * reader that flagged it would be the one out of six that disagreed. */
+		 * reader that flagged it would be the one out of six that disagreed.
+		 * And NOT a located member, which satisfies both flags -- `at off`
+		 * is a dynamic offset and is usually fixed-size -- while "a
+		 * `located` member reaches past the frame by construction (9.8)".
+		 * Its accessor asks the message on every call. Asking it here
+		 * refused frames all four backends accept (26.446). */
 		if ((held.flags & SITU_WALK_OFFSET_KNOWN) == 0u
 		                && (held.flags & SITU_WALK_SIZE_FIXED) != 0u
+		                && held.located_code == SITU_WALK_NONE
 		                && (at / 8u > len || (wide + 7u) / 8u > len - at / 8u)) {
 			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;

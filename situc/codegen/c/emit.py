@@ -2824,17 +2824,43 @@ class Emitter:
 				f" {len(delim)}u);",
 				"}",
 				"",
-				"/* Content plus the delimiter: where the next member starts.",
-				" * Where the delimiter is missing there is nothing to add --",
-				" * the arm ran to the end of what the view holds. */",
-				f"static inline uint32_t {span_fn}(situ_view_t view)",
-				"{",
-				f"\tconst uint32_t content = {scan}(view);",
-				"",
-				f"\treturn content + (content"
-				f" < {self._scan_limit(placement, at)}",
-				f"\t\t? {len(delim)}u : 0u);",
-				"}",
+				# `until` CONSUMES its delimiter and `before` does not:
+				# 26.291 calls the first a terminator belonging to the
+				# member it ends and the second a separator belonging to
+				# neither side. The arm span added it either way, so the
+				# four backends answered `before` exactly as they answer
+				# `until` -- but only INSIDE AN ARM, contradicting their own
+				# top-level answer for the same member, and every member
+				# after the variant was read one byte late (26.444).
+				#
+				# Mine, from the arm-span work: the accessors taught the
+				# emitters about delimiters and not about which of the two
+				# kinds. The walker had it right all along, which is how it
+				# surfaced -- four agreeing backends can hide anything the
+				# fifth description does not check.
+				*(["/* Content plus the delimiter: where the next member"
+				   " starts.",
+				   " * Where the delimiter is missing there is nothing to"
+				   " add --",
+				   " * the arm ran to the end of what the view holds. */",
+				   f"static inline uint32_t {span_fn}(situ_view_t view)",
+				   "{",
+				   f"\tconst uint32_t content = {scan}(view);",
+				   "",
+				   f"\treturn content + (content"
+				   f" < {self._scan_limit(placement, at)}",
+				   f"\t\t? {len(delim)}u : 0u);",
+				   "}"]
+				  if placement.delimiter_consumed else
+				  ["/* The content alone. `before` makes the delimiter a"
+				   " SEPARATOR",
+				   " * belonging to neither side, so the next member starts"
+				   " at it",
+				   " * rather than past it. */",
+				   f"static inline uint32_t {span_fn}(situ_view_t view)",
+				   "{",
+				   f"\treturn {scan}(view);",
+				   "}"]),
 				"",
 				# The delimiter is THERE, which is what separates a complete
 				# frame from one cut short. A delimited member has had this

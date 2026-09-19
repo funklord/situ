@@ -815,8 +815,18 @@ def _validate(image: Image, view: View, struct_index: int,
 		#
 		# A member that declares its own length is the case below and is
 		# never fixed-size, so the two do not overlap.
+		#
+		# NOT a located member, whatever the pair says. `at off` is a
+		# dynamic offset and is usually fixed-size, so it satisfies both
+		# flags -- and "a `located` member reaches past the frame by
+		# construction (9.8)". Its accessor asks the message on every
+		# call, which is where that question belongs; asking it here
+		# refused frames all four backends accept, because none of them
+		# emits this check for one. Three other artifacts had already made
+		# exactly this assumption (26.446).
 		placed = image.placements[index]
-		if placed.fixed and not placed.offset_known:
+		if placed.fixed and not placed.offset_known \
+				and placed.located_code == NONE:
 			if view.at * 8 + at + wide > view.limit * 8:
 				return fail(ERR_BOUNDS, index)
 

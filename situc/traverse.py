@@ -1674,6 +1674,19 @@ def preceding_parts(struct: ResolvedStruct,
 	for other in walk_order(struct, placement):
 		if other.path == placement.path:
 			break
+		# A LOCATED member occupies nothing here. `at off` puts its bytes
+		# where the message says, not after the member before it, so it
+		# contributes no extent to the running sum -- which is what the
+		# STATIC placement path has always done, and why a struct whose
+		# members are all static reports the located one as adding zero.
+		#
+		# This path added its declared size, so the two disagreed and the
+		# dynamic one was wrong: `u8 payload[5] at off` behind a
+		# variable-length member put every later member five bytes late, in
+		# all four backends at once, while the walker read them correctly
+		# (26.445). Four agreeing backends are what made it invisible.
+		if other.located is not None:
+			continue
 		if occupies_fixed_bytes(other):
 			bits += fixed_span_bits(other)
 			continue

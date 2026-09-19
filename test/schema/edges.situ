@@ -820,6 +820,41 @@ struct delimited_arm {
 	u8  after;
 }
 
+// A SEPARATOR INSIDE AN ARM (26.444). `delimited_arm` above is the same
+// shape with `until`, and the pair is the point: `until` is a terminator
+// and belongs to the member it ends, `before` is a separator and belongs
+// to neither side. All four backends had the distinction right at the top
+// level and spelled it as `until` inside an arm, so `after` was read one
+// byte late -- one schema, two spellings, and only the arm was wrong.
+struct separated_arm {
+	u8 pick;
+	variant held switch (pick) {
+		case 1:  u8  line[] before ",";
+		case 2:  u8  fixed[3];
+		default: error;
+	}
+
+	u8  after;
+}
+
+// A LOCATED MEMBER BEHIND A VARIABLE ONE (26.445, 26.446). The file has
+// carried located members and variable-length members separately for a
+// long time and never the combination, which is why four backends could
+// sum a located member's own size into the offset of everything after it
+// -- `at` says where a member is, so it joins no offset chain and
+// contributes no extent to `tail`.
+//
+// It is also the frame question (9.8): `spot` may point anywhere the byte
+// admits, including past this frame, and that is not a malformed message.
+// The accessor asks the message on every call; `validate` does not.
+struct located_tail {
+	u8 n;
+	u8 v[n];
+	u8 spot;
+	u8 payload[2] at spot;
+	u8 tail;
+}
+
 // A VARINT CARRYING BOUNDS ON ITS VALUE (26.426), which the file has had
 // the halves of since `edge_varint` landed and never the product.
 //
