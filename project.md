@@ -30711,6 +30711,44 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.443 The paren depth limit: recorded, NOT fixed, and why
+
+**Measured by bisection: 69 nested parentheses parse, 70 raise
+`RecursionError` from `situc/parser.py` in `parse_expr`.** It is a
+traceback rather than a diagnostic, which is the same class as 26.437
+through 26.442 -- and it is the one of the family being left alone.
+
+    u8 d[((((( ... 70 deep ... 1 ... )))))];
+
+`parse_expr` descends one frame per precedence level per paren, so the
+budget is about twelve Python frames per `(`. Nothing else in the parser
+is this shallow: unary `~` chains 500 deep, 800-term binary chains, 200
+nested `positional` blocks and 150 nested `authenticated` regions all
+parse.
+
+**Why it is not fixed, which is a judgement and belongs written down.**
+Every available fix either narrows the language or rewrites the parser:
+
+  - A depth cap with a real diagnostic has to fire BELOW 70 to beat the
+    interpreter, so it turns "parses" into "refused" for anything from
+    the cap to 69. That is a language change to defend against input
+    nobody writes.
+  - Raising the interpreter's recursion limit trades a clean
+    `RecursionError` for a possible segfault, which is worse.
+  - Making the precedence climb iterative is the honest fix and is a
+    parser refactor, which is its own piece of work and not one to do at
+    the end of a session spent elsewhere.
+
+**And the bar this file sets is whether acting on it changes anybody's
+code, build or decision.** A hand-written schema does not reach 70; a
+generator emitting one would be a finding about the generator. So it is
+recorded as a known limit with its exact threshold, which is what lets
+the next person recognise it in one line instead of bisecting it again.
+
+**The threshold is a property of this interpreter**, not of situ: it
+moves with the recursion limit and the frame cost of the Python running
+it. Re-measure before quoting the 70.
+
 ### 26.442 A constraint the image cannot carry, and the one description that died
 
 **`map`, `wire`, `doc` and all four backends accept these schemas and
