@@ -142,6 +142,9 @@ struct escaped_run size=1..
   @0x0000   until:2c  u8         field  escape=0x5c cap=64
   ~         0..       u8         rest  sized-by=remaining
 
+struct fixed_text size=3
+  @0x0000   3         u8         body  big encoding=ascii
+
 struct framed size=9..
   @0x0000   4         u8         magic  big
   @0x0004   until:0d0a u8         version  big cap=16
@@ -380,6 +383,10 @@ struct signed_whole size=16
   @0x000e   2         u8         whole_sig
   part_sig covers: a b part_body
   whole_sig covers: piece a b part_body part_sig stamp version whole_body
+
+struct sized_text size=1..256
+  @0x0000   1         u8         n
+  @0x0001   0..255    u8         body  sized-by=n encoding=ascii
 
 struct spanned_arm size=6
   @0x0000   1         u8         pick

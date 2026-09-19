@@ -3874,6 +3874,41 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 		}
 
+		/* DOES THE FRAME HOLD THE RUN -- asked before anything reads the
+		 * run's bytes, which is `report._validate`'s order and was not this
+		 * walk's. The accessor clamps; this is where a message declaring
+		 * more than it carries is called malformed, and it answers BOUNDS
+		 * rather than CONSTRAINT.
+		 *
+		 * It sat in the value loop BELOW the span block, so a run carrying
+		 * an encoding had its bytes read first, the read found the frame
+		 * short, and the refusal was recorded with no check behind it. The
+		 * two walkers then agreed on BOUNDS and disagreed about which check
+		 * said so -- the exact silence 0051's comparison exists to break,
+		 * and the encoding row was the whole discriminator: a plain
+		 * `u8 body[n]` and a `[nul_terminated]` one both reached this check
+		 * and agreed, because with no span row the block below is skipped.
+		 * Found by `edges.sized_text` on the run it was added in (26.447). */
+		for (uint32_t c = 0u; c < rows; c++) {
+			if (checks[c * image->constraint_stride + 12] != CHECK_FITS_FRAME) {
+				continue;
+			}
+			{
+				uint32_t held_bits = 0u;
+				err = situ_walk_size_bits(image, message, len, shape, index,
+				                          &held_bits);
+				if (err != SITU_WALK_OK) {
+					return err;
+				}
+				if ((held_bits + 7u) / 8u > len - at / 8u) {
+					record(why, index, CHECK_FITS_FRAME);
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
+			}
+			break;
+		}
+
 		/* The checks that read a *span* rather than a value, over the bytes
 		 * the schema called text. A delimited member's width is its content
 		 * plus its delimiter, because that is where the next member starts,
@@ -4018,6 +4053,7 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			const uint8_t  kind  = row[12];
 
 			if (kind == CHECK_TERMINATED || kind == CHECK_NUL_TERMINATED
+			                || kind == CHECK_FITS_FRAME
 			                || kind == CHECK_ENCODED_AS
 			                || kind == CHECK_ZERO_RUN
 			                || kind == CHECK_PINNED_RUN
@@ -4027,24 +4063,6 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			                || kind == CHECK_PAD_LENGTH_MIN
 			                || kind == CHECK_PAD_LENGTH_MAX) {
 				continue;	/* asked above, over the span rather than a value */
-			}
-
-			if (kind == CHECK_FITS_FRAME) {
-				/* The accessor clamps; this is where a message declaring
-				 * more than it carries is called malformed, and it answers
-				 * BOUNDS rather than CONSTRAINT. */
-				uint32_t held_bits = 0u;
-				err = situ_walk_size_bits(image, message, len, shape, index,
-				                          &held_bits);
-				if (err != SITU_WALK_OK) {
-					return err;
-				}
-				if ((held_bits + 7u) / 8u > len - at / 8u) {
-					record(why, index, kind);
-					*verdict = SITU_WALK_BOUNDS;
-					return SITU_WALK_OK;
-				}
-				continue;
 			}
 
 			uint64_t value = 0u;

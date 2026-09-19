@@ -820,6 +820,27 @@ struct delimited_arm {
 	u8  after;
 }
 
+// AN ENCODING ON A MESSAGE-SIZED RUN (26.447). The literal-length
+// sibling is the control and the whole instrument: same attribute, same
+// bytes, and it was answered correctly in all four backends while this
+// one was answered by C alone. C++ passed a count of zero, so the check
+// ran over no bytes and accepted anything; Rust and Python bailed before
+// reaching the attribute at all.
+//
+// `nul_terminated` is deliberately NOT here. Whether it means anything on
+// a run the message sizes is an open question -- 973 says the declared
+// size is the capacity, `wellformed.py` accepts the placement, and
+// `c/emit.py` says a message-sized run has no capacity -- and a corpus
+// entry would settle it by accident. See project.md 26.447.
+struct sized_text {
+	u8 n;
+	u8 body[n] [encoding = ascii];
+}
+
+struct fixed_text {
+	u8 body[3] [encoding = ascii];
+}
+
 // A SEPARATOR INSIDE AN ARM (26.444). `delimited_arm` above is the same
 // shape with `until`, and the pair is the point: `until` is a terminator
 // and belongs to the member it ends, `before` is a separator and belongs

@@ -6698,12 +6698,18 @@ class Emitter:
 		if scalar.bits != BITS_PER_BYTE:
 			return self._utf16_check(struct, placement, scalar)
 
-		if placement.sized_by is not None:
-			return []
+		# A message-sized run returned nothing here, which dropped the
+		# ENCODING check with the terminator one -- `ascii_valid(self.text)`
+		# reads the bytes the accessor hands back and wants no count at
+		# all. So `u8 text[n] [encoding = ascii]` accepted any bytes while
+		# `u8 text[3] [encoding = ascii]` refused the same ones correctly,
+		# in this backend and in Rust, C++ getting it wrong a third way.
+		# The literal-length sibling is what made it visible: same
+		# attribute, same bytes, opposite answers.
 
 		from situc.wellformed import _encoding_source
 
-		count = placement.array_count or 0
+		count = placement.array_count
 		lines: list[str] = []
 
 		for attr in placement.attrs:
@@ -6722,7 +6728,10 @@ class Emitter:
 				elif _encoding_source(attr) is not None:
 					lines.extend(self._declared_encoding_check(
 						struct, placement, attr, f"self.{name}"))
-			if attr.name == "nul_terminated":
+			# Only where the count is declared. C and Rust skip a
+			# message-sized run too, and which answer is right is an open
+			# question rather than this backend's to settle -- project.md.
+			if attr.name == "nul_terminated" and count is not None:
 				lines.extend([
 					f"\t\tif self.{name}_len >= {count}:",
 					f"\t\t\traise ConstraintError("

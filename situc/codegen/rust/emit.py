@@ -7531,9 +7531,14 @@ class Emitter:
 
 		from situc.wellformed import _encoding_source
 
+		# The count is `nul_terminated`'s business and nobody else's: the
+		# encoding checks take a SLICE, whose length is its own. Bailing
+		# here for a message-sized run therefore dropped the encoding too,
+		# so `u8 text[n] [encoding = ascii]` was accepted with any bytes in
+		# it while the literal-length sibling was refused correctly -- the
+		# attribute inert in three of four backends, which is the state
+		# `c/emit.py` calls worse than having none.
 		count = placement.array_count
-		if count is None:
-			return checks
 		where = span if span is not None else f"self.{name}()"
 		holds = (f"situ_rt::nul_len({where})" if span is not None
 		         else f"self.{name}_len()")
@@ -7554,7 +7559,11 @@ class Emitter:
 				elif _encoding_source(attr) is not None:
 					checks.extend(self._declared_encoding_checks(
 						struct, placement, attr, where))
-			if attr.name == "nul_terminated":
+			# Only where the count is declared here. A message-sized run
+			# is skipped by C and Python too, and which answer is right is
+			# an open question rather than this backend's to settle -- see
+			# project.md.
+			if attr.name == "nul_terminated" and count is not None:
 				checks.extend([
 					f"\t\tif {holds} >= {count} {{",
 					"\t\t\treturn Err(Error::Constraint);",

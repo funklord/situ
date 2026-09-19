@@ -8501,8 +8501,28 @@ class Emitter:
 		from situc.wellformed import _encoding_source
 
 		name  = bare_name(local_name(struct, placement))
-		count = placement.array_count or 0
 		where = span if span is not None else f"{name}().data()"
+		# The run's length, which is NOT `array_count` where the message
+		# declares it -- `array_count` is None for `u8 text[n]`, and `or 0`
+		# turned that into a literal zero. `situ_ascii_valid(p, 0)` passes
+		# whatever the bytes are and `situ_nul_terminated(p, 0)` fails
+		# whatever they are, so one attribute went unenforced and the other
+		# refused every message including the well-formed ones. Measured
+		# against the literal-length sibling, which was correct throughout:
+		# that is what said the checks work and only this path was wrong.
+		#
+		# The span is the same one `where` points at, so its size is the
+		# length by construction rather than by a second derivation --
+		# which is the whole reason to take it from there rather than
+		# re-render the count expression.
+		if placement.array_count is not None:
+			count: str = str(placement.array_count)
+		elif span is not None:
+			count = f"static_cast<std::uint32_t>({span[:-len('.data()')]}.size())" \
+				if span.endswith(".data()") else \
+				f"static_cast<std::uint32_t>({name}().size())"
+		else:
+			count = f"static_cast<std::uint32_t>({name}().size())"
 		lines: list[str] = []
 
 		for attr in placement.attrs:
@@ -8524,8 +8544,22 @@ class Emitter:
 				elif _encoding_source(attr) is not None:
 					lines.extend(self._declared_encoding_check(
 						struct, placement, attr,
-						where, f"{count}"))
-			if attr.name == "nul_terminated":
+						where, count))
+			# NOT on a message-sized run, which is what C, Rust and
+			# Python all do -- this backend was the only one that tried,
+			# and it tried with a count of zero, so `situ_nul_terminated(p,
+			# 0)` refused every message including the well-formed ones.
+			#
+			# Aligning with the three rather than fixing the count, because
+			# WHICH answer is right here is an open design question and not
+			# this backend's to settle: 973 says the declared size is the
+			# capacity and `validate` refuses, `wellformed.py`'s placement
+			# rule accepts `u8 text[n]`, and `c/emit.py` says a message-
+			# sized run has no capacity to be the capacity of. A fourth
+			# position invented here would make the disagreement worse.
+			# See project.md -- flagged, not resolved.
+			if attr.name == "nul_terminated" \
+					and placement.array_count is not None:
 				lines.extend([
 					f"\t\t/* {placement.path} [nul_terminated] */",
 					f"\t\tif (!situ_nul_terminated({where}, {count})) {{",

@@ -30711,6 +30711,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.447 An encoding nobody checks, in three backends and three ways
+
+**`[encoding = ascii]` on a run the message sizes was enforced by C and by
+nobody else.** Each of the other three failed differently, which is why it
+survived: there was no single wrong behaviour to notice.
+
+    struct declared { u8 n; u8 text[n] [encoding = ascii]; }
+    struct literal  { u8 text[3] [encoding = ascii]; }
+
+C++ passed `situ_ascii_valid(text().data(), 0)` -- `array_count or 0`, and
+`array_count` is None when the message declares the length -- so the check
+ran over no bytes and accepted anything. Rust returned before the attribute
+loop on `if count is None`, and Python on `if placement.sized_by is not
+None`; both dropped the encoding check on the way past, though neither
+encoding check needs a count at all, one taking a slice and the other the
+accessor's own bytes.
+
+**The literal sibling is the whole instrument, and it was right in all four
+throughout.** Same attribute, same bytes, opposite answers -- which is the
+relationship worth asserting, since either value alone reads as correct.
+`c/emit.py` already stated the stake in a comment: an encoding nobody
+checks is worse than none.
+
+**The same zero count made C++ refuse every cpio entry.** `cpio_entry.name`
+is `u8 name[header.namesize] [nul_terminated]`, so that backend emitted
+`situ_nul_terminated(name().data(), 0)`, and `situ_nul_terminated(p, 0)`
+is false for every input -- measured against the runtime rather than
+reasoned about. Generated C++ refused this project's own golden vector, and
+the one corpus artifact this fix changes is that line disappearing.
+
+**Why no gate saw it is the part worth keeping.** The golden vectors are
+checked by `situc verify`, which runs the accessors in memory **through
+Python** -- and Python was one of the backends emitting no check on this
+path. The vectors were being validated by the one reader that ignored the
+attribute, so a C++ defect on the same line was unreachable from them. A
+gate is only as good as which reader it asks.
+
+**`[nul_terminated]` on a message-sized run is NOT settled here, and three
+answers are on the table rather than two.** 973 says the declared size is
+the capacity and `validate` refuses a field with no terminator;
+`wellformed.py`'s placement rule accepts `u8 text[n]` as "a counted byte
+array"; and `c/emit.py` says in as many words that `nul_terminated` stays
+on the fixed-count path because "a message-sized run does not have" a
+capacity. The third answer neither names is that the combination should be
+REFUSED, so the author is told rather than served silence by three backends
+and a verdict by one.
+
+C++ is aligned with its three siblings for now -- it skips the check there
+-- because its previous behaviour was indefensible under all three answers
+and inventing a fourth position would make the disagreement worse. That is
+an alignment, not a decision, and the decision is the copyright holder's.
+`edges.situ` deliberately carries the encoding pair and NOT a
+`nul_terminated` one, because a corpus entry would settle the question by
+accident.
+
 ### 26.446 A located member reaches past the frame, in five of six readers
 
 **Six descriptions of one layout, and five of them had each independently

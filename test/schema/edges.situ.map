@@ -132,6 +132,9 @@ struct escaped_run size=1.. access=Sequential mutate=Shifting address=Unstable c
   escaped_run.field                      offset=AbsoluteStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   escaped_run.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct fixed_text size=3 atomic=NonAtomic
+  fixed_text.body                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
+
 struct framed size=9.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
   framed.magic                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   framed.version                         offset=AbsoluteStatic(0x04) size=Bounded(2, 16) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
@@ -395,6 +398,10 @@ struct signed_whole size=16 mutate=Immutable repr=ValueConverted atomic=NonAtomi
   signed_whole.piece.part_sig            offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
   signed_whole.stamp                     offset=AbsoluteStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord auth=Covered(whole_sig)
   signed_whole.whole_sig                 offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
+struct sized_text size=1..256 mutate=Shifting
+  sized_text.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  sized_text.body                        offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct spanned_arm size=6 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   spanned_arm.pick                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
