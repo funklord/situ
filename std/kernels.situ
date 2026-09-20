@@ -184,7 +184,16 @@ impl internet_checksum derived;
 // it comes back, and it corrects rather than merely detecting -- so the code is
 // invertible where a CRC is not, and a burst past its capacity propagates.
 //
-// CCSDS's (255, 223): 32 parity symbols correcting any 16 errors in the block.
+// (255, 223): 32 parity symbols correcting any 16 errors in the block.
+//
+// The GEOMETRY is CCSDS's and the CODE is not, which this said otherwise
+// until somebody went looking for CCSDS vectors to check it against and
+// found they could not match. CCSDS 131.0-B specifies field polynomial
+// 0x187, first consecutive root 112, primitive element 11 and a dual-basis
+// symbol representation; these parameters are the conventional set --
+// 0x11D, first root 0, primitive element 2 -- which is what QR codes and
+// libfec default to. A published CCSDS codeword will not match this, and
+// the naming was the reason to expect it would.
 codec reed_solomon_255_223 {
 	kernel = polynomial(field = 256, n = 255, k = 223, primitive = 0x11D);
 }

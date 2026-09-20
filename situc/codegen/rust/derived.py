@@ -139,6 +139,352 @@ def bits_helper() -> list[str]:
 	]
 
 
+def _smtp_dot(decl: ast.CodecDecl, prefix: str) -> list[str]:
+	"""RFC 5321 section 4.5.2, re-spelled from C including its two
+	deliberate departures from a strict reading.
+
+	A line end is tested as LF ALONE, not CRLF: that is what keeps this a
+	stream, since a CR ending one call and an LF starting the next would
+	otherwise be missed. And the decoder strips a leading period
+	unconditionally, where the RFC strips it only when other characters
+	follow -- a line of exactly `.` is the terminator, and the framing
+	scan stops before it, so it never reaches this. Both are
+	preconditions a port must not quietly change.
+	"""
+	name = _ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/// `{decl.name}`: SMTP dot-stuffing, RFC 5321 section 4.5.2.",
+		"/// A period at the start of a line is doubled. The terminator is",
+		"/// neither written nor consumed here: the region is delimited as",
+		"/// well as coded, and the scan runs on the encoded bytes.",
+		f"pub fn {name}_encode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\t// The body starts at the start of a line.",
+		"\tlet mut at_line_start = true;",
+		"",
+		"\tfor read in 0..len {",
+		"\t\tif at_line_start && input[read] == b'.' {",
+		"\t\t\tout[written] = b'.';",
+		"\t\t\twritten += 1;",
+		"\t\t}",
+		"",
+		"\t\tout[written] = input[read];",
+		"\t\twritten += 1;",
+		"\t\tat_line_start = input[read] == b'\\n';",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+		"",
+		"/// The inverse.",
+		f"pub fn {name}_decode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut at_line_start = true;",
+		"",
+		"\tfor read in 0..len {",
+		"\t\tif at_line_start && input[read] == b'.' {",
+		"\t\t\t// Drop the added one and keep what follows.",
+		"\t\t\tat_line_start = false;",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"",
+		"\t\tout[written] = input[read];",
+		"\t\twritten += 1;",
+		"\t\tat_line_start = input[read] == b'\\n';",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+	]
+
+
+def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""Hamming(7,4), whose shape is unlike every other family here.
+
+	A nibble in, a byte out -- not `(in, len, out)` -- because it is a
+	symbol map with a correction step rather than a stream transform.
+	Rust returns the corrected flag in a tuple where C takes an
+	out-parameter, there being no null pointer to make optional.
+
+	The tables are computed by C's generator from `_HAMMING_PARITY` and
+	imported rather than transcribed: a 16-entry table copied is a table
+	nobody checks.
+
+	Single-error CORRECTING and not detecting: the syndrome's "no error"
+	entry is unreachable from the error branch, so a double-bit error is
+	silently miscorrected and still reports `true`. That is d_min = 3
+	behaving as it must, and the flag means "the syndrome was nonzero"
+	rather than anything stronger.
+	"""
+	from situc.codegen.c.derived import DERIVED_LINEAR, _HAMMING_PARITY
+	from situc.codegen.c.derived import _named_code
+
+	if _named_code(decl) not in DERIVED_LINEAR:
+		return None
+
+	name = _ident(prefix, decl.name)
+
+	syndrome = [7] * 8
+	for position in range(7):
+		codeword = 1 << position
+		value = 0
+		for row, mask in enumerate(_HAMMING_PARITY):
+			parity = bin((codeword & 0xF) & mask).count("1") & 1
+			parity ^= (codeword >> (4 + row)) & 1
+			value |= parity << row
+		syndrome[value] = position
+
+	table = []
+	for nibble in range(16):
+		word = nibble
+		for row, mask in enumerate(_HAMMING_PARITY):
+			word |= (bin(nibble & mask).count("1") & 1) << (4 + row)
+		table.append(word)
+
+	masks = ", ".join(f"0x{mask:02X}" for mask in _HAMMING_PARITY)
+
+	return [
+		"",
+		f"/// `{decl.name}`: Hamming(7,4), systematic. The low nibble of a",
+		"/// codeword is the data; the three high bits are parity.",
+		f"const {name.upper()}_ENCODE_TABLE: [u8; 16] = [",
+		"\t" + ", ".join(f"0x{value:02X}" for value in table),
+		"];",
+		"",
+		"/// Syndrome to the bit it accuses; 7 means no error.",
+		f"const {name.upper()}_SYNDROME: [u8; 8] = [",
+		"\t" + ", ".join(str(value) for value in syndrome),
+		"];",
+		"",
+		f"pub fn {name}_encode(nibble: u8) -> u8 {{",
+		f"\t{name.upper()}_ENCODE_TABLE[(nibble & 0x0F) as usize]",
+		"}",
+		"",
+		"/// Returns the nibble and whether a bit was corrected. A DOUBLE",
+		"/// error is miscorrected and still reports true: d_min is 3, so",
+		"/// this code corrects one bit and cannot report `detected but",
+		"/// not correctable`.",
+		f"pub fn {name}_decode(codeword: u8) -> (u8, bool) {{",
+		f"\tconst MASKS: [u8; 3] = [{masks}];",
+		"",
+		"\tlet mut value = codeword & 0x7F;",
+		"\tlet mut check = 0u8;",
+		"",
+		"\tfor row in 0..3 {",
+		"\t\tlet mut bits = value & MASKS[row];",
+		"\t\tlet mut parity = 0u8;",
+		"",
+		"\t\twhile bits != 0 {",
+		"\t\t\tparity ^= bits & 1;",
+		"\t\t\tbits >>= 1;",
+		"\t\t}",
+		"",
+		"\t\tparity ^= (value >> (4 + row)) & 1;",
+		"\t\tcheck |= parity << row;",
+		"\t}",
+		"",
+		"\tif check == 0 {",
+		"\t\treturn (value & 0x0F, false);",
+		"\t}",
+		"",
+		f"\tlet at = {name.upper()}_SYNDROME[check as usize];",
+		"",
+		"\tif at < 7 {",
+		"\t\tvalue ^= 1 << at;",
+		"\t}",
+		"",
+		"\t(value & 0x0F, true)",
+		"}",
+	]
+
+
+def _permutation(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""A block interleaver: written row-major, read column-major.
+
+	`rows` is the discriminator. A permutation declared only by extent
+	has a span and no mapping, so the properties follow and the code
+	cannot -- C returns None for it in four places that must agree.
+
+	A partial block is REFUSED rather than padded: it has no defined
+	permutation. Note 0 is also the answer for an empty input, so a
+	caller cannot tell the two apart -- C's behaviour, kept.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	if kernel.argument("rows") is None:
+		return None
+
+	rows    = number(decl, "rows")
+	columns = number(decl, "columns")
+	block   = rows * columns
+	name    = _ident(prefix, decl.name)
+
+	def loop(target: str, source: str) -> list[str]:
+		return [
+			f"\t\tfor row in 0..{rows} {{",
+			f"\t\t\tfor column in 0..{columns} {{",
+			f"\t\t\t\tout[at + {target}] = input[at + {source}];",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+	forward = f"column * {rows} + row", f"row * {columns} + column"
+
+	return [
+		"",
+		f"/// `{decl.name}`: a {rows}x{columns} block interleaver, written",
+		"/// row-major and read column-major. Length-preserving, and the",
+		"/// input must be a whole number of blocks.",
+		f"pub const {name.upper()}_BLOCK: usize = {block};",
+		"",
+		f"pub fn {name}_encode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\t// Whole blocks only: a partial one has no defined permutation.",
+		f"\tif len % {block} != 0 {{",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		f"\tfor at in (0..len).step_by({block}) {{",
+		*loop(*forward),
+		"\t}",
+		"",
+		"\tlen",
+		"}",
+		"",
+		"/// The inverse: the same loop with the two index expressions",
+		"/// swapped. At 4x4 that is the SAME permutation -- the interleaver",
+		"/// is its own inverse when it is square -- so a round trip cannot",
+		"/// tell this from `encode`, and only a non-square case can.",
+		f"pub fn {name}_decode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		f"\tif len % {block} != 0 {{",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		f"\tfor at in (0..len).step_by({block}) {{",
+		*loop(forward[1], forward[0]),
+		"\t}",
+		"",
+		"\tlen",
+		"}",
+	]
+
+
+def _reads_bits(decl: ast.CodecDecl) -> bool:
+	"""Whether this codec's body calls the MSB bit helpers.
+
+	An UNPADDED table code walks bits, and so does bit stuffing. The
+	padded base codes accumulate whole bytes and call neither, which is
+	why the question is asked per codec rather than per family -- a
+	base64-only module carrying two dead helpers is a diff its reader
+	has to explain (26.452).
+	"""
+	from situc.codegen.c.derived import BIT_STUFFING, _named_code
+
+	kernel = decl.kernel
+	if kernel is None:
+		return False
+	if kernel.family is ast.KernelFamily.TABLE:
+		return not isinstance(kernel.argument("pad"), ast.IntLiteral)
+	if kernel.family is ast.KernelFamily.STUFFING:
+		return _named_code(decl) in BIT_STUFFING
+	return False
+
+
+def _bit_stuffing(decl: ast.CodecDecl, prefix: str,
+		code: str) -> list[str]:
+	"""HDLC and USB bit stuffing: a zero after `run` contiguous ones.
+
+	Lengths are in BITS in both directions, not bytes, and the bit order
+	is MSB-first and hardcoded -- the codec consumes a bit stream and
+	does not consult the schema's bit order. Both standards TRANSMIT
+	octets least-significant-bit first, so a vector taken from a real
+	capture needs each byte reversed on one side; a vector written as a
+	bit string does not.
+
+	Re-spelled from C including two behaviours a port could reasonably
+	get wrong. Truncation is NOT an error: an input ending exactly where
+	the stuffed bit belongs simply ends. And the decoder's only failure
+	is 0, which is also the answer for empty input, so the two are
+	indistinguishable -- C's, kept, because a differential compares them.
+	"""
+	from situc.codegen.c.derived import BIT_STUFFING
+
+	run = BIT_STUFFING[code][0]
+	name = _ident(prefix, decl.name)
+
+	return [
+		"",
+		f"/// `{decl.name}`: a zero after {run} contiguous ones, so"
+		f" {run + 1} cannot",
+		"/// appear in the body. Lengths are in BITS and so is the return.",
+		f"/// `out` needs bits + bits / {run} + 1 bits, and is",
+		"/// read-modify-written: bits past the end of the last byte keep",
+		"/// whatever the caller left there.",
+		f"pub fn {name}_encode(input: &[u8], bits: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut ones = 0usize;",
+		"",
+		"\tfor at in 0..bits {",
+		"\t\tlet bit = situ_bits_get_msb(input, at, 1);",
+		"",
+		"\t\tsitu_bits_set_msb(out, written, 1, bit);",
+		"\t\twritten += 1;",
+		"",
+		"\t\tif bit != 0 {",
+		"\t\t\tones += 1;",
+		"",
+		f"\t\t\tif ones == {run} {{",
+		"\t\t\t\tsitu_bits_set_msb(out, written, 1, 0);",
+		"\t\t\t\twritten += 1;",
+		"\t\t\t\tones = 0;",
+		"\t\t\t}",
+		"\t\t} else {",
+		"\t\t\tones = 0;",
+		"\t\t}",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+		"",
+		f"/// The inverse. Returns 0 where {run + 1} contiguous ones appear,",
+		"/// which the encoder cannot produce -- and 0 is also the answer",
+		"/// for empty input, so a caller cannot tell those apart.",
+		f"pub fn {name}_decode(input: &[u8], bits: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut ones = 0usize;",
+		"",
+		"\tfor at in 0..bits {",
+		"\t\tlet bit = situ_bits_get_msb(input, at, 1);",
+		"",
+		f"\t\tif ones == {run} {{",
+		"\t\t\t// A stuffed zero, which the encoder put there.",
+		"\t\t\tones = 0;",
+		"",
+		"\t\t\tif bit != 0 {",
+		"\t\t\t\treturn 0;",
+		"\t\t\t}",
+		"",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"",
+		"\t\tsitu_bits_set_msb(out, written, 1, bit);",
+		"\t\twritten += 1;",
+		"\t\tones = if bit != 0 { ones + 1 } else { 0 };",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+	]
+
+
 def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""COBS and the escape-stuffed byte codes (SLIP, PPP async).
 
@@ -233,6 +579,14 @@ def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 			"\twritten",
 			"}",
 		]
+
+	from situc.codegen.c.derived import BIT_STUFFING
+
+	if code in BIT_STUFFING:
+		return _bit_stuffing(decl, prefix, code)
+
+	if code == "smtp_dot":
+		return _smtp_dot(decl, prefix)
 
 	if code not in ESCAPE_STUFFING:
 		return None
@@ -744,8 +1098,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		# ... and an UNPADDED one: the padded base codes accumulate whole bytes and call neither helper, so a base64-only schema was carrying two dead functions (26.452).
 		*(bits_helper() if any(
 			decl.name in bound and decl.kernel is not None
-			and decl.kernel.family is ast.KernelFamily.TABLE
-			and not isinstance(decl.kernel.argument("pad"), ast.IntLiteral)
+			and _reads_bits(decl)
 			for decl in schema.codecs()) else []),
 	]
 
@@ -790,7 +1143,19 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _shift_register(decl, prefix)
 	if kernel.family is ast.KernelFamily.STUFFING:
 		return _stuffing(decl, prefix)
-	return None
+	if kernel.family is ast.KernelFamily.LINEAR:
+		return _linear_block(decl, prefix)
+	if kernel.family is ast.KernelFamily.PERMUTATION:
+		return _permutation(decl, prefix)
+
+	# No fallthrough: the branches above are every member of
+	# `KernelFamily`, which mypy proved by calling a trailing
+	# `return None` unreachable. This backend now DISPATCHES every
+	# family C does -- the declines that remain are inside the handlers
+	# (Reed-Solomon in `_polynomial`, an unnamed linear or permutation
+	# code) rather than a family nobody wrote. A family added later
+	# falls off the end and declines, which is the same answer the
+	# unreachable line gave.
 
 
 def _polynomial(decl: ast.CodecDecl, prefix: str) -> list[str] | None:

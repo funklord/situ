@@ -20,10 +20,11 @@ CRC-32 from an implementation of whatever this happens to do.
 from __future__ import annotations
 
 import base64
+from collections import Counter
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Callable, cast
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -1553,12 +1554,15 @@ def test_the_generated_python_refuses_a_symbol_the_code_omits(
 
 
 def _generated(source: str, tmp_path: Path, *names: str
-		) -> list[Callable[..., int]]:
+		) -> list[Callable[..., Any]]:
 	"""Execute a generated Python module and hand back named functions.
 
 	`exec` fills a `dict[str, object]`, so what comes out needs saying:
-	each of these is `(bytes, int, bytearray) -> int`. The cast is the
-	claim, and the call in the test is what checks it.
+	`Any` rather than `int`, because these do not share a shape: a byte
+	codec is `(bytes, int, bytearray) -> int` and Hamming is
+	`(int) -> int` beside `(int) -> tuple[int, bool]`. Narrowing to the
+	common case made mypy call a correct tuple comparison
+	non-overlapping. The call in each test is what checks the shape.
 	"""
 	module = tmp_path / "unit.py"
 	module.write_text(source, encoding="ascii")
@@ -1571,7 +1575,7 @@ def _generated(source: str, tmp_path: Path, *names: str
 	for name in names:
 		got = namespace[name]
 		assert callable(got), f"{name} is not callable"
-		found.append(cast("Callable[..., int]", got))
+		found.append(cast("Callable[..., Any]", got))
 	return found
 
 
@@ -2109,3 +2113,413 @@ def test_rust_cobs_spends_one_overhead_byte_at_a_full_group(
 	assert int(head) == first
 	assert int(tail) == 0, "no delimiter"
 	assert round_tripped == "1", "did not round trip"
+
+
+# ---------------------------------------------------------------------------
+# Hamming(7,4), the block interleaver and SMTP dot-stuffing (26.455)
+# ---------------------------------------------------------------------------
+
+THREE = """codec hamming_7_4 { kernel = linear_block(n = 7, k = 4,
+	standard_form, code = hamming_7_4); }
+impl hamming_7_4 derived;
+
+codec interleave_16 { kernel = permutation(rows = 4, columns = 4); }
+impl interleave_16 derived;
+
+codec wide { kernel = permutation(rows = 2, columns = 8); }
+impl wide derived;
+
+codec smtp { kernel = stuffing(worst_case = 4, per = 3, unit = stream,
+	code = smtp_dot); }
+impl smtp derived;
+"""
+
+#: Hamming(7,4) in situ's own packing -- byte = 0 p2 p1 p0 d3 d2 d1 d0.
+#: These do NOT match either published table's literal bytes, because the
+#: packing differs; it is the same code with the parity bits elsewhere.
+#: What makes them checkable without trusting the packing is the two
+#: properties below, which hold of Hamming(7,4) whoever implements it.
+HAMMING = (0x00, 0x71, 0x62, 0x13, 0x54, 0x25, 0x36, 0x47,
+           0x38, 0x49, 0x5A, 0x2B, 0x6C, 0x1D, 0x0E, 0x7F)
+
+
+def test_hamming_is_systematic_and_has_the_right_weights(
+		tmp_path: Path) -> None:
+	"""Two properties of the code itself, not of this spelling of it.
+
+	Systematic: the low nibble of every codeword is the input. And the
+	weight distribution of Hamming(7,4) is one word of weight 0, seven
+	of 3, seven of 4 and one of 7 -- a table with a transcription slip
+	in it almost certainly breaks one of these, where comparing against
+	a table somebody typed would only compare two typings.
+	"""
+	encode, = _generated(py_derived.generate(parse_text(THREE), "unit"),
+	                     tmp_path, "hamming_7_4_encode")
+	table = [encode(nibble) for nibble in range(16)]
+
+	assert tuple(table) == HAMMING
+	assert all(word & 0x0F == nibble for nibble, word in enumerate(table)), \
+		"not systematic: the low nibble is not the input"
+
+	weights = Counter(bin(word).count("1") for word in table)
+	assert dict(sorted(weights.items())) == {0: 1, 3: 7, 4: 7, 7: 1}
+
+
+def test_hamming_corrects_every_single_bit_error(tmp_path: Path) -> None:
+	"""All 112 of them, and the 16 clean words.
+
+	Exhaustive because it can be: 16 nibbles times 7 bit positions is
+	the whole space, so there is no sampling question to get wrong.
+	"""
+	source = py_derived.generate(parse_text(THREE), "unit")
+	encode, = _generated(source, tmp_path, "hamming_7_4_encode")
+	decode  = _generated(source, tmp_path, "hamming_7_4_decode")[0]
+
+	for nibble in range(16):
+		word = encode(nibble)
+		assert decode(word) == (nibble, False), "a clean word reported an error"
+
+		for bit in range(7):
+			assert decode(word ^ (1 << bit)) == (nibble, True), (
+				f"nibble {nibble}, bit {bit} not corrected")
+
+
+def test_hamming_miscorrects_a_double_error_and_says_nothing(
+		tmp_path: Path) -> None:
+	"""Pinning what this does NOT catch, so nobody reads the flag as
+	stronger than it is.
+
+	d_min is 3, so the code corrects one bit and cannot detect two. The
+	syndrome's "no error" entry is unreachable from the error branch, so
+	there is no path that reports `detected but not correctable`: a
+	double error returns a WRONG nibble and still reports True. That is
+	the code behaving as it must, and a port must not invent a third
+	outcome.
+	"""
+	source = py_derived.generate(parse_text(THREE), "unit")
+	encode, = _generated(source, tmp_path, "hamming_7_4_encode")
+	decode  = _generated(source, tmp_path, "hamming_7_4_decode")[0]
+
+	word = encode(0x5)
+	got, corrected = decode(word ^ 0b0000011)
+
+	assert corrected is True, "a double error reported no error"
+	assert got != 0x5, "a double error was corrected, which d_min 3 forbids"
+
+
+#: The interleaver at 4x4 is its own inverse, so `encode` and `decode`
+#: cannot be told apart by a round trip or by any square fixture. A
+#: non-square one is the only case where the plausible wrong answer --
+#: the two index expressions swapped -- separates from the right one,
+#: and no schema in the tree uses one.
+WIDE_ENCODE = [0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15]
+WIDE_DECODE = [0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15]
+
+
+def test_the_interleaver_transposes_and_refuses_a_partial_block(
+		tmp_path: Path) -> None:
+	source = py_derived.generate(parse_text(THREE), "unit")
+	encode, decode = _generated(source, tmp_path, "interleave_16_encode",
+	                            "interleave_16_decode")
+	data = bytes(range(16))
+
+	out = bytearray(16)
+	assert encode(data, 16, out) == 16
+	assert list(out) == [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15]
+
+	back = bytearray(16)
+	assert decode(bytes(out), 16, back) == 16
+	assert bytes(back) == data
+
+	# A partial block has no defined permutation.
+	assert encode(bytes(15), 15, bytearray(32)) == 0
+	assert decode(bytes(17), 17, bytearray(32)) == 0
+
+
+def test_a_non_square_interleaver_separates_encode_from_decode(
+		tmp_path: Path) -> None:
+	"""The direction, which every square fixture is blind to.
+
+	At 2x8 the two differ, so a port that swapped the index expressions
+	in one of the two functions fails here and passes everything else.
+	"""
+	source = py_derived.generate(parse_text(THREE), "unit")
+	encode, decode = _generated(source, tmp_path, "wide_encode",
+	                            "wide_decode")
+	data = bytes(range(16))
+
+	out = bytearray(16)
+	encode(data, 16, out)
+	assert list(out) == WIDE_ENCODE
+
+	other = bytearray(16)
+	decode(data, 16, other)
+	assert list(other) == WIDE_DECODE
+	assert WIDE_ENCODE != WIDE_DECODE, "the fixture cannot separate them"
+
+
+#: Derived from RFC 5321 section 4.5.2's two rules, NOT quoted from it:
+#: the RFC states the rule in prose and its Appendix D transcripts carry
+#: no body with a leading period, so there is no published byte-level
+#: vector for this codec. Said plainly rather than cited as one.
+SMTP_PAIRS = ((b".\r\n", b"..\r\n"), (b"..\r\n", b"...\r\n"),
+              (b".x\r\n", b"..x\r\n"), (b"a.b\r\n", b"a.b\r\n"),
+              (b"a\r\n.b\r\n", b"a\r\n..b\r\n"), (b"", b""),
+              (b"hello\r\n", b"hello\r\n"))
+
+
+@pytest.mark.parametrize("plain,wire", SMTP_PAIRS)
+def test_smtp_doubles_a_period_at_the_start_of_a_line(
+		plain: bytes, wire: bytes, tmp_path: Path) -> None:
+	source = py_derived.generate(parse_text(THREE), "unit")
+	encode, decode = _generated(source, tmp_path, "smtp_encode",
+	                            "smtp_decode")
+
+	out = bytearray(32)
+	got = bytes(out[:encode(plain, len(plain), out)])
+	assert got == wire
+
+	back = bytearray(32)
+	kept = decode(got, len(got), back)
+	assert bytes(back[:kept]) == plain
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_rust_agrees_on_hamming_and_the_non_square_interleaver(
+		tmp_path: Path) -> None:
+	"""Rust's own executing test, because a backend without one is a
+	backend nothing checks -- measured twice in this file's history.
+
+	The two cases here are the ones where a wrong answer is plausible: a
+	mis-transcribed Hamming table, and an interleaver whose direction is
+	swapped in one function.
+	"""
+	(tmp_path / "unit.rs").write_text(
+		rs_derived.generate(parse_text(THREE), "unit"), encoding="ascii")
+	(tmp_path / "main.rs").write_text(
+		'#[path = "unit.rs"] mod unit;\n'
+		"use unit::*;\n"
+		"\n"
+		"fn main() {\n"
+		"\tlet t: Vec<u8> = (0..16u8).map(hamming_7_4_encode).collect();\n"
+		"\tprintln!(\"{}\", t.iter()\n"
+		"\t\t.map(|x| format!(\"{:02x}\", x)).collect::<String>());\n"
+		"\n"
+		"\tlet mut single = 0;\n"
+		"\tfor n in 0..16u8 {\n"
+		"\t\tfor b in 0..7 {\n"
+		"\t\t\tif hamming_7_4_decode(t[n as usize] ^ (1 << b))\n"
+		"\t\t\t\t\t== (n, true) { single += 1; }\n"
+		"\t\t}\n"
+		"\t}\n"
+		"\tprintln!(\"{}\", single);\n"
+		"\n"
+		"\tlet src: Vec<u8> = (0..16u8).collect();\n"
+		"\tlet mut e = vec![0u8; 16];\n"
+		"\tlet mut d = vec![0u8; 16];\n"
+		"\twide_encode(&src, 16, &mut e);\n"
+		"\twide_decode(&src, 16, &mut d);\n"
+		"\tprintln!(\"{:?}\", e);\n"
+		"\tprintln!(\"{:?}\", d);\n"
+		"}\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-A", "warnings",
+		 "-o", str(tmp_path / "run"), str(tmp_path / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stderr
+	table, single, encoded, decoded = ran.stdout.splitlines()
+
+	assert table == "".join(f"{word:02x}" for word in HAMMING)
+	assert single == "112", f"Rust corrected {single} of 112 single-bit errors"
+	assert encoded == repr(WIDE_ENCODE).replace("'", "")
+	assert decoded == repr(WIDE_DECODE).replace("'", "")
+
+
+# ---------------------------------------------------------------------------
+# HDLC and USB bit stuffing (26.456)
+# ---------------------------------------------------------------------------
+
+BITSTUFF = """codec hdlc { kernel = stuffing(worst_case = 6, per = 5,
+	unit = bit, code = hdlc); }
+impl hdlc derived;
+
+codec usb { kernel = stuffing(worst_case = 7, per = 6, unit = bit,
+	code = usb); }
+impl usb derived;
+"""
+
+#: Published worked examples, with their sources. Neither standard
+#: carries a bit-string vector: RFC 1662 section 5.2 states the HDLC rule
+#: in prose and gives no example, and the USB 2.0 figures are waveform
+#: drawings with no bit numerals. So these come from externally authored
+#: worked examples rather than from the specifications themselves, which
+#: is a weaker citation and is said rather than glossed.
+#:
+#: Both standards TRANSMIT octets least-significant-bit first while this
+#: codec walks the buffer MSB-first. That does not affect a vector
+#: written as a bit string -- the algorithm consumes a stream -- but a
+#: vector taken from a real capture would need each byte reversed.
+STUFF_VECTORS = (
+	("hdlc", "011110", "011110", "Dordal, Intro to Computer Networks 6.1.5.1"),
+	("hdlc", "0111110", "01111100", "Dordal 6.1.5.1"),
+	("hdlc", "01111110", "011111010", "Dordal 6.1.5.1"),
+	("hdlc", "011011111111111111110010",
+	 "011011111011111011111010010", "Tanenbaum, Computer Networks"),
+	("usb", "011111111001111", "0111111011001111",
+	 "Cypress AN57294 figure 10"),
+)
+
+#: Derived from the rules, NOT published -- labelled so nobody cites
+#: them as a standard's. The five-ones case is the discriminator between
+#: the two codes: HDLC stuffs there and USB does not.
+STUFF_DERIVED = (("hdlc", "11111", "111110"),
+                 ("hdlc", "1" * 10, "111110111110"),
+                 ("usb", "111111", "1111110"),
+                 ("usb", "11111", "11111"))
+
+
+def _bits(text: str) -> bytes:
+	"""A bit string as an MSB-first buffer."""
+	out = bytearray(len(text) // 8 + 2)
+	for index, char in enumerate(text):
+		if char == "1":
+			out[index // 8] |= 0x80 >> (index % 8)
+	return bytes(out)
+
+
+def _unbits(buffer: bytes, count: int) -> str:
+	return "".join("1" if buffer[i // 8] >> (7 - i % 8) & 1 else "0"
+	               for i in range(count))
+
+
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_every_backend_writes_both_bit_stuffing_codes(language: str) -> None:
+	out = DERIVED_EMITTERS[language].generate(parse_text(BITSTUFF), "unit")
+
+	assert "No implementation for" not in out
+	for name in ("hdlc", "usb"):
+		assert f"{name}_encode" in out and f"{name}_decode" in out
+
+
+@pytest.mark.parametrize("name,plain,wire,source", STUFF_VECTORS,
+                         ids=[f"{v[0]}-{v[1][:12]}" for v in STUFF_VECTORS])
+def test_the_generated_python_stuffs_the_published_way(
+		name: str, plain: str, wire: str, source: str,
+		tmp_path: Path) -> None:
+	source_text = py_derived.generate(parse_text(BITSTUFF), "unit")
+	encode, decode = _generated(source_text, tmp_path, f"{name}_encode",
+	                            f"{name}_decode")
+
+	out = bytearray(32)
+	written = encode(_bits(plain), len(plain), out)
+	assert _unbits(bytes(out), written) == wire, f"against {source}"
+
+	back = bytearray(32)
+	kept = decode(_bits(wire), len(wire), back)
+	assert _unbits(bytes(back), kept) == plain, "did not round trip"
+
+
+@pytest.mark.parametrize("name,plain,wire", STUFF_DERIVED)
+def test_the_run_at_the_very_end_is_still_stuffed(
+		name: str, plain: str, wire: str, tmp_path: Path) -> None:
+	"""RFC 1662 says "including the last 5 bits of the FCS" and USB 2.0
+	section 7.1.9 says a zero goes in "even if it is the last bit before
+	the end-of-packet signal", so a run completing on the final bit
+	still stuffs. The counter resets afterwards, so ten ones stuff twice.
+	"""
+	encode, = _generated(py_derived.generate(parse_text(BITSTUFF), "unit"),
+	                     tmp_path, f"{name}_encode")
+
+	out = bytearray(32)
+	written = encode(_bits(plain), len(plain), out)
+	assert _unbits(bytes(out), written) == wire
+
+
+@pytest.mark.parametrize("name,stream", (("hdlc", "0111111"),
+                                         ("usb", "1111111")))
+def test_a_run_the_encoder_cannot_produce_is_refused(
+		name: str, stream: str, tmp_path: Path) -> None:
+	"""Six ones for HDLC, seven for USB.
+
+	situ has no framing layer, so it refuses where a real stack would
+	call six ones a flag and seven an abort -- framing events rather
+	than stream errors. C's behaviour and C's comment; kept deliberately
+	rather than improved, because the reference is what a port matches.
+	"""
+	decode, = _generated(py_derived.generate(parse_text(BITSTUFF), "unit"),
+	                     tmp_path, f"{name}_decode")
+
+	assert decode(_bits(stream), len(stream), bytearray(32)) == 0
+
+
+def test_truncation_is_not_an_error(tmp_path: Path) -> None:
+	"""An input ending exactly where the stuffed bit belongs simply ends.
+
+	Pinned because it is the plausible place for a port to add a refusal
+	that C does not have -- and because `0` already means something else
+	here, so inventing one would be indistinguishable from empty input.
+	"""
+	decode, = _generated(py_derived.generate(parse_text(BITSTUFF), "unit"),
+	                     tmp_path, "hdlc_decode")
+
+	out = bytearray(32)
+	assert decode(_bits("11111"), 5, out) == 5
+	assert _unbits(bytes(out), 5) == "11111"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_rust_stuffs_the_published_way(tmp_path: Path) -> None:
+	"""Rust's own executing test, for the reason this file keeps
+	relearning: a backend without one is a backend nothing checks."""
+	(tmp_path / "unit.rs").write_text(
+		rs_derived.generate(parse_text(BITSTUFF), "unit"), encoding="ascii")
+
+	calls = "\n".join(
+		f'\tshow("{name}", "{plain}", {name}_encode);'
+		for name, plain, _wire, _source in STUFF_VECTORS)
+
+	(tmp_path / "main.rs").write_text(
+		'#[path = "unit.rs"] mod unit;\n'
+		"use unit::*;\n"
+		"\n"
+		"fn pack(s: &str) -> Vec<u8> {\n"
+		"\tlet mut b = vec![0u8; s.len() / 8 + 2];\n"
+		"\tfor (i, c) in s.chars().enumerate() {\n"
+		"\t\tif c == '1' { b[i / 8] |= 0x80 >> (i % 8); }\n"
+		"\t}\n"
+		"\tb\n"
+		"}\n"
+		"\n"
+		"fn show(name: &str, plain: &str,\n"
+		"\t\tenc: fn(&[u8], usize, &mut [u8]) -> usize) {\n"
+		"\tlet mut out = vec![0u8; 32];\n"
+		"\tlet n = enc(&pack(plain), plain.len(), &mut out);\n"
+		"\tlet bits: String = (0..n)\n"
+		"\t\t.map(|i| if (out[i / 8] >> (7 - i % 8)) & 1 == 1\n"
+		"\t\t\t{ '1' } else { '0' }).collect();\n"
+		"\tprintln!(\"{} {}\", name, bits);\n"
+		"}\n"
+		"\n"
+		"fn main() {\n" + calls + "\n}\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-A", "warnings",
+		 "-o", str(tmp_path / "run"), str(tmp_path / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stderr
+
+	lines = ran.stdout.splitlines()
+	assert len(lines) == len(STUFF_VECTORS)
+
+	for line, (name, plain, wire, source) in zip(lines, STUFF_VECTORS):
+		assert line == f"{name} {wire}", (
+			f"Rust {name} {plain}: {line}, against {source}")

@@ -30711,6 +30711,145 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.457 Reed-Solomon: why the last two are not a re-spelling
+
+**Coverage is 40 of 42 and stops there deliberately.** The two
+Reed-Solomon codecs are the remainder, and porting them the way the
+other six families were ported would break the rule that made those
+ports safe.
+
+**Measured, not estimated.** C's Reed-Solomon is 371 lines in
+`c/derived.py`, of which about 250 are C being spelled and 102 are
+Python. But only **two functions are backend-neutral derivation** --
+`_gf_tables` (23 lines) and `_rs_generator_coefficients` (16) -- so the
+split is 39 lines a second backend could import against **250 it must
+rewrite, 165 of them the decoder**.
+
+**That inverts the ratio the other families had, and 0017's sentence
+does not cover it.** "A second backend re-spells; it does not re-derive"
+was measured over a file whose bulk is CRCs and table codes, where the
+ALGORITHM is trivial -- index a table, xor, shift -- and the CONTENT is
+the hard part and already lives in Python. Reed-Solomon is the other way
+round: Berlekamp-Massey, the Chien search and Forney's formula exist
+nowhere in this repository except as C text inside string literals.
+Porting them means a person transcribing an error-correction algorithm
+into two more languages, which is the act 0017 was written to prevent --
+and the RS decoder is the specific bug 0017 cites as its founding
+evidence.
+
+**Two further obstacles, both real.** Rust's generated code is `no_std`
+and must not panic, and the decoder indexes arrays by runtime-computed
+degrees throughout; in C those are unchecked and in Rust they are panics
+unless the bounds are proved. And an encode-only port would make the
+capability map over-promise, since the map says `invertible` and is
+backend-independent -- so a partial port is worse than none.
+
+**What WOULD make the port safe is written down rather than done:**
+hoist `_gf_tables` and `_rs_generator_coefficients` into
+`codegen/kernel_math.py` where the CRC derivation already lives, and
+express the decoder once in Python so the backends render rather than
+transcribe it. Then 0017's sentence is true of Reed-Solomon too, and it
+is not true today.
+
+**An independent oracle exists and situ passes it, which nothing in the
+tree records.** `reedsolo` is installed here and its defaults --
+`prim=0x11D`, `fcr=0`, `generator=2` -- are exactly situ's parameters.
+Verified in this session: RS(255,223) over `(i * 7 + 1) & 0xFF` gives
+parity `7c128db6...67c3` from both, and RS(64,56) gives `53c36892b1252fc9`
+from both. `test_differential_oracle.py` currently exempts these two with
+the reason "a block code rather than a CRC -- it has no check value", and
+that reason is now falsifiable: an oracle exists. Replacing the exemption
+with a real differential is worth doing BEFORE any port, so that a future
+Rust decoder's first witness is not situ's own C.
+
+**And the schema misnamed the code, which is how the oracle question came
+up at all.** `std/kernels.situ` called RS(255,223) "CCSDS's". CCSDS
+131.0-B specifies field polynomial 0x187, first consecutive root 112,
+primitive element 11 and a dual-basis symbol representation; situ uses
+0x11D, first root 0, primitive element 2. The block geometry is CCSDS's
+and the code is not, so a published CCSDS codeword cannot match -- and
+the name was the reason to expect it would. Corrected here, independently
+of any port.
+
+### 26.456 Bit stuffing, and two standards that transmit the other way up
+
+**`hdlc_bit_stuffing` and `usb_bit_stuffing`, taking coverage to 40 of
+42.** A zero after five contiguous ones for HDLC and after six for USB,
+so the flag pattern cannot appear in the body.
+
+**The bit order is the trap, and it is not in the algorithm.** Both
+standards transmit octets LEAST-significant-bit first; this codec walks
+the buffer MSB-first and does not consult the schema's bit order. The
+algorithm is order-agnostic -- it consumes a stream -- so a vector
+written as a BIT STRING reproduces exactly, while a vector taken from a
+capture would need every byte reversed. Worth knowing before comparing
+against one. And the HDLC flag `0x7E` is a palindrome, so it cannot tell
+the two orders apart: a test meant to pin bit order needs a
+non-palindromic byte.
+
+**Neither standard carries a worked vector.** RFC 1662 section 5.2
+states the HDLC rule in prose with no example, and the USB 2.0 figures
+are waveform drawings with no bit numerals. So the vectors here come
+from externally authored worked examples -- Dordal's textbook, the
+Tanenbaum figure, and Cypress AN57294 figure 10 for USB -- which is a
+weaker citation than a specification and is labelled as one. The cases
+derived from the rule rather than published say so too.
+
+**Two behaviours kept deliberately because a port would improve them.**
+Truncation is NOT an error: an input ending exactly where the stuffed
+bit belongs simply ends. And the decoder's only failure is 0, which is
+also the answer for empty input, so the two are indistinguishable -- a
+Rust port returning `Result` would diverge from C for a differential
+that maps them. situ also refuses six ones where a real HDLC stack would
+call it a flag and seven an abort; it has no framing layer, so a framing
+event has nowhere else to go.
+
+### 26.455 Hamming, the interleaver, and a test no square fixture can fail
+
+**Three more families -- `hamming_7_4`, `interleave_16` and SMTP
+dot-stuffing -- taking coverage to 38 of 42.**
+
+**The interleaver has a hole in situ's own suite and this is the entry
+that records it.** `interleave_16` is 4x4, so its encode IS its own
+inverse: `encode(encode(x)) == x`, and no round trip and no square
+fixture can tell encode from decode. A port that swapped the two index
+expressions in ONE of the two functions would pass everything in the
+tree -- the only thing pinning direction is a single literal assertion
+for encode in `test_kernels.c`, and there is no equivalent for decode.
+The port's fixture adds a NON-SQUARE case (2x8) that no schema uses,
+because that is the only shape where the plausible wrong answer
+separates from the right one. Sabotaging either backend's direction now
+fails that backend's test and nothing else.
+
+**Hamming's shape is unlike every other family here** -- a nibble in and
+a byte out, not `(in, len, out)` -- because it is a symbol map with a
+correction step. What makes the table checkable without trusting the
+packing is two properties of the CODE rather than of this spelling: the
+low nibble of every codeword is the input, and the weight distribution
+is one word of weight 0, seven of 3, seven of 4 and one of 7. situ's
+literal bytes match neither published table, because the parity bits sit
+elsewhere; it is the same code.
+
+**What it does NOT do is pinned too.** d_min is 3, so the code corrects
+one bit and cannot detect two: the syndrome's "no error" entry is
+unreachable from the error branch, and a double error returns a WRONG
+nibble while still reporting corrected. A port must not invent a third
+outcome, so a test asserts the miscorrection.
+
+**SMTP dot-stuffing has no published vector at all.** RFC 5321 section
+4.5.2 states the rule in prose and its Appendix D transcripts carry no
+body with a leading period. The pairs in the test are derived from the
+two bulleted rules and say so. Two departures from a strict reading are
+kept from C: a line end is tested as LF alone, which is what makes it a
+stream, and the decoder strips a leading period unconditionally where
+the RFC strips it only when other characters follow -- a line of exactly
+`.` is the terminator and the framing scan stops before it.
+
+**Every backend now DISPATCHES every family.** mypy proved it by calling
+the trailing `return None` in both `_for_kernel`s unreachable: the
+branches above it are the whole of `KernelFamily`. The declines that
+remain are inside the handlers rather than a family nobody wrote.
+
 ### 26.454 COBS and the escape codes, and a test that ran out of bytes
 
 **Three more kernels -- `cobs`, `slip_framing`, `ppp_async_framing` --
