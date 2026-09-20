@@ -1551,10 +1551,26 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 	for index in _tags(image, struct_index):
 		local = _local(image, index)
 		try:
-			read_bytes(view, index)
-			lines.append(f"{local} present=1")
+			# The LENGTH and the first byte as well as the presence, which
+			# is where the bytes are rather than whether they verify. A tag
+			# read at the wrong offset answers `present=1` in every reader,
+			# so presence alone could not separate five descriptions that
+			# disagreed about which bytes the tag IS -- and a tag's location
+			# is what 26.448 got wrong one accessor away (26.450).
+			#
+			# `bytes=` and NOT `len=`: the dissector comparison harvests
+			# `len=` from any line into `<name>#len` and compares it with
+			# a Wireshark row's length, and its own docstring says why
+			# that is the wrong question here -- "`present=` is a tag's
+			# presence and not its bytes". Spelling this `len=` forced a
+			# comparison that test deliberately does not make, and two
+			# tags after a sealed region failed it: the walker calls them
+			# unplaceable and the dissector shows a row.
+			span = read_bytes(view, index)
+			lines.append(f"{local} present=1 bytes={len(span)} "
+			             f"first={span[0] if span else -1}")
 		except Refused:
-			lines.append(f"{local} present=0")
+			lines.append(f"{local} present=0 bytes=0 first=-1")
 
 	for index in _while_runs(image, struct_index):
 		local = _local(image, index)

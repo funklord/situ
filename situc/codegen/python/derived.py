@@ -71,6 +71,13 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"from __future__ import annotations",
 	]
 	lines.extend(span_byte())
+	# Only where a TABLE codec is bound, for the reason Rust's copy gives:
+	# emitting it anyway grew every derived module in the corpus by thirty
+	# lines nothing in them calls (26.451).
+	if any(decl.name in bound and decl.kernel is not None
+	       and decl.kernel.family is ast.KernelFamily.TABLE
+	       for decl in schema.codecs()):
+		lines.extend(bits_access())
 
 	for decl in schema.codecs():
 		if decl.name not in bound or decl.kernel is None:
@@ -95,6 +102,153 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		lines.extend(body)
 
 	return "\n".join(lines) + "\n"
+
+
+def bits_access() -> list[str]:
+	"""MSB-first bit access, which a symbol map needs and a CRC does not.
+
+	A table code's symbols are not byte-aligned -- 4b5b is five bits out
+	for four in -- so encoding walks bits rather than bytes. C keeps these
+	in its runtime; a generated Python module has none to reach into, so
+	they are emitted here once, for the reason `span_byte` gives.
+
+	MSB-first because that is the order a line code is transmitted in and
+	the order C's runtime uses. A decoder agreeing on the table and
+	disagreeing on the bit order yields a plausible stream that is not the
+	one sent, which nothing downstream can see.
+	"""
+	return [
+		"",
+		"",
+		"def _bits_get_msb(data: bytes, at: int, width: int) -> int:",
+		'\t"""`width` bits starting at bit `at`, most significant first."""',
+		"\tvalue = 0",
+		"",
+		"\tfor i in range(width):",
+		"\t\tbit  = at + i",
+		"\t\tbyte = data[bit // 8] if bit // 8 < len(data) else 0",
+		"\t\tvalue = (value << 1) | ((byte >> (7 - bit % 8)) & 1)",
+		"",
+		"\treturn value",
+		"",
+		"",
+		"def _bits_set_msb(out: bytearray, at: int, width: int,",
+		"\t\tvalue: int) -> None:",
+		'\t"""Write `width` bits of `value` at bit `at`, most significant',
+		'\tfirst."""',
+		"\tfor i in range(width):",
+		"\t\tbit = at + i",
+		"",
+		"\t\tif bit // 8 >= len(out):",
+		"\t\t\treturn",
+		"",
+		"\t\tmask = 1 << (7 - bit % 8)",
+		"",
+		"\t\tif (value >> (width - 1 - i)) & 1:",
+		"\t\t\tout[bit // 8] |= mask",
+		"\t\telse:",
+		"\t\t\tout[bit // 8] &= ~mask & 0xFF",
+	]
+
+
+def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""A symbol map, encoded and decoded a symbol at a time.
+
+	The derivation is `c.derived._symbol_map` and `NAMED_CODES`, imported
+	rather than repeated: 0017's amendment says a second backend re-spells
+	and does not re-derive, and a second copy of the 4b5b table is a second
+	table to be wrong. Only the spelling below is Python's.
+
+	A PADDED code is declined, as C declines it from this path into one of
+	its own: the last group's symbol count depends on how much input was
+	left, which symbol-at-a-time cannot express. base32 and base64 are that
+	shape; base16 is not, and is generated.
+	"""
+	from situc.codegen.c.derived import _symbol_map
+
+	kernel = decl.kernel
+	assert kernel is not None
+
+	inputs  = number(decl, "input_bits")
+	outputs = number(decl, "output_bits")
+	mapping = _symbol_map(decl, inputs, outputs)
+
+	if mapping is None or inputs > 8 or outputs > 16:
+		return None
+	if isinstance(kernel.argument("pad"), ast.IntLiteral):
+		return None
+
+	name  = _ident(prefix, decl.name)
+	size  = 1 << inputs
+	whole = ([f"\tif bits % {inputs} != 0:", "\t\treturn 0", ""]
+	         if inputs > 1 else [])
+
+	return [
+		"",
+		"",
+		f"#: `{decl.name}`: {inputs} bits in, {outputs} bits out, ratio"
+		f" {outputs}:{inputs}.",
+		"#: The ratio is exact, so an output position is a linear function",
+		"#: of an input one.",
+		f"{name.upper()}_ENCODE_TABLE = (",
+		"\t" + ", ".join(f"0x{mapping[symbol]:X}" for symbol in range(size))
+		+ ",",
+		")",
+		"",
+		"",
+		f"def {name}_encode(data: bytes, bits: int,"
+		" out: bytearray) -> int:",
+		f'\t"""Encode `bits` input bits into `out`. Returns the output bits',
+		f"\twritten, exactly bits * {outputs} // {inputs}"
+		+ ('" ""' if False else ""),
+		*(["\t-- or 0 if `bits` is not a whole number of symbols, which has",
+		   '\tno encoding the way a partial block has none."""']
+		  if inputs > 1 else ['\t."""']),
+		"\twritten = 0",
+		"\tat      = 0",
+		"",
+		*whole,
+		f"\twhile at + {inputs} <= bits:",
+		f"\t\tsymbol = _bits_get_msb(data, at, {inputs})",
+		"",
+		f"\t\t_bits_set_msb(out, written, {outputs},",
+		f"\t\t\t{name.upper()}_ENCODE_TABLE[symbol])",
+		f"\t\twritten += {outputs}",
+		f"\t\tat      += {inputs}",
+		"",
+		"\treturn written",
+		"",
+		"",
+		f"def {name}_decode(data: bytes, bits: int,"
+		" out: bytearray) -> int:",
+		'\t"""Decode. Returns the input bits recovered, or 0 on a symbol the',
+		"\tcode does not define, or on a length that is not a whole number of",
+		"\tsymbols -- both are a corrupted stream rather than a decodable one,",
+		'\tand neither is something to decode part of."""',
+		"\twritten = 0",
+		"\tat      = 0",
+		"",
+		f"\tif bits % {outputs} != 0:",
+		"\t\treturn 0",
+		"",
+		f"\twhile at + {outputs} <= bits:",
+		f"\t\tcode  = _bits_get_msb(data, at, {outputs})",
+		"\t\tfound = False",
+		"",
+		f"\t\tfor symbol in range({size}):",
+		f"\t\t\tif {name.upper()}_ENCODE_TABLE[symbol] == code:",
+		f"\t\t\t\t_bits_set_msb(out, written, {inputs}, symbol)",
+		f"\t\t\t\twritten += {inputs}",
+		"\t\t\t\tfound = True",
+		"\t\t\t\tbreak",
+		"",
+		"\t\tif not found:",
+		"\t\t\treturn 0",
+		"",
+		f"\t\tat += {outputs}",
+		"",
+		"\treturn written",
+	]
 
 
 def span_byte() -> list[str]:
@@ -156,6 +310,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
+	if kernel.family is ast.KernelFamily.TABLE:
+		return _table(decl, prefix)
 	return None
 
 

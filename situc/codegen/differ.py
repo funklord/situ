@@ -1222,8 +1222,13 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst uint8_t *held = {call.format('ptr')}(view);",
-		        f'\t\t\t\tprintf("{ask.local} present=%d\\n",'
-		        " held == NULL ? 0 : 1);",
+		        f"\t\t\t\tconst uint32_t len = held == NULL ? 0u"
+		        f" : {ask.count or 0}u;",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} present=%d bytes=%u'
+		        ' first=%d\\n",',
+		        "\t\t\t\t\theld == NULL ? 0 : 1, len,",
+		        "\t\t\t\t\tlen == 0u ? -1 : (int)held[0]);",
 		        "\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
 		# The refusal is part of the answer, not a reason to print
@@ -1591,8 +1596,15 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\tstd::printf("{ask.local} count=%u\\n",'
 		        f" view.{call}_count());"]
 	if ask.probe is Probe.TAG:
-		return [f'\t\t\tstd::printf("{ask.local} present=%d\\n",'
-		        f" view.{call}().empty() ? 0 : 1);"]
+		return ["\t\t\t{",
+		        f"\t\t\t\tconst auto held = view.{call}();",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} present=%d bytes=%u'
+		        ' first=%d\\n",',
+		        "\t\t\t\t\theld.empty() ? 0 : 1,",
+		        "\t\t\t\t\tstatic_cast<std::uint32_t>(held.size()),",
+		        "\t\t\t\t\theld.empty() ? -1 : static_cast<int>(held[0]));",
+		        "\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
 		return ["\t\t\t{",
 		        "\t\t\t\tstd::uint32_t at = 0, len = 0;",
@@ -1870,8 +1882,16 @@ def _rust_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\t\tprintln!("{ask.local} count={{}}",'
 		        f" view.{rust_ident(ask.local + '_count')}());"]
 	if ask.probe is Probe.TAG:
-		return [f'\t\t\t\tprintln!("{ask.local} present={{}}",'
-		        f" if view.{call}().is_empty() {{ 0 }} else {{ 1 }});"]
+		return ["\t\t\t\t{",
+		        f"\t\t\t\t\tlet held = view.{call}();",
+		        "",
+		        f'\t\t\t\t\tprintln!("{ask.local} present={{}} bytes={{}}'
+		        ' first={}",',
+		        "\t\t\t\t\t\tif held.is_empty() { 0 } else { 1 },"
+		        " held.len(),",
+		        "\t\t\t\t\t\tif held.is_empty() { -1i32 }"
+		        " else { held[0] as i32 });",
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
 		return [f"\t\t\t\tmatch view.{call}_covered() {{",
 		        f'\t\t\t\t\tOk((at, len)) => println!("{ask.local}'
@@ -2100,8 +2120,10 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.COUNT:
 		return [f'print("{ask.local} count=%d" % view.{call}_count)']
 	if ask.probe is Probe.TAG:
-		return [f'print("{ask.local} present=%d"'
-		        f" % (0 if len(view.{call}) == 0 else 1))"]
+		return [f"held = view.{call}",
+		        f'print("{ask.local} present=%d bytes=%d first=%d"',
+		        "\t% (0 if len(held) == 0 else 1, len(held),",
+		        "\t   -1 if len(held) == 0 else held[0]))"]
 	if ask.probe is Probe.COVERED_RANGE:
 		return ["try:",
 		        f"\tat, length = view.{call}_covered()",

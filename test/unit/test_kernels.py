@@ -1428,3 +1428,122 @@ def test_no_derived_emitter_reads_a_struct_declaration_at_all(
 	if language == "c":
 		assert emitter.declarations(poisoned, "situ") \
 			== emitter.declarations(parse_text(WITH_ARGUMENT), "situ")
+
+
+# ---------------------------------------------------------------------------
+# The table family in Rust and Python (26.451)
+# ---------------------------------------------------------------------------
+
+#: The five unpadded table codes, and what each one's standard says the
+#: first two symbols are. Written as bit strings rather than as integers
+#: because that is how the standards print them, and because a table read
+#: back as a number hides a bit-order error that a string shows.
+#:
+#: Checked against the standards and NOT against C's output: C is the only
+#: backend that generated these until now, so comparing to it would be
+#: asking the implementation whether it agrees with itself.
+TABLE_CODES = {
+	# RFC 4648 base16: a nibble to an uppercase ASCII hex digit.
+	"base16":            (4, 8, bytes([0x01]), "0011000000110001"),
+	"base16_lower":      (4, 8, bytes([0x01]), "0011000000110001"),
+	# ANSI X3.263 / FDDI: 0 is 11110, 1 is 01001. Chosen to bound the run
+	# length, so they are not an arithmetic function of the input.
+	"code_4b5b":         (4, 5, bytes([0x01]), "1111001001"),
+	# IEEE 802.3: a one is a falling edge, encoded 10.
+	"manchester_802_3":  (1, 2, bytes([0b0100_0000]), "0110"),
+	# G.E. Thomas's, which is the bit-inverse and a different code.
+	"manchester_thomas": (1, 2, bytes([0b0100_0000]), "1001"),
+}
+
+#: How many input bits each case above feeds in.
+TABLE_INPUT_BITS = {"base16": 8, "base16_lower": 8, "code_4b5b": 8,
+                    "manchester_802_3": 2, "manchester_thomas": 2}
+
+
+def _table_schema(name: str, inputs: int, outputs: int) -> str:
+	code = "fddi_4b5b" if name == "code_4b5b" else name
+	return (f"codec {name} {{ kernel = table(input_bits = {inputs},"
+	        f" output_bits = {outputs}, code = {code}); }}\n"
+	        f"impl {name} derived;\n")
+
+
+@pytest.mark.parametrize("name", sorted(TABLE_CODES))
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_every_backend_writes_a_body_for_an_unpadded_table_code(
+		language: str, name: str) -> None:
+	"""Rust and Python declined all five until 26.451, and said so in a
+	comment rather than failing -- which is the right way to decline and
+	is indistinguishable from a body when nobody looks.
+
+	This asserts the absence of the decline note as well as the presence
+	of the function, because the note is what the gap looked like.
+	"""
+	inputs, outputs, _data, _want = TABLE_CODES[name]
+	text = _table_schema(name, inputs, outputs)
+	out  = DERIVED_EMITTERS[language].generate(parse_text(text), "unit")
+
+	assert f"No implementation for `{name}`" not in out, (
+		f"{language} still declines {name}")
+	assert f"{name}_encode" in out and f"{name}_decode" in out
+
+
+@pytest.mark.parametrize("name", sorted(TABLE_CODES))
+def test_the_generated_python_encodes_what_the_standard_says(
+		name: str, tmp_path: Path) -> None:
+	"""Run it, do not read it.
+
+	Generated Python fails at the call rather than at the build, so a
+	module that imports cleanly has demonstrated nothing. Each case feeds
+	the first two symbols and compares the output BITS against the
+	standard's own spelling, then round-trips.
+	"""
+	inputs, outputs, data, want = TABLE_CODES[name]
+	text   = _table_schema(name, inputs, outputs)
+	module = tmp_path / "unit.py"
+	module.write_text(py_derived.generate(parse_text(text), "unit"),
+	                  encoding="ascii")
+
+	namespace: dict[str, object] = {}
+	exec(compile(module.read_text(encoding="ascii"), str(module), "exec"),
+	     namespace)
+
+	encode = namespace[f"{name}_encode"]
+	decode = namespace[f"{name}_decode"]
+	assert callable(encode) and callable(decode)
+
+	bits = TABLE_INPUT_BITS[name]
+	out  = bytearray(16)
+	n    = encode(data, bits, out)
+
+	got = "".join(f"{byte:08b}" for byte in out)[:n]
+	assert got == want, f"{name}: encoded {got}, the standard says {want}"
+
+	back = bytearray(16)
+	recovered = decode(bytes(out), n, back)
+	assert recovered == bits, f"{name}: round trip returned {recovered} bits"
+	assert bytes(back)[:len(data)] == data
+
+
+@pytest.mark.parametrize("name", sorted(TABLE_CODES))
+def test_the_generated_python_refuses_a_symbol_the_code_omits(
+		name: str, tmp_path: Path) -> None:
+	"""The control for the test above, and the half a round trip cannot
+	show: a decoder that accepted anything would round-trip perfectly.
+
+	`0xFF` repeated is not a codeword in any of the five -- base16's
+	alphabet is ASCII, 4b5b's is five bits with a bounded run length, and
+	a Manchester symbol is never 11.
+	"""
+	inputs, outputs, _data, _want = TABLE_CODES[name]
+	text   = _table_schema(name, inputs, outputs)
+	module = tmp_path / "unit.py"
+	module.write_text(py_derived.generate(parse_text(text), "unit"),
+	                  encoding="ascii")
+
+	namespace: dict[str, object] = {}
+	exec(compile(module.read_text(encoding="ascii"), str(module), "exec"),
+	     namespace)
+
+	decode = namespace[f"{name}_decode"]
+	assert decode(b"\xFF" * 4, outputs * 4, bytearray(16)) == 0, (  # type: ignore[operator]
+		f"{name} decoded a symbol its table does not define")

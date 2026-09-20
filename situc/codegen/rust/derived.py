@@ -86,6 +86,161 @@ def span_byte_helper() -> list[str]:
 	]
 
 
+def bits_helper() -> list[str]:
+	"""MSB-first bit access, which a symbol map needs and a CRC does not.
+
+	A table code's symbols are not byte-aligned -- 4b5b is five bits out
+	for four in -- so encoding walks bits rather than bytes. C has these
+	in its runtime as `situ_bits_get_msb` and `situ_bits_set_msb`; Rust's
+	generated modules have no runtime to reach into, so they are emitted
+	here, once per module for the reason `span_byte_helper` gives.
+
+	MSB-first because that is the order a line code is transmitted in and
+	the order C's runtime uses: a decoder that agreed on the table and
+	disagreed on the bit order would produce a plausible stream that is
+	not the one sent.
+	"""
+	return [
+		"",
+		"/// `width` bits starting at bit `at`, most significant first.",
+		"fn situ_bits_get_msb(data: &[u8], at: usize, width: usize) -> u64 {",
+		"\tlet mut value: u64 = 0;",
+		"",
+		"\tfor i in 0..width {",
+		"\t\tlet bit = at + i;",
+		"\t\tlet byte = data.get(bit / 8).copied().unwrap_or(0);",
+		"\t\tvalue = (value << 1) | u64::from((byte >> (7 - bit % 8)) & 1);",
+		"\t}",
+		"",
+		"\tvalue",
+		"}",
+		"",
+		"/// Write `width` bits of `value` at bit `at`, most significant first.",
+		"fn situ_bits_set_msb(out: &mut [u8], at: usize, width: usize,",
+		"\t\tvalue: u64) {",
+		"\tfor i in 0..width {",
+		"\t\tlet bit = at + i;",
+		"",
+		"\t\tif bit / 8 >= out.len() {",
+		"\t\t\treturn;",
+		"\t\t}",
+		"",
+		"\t\tlet mask = 1u8 << (7 - bit % 8);",
+		"",
+		"\t\tif (value >> (width - 1 - i)) & 1 == 1 {",
+		"\t\t\tout[bit / 8] |= mask;",
+		"\t\t} else {",
+		"\t\t\tout[bit / 8] &= !mask;",
+		"\t\t}",
+		"\t}",
+		"}",
+	]
+
+
+def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""A symbol map, encoded and decoded a symbol at a time.
+
+	The derivation is `c.derived._symbol_map` and `NAMED_CODES`, imported
+	rather than repeated: decision 0017's amendment says a second backend
+	re-spells and does not re-derive, and a second copy of the 4b5b table
+	is a second table to be wrong. Only the spelling below is Rust's.
+
+	A PADDED code is declined here as C's own path declines it in a
+	different function: the last group's symbol count depends on how much
+	input was left, which symbol-at-a-time cannot express. base32 and
+	base64 are that shape; base16 is not, and is generated.
+	"""
+	from situc.codegen.c.derived import _symbol_map
+
+	kernel = decl.kernel
+	assert kernel is not None
+
+	inputs  = number(decl, "input_bits")
+	outputs = number(decl, "output_bits")
+	mapping = _symbol_map(decl, inputs, outputs)
+
+	if mapping is None or inputs > 8 or outputs > 16:
+		return None
+	if isinstance(kernel.argument("pad"), ast.IntLiteral):
+		return None
+
+	name = _ident(prefix, decl.name)
+	size = 1 << inputs
+	whole = ([f"\tif bits % {inputs} != 0 {{", "\t\treturn 0;", "\t}", ""]
+	         if inputs > 1 else [])
+
+	return [
+		"",
+		f"/// `{decl.name}`: {inputs} bits in, {outputs} bits out, ratio",
+		f"/// {outputs}:{inputs}. The ratio is exact, so an output position is",
+		"/// a linear function of an input one.",
+		f"const {name.upper()}_ENCODE_TABLE: [u16; {size}] = [",
+		"\t" + ", ".join(f"0x{mapping[symbol]:X}" for symbol in range(size)),
+		"];",
+		"",
+		"/// Encode `bits` input bits from `input` into `out`. Returns the",
+		f"/// number of output bits written, exactly bits * {outputs} /"
+		f" {inputs}",
+		*(["/// -- or 0 if `bits` is not a whole number of symbols, which has",
+		   "/// no encoding the way a partial block has no permutation."]
+		  if inputs > 1 else ["/// bits."]),
+		f"pub fn {name}_encode(input: &[u8], bits: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut at = 0usize;",
+		"",
+		*whole,
+		f"\twhile at + {inputs} <= bits {{",
+		f"\t\tlet symbol = situ_bits_get_msb(input, at, {inputs}) as usize;",
+		"",
+		f"\t\tsitu_bits_set_msb(out, written, {outputs},",
+		f"\t\t\tu64::from({name.upper()}_ENCODE_TABLE[symbol]));",
+		f"\t\twritten += {outputs};",
+		f"\t\tat += {inputs};",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+		"",
+		"/// Decode. Returns the number of input bits recovered, or 0 on a",
+		"/// symbol the code does not define, or on a length that is not a",
+		"/// whole number of symbols -- both are a corrupted stream rather",
+		"/// than a decodable one, and neither is something to decode part of.",
+		f"pub fn {name}_decode(input: &[u8], bits: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut at = 0usize;",
+		"",
+		f"\tif bits % {outputs} != 0 {{",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		f"\twhile at + {outputs} <= bits {{",
+		f"\t\tlet code = situ_bits_get_msb(input, at, {outputs}) as u16;",
+		"\t\tlet mut found = false;",
+		"",
+		f"\t\tfor symbol in 0..{size} {{",
+		f"\t\t\tif {name.upper()}_ENCODE_TABLE[symbol] == code {{",
+		f"\t\t\t\tsitu_bits_set_msb(out, written, {inputs},"
+		" symbol as u64);",
+		f"\t\t\t\twritten += {inputs};",
+		"\t\t\t\tfound = true;",
+		"\t\t\t\tbreak;",
+		"\t\t\t}",
+		"\t\t}",
+		"",
+		"\t\tif !found {",
+		"\t\t\treturn 0;",
+		"\t\t}",
+		"",
+		f"\t\tat += {outputs};",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+	]
+
+
 def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	"""Emit every derived implementation the schema binds, as Rust."""
 	# `impls()` and `codecs()` decide everything this emits, and every
@@ -105,6 +260,17 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"",
 		"#![allow(dead_code)]",
 		*span_byte_helper(),
+		# Only where a TABLE codec is bound. `span_byte_helper` is emitted
+		# unconditionally because both existing families use it; these are
+		# used by one family, and emitting them anyway changed every
+		# derived module in the corpus -- 40 files gaining 30 lines of
+		# helper nothing in them calls. A generated file growing for a
+		# feature its schema does not use is a diff its reader has to
+		# explain (26.451).
+		*(bits_helper() if any(
+			decl.name in bound and decl.kernel is not None
+			and decl.kernel.family is ast.KernelFamily.TABLE
+			for decl in schema.codecs()) else []),
 	]
 
 	emitted = 0
@@ -142,6 +308,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
+	if kernel.family is ast.KernelFamily.TABLE:
+		return _table(decl, prefix)
 	return None
 
 
