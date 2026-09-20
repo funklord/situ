@@ -109,7 +109,7 @@ from situc.diagnostics import SituError, error
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	bit_addressed_tag, invalidating_members,
+	bit_addressed_tag, covered_run, invalidating_members,
 	Member, arm_members, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, local_name, own_entries,
 	own_members, unmeasurable_inside,
@@ -176,6 +176,14 @@ class Probe(Enum):
 	#: which has to leave the tag stale (14.2). The claim is the security
 	#: model's, and four backends spell the marking four ways.
 	COVERED   = "covered"
+	#: The RANGE a tag says it authenticates, read back through `_covered`.
+	#: Not `COVERED`, which writes a scalar INSIDE a covered region and
+	#: prints the dirty bit -- a probe with the right name asking a
+	#: different question, and the reason nobody noticed this one was
+	#: missing. `edges.covered_tail.mac_covered()` returned an inverted
+	#: range in three backends and refused every message, uncaught, because
+	#: grepping for "covered" finds the write probe and stops (26.449).
+	COVERED_RANGE = "covered_range"
 
 
 @dataclass(frozen=True)
@@ -455,6 +463,13 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				                 signed=scalar.signed))
 			else:
 				found.append(Ask(Probe.TAG, local, placement.array_count))
+			# And what it says it covers, where it covers a contiguous
+			# run -- which is exactly when the four emit `_covered`.
+			# Asked of the tag rather than inferred from the layout,
+			# because the whole point is that the four disagreed about
+			# it while agreeing with the layout they were built from.
+			if covered_run(struct, placement) is not None:
+				found.append(Ask(Probe.COVERED_RANGE, local))
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:
@@ -1210,6 +1225,23 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        f'\t\t\t\tprintf("{ask.local} present=%d\\n",'
 		        " held == NULL ? 0 : 1);",
 		        "\t\t\t}"]
+	if ask.probe is Probe.COVERED_RANGE:
+		# The refusal is part of the answer, not a reason to print
+		# nothing: three backends refused every message here while C
+		# answered, and a probe that skipped the refusal would have
+		# printed one line in one column and compared nothing.
+		return ["\t\t\t{",
+		        "\t\t\t\tuint32_t at = 0u, len = 0u;",
+		        f"\t\t\t\tconst situ_err_t e ="
+		        f" {call.format('covered')}(view, &at, &len);",
+		        "",
+		        "\t\t\t\tif (e == SITU_OK) {",
+		        f'\t\t\t\t\tprintf("{ask.local}.covered %u+%u\\n",'
+		        " at, len);",
+		        "\t\t\t\t} else {",
+		        f'\t\t\t\t\tprintf("{ask.local}.covered refused\\n");',
+		        "\t\t\t\t}",
+		        "\t\t\t}"]
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tprintf("{ask.local}[0] %lld\\n",'
 		        f' (long long){call.format("get")}(view, 0u));']
@@ -1561,6 +1593,18 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\tstd::printf("{ask.local} present=%d\\n",'
 		        f" view.{call}().empty() ? 0 : 1);"]
+	if ask.probe is Probe.COVERED_RANGE:
+		return ["\t\t\t{",
+		        "\t\t\t\tstd::uint32_t at = 0, len = 0;",
+		        f"\t\t\t\tconst auto e = view.{call}_covered(at, len);",
+		        "",
+		        "\t\t\t\tif (e == ::situ::rt::err::ok) {",
+		        f'\t\t\t\t\tstd::printf("{ask.local}.covered %u+%u\\n",'
+		        " at, len);",
+		        "\t\t\t\t} else {",
+		        f'\t\t\t\t\tstd::printf("{ask.local}.covered refused\\n");',
+		        "\t\t\t\t}",
+		        "\t\t\t}"]
 	if ask.probe is Probe.ELEMENT:
 		return [f'\t\t\tstd::printf("{ask.local}[0] %lld\\n",'
 		        f" static_cast<long long>(view.{call}(0)));"]
@@ -1828,6 +1872,13 @@ def _rust_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'\t\t\t\tprintln!("{ask.local} present={{}}",'
 		        f" if view.{call}().is_empty() {{ 0 }} else {{ 1 }});"]
+	if ask.probe is Probe.COVERED_RANGE:
+		return [f"\t\t\t\tmatch view.{call}_covered() {{",
+		        f'\t\t\t\t\tOk((at, len)) => println!("{ask.local}'
+		        '.covered {}+{}", at, len),',
+		        f'\t\t\t\t\tErr(_) => println!("{ask.local}'
+		        '.covered refused"),',
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.NESTED:
 		# The extent is asked of the sub-view rather than read off it: the
 		# slice behind a generated struct is private, which is the point of
@@ -2051,6 +2102,12 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.TAG:
 		return [f'print("{ask.local} present=%d"'
 		        f" % (0 if len(view.{call}) == 0 else 1))"]
+	if ask.probe is Probe.COVERED_RANGE:
+		return ["try:",
+		        f"\tat, length = view.{call}_covered()",
+		        f'\tprint("{ask.local}.covered %d+%d" % (at, length))',
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local}.covered refused")']
 	if ask.probe is Probe.ELEMENT:
 		return [f'print("{ask.local}[0] %d" % view.{call}(0))']
 	if ask.probe is Probe.RUN_ELEMENT:

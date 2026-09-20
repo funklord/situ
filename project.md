@@ -30711,6 +30711,67 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.449 A probe with the right name, asking a different question
+
+**The instrument 26.448 said was missing is built, and why it was missing is
+the finding.** `situc/codegen/differ.py` already had a `Probe.COVERED`,
+wired into all four backends. Anybody asking "do we compare what a tag
+covers?" greps for it, finds four call sites, and stops.
+
+It compares something else. Line 619 is `kind = Probe.COVERED if covers else
+Probe.WRITE`: the probe selects a scalar FIELD sitting inside a covered
+region, writes it, and prints the tag's DIRTY BIT. It never calls
+`_covered()` and never prints a range. So the question 26.448's defect lived
+in -- what byte range does this tag say it authenticates -- was asked by
+nothing, while a probe named for it passed on every run.
+
+**That is a better explanation for a three-backend fault surviving than
+"nobody thought of it", and it generalises.** A name is not a
+characterisation, and a probe's name is what the next person checks coverage
+against. `evidence.md` has the shape for a test whose name quantifies; this
+is the same fault one level out, in a probe whose name states its subject
+and not its question.
+
+**`Probe.COVERED_RANGE` asks the other one.** It calls each backend's
+`_covered()` and prints `<tag>.covered <offset>+<len>`, in all four
+languages, emitted for a tag exactly where `covered_run` is not None --
+which is exactly when the four emit the accessor.
+
+**The label is `<tag>.covered` and not `<tag> covers=`, which the first
+version was, because the first version broke eight tests.**
+`test_walker.py::_by_member` keys a listing by each line's FIRST TOKEN and
+last-wins, so a second line beginning `mac` REPLACED `mac present=0` in
+C's map while the walker still had only the `present=` line. The
+comparison then paired two different questions about one member and
+called it a disagreement -- `walker: 'tag present=0'` against
+`C: 'tag covers=21+71'` -- across dtls, icmp, ipv4, udp and edges.
+
+Nothing was wrong with either answer, and the test was right to fail: its
+contract is one line per member per backend, and the probe had quietly
+made that two. A distinct first token restores it, and the four-way
+comparison is unaffected because it reads the whole listing. A member C
+mentions and the walker does not is already ignored by that test, which
+is why no new exclusion was needed.
+
+**Printing the REFUSAL is the load-bearing part, not decoration.** Three
+backends refused every message on `covered_tail` while C answered, so a
+probe that printed nothing on a refusal would have emitted one line in one
+column and compared nothing -- a differential silently reduced to a
+monologue. Each backend prints `covers=refused` instead, and a refusal in
+one column against a range in three is the disagreement.
+
+**Shown failing before being believed.** With 26.448's Python fix reverted,
+the four print `3+3`, `3+3`, `3+3`, `refused`. That is the defect that lived
+undetected, caught by the instrument on the first run.
+
+**What it inspects, counted rather than assumed: 17 tags across 9 schemas**
+-- dtls, icmp, ipv4, keystore, packet, png, tcp, udp one each and edges
+nine. The corpus differential passes with all of them agreeing, which is a
+pass over a population rather than over an empty list. The count came from
+`asks()`; asking `writes()` for it returns 0, because the tag branch lives
+in the other function, and that zero looked exactly like a vacuous pass
+until the driver output contradicted it.
+
 ### 26.448 A tag that could not say what it covered
 
 **`edges.covered_tail.mac_covered()` refused every message in three of the
@@ -30767,11 +30828,10 @@ BETWEEN backends**, and `covered_tail.mac_covered` had no caller in any of
 the four. An interface is only as wired as its least-used method, and a
 method wired in one backend of four is the same hole one axis over.
 
-That gap is not closed here. The test added covers all four cells in
-Python, which is the backend the corpus fault was measured in; C++ and Rust
-are the same code path and are verified only by generation and by the corpus
-diff. A cross-backend comparison of covered ranges is the instrument this
-wants and does not have.
+That gap is **closed by 26.449**, which built the instrument rather than
+leaving it named. The test added here covers all four cells in Python, which
+is the backend the corpus fault was measured in; the four-way comparison is
+the differ's now.
 
 **Swept for other sites, and the empty result has a method.** The
 question a reader asks next is whether anything ELSE hands a region
