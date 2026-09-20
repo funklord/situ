@@ -31,6 +31,8 @@ concatenation, so nothing here allocates a copy of what it is summing.
 
 from __future__ import annotations
 
+from math import lcm
+
 from situc import ast
 from situc.codegen.kernel_math import (crc_register, crc_shift, crc_start,
                                        crc_table, crc_width, number, reverse)
@@ -74,8 +76,10 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	# Only where a TABLE codec is bound, for the reason Rust's copy gives:
 	# emitting it anyway grew every derived module in the corpus by thirty
 	# lines nothing in them calls (26.451).
+	# ... and an UNPADDED one: the padded base codes accumulate whole bytes and call neither helper, so a base64-only schema was carrying two dead functions (26.452).
 	if any(decl.name in bound and decl.kernel is not None
 	       and decl.kernel.family is ast.KernelFamily.TABLE
+	       and not isinstance(decl.kernel.argument("pad"), ast.IntLiteral)
 	       for decl in schema.codecs()):
 		lines.extend(bits_access())
 
@@ -151,6 +155,118 @@ def bits_access() -> list[str]:
 	]
 
 
+def _padded_table(decl: ast.CodecDecl, prefix: str, inputs: int,
+		outputs: int, mapping: list[int], pad: int) -> list[str] | None:
+	"""A base-N code: whole groups, with a partial one filled out.
+
+	base32 and base64, re-spelled from C's `_padded_table`: same group
+	size, same fill rule, same reverse table. C's note is worth repeating
+	because it says what the tests must cover -- an encoder wrong only for
+	inputs of length 3n+1 looks right in casual testing.
+	"""
+	if outputs != 8 or inputs >= 8:
+		return None
+
+	name       = _ident(prefix, decl.name)
+	group_bits = lcm(8, inputs)
+	group_in   = group_bits // 8
+	symbols    = group_bits // inputs
+	mask       = (1 << inputs) - 1
+
+	reverse = [0xFF] * 256
+	for symbol, value in enumerate(mapping):
+		reverse[value] = symbol
+
+	return [
+		"",
+		"",
+		f"#: `{decl.name}`: RFC 4648 base{1 << inputs}. {group_in} input",
+		f"#: bytes make {symbols} output bytes; a shorter final group is",
+		f"#: filled with 0x{pad:02X}.",
+		f"{name.upper()}_ALPHABET = bytes((",
+		"\t" + ", ".join(f"0x{value:02X}" for value in mapping) + ",",
+		"))",
+		"",
+		"#: Symbol for each byte, 0xFF where it is not in the alphabet.",
+		f"{name.upper()}_SYMBOL = bytes((",
+		"\t" + ", ".join(f"0x{value:02X}" for value in reverse) + ",",
+		"))",
+		"",
+		"",
+		f"def {name}_encode(data: bytes, length: int,"
+		" out: bytearray) -> int:",
+		'\t"""Encode `length` bytes into `out`, padding the final group."""',
+		"\twritten = 0",
+		"\tstart   = 0",
+		"",
+		"\twhile start < length:",
+		f"\t\thave = min(length - start, {group_in})",
+		"\t\tacc  = 0",
+		"",
+		f"\t\tfor i in range({group_in}):",
+		"\t\t\tacc = (acc << 8) | (data[start + i] if i < have else 0)",
+		"",
+		"\t\t# Symbols that carry data; the rest are padding.",
+		f"\t\tfull = (have * 8 + {inputs - 1}) // {inputs}",
+		"",
+		f"\t\tfor i in range({symbols}):",
+		f"\t\t\tshift = {group_bits} - {inputs} * (i + 1)",
+		"",
+		"\t\t\tout[written + i] = (",
+		f"\t\t\t\t{name.upper()}_ALPHABET[(acc >> shift)"
+		f" & 0x{mask:02X}]",
+		f"\t\t\t\tif i < full else 0x{pad:02X})",
+		"",
+		f"\t\twritten += {symbols}",
+		f"\t\tstart   += {group_in}",
+		"",
+		"\treturn written",
+		"",
+		"",
+		f"def {name}_decode(data: bytes, length: int,"
+		" out: bytearray) -> int:",
+		'\t"""Returns the number of bytes decoded, or 0 for input that is',
+		"\tnot a whole number of groups or carries a byte outside the",
+		'\talphabet."""',
+		"\twritten = 0",
+		"\tstart   = 0",
+		"",
+		f"\tif length % {symbols} != 0:",
+		"\t\treturn 0",
+		"",
+		"\twhile start < length:",
+		"\t\tacc  = 0",
+		"\t\tkept = 0",
+		"",
+		f"\t\twhile kept < {symbols}"
+		f" and data[start + kept] != 0x{pad:02X}:",
+		"\t\t\tkept += 1",
+		"",
+		f"\t\tfor i in range({symbols}):",
+		"\t\t\tsymbol = 0",
+		"",
+		"\t\t\tif i < kept:",
+		f"\t\t\t\tsymbol = {name.upper()}_SYMBOL[data[start + i]]",
+		"",
+		"\t\t\t\tif symbol == 0xFF:",
+		"\t\t\t\t\treturn 0",
+		"",
+		f"\t\t\tacc = (acc << {inputs}) | symbol",
+		"",
+		f"\t\tnbytes = kept * {inputs} // 8",
+		"",
+		"\t\tfor i in range(nbytes):",
+		f"\t\t\tshift = {group_bits} - 8 * (i + 1)",
+		"",
+		"\t\t\tout[written + i] = (acc >> shift) & 0xFF",
+		"",
+		"\t\twritten += nbytes",
+		f"\t\tstart   += {symbols}",
+		"",
+		"\treturn written",
+	]
+
+
 def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""A symbol map, encoded and decoded a symbol at a time.
 
@@ -175,8 +291,10 @@ def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	if mapping is None or inputs > 8 or outputs > 16:
 		return None
-	if isinstance(kernel.argument("pad"), ast.IntLiteral):
-		return None
+	pad = kernel.argument("pad")
+	if isinstance(pad, ast.IntLiteral):
+		return _padded_table(decl, prefix, inputs, outputs, mapping,
+		                     pad.value)
 
 	name  = _ident(prefix, decl.name)
 	size  = 1 << inputs

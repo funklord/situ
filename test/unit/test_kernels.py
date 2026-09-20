@@ -19,9 +19,11 @@ CRC-32 from an implementation of whatever this happens to do.
 
 from __future__ import annotations
 
+import base64
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Callable, cast
 
 import pytest
 
@@ -1547,3 +1549,173 @@ def test_the_generated_python_refuses_a_symbol_the_code_omits(
 	decode = namespace[f"{name}_decode"]
 	assert decode(b"\xFF" * 4, outputs * 4, bytearray(16)) == 0, (  # type: ignore[operator]
 		f"{name} decoded a symbol its table does not define")
+
+
+
+def _generated(source: str, tmp_path: Path, *names: str
+		) -> list[Callable[..., int]]:
+	"""Execute a generated Python module and hand back named functions.
+
+	`exec` fills a `dict[str, object]`, so what comes out needs saying:
+	each of these is `(bytes, int, bytearray) -> int`. The cast is the
+	claim, and the call in the test is what checks it.
+	"""
+	module = tmp_path / "unit.py"
+	module.write_text(source, encoding="ascii")
+
+	namespace: dict[str, object] = {}
+	exec(compile(module.read_text(encoding="ascii"), str(module), "exec"),
+	     namespace)
+
+	found = []
+	for name in names:
+		got = namespace[name]
+		assert callable(got), f"{name} is not callable"
+		found.append(cast("Callable[..., int]", got))
+	return found
+
+
+# ---------------------------------------------------------------------------
+# The padded table codes (26.452)
+# ---------------------------------------------------------------------------
+
+#: `base32` and `base64` emit whole groups and fill a partial one, so the
+#: last group's symbol count depends on how much input was left. That is
+#: the whole difference from `base16`, where four bits divide a byte and
+#: the question never arises.
+#:
+#: The oracle is Python's own `base64` module -- independent of situ, and
+#: what C's arithmetic was written against. C's note says what the sweep
+#: has to cover: an encoder wrong only for inputs of length 3n+1 looks
+#: right in casual testing, so every residue is swept rather than a
+#: convenient case picked.
+PADDED_CODES: dict[str, tuple[int, Callable[[bytes], bytes]]] = {
+	"base64": (6, base64.b64encode),
+	"base32": (5, base64.b32encode),
+}
+
+
+def _padded_schema(name: str, inputs: int) -> str:
+	return (f"codec {name} {{ kernel = table(input_bits = {inputs},"
+	        f" output_bits = 8, code = {name}, pad = 0x3D); }}\n"
+	        f"impl {name} derived;\n")
+
+
+@pytest.mark.parametrize("name", sorted(PADDED_CODES))
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_every_backend_writes_a_body_for_a_padded_base_code(
+		language: str, name: str) -> None:
+	inputs, _ref = PADDED_CODES[name]
+	out = DERIVED_EMITTERS[language].generate(
+		parse_text(_padded_schema(name, inputs)), "unit")
+
+	assert f"No implementation for `{name}`" not in out, (
+		f"{language} still declines {name}")
+	assert f"{name}_encode" in out and f"{name}_decode" in out
+
+
+@pytest.mark.parametrize("name", sorted(PADDED_CODES))
+def test_the_generated_python_agrees_with_the_base64_module(
+		name: str, tmp_path: Path) -> None:
+	"""Every input length from 0 to 39, against the standard library.
+
+	Not against C, which was the only backend generating these: a diff
+	against it asks the implementation whether it agrees with itself. The
+	sweep is every length rather than a sample because the failure this
+	guards is length-dependent by construction -- the padding rule is the
+	only thing that varies between one residue and the next.
+	"""
+	inputs, reference = PADDED_CODES[name]
+	encode, decode = _generated(
+		py_derived.generate(parse_text(_padded_schema(name, inputs)), "unit"),
+		tmp_path, f"{name}_encode", f"{name}_decode")
+
+	for length in range(40):
+		data = bytes((i * 37 + 11) & 0xFF for i in range(length))
+		out  = bytearray(length * 2 + 32)
+		got  = bytes(out[:encode(data, length, out)])
+
+		assert got == reference(data), (
+			f"{name} at length {length}: {got!r} against the standard "
+			f"library's {reference(data)!r}")
+
+		back = bytearray(length + 32)
+		kept = decode(got, len(got), back)
+		assert bytes(back[:kept]) == data, (
+			f"{name} at length {length} did not round trip")
+
+
+@pytest.mark.parametrize("name", sorted(PADDED_CODES))
+def test_the_padded_decoder_refuses_a_byte_outside_the_alphabet(
+		name: str, tmp_path: Path) -> None:
+	"""The control, and the half the sweep above cannot show: a decoder
+	that accepted anything would agree with the oracle on every input the
+	oracle produced.
+
+	`*` is in neither alphabet -- base64's is A-Za-z0-9+/ and base32's is
+	A-Z2-7 -- and a group of them is a whole number of groups, so length
+	is not what refuses it.
+	"""
+	inputs, _reference = PADDED_CODES[name]
+	decode, = _generated(
+		py_derived.generate(parse_text(_padded_schema(name, inputs)), "unit"),
+		tmp_path, f"{name}_decode")
+	assert decode(b"*" * 8, 8, bytearray(32)) == 0, (
+		f"{name} decoded a byte its alphabet does not contain")
+
+
+#: Rust is compiled and run rather than read, for the reason C is: a
+#: generated body that parses has demonstrated nothing about what it
+#: computes. Without this the padded path was verified once, by hand, and
+#: never again -- and the Python sweep above cannot speak for it, which a
+#: sabotage of Rust's padding shows by leaving that sweep green.
+RUSTC = shutil.which("rustc")
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("name", sorted(PADDED_CODES))
+def test_the_generated_rust_agrees_with_the_base64_module(
+		name: str, tmp_path: Path) -> None:
+	"""The same sweep as Python's, in the other backend that inlines these.
+
+	One process for all forty lengths: rustc is slow enough that a
+	compile per length would be the test's whole cost, and the driver
+	printing one line per length keeps the comparison in Python where the
+	oracle is.
+	"""
+	inputs, reference = PADDED_CODES[name]
+	(tmp_path / "unit.rs").write_text(
+		rs_derived.generate(parse_text(_padded_schema(name, inputs)), "unit"),
+		encoding="ascii")
+	(tmp_path / "main.rs").write_text(
+		"#[path = \"unit.rs\"] mod unit;\n"
+		"use unit::*;\n"
+		"\n"
+		"fn main() {\n"
+		"\tfor n in 0..40usize {\n"
+		"\t\tlet data: Vec<u8> = (0..n)\n"
+		"\t\t\t.map(|i| ((i * 37 + 11) & 0xFF) as u8).collect();\n"
+		"\t\tlet mut out = vec![0u8; n * 2 + 32];\n"
+		f"\t\tlet k = {name}_encode(&data, n, &mut out);\n"
+		"\t\tprintln!(\"{}\", String::from_utf8_lossy(&out[..k]));\n"
+		"\t}\n"
+		"}\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-A", "warnings",
+		 "-o", str(tmp_path / "run"), str(tmp_path / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stderr
+
+	lines = ran.stdout.splitlines()
+	assert len(lines) == 40, f"driver printed {len(lines)} lines"
+
+	for length, got in enumerate(lines):
+		data = bytes((i * 37 + 11) & 0xFF for i in range(length))
+		assert got == reference(data).decode("ascii"), (
+			f"{name} at length {length}: Rust wrote {got!r}, the standard "
+			f"library says {reference(data).decode('ascii')!r}")

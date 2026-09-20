@@ -14,6 +14,8 @@ correct, and an `extern` impl supplies the code.
 
 from __future__ import annotations
 
+from math import lcm
+
 from situc import ast
 from situc.codegen.kernel_math import (accumulator, crc_register, crc_shift,
                                        crc_start, crc_table, crc_width, number,
@@ -137,6 +139,137 @@ def bits_helper() -> list[str]:
 	]
 
 
+def _padded_table(decl: ast.CodecDecl, prefix: str, inputs: int,
+		outputs: int, mapping: list[int], pad: int) -> list[str] | None:
+	"""A base-N code: whole groups, with a partial one filled out.
+
+	base32 and base64. A group is the smallest run of input that is both a
+	whole number of bytes and a whole number of symbols -- five bytes and
+	three respectively -- so an input not ending on one has its last group
+	padded rather than truncated. base16 never meets the question, four
+	bits dividing a byte exactly, which is why it is the unpadded path.
+
+	The arithmetic is C's, re-spelled: same group size, same fill rule,
+	same reverse table. C's own note is worth repeating here because it
+	says what the tests have to cover -- an encoder wrong only for inputs
+	of length 3n+1 looks right in casual testing.
+	"""
+	if outputs != 8 or inputs >= 8:
+		return None
+
+	name       = _ident(prefix, decl.name)
+	group_bits = lcm(8, inputs)
+	group_in   = group_bits // 8
+	symbols    = group_bits // inputs
+	mask       = (1 << inputs) - 1
+
+	reverse = [0xFF] * 256
+	for symbol, value in enumerate(mapping):
+		reverse[value] = symbol
+
+	return [
+		"",
+		f"/// `{decl.name}`: RFC 4648 base{1 << inputs}. {group_in} input",
+		f"/// bytes make {symbols} output bytes; a shorter final group is",
+		f"/// filled with 0x{pad:02X}, so the output is always a whole number",
+		"/// of groups -- which is what `ratio_padded` in the capability map",
+		"/// means.",
+		f"const {name.upper()}_ALPHABET: [u8; {len(mapping)}] = [",
+		"\t" + ", ".join(f"0x{value:02X}" for value in mapping),
+		"];",
+		"",
+		"/// Symbol for each byte, 0xFF where the byte is not in the alphabet.",
+		f"const {name.upper()}_SYMBOL: [u8; 256] = [",
+		"\t" + ", ".join(f"0x{value:02X}" for value in reverse),
+		"];",
+		"",
+		f"pub fn {name}_encode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut start = 0usize;",
+		"",
+		"\twhile start < len {",
+		f"\t\tlet have = core::cmp::min(len - start, {group_in});",
+		"\t\tlet mut acc: u64 = 0;",
+		"",
+		f"\t\tfor i in 0..{group_in} {{",
+		"\t\t\tlet byte = if i < have { input[start + i] } else { 0 };",
+		"\t\t\tacc = (acc << 8) | u64::from(byte);",
+		"\t\t}",
+		"",
+		"\t\t// Symbols that carry data; the rest are padding.",
+		f"\t\tlet full = (have * 8 + {inputs - 1}) / {inputs};",
+		"",
+		f"\t\tfor i in 0..{symbols} {{",
+		f"\t\t\tlet shift = {group_bits} - {inputs} * (i + 1);",
+		"",
+		"\t\t\tout[written + i] = if i < full {",
+		f"\t\t\t\t{name.upper()}_ALPHABET"
+		f"[((acc >> shift) & 0x{mask:02X}) as usize]",
+		"\t\t\t} else {",
+		f"\t\t\t\t0x{pad:02X}",
+		"\t\t\t};",
+		"\t\t}",
+		"",
+		f"\t\twritten += {symbols};",
+		f"\t\tstart += {group_in};",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+		"",
+		"/// Returns the number of bytes decoded, or 0 for input that is not",
+		"/// a whole number of groups or carries a byte outside the alphabet.",
+		f"pub fn {name}_decode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"\tlet mut start = 0usize;",
+		"",
+		f"\tif len % {symbols} != 0 {{",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		"\twhile start < len {",
+		"\t\tlet mut acc: u64 = 0;",
+		"\t\tlet mut kept = 0usize;",
+		"",
+		f"\t\twhile kept < {symbols}"
+		f" && input[start + kept] != 0x{pad:02X} {{",
+		"\t\t\tkept += 1;",
+		"\t\t}",
+		"",
+		f"\t\tfor i in 0..{symbols} {{",
+		"\t\t\tlet mut symbol = 0u8;",
+		"",
+		"\t\t\tif i < kept {",
+		f"\t\t\t\tsymbol = {name.upper()}_SYMBOL"
+		"[input[start + i] as usize];",
+		"",
+		"\t\t\t\tif symbol == 0xFF {",
+		"\t\t\t\t\treturn 0;",
+		"\t\t\t\t}",
+		"\t\t\t}",
+		"",
+		f"\t\t\tacc = (acc << {inputs}) | u64::from(symbol);",
+		"\t\t}",
+		"",
+		f"\t\tlet bytes = kept * {inputs} / 8;",
+		"",
+		"\t\tfor i in 0..bytes {",
+		f"\t\t\tlet shift = {group_bits} - 8 * (i + 1);",
+		"",
+		"\t\t\tout[written + i] = ((acc >> shift) & 0xFF) as u8;",
+		"\t\t}",
+		"",
+		"\t\twritten += bytes;",
+		f"\t\tstart += {symbols};",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+	]
+
+
 def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""A symbol map, encoded and decoded a symbol at a time.
 
@@ -161,8 +294,10 @@ def _table(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	if mapping is None or inputs > 8 or outputs > 16:
 		return None
-	if isinstance(kernel.argument("pad"), ast.IntLiteral):
-		return None
+	pad = kernel.argument("pad")
+	if isinstance(pad, ast.IntLiteral):
+		return _padded_table(decl, prefix, inputs, outputs, mapping,
+		                     pad.value)
 
 	name = _ident(prefix, decl.name)
 	size = 1 << inputs
@@ -267,9 +402,11 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		# helper nothing in them calls. A generated file growing for a
 		# feature its schema does not use is a diff its reader has to
 		# explain (26.451).
+		# ... and an UNPADDED one: the padded base codes accumulate whole bytes and call neither helper, so a base64-only schema was carrying two dead functions (26.452).
 		*(bits_helper() if any(
 			decl.name in bound and decl.kernel is not None
 			and decl.kernel.family is ast.KernelFamily.TABLE
+			and not isinstance(decl.kernel.argument("pad"), ast.IntLiteral)
 			for decl in schema.codecs()) else []),
 	]
 
