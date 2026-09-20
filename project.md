@@ -30711,6 +30711,51 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.458 An exemption whose reason had stopped being true
+
+**`CRC_UNCHECKED` is empty.** It held the two Reed-Solomon codecs, excused
+as "a block code rather than a CRC -- it has no check value and its own
+encode/decode shape". That was true about check values and wrong about
+oracles: `reedsolo` implements exactly these parameters, is a `pip` away,
+and is already installed here.
+
+**An exemption reads as settled, which is what keeps it.** It was written
+honestly, it named its reason, and the guard beside it did its job -- the
+reason simply stopped being true and nothing re-examines a line that
+explains itself. 26.457 found it only because somebody went looking for
+Reed-Solomon vectors for a different purpose.
+
+**The pairing is exact, and that is what makes it worth anything.**
+`reedsolo`'s defaults are situ's parameters -- `prim` 0x11D, `fcr` 0,
+`generator` 2. If either side moved, the test would fail rather than
+quietly compare two different codes.
+
+**Encode and decode are compared separately because they share no code.**
+The encoder is a polynomial division; the decoder is Berlekamp-Massey, a
+Chien search and Forney's formula. So parity is compared symbol for
+symbol over four inputs per codec, and then a block is damaged in exactly
+`t = nroots / 2` places and both implementations are asked to repair it.
+Past `t` the answer is undefined and the two are entitled to differ, so
+that is not asked.
+
+**Why this was worth doing, measured rather than argued.** situ's
+existing Reed-Solomon tests check PROPERTIES: systematic, corrects up to
+`t` errors, refuses a wrong length. Setting `first_root` to 1 makes the
+generator a DIFFERENT code -- and under that sabotage the generated
+encoder still returns 8 parity symbols, the block is still systematic,
+and the decoder still corrects all four injected errors and recovers the
+data exactly. **Every property test passes against the wrong code**,
+because a wrong code is self-consistent with itself. Only the
+differential fails, and it fails on all four cases.
+
+**The first sabotage was narrower than it looked, which is the other
+thing worth keeping.** Changing the default `primitive` from 0x11D to
+0x12D failed `reed_solomon_64_56` and NOT `reed_solomon_255_223` --
+because the latter declares `primitive` explicitly and the default never
+reaches it. The test was being precise rather than partial, but a reader
+of that run would have concluded the 255,223 case could not fail.
+`first_root`, which both codecs omit, is the sabotage that reaches both.
+
 ### 26.457 Reed-Solomon: why the last two are not a re-spelling
 
 **Coverage is 40 of 42 and stops there deliberately.** The two

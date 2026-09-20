@@ -62,7 +62,7 @@ def have(tool: str) -> bool:
 	would report it missing on every machine and skip the oracle silently --
 	which is the failure this whole file is about.
 	"""
-	if tool in ("pymodbus", "json"):
+	if tool in ("pymodbus", "json", "reedsolo"):
 		import importlib.util
 		return importlib.util.find_spec(tool) is not None
 	return shutil.which(tool) is not None

@@ -246,13 +246,25 @@ CRC_CHECK_VALUES = {
 }
 
 #: A polynomial codec neither oracle reaches, and why. Being named here is a
-#: decision a reader can see and argue with; being in none of the three is the
+#: decision a reader can see and argue with; being in none of the four is the
 #: silence the guard below refuses.
-CRC_UNCHECKED = {
-	"reed_solomon_255_223": "a block code rather than a CRC -- it has no "
-	                        "check value and its own encode/decode shape",
-	"reed_solomon_64_56":   "as reed_solomon_255_223",
-}
+#:
+#: EMPTY, and it held the two Reed-Solomon codecs until 26.458. The reason
+#: recorded there -- "a block code rather than a CRC -- it has no check
+#: value and its own encode/decode shape" -- was true about check values
+#: and wrong about oracles: `reedsolo` implements exactly these parameters
+#: and is a `pip` away. An exemption whose reason is falsifiable is one
+#: nobody re-examines, because it reads as settled.
+CRC_UNCHECKED: dict[str, str] = {}
+
+#: Reed-Solomon, against the `reedsolo` package. Its defaults are situ's
+#: parameters exactly -- `prim` 0x11D, `fcr` 0, `generator` 2 -- which is
+#: why the pairing is worth anything: a mismatch in any of the three would
+#: make the comparison meaningless rather than failing.
+#:
+#: `n` and `k` come from the schema; nroots is n - k. Both codecs share a
+#: field and a primitive, so one `init_tables` serves both.
+RS_CASES = (("reed_solomon_255_223", 255, 223), ("reed_solomon_64_56", 64, 56))
 
 
 # The base-N codecs, against Python's own implementation of the same RFC.
@@ -428,6 +440,140 @@ def test_a_generated_crc_matches_an_independent_implementation(
 
 		assert fn(buf, length) == independently(data), (  # type: ignore[operator]
 			f"{name}: situ and the standard library disagree at {length} bytes")
+
+
+def _reed_solomon(lib: ctypes.CDLL, name: str) -> tuple[object, object]:
+	"""situ's two Reed-Solomon entry points.
+
+	A different shape from a CRC's: encode writes PARITY to a separate
+	buffer and returns the number of roots, and decode corrects a whole
+	block IN PLACE and returns the number of symbols it fixed, 0 for a
+	clean block or -1 for one it cannot.
+	"""
+	encode = getattr(lib, f"situ_{name}_encode")
+	encode.restype  = ctypes.c_uint32
+	encode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32,
+	                   ctypes.POINTER(ctypes.c_uint8)]
+
+	decode = getattr(lib, f"situ_{name}_decode")
+	decode.restype  = ctypes.c_int
+	decode.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32]
+	return encode, decode
+
+
+def _reedsolo() -> object:
+	"""The oracle module, imported here rather than at the top.
+
+	It is an optional dependency and the skip above is what reports its
+	absence; importing it at module scope would make a machine without it
+	fail to collect rather than skip. One import site, so the ignore is
+	not duplicated -- `reedsolo` ships no `py.typed`, and widening
+	`ignore_missing_imports` in the config would silence the next untyped
+	dependency too.
+	"""
+	import reedsolo  # type: ignore[import-untyped]
+
+	# Global to the module, and both codecs share a field and a
+	# primitive, so setting it per call costs nothing and removes any
+	# question about which state a test ran under.
+	reedsolo.init_tables(prim=0x11D)
+	return reedsolo
+
+
+def _reedsolo_parity(data: bytes, nroots: int) -> bytes:
+	"""The same parity from `reedsolo`, at situ's parameters."""
+	oracle = _reedsolo()
+
+	return bytes(oracle.rs_encode_msg(  # type: ignore[attr-defined]
+		data, nroots, fcr=0, generator=2)[len(data):])
+
+
+@pytest.mark.skipif(not have("reedsolo"),
+                    reason="no reedsolo; the Reed-Solomon oracle did not run")
+@pytest.mark.parametrize("name,n,k", RS_CASES, ids=[case[0] for case in RS_CASES])
+def test_a_generated_reed_solomon_matches_reedsolo(
+		name: str, n: int, k: int, kernel_library: ctypes.CDLL) -> None:
+	"""situ's parity against somebody else's, symbol for symbol.
+
+	This file's whole argument applies here with more force than
+	anywhere else in it. A CRC has a published check value to fall back
+	on; Reed-Solomon has none, so until this existed the ONLY things
+	checking situ's RS were situ's own property tests -- systematic,
+	corrects up to t errors, refuses a wrong length. Every one of those
+	passes against a self-consistent implementation of the wrong code:
+	a generator polynomial built from the wrong primitive is wrong
+	consistently, encodes and decodes with itself perfectly, and
+	satisfies every property.
+
+	`reedsolo`'s defaults are situ's parameters -- prim 0x11D, fcr 0,
+	generator 2 -- which is the one thing that makes the comparison
+	meaningful. If either side moved, this would fail rather than
+	quietly compare two different codes.
+	"""
+	encode, _decode = _reed_solomon(kernel_library, name)
+	nroots = n - k
+
+	random.seed(20260920)
+	for trial in range(4):
+		data = (bytes((i * 7 + 1) & 0xFF for i in range(k)) if trial == 0
+		        else bytes(random.randrange(256) for _ in range(k)))
+
+		buffer = (ctypes.c_uint8 * k)(*data)
+		parity = (ctypes.c_uint8 * nroots)()
+
+		assert encode(buffer, k, parity) == nroots, (  # type: ignore[operator]
+			f"{name}: encode did not write {nroots} parity symbols")
+
+		assert bytes(parity) == _reedsolo_parity(data, nroots), (
+			f"{name}: situ and reedsolo disagree about the parity of "
+			f"trial {trial}")
+
+
+@pytest.mark.skipif(not have("reedsolo"),
+                    reason="no reedsolo; the Reed-Solomon oracle did not run")
+@pytest.mark.parametrize("name,n,k", RS_CASES, ids=[case[0] for case in RS_CASES])
+def test_reed_solomon_corrects_what_reedsolo_corrects(
+		name: str, n: int, k: int, kernel_library: ctypes.CDLL) -> None:
+	"""The decoder, held to the same outside implementation.
+
+	Encoding agreeing does not make decoding right -- the encoder is a
+	polynomial division and the decoder is Berlekamp-Massey, a Chien
+	search and Forney's formula, which share no code with it. So the
+	block is damaged in exactly `t` places and both sides are asked to
+	repair it, and they must return the same message.
+
+	`t` is nroots // 2, the most the code can correct. Damaging one more
+	is a different question and is not asked here: past `t` the standard
+	answer is "undefined", and situ and reedsolo are entitled to differ.
+	"""
+	encode, decode = _reed_solomon(kernel_library, name)
+	nroots = n - k
+	limit  = nroots // 2
+
+	random.seed(20260921)
+	data   = bytes(random.randrange(256) for _ in range(k))
+	buffer = (ctypes.c_uint8 * k)(*data)
+	parity = (ctypes.c_uint8 * nroots)()
+	encode(buffer, k, parity)  # type: ignore[operator]
+
+	whole = bytearray(data + bytes(parity))
+	spots = random.sample(range(n), limit)
+	for spot in spots:
+		whole[spot] ^= 0xFF
+
+	block = (ctypes.c_uint8 * n)(*whole)
+	fixed = decode(block, n)  # type: ignore[operator]
+
+	assert fixed == limit, (
+		f"{name}: situ corrected {fixed} of {limit} damaged symbols")
+	assert bytes(block)[:k] == data, f"{name}: situ recovered wrong data"
+
+	repaired, _parity, _errata = _reedsolo().rs_correct_msg(  # type: ignore[attr-defined]
+		bytearray(whole), nroots, fcr=0, generator=2)
+
+	assert bytes(repaired) == data, (
+		f"{name}: reedsolo recovered something else, so the two decoders "
+		f"disagree about the same damaged block")
 
 
 def _crc_bits(lib: ctypes.CDLL, name: str, ctype: type) -> object:
@@ -1149,13 +1295,14 @@ def test_every_polynomial_codec_is_checked_or_excused() -> None:
 	assert CRC_CASES, "CRC_CASES is empty, so no generated CRC is checked"
 
 	covered = ({case[0] for case in CRC_CASES} | set(CRC_CHECK_VALUES)
-	           | set(CRC_UNCHECKED))
+	           | {case[0] for case in RS_CASES} | set(CRC_UNCHECKED))
 	missing = polynomial - covered
 	assert not missing, (
 		f"{sorted(missing)}: a generated CRC that nothing outside this "
 		f"project checks. Add it to CRC_CASES if the standard library "
 		f"implements it, to CRC_CHECK_VALUES with its published check value, "
-		f"or to CRC_UNCHECKED with the reason it can have neither")
+		f"to RS_CASES if `reedsolo` reaches it, or to CRC_UNCHECKED with the "
+		f"reason it can have none of the three")
 
 
 #: A schema this file compares against nothing, and why. Grouped by the kind
