@@ -30711,6 +30711,45 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.454 COBS and the escape codes, and a test that ran out of bytes
+
+**Three more kernels -- `cobs`, `slip_framing`, `ppp_async_framing` --
+taking coverage to 35 of 42.** Bit stuffing and SMTP dot-stuffing are the
+other two shapes in the family and are their own tranche. `example/slip`
+gains a real implementation in both backends, not only
+`std/kernels.situ`.
+
+Checked against the publications rather than against C: Cheshire and
+Baker's own table for COBS, RFC 1055 for SLIP, RFC 1662 for PPP. The two
+escape codes differ in a way the decoders are written around -- SLIP's
+substitutions are a TABLE, so an escape outside it is refused rather than
+guessed, while PPP's is a TRANSFORMATION (exclusive-or with 0x20) and so
+reverses escapes this generator never enumerated, which a peer with a
+non-zero ACCM will send.
+
+**The escape decoders returned zeros, and only the round trip saw it.**
+The generated `undo` block was indented one level too deep, so Python
+read it as the body of the truncation guard above it: dead code, and
+`out[written]` never assigned. It parsed, it imported, it ran, and it
+decoded nothing. The encoder was right, so a test checking only the
+encoded bytes against the RFC would have passed.
+
+**The COBS group boundary was untested and a sabotage is what said so.**
+Every published vector is four bytes or fewer, so `code == 0xFF` never
+executes -- breaking the flush left the suite green. The case that
+matters is 254 non-zero bytes: a full group at the END must not open
+another, because that spends a second overhead byte, which is the one
+thing COBS promises not to do. Measured 253 to 255 bytes out, 254 to 256,
+255 to 258, 256 to 259, all as the paper has it, and the sabotage now
+fails at 255 and 256.
+
+**Twice in two tranches, "the tests caught it" meant "one backend's tests
+caught it".** Here the boundary test was Python's, and sabotaging Rust
+ALONE left all 119 tests in the file green -- measured, not feared.
+26.453's version of the same thing was a `-k` filter that did not select
+the only test that could fail. A backend without its own executing test
+is a backend nothing is checking, however many tests the file has.
+
 ### 26.453 The shift-register family, and a filter that hid its own test
 
 **Seven kernels in one tranche**, which is the whole `shift_register`

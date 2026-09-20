@@ -139,6 +139,188 @@ def bits_helper() -> list[str]:
 	]
 
 
+def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""COBS and the escape-stuffed byte codes (SLIP, PPP async).
+
+	Bit stuffing and SMTP dot-stuffing are still declined: they are the
+	other two shapes in this family and are their own tranche.
+
+	Re-spelled from C, including its reasons -- COBS flushes a full group
+	only when more input follows, because opening one at the very end
+	would spend a second overhead byte, which is the one thing COBS
+	promises not to do; and PPP's escape is a transformation rather than
+	a table, so its decoder reverses escapes this generator never
+	enumerated, which a peer with a non-zero ACCM will send.
+	"""
+	from situc.codegen.c.derived import ESCAPE_STUFFING, _named_code
+
+	code = _named_code(decl)
+	name = _ident(prefix, decl.name)
+
+	if code == "cobs":
+		return [
+			"",
+			f"/// `{decl.name}`: COBS (Cheshire and Baker). A zero byte",
+			"/// becomes a pointer to the next one, so no zero survives in",
+			"/// the body and a zero can delimit the frame.",
+			"///",
+			"/// `out` needs len + len/254 + 2 bytes.",
+			f"pub fn {name}_encode(input: &[u8], len: usize,"
+			" out: &mut [u8]) -> usize {",
+			"\tlet mut code_at = 0usize;",
+			"\tlet mut written = 1usize;",
+			"\t// Wider than the byte it is stored as: the invariant keeps",
+			"\t// it under 0xFF, and a debug build should not depend on",
+			"\t// that to avoid an overflow panic.",
+			"\tlet mut code: u32 = 1;",
+			"",
+			"\tfor read in 0..len {",
+			"\t\tif input[read] != 0 {",
+			"\t\t\tout[written] = input[read];",
+			"\t\t\twritten += 1;",
+			"\t\t\tcode += 1;",
+			"",
+			"\t\t\t// A full group is flushed only when more input",
+			"\t\t\t// follows: at the very end there is nothing for a new",
+			"\t\t\t// group to hold, and opening one would spend a second",
+			"\t\t\t// overhead byte, which COBS promises not to do.",
+			"\t\t\tif code != 0xFF || read + 1 >= len {",
+			"\t\t\t\tcontinue;",
+			"\t\t\t}",
+			"\t\t}",
+			"",
+			"\t\tout[code_at] = code as u8;",
+			"\t\tcode_at = written;",
+			"\t\twritten += 1;",
+			"\t\tcode = 1;",
+			"\t}",
+			"",
+			"\tout[code_at] = code as u8;",
+			"\tout[written] = 0;\t// the delimiter",
+			"\twritten + 1",
+			"}",
+			"",
+			f"pub fn {name}_decode(input: &[u8], len: usize,"
+			" out: &mut [u8]) -> usize {",
+			"\tlet mut read = 0usize;",
+			"\tlet mut written = 0usize;",
+			"",
+			"\twhile read < len {",
+			"\t\tlet code = input[read];",
+			"",
+			"\t\tif code == 0 {",
+			"\t\t\tbreak;\t// the delimiter ends the frame",
+			"\t\t}",
+			"",
+			"\t\tread += 1;",
+			"",
+			"\t\tfor _ in 1..code {",
+			"\t\t\tif read >= len {",
+			"\t\t\t\treturn 0;\t// truncated: a code ran past the end",
+			"\t\t\t}",
+			"",
+			"\t\t\tout[written] = input[read];",
+			"\t\t\twritten += 1;",
+			"\t\t\tread += 1;",
+			"\t\t}",
+			"",
+			"\t\tif code != 0xFF && read < len && input[read] != 0 {",
+			"\t\t\tout[written] = 0;",
+			"\t\t\twritten += 1;",
+			"\t\t}",
+			"\t}",
+			"",
+			"\twritten",
+			"}",
+		]
+
+	if code not in ESCAPE_STUFFING:
+		return None
+
+	title, delim, esc, xor, pairs = ESCAPE_STUFFING[code]
+	arms = []
+	for literal, escaped in pairs:
+		arms += [f"\t\t\t0x{literal:02X} => {{",
+		         f"\t\t\t\tout[written] = 0x{esc:02X};",
+		         f"\t\t\t\tout[written + 1] = 0x{escaped:02X};",
+		         "\t\t\t\twritten += 2;",
+		         "\t\t\t}"]
+
+	if xor is None:
+		undo = ["\t\tmatch input[read] {",
+		        *[line for literal, escaped in pairs for line in (
+			        f"\t\t0x{escaped:02X} => out[written] ="
+			        f" 0x{literal:02X},",)],
+		        "\t\t\t// An escape this code does not define. Refusing",
+		        "\t\t\t// beats inventing a byte: the frame is not what",
+		        "\t\t\t// it claims.",
+		        "\t\t\t_ => return 0,",
+		        "\t\t}"]
+	else:
+		undo = [f"\t\t// RFC 1662: an escaped byte is the original",
+		        f"\t\t// exclusive-ored with 0x{xor:02X}, so undoing it is",
+		        "\t\t// the same operation again -- which reverses escapes",
+		        "\t\t// this generator never enumerated, as a peer with a",
+		        "\t\t// non-zero ACCM will send.",
+		        f"\t\tout[written] = input[read] ^ 0x{xor:02X};"]
+
+	return [
+		"",
+		f"/// `{decl.name}`: {title}. A payload byte equal to the delimiter",
+		f"/// (0x{delim:02X}) or the escape (0x{esc:02X}) is sent as the escape",
+		"/// followed by a substitute. `out` needs 2 * len + 1 bytes.",
+		f"pub fn {name}_encode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut written = 0usize;",
+		"",
+		"\tfor read in 0..len {",
+		"\t\tmatch input[read] {",
+		*arms,
+		"\t\t\tbyte => {",
+		"\t\t\t\tout[written] = byte;",
+		"\t\t\t\twritten += 1;",
+		"\t\t\t}",
+		"\t\t}",
+		"\t}",
+		"",
+		f"\tout[written] = 0x{delim:02X};\t// the frame delimiter",
+		"\twritten + 1",
+		"}",
+		"",
+		"/// The inverse, stopping at the delimiter.",
+		f"pub fn {name}_decode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		"\tlet mut read = 0usize;",
+		"\tlet mut written = 0usize;",
+		"",
+		"\twhile read < len {",
+		"\t\tlet byte = input[read];",
+		"\t\tread += 1;",
+		"",
+		f"\t\tif byte == 0x{delim:02X} {{",
+		"\t\t\tbreak;\t// the delimiter ends the frame",
+		"\t\t}",
+		"",
+		f"\t\tif byte != 0x{esc:02X} {{",
+		"\t\t\tout[written] = byte;",
+		"\t\t\twritten += 1;",
+		"\t\t\tcontinue;",
+		"\t\t}",
+		"",
+		"\t\tif read >= len {",
+		"\t\t\treturn 0;\t// truncated: an escape ended the input",
+		"\t\t}",
+		"",
+		*undo,
+		"\t\twritten += 1;",
+		"\t\tread += 1;",
+		"\t}",
+		"",
+		"\twritten",
+		"}",
+	]
+
+
 def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""An LFSR, and where its feedback comes from decides everything.
 
@@ -606,6 +788,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _table(decl, prefix)
 	if kernel.family is ast.KernelFamily.SHIFT:
 		return _shift_register(decl, prefix)
+	if kernel.family is ast.KernelFamily.STUFFING:
+		return _stuffing(decl, prefix)
 	return None
 
 

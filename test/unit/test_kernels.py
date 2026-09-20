@@ -1853,3 +1853,259 @@ def test_rust_and_python_scramble_identically(tmp_path: Path) -> None:
 		assert bytes(out).hex() == rust[index], (
 			f"{name}: Python wrote {bytes(out).hex()} and Rust "
 			f"wrote {rust[index]}")
+
+
+# ---------------------------------------------------------------------------
+# COBS and the escape-stuffed codes in Rust and Python (26.454)
+# ---------------------------------------------------------------------------
+
+STUFFING = """codec cobs { kernel = stuffing(worst_case = 255, per = 254,
+	code = cobs); }
+impl cobs derived;
+
+codec slip { kernel = stuffing(worst_case = 2, per = 1, unit = byte,
+	code = slip); }
+impl slip derived;
+
+codec ppp { kernel = stuffing(worst_case = 2, per = 1, unit = byte,
+	code = ppp_async); }
+impl ppp derived;
+"""
+
+#: Cheshire and Baker's own table, which is the oracle situ did not
+#: write. The last two are the ones that separate a correct encoder from
+#: a plausible one: a run with no zero at all, and a run that ends in
+#: zeros.
+COBS_VECTORS = (
+	(bytes([0x00]),                bytes([0x01, 0x01, 0x00])),
+	(bytes([0x00, 0x00]),          bytes([0x01, 0x01, 0x01, 0x00])),
+	(bytes([0x11, 0x22, 0x00, 0x33]),
+	 bytes([0x03, 0x11, 0x22, 0x02, 0x33, 0x00])),
+	(bytes([0x11, 0x22, 0x33, 0x44]),
+	 bytes([0x05, 0x11, 0x22, 0x33, 0x44, 0x00])),
+	(bytes([0x11, 0x00, 0x00, 0x00]),
+	 bytes([0x02, 0x11, 0x01, 0x01, 0x01, 0x00])),
+)
+
+#: RFC 1055 and RFC 1662: the delimiter and the escape are the two bytes
+#: that must be escaped, and each becomes the escape plus a substitute.
+ESCAPE_VECTORS = {
+	"slip": (bytes([0xC0, 0x01, 0xDB]),
+	         bytes([0xDB, 0xDC, 0x01, 0xDB, 0xDD, 0xC0])),
+	"ppp":  (bytes([0x7E, 0x01, 0x7D]),
+	         bytes([0x7D, 0x5E, 0x01, 0x7D, 0x5D, 0x7E])),
+}
+
+
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_every_backend_writes_cobs_and_the_escape_codes(
+		language: str) -> None:
+	out = DERIVED_EMITTERS[language].generate(parse_text(STUFFING), "unit")
+
+	assert "No implementation for" not in out, f"{language} declines one"
+	for name in ("cobs", "slip", "ppp"):
+		assert f"{name}_encode" in out and f"{name}_decode" in out
+
+
+def test_the_generated_python_matches_the_cobs_paper(tmp_path: Path) -> None:
+	"""Against Cheshire and Baker's table, not against C.
+
+	The round trip is asserted too and is not enough on its own: an
+	encoder and decoder that agreed on a wrong scheme would round-trip
+	perfectly, which is what the published bytes rule out.
+	"""
+	encode, decode = _generated(
+		py_derived.generate(parse_text(STUFFING), "unit"),
+		tmp_path, "cobs_encode", "cobs_decode")
+
+	for plain, want in COBS_VECTORS:
+		out = bytearray(64)
+		got = bytes(out[:encode(plain, len(plain), out)])
+		assert got == want, (
+			f"cobs {plain.hex()}: wrote {got.hex()}, the paper says "
+			f"{want.hex()}")
+
+		back = bytearray(64)
+		kept = decode(got, len(got), back)
+		assert bytes(back[:kept]) == plain, f"cobs {plain.hex()} round trip"
+
+
+@pytest.mark.parametrize("name", sorted(ESCAPE_VECTORS))
+def test_the_generated_python_escapes_what_the_rfc_says(
+		name: str, tmp_path: Path) -> None:
+	"""RFC 1055 for SLIP and RFC 1662 for PPP.
+
+	The round trip here caught a real defect and is why it is asserted
+	separately from the bytes: the encoder was right and the decoder
+	returned zeros, because the generated `undo` block was indented one
+	level too deep and Python read it as the body of the truncation
+	guard above it. It parsed, it ran, and it decoded nothing.
+	"""
+	plain, want = ESCAPE_VECTORS[name]
+	encode, decode = _generated(
+		py_derived.generate(parse_text(STUFFING), "unit"),
+		tmp_path, f"{name}_encode", f"{name}_decode")
+
+	out = bytearray(64)
+	got = bytes(out[:encode(plain, len(plain), out)])
+	assert got == want, (
+		f"{name} {plain.hex()}: wrote {got.hex()}, the RFC says {want.hex()}")
+
+	back = bytearray(64)
+	kept = decode(got, len(got), back)
+	assert bytes(back[:kept]) == plain, f"{name} did not round trip"
+
+
+def test_slip_refuses_an_escape_it_does_not_define(tmp_path: Path) -> None:
+	"""SLIP's substitutions are a table rather than a transformation, so
+	an escape outside it is refused rather than guessed.
+
+	PPP is deliberately NOT held to this: RFC 1662 defines its escape as
+	exclusive-or with 0x20, so every escaped byte is reversible and there
+	is no such thing as one it does not define -- which is the difference
+	the two decoders are written around.
+	"""
+	decode, = _generated(py_derived.generate(parse_text(STUFFING), "unit"),
+	                     tmp_path, "slip_decode")
+
+	# 0xDB is the escape; 0x01 is not one of its two substitutes.
+	assert decode(bytes([0xDB, 0x01, 0xC0]), 3, bytearray(16)) == 0
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_rust_stuffs_identically_to_the_published_vectors(
+		tmp_path: Path) -> None:
+	"""The same vectors through the other backend, compiled and run."""
+	(tmp_path / "unit.rs").write_text(
+		rs_derived.generate(parse_text(STUFFING), "unit"), encoding="ascii")
+
+	cases = [("cobs", plain) for plain, _want in COBS_VECTORS]
+	cases += [(name, ESCAPE_VECTORS[name][0]) for name in sorted(ESCAPE_VECTORS)]
+	calls = "\n".join(
+		f"\tround(\"{name}\", &{list(plain)!r}, {name}_encode, {name}_decode);"
+		.replace("[", "[").replace("'", "")
+		for name, plain in cases)
+
+	(tmp_path / "main.rs").write_text(
+		'#[path = "unit.rs"] mod unit;\n'
+		"use unit::*;\n"
+		"\n"
+		"fn hex(b: &[u8]) -> String {\n"
+		"\tb.iter().map(|x| format!(\"{:02x}\", x)).collect()\n"
+		"}\n"
+		"\n"
+		"fn round(name: &str, plain: &[u8],\n"
+		"\t\tenc: fn(&[u8], usize, &mut [u8]) -> usize,\n"
+		"\t\tdec: fn(&[u8], usize, &mut [u8]) -> usize) {\n"
+		"\tlet mut out = vec![0u8; 64];\n"
+		"\tlet n = enc(plain, plain.len(), &mut out);\n"
+		"\tlet mut back = vec![0u8; 64];\n"
+		"\tlet k = dec(&out[..n], n, &mut back);\n"
+		"\tprintln!(\"{} {} {}\", name, hex(&out[..n]), hex(&back[..k]));\n"
+		"}\n"
+		"\n"
+		"fn main() {\n" + calls + "\n}\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-A", "warnings",
+		 "-o", str(tmp_path / "run"), str(tmp_path / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stderr
+
+	lines = ran.stdout.splitlines()
+	assert len(lines) == len(cases), f"driver printed {len(lines)} lines"
+
+	wanted = [want for _plain, want in COBS_VECTORS]
+	wanted += [ESCAPE_VECTORS[name][1] for name in sorted(ESCAPE_VECTORS)]
+
+	for line, (name, plain), want in zip(lines, cases, wanted):
+		parts = line.split()
+		assert parts[1] == want.hex(), (
+			f"{name} {plain.hex()}: Rust wrote {parts[1]}, the published "
+			f"vector is {want.hex()}")
+		assert parts[2] == plain.hex(), f"{name} {plain.hex()} round trip"
+
+
+#: The group boundary, which Cheshire and Baker's table does not reach
+#: and which a sabotage found missing: every published vector is four
+#: bytes or fewer, so the `code == 0xFF` flush was never executed and
+#: breaking it left the suite green.
+#:
+#: 254 non-zero bytes is the case that matters. A full group at the very
+#: END must NOT open another -- the output is one code byte, the 254
+#: bytes and the delimiter, 256 in all. Opening a group there would spend
+#: a second overhead byte, which is the one thing COBS promises not to
+#: do, and it is a one-token change away in both backends.
+COBS_GROUPS = ((253, 255, 0xFE), (254, 256, 0xFF),
+               (255, 258, 0xFF), (256, 259, 0xFF))
+
+
+@pytest.mark.parametrize("count,expected,first", COBS_GROUPS)
+def test_cobs_spends_one_overhead_byte_at_a_full_group(
+		count: int, expected: int, first: int, tmp_path: Path) -> None:
+	encode, decode = _generated(
+		py_derived.generate(parse_text(STUFFING), "unit"),
+		tmp_path, "cobs_encode", "cobs_decode")
+
+	plain = bytes([0xAA]) * count
+	out   = bytearray(1024)
+	got   = bytes(out[:encode(plain, count, out)])
+
+	assert len(got) == expected, (
+		f"{count} non-zero bytes encoded to {len(got)}, not {expected}")
+	assert got[0] == first
+	assert got[-1] == 0x00, "no delimiter"
+
+	back = bytearray(1024)
+	kept = decode(got, len(got), back)
+	assert bytes(back[:kept]) == plain
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("count,expected,first", COBS_GROUPS)
+def test_rust_cobs_spends_one_overhead_byte_at_a_full_group(
+		count: int, expected: int, first: int, tmp_path: Path) -> None:
+	"""The group boundary in the other backend, and it needs its own test.
+
+	The published-vector sweep above is four bytes at its longest, so it
+	never reaches a full group -- measured: sabotaging Rust's flush alone
+	left all 119 tests in this file green, which is the same
+	one-backend-only gap the shift-register tranche hit and is why this
+	is written out rather than folded into the sweep.
+	"""
+	(tmp_path / "unit.rs").write_text(
+		rs_derived.generate(parse_text(STUFFING), "unit"), encoding="ascii")
+	(tmp_path / "main.rs").write_text(
+		'#[path = "unit.rs"] mod unit;\n'
+		"use unit::*;\n"
+		"\n"
+		"fn main() {\n"
+		f"\tlet plain = vec![0xAAu8; {count}];\n"
+		"\tlet mut out = vec![0u8; 1024];\n"
+		f"\tlet n = cobs_encode(&plain, {count}, &mut out);\n"
+		"\tlet mut back = vec![0u8; 1024];\n"
+		"\tlet k = cobs_decode(&out[..n], n, &mut back);\n"
+		"\tprintln!(\"{} {} {} {}\", n, out[0], out[n - 1],\n"
+		"\t\t(back[..k] == plain[..]) as u8);\n"
+		"}\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-A", "warnings",
+		 "-o", str(tmp_path / "run"), str(tmp_path / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stderr
+
+	length, head, tail, round_tripped = ran.stdout.split()
+	assert int(length) == expected, (
+		f"{count} non-zero bytes encoded to {length}, not {expected}")
+	assert int(head) == first
+	assert int(tail) == 0, "no delimiter"
+	assert round_tripped == "1", "did not round trip"

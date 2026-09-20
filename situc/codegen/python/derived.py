@@ -155,6 +155,175 @@ def bits_access() -> list[str]:
 	]
 
 
+def _stuffing(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""COBS and the escape-stuffed byte codes (SLIP, PPP async).
+
+	Bit stuffing and SMTP dot-stuffing are still declined: they are the
+	other two shapes in this family and are their own tranche.
+
+	Re-spelled from C, including its reasons -- COBS flushes a full group
+	only when more input follows, because opening one at the very end
+	would spend a second overhead byte, which is the one thing COBS
+	promises not to do; and PPP's escape is a transformation rather than
+	a table, so its decoder reverses escapes this generator never
+	enumerated, which a peer with a non-zero ACCM will send.
+	"""
+	from situc.codegen.c.derived import ESCAPE_STUFFING, _named_code
+
+	code = _named_code(decl)
+	name = _ident(prefix, decl.name)
+
+	if code == "cobs":
+		return [
+			"",
+			"",
+			f"#: `{decl.name}`: COBS (Cheshire and Baker). A zero byte",
+			"#: becomes a pointer to the next one, so no zero survives in the",
+			"#: body and a zero can delimit the frame.",
+			f"def {name}_encode(data: bytes, length: int,"
+			" out: bytearray) -> int:",
+			'\t"""`out` needs length + length // 254 + 2 bytes."""',
+			"\tcode_at = 0",
+			"\twritten = 1",
+			"\tcode    = 1",
+			"",
+			"\tfor read in range(length):",
+			"\t\tif data[read] != 0:",
+			"\t\t\tout[written] = data[read]",
+			"\t\t\twritten += 1",
+			"\t\t\tcode    += 1",
+			"",
+			"\t\t\t# A full group is flushed only when more input follows:",
+			"\t\t\t# at the very end there is nothing for a new group to",
+			"\t\t\t# hold, and opening one would spend a second overhead",
+			"\t\t\t# byte, which COBS promises not to do.",
+			"\t\t\tif code != 0xFF or read + 1 >= length:",
+			"\t\t\t\tcontinue",
+			"",
+			"\t\tout[code_at] = code",
+			"\t\tcode_at = written",
+			"\t\twritten += 1",
+			"\t\tcode     = 1",
+			"",
+			"\tout[code_at] = code",
+			"\tout[written] = 0            # the delimiter",
+			"\treturn written + 1",
+			"",
+			"",
+			f"def {name}_decode(data: bytes, length: int,"
+			" out: bytearray) -> int:",
+			"\tread    = 0",
+			"\twritten = 0",
+			"",
+			"\twhile read < length:",
+			"\t\tcode = data[read]",
+			"",
+			"\t\tif code == 0:",
+			"\t\t\tbreak               # the delimiter ends the frame",
+			"",
+			"\t\tread += 1",
+			"",
+			"\t\tfor _ in range(1, code):",
+			"\t\t\tif read >= length:",
+			"\t\t\t\treturn 0        # truncated: a code ran past the end",
+			"",
+			"\t\t\tout[written] = data[read]",
+			"\t\t\twritten += 1",
+			"\t\t\tread    += 1",
+			"",
+			"\t\tif code != 0xFF and read < length and data[read] != 0:",
+			"\t\t\tout[written] = 0",
+			"\t\t\twritten += 1",
+			"",
+			"\treturn written",
+		]
+
+	if code not in ESCAPE_STUFFING:
+		return None
+
+	title, delim, esc, xor, pairs = ESCAPE_STUFFING[code]
+	table = ", ".join(f"0x{literal:02X}: 0x{escaped:02X}"
+	                  for literal, escaped in pairs)
+	back  = ", ".join(f"0x{escaped:02X}: 0x{literal:02X}"
+	                  for literal, escaped in pairs)
+
+	if xor is None:
+		undo = ["\t\tif data[read] not in _BACK_" + name.upper() + ":",
+		        "\t\t\t# An escape this code does not define. Refusing",
+		        "\t\t\t# beats inventing a byte: the frame is not what",
+		        "\t\t\t# it claims.",
+		        "\t\t\treturn 0",
+		        "",
+		        f"\t\tout[written] = _BACK_{name.upper()}[data[read]]"]
+		tables = [f"_BACK_{name.upper()} = {{{back}}}", ""]
+	else:
+		undo = [f"\t\t# RFC 1662: an escaped byte is the original",
+		        f"\t\t# exclusive-ored with 0x{xor:02X}, so undoing it is",
+		        "\t\t# the same operation again -- which reverses escapes",
+		        "\t\t# this generator never enumerated, as a peer with a",
+		        "\t\t# non-zero ACCM will send.",
+		        f"\t\tout[written] = data[read] ^ 0x{xor:02X}"]
+		tables = []
+
+	return [
+		"",
+		"",
+		f"#: `{decl.name}`: {title}. A payload byte equal to the delimiter",
+		f"#: (0x{delim:02X}) or the escape (0x{esc:02X}) is sent as the escape",
+		"#: followed by a substitute.",
+		f"_ESCAPE_{name.upper()} = {{{table}}}",
+		*tables,
+		"",
+		f"def {name}_encode(data: bytes, length: int,"
+		" out: bytearray) -> int:",
+		'\t"""`out` needs 2 * length + 1 bytes."""',
+		"\twritten = 0",
+		"",
+		"\tfor read in range(length):",
+		f"\t\tswap = _ESCAPE_{name.upper()}.get(data[read])",
+		"",
+		"\t\tif swap is None:",
+		"\t\t\tout[written] = data[read]",
+		"\t\t\twritten += 1",
+		"\t\t\tcontinue",
+		"",
+		f"\t\tout[written]     = 0x{esc:02X}",
+		"\t\tout[written + 1] = swap",
+		"\t\twritten += 2",
+		"",
+		f"\tout[written] = 0x{delim:02X}       # the frame delimiter",
+		"\treturn written + 1",
+		"",
+		"",
+		f"def {name}_decode(data: bytes, length: int,"
+		" out: bytearray) -> int:",
+		'\t"""The inverse, stopping at the delimiter."""',
+		"\tread    = 0",
+		"\twritten = 0",
+		"",
+		"\twhile read < length:",
+		"\t\tbyte  = data[read]",
+		"\t\tread += 1",
+		"",
+		f"\t\tif byte == 0x{delim:02X}:",
+		"\t\t\tbreak               # the delimiter ends the frame",
+		"",
+		f"\t\tif byte != 0x{esc:02X}:",
+		"\t\t\tout[written] = byte",
+		"\t\t\twritten += 1",
+		"\t\t\tcontinue",
+		"",
+		"\t\tif read >= length:",
+		"\t\t\treturn 0            # truncated: an escape ended the input",
+		"",
+		*undo,
+		"\t\twritten += 1",
+		"\t\tread    += 1",
+		"",
+		"\treturn written",
+	]
+
+
 def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	"""An LFSR, additive or multiplicative depending on the feedback.
 
@@ -563,6 +732,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _table(decl, prefix)
 	if kernel.family is ast.KernelFamily.SHIFT:
 		return _shift_register(decl, prefix)
+	if kernel.family is ast.KernelFamily.STUFFING:
+		return _stuffing(decl, prefix)
 	return None
 
 
