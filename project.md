@@ -30711,6 +30711,55 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.453 The shift-register family, and a filter that hid its own test
+
+**Seven kernels in one tranche**, which is the whole `shift_register`
+family: both scramblers, both NRZI conventions, the SONET and USB3
+scramblers and PRBS23. Coverage is **32 of 42** now, and what is left is
+stuffing (6), Reed-Solomon (2), one permutation and one linear block.
+
+The family is one mechanism with one word deciding everything. Additive:
+the register runs on its own state and the data is XORed with the
+keystream, so it is startable anywhere, is its own inverse, and a corrupt
+bit spoils only itself. Multiplicative: the register is fed from the
+scrambled output, so a receiver synchronises without being told the state
+and pays for it in error propagation. Re-spelled from C, which is where
+the width handling and the complement rule are argued.
+
+**The corpus gained a real implementation, not just `std/kernels.situ`.**
+`edges.scramble` is a 16-bit additive LFSR that carried a decline note in
+Rust and Python; both emit a body now. Four generated files change, two
+of them edges'.
+
+**Held to C rather than to a model, and the limit is stated.** All three
+backends produce the same bytes for both conventions -- `ff3e0213...`
+additive and `0041c2b3...` multiplicative -- and all three round-trip. C
+had this family first and the other two are re-spellings of it, so what
+the comparison catches is a TRANSCRIPTION error between backends, which
+is the error re-spelling can make. It cannot see a design error shared
+with C, and C's own tests are what cover that. Round-tripping alone would
+not do: a scrambler that did nothing round-trips perfectly, so the output
+is also required to differ from the input.
+
+**The NRZI pair is asserted as a relationship.** `complement_feedback` is
+one word in the schema and the whole difference between the two
+conventions; pinning either stream alone would pass against a build that
+ignored the flag, so what is asserted is that the two differ.
+
+**And the sabotage that proved the Rust comparison works had to be run
+twice, for two different reasons.** The first did not apply -- the anchor
+was mis-escaped and matched nothing, so a green run meant only that
+nothing had changed. The second applied to all three seed sites, verified
+by count, and the tests still passed: the `-k` filter said `scrambles`
+and the test is `test_rust_and_python_scramble_identically`, so the one
+test that could fail was never selected. Named by its full node id it
+fails immediately.
+
+Twice in one tranche the verification needed verifying, in two places
+that look nothing alike -- a string that did not match and a filter that
+did not select. **The output of a sabotage run is not evidence until you
+know the sabotage landed AND the test ran.**
+
 ### 26.452 The padded base codes, and two sabotages that proved nothing
 
 **`base32`, `base64` and `base64url` in Rust and Python**, which 26.451

@@ -1719,3 +1719,137 @@ def test_the_generated_rust_agrees_with_the_base64_module(
 		assert got == reference(data).decode("ascii"), (
 			f"{name} at length {length}: Rust wrote {got!r}, the standard "
 			f"library says {reference(data).decode('ascii')!r}")
+
+
+# ---------------------------------------------------------------------------
+# The shift-register family in Rust and Python (26.453)
+# ---------------------------------------------------------------------------
+
+#: One additive and one multiplicative, which is the whole axis: the same
+#: taps and seed, differing only in where the feedback comes from, and
+#: having opposite properties because of it.
+LFSR = """codec additive { kernel = shift_register(width = 15, taps = 0x6000,
+	seed = 0x7FFF, feedback = input); }
+impl additive derived;
+
+codec multiplicative { kernel = shift_register(width = 15, taps = 0x6000,
+	seed = 0x7FFF, feedback = output); }
+impl multiplicative derived;
+"""
+
+#: The two NRZI conventions, which differ by one word and produce
+#: complementary streams. A receiver built on the wrong one returns the
+#: complement of what was sent, and nothing at run time can see that.
+NRZI = """codec on_one { kernel = shift_register(width = 1, taps = 0x1,
+	seed = 0x0, feedback = output); }
+impl on_one derived;
+
+codec on_zero { kernel = shift_register(width = 1, taps = 0x1, seed = 0x0,
+	feedback = output, complement_feedback); }
+impl on_zero derived;
+"""
+
+
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_every_backend_writes_a_body_for_a_shift_register(
+		language: str) -> None:
+	out = DERIVED_EMITTERS[language].generate(parse_text(LFSR), "unit")
+
+	assert "No implementation for" not in out, f"{language} declines an LFSR"
+	for name in ("additive", "multiplicative"):
+		assert f"{name}_encode" in out and f"{name}_decode" in out
+
+
+def test_the_generated_python_scrambles_and_unscrambles(tmp_path: Path) -> None:
+	"""Round trip in both conventions.
+
+	Necessary and not sufficient -- a scrambler that did nothing would
+	round-trip perfectly -- so the output is also required to differ from
+	the input, and the cross-backend comparison below is what says the
+	bytes are the RIGHT ones.
+	"""
+	data = bytes(range(32))
+	for name in ("additive", "multiplicative"):
+		encode, decode = _generated(py_derived.generate(parse_text(LFSR),
+		                                                "unit"),
+		                            tmp_path, f"{name}_encode",
+		                            f"{name}_decode")
+		out = bytearray(32)
+		assert encode(data, 32, out) == 32
+		assert bytes(out) != data, f"{name} left the data unscrambled"
+
+		back = bytearray(32)
+		assert decode(bytes(out), 32, back) == 32
+		assert bytes(back) == data, f"{name} did not round trip"
+
+
+def test_the_two_nrzi_conventions_are_complements(tmp_path: Path) -> None:
+	"""`complement_feedback` is one word in the schema and the whole
+	difference between the two NRZI conventions.
+
+	A relationship rather than two values: either stream alone looks
+	plausible, and what says the flag is read is that the two differ in
+	every bit. Pinning one of them would pass against a build that
+	ignored the flag entirely.
+	"""
+	data = bytes(range(16))
+	source = py_derived.generate(parse_text(NRZI), "unit")
+	one, = _generated(source, tmp_path, "on_one_encode")
+	zero, = _generated(source, tmp_path, "on_zero_encode")
+
+	a, b = bytearray(16), bytearray(16)
+	one(data, 16, a)
+	zero(data, 16, b)
+
+	assert bytes(a) != bytes(b), "the complement flag changed nothing"
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_rust_and_python_scramble_identically(tmp_path: Path) -> None:
+	"""Three spellings of one algorithm, held to each other.
+
+	C is the reference: it had this family before either of the others,
+	and Rust and Python are re-spellings of it. So what this catches is a
+	transcription error between backends, which is the error re-spelling
+	can make -- not a shared design error, which it cannot see and which
+	C's own tests are for. Said rather than implied.
+	"""
+	data = bytes(range(32))
+
+	(tmp_path / "unit.rs").write_text(
+		rs_derived.generate(parse_text(LFSR), "unit"), encoding="ascii")
+	(tmp_path / "main.rs").write_text(
+		'#[path = "unit.rs"] mod unit;\n'
+		"use unit::*;\n"
+		"\n"
+		"fn main() {\n"
+		"\tlet data: Vec<u8> = (0..32u8).collect();\n"
+		"\tlet mut a = vec![0u8; 32];\n"
+		"\tlet mut b = vec![0u8; 32];\n"
+		"\tadditive_encode(&data, 32, &mut a);\n"
+		"\tmultiplicative_encode(&data, 32, &mut b);\n"
+		"\tfor x in &a { print!(\"{:02x}\", x); }\n"
+		"\tprintln!();\n"
+		"\tfor x in &b { print!(\"{:02x}\", x); }\n"
+		"\tprintln!();\n"
+		"}\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-A", "warnings",
+		 "-o", str(tmp_path / "run"), str(tmp_path / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "run")], capture_output=True,
+	                     text=True)
+	assert ran.returncode == 0, ran.stderr
+	rust = ran.stdout.split()
+
+	source = py_derived.generate(parse_text(LFSR), "unit")
+	for index, name in enumerate(("additive", "multiplicative")):
+		encode, = _generated(source, tmp_path, f"{name}_encode")
+		out = bytearray(32)
+		encode(data, 32, out)
+		assert bytes(out).hex() == rust[index], (
+			f"{name}: Python wrote {bytes(out).hex()} and Rust "
+			f"wrote {rust[index]}")

@@ -139,6 +139,163 @@ def bits_helper() -> list[str]:
 	]
 
 
+def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""An LFSR, and where its feedback comes from decides everything.
+
+	Additive: the register runs on its own state and the data is XORed
+	with the keystream, so it is startable anywhere, is its own inverse,
+	and a corrupt bit spoils only itself. Multiplicative: the register is
+	fed from the scrambled output, so a receiver synchronises itself
+	without being told the state and pays for it with error propagation.
+
+	Both are here because the pair is the point: one word of the
+	description separates them. Re-spelled from C's `_shift_register`,
+	which is where the width handling and the complement rule are argued.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	taps  = number(decl, "taps")
+	width = number(decl, "width", 16)
+	seed  = number(decl, "seed", (1 << width) - 1)
+
+	if not taps or not 1 <= width <= 64:
+		return None
+
+	source       = kernel.argument("feedback")
+	additive     = isinstance(source, ast.NameRef) and source.name == "input"
+	complemented = kernel.flag("complement_feedback")
+	name         = _ident(prefix, decl.name)
+	held         = accumulator(width)
+	word         = f"u{held}"
+	mask         = (1 << width) - 1
+
+	# The one XOR separating the two differential conventions, built once
+	# because the encoder and decoder must complement or not complement
+	# together: a decoder disagreeing with its encoder here returns the
+	# complement of what was sent, which is plausible bytes with nothing
+	# at run time to notice.
+	feedback = f"{name}_parity(state & 0x{taps:X})"
+	if complemented:
+		feedback = f"({feedback} ^ 1)"
+
+	shifted = (f"state = ((state << 1) | u{held}::from(output)) & 0x{mask:X};"
+	           if held != width else
+	           f"state = (state << 1) | u{held}::from(output);")
+	shifted_in = (f"state = ((state << 1) | u{held}::from(coded)) & 0x{mask:X};"
+	              if held != width else
+	              f"state = (state << 1) | u{held}::from(coded);")
+
+	head = [
+		"",
+		f"/// `{decl.name}`: a {width}-bit LFSR, taps 0x{taps:X}, seed"
+		f" 0x{seed:X}.",
+		("/// Additive: the register runs on its own state, so this is"
+		 if additive else
+		 "/// Multiplicative: the register is fed from the scrambled output,"),
+		("/// startable anywhere and its own inverse."
+		 if additive else
+		 "/// so a receiver synchronises without being told the state."),
+	]
+
+	if additive:
+		return head + [
+			f"fn {name}_step(state: {word}) -> {word} {{",
+			"	let bit = state & 1;",
+			"	let next = state >> 1;",
+			"",
+			"	if bit != 0 {",
+			f"		next ^ 0x{taps:X}",
+			"	} else {",
+			"		next",
+			"	}",
+			"}",
+			"",
+			f"pub fn {name}_encode(input: &[u8], len: usize,"
+			" out: &mut [u8]) -> usize {",
+			f"	let mut state: {word} = 0x{seed:X};",
+			"",
+			"	for at in 0..len {",
+			"		let mut key: u8 = 0;",
+			"",
+			"		for bit in 0..8 {",
+			"			key |= ((state & 1) as u8) << bit;",
+			f"			state = {name}_step(state);",
+			"		}",
+			"",
+			"		out[at] = input[at] ^ key;",
+			"	}",
+			"",
+			"	len",
+			"}",
+			"",
+			"/// Its own inverse: the keystream does not depend on the data.",
+			f"pub fn {name}_decode(input: &[u8], len: usize,"
+			" out: &mut [u8]) -> usize {",
+			f"	{name}_encode(input, len, out)",
+			"}",
+		]
+
+	return head + [
+		f"fn {name}_parity(value: {word}) -> u8 {{",
+		"	let mut bits: u8 = 0;",
+		"	let mut left = value;",
+		"",
+		"	while left != 0 {",
+		"		bits ^= (left & 1) as u8;",
+		"		left >>= 1;",
+		"	}",
+		"",
+		"	bits",
+		"}",
+		"",
+		f"pub fn {name}_encode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		f"	let mut state: {word} = 0x{seed:X};",
+		"",
+		"	for at in 0..len {",
+		"		let mut coded: u8 = 0;",
+		"",
+		"		for bit in 0..8 {",
+		"			let plain = (input[at] >> bit) & 1;",
+		f"			let output = plain ^ {feedback};",
+		"",
+		"			coded |= output << bit;",
+		"			// The scrambled bit goes into the register: that is what",
+		"			// makes a receiver self-synchronising.",
+		f"			{shifted}",
+		"		}",
+		"",
+		"		out[at] = coded;",
+		"	}",
+		"",
+		"	len",
+		"}",
+		"",
+		"/// Not its own inverse: the register is fed from the scrambled",
+		"/// side, so decoding shifts in what it received.",
+		f"pub fn {name}_decode(input: &[u8], len: usize,"
+		" out: &mut [u8]) -> usize {",
+		f"	let mut state: {word} = 0x{seed:X};",
+		"",
+		"	for at in 0..len {",
+		"		let mut plain: u8 = 0;",
+		"",
+		"		for bit in 0..8 {",
+		"			let coded = (input[at] >> bit) & 1;",
+		"",
+		f"			plain |= (coded ^ {feedback}) << bit;",
+		f"			{shifted_in}",
+		"		}",
+		"",
+		"		out[at] = plain;",
+		"	}",
+		"",
+		"	len",
+		"}",
+	]
+
+
 def _padded_table(decl: ast.CodecDecl, prefix: str, inputs: int,
 		outputs: int, mapping: list[int], pad: int) -> list[str] | None:
 	"""A base-N code: whole groups, with a partial one filled out.
@@ -447,6 +604,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _ones_complement(decl, prefix)
 	if kernel.family is ast.KernelFamily.TABLE:
 		return _table(decl, prefix)
+	if kernel.family is ast.KernelFamily.SHIFT:
+		return _shift_register(decl, prefix)
 	return None
 
 

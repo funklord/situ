@@ -155,6 +155,137 @@ def bits_access() -> list[str]:
 	]
 
 
+def _shift_register(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""An LFSR, additive or multiplicative depending on the feedback.
+
+	Re-spelled from C's `_shift_register`, which is where the width
+	handling and the complement rule are argued. Python has no fixed word,
+	so the mask that C gets from its type is written out at every shift.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	taps  = number(decl, "taps")
+	width = number(decl, "width", 16)
+	seed  = number(decl, "seed", (1 << width) - 1)
+
+	if not taps or not 1 <= width <= 64:
+		return None
+
+	source       = kernel.argument("feedback")
+	additive     = isinstance(source, ast.NameRef) and source.name == "input"
+	complemented = kernel.flag("complement_feedback")
+	name         = _ident(prefix, decl.name)
+	mask         = (1 << width) - 1
+
+	feedback = f"_parity_{name}(state & 0x{taps:X})"
+	if complemented:
+		feedback = f"({feedback} ^ 1)"
+
+	head = [
+		"",
+		"",
+		f"#: `{decl.name}`: a {width}-bit LFSR, taps 0x{taps:X}, seed"
+		f" 0x{seed:X}.",
+		("#: Additive: the register runs on its own state, startable"
+		 " anywhere"
+		 if additive else
+		 "#: Multiplicative: the register is fed from the scrambled"
+		 " output, so"),
+		("#: and its own inverse." if additive else
+		 "#: a receiver synchronises without being told the state."),
+	]
+
+	if additive:
+		return head + [
+			"",
+			f"def _step_{name}(state: int) -> int:",
+			"	bit  = state & 1",
+			"	next_state = state >> 1",
+			"",
+			"	if bit:",
+			f"		next_state ^= 0x{taps:X}",
+			"",
+			"	return next_state",
+			"",
+			"",
+			f"def {name}_encode(data: bytes, length: int,"
+			" out: bytearray) -> int:",
+			f"	state = 0x{seed:X}",
+			"",
+			"	for at in range(length):",
+			"		key = 0",
+			"",
+			"		for bit in range(8):",
+			"			key |= (state & 1) << bit",
+			f"			state = _step_{name}(state)",
+			"",
+			"		out[at] = data[at] ^ key",
+			"",
+			"	return length",
+			"",
+			"",
+			f"def {name}_decode(data: bytes, length: int,"
+			" out: bytearray) -> int:",
+			'	"""Its own inverse: the keystream does not depend on the',
+			'	data."""',
+			f"	return {name}_encode(data, length, out)",
+		]
+
+	return head + [
+		"",
+		f"def _parity_{name}(value: int) -> int:",
+		"	bits = 0",
+		"",
+		"	while value:",
+		"		bits ^= value & 1",
+		"		value >>= 1",
+		"",
+		"	return bits",
+		"",
+		"",
+		f"def {name}_encode(data: bytes, length: int,"
+		" out: bytearray) -> int:",
+		f"	state = 0x{seed:X}",
+		"",
+		"	for at in range(length):",
+		"		coded = 0",
+		"",
+		"		for bit in range(8):",
+		"			plain  = (data[at] >> bit) & 1",
+		f"			output = plain ^ {feedback}",
+		"",
+		"			coded |= output << bit",
+		"			# The scrambled bit goes into the register: that is what",
+		"			# makes a receiver self-synchronising.",
+		f"			state  = ((state << 1) | output) & 0x{mask:X}",
+		"",
+		"		out[at] = coded",
+		"",
+		"	return length",
+		"",
+		"",
+		f"def {name}_decode(data: bytes, length: int,"
+		" out: bytearray) -> int:",
+		'	"""Not its own inverse: the register is fed from the scrambled',
+		'	side, so decoding shifts in what it received."""',
+		f"	state = 0x{seed:X}",
+		"",
+		"	for at in range(length):",
+		"		plain = 0",
+		"",
+		"		for bit in range(8):",
+		"			coded  = (data[at] >> bit) & 1",
+		"",
+		f"			plain |= (coded ^ {feedback}) << bit",
+		f"			state  = ((state << 1) | coded) & 0x{mask:X}",
+		"",
+		"		out[at] = plain",
+		"",
+		"	return length",
+	]
+
+
 def _padded_table(decl: ast.CodecDecl, prefix: str, inputs: int,
 		outputs: int, mapping: list[int], pad: int) -> list[str] | None:
 	"""A base-N code: whole groups, with a partial one filled out.
@@ -430,6 +561,8 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		return _ones_complement(decl, prefix)
 	if kernel.family is ast.KernelFamily.TABLE:
 		return _table(decl, prefix)
+	if kernel.family is ast.KernelFamily.SHIFT:
+		return _shift_register(decl, prefix)
 	return None
 
 
