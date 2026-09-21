@@ -161,3 +161,63 @@ def crc_register(width: int, reflect: bool) -> int:
 	formatting a table entry or an initial value has to write.
 	"""
 	return 8 if crc_shift(width, reflect) else accumulator(width)
+
+
+# ---------------------------------------------------------------------------
+# Reed-Solomon: the part that is not a spelling
+# ---------------------------------------------------------------------------
+#
+# Here for the reason the CRC table is: a table computed twice is the same
+# shape with a worse failure. These two are the whole of Reed-Solomon that
+# does not depend on a target language -- 39 lines against the 250 of C
+# that `c/derived.py` spells, which is the measurement 26.457 rests on.
+#
+# Moved out of `c/derived.py` unchanged (26.461). It buys nothing today,
+# C being the only backend that generates the family; it is the half of
+# the port that 0017's "a second backend re-spells; it does not re-derive"
+# already covers, done first so that what remains is stated exactly: the
+# decoder, whose Berlekamp-Massey, Chien search and Forney's formula exist
+# nowhere in this repository except as C text inside string literals.
+
+
+def gf_tables(field: int, primitive: int) -> tuple[list[int], list[int]]:
+	"""Antilog and log for GF(2^m), generated from the primitive polynomial.
+
+	The antilog table is doubled so a product of two logs can be looked up
+	without a modulo, which is the usual trick and the reason the generated
+	multiply is two loads and an add.
+	"""
+	size   = field - 1
+	exp    = [0] * (2 * field)
+	log    = [0] * field
+	value  = 1
+
+	for power in range(size):
+		exp[power] = value
+		log[value] = power
+		value <<= 1
+		if value & field:
+			value ^= primitive
+
+	for power in range(size, 2 * size):
+		exp[power] = exp[power - size]
+
+	return exp, log
+
+
+def rs_generator_coefficients(nroots: int, first_root: int, exp: list[int],
+		log: list[int], size: int) -> list[int]:
+	"""Multiply out (x - alpha^(first_root + i)) for each root."""
+	poly = [1]
+
+	for root in range(nroots):
+		alpha = exp[(first_root + root) % size]
+		shifted = poly + [0]
+
+		for at in range(len(poly)):
+			if poly[at] and alpha:
+				shifted[at + 1] ^= exp[(log[poly[at]] + log[alpha]) % size]
+
+		poly = shifted
+
+	return poly

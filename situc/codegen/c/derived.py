@@ -30,6 +30,8 @@ from situc.codegen.c.names import ident, macro
 from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
 from situc.traverse import table_is_padded
 from situc.codegen.kernel_math import (WORD_WIDTHS, accumulator,
+                                       gf_tables,
+                                       rs_generator_coefficients,
                                        crc_register, crc_shift, crc_start,
                                        crc_table, crc_width, number, reverse)
 from situc.layout import BITS_PER_BYTE
@@ -1907,31 +1909,6 @@ def _bit_stuffing(decl: ast.CodecDecl, prefix: str, code: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _gf_tables(field: int, primitive: int) -> tuple[list[int], list[int]]:
-	"""Antilog and log for GF(2^m), generated from the primitive polynomial.
-
-	The antilog table is doubled so a product of two logs can be looked up
-	without a modulo, which is the usual trick and the reason the generated
-	multiply is two loads and an add.
-	"""
-	size   = field - 1
-	exp    = [0] * (2 * field)
-	log    = [0] * field
-	value  = 1
-
-	for power in range(size):
-		exp[power] = value
-		log[value] = power
-		value <<= 1
-		if value & field:
-			value ^= primitive
-
-	for power in range(size, 2 * size):
-		exp[power] = exp[power - size]
-
-	return exp, log
-
-
 def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	field = number(decl, "field")
 	n     = number(decl, "n")
@@ -1945,13 +1922,13 @@ def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	nroots     = n - k
 	size       = field - 1
 
-	exp, log = _gf_tables(field, primitive)
+	exp, log = gf_tables(field, primitive)
 
 	# Constant term first. The division loop below indexes from the low end,
 	# which is the standard formulation and the one every reference uses;
 	# multiplying the roots out produces it leading-first.
 	generator = list(reversed(
-		_rs_generator_coefficients(nroots, first_root, exp, log, size)))
+		rs_generator_coefficients(nroots, first_root, exp, log, size)))
 	name = ident(prefix, decl.name)
 
 	return [
@@ -1976,24 +1953,6 @@ def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		*_rs_encoder(name, generator, nroots, k),
 		*_rs_decoder(name, n, nroots, first_root, size),
 	]
-
-
-def _rs_generator_coefficients(nroots: int, first_root: int, exp: list[int],
-		log: list[int], size: int) -> list[int]:
-	"""Multiply out (x - alpha^(first_root + i)) for each root."""
-	poly = [1]
-
-	for root in range(nroots):
-		alpha = exp[(first_root + root) % size]
-		shifted = poly + [0]
-
-		for at in range(len(poly)):
-			if poly[at] and alpha:
-				shifted[at + 1] ^= exp[(log[poly[at]] + log[alpha]) % size]
-
-		poly = shifted
-
-	return poly
 
 
 def _gf_arithmetic(name: str, exp: list[int], log: list[int],

@@ -30711,6 +30711,36 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.461 The Reed-Solomon derivation moves to where it can be shared
+
+**The first of the three steps 26.457 named, and the only one that needs
+no decision.** `gf_tables` and `rs_generator_coefficients` are in
+`codegen/kernel_math.py` now, beside the CRC derivation, for the reason
+that module's own docstring gives: a table computed twice is the same
+shape with a worse failure.
+
+**It buys nothing today and that is the point.** C is still the only
+backend that generates the family, so nothing imports them but C. What
+the move does is make the remaining work exact: 39 lines are now
+demonstrably shared, and what is left is the 250 lines of spelling --
+165 of them a decoder whose Berlekamp-Massey, Chien search and Forney's
+formula exist nowhere in this repository except as C text inside string
+literals. 26.457 argued that split from a measurement; this puts the
+shared half where the argument says it belongs, so a future port starts
+from a smaller and better-described problem.
+
+**The proof is byte-identical output**, which is the property the 0017
+amendment used for the shift-register widths: generating all three
+backends from `std/kernels.situ` before and after the move gives the
+same bytes. A refactor whose evidence is "it still compiles" would not
+have been worth doing.
+
+**And the moved code is live rather than a copy left behind**, which
+byte-identity alone does not show -- an unused duplicate would also
+leave the output unchanged. Perturbing the primitive-polynomial
+reduction in its NEW home fails all four cases of 26.458's differential,
+so the tables C emits are the ones this module computes.
+
 ### 26.460 An `authenticated` region has to hold something
 
 **Settled by the copyright holder 2026-09-21: refused.** The second of
