@@ -42,6 +42,8 @@ from situc.codegen import python as generate_py
 from situc.codegen.c import derived as generate_derived
 from situc.codegen.python import derived as generate_py_derived
 from situc.codegen.c.derived import _C_SHARED
+from situc.codegen.kernel_math import (gf_tables,
+                                      rs_generator_coefficients)
 from situc.codegen.kernel_program import (Array, Assign, Binary,
                                           Declare, Expr, Gf, If,
                                           Index, Loop, Return, Stmt,
@@ -1765,3 +1767,68 @@ def test_every_array_the_program_names_is_one_a_renderer_resolves() -> None:
 		assert _C_SHARED == _PY_SHARED, (
 			"the two renderers disagree about which arrays are file-scope "
 			"tables, so one of them would emit an undefined name")
+
+
+# -- the Berlekamp-Massey bound (26.465) ------------------------------------
+
+
+def _shorter_codeword(message: bytes, roots: int) -> bytes:
+	"""A block whose first `roots` syndromes vanish, by situ's own
+	derivation rather than by a frozen array.
+
+	Systematic encode against a generator built from `roots` roots, which
+	is `rs_encoder_program` done in Python for a code situ does not
+	declare. Derived rather than pinned because the point is the SHAPE --
+	leading syndromes that vanish -- and a hard-coded block would stop
+	having that shape the moment a parameter moved, while still passing.
+	"""
+	exp, log = gf_tables(256, 0x11D)
+	generator = list(reversed(
+		rs_generator_coefficients(roots, 0, exp, log, 255)))
+
+	def mul(a: int, b: int) -> int:
+		return 0 if a == 0 or b == 0 else exp[log[a] + log[b]]
+
+	parity = [0] * roots
+	for byte in message:
+		feedback = byte ^ parity[0]
+		for j in range(roots - 1):
+			parity[j] = parity[j + 1] ^ mul(feedback, generator[roots - 1 - j])
+		parity[roots - 1] = mul(feedback, generator[0])
+
+	return bytes(message) + bytes(parity)
+
+
+def test_a_block_whose_leading_syndromes_vanish_is_refused(
+		kernel_python: dict[str, object]) -> None:
+	"""The register length Berlekamp-Massey finds is bounded, or it reads
+	off the end of the locator.
+
+	`locator` is `half + 1` long and the inner loop reads `locator[j]` for
+	`j` up to `degree`, while the refusal for `degree > half` came AFTER
+	the loop -- so an iteration that raised the degree above `half` was
+	followed by one that read past the array. Measured as a stack buffer
+	over-read under AddressSanitizer in the generated C, from a 64-byte
+	input, and present since the decoder was written.
+
+	The blocks that reach it are not random: 0 of 4000 random 64-byte
+	blocks trigger it and 300 of 300 codewords of RS(64,60) do, which is
+	why fuzzing never found it and why it is trivial for somebody who
+	knows the code to construct. A block whose leading syndromes vanish
+	is exactly a codeword of a shorter Reed-Solomon code.
+
+	The bound is checked where the degree changes now, so the read cannot
+	happen rather than being detected afterwards. Every correctable block
+	is unaffected: a word within `t` errors never drives the degree above
+	`t`, which the oracle cases above assert from the other side.
+	"""
+	decode = kernel_python["reed_solomon_64_56_decode"]
+
+	for roots in (4, 5, 6):
+		message = bytes((i * 31 + roots) & 0xFF for i in range(64 - roots))
+		block   = _shorter_codeword(message, roots)
+		assert len(block) == 64
+
+		assert decode(bytearray(block)) == -1, (  # type: ignore[operator]
+			f"a codeword of RS(64,{64 - roots}) was accepted by the "
+			f"RS(64,56) decoder rather than refused")

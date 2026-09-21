@@ -344,6 +344,14 @@ def _berlekamp_massey(nroots: int, half: int) -> tuple[Stmt, ...]:
 				Assign(Name("degree"),
 				       Binary("-", Binary("+", Name("at"), Lit(1)),
 				              Name("degree"))),
+				# HERE, not after the loop. `locator` is `half + 1` long
+				# and the read above indexes it to `degree`, so a degree
+				# that jumps past `half` is read with on the NEXT
+				# iteration -- a stack buffer over-read, measured under
+				# ASan from a 64-byte input (26.465). The refusal was
+				# right and one iteration late.
+				If(Binary(">", Name("degree"), Lit(half)),
+				   (Return(Lit(-1)),)),
 				Loop("j", Lit(0), Lit(half), True, (
 					Assign(Index("previous", Name("j")),
 					       Index("scratch", Name("j"))),
@@ -355,9 +363,13 @@ def _berlekamp_massey(nroots: int, half: int) -> tuple[Stmt, ...]:
 			)),
 		)),
 		Blank(),
-		Comment(("More errors than the code can locate.",)),
+		# No `degree > half` here any more: the bound above refuses at the
+		# moment the degree moves, so this could no longer fail, and a
+		# check that cannot fail is not evidence. Measured rather than
+		# assumed -- kept as a probe over 25,400 blocks across three
+		# input families, it fired zero times.
+		Comment(("A locator of degree zero locates nothing.",)),
 		If(Binary("==", Name("degree"), Lit(0)), (Return(Lit(-1)),)),
-		If(Binary(">", Name("degree"), Lit(half)), (Return(Lit(-1)),)),
 		Blank(),
 	)
 
