@@ -30711,6 +30711,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.469 What the Rust port is actually blocked on, measured
+
+**26.457 recorded the port as blocked on `no_std` and no-panic
+indexing: "the decoder indexes arrays by runtime-computed degrees
+throughout; in C those are unchecked and in Rust they are panics unless
+the bounds are proved". That is true and it is not a lot of indices.**
+
+**21 indices into fixed arrays; 14 are provable from a constant loop
+bound and 7 are not.** Counted by walking the statement tree and asking
+of each `Index` whether its subscript has a bound derivable from the
+enclosing loops and literals. The seven are two arrays:
+
+    locator[j]                 j <= degree        len half + 1
+    position[found]            found < degree     len half
+    position[at]               at < found         len half
+
+**All three are bounded by the program's own refusals rather than by
+its types.** `degree > half` is refused where the degree moves (26.465)
+and `found >= degree` is refused in the Chien search, so every one of
+the seven is in range at the moment it is used -- which the compiler
+cannot see and the program can.
+
+**Measured rather than argued.** Instrumenting the rendered Python over
+about 9,000 blocks per codec -- random, codewords of every shorter
+code, and real codewords damaged from 0 to 3t places -- the peak index
+reached is exactly the last valid slot: `locator` reaches 4 of 5 and 16
+of 17, `position` reaches 3 of 4 and 15 of 16. Tight, and never
+exceeded.
+
+**So the question is smaller than "how should generated Rust index",
+and it has two answers.** Neither is mine to pick, because the first
+changes generated C for every user to serve a backend that does not
+exist yet:
+
+- **A clamp in the shared program.** `1..=min(degree, HALF)` and the
+  same for `found`. Every index becomes provable in any backend, the
+  Rust renderer needs nothing special, and C gains a redundant
+  comparison in two loops that can never change a result.
+- **`.get()` in the Rust renderer alone.** Seven sites, no change to C
+  or Python, and the generated Rust carries an `unwrap_or` fallback for
+  a case the program refuses -- a branch that cannot be taken, which is
+  a small untruth in the source and the thing `evidence.md` calls a
+  check that cannot fail.
+
+**The cost the record feared was the whole decoder; it is seven
+subscripts in two arrays.** That is `working-practice`'s *measure the
+feared cost before deliberating* doing what it says it does -- the
+measurement did not argue for a branch, it made the question small
+enough to answer.
+
 ### 26.468 The fifth generator, and a recorded gap closed
 
 **26.464 left `gen-tests` outside the accessor guard and said so.** Its
@@ -31309,7 +31359,9 @@ evidence.
 **Two further obstacles, both real.** Rust's generated code is `no_std`
 and must not panic, and the decoder indexes arrays by runtime-computed
 degrees throughout; in C those are unchecked and in Rust they are panics
-unless the bounds are proved. And an encode-only port would make the
+unless the bounds are proved. **Measured at 26.469: seven subscripts in
+two arrays, not the whole decoder, and all seven are bounded by the
+program's own refusals.** And an encode-only port would make the
 capability map over-promise, since the map says `invertible` and is
 backend-independent -- so a partial port is worse than none.
 
