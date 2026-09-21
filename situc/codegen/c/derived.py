@@ -34,6 +34,13 @@ from situc.codegen.kernel_math import (WORD_WIDTHS, accumulator,
                                        rs_generator_coefficients,
                                        crc_register, crc_shift, crc_start,
                                        crc_table, crc_width, number, reverse)
+from situc.codegen.kernel_program import (Array, Assign, Binary, Blank,
+                                          Comment, Declare, Expr, Gf,
+                                          If, Increment, Index, Lit,
+                                          Loop, Name, Return, Stmt,
+                                          XorAssign,
+                                          rs_decoder_program,
+                                          rs_encoder_program)
 from situc.layout import BITS_PER_BYTE
 from situc import __version__
 
@@ -2001,6 +2008,7 @@ def _gf_arithmetic(name: str, exp: list[int], log: list[int],
 
 def _rs_encoder(name: str, generator: list[int], nroots: int,
 		k: int) -> list[str]:
+	"""C's spelling of `kernel_program.rs_encoder_program`."""
 	rows = "\t" + ", ".join(f"0x{value:02X}u" for value in generator) + ","
 
 	return [
@@ -2011,31 +2019,10 @@ def _rs_encoder(name: str, generator: list[int], nroots: int,
 		"",
 		"/* Systematic encode: the message is left alone and the parity is the",
 		" * remainder of dividing it, shifted, by the generator. */",
-		f"uint32_t {name}_encode(const uint8_t *data, uint32_t len, uint8_t *parity)",
+		f"uint32_t {name}_encode(const uint8_t *data, uint32_t length, "
+		"uint8_t *parity)",
 		"{",
-		f"\tuint32_t at;",
-		f"\tuint32_t j;",
-		"",
-		f"\tif (len != {k}u) {{",
-		"\t\treturn 0;",
-		"\t}",
-		"",
-		f"\tfor (at = 0; at < {nroots}u; at++) {{",
-		"\t\tparity[at] = 0u;",
-		"\t}",
-		"",
-		"\tfor (at = 0; at < len; at++) {",
-		"\t\tuint8_t feedback = (uint8_t)(data[at] ^ parity[0]);",
-		"",
-		f"\t\tfor (j = 0; j + 1u < {nroots}u; j++) {{",
-		"\t\t\tparity[j] = (uint8_t)(parity[j + 1] ^",
-		f"\t\t\t\t{name}_mul(feedback, {name}_generator[{nroots}u - 1u - j]));",
-		"\t\t}",
-		f"\t\tparity[{nroots}u - 1u] = {name}_mul(feedback, "
-		f"{name}_generator[0]);",
-		"\t}",
-		"",
-		f"\treturn {nroots}u;",
+		*_CRenderer(name).program(rs_encoder_program(nroots, k)),
 		"}",
 		"",
 	]
@@ -2043,179 +2030,220 @@ def _rs_encoder(name: str, generator: list[int], nroots: int,
 
 def _rs_decoder(name: str, n: int, nroots: int, first_root: int,
 		size: int) -> list[str]:
-	"""The standard four steps, in the standard order.
+	"""C's spelling of `kernel_program.rs_decoder_program`.
 
-	Syndromes say whether anything is wrong; Berlekamp-Massey finds the error
-	locator polynomial from them; a Chien search finds its roots, which are the
-	error positions; Forney gives the magnitude at each. Nothing here is novel,
-	deliberately: a novel error-correcting code is the last thing anybody
-	wants, and the value situ adds is that the properties in the capability map
-	were derived from the same description as this code.
+	The algorithm is not here and must not be copied here: 26.457 measured
+	the cost of a decoder that exists only as C text inside string
+	literals, and 0017's "a second backend re-spells; it does not
+	re-derive" is what this makes true of Reed-Solomon.
 	"""
-	half = nroots // 2
+	program = rs_decoder_program(n, nroots, first_root, size)
 
 	return [
 		"/* Decode in place. Returns the number of symbols corrected, or -1 if",
 		" * the block holds more errors than the code can correct -- which it",
 		" * detects rather than guessing at, because a miscorrection is worse",
 		" * than a refusal. */",
-		f"int {name}_decode(uint8_t *block, uint32_t len)",
+		f"int {name}_decode(uint8_t *block, uint32_t length)",
 		"{",
-		f"\tuint8_t syndrome[{nroots}u];",
-		f"\tuint8_t lambda[{half + 1}u];",
-		f"\tuint8_t previous[{half + 1}u];",
-		f"\tuint8_t scratch[{half + 1}u];",
-		f"\tuint8_t omega[{nroots}u];",
-		f"\tuint8_t position[{half}u];",
-		"\tuint32_t at;",
-		"\tuint32_t j;",
-		"\tuint32_t found = 0;",
-		"\tuint32_t degree = 0;",
-		"\tuint32_t shift = 1;",
-		"\tuint8_t  discrepancy_last = 1;",
-		"\tint      wrong = 0;",
-		"",
-		f"\tif (len != {n}u) {{",
-		"\t\treturn -1;",
-		"\t}",
-		"",
-		"\t/* 1. Syndromes: the block evaluated at each root. All zero means",
-		"\t *    nothing is wrong, which is the common case and the cheap one. */",
-		f"\tfor (at = 0; at < {nroots}u; at++) {{",
-		"\t\tuint8_t value = 0u;",
-		f"\t\tuint8_t root = {name}_pow({first_root}u + at);",
-		"",
-		"\t\tfor (j = 0; j < len; j++) {",
-		f"\t\t\tvalue = (uint8_t)(block[j] ^ {name}_mul(value, root));",
-		"\t\t}",
-		"\t\tsyndrome[at] = value;",
-		"\t\tif (value) {",
-		"\t\t\twrong = 1;",
-		"\t\t}",
-		"\t}",
-		"",
-		"\tif (!wrong) {",
-		"\t\treturn 0;",
-		"\t}",
-		"",
-		"\t/* 2. Berlekamp-Massey: the shortest register that makes the",
-		"\t *    syndromes, whose connection polynomial locates the errors. */",
-		f"\tfor (at = 0; at <= {half}u; at++) {{",
-		"\t\tlambda[at] = 0u;",
-		"\t\tprevious[at] = 0u;",
-		"\t}",
-		"\tlambda[0] = 1u;",
-		"\tprevious[0] = 1u;",
-		"",
-		f"\tfor (at = 0; at < {nroots}u; at++) {{",
-		"\t\tuint8_t discrepancy = syndrome[at];",
-		"",
-		"\t\tfor (j = 1; j <= degree; j++) {",
-		"\t\t\tdiscrepancy = (uint8_t)(discrepancy ^",
-		f"\t\t\t\t{name}_mul(lambda[j], syndrome[at - j]));",
-		"\t\t}",
-		"",
-		"\t\tif (discrepancy == 0u) {",
-		"\t\t\tshift++;",
-		"\t\t\tcontinue;",
-		"\t\t}",
-		"",
-		f"\t\tfor (j = 0; j <= {half}u; j++) {{",
-		"\t\t\tscratch[j] = lambda[j];",
-		"\t\t}",
-		f"\t\tfor (j = shift; j <= {half}u; j++) {{",
-		"\t\t\tlambda[j] = (uint8_t)(lambda[j] ^",
-		f"\t\t\t\t{name}_mul({name}_mul(discrepancy, "
-		f"{name}_inv(discrepancy_last)),",
-		"\t\t\t\t             previous[j - shift]));",
-		"\t\t}",
-		"",
-		"\t\tif (2u * degree <= at) {",
-		"\t\t\tdegree = at + 1u - degree;",
-		f"\t\t\tfor (j = 0; j <= {half}u; j++) {{",
-		"\t\t\t\tprevious[j] = scratch[j];",
-		"\t\t\t}",
-		"\t\t\tdiscrepancy_last = discrepancy;",
-		"\t\t\tshift = 1;",
-		"\t\t} else {",
-		"\t\t\tshift++;",
-		"\t\t}",
-		"\t}",
-		"",
-		f"\tif (degree > {half}u || degree == 0u) {{",
-		"\t\treturn -1;\t\t/* more errors than the code can locate */",
-		"\t}",
-		"",
-		"\t/* 3. Chien search: every position whose evaluation vanishes is an",
-		"\t *    error. Exhaustive over the block, which is what makes the cost",
-		"\t *    of decoding proportional to the block and not to the errors. */",
-		"\tfor (at = 0; at < len; at++) {",
-		"\t\tuint8_t value = 1u;\t/* lambda[0] is always 1 */",
-		f"\t\tuint8_t x = {name}_pow({size}u - ((len - 1u - at) % {size}u));",
-		"\t\tuint8_t term = 1u;",
-		"",
-		"\t\tfor (j = 1; j <= degree; j++) {",
-		f"\t\t\tterm = {name}_mul(term, x);",
-		f"\t\t\tvalue = (uint8_t)(value ^ {name}_mul(lambda[j], term));",
-		"\t\t}",
-		"",
-		"\t\tif (value == 0u) {",
-		"\t\t\tif (found >= degree) {",
-		"\t\t\t\treturn -1;",
-		"\t\t\t}",
-		"\t\t\tposition[found++] = (uint8_t)at;",
-		"\t\t}",
-		"\t}",
-		"",
-		"\tif (found != degree) {",
-		"\t\treturn -1;\t\t/* the locator has roots outside the block */",
-		"\t}",
-		"",
-		"\t/* 4. Forney: the magnitude at each located position, from the error",
-		"\t *    evaluator over the formal derivative of the locator. */",
-		f"\tfor (at = 0; at < {nroots}u; at++) {{",
-		"\t\tuint8_t value = 0u;",
-		"",
-		"\t\tfor (j = 0; j <= at && j <= degree; j++) {",
-		"\t\t\tvalue = (uint8_t)(value ^",
-		f"\t\t\t\t{name}_mul(lambda[j], syndrome[at - j]));",
-		"\t\t}",
-		"\t\tomega[at] = value;",
-		"\t}",
-		"",
-		"\tfor (at = 0; at < found; at++) {",
-		f"\t\tuint8_t x = {name}_pow((len - 1u - position[at]) % {size}u);",
-		f"\t\tuint8_t inverse = {name}_inv(x);",
-		"\t\tuint8_t top = 0u;",
-		"\t\tuint8_t bottom = 0u;",
-		"\t\tuint8_t term = 1u;",
-		"",
-		f"\t\tfor (j = 0; j < {nroots}u; j++) {{",
-		f"\t\t\ttop = (uint8_t)(top ^ {name}_mul(omega[j], term));",
-		f"\t\t\tterm = {name}_mul(term, inverse);",
-		"\t\t}",
-		"",
-		"\t\t/* The formal derivative over GF(2) keeps only the odd terms. */",
-		"\t\tterm = 1u;",
-		"\t\tfor (j = 1; j <= degree; j += 2u) {",
-		f"\t\t\tbottom = (uint8_t)(bottom ^ {name}_mul(lambda[j], term));",
-		f"\t\t\tterm = {name}_mul({name}_mul(term, inverse), inverse);",
-		"\t\t}",
-		"",
-		"\t\tif (bottom == 0u) {",
-		"\t\t\treturn -1;",
-		"\t\t}",
-		"",
-		"\t\t{",
-		f"\t\t\tuint8_t magnitude = {name}_mul(top, {name}_inv(bottom));",
-		"",
-		f"\t\t\tif ({first_root} == 0) {{",
-		f"\t\t\t\tmagnitude = {name}_mul(magnitude, x);",
-		"\t\t\t}",
-		"\t\t\tblock[position[at]] = (uint8_t)(block[position[at]] ^ magnitude);",
-		"\t\t}",
-		"\t}",
-		"",
-		"\treturn (int)found;",
+		*_CRenderer(name).program(program),
 		"}",
+		"",
 	]
+
+
+#: The program's arrays that are file-scope tables rather than locals, and
+#: so carry the codec's prefix. Everything else it names is a local.
+_C_SHARED = {"generator"}
+
+#: C's types for the two the program names. A backend whose integers do
+#: not wrap at these widths masks instead; C's do, so a cast is enough.
+_C_TYPE = {"u8": "uint8_t", "u32": "uint32_t"}
+
+
+class _CRenderer:
+	"""How C spells the statements of `kernel_program`, and nothing else.
+
+	No decision about Reed-Solomon is taken here. Everything this class
+	knows is which characters C uses for a loop, a cast and an array --
+	which is what 0017 means by a spelling, and is why a second one of
+	these is cheap where a second transcription was not.
+	"""
+
+	def __init__(self, name: str) -> None:
+		self.name = name
+		# `block` and `length` are the parameters; the rest arrive as the
+		# program declares them. The map exists for one purpose: C's
+		# integer promotions widen a `uint8_t` xor to `int`, so assigning
+		# one back needs a cast, and assigning a `uint32_t` does not.
+		self.kind: dict[str, str] = {"block": "u8", "length": "u32"}
+
+	# -- expressions --------------------------------------------------
+
+	def expr(self, node: Expr) -> str:
+		"""Fully parenthesised, because this program's precedence is not
+		worth a reader checking against C's table."""
+		if isinstance(node, Binary):
+			return f"({self.bare(node)})"
+		return self.bare(node)
+
+	def bare(self, node: Expr) -> str:
+		"""The same, without the outermost parentheses."""
+		if isinstance(node, Lit):
+			return f"{node.value}u" if node.value >= 0 else str(node.value)
+		if isinstance(node, Name):
+			return node.name
+		if isinstance(node, Index):
+			return f"{self.array(node.array)}[{self.bare(node.at)}]"
+		if isinstance(node, Gf):
+			args = ", ".join(self.bare(arg) for arg in node.args)
+			return f"{self.name}_{node.op}({args})"
+		return f"{self.expr(node.left)} {node.op} {self.expr(node.right)}"
+
+	def array(self, name: str) -> str:
+		"""A local array keeps its name; a file-scope table takes the
+		prefix that keeps this codec's symbols out of the linker's way."""
+		if name in _C_SHARED:
+			return f"{self.name}_{name}"
+		return name
+
+	def store(self, target: Expr, node: Expr) -> str:
+		"""`target = node`, with the cast C's promotions make necessary.
+
+		Only an arithmetic result needs it: every other value here came
+		out of a `uint8_t` array or one of the three field functions, and
+		a cast on those would say the compiler had been doubted."""
+		if self.kind_of(target) == "u8" and self.kind_of(node) != "u8":
+			return f"{self.expr(target)} = (uint8_t)({self.bare(node)});"
+		return f"{self.expr(target)} = {self.bare(node)};"
+
+	def kind_of(self, node: Expr) -> str:
+		"""What C makes of an expression: a byte, or something wider.
+
+		Arithmetic is the whole of the difference. C promotes a `uint8_t`
+		xor to `int`, and a loop counter is a `uint32_t` here, so either
+		narrows on the way into a byte; a table lookup and a field
+		function do not."""
+		if isinstance(node, Binary):
+			return "u32"
+		if isinstance(node, (Gf, Lit)):
+			return "u8"
+		if isinstance(node, Index):
+			return self.kind.get(node.array, "u8")
+		return self.kind.get(node.name, "u8")
+
+	# -- statements ---------------------------------------------------
+
+	def program(self, body: tuple[Stmt, ...]) -> list[str]:
+		"""The function body: declarations, then the algorithm.
+
+		C wants its loop variables declared and the program does not name
+		them, every other target binding them per loop. They go in after
+		the program's own declarations so the block reads in one order.
+		"""
+		lead = 0
+		while isinstance(body[lead], (Array, Declare)):
+			lead += 1
+
+		loops = sorted(_loop_variables(body))
+		for each in loops:
+			self.kind[each] = "u32"
+
+		# No blank after the loop variables where the program opens with
+		# one of its own: two in a row is a diff nobody asked for.
+		gap = [] if isinstance(body[lead], Blank) else [""]
+		return [*self.render(body[:lead], 1),
+		        *[f"\tuint32_t {each};" for each in loops],
+		        *gap,
+		        *self.render(body[lead:], 1)]
+
+	def render(self, body: tuple[Stmt, ...], depth: int) -> list[str]:
+		pad = "\t" * depth
+		out: list[str] = []
+
+		for statement in body:
+			if isinstance(statement, Blank):
+				out.append("")
+			elif isinstance(statement, Comment):
+				out.extend(_c_comment(statement.lines, pad))
+			elif isinstance(statement, Array):
+				self.kind[statement.name] = "u8"
+				out.append(f"{pad}uint8_t {statement.name}"
+				           f"[{statement.length}u] = {{0u}};")
+			elif isinstance(statement, Declare):
+				self.kind[statement.name] = statement.kind
+				start = self.bare(statement.init)
+				if (statement.kind == "u8"
+						and self.kind_of(statement.init) != "u8"):
+					start = f"(uint8_t)({start})"
+				out.append(f"{pad}{_C_TYPE[statement.kind]} {statement.name}"
+				           f" = {start};")
+			elif isinstance(statement, Assign):
+				out.append(pad + self.store(statement.target,
+				                            statement.value))
+			elif isinstance(statement, XorAssign):
+				out.append(pad + self.store(
+					statement.target,
+					Binary("^", statement.target, statement.value)))
+			elif isinstance(statement, Increment):
+				out.append(f"{pad}{statement.name}++;")
+			elif isinstance(statement, Loop):
+				out.extend(self.loop(statement, pad, depth))
+			elif isinstance(statement, If):
+				out.extend(self.branch(statement, pad, depth))
+			elif isinstance(statement, Return):
+				out.append(f"{pad}return {_c_returned(statement.value)};")
+			else:
+				out.append(f"{pad}continue;")
+
+		return out
+
+	def loop(self, statement: Loop, pad: str, depth: int) -> list[str]:
+		self.kind[statement.var] = "u32"
+		test = "<=" if statement.inclusive else "<"
+		step = (f"{statement.var}++" if statement.step == 1
+		        else f"{statement.var} += {statement.step}u")
+		return [
+			f"{pad}for ({statement.var} = {self.bare(statement.start)}; "
+			f"{statement.var} {test} {self.bare(statement.limit)}; {step}) {{",
+			*self.render(statement.body, depth + 1),
+			f"{pad}}}",
+		]
+
+	def branch(self, statement: If, pad: str, depth: int) -> list[str]:
+		out = [f"{pad}if ({self.bare(statement.cond)}) {{",
+		       *self.render(statement.body, depth + 1)]
+		if statement.orelse:
+			out.append(f"{pad}}} else {{")
+			out.extend(self.render(statement.orelse, depth + 1))
+		out.append(f"{pad}}}")
+		return out
+
+
+def _c_returned(node: Expr) -> str:
+	"""`return 0;` rather than `return 0u;`: the function returns `int`."""
+	if isinstance(node, Lit):
+		return str(node.value)
+	if isinstance(node, Name):
+		return f"(int){node.name}"
+	raise AssertionError("the decoder returns a literal or a counter")
+
+
+def _c_comment(lines: tuple[str, ...], pad: str) -> list[str]:
+	if len(lines) == 1:
+		return [f"{pad}/* {lines[0]} */"]
+	return [f"{pad}/* {lines[0]}",
+	        *[f"{pad} * {line}" for line in lines[1:-1]],
+	        f"{pad} * {lines[-1]} */"]
+
+
+def _loop_variables(body: tuple[Stmt, ...]) -> set[str]:
+	found: set[str] = set()
+	for statement in body:
+		if isinstance(statement, Loop):
+			found.add(statement.var)
+			found |= _loop_variables(statement.body)
+		elif isinstance(statement, If):
+			found |= _loop_variables(statement.body)
+			found |= _loop_variables(statement.orelse)
+	return found

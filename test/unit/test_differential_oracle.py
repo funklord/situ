@@ -40,6 +40,15 @@ from situc import ast
 from situc.codegen import c as generate_c
 from situc.codegen import python as generate_py
 from situc.codegen.c import derived as generate_derived
+from situc.codegen.python import derived as generate_py_derived
+from situc.codegen.c.derived import _C_SHARED
+from situc.codegen.kernel_program import (Array, Assign, Binary,
+                                          Declare, Expr, Gf, If,
+                                          Index, Loop, Return, Stmt,
+                                          XorAssign,
+                                          rs_decoder_program,
+                                          rs_encoder_program)
+from situc.codegen.python.derived import _PY_SHARED
 from situc.diagnostics import Source
 from situc.kernels import STUFFING_BOUNDS
 from situc.layout import solve
@@ -1542,3 +1551,217 @@ def test_the_oracles_scratch_goes_away(tmp_path: Path) -> None:
 	assert made.name.startswith("oracle-"), ran.stdout
 	assert not made.exists(), (
 		f"{made} outlived the process that made it: the scratch leaks")
+
+
+# -- the two renderings of one Reed-Solomon program (26.462) ----------------
+
+
+@pytest.fixture(scope="module")
+def kernel_python() -> dict[str, object]:
+	"""`std/kernels.situ`'s derived codecs, as Python, executed.
+
+	The module scope is the C fixture's reasoning: one generate and one
+	compile serve every case below.
+
+	`exec` rather than an import through a file, because what is under
+	test is the text the backend produced -- writing it out and importing
+	it would add a step that can fail for reasons the test is not about.
+	"""
+	kernels = ROOT / "std" / "kernels.situ"
+	source  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	namespace: dict[str, object] = {}
+	exec(compile(generate_py_derived.generate(source, "kernels"),
+	             "kernels_derived.py", "exec"), namespace)
+	return namespace
+
+
+@pytest.mark.skipif(not have("reedsolo"),
+                    reason="no reedsolo; the Reed-Solomon oracle did not run")
+@pytest.mark.parametrize("name,n,k", RS_CASES, ids=[case[0] for case in RS_CASES])
+def test_the_python_reed_solomon_matches_reedsolo(
+		name: str, n: int, k: int,
+		kernel_python: dict[str, object]) -> None:
+	"""The second rendering, held to the same outside implementation.
+
+	Not a repeat of the C case. C and Python render one program
+	(`kernel_program`), so they agree with each other by construction and
+	agreeing proves the renderers, not the code -- `evidence.md`'s two
+	documents and one witness. What makes this worth running is that
+	`reedsolo` shares nothing with either, so a program that is wrong is
+	wrong here in both backends at once, which is the failure the shared
+	program introduced and the reason it has to be checked from outside.
+	"""
+	encode = kernel_python[f"{name}_encode"]
+	decode = kernel_python[f"{name}_decode"]
+	nroots = n - k
+	limit  = nroots // 2
+
+	random.seed(20260921)
+	for trial in range(4):
+		data   = bytes(random.randrange(256) for _ in range(k))
+		parity = bytearray(nroots)
+
+		assert encode(data, parity) == nroots, (  # type: ignore[operator]
+			f"{name}: encode did not write {nroots} parity symbols")
+		assert bytes(parity) == _reedsolo_parity(data, nroots), (
+			f"{name}: Python and reedsolo disagree about the parity of "
+			f"trial {trial}")
+
+		block = bytearray(data + parity)
+		whole = bytes(block)
+		for spot in random.sample(range(n), limit):
+			block[spot] ^= 0xFF
+
+		assert decode(block) == limit, (  # type: ignore[operator]
+			f"{name}: Python did not correct {limit} damaged symbols")
+		assert bytes(block) == whole, (
+			f"{name}: Python recovered a different block")
+
+
+@pytest.mark.parametrize("name,n,k", RS_CASES, ids=[case[0] for case in RS_CASES])
+def test_c_and_python_render_the_same_reed_solomon(
+		name: str, n: int, k: int, kernel_library: ctypes.CDLL,
+		kernel_python: dict[str, object]) -> None:
+	"""One program, two renderers, and the answer has to be the same one.
+
+	The oracle above says the algorithm is right; this says the two
+	spellings of it are. They fail for different reasons -- a wrong
+	program fails there and passes here, a renderer that drops a cast or
+	an inclusive bound fails here and cannot fail there, because
+	`reedsolo` is only ever asked about one of the two.
+
+	Damage past `t` is included deliberately and the oracle case excludes
+	it for a good reason: past `t` the right answer is undefined, so
+	`reedsolo` and situ are entitled to differ -- but situ's two
+	renderings are not. A refusal is a verdict and both must reach it.
+	"""
+	c_encode, c_decode = _reed_solomon(kernel_library, name)
+	py_encode = kernel_python[f"{name}_encode"]
+	py_decode = kernel_python[f"{name}_decode"]
+	nroots = n - k
+
+	random.seed(20260922)
+	for errors in range(0, nroots // 2 + 3):
+		data   = bytes(random.randrange(256) for _ in range(k))
+		buffer = (ctypes.c_uint8 * k)(*data)
+		parity = (ctypes.c_uint8 * nroots)()
+		c_encode(buffer, k, parity)  # type: ignore[operator]
+
+		theirs = bytearray(nroots)
+		py_encode(data, theirs)  # type: ignore[operator]
+		assert bytes(parity) == bytes(theirs), (
+			f"{name}: the two renderings disagree about the parity")
+
+		whole = bytearray(data + bytes(parity))
+		for spot in random.sample(range(n), errors):
+			whole[spot] ^= 0xFF
+
+		block = (ctypes.c_uint8 * n)(*whole)
+		mine  = c_decode(block, n)  # type: ignore[operator]
+		yours = py_decode(bytearray(whole))  # type: ignore[operator]
+
+		assert mine == yours, (
+			f"{name}: C returned {mine} and Python {yours} for {errors} "
+			f"damaged symbols")
+
+
+def test_a_reed_solomon_decoder_refuses_a_block_of_the_wrong_length(
+		kernel_python: dict[str, object]) -> None:
+	"""The one failure the length check exists for, in the rendering that
+	cannot fall back on a compiler.
+
+	C's decoder takes a pointer and a length and would read past the
+	block without it; Python's takes a `bytearray` and would index a
+	short list. Both refuse, and both refuse through the same statement
+	of the program rather than through their own guard.
+	"""
+	decode = kernel_python["reed_solomon_64_56_decode"]
+
+	for length in (0, 63, 65):
+		assert decode(bytearray(length)) == -1, (  # type: ignore[operator]
+			f"a {length}-byte block was accepted by a 64-byte code")
+
+
+# -- the program's free names, which each renderer resolves (26.462) --------
+
+
+def _program_arrays(body: tuple[Stmt, ...]) -> tuple[set[str], set[str]]:
+	"""Every array the program indexes, and every one it declares."""
+	indexed: set[str] = set()
+	declared: set[str] = set()
+
+	def read(node: Expr) -> None:
+		if isinstance(node, Index):
+			indexed.add(node.array)
+			read(node.at)
+		elif isinstance(node, Gf):
+			for argument in node.args:
+				read(argument)
+		elif isinstance(node, Binary):
+			read(node.left)
+			read(node.right)
+
+	def walk(statements: tuple[Stmt, ...]) -> None:
+		for statement in statements:
+			if isinstance(statement, Array):
+				declared.add(statement.name)
+			elif isinstance(statement, Loop):
+				read(statement.start)
+				read(statement.limit)
+				walk(statement.body)
+			elif isinstance(statement, If):
+				read(statement.cond)
+				walk(statement.body)
+				walk(statement.orelse)
+			elif isinstance(statement, Declare):
+				read(statement.init)
+			elif isinstance(statement, (Assign, XorAssign)):
+				read(statement.target)
+				read(statement.value)
+			elif isinstance(statement, Return):
+				read(statement.value)
+
+	walk(body)
+	return indexed, declared
+
+
+def test_every_array_the_program_names_is_one_a_renderer_resolves() -> None:
+	"""A free array is a parameter or a file-scope table, and nothing else.
+
+	The renderers divide the names three ways: an `Array` statement is a
+	local, a name in `_C_SHARED` carries the codec's prefix, and the rest
+	are parameters of the function being rendered. Nothing in either
+	renderer refuses a fourth kind -- a table added to the program and
+	left out of both sets renders as a bare identifier that neither
+	backend defines, which is a compile error in C and a `NameError` in
+	Python, a long way from the line that caused it.
+
+	So the partition is asserted rather than the membership: every array
+	the program indexes is accounted for by one of the three, in both
+	programs. `evidence.md` calls this asserting the population -- the
+	fourth cell is empty today and this is what notices when something
+	arrives in it.
+	"""
+	for label, program, parameters in (
+			("decoder", rs_decoder_program(255, 32, 0, 255), {"block"}),
+			("encoder", rs_encoder_program(32, 223), {"data", "parity"})):
+		indexed, declared = _program_arrays(program)
+
+		# Liveness on `indexed` rather than on `declared`: the encoder
+		# writes into a parameter and declares no local array at all, so
+		# an empty `declared` is a fact about it and an empty `indexed`
+		# would be the walk having read nothing.
+		assert indexed, f"{label}: no arrays found; this is reading nothing"
+		assert indexed >= declared, (
+			f"{label}: {sorted(declared - indexed)} are declared and never "
+			f"indexed")
+
+		loose = indexed - declared - parameters - _C_SHARED
+		assert not loose, (
+			f"{label}: {sorted(loose)} are neither a local, a parameter nor a "
+			f"shared table, so both renderers would emit an undefined name")
+
+		assert _C_SHARED == _PY_SHARED, (
+			"the two renderers disagree about which arrays are file-scope "
+			"tables, so one of them would emit an undefined name")

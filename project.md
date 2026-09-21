@@ -30711,6 +30711,64 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.462 The Reed-Solomon decoder, expressed once
+
+**The second and third of 26.457's three steps, and the sentence 0017
+makes is now true of Reed-Solomon.** The encoder and the decoder are a
+statement tree in `codegen/kernel_program.py`; C and Python each carry a
+renderer for it, and neither carries the algorithm. Coverage is 41 of
+42: Python generates both RS codecs, where it declined them before.
+
+**Why a tree and not a reference implementation.** An executable Python
+`rs_decode` beside C's string literals would have been cheaper and would
+have bought a witness, not a fix: C would still hold a hand-written
+Berlekamp-Massey, and a Rust port would still have had to transcribe
+one. What 26.457 asked for was that the backends RENDER, and rendering
+needs the algorithm in a form a backend can walk.
+
+**The language is deliberately too small to be an IR.** Eleven statement
+kinds and five expression kinds, chosen by writing the decoder and
+stopping: enough for a fixed array, a loop with a runtime bound, a
+field-arithmetic call and an early return, and nothing else. A second
+algorithm wanting it is the moment to ask whether situ should have an
+IR, not a reason to widen this one now.
+
+**The two renderers are 160 lines of C spelling and 88 of Python, and
+the asymmetry is the argument.** C needs types, casts and loop-variable
+declarations; Python needs a colon. The second backend cost a page where
+transcribing the decoder would have cost the algorithm again -- and the
+third, if Rust's no-panic indexing question is answered, costs a page
+too.
+
+**Three differentials, and they fail for different reasons.** The
+`reedsolo` pairing from 26.458 now runs against both renderings, because
+one program wrong in the tree is wrong in both backends at once and
+their agreeing proves nothing -- `evidence.md`'s two documents and one
+witness, manufactured by the very sharing this entry is about. A
+C-against-Python case covers what `reedsolo` cannot be asked: damage
+past `t`, where the right answer is undefined and the two renderings
+must still reach the same verdict. And a wrong-length block, which is
+the one refusal the program itself states.
+
+**Each was seen to fail through itself.** Rendering C's inclusive loops
+as half-open fails the C oracle and the cross-check and leaves the
+Python oracle green; doing the same to Python fails the other two;
+removing the length check fails only the refusal case.
+
+**What the corpus diff shows, read rather than counted.** Two files
+change out of 126 generated across every schema in the tree -- C's
+kernels and Python's. C's is a re-spelling throughout: `len` becomes
+`length`, `lambda` becomes `locator` because `lambda` is a name Python
+will not take, an array is zeroed at its declaration rather than by a
+loop, and `0` becomes `0u`. Python's removes two decline notes and adds
+two codecs.
+
+**One thing is worse and is not worth machinery.** The renderer does not
+wrap, so the Berlekamp-Massey update is one 184-column line where the
+hand-written C broke it over three. Generated C here has no width gate
+and already carries longer lines than that, and the algorithm is now
+readable in one place that is not generated at all.
+
 ### 26.461 The Reed-Solomon derivation moves to where it can be shared
 
 **The first of the three steps 26.457 named, and the only one that needs

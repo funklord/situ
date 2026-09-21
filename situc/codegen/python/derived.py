@@ -35,7 +35,15 @@ from math import lcm
 
 from situc import ast
 from situc.codegen.kernel_math import (crc_register, crc_shift, crc_start,
-                                       crc_table, crc_width, number, reverse)
+                                       crc_table, crc_width, gf_tables,
+                                       number, reverse,
+                                       rs_generator_coefficients)
+from situc.codegen.kernel_program import (Array, Assign, Binary, Blank,
+                                          Comment, Declare, Expr, Gf, If,
+                                          Increment, Index, Lit, Loop, Name,
+                                          Return, Stmt, XorAssign,
+                                          rs_decoder_program,
+                                          rs_encoder_program)
 from situc.codegen.python.emit import py_name
 from situc import __version__
 
@@ -1047,9 +1055,9 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	if kernel.family is ast.KernelFamily.POLYNOMIAL:
 		# A polynomial over an extension field is Reed-Solomon, which is a
-		# different code and not one of the two this backend generates.
+		# different code and has its own emitter.
 		if kernel.argument("field") is not None:
-			return None
+			return _reed_solomon(decl, prefix)
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
@@ -1304,3 +1312,194 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\t\ttotal = (total & 0xFFFF) + (total >> 16)",
 		f"\treturn {final}",
 	]
+
+
+# ---------------------------------------------------------------------------
+# Reed-Solomon
+# ---------------------------------------------------------------------------
+
+
+def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""Python's spelling of `kernel_program`'s encoder and decoder.
+
+	The algorithm is not here, and putting it here is the mistake this
+	whole arrangement exists to prevent: 26.457 measured Reed-Solomon as
+	250 lines of C against 39 of shared derivation, and a second backend
+	that transcribed Berlekamp-Massey, the Chien search and Forney's
+	formula by hand would be doing the thing 0017 was written after.
+	What this function decides is where Python puts a colon.
+
+	Python's integers do not wrap, and nothing here needs them to: every
+	value is a field element that arrives from a table or an xor of two
+	of them, so the mask the CRC codecs carry has nothing to do.
+	"""
+	field = number(decl, "field")
+	n     = number(decl, "n")
+	k     = number(decl, "k")
+
+	if field != 256 or not n or not k:
+		return None
+
+	primitive  = number(decl, "primitive", 0x11D)
+	first_root = number(decl, "first_root", 0)
+	nroots     = n - k
+	size       = field - 1
+
+	exp, log = gf_tables(field, primitive)
+
+	# Constant term first, as C's is: the division loop indexes from the
+	# low end, which is the standard formulation.
+	generator = list(reversed(
+		rs_generator_coefficients(nroots, first_root, exp, log, size)))
+
+	name   = _ident(prefix, decl.name)
+	inner  = f"_{name}"
+	render = _PyRenderer(inner)
+
+	return [
+		"",
+		"",
+		f"#: `{decl.name}`: Reed-Solomon({n}, {k}) over GF({field}),",
+		f"#: primitive polynomial 0x{primitive:X}, first root alpha^"
+		f"{first_root}.",
+		f"#: {nroots} parity symbols, correcting up to {nroots // 2} symbol",
+		"#: errors anywhere in the block. Systematic: the message sits",
+		"#: verbatim ahead of the parity.",
+		*_py_table(f"{inner}_exp", exp),
+		*_py_table(f"{inner}_log", log),
+		*_py_table(f"{inner}_generator", generator),
+		"",
+		"",
+		f"def {inner}_mul(a: int, b: int) -> int:",
+		"\tif a == 0 or b == 0:",
+		"\t\treturn 0",
+		f"\treturn {inner}_exp[{inner}_log[a] + {inner}_log[b]]",
+		"",
+		"",
+		f"def {inner}_inv(a: int) -> int:",
+		f"\treturn {inner}_exp[{size} - {inner}_log[a]]",
+		"",
+		"",
+		f"def {inner}_pow(power: int) -> int:",
+		f"\treturn {inner}_exp[power % {size}]",
+		"",
+		"",
+		f"def {name}_encode(data: bytes, parity: bytearray) -> int:",
+		'\t"""The parity of a message, written into `parity`.',
+		"",
+		f"\tReturns {nroots}, or 0 where `data` is not {k} bytes."
+		'"""',
+		"\tlength = len(data)",
+		*render.render(rs_encoder_program(nroots, k), 1),
+		"",
+		"",
+		f"def {name}_decode(block: bytearray) -> int:",
+		'\t"""Correct `block` in place.',
+		"",
+		"\tReturns the number of symbols corrected, or -1 where the block",
+		"\tholds more errors than the code can correct -- which it detects",
+		"\trather than guessing at, because a miscorrection is worse than a",
+		'\trefusal."""',
+		"\tlength = len(block)",
+		*render.render(rs_decoder_program(n, nroots, first_root, size), 1),
+	]
+
+
+def _py_table(name: str, values: list[int]) -> list[str]:
+	"""A field table as a tuple, sixteen to a line as C writes it."""
+	rows = []
+	for start in range(0, len(values), 16):
+		rows.append("\t" + ", ".join(f"0x{value:02X}"
+		                             for value in values[start:start + 16])
+		            + ",")
+	return ["", f"{name}: tuple[int, ...] = (", *rows, ")"]
+
+
+class _PyRenderer:
+	"""How Python spells the statements of `kernel_program`.
+
+	Shorter than C's by everything C needs and Python does not: no types,
+	no casts, no separate declaration of a loop variable. That asymmetry
+	is the argument for the arrangement -- the second backend cost a page,
+	where transcribing the decoder would have cost the algorithm again.
+	"""
+
+	def __init__(self, name: str) -> None:
+		self.name = name
+
+	def expr(self, node: Expr) -> str:
+		if isinstance(node, Lit):
+			return str(node.value)
+		if isinstance(node, Name):
+			return node.name
+		if isinstance(node, Index):
+			return f"{self.array(node.array)}[{self.bare(node.at)}]"
+		if isinstance(node, Gf):
+			args = ", ".join(self.bare(arg) for arg in node.args)
+			return f"{self.name}_{node.op}({args})"
+		return f"({self.bare(node)})"
+
+	def bare(self, node: Expr) -> str:
+		"""An expression the surrounding syntax already delimits."""
+		if isinstance(node, Binary):
+			return (f"{self.expr(node.left)} {node.op} "
+			        f"{self.expr(node.right)}")
+		return self.expr(node)
+
+	def array(self, name: str) -> str:
+		if name in _PY_SHARED:
+			return f"{self.name}_{name}"
+		return name
+
+	def render(self, body: tuple[Stmt, ...], depth: int) -> list[str]:
+		pad = "\t" * depth
+		out: list[str] = []
+
+		for statement in body:
+			if isinstance(statement, Blank):
+				out.append("")
+			elif isinstance(statement, Comment):
+				out.extend(f"{pad}# {line}" for line in statement.lines)
+			elif isinstance(statement, Array):
+				out.append(f"{pad}{statement.name} = "
+				           f"[0] * {statement.length}")
+			elif isinstance(statement, Declare):
+				out.append(f"{pad}{statement.name} = "
+				           f"{self.bare(statement.init)}")
+			elif isinstance(statement, Assign):
+				out.append(f"{pad}{self.expr(statement.target)} = "
+				           f"{self.bare(statement.value)}")
+			elif isinstance(statement, XorAssign):
+				out.append(f"{pad}{self.expr(statement.target)} ^= "
+				           f"{self.bare(statement.value)}")
+			elif isinstance(statement, Increment):
+				out.append(f"{pad}{statement.name} += 1")
+			elif isinstance(statement, Loop):
+				out.extend(self.loop(statement, pad, depth))
+			elif isinstance(statement, If):
+				out.append(f"{pad}if {self.bare(statement.cond)}:")
+				out.extend(self.render(statement.body, depth + 1))
+				if statement.orelse:
+					out.append(f"{pad}else:")
+					out.extend(self.render(statement.orelse, depth + 1))
+			elif isinstance(statement, Return):
+				out.append(f"{pad}return {self.bare(statement.value)}")
+			else:
+				out.append(f"{pad}continue")
+
+		return out
+
+	def loop(self, statement: Loop, pad: str, depth: int) -> list[str]:
+		limit = self.bare(statement.limit)
+		if statement.inclusive:
+			limit = f"{limit} + 1"
+		step = f", {statement.step}" if statement.step != 1 else ""
+		return [
+			f"{pad}for {statement.var} in "
+			f"range({self.bare(statement.start)}, {limit}{step}):",
+			*self.render(statement.body, depth + 1),
+		]
+
+
+#: As C's: the program's arrays that are module tables rather than locals.
+_PY_SHARED = {"generator"}
