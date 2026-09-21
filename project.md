@@ -30711,6 +30711,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.463 A harness that names accessors the backend stopped writing
+
+**`make test` had been red before this session touched it, and the unit
+suite could not see it.** The generated C fuzz harness for
+`test/schema/edges.situ` calls `situ_delimited_arm_held_line_get` and
+`situ_wide_delim_arm_held_code_get`, which the header does not declare,
+and passes a `uint8_t *` where `situ_typed_kind_held_named_get` wants a
+`situ_arm_kind_t *`. Three errors, measured by compiling the harness
+generated at `fba9ee5` -- the commit before this session's first.
+
+**This session made it four.** 26.444's `separated_arm` fixture is a
+delimited arm, so it landed in the same branch and added a fourth
+instance of a defect already there. That is *put the construct in the
+corpus* working exactly as intended and being read by nobody, because
+nothing between the fixture landing and now compiled the harness.
+
+**The cause is a docstring that claimed exhaustiveness.** `_arm_reads`
+says its four shapes "are the four `_arm_member` emits, in its order, so
+this names an accessor exactly when that one wrote it". The emitter had
+grown a fifth branch AHEAD of the others at 26.423 -- a delimited arm
+gets `_ptr` and `_len` rather than a one-byte `_get` -- and the harness
+kept the old four. `evidence.md`'s *a name that claims exhaustiveness is
+not a check that achieved it*: the assertion was fine and the
+enumeration was short by one.
+
+**The second half is the same fault one member family over, already
+fixed there.** `_versioned_read` carries a comment saying an enum
+member's out-parameter is `situ_dialect_t *` and `uint8_t *` is not
+that, "which nothing noticed while no versioned member had ever been an
+enum". `_arm_reads` had never been told. Both read the type from one
+helper now.
+
+**Why it survived: the fast gate reads the file and the slow gate
+compiles it.** The unit suite generates this harness on every run --
+`test_every_fuzzable_struct_reaches_the_harness` walks every schema --
+and asserts on its TEXT. The only thing that compiles it is a
+`make test` target that takes three quarters of an hour. So a build
+failure sat in a file the fast gate read on every run, for at least
+thirteen commits.
+
+**The guard asks the cheap half of the compiler's question.** Over every
+schema, without needing a compiler: every `situ_` function the harness
+calls must be one the header declares. It cannot see a wrong argument
+type, and says so rather than implying it covers one; a named test
+covers the enum instance and `make test` covers the rest. Liveness is a
+partition rather than a per-schema claim, because `register.situ`,
+`std/codecs.situ` and `std/kernels.situ` honestly have nothing to fuzz
+-- an empty call set is their fact, and an empty one with a harness body
+in it is the test reading nothing.
+
+**42 of 42 harnesses compile now**, checked by generating each schema's
+header and harness and running the build's own warning set over them;
+the sweep was shown capable of reporting a failure by pointing it at the
+unfixed generator, which it named.
+
 ### 26.462 The Reed-Solomon decoder, expressed once
 
 **The second and third of 26.457's three steps, and the sentence 0017

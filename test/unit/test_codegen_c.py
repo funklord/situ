@@ -842,6 +842,119 @@ def test_every_fuzzable_struct_reaches_the_harness(path: Path) -> None:
 			f"{path.name}: the entry point never dispatches to `{name}`"
 
 
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_fuzz_harness_calls_only_accessors_the_header_declares(
+		path: Path) -> None:
+	"""The harness and the emitter must agree about which accessor an arm
+	gets, and for three arms in `edges.situ` they did not.
+
+	`_arm_reads` says in as many words that its four shapes "are the four
+	`_arm_member` emits, in its order, so this names an accessor exactly
+	when that one wrote it". The emitter had grown a fifth branch ahead
+	of the others -- a delimited arm gets `_ptr` and `_len`, not a
+	one-byte `_get` (26.423) -- and the harness kept the old four, so it
+	called `situ_delimited_arm_held_line_get`, which nothing defines. A
+	name that claims exhaustiveness over a hand-written enumeration, and
+	the enumeration was short by one.
+
+	Nothing reported it because the unit suite generates the harness and
+	never compiles it, while the target that does compile it lives in
+	`make test`: a build failure that only the slow gate could see, in a
+	file the fast gate reads every run.
+
+	So this asks the cheap half of the compiler's question, over every
+	schema and without needing one: every `situ_` function the harness
+	CALLS must be one the header DECLARES. It cannot see a wrong argument
+	type -- `test_a_typed_arm_is_read_at_the_accessor_s_type` covers the
+	instance of that, and `make test` covers the rest.
+	"""
+	from situc.codegen.c import fuzz
+
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	header   = generate(schema, resolved, path.stem).header
+	harness  = fuzz.generate(schema, resolved, path.stem)
+
+	called   = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", harness))
+	declared = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", header))
+
+	# The harness defines a few of its own, and the runtime declares the
+	# rest: `situ_view_*`, `situ_fuzz_sink`, and whatever `situ.h` offers.
+	own = set(re.findall(r"\bstatic\s+\w+\s+(situ_[A-Za-z0-9_]+)\s*\(",
+	                     harness))
+	runtime = set(re.findall(
+		r"\b(situ_[A-Za-z0-9_]+)\s*\(",
+		(RUNTIME / "situ.h").read_text(encoding="ascii")))
+
+	# Liveness, as a partition rather than a per-schema claim: three
+	# schemas here have nothing to fuzz -- `register.situ` because a
+	# register is a bus transaction rather than bytes off a wire, and
+	# `std/codecs.situ` and `std/kernels.situ` because they declare no
+	# struct at all. Their harness holds no `fuzz_` body, so an empty
+	# call set is the schema's fact. An empty one with a body in it is
+	# this test reading nothing, and says so.
+	bodies = re.findall(r"^static void fuzz_", harness, re.M)
+	assert called or not bodies, (
+		f"{path.name}: {len(bodies)} harness bodies and no accessor call "
+		f"found; this is reading nothing")
+
+	missing = sorted(called - declared - own - runtime)
+	assert not missing, (
+		f"{path.name}: the harness calls {missing}, which the header does "
+		f"not declare -- a build failure `make test` would find and this "
+		f"suite would not")
+
+
+def test_a_typed_arm_is_read_at_the_accessor_s_type() -> None:
+	"""An enum arm's out-parameter is `situ_<enum>_t *`, not `uint8_t *`.
+
+	The harness declared the backing WIDTH and the header declared the
+	TYPE, which nothing noticed while no arm had ever been an enum.
+	`_versioned_read` had the identical fault one member family over, so
+	the reading is one helper now rather than two.
+	"""
+	text = fuzz_source(
+		"enum kind : u8 { one = 1, two = 2, default = error }\n"
+		"struct S {\n"
+		"\tu8 tag;\n"
+		"\tvariant held switch (tag) {\n"
+		"\t\tcase 1: kind named;\n"
+		"\t\tcase 2: u8   raw;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"\tu8 tail;\n"
+		"}\n")
+
+	assert "situ_kind_t held = 0;" in text, (
+		"the enum arm was read at its backing width, which is not the "
+		"type the accessor's out-parameter has")
+	assert "situ_S_held_named_get(view, &held)" in text
+
+
+def test_a_delimited_arm_is_read_as_the_span_it_is() -> None:
+	"""A delimited arm has `_ptr` and `_len`, and no one-byte `_get`.
+
+	Sabotaging this is what the compiler would have said: the harness
+	names a function the backend declined to write, which is a build
+	failure rather than a wrong read, and it is the shape 26.463 fixes.
+	"""
+	text = fuzz_source(
+		"struct S {\n"
+		"\tu8 pick;\n"
+		"\tvariant held switch (pick) {\n"
+		"\t\tcase 1: u8 line[] until \"\\n\";\n"
+		"\t\tcase 2: u8 raw;\n"
+		"\t\tdefault: error;\n"
+		"\t}\n"
+		"}\n")
+
+	assert "situ_S_held_line_ptr(view, &held, &n)" in text
+	assert "situ_S_held_line_get(" not in text, (
+		"a delimited arm got the one-byte getter the emitter stopped "
+		"writing at 26.423")
+
+
 def test_fuzz_harness_reads_every_accessor() -> None:
 	text = fuzz_source("struct S { u32 a; u8 b; u3 c; u5 d; }")
 	for field in ("a", "b", "c", "d"):

@@ -526,12 +526,36 @@ def _arm_reads(struct: ResolvedStruct, placement: Placement, prefix: str,
 		scalar = member.scalar
 		local  = c_name(member.path[len(struct.name) + 1 :])
 
-		# 1. A plain scalar arm.
+		# 0. A DELIMITED arm, ahead of the scalar branch it otherwise
+		# satisfies. `u8 line[] until "\n"` has a `scalar` and no
+		# `array_count`, so it took that branch and this harness named a
+		# one-byte getter the backend emits no such thing for -- three
+		# arms in `edges.situ` and a build failure in all three, which
+		# nothing reported because `make test` builds the harness and the
+		# unit suite does not. `_arm_member` tests `delimiters` first for
+		# the reason 26.423 gives, and this is that test in the consumer
+		# that has to ask the same question.
+		#
+		# More than one delimiter and the backend emits NO accessor at
+		# all, only a note saying it does not scan for several inside an
+		# arm yet. So this emits nothing either: a harness that names a
+		# function the backend declined to write is the failure being
+		# fixed, not a second way to have it.
+		if member.delimiters and scalar is not None:
+			if len(member.delimiters) == 1:
+				lines.extend(_span_read(struct, local, prefix))
+			continue
+
+		# 1. A plain scalar arm. The ACCESSOR's type, not the backing
+		# width: an enum arm's out-parameter is `situ_arm_kind_t *` and
+		# `uint8_t *` is not that. `_versioned_read` learned this one
+		# member family over and this branch did not, which is why the
+		# type now comes from one helper rather than two readings.
 		if scalar is not None and member.array_count is None \
 				and member.sized_by is None and not data_sized(member):
 			lines.extend([
 				"\t{",
-				f"\t\t{_ctype_of(member)} held = 0;",
+				f"\t\t{_held_type(member, resolved, prefix)} held = 0;",
 				"",
 				f"\t\tif ({ident(prefix, struct.name, local, 'get')}"
 				"(view, &held) == SITU_OK) {",
@@ -546,18 +570,7 @@ def _arm_reads(struct: ResolvedStruct, placement: Placement, prefix: str,
 		# extent shows up at the end rather than the start.
 		if scalar is not None and scalar.bits == BITS_PER_BYTE \
 				and not indexed_elements(member):
-			lines.extend([
-				"\t{",
-				"\t\tconst uint8_t *held = NULL;",
-				"\t\tuint32_t       n    = 0u;",
-				"",
-				f"\t\tif ({ident(prefix, struct.name, local, 'ptr')}"
-				"(view, &held, &n) == SITU_OK",
-				"\t\t\t\t&& held != NULL && n != 0u) {",
-				"\t\t\tsitu_fuzz_sink((uint64_t)held[n - 1u]);",
-				"\t\t}",
-				"\t}",
-			])
+			lines.extend(_span_read(struct, local, prefix))
 			continue
 
 		# 3. A run of values wider than a byte: a count and an indexed
@@ -895,6 +908,44 @@ def _walk_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
 		"\t\t}",
 		"\t}",
 	]
+
+
+def _span_read(struct: ResolvedStruct, local: str, prefix: str) -> list[str]:
+	"""A run of bytes through `_ptr`, reading the last byte it claims.
+
+	One helper because two branches of `_arm_reads` want it: a run whose
+	count the schema states, and a run a delimiter ends. The backend
+	emits the same `_ptr` for both -- pointer and length out through
+	parameters, because the gate needs an error return -- so a second
+	copy here would be a second thing to be wrong.
+	"""
+	return [
+		"\t{",
+		"\t\tconst uint8_t *held = NULL;",
+		"\t\tuint32_t       n    = 0u;",
+		"",
+		f"\t\tif ({ident(prefix, struct.name, local, 'ptr')}"
+		"(view, &held, &n) == SITU_OK",
+		"\t\t\t\t&& held != NULL && n != 0u) {",
+		"\t\t\tsitu_fuzz_sink((uint64_t)held[n - 1u]);",
+		"\t\t}",
+		"\t}",
+	]
+
+
+def _held_type(placement: Placement, resolved: ResolvedSchema,
+		prefix: str) -> str:
+	"""The type the ACCESSOR hands back, which is not always the width.
+
+	An enum member's out-parameter is `situ_<enum>_t *`, and `uint8_t *`
+	is not that -- the harness declared the width, the header declared
+	the type, and the two disagreed for as long as no arm had been an
+	enum. `_versioned_read` had the same fault and the same fix; this is
+	the reading both now share.
+	"""
+	if placement.type_name in resolved.layout.env.enums:
+		return ident(prefix, placement.type_name or "") + "_t"
+	return _ctype_of(placement)
 
 
 def _versioned_read(struct: ResolvedStruct, placement: Placement, local: str,
