@@ -99,11 +99,20 @@ require absolute_static(cpio_header);
 struct cpio_entry {
 	cpio_header  header;
 
-	// `namesize` counts the NUL, so this is the whole name field. It is
-	// `[nul_terminated]` because the format says so and because a reader who
-	// takes these bytes as a string needs to know the terminator is inside
-	// the count rather than after it.
-	u8  name[header.namesize]  [nul_terminated];
+	// `namesize` counts the NUL, so this is the whole name field and the
+	// terminator is inside the count rather than after it. A reader taking
+	// these bytes as a string needs to know that, which is why it is said
+	// here.
+	//
+	// It is NOT `[nul_terminated]`, and that attribute is refused on a
+	// member the message sizes. 973 reads the declared size as a CAPACITY
+	// with the content running to the first zero, which needs the capacity
+	// and the content to be two numbers; `namesize` is one number and the
+	// content already is it. The attribute was carried here and enforced by
+	// no backend -- C skipped this path by design and C++ emitted a check
+	// over zero bytes that refused every entry until 26.447 -- so the
+	// schema was stating what nothing checked. Settled 2026-09-21.
+	u8  name[header.namesize];
 
 	// initramfs.c:73. `N_ALIGN(len)` is `(((len) + 1) & ~3) + 2`, which is
 	// the distance from the start of a 110-byte header to the file data --

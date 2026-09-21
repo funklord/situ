@@ -30711,6 +30711,57 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.459 `[nul_terminated]` wants a count the schema states
+
+**Settled by the copyright holder 2026-09-21: refused.** 26.447 recorded
+three answers and named a fourth that none of the three documents gave --
+refuse the combination so the author is told -- and that is the one taken.
+
+**The argument is 973's own.** It reads the declared size as a CAPACITY,
+with the content running to the first zero. That needs the capacity and
+the content to be two different numbers. `name[16]` has them: sixteen
+bytes of room for a name that may be shorter. `name[n]` has one number,
+and that number already IS the content, so there is nothing for a
+terminator to be inside of.
+
+**It was accepted and enforced by nobody, in all four backends.** C
+skipped the path by design and said so; C++ emitted a check with a
+length of zero that refused every message until 26.447; Rust and Python
+emitted nothing. The refusal's own notes are the argument: "nothing
+reads it in this position, so the generated code is byte-identical to
+the schema without it", and "a schema that states what the generated
+code does not enforce is worse than one that states nothing".
+
+**One corpus schema carried it and its capability map was wrong because
+of it.** `cpio_entry.name` was `u8 name[header.namesize] [nul_terminated]`
+-- and `namesize` COUNTS the NUL, so the field has no slack past the
+terminator at all. The attribute was nevertheless propagating
+`canonical = NonCanonical`, whose justification is that bytes past the
+terminator do not affect the value and two buffers differing only there
+mean the same thing. In cpio no such pair exists. Removing the attribute
+made the map MORE accurate, not less: `cpio_entry` is canonical, and the
+fact a reader needs -- the terminator is inside the count -- is still
+said, in prose, where it makes no promise about enforcement.
+
+**The refusal reaches a variant arm, measured rather than assumed.** A
+refusal that misses an arm ACCEPTS a schema the language forbids, which
+is this tree's most productive defect class. The arm form of the
+message-sized case is refused and the arm form of the LITERAL case is
+still accepted, so the walk reaches arms without the narrowing
+swallowing them.
+
+**What it cost: one schema line and one test's accepted example.** Every
+other use in the corpus and in the suite is a literal count and stays
+legal. `test_the_four_held_attributes_are_placed` had `u8 c[n]
+[nul_terminated]` as its ACCEPTED case -- a test that had encoded the
+old behaviour, which is what a decision like this is expected to turn
+up.
+
+**The emitter guards are now unreachable and are left alone.** C's skip
+and the three added in 26.447 can no longer be reached, the language
+having refused the shape upstream. They are belt-and-braces rather than
+policy; the policy lives in one place, and that place is the refusal.
+
 ### 26.458 An exemption whose reason had stopped being true
 
 **`CRC_UNCHECKED` is empty.** It held the two Reed-Solomon codecs, excused

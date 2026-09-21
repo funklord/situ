@@ -79,11 +79,13 @@ def test_the_four_backends_enforce_an_encoding_on_either_spelling(
 def test_a_real_cpio_entry_is_not_refused(tmp_path: Path) -> None:
 	"""The corpus payoff, and the reason this was worth chasing.
 
-	`cpio_entry.name` is `u8 name[header.namesize] [nul_terminated]`, and
-	the same zero count made generated C++ emit
+	`cpio_entry.name` WAS `u8 name[header.namesize] [nul_terminated]`,
+	and the same zero count made generated C++ emit
 	`situ_nul_terminated(name().data(), 0)` -- which is false for every
 	input, so that backend refused EVERY cpio entry, this project's own
-	golden vector included.
+	golden vector included. The attribute is gone from that schema now
+	and refused by the language (26.459); the count is still
+	message-sized, which is what this test needs of it.
 
 	Nothing caught it because the vectors are checked by `situc verify`,
 	which runs the accessors in memory through Python -- and Python was

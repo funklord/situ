@@ -2146,10 +2146,31 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 
 	if attr.name == "nul_terminated":
 		array = getattr(member, "array", None)
-		if array is not None and getattr(member, "until", None) is None:
-			return None
-		return ("a counted byte array -- the terminator sits inside a field "
-		        "whose extent something else already decides (8.6)")
+		if array is None or getattr(member, "until", None) is not None:
+			return ("a counted byte array -- the terminator sits inside a "
+			        "field whose extent something else already decides "
+			        "(8.6)")
+		# And the count has to be one the SCHEMA states. 973 reads the
+		# declared size as a CAPACITY, with the content running to the
+		# first zero -- which needs the two to be different numbers.
+		# `name[16]` has a capacity; `name[n]` has only the length the
+		# message declares, and that length already IS the content, so
+		# there is nothing for a terminator to be inside of.
+		#
+		# It was accepted and inert: C skipped it on this path by
+		# design, C++ emitted a check with a length of zero that refused
+		# every message until 26.447, and the other two emitted nothing.
+		# Four backends, no enforcement, and a schema saying otherwise --
+		# which is the state the notes on this refusal call worse than
+		# saying nothing. Settled by the copyright holder 2026-09-21
+		# after 26.447 recorded the three available answers; this is the
+		# one none of the three documents named.
+		if not isinstance(array.size, ast.IntLiteral):
+			return ("a byte array whose COUNT THE SCHEMA STATES -- "
+			        "`name[16]` declares a capacity for the terminator to "
+			        "sit inside, and `name[n]` declares only the length "
+			        "the message gives, which the content already is (8.6)")
+		return None
 
 	if attr.name == "must_be_zero":
 		if isinstance(member, ast.Reserved):

@@ -1088,7 +1088,7 @@ def test_the_four_held_attributes_are_placed() -> None:
 		assert expected in rendered(BUFFER + "struct b { %s }\n" % body), body
 
 	parse_text(BUFFER + 'struct b { u8 a[] until ":" [trim, case_insensitive];'
-	           " u8 n; u8 c[n] [nul_terminated]; }\n", path="s.situ")
+	           " u8 c[4] [nul_terminated]; }\n", path="s.situ")
 	assert wellformed.UNPLACED_ATTRS == frozenset({"secret", "non_canonical"})
 
 
@@ -2930,3 +2930,91 @@ def test_the_map_names_a_parameter_rather_than_placing_it() -> None:
 	body = next(one for one in rendered.splitlines()
 	            if one.strip().startswith("S.body"))
 	assert "offset=" in body and "size=" in body
+
+
+# ---------------------------------------------------------------------------
+# `[nul_terminated]` wants a count the schema states (26.459)
+# ---------------------------------------------------------------------------
+
+PREFIX = "target buffer;\nendian big;\n"
+
+
+def test_nul_terminated_needs_a_count_the_schema_states() -> None:
+	"""973 reads the declared size as a CAPACITY with the content running
+	to the first zero, which needs the two to be different numbers.
+
+	`name[n]` declares only the length the message gives, and that length
+	already IS the content, so there is nothing for a terminator to be
+	inside of. It was accepted and enforced by nobody: C skipped the path
+	by design, C++ emitted a check over zero bytes that refused every
+	message until 26.447, and the other two emitted nothing.
+	"""
+	with pytest.raises(SituError) as raised:
+		parse_text(PREFIX + "struct s { u8 n; u8 name[n] [nul_terminated]; }")
+
+	# The rendered diagnostic, not `str(exc)`: the headline alone is the
+	# generic "means nothing here" that every misplaced attribute gets,
+	# so asserting on it would pass for a refusal about something else.
+	text = raised.value.diagnostic.render()
+	assert "`[nul_terminated]` means nothing here" in text
+	assert "COUNT THE SCHEMA STATES" in text
+	assert "worse than one that states nothing" in text
+
+
+def test_nul_terminated_on_remaining_is_refused_too() -> None:
+	"""`[remaining]` is the same absence of a capacity, spelled shorter."""
+	with pytest.raises(SituError):
+		parse_text(PREFIX
+		           + "struct s { u8 name[remaining] [nul_terminated]; }")
+
+
+def test_nul_terminated_on_a_literal_count_is_still_accepted() -> None:
+	"""The control, and it is the whole of what the refusal must not cost.
+
+	A literal count IS a capacity: sixteen bytes of room for a name that
+	may be shorter, with the terminator somewhere inside. Every use in
+	the corpus and in this suite is this shape, which is why the refusal
+	cost one schema line rather than a rewrite.
+	"""
+	schema = parse_text(PREFIX + "struct s { u8 name[16] [nul_terminated]; }")
+	assert schema is not None
+
+	# And the pairing with an encoding, which is the other corpus shape.
+	both = parse_text(
+		PREFIX + "struct s { u8 name[16] [nul_terminated, encoding = utf8]; }")
+	assert both is not None
+
+
+def test_a_delimited_member_is_still_refused_for_its_own_reason() -> None:
+	"""The refusal that was already there, which the new one sits beside.
+
+	`until` has no declared size to be the capacity of, so it is refused
+	as a PLACEMENT rather than for the count -- a different sentence, and
+	this is what says the narrowing did not swallow it.
+	"""
+	with pytest.raises(SituError) as raised:
+		parse_text(PREFIX
+		           + 'struct s { u8 name[] until "\\n" [nul_terminated]; }')
+
+	assert "nul_terminated" in str(raised.value)
+
+
+def test_the_refusal_reaches_a_variant_arm() -> None:
+	"""A refusal that misses an arm ACCEPTS a schema the language forbids,
+	which is this tree's most productive defect class -- six instances in
+	five layers on 2026-09-19 alone, all of them a loop over
+	`struct.members` that a variant's arm is not in.
+
+	Measured rather than assumed: the arm form of the message-sized case
+	is refused, and the arm form of the LITERAL case is still accepted,
+	so the walk reaches arms without the narrowing swallowing them.
+	"""
+	arm = (PREFIX + "struct s { u8 n; u8 pick; variant v switch (pick) {\n"
+	       "  case 1: u8 name[n] [nul_terminated];\n  default: error;\n} }")
+	with pytest.raises(SituError) as raised:
+		parse_text(arm)
+	assert "COUNT THE SCHEMA STATES" in raised.value.diagnostic.render()
+
+	legal = (PREFIX + "struct s { u8 pick; variant v switch (pick) {\n"
+	         "  case 1: u8 name[4] [nul_terminated];\n  default: error;\n} }")
+	assert parse_text(legal) is not None
