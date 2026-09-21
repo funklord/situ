@@ -2793,7 +2793,11 @@ def _coverage_checks(suite: Suite, schema: ast.Schema,
 
 	for one in held:
 		if one.kind == "tag":
-			_span_check(suite, resolved, struct, prefix, extent, one.name)
+			# `local`, not `name`: a tag a NESTED member carries is reached
+			# through its path, so `signed_whole`'s inner obligation is
+			# `situ_signed_whole_piece_part_sig_covered`. The leaf is the
+			# MACRO's spelling and this named a function with it (26.464).
+			_span_check(suite, resolved, struct, prefix, extent, one.local)
 
 	_dirty_mask_check(suite, struct, held, prefix, extent)
 
@@ -2816,22 +2820,29 @@ def _coverage_checks(suite: Suite, schema: ast.Schema,
 		local  = c_name(entry.placement.path[len(struct.name) + 1:])
 		setter = ident(prefix, struct.name, local, "set")
 		ctype  = _ctype(entry.placement.scalar)
-		name   = c_name(one.name)
+		# As above: the accessor is named by the path and the bit by the
+		# leaf, and the two differ exactly when a nested member holds the
+		# obligation.
+		name  = c_name(one.local)
+		stale = _stale_test(struct, one, prefix)
+		why   = _why_stale(one)
 
-		if one.kind == "tag":
-			stale     = f"{ident(prefix, struct.name, name, 'is_dirty')}(&msg)"
-			discharge = f"{ident(prefix, struct.name, name, 'finalize')}(&msg);"
-			why       = ("Section 14.2 says a write to it leaves the tag stale "
-			             "and the\n\t * message refuses to be transmittable "
-			             "until finalize puts it right.")
-			# The recompute takes the view as well: it writes bytes, where
-			# finalize only reads them and stores a tag it was handed.
-		else:
-			stale     = f"{ident(prefix, struct.name, name, 'is_stale')}(&msg)"
-			discharge = f"{ident(prefix, struct.name, name, 'recompute')}(&msg, view);"
-			why       = ("Section 16.1 says a write to it leaves the derived "
-			             "field stale\n\t * and the message refuses to be "
-			             "transmittable until recompute puts it right.")
+		# EVERY obligation the write marks, not just the one this case is
+		# named for. `signed_whole.piece.a` sits inside the inner
+		# authenticated region and the outer one, so its setter marks two
+		# bits -- and a case that discharged one and then asserted the
+		# message was transmittable asserted something false. It could
+		# not say so: the file did not compile, for the unrelated reason
+		# 26.464 fixes, so this was written and never once run (26.466).
+		#
+		# In `obligations()` order, which is layout order, which puts a
+		# nested struct's tag before the enclosing struct's trailing one.
+		# That is the order these must be discharged in -- the outer tag
+		# covers the bytes the inner one occupies, so finalizing outward
+		# first would seal a tag that is about to change. Stated because
+		# it is a property of the layout rather than of this loop.
+		marks = [other for other in held
+		         if other.label in entry.placement.covered_by]
 
 		suite.add(
 			f"check_{c_name(struct.name)}_covered_write_marks_{name}",
@@ -2845,12 +2856,45 @@ def _coverage_checks(suite: Suite, schema: ast.Schema,
 				f"\tassert_true({stale});",
 				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_ERR_TAG);",
 				"",
-				f"\t{discharge}",
+				*([] if len(marks) == 1 else
+				  [f"\t/* The write marks {len(marks)} obligations, innermost",
+				   "\t * first; the message is transmittable once all of them",
+				   "\t * are discharged and not before. */"]),
+				*[f"\t{_discharge(struct, other, prefix)}" for other in marks],
 				f"\tassert_false({stale});",
 				"\tassert_int_equal(situ_msg_transmittable(&msg), SITU_OK);",
 			],
 			[f"/* {entry.placement.path} is Covered({one.label}).",
 			 f"\t * {why} */"])
+
+
+def _stale_test(struct: ResolvedStruct, one: Obligation,
+		prefix: str) -> str:
+	"""Whether this obligation is outstanding, in its own vocabulary."""
+	verb = "is_dirty" if one.kind == "tag" else "is_stale"
+	return f"{ident(prefix, struct.name, c_name(one.local), verb)}(&msg)"
+
+
+def _discharge(struct: ResolvedStruct, one: Obligation, prefix: str) -> str:
+	"""The call that clears it.
+
+	A recompute takes the view as well: it WRITES bytes, where finalize
+	only reads them and stores a tag it was handed.
+	"""
+	if one.kind == "tag":
+		return f"{ident(prefix, struct.name, c_name(one.local), 'finalize')}(&msg);"
+	return (f"{ident(prefix, struct.name, c_name(one.local), 'recompute')}"
+	        "(&msg, view);")
+
+
+def _why_stale(one: Obligation) -> str:
+	if one.kind == "tag":
+		return ("Section 14.2 says a write to it leaves the tag stale and "
+		        "the\n\t * message refuses to be transmittable until "
+		        "finalize puts it right.")
+	return ("Section 16.1 says a write to it leaves the derived field "
+	        "stale\n\t * and the message refuses to be transmittable "
+	        "until recompute puts it right.")
 
 
 def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,

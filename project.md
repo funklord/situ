@@ -30711,6 +30711,171 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.466 A generated check that had never run, and was wrong
+
+**Fixing 26.464 made a file compile, and the first thing it did was
+fail.** `check_signed_whole_covered_write_marks_piece_part_sig` sets
+`signed_whole.piece.a`, finalizes the inner tag, and asserts the message
+is transmittable. It is not: that field sits inside the inner
+authenticated region AND the outer one, so its setter marks two dirty
+bits -- `situ_msg_mark_dirty(msg, SITU_SIGNED_WHOLE_PART_SIG_DIRTY |
+SITU_SIGNED_WHOLE_WHOLE_SIG_DIRTY)` -- and discharging one leaves the
+message refusing, correctly.
+
+**The emitted code was right and the generated TEST was wrong**, which
+is the pairing worth noticing: `edges.situ` states this case in a
+comment at the top of the struct -- "writing it stales the inner
+checksum and the outer one, innermost first" -- so the schema knew, the
+emitter knew, and only the check did not.
+
+**It is `evidence.md`'s "a check is untested until it has been seen to
+fail", arriving from a direction that entry does not cover.** The usual
+shape is a check that cannot fail. This one could fail and did, every
+time, and nobody ever saw it, because the file it lives in has not
+compiled for at least thirteen commits. A generated test is emitted on
+every run of the fast gate and read by nobody; only the slow gate builds
+it. **So "this test exists" and "this test has ever executed" are
+different facts about a generated suite, and the fast gate cannot tell
+them apart.**
+
+**The fix discharges every obligation the write marks**, in
+`obligations()` order, which is layout order, which puts a nested
+struct's tag before the enclosing struct's trailing one. That order is
+load-bearing rather than incidental: the outer tag covers the bytes the
+inner one occupies, so sealing outward first would seal a tag that is
+about to change. The generated case says so in a comment when there is
+more than one, and says nothing when there is one.
+
+**450 checks pass where 449 did**, and reverting the change fails
+exactly the one case. The unit guard asserts both the presence of the
+second discharge and its ORDER, over a two-region fixture of its own,
+because a sweep that only counted discharges would accept them
+backwards.
+
+**Three defects in one gate, none of them this session's, found one
+behind the other**: a fuzz harness naming an accessor the emitter
+stopped writing (26.463), a checks suite naming a nested obligation for
+its leaf (26.464), and a check that had never run (26.466). Each was
+hidden by the one in front of it, which is the argument for running the
+slow gate to completion rather than to the first failure.
+
+### 26.465 The decoder read past its locator, and what found it
+
+**A stack buffer over-read in the generated Reed-Solomon decoder,
+reachable from 64 attacker-chosen bytes, present since the decoder was
+written.** Confirmed under AddressSanitizer against the compiled C:
+`READ of size 1` at offset 69 in a frame whose `locator` occupies 64 to
+69, from `situ_reed_solomon_64_56_decode`. Reproduced identically at
+`a575a8f`, so it predates 26.462's rendering -- the statement tree
+inherited the algorithm faithfully, including this.
+
+**The bound was checked after the read rather than before it.**
+`locator` is `half + 1` long. Berlekamp-Massey's inner loop reads
+`locator[j]` for `j` up to `degree`, and `degree` is only tested against
+`half` AFTER the outer loop finishes. The update `degree = at + 1 -
+degree` fires when `2 * degree <= at`, so a run of vanishing
+discrepancies followed by one non-zero discrepancy late in the block
+jumps the degree straight past `half` -- and the NEXT iteration reads
+with it. The refusal was correct and arrived one iteration too late.
+
+**Which inputs reach it is the interesting half, and it is why nothing
+found this.** Measured over the rendered Python, which raises where C
+reads silently:
+
+    4000 random 64-byte blocks            0 out of range
+    300 codewords of RS(64,60)          300
+    300 codewords of RS(64,59)          300
+    300 codewords of RS(64,58)          298
+    300 codewords of RS(64,61)            2
+
+A block whose leading syndromes vanish IS a codeword of a shorter
+Reed-Solomon code, which is deterministic to construct and essentially
+unreachable by chance. **A fuzzer would have to guess a codeword.** And
+`std/kernels.situ` declares no struct, so its generated fuzz harness is
+empty and the derived codecs are not fuzzed at all -- the one instrument
+that might have stumbled on it was never pointed here.
+
+**What found it was asking the Rust port's question.** 26.457 records
+the port as blocked on `no_std` and no-panic indexing, "the decoder
+indexes arrays by runtime-computed degrees throughout; in C those are
+unchecked and in Rust they are panics unless the bounds are proved".
+Working out which index Rust could not prove is what produced the
+counter-example. The obstacle to the port was not a nuisance to be
+worked around: it was a defect report nobody had read.
+
+**The fix is the bound at the point the degree changes**, so the read
+cannot occur rather than being detected after it. The post-loop `degree
+> half` test is removed with it, because it can no longer fail and a
+check that cannot fail is not evidence. `degree == 0` stays: that is a
+different condition and still reachable.
+
+**One program, two backends, one fix.** C and Python both render
+`kernel_program`, so the bound landed in both at once -- which is
+26.462's argument arriving within the hour, and not an argument anybody
+was looking to make.
+
+**The regression test derives its fixture rather than freezing one.**
+A pinned 64-byte block would stop having the shape that matters the
+moment a parameter moved, and would still pass; the test builds a
+codeword of a shorter code from `gf_tables` and
+`rs_generator_coefficients`, which is situ's own derivation. The sweep
+that proved the fix complete -- 25,400 blocks across three families,
+zero out of range, against 5,401 before it -- is recorded here rather
+than committed, being too slow for the suite.
+
+### 26.464 The second generator with the same fault
+
+**26.463 fixed `gen-fuzz` and the next target was red for the same
+reason.** `gen-checks` emits `situ_signed_whole_part_sig_finalize` where
+the header declares `situ_signed_whole_piece_part_sig_finalize`, and the
+harness compiled at `fba9ee5` has the same three errors, so this
+predates the session as well. Two independent pre-existing breakages in
+one gate, found one behind the other.
+
+**An obligation a nested member carries has two spellings and they are
+not interchangeable.** The dirty BIT is named for the leaf --
+`SITU_SIGNED_WHOLE_PART_SIG_DIRTY` -- and the accessor for the path --
+`situ_signed_whole_piece_part_sig_finalize`. Four backends read
+`Obligation.name` for the macro, which is right; `c/checks` read it for
+the function too. `Obligation` carries `local` now beside `name`, in
+`traverse` where the other five descriptions can reach it, rather than
+each backend deriving one spelling from the other.
+
+**The guard is the one 26.463 wrote, pointed at four generators instead
+of one.** That is the correction worth keeping: a guard aimed at
+whichever generator broke first is a guard the second inherits nothing
+from, and these two broke at the same time in the same way. It now asks
+every schema of `gen-fuzz`, `gen-checks`, `gen-codec-tests` and
+`gen-tamper` -- 168 cases -- whether every `situ_` function the output
+calls is one the headers declare. `gen-tests` is absent because its
+generator wants golden vectors as well as a schema, and that is recorded
+as a gap rather than left to be discovered.
+
+**The instrument was wrong twice before it was right, both times in the
+direction that manufactures a finding.** It read `<name>.h` alone, so a
+checks suite reaching `situ_msg_*` through `<name>_frame.h` looked like
+four schemas calling undeclared functions; it now reads every rung the
+build emits. And `static\s+\w+\s+` matched one word where a tamper
+harness's own `static inline situ_err_t situ_<struct>_tamper` has two,
+so four more schemas were reported for defining their own helper.
+`evidence.md`'s *suspect the check before the code*, twice in one
+afternoon, and both times the apparatus was the error.
+
+**A latent defect the same question exposes, recorded and NOT fixed
+here.** Two nested members whose obligations share a leaf name collide
+on one macro: a schema with `inner_a.sig` and `inner_b.sig` emits
+`SITU_OUTER_SIG_DIRTY` twice, as `0x1u` and `0x2u`. Under this
+project's own warnings that is a REFUSED BUILD rather than a wrong
+answer -- gcc calls the redefinition an error under `-Werror` -- and a
+consumer compiling generated headers more loosely takes the second
+definition, at which point both tags share a bit and finalizing one
+clears the other. `check_collisions` runs at the top of the C emitter
+for exactly this class and reads struct and enum names only, so it has
+nothing to say about it. No schema in the corpus has the shape; the fix
+is `local` in the macro too, and it changes a generated macro name in
+every backend, which is its own piece of work rather than a side effect
+of this one.
+
 ### 26.463 A harness that names accessors the backend stopped writing
 
 **`make test` had been red before this session touched it, and the unit

@@ -842,13 +842,40 @@ def test_every_fuzzable_struct_reaches_the_harness(path: Path) -> None:
 			f"{path.name}: the entry point never dispatches to `{name}`"
 
 
-@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
-def test_the_fuzz_harness_calls_only_accessors_the_header_declares(
-		path: Path) -> None:
-	"""The harness and the emitter must agree about which accessor an arm
-	gets, and for three arms in `edges.situ` they did not.
+def _c_consumers() -> dict[str, object]:
+	"""The generators that emit C somebody will compile, by name.
 
-	`_arm_reads` says in as many words that its four shapes "are the four
+	A dict rather than a guard aimed at one of them, because that is how
+	the question below went unasked of the rest: `gen-fuzz` and
+	`gen-checks` had the same class of defect at the same time, and a
+	test written for whichever broke first would have inherited nothing
+	to the second.
+
+	`gen-tests` is absent and that is a gap rather than a decision: its
+	generator takes golden vectors as well as a schema, so asking it this
+	question needs a vector file per schema and this does not have one.
+	`make test` compiles it.
+	"""
+	from situc.codegen.c import checks, codectests, fuzz, tamper
+
+	return {
+		"fuzz":   lambda sch, res, stem: fuzz.generate(sch, res, stem),
+		"checks": lambda sch, res, stem: checks.generate(sch, res, stem),
+		"codec":  lambda sch, res, stem: codectests.generate(sch, stem),
+		# A dict of files, or nothing where no struct carries a tag.
+		"tamper": lambda sch, res, stem: "\n".join(
+			tamper.generate(sch, res, stem).values()),
+	}
+
+
+@pytest.mark.parametrize("consumer", sorted(_c_consumers()))
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_generated_c_calls_only_accessors_the_headers_declare(
+		path: Path, consumer: str) -> None:
+	"""A generator and the emitter must agree about the name of an
+	accessor, and two of them did not.
+
+	`gen-fuzz`: `_arm_reads` says its four shapes "are the four
 	`_arm_member` emits, in its order, so this names an accessor exactly
 	when that one wrote it". The emitter had grown a fifth branch ahead
 	of the others -- a delimited arm gets `_ptr` and `_len`, not a
@@ -857,32 +884,51 @@ def test_the_fuzz_harness_calls_only_accessors_the_header_declares(
 	name that claims exhaustiveness over a hand-written enumeration, and
 	the enumeration was short by one.
 
-	Nothing reported it because the unit suite generates the harness and
-	never compiles it, while the target that does compile it lives in
-	`make test`: a build failure that only the slow gate could see, in a
-	file the fast gate reads every run.
+	`gen-checks`: an obligation a NESTED member carries is reached
+	through its path and named for its leaf, and this read the leaf for
+	both -- `situ_signed_whole_part_sig_finalize` where the header says
+	`situ_signed_whole_piece_part_sig_finalize` (26.464).
+
+	Nothing reported either because the unit suite generates these files
+	on every run and asserts on their TEXT, while the only thing that
+	compiles them is a `make test` target that takes three quarters of an
+	hour. Two build failures in files the fast gate read every run.
 
 	So this asks the cheap half of the compiler's question, over every
-	schema and without needing one: every `situ_` function the harness
-	CALLS must be one the header DECLARES. It cannot see a wrong argument
-	type -- `test_a_typed_arm_is_read_at_the_accessor_s_type` covers the
-	instance of that, and `make test` covers the rest.
+	schema and every generator, and without needing a compiler: every
+	`situ_` function the output CALLS must be one the headers DECLARE. It
+	cannot see a wrong argument type -- the two named tests below cover
+	the instances of that, and `make test` covers the rest.
 	"""
-	from situc.codegen.c import fuzz
-
+	emit     = _c_consumers()[consumer]
 	source   = Source(str(path), path.read_text(encoding="ascii"))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
-	header   = generate(schema, resolved, path.stem).header
-	harness  = fuzz.generate(schema, resolved, path.stem)
+	# Every header the build writes, not just `<name>.h`: a checks suite
+	# reaches `situ_msg_*` and the message-level accessors through
+	# `<name>_frame.h` and the setters through `<name>_edit.h`, so reading
+	# one file alone would report the others' as undeclared -- an
+	# instrument manufacturing the finding it went looking for.
+	from situc.codegen.c import converse as conv_c, edit as edit_c, \
+		relate as rel_c
+
+	header = generate(schema, resolved, path.stem).header
+	for rung in (edit_c, rel_c, frame_c, conv_c):
+		header += "\n".join(
+			rung.generate(schema, resolved, path.stem).values())
+	harness  = emit(schema, resolved, path.stem)  # type: ignore[operator]
 
 	called   = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", harness))
 	declared = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", header))
 
-	# The harness defines a few of its own, and the runtime declares the
-	# rest: `situ_view_*`, `situ_fuzz_sink`, and whatever `situ.h` offers.
-	own = set(re.findall(r"\bstatic\s+\w+\s+(situ_[A-Za-z0-9_]+)\s*\(",
-	                     harness))
+	# What the output defines for itself, which is not a finding about the
+	# headers: `situ_fuzz_sink`, and a tamper harness's own
+	# `static inline situ_err_t situ_<struct>_tamper`. `\w+` between
+	# `static` and the name matched one word and these carry two, so the
+	# instrument reported four schemas before it reported a defect --
+	# suspect the check before the code, and this one was wrong twice.
+	own = set(re.findall(
+		r"\bstatic\s+(?:\w+\s+)+(situ_[A-Za-z0-9_]+)\s*\(", harness))
 	runtime = set(re.findall(
 		r"\b(situ_[A-Za-z0-9_]+)\s*\(",
 		(RUNTIME / "situ.h").read_text(encoding="ascii")))
@@ -904,6 +950,79 @@ def test_the_fuzz_harness_calls_only_accessors_the_header_declares(
 		f"{path.name}: the harness calls {missing}, which the header does "
 		f"not declare -- a build failure `make test` would find and this "
 		f"suite would not")
+
+
+def test_a_nested_obligation_is_named_by_its_path() -> None:
+	"""An obligation a nested member carries has two spellings, and they
+	are not interchangeable.
+
+	The dirty BIT is named for the leaf -- `SITU_OUTER_SIG_DIRTY` -- and
+	the accessor for the path -- `situ_outer_part_sig_finalize`. The
+	checks generator read the leaf for both, so it called a function
+	nothing declares. `Obligation` carries the path now, beside the leaf
+	it already had, rather than each backend deriving one from the other.
+	"""
+	from situc.codegen.c import checks
+
+	body = ("struct part {\n"
+	        "\tauthenticated body { u8 x; }\n"
+	        "\tchecksum u8 sig[2] covers(body);\n"
+	        "}\n"
+	        "struct outer {\n"
+	        "\tpart inner;\n"
+	        "\tu8   tail;\n"
+	        "}\n")
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	text     = checks.generate(schema, resolved, "unit")
+
+	assert "situ_outer_inner_sig_finalize" in text, (
+		"the nested obligation was named for its leaf, which is the "
+		"macro's spelling and not the accessor's")
+	assert "situ_outer_sig_finalize(" not in text
+
+
+def test_a_covered_write_discharges_every_obligation_it_marks() -> None:
+	"""A field inside two authenticated regions marks two dirty bits, and
+	the message is transmittable once both are discharged.
+
+	`signed_whole.piece.a` is that field in the corpus: its setter marks
+	the inner tag and the outer one, so a generated case that finalized
+	the inner and then asserted `situ_msg_transmittable(&msg) == SITU_OK`
+	asserted something false. It never said so, because the file it lives
+	in did not compile for the unrelated reason 26.464 fixes -- emitted
+	on every run and never once executed.
+
+	The order is the layout's and is asserted with the count: the outer
+	tag covers the bytes the inner one occupies, so finalizing outward
+	first would seal a tag that is about to change.
+	"""
+	from situc.codegen.c import checks
+
+	body = ("struct part {\n"
+	        "\tauthenticated part_body { u8 a; u8 b; }\n"
+	        "\tchecksum u8 part_sig[2] covers(part_body);\n"
+	        "}\n"
+	        "struct whole {\n"
+	        "\tauthenticated whole_body { part piece; u8 stamp; }\n"
+	        "\tchecksum u8 whole_sig[2] covers(whole_body);\n"
+	        "}\n")
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	text     = checks.generate(schema, resolved, "unit")
+
+	start = text.index("check_whole_covered_write_marks_piece_part_sig")
+	case  = text[start:text.index("\n}\n", start)]
+
+	assert "situ_whole_piece_part_sig_finalize(&msg);" in case, (
+		"the case does not discharge the obligation it is named for")
+	assert "situ_whole_whole_sig_finalize(&msg);" in case, (
+		"a write that marks two obligations discharged one and then "
+		"asserted the message was transmittable")
+	assert case.index("situ_whole_piece_part_sig_finalize") \
+		< case.index("situ_whole_whole_sig_finalize"), (
+		"the outer tag covers the bytes the inner one occupies, so it "
+		"must be sealed last")
 
 
 def test_a_typed_arm_is_read_at_the_accessor_s_type() -> None:

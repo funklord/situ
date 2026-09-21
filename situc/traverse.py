@@ -533,6 +533,14 @@ class Obligation:
 	label: str
 	#: Which bit of the message's dirty word. Position in `obligations()`.
 	bit:   int
+	#: The member's path within this struct, dotted. The same as `name` for
+	#: an obligation the struct owns, and `piece.part_sig` for one carried
+	#: by a nested member -- which is what a BACKEND has to name, because
+	#: the accessor is `situ_<struct>_piece_part_sig_finalize` while the
+	#: macro is `SITU_<STRUCT>_PART_SIG_DIRTY`. The two genuinely differ,
+	#: and a generator that read `name` for both emitted calls to functions
+	#: nothing declares (26.464).
+	local: str
 
 	@property
 	def suffix(self) -> str:
@@ -1183,7 +1191,8 @@ def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
 	lists, and a struct carrying both a tag and an invariant gave the two
 	backends different answers for the same schema.
 	"""
-	found = [Obligation("tag", entry.placement.name, entry.placement.name, bit)
+	found = [Obligation("tag", entry.placement.name, entry.placement.name,
+	                    bit, entry.placement.path[len(struct.name) + 1:])
 	         for bit, entry in enumerate(entry for entry in struct.entries
 	                                     if entry.placement.kind in ("tag", "checksum"))]
 
@@ -1191,7 +1200,7 @@ def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
 		holder, _, field = decl.derived.partition(".")
 		if holder == struct.name:
 			found.append(Obligation("invariant", field, f"invariant {field}",
-			                        len(found)))
+			                        len(found), field))
 	return found
 
 
