@@ -855,20 +855,31 @@ def _c_consumers() -> dict[str, object]:
 	test written for whichever broke first would have inherited nothing
 	to the second.
 
-	`gen-tests` is absent and that is a gap rather than a decision: its
-	generator takes golden vectors as well as a schema, so asking it this
-	question needs a vector file per schema and this does not have one.
-	`make test` compiles it.
+	`gen-tests` was absent and recorded as a gap: its generator takes
+	golden vectors as well as a schema. Sixteen schemas here commit a
+	`.vectors` file beside the `.situ`, so it is covered for those and
+	emits nothing for the rest -- which the emitter below turns into an
+	empty string rather than a skip, so a schema that GAINS vectors is
+	asked the question without anybody remembering to add it.
 	"""
-	from situc.codegen.c import checks, codectests, fuzz, tamper
+	from situc.codegen.c import checks, codectests, fuzz, tamper, vectors
+
+	def golden(sch: Any, res: Any, stem: str, path: Path) -> str:
+		beside = path.with_suffix(".vectors")
+		if not beside.exists():
+			return ""
+		cases = vectors.parse_vectors(
+			Source(str(beside), beside.read_text(encoding="ascii")))
+		return vectors.generate(sch, res, cases, stem)
 
 	return {
-		"fuzz":   lambda sch, res, stem: fuzz.generate(sch, res, stem),
-		"checks": lambda sch, res, stem: checks.generate(sch, res, stem),
-		"codec":  lambda sch, res, stem: codectests.generate(sch, stem),
+		"fuzz":   lambda sch, res, stem, path: fuzz.generate(sch, res, stem),
+		"checks": lambda sch, res, stem, path: checks.generate(sch, res, stem),
+		"codec":  lambda sch, res, stem, path: codectests.generate(sch, stem),
 		# A dict of files, or nothing where no struct carries a tag.
-		"tamper": lambda sch, res, stem: "\n".join(
+		"tamper": lambda sch, res, stem, path: "\n".join(
 			tamper.generate(sch, res, stem).values()),
+		"vectors": golden,
 	}
 
 
@@ -920,7 +931,7 @@ def test_generated_c_calls_only_accessors_the_headers_declare(
 	for rung in (edit_c, rel_c, frame_c, conv_c):
 		header += "\n".join(
 			rung.generate(schema, resolved, path.stem).values())
-	harness  = emit(schema, resolved, path.stem)  # type: ignore[operator]
+	harness  = emit(schema, resolved, path.stem, path)  # type: ignore[operator]
 
 	called   = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", harness))
 	declared = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", header))
@@ -933,6 +944,12 @@ def test_generated_c_calls_only_accessors_the_headers_declare(
 	# quarters of an hour later (26.467).
 	called |= set(re.findall(r"\b(SITU_[A-Z0-9_]+)\b", harness))
 	declared |= set(re.findall(r"#define\s+(SITU_[A-Z0-9_]+)", header))
+	# An ENUM constant is declared too, and is not a `#define`. The
+	# golden-vector generator names `SITU_OPERATION_REPLY` and friends,
+	# so reading only macros reported five schemas as calling undeclared
+	# names -- the sixth time this session an instrument produced the
+	# finding it went looking for.
+	declared |= set(re.findall(r"^\s*(SITU_[A-Z0-9_]+)\s*=", header, re.M))
 	declared |= set(re.findall(r"\b(SITU_[A-Z0-9_]+)\b",
 	                           (RUNTIME / "situ.h").read_text(encoding="ascii")))
 
@@ -964,6 +981,11 @@ def test_generated_c_calls_only_accessors_the_headers_declare(
 	# struct at all. Their harness holds no `fuzz_` body, so an empty
 	# call set is the schema's fact. An empty one with a body in it is
 	# this test reading nothing, and says so.
+	# `gen-tests` emits nothing for a schema with no committed vectors,
+	# which is that schema's fact and not a silence to assert on.
+	if consumer == "vectors" and not harness:
+		pytest.skip(f"{path.name} commits no golden vectors")
+
 	bodies = re.findall(r"^static void fuzz_", harness, re.M)
 	assert called or not bodies, (
 		f"{path.name}: {len(bodies)} harness bodies and no accessor call "

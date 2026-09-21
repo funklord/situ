@@ -30711,6 +30711,43 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.468 The fifth generator, and a recorded gap closed
+
+**26.464 left `gen-tests` outside the accessor guard and said so.** Its
+generator wants golden vectors as well as a schema, and the guard had
+no way to supply them. Sixteen schemas commit a `.vectors` beside the
+`.situ`, which is enough: the guard reads it where it exists and the
+generator emits nothing where it does not. 183 cases now, 27 of them
+skipped for schemas with no vectors.
+
+**The skip is the schema's fact and is stated as one.** A generator
+asked about a schema with no vectors returns an empty string, and an
+empty string is not a silence to assert on -- so the case skips with
+the reason named, rather than passing vacuously or being left out of
+the parametrisation. A schema that GAINS vectors is asked the question
+without anybody remembering to add it, which is the property that
+made this worth doing rather than listing the sixteen.
+
+**Why this one was worth closing rather than leaving recorded.** The
+class had a two-in-three hit rate: of the three generators the guard
+covered when it was written, two were emitting C that did not compile
+(26.463, 26.464). A gap in a guard whose neighbours keep finding
+defects is not a tidy-up.
+
+**And the instrument was wrong a sixth time, in the same direction.**
+It reported five schemas as naming undeclared symbols --
+`SITU_OPERATION_REPLY`, `SITU_MODE_CLIENT` and their kin. Those are
+ENUM constants, declared as `SITU_OPERATION_REPLY = 2,` inside an
+`enum` and not as a `#define`, and the guard read only macros. Six
+instrument errors in this arc, every one of them manufacturing a
+finding rather than hiding one, which is the direction to prefer and
+still a cost: each looked exactly like a defect until it was read.
+
+**The control is the sabotage, as ever.** Make the vector generator
+name `..._get_nonexistent` and one cell goes red. Without that the new
+cell would be 183 green ticks with no demonstrated ability to be
+anything else.
+
 ### 26.467 One obligation, one bit -- and the half-fix that was worse
 
 **Recorded as latent at 26.464, and it was two defects rather than
@@ -30928,10 +30965,12 @@ of one.** That is the correction worth keeping: a guard aimed at
 whichever generator broke first is a guard the second inherits nothing
 from, and these two broke at the same time in the same way. It now asks
 every schema of `gen-fuzz`, `gen-checks`, `gen-codec-tests` and
-`gen-tamper` -- 168 cases -- whether every `situ_` function the output
-calls is one the headers declare. `gen-tests` is absent because its
-generator wants golden vectors as well as a schema, and that is recorded
-as a gap rather than left to be discovered.
+`gen-tamper` whether every `situ_` function the output calls is one the
+headers declare. `gen-tests` is absent because its generator wants
+golden vectors as well as a schema, and that is recorded as a gap
+rather than left to be discovered -- and closed at 26.468, sixteen
+schemas committing a `.vectors` beside the `.situ` being enough to ask
+it too.
 
 **The instrument was wrong twice before it was right, both times in the
 direction that manufactures a finding.** It read `<name>.h` alone, so a
