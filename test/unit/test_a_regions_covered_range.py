@@ -26,7 +26,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import cast
 
+import pytest
+
 from situc.codegen.python import generate as generate_py
+from situc.diagnostics import SituError
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -79,7 +82,15 @@ PREAMBLE = "target buffer;\nendian big;\n"
 #: The four cells. `region` is empty or not; `position` is static or
 #: decided by the message. Only the product of EMPTY and DYNAMIC reached
 #: C's `0u`, and only DYNAMIC reached the other three's frame-end -- so a
-#: test of one cell cannot tell the two causes apart.
+#: test of one cell could not tell the two causes apart.
+#:
+#: TWO OF THE FOUR ARE NO LONGER SCHEMAS. An empty `authenticated` region
+#: is refused since 26.460: it covers zero bytes, and a tag over zero
+#: bytes cannot tell one message from another. The arithmetic 26.448 fixed
+#: for those two cells is still in the backends and is now unreachable, so
+#: what is asserted here instead is the REFUSAL -- which is the honest
+#: replacement, and is why the empty schemas stay in this file rather than
+#: being deleted with the cells they served.
 EMPTY_DYNAMIC = PREAMBLE + """
 struct s {
 	u8 n;
@@ -137,16 +148,21 @@ def test_a_corpus_tag_could_not_compute_its_own_range(tmp_path: Path) -> None:
 	assert view.mac_covered() == (3, 3)
 
 
-def test_an_empty_region_behind_a_variable_member(tmp_path: Path) -> None:
-	"""The cell that was wrong in all four, two different ways.
+def test_an_empty_region_behind_a_variable_member_is_refused(
+		tmp_path: Path) -> None:
+	"""The cell that was wrong in all four, two different ways -- and is
+	now not a schema.
 
-	`n = 2`, so `v` is two bytes and the empty region sits at 3, where
-	`mac` also begins. A tag over nothing is length 0 -- the value C
-	answered was (0, frame), its own bytes included.
+	It used to answer (3, 0) here after 26.448, against C's (0, frame)
+	before it. The holder settled the construct instead: a tag over zero
+	bytes authenticates nothing, so the region is refused and the
+	arithmetic behind it is unreachable.
 	"""
-	module, runtime = load(tmp_path, EMPTY_DYNAMIC)
-	assert covered(module, runtime, "s", bytes([2, 0xAA, 0xBB, 1, 2, 3, 4])) \
-		== (3, 0)
+	del tmp_path
+	with pytest.raises(SituError) as raised:
+		parse_text(EMPTY_DYNAMIC)
+
+	assert "authenticates nothing" in str(raised.value)
 
 
 def test_a_full_region_behind_a_variable_member(tmp_path: Path) -> None:
@@ -156,12 +172,18 @@ def test_a_full_region_behind_a_variable_member(tmp_path: Path) -> None:
 	               bytes([2, 0xAA, 0xBB, 0x5A, 1, 2, 3, 4])) == (3, 1)
 
 
-def test_an_empty_region_at_a_static_offset(tmp_path: Path) -> None:
-	"""CONTROL. Static placement returns before any of this, and was
-	already correct -- `start = 1u; end = 1u`. It has to stay that way,
-	or a fix to the dynamic path has been paid for from here."""
-	module, runtime = load(tmp_path, EMPTY_STATIC)
-	assert covered(module, runtime, "s", bytes([0, 1, 2, 3, 4])) == (1, 0)
+def test_an_empty_region_at_a_static_offset_is_refused_too(
+		tmp_path: Path) -> None:
+	"""The other empty cell, refused for the same reason.
+
+	It was the CONTROL for 26.448 -- static placement was always correct
+	here, `start = 1u; end = 1u`, and its job was to show the dynamic fix
+	had not been paid for out of it. The refusal is not about which cell
+	was right: an empty region covers nothing wherever it sits.
+	"""
+	del tmp_path
+	with pytest.raises(SituError):
+		parse_text(EMPTY_STATIC)
 
 
 def test_a_full_region_at_a_static_offset(tmp_path: Path) -> None:

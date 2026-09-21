@@ -61,6 +61,7 @@ def check(schema: ast.Schema) -> None:
 	check_tag_coverage(schema)
 	check_tag_prefixes(schema)
 	check_coded_coverage(schema)
+	check_authenticated_regions_hold_something(schema)
 	check_attribute_places(schema)
 	check_attribute_values(schema)
 	check_byte_run_equality(schema)
@@ -2401,6 +2402,49 @@ REGION_ARGUMENTS: dict[type, tuple[tuple[str, ...], str]] = {
 	              "`tag_identity`, `value_size`, `known`, `unknown`, "
 	              "`duplicate_tags`, `ordering` and `length_type` (9.5)"),
 }
+
+
+def check_authenticated_regions_hold_something(schema: ast.Schema) -> None:
+	"""An `authenticated` region with nothing in it covers nothing.
+
+	The block transforms no bytes -- its members lie exactly where they
+	would without it -- so an EMPTY one names a range of zero length, and
+	a tag over zero bytes authenticates nothing. There is no message it
+	could distinguish from any other.
+
+	Refused rather than placed, settled by the copyright holder
+	2026-09-21 after 26.448 found the empty case computed wrongly in all
+	four backends: C handed the tag the WHOLE FRAME including its own
+	bytes, and the other three an empty range parked at the frame's end.
+	Those were fixed, and the fix has no schema that can reach it now --
+	which is the right order, because a construct nobody can write is not
+	one whose arithmetic should be silently wrong.
+
+	NOT extended to `sealed` or `coded`, and the difference is real
+	rather than an omission: their interior is the codec's OUTPUT, so an
+	empty one can still occupy bytes where the codec expands. An empty
+	`authenticated` region is zero bytes by construction.
+	"""
+	for struct in schema.structs():
+		for member in _walk_members(struct.members):
+			if not isinstance(member, ast.Authenticated):
+				continue
+			if member.members:
+				continue
+
+			raise error(
+				f"`{member.name}` authenticates nothing",
+				member.span,
+				label = "an empty region",
+				notes = ["`authenticated` names bytes for a tag to cover "
+				         "and transforms none of them, so a region with no "
+				         "members is a range of zero length",
+				         "a tag over zero bytes cannot tell one message "
+				         "from another, which is the whole of what a tag "
+				         "is for (section 14.1)",
+				         "put the members it should cover inside it, or "
+				         "remove the region and the tag that covers it"],
+			)
 
 
 def check_region_arguments(schema: ast.Schema) -> None:

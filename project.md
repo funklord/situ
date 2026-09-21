@@ -30711,6 +30711,50 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.460 An `authenticated` region has to hold something
+
+**Settled by the copyright holder 2026-09-21: refused.** The second of
+the two questions 26.447 and 26.448 left open, and the same answer as
+26.459 for a related reason -- a construct that states something the
+generated code cannot act on.
+
+**The argument.** `authenticated` transforms nothing: its members lie
+exactly where they would without it, and all the block does is name a
+range a tag can cover. An EMPTY one names a range of zero length, and a
+tag over zero bytes cannot tell one message from another, which is the
+whole of what a tag is for.
+
+**Not extended to `sealed` or `coded`, and the difference is real.**
+Their interior is the CODEC's output, so an empty one can still occupy
+bytes wherever the codec expands -- there is something there to seal
+even when the schema put nothing in. An `authenticated` region is zero
+bytes by construction. A test pins the sealed case as accepted, so
+widening the refusal later is a decision somebody makes rather than a
+tidy-up somebody performs.
+
+**It cost no schema.** Nothing in `std/`, `example/` or `test/schema/`
+has an empty region; all 42 corpus schemas still parse. The two prose
+mentions of `authenticated { }` are notation in comments.
+
+**What it cost instead is two cells of 26.448's own table**, and that is
+worth stating plainly rather than quietly deleting them. That entry
+built a four-cell fixture -- region empty or not, crossed with position
+static or dynamic -- because no single cell could separate the two
+causes. Two of those cells are no longer schemas. The arithmetic 26.448
+fixed for them is still in all four backends and is now unreachable, so
+the tests assert the REFUSAL instead and say why the empty schemas are
+still in the file.
+
+**The order was right even though the fix is now unreachable.** 26.448's
+empty case had C handing a tag the whole frame including its own bytes.
+Fixing that before the construct was settled looks wasted and is not: a
+construct nobody can write is not one whose arithmetic should be
+silently wrong, and the refusal was only reachable as a question because
+somebody had measured what the four backends actually did with it.
+
+**The refusal reaches a nested region**, checked rather than assumed,
+for the reason 26.459 gives.
+
 ### 26.459 `[nul_terminated]` wants a count the schema states
 
 **Settled by the copyright holder 2026-09-21: refused.** 26.447 recorded

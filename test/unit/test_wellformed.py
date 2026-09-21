@@ -3018,3 +3018,66 @@ def test_the_refusal_reaches_a_variant_arm() -> None:
 	legal = (PREFIX + "struct s { u8 pick; variant v switch (pick) {\n"
 	         "  case 1: u8 name[4] [nul_terminated];\n  default: error;\n} }")
 	assert parse_text(legal) is not None
+
+
+# ---------------------------------------------------------------------------
+# An `authenticated` region has to hold something (26.460)
+# ---------------------------------------------------------------------------
+
+REGION_AEAD = """codec region_aead {
+	length_preserving; seekable; authenticated; invertible; deterministic;
+}
+impl region_aead extern "my_aead";
+"""
+
+
+def test_an_empty_authenticated_region_is_refused() -> None:
+	"""It covers zero bytes, so the tag over it cannot tell one message
+	from another -- which is the whole of what a tag is for.
+
+	26.448 found the empty case computed wrongly in all four backends: C
+	handed the tag the WHOLE FRAME including its own bytes, and the
+	other three an empty range at the frame's end. Fixing that was
+	right; the construct having no meaning is a separate question and
+	the holder settled it here.
+	"""
+	with pytest.raises(SituError) as raised:
+		parse_text(PREFIX + REGION_AEAD + "struct s { u8 n; authenticated body { } "
+		           "tag u8 mac[4] covers(body); }")
+
+	text = raised.value.diagnostic.render()
+	assert "authenticates nothing" in text
+	assert "a range of zero length" in text
+
+
+def test_a_region_with_members_is_still_accepted() -> None:
+	"""The control, and the whole of what the refusal must not cost.
+
+	Both positions: a region the message places, and one at a static
+	offset. Every `authenticated` region in the corpus is this shape,
+	which is why the refusal cost no schema at all.
+	"""
+	dynamic = parse_text(
+		PREFIX + REGION_AEAD + "struct s { u8 n; u8 v[n]; "
+		"authenticated body { u8 x; } tag u8 mac[4] covers(body); }")
+	static = parse_text(
+		PREFIX + REGION_AEAD + "struct s { u8 n; authenticated body { u8 x; } "
+		"tag u8 mac[4] covers(body); }")
+
+	assert dynamic is not None and static is not None
+
+
+def test_an_empty_sealed_region_is_not_refused() -> None:
+	"""Deliberately out of scope, and the difference is real rather than
+	an omission.
+
+	A `sealed` region's interior is the CODEC's output, so an empty one
+	can still occupy bytes wherever the codec expands -- there is
+	something there to seal even when the schema put nothing in. An
+	`authenticated` region transforms nothing and is zero bytes by
+	construction. Pinned so that widening the refusal later is a
+	decision somebody makes rather than a tidy-up.
+	"""
+	assert parse_text(
+		PREFIX + REGION_AEAD + "struct s { u8 n; sealed body(region_aead) { } "
+		"tag u8 mac[4] covers(body); }") is not None
