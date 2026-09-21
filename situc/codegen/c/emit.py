@@ -621,7 +621,7 @@ class Emitter:
 		held = obligation(self.schema, struct, label)
 		if held is None:
 			return macro(self.prefix, struct.name, label, "DIRTY")
-		return macro(self.prefix, struct.name, held.name, held.suffix)
+		return macro(self.prefix, struct.name, held.local, held.suffix)
 
 	def _tag_constants(self, struct: ResolvedStruct) -> list[str]:
 		"""One bit per obligation, plus the mask of all of them.
@@ -648,7 +648,7 @@ class Emitter:
 
 		for one in held:
 			lines.append(
-				f"#define {macro(self.prefix, struct.name, one.name, one.suffix)} "
+				f"#define {macro(self.prefix, struct.name, one.local, one.suffix)} "
 				f"{hex(1 << one.bit)}u")
 
 		mask = (1 << len(held)) - 1
@@ -745,12 +745,14 @@ class Emitter:
 			f"{ident(self.prefix, struct.name, local, 'is_dirty')}"
 			"(const situ_msg_t *msg)",
 			"{",
-			f"\treturn (msg->dirty & {self._tag_bit(struct, name)}) != 0u;",
+			f"\treturn (msg->dirty & "
+			f"{self._tag_bit(struct, self._local(struct, placement))}) != 0u;",
 			"}",
 			f"static inline void "
 			f"{ident(self.prefix, struct.name, local, 'finalize')}(situ_msg_t *msg)",
 			"{",
-			f"\tsitu_msg_clear_dirty(msg, {self._tag_bit(struct, name)});",
+			f"\tsitu_msg_clear_dirty(msg, "
+			f"{self._tag_bit(struct, self._local(struct, placement))});",
 			"}",
 		])
 		# `compute` and `check` read the span through `_covered`, so neither

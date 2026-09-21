@@ -709,7 +709,8 @@ def _find_mutable_under_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 				continue
 
 			candidates = [entry for entry in struct.entries
-			              if tag.placement.name in entry.placement.covered_by
+			              if tag.placement.path[len(struct.name) + 1:]
+			                  in entry.placement.covered_by
 			              and entry.placement.kind == "field"
 			              and entry.placement.scalar is not None
 			              and entry.placement.sealed_by is None

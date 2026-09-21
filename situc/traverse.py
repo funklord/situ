@@ -1191,7 +1191,12 @@ def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
 	lists, and a struct carrying both a tag and an invariant gave the two
 	backends different answers for the same schema.
 	"""
-	found = [Obligation("tag", entry.placement.name, entry.placement.name,
+	# `label` is the PATH, matching what `covered_by` records: two nested
+	# members can both hold a tag called `sig`, and on the leaf they are
+	# one label that resolves to whichever came first (26.467). `name`
+	# stays the leaf, being what a human says out loud.
+	found = [Obligation("tag", entry.placement.name,
+	                    entry.placement.path[len(struct.name) + 1:],
 	                    bit, entry.placement.path[len(struct.name) + 1:])
 	         for bit, entry in enumerate(entry for entry in struct.entries
 	                                     if entry.placement.kind in ("tag", "checksum"))]

@@ -174,6 +174,16 @@ struct hp_split size=10 repr=ValueConverted atomic=NonAtomic
   hp_split.pn.number                     offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   hp_split.rest                          offset=AbsoluteStatic(0x06) size=Fixed(4) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
 
+struct inner_left size=3 mutate=Immutable atomic=NonAtomic auth=Covered(sig)
+  inner_left.left_body                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sig)
+  inner_left.x                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sig)
+  inner_left.sig                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
+struct inner_right size=3 mutate=Immutable atomic=NonAtomic auth=Covered(sig)
+  inner_right.right_body                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sig)
+  inner_right.y                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sig)
+  inner_right.sig                        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
 struct keywords size=10 repr=ValueConverted
   keywords.int                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   keywords.short                         offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
@@ -388,13 +398,13 @@ struct signed_part size=11 mutate=Immutable atomic=NonAtomic auth=Covered(part_s
   signed_part.b                          offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig)
   signed_part.part_sig                   offset=AbsoluteStatic(0x09) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
-struct signed_whole size=16 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(whole_sig, part_sig)
+struct signed_whole size=16 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(whole_sig, piece.part_sig)
   signed_whole.whole_body                offset=AbsoluteStatic(0x00) size=Fixed(14) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(whole_sig)
   signed_whole.version                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(whole_sig)
-  signed_whole.piece                     offset=AbsoluteStatic(0x01) size=Fixed(11) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(whole_sig, part_sig)
-  signed_whole.piece.part_body           offset=AbsoluteStatic(0x01) size=Fixed(9) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig, whole_sig)
-  signed_whole.piece.a                   offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(part_sig, whole_sig)
-  signed_whole.piece.b                   offset=AbsoluteStatic(0x02) size=Fixed(8) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig, whole_sig)
+  signed_whole.piece                     offset=AbsoluteStatic(0x01) size=Fixed(11) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(whole_sig, piece.part_sig)
+  signed_whole.piece.part_body           offset=AbsoluteStatic(0x01) size=Fixed(9) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(piece.part_sig, whole_sig)
+  signed_whole.piece.a                   offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(piece.part_sig, whole_sig)
+  signed_whole.piece.b                   offset=AbsoluteStatic(0x02) size=Fixed(8) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic auth=Covered(piece.part_sig, whole_sig)
   signed_whole.piece.part_sig            offset=AbsoluteStatic(0x0A) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
   signed_whole.stamp                     offset=AbsoluteStatic(0x0C) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord auth=Covered(whole_sig)
   signed_whole.whole_sig                 offset=AbsoluteStatic(0x0E) size=Fixed(2) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
@@ -433,6 +443,16 @@ struct text_driver size=6..14 mutate=Shifting address=Unstable repr=TextConverte
 struct texty size=2..65543 access=Sequential mutate=Shifting address=Unstable repr=TextConverted canonical=NonCanonical
   texty.count                            offset=AbsoluteStatic(0x00) size=Bounded(2, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   texty.body                             offset=Scanned size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
+struct twin_sigs size=6 mutate=Immutable atomic=NonAtomic auth=Covered(left.sig, right.sig)
+  twin_sigs.left                         offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(left.sig)
+  twin_sigs.left.left_body               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(left.sig)
+  twin_sigs.left.x                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(left.sig)
+  twin_sigs.left.sig                     offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+  twin_sigs.right                        offset=AbsoluteStatic(0x03) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(right.sig)
+  twin_sigs.right.right_body             offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(right.sig)
+  twin_sigs.right.y                      offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(right.sig)
+  twin_sigs.right.sig                    offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
 struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(tag, checksum)
   two_tags.hop                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

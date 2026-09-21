@@ -30711,6 +30711,88 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.467 One obligation, one bit -- and the half-fix that was worse
+
+**Recorded as latent at 26.464, and it was two defects rather than
+one.** Two nested members whose obligations share a leaf name took one
+dirty bit. Fixing the NAME made it worse, and finding that out is the
+entry.
+
+**The corpus carries the shape now.** `twin_sigs` holds an `inner_left`
+and an `inner_right`, each with a checksum called `sig`. The two inner
+structs are deliberately not one type used twice: a repeated type would
+collide on the path as well, which is a different question.
+
+**First the visible half.** All four backends named a dirty bit from
+`Obligation.name`, the leaf, while naming its accessors from the path.
+C emitted `#define SITU_TWIN_SIGS_SIG_DIRTY 0x1u` and `0x2u` on
+consecutive lines -- refused under `-Werror`, and silently collapsing
+two tags onto one bit for anyone compiling more loosely. Nine sites
+across four backends read `local` now.
+
+**Then the half that was worse than the disease.** With the names
+distinct the header COMPILED, and
+`situ_twin_sigs_right_y_set` marked `SITU_TWIN_SIGS_LEFT_SIG_DIRTY`. A
+build the compiler had been refusing became a build that quietly marks
+the wrong tag -- `evidence.md`'s gate satisfied by deforming the source,
+arrived at by fixing half of something. It was caught by reading the
+generated setters, not by any test: the suite was green across 1,544
+cases with the wrong bit in the output.
+
+**The root is two layers down and is a key, not a name.** `covered_by`
+identified an obligation by its leaf, and `resolve_coverage` returned
+early for any struct declaring no `authenticated` region of its own.
+`twin_sigs` declares none -- both regions belong to its nested members
+-- so its coverage was never re-resolved at the outer level and both
+members inherited the bare label `sig`, which is unambiguous inside
+`inner_left` and ambiguous the moment two sit side by side.
+`obligation()` then returned whichever came first.
+
+Coverage is keyed by PATH now and resolved even where the struct owns
+no region, and the sites that looked one up by the bare leaf pass the
+path: four emitters, `advise` and `wire`. `signed_whole` gains the same
+treatment for free -- its map entry reads `Covered(piece.part_sig)`
+where it read `Covered(part_sig)`.
+
+**Six sites, not four, and the compiler found the last two.** The
+sweep over generated C reads function CALLS, and a macro is not a
+call -- so `gen-checks` building its `DIRTY_MASK` assertion from the
+leaf went straight past it and surfaced 45 minutes into the gate as
+`SITU_SIGNED_WHOLE_PART_SIG_DIRTY undeclared`. That sweep reads macros
+now, and its own control is the revert: put the leaf back and it names
+`edges.situ-checks` alone. A companion asks the other three backends
+the question C's linker asks for free -- every dirty constant a module
+REFERENCES is one it DEFINES -- because those scope theirs inside a
+class or an impl, where a wrong name is neither a redefinition nor a
+missing declaration, just wrong.
+
+**And one of the six is a no-op that is staying anyway.** Python's
+`_tag_rest` is reached only for a struct's OWN tags, where the path and
+the leaf are the same string, so changing it cannot alter output today
+and sabotaging it leaves every test green. It is written the same way
+as the other five because the next nested case to reach it would find
+the leaf there otherwise -- recorded as unexercised rather than
+counted as a fix.
+
+**Three guards, and only the third would have failed on the tree as it
+stood.** Distinct names catches nothing here; a header with no repeated
+`#define` catches the original and not the half-fix; *every coverage
+label names exactly one obligation* catches both, because two matches is
+the original and zero is the half-fix. Each was sabotaged in both
+directions and each fails on `edges.situ` alone.
+
+**The contracts moved as little as they could.** `edges.situ.wire` is
+purely additive -- no deployed peer sees a change -- and the map's only
+non-additive line is the label disambiguation. Checked by asking what
+was REMOVED from each rather than by reading what was added, which is
+the cheaper question and the one that would have caught a loss.
+
+**What this cost, stated because the estimate was wrong.** It began as
+"one word in four backends" and became `layout.py`, `traverse.py`, four
+emitters, `advise`, `wire`, the corpus and two committed contracts. The
+estimate was wrong because it was made from the symptom -- a duplicated
+macro -- rather than from the key that produced it.
+
 ### 26.466 A generated check that had never run, and was wrong
 
 **Fixing 26.464 made a file compile, and the first thing it did was

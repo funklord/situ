@@ -871,7 +871,7 @@ class Emitter:
 		         "\t * to be transmittable until it is cleared -- a tag by being",
 		         "\t * recomputed and finalized, a derived field by its recompute. */"]
 		lines.extend(
-			f"\tstatic constexpr std::uint32_t dirty_{c_name(one.name)}"
+			f"\tstatic constexpr std::uint32_t dirty_{c_name(one.local)}"
 			f" = {hex(1 << one.bit)}u;"
 			for one in held)
 		lines.append(
@@ -5866,7 +5866,7 @@ class Emitter:
 		ready to send while a covered byte no longer matches what
 		authenticates it.
 		"""
-		names = [f"dirty_{c_name(held.name)}"
+		names = [f"dirty_{c_name(held.local)}"
 		         for label in placement.covered_by
 		         if (held := obligation(self.schema, struct, label)) is not None]
 		return " | ".join(names) if names else "0u"
@@ -6431,7 +6431,11 @@ class Emitter:
 				"\t}",
 			])
 
-		held = obligation(self.schema, struct, placement.name)
+		# The PATH, not the leaf: `covered_by` and an obligation's
+		# label record the path now, because two nested members can
+		# both hold a tag called `sig` (26.467).
+		held = obligation(self.schema, struct,
+		                  placement.path[len(struct.name) + 1:])
 		if held is not None:
 			lines.extend([
 				"",

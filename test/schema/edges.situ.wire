@@ -179,6 +179,16 @@ struct hp_split size=10
   @0x0006   4         u32        rest  big
   pn covers: pn first
 
+struct inner_left size=3
+  @0x0000   1         u8         x
+  @0x0001   2         u8         sig
+  sig covers: left_body x
+
+struct inner_right size=3
+  @0x0000   1         u8         y
+  @0x0001   2         u8         sig
+  sig covers: right_body y
+
 struct keywords size=10
   @0x0000   4         u32        int  big
   @0x0004   2         u16        short  big
@@ -419,6 +429,12 @@ struct text_driver size=6..14
 struct texty size=2..65543
   @0x0000   until:0d0a u16        count  big radix=10 cap=8
   ~         0..65535  u8         body  sized-by=count
+
+struct twin_sigs size=6
+  @0x0000   3         inner_left left  big
+  @0x0003   3         inner_right right  big
+  sig covers: left_body x
+  sig covers: right_body y
 
 struct two_tags size=23
   @0x0000   1         u8         hop

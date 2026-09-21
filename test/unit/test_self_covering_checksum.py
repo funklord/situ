@@ -149,7 +149,12 @@ def test_a_nested_tag_stales_the_bytes_it_covers() -> None:
 
 	inside = resolved.find("whole.piece.a")
 	assert inside is not None
-	assert inside.placement.covered_by == ("part_sig", "whole_sig")
+	# `piece.part_sig` rather than `part_sig`: coverage identifies an
+	# obligation by its PATH within this struct, because two nested
+	# members can both hold a tag called `sig` and on the leaf they are
+	# one label (26.467). What this test is about -- both tags, innermost
+	# first -- is unchanged.
+	assert inside.placement.covered_by == ("piece.part_sig", "whole_sig")
 
 	outside = resolved.find("whole.stamp")
 	assert outside is not None

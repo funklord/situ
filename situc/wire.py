@@ -675,7 +675,8 @@ def _coverage(struct: ResolvedStruct) -> list[str]:
 
 		covered = sorted(
 			entry.placement.path for entry in struct.entries
-			if held.name in entry.placement.covered_by)
+			if held.path[len(struct.name) + 1:]
+			   in entry.placement.covered_by)
 		names = " ".join(path.rpartition(".")[2] for path in covered) or "nothing"
 		# The prefix is part of what a peer has to sum (14.2a), and it is
 		# invisible in the structure: every member, offset and size is

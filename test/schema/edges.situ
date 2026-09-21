@@ -129,6 +129,47 @@ struct signed_whole {
 require size(signed_part) == 11;
 require size(signed_whole) == 16;
 
+// TWO NESTED OBLIGATIONS SHARING A LEAF NAME (26.467). `signed_whole`
+// above carries a nested tag and its own, and their leaves differ --
+// `part_sig` and `whole_sig` -- so nothing here asked what happens when
+// they do not. Every backend names a dirty bit for the obligation's LEAF
+// and its accessor for the obligation's PATH, which is fine until two
+// paths end in the same word.
+//
+// Then `situ_twin_sigs_sig_is_dirty` and its sibling are two functions
+// over one macro defined twice. C refuses the header under `-Werror`,
+// and a consumer compiling generated headers more loosely takes the
+// second definition, at which point both tags share a bit: marking
+// either marks both and finalizing either clears both, which is 14.1's
+// one forbidden outcome again by a different route.
+//
+// The two inner structs are deliberately not one type used twice. A
+// repeated type would collide on the path as well, which is a different
+// question -- this one is about two DIFFERENT paths whose last component
+// agrees.
+struct inner_left {
+	authenticated left_body {
+		u8  x;
+	}
+	checksum u8 sig[2] covers(left_body);
+}
+
+struct inner_right {
+	authenticated right_body {
+		u8  y;
+	}
+	checksum u8 sig[2] covers(right_body);
+}
+
+struct twin_sigs {
+	inner_left   left;
+	inner_right  right;
+}
+
+require size(inner_left) == 3;
+require size(inner_right) == 3;
+require size(twin_sigs) == 6;
+
 // Text with the two attributes section 8.6 offers, which no protocol here uses
 // and which were both parsed and dropped on the floor until they were not.
 //

@@ -19,10 +19,14 @@ import pytest
 
 from situc.cli import analyse
 from situc.codegen.c import frame as frame_c, generate
+from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.python import generate as generate_py
+from situc.codegen.rust import generate as generate_rs
 from situc.diagnostics import Source, SituError
 from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import resolve
+from situc.traverse import obligations
 
 from every_schema import ROOT, SCHEMAS, ids
 
@@ -921,6 +925,17 @@ def test_generated_c_calls_only_accessors_the_headers_declare(
 	called   = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", harness))
 	declared = set(re.findall(r"\b(situ_[A-Za-z0-9_]+)\s*\(", header))
 
+	# MACROS as well as functions. A generated suite naming
+	# `SITU_SIGNED_WHOLE_PART_SIG_DIRTY` where the header defines
+	# `SITU_SIGNED_WHOLE_PIECE_PART_SIG_DIRTY` is the same build failure
+	# and this saw none of it, because a macro is not a call. Two of
+	# them went past this guard and were caught by the compiler three
+	# quarters of an hour later (26.467).
+	called |= set(re.findall(r"\b(SITU_[A-Z0-9_]+)\b", harness))
+	declared |= set(re.findall(r"#define\s+(SITU_[A-Z0-9_]+)", header))
+	declared |= set(re.findall(r"\b(SITU_[A-Z0-9_]+)\b",
+	                           (RUNTIME / "situ.h").read_text(encoding="ascii")))
+
 	# What the output defines for itself, which is not a finding about the
 	# headers: `situ_fuzz_sink`, and a tamper harness's own
 	# `static inline situ_err_t situ_<struct>_tamper`. `\w+` between
@@ -929,6 +944,15 @@ def test_generated_c_calls_only_accessors_the_headers_declare(
 	# suspect the check before the code, and this one was wrong twice.
 	own = set(re.findall(
 		r"\bstatic\s+(?:\w+\s+)+(situ_[A-Za-z0-9_]+)\s*\(", harness))
+	# The same distinction for macros: an include guard and a harness's
+	# own `SITU_CODEC_MAX_*` are things the output DEFINES, not things
+	# it expects a header to have declared.
+	own |= set(re.findall(r"^#define\s+(SITU_[A-Z0-9_]+)", harness, re.M))
+	# And one the BUILD supplies: `test/generated/Makefile` compiles a
+	# fuzz harness with `-DSITU_FUZZ_STANDALONE`, so no header defines
+	# it and none should. Named rather than pattern-matched, so a second
+	# command-line define has to be admitted deliberately.
+	own |= {"SITU_FUZZ_STANDALONE"}
 	runtime = set(re.findall(
 		r"\b(situ_[A-Za-z0-9_]+)\s*\(",
 		(RUNTIME / "situ.h").read_text(encoding="ascii")))
@@ -980,6 +1004,291 @@ def test_a_nested_obligation_is_named_by_its_path() -> None:
 		"the nested obligation was named for its leaf, which is the "
 		"macro's spelling and not the accessor's")
 	assert "situ_outer_sig_finalize(" not in text
+
+
+#: How each backend spells a dirty-bit constant: where it DEFINES one,
+#: and how it REFERS to one. C is absent because its macros live in one
+#: namespace and `test_the_c_header_defines_no_macro_twice` plus the
+#: accessor sweep already read them; these three scope theirs inside a
+#: type, so only a per-module reference check can see a dangling one.
+DIRTY_SPELLINGS = {
+	"cpp":    (r"constexpr std::uint32_t (dirty_[a-z0-9_]+)",
+	           r"\b(dirty_[a-z0-9_]+)\b"),
+	"python": (r"^\tDIRTY_([A-Z0-9_]+) =", r"\bDIRTY_([A-Z0-9_]+)\b"),
+	"rust":   (r"const DIRTY_([A-Z0-9_]+):", r"\bDIRTY_([A-Z0-9_]+)\b"),
+}
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_dirty_constant_referenced_is_defined(path: Path) -> None:
+	"""A bit named one way where it was defined another.
+
+	Six sites across five files name a dirty bit, and renaming the
+	obligation they read left two of them behind: `gen-checks` building
+	the `DIRTY_MASK` assertion from the leaf, and the Python backend's
+	stale accessor doing the same. C's compiler found both -- three
+	quarters of an hour into the gate, because the sweep over generated
+	C read function CALLS and a macro is not a call.
+
+	That sweep reads macros now, which covers C. These three scope the
+	constant inside a class or an impl, so a name defined in one struct
+	and referenced in another is not a redefinition and not a missing
+	declaration; it is simply wrong. Only asking, per module, whether
+	every constant referenced is one the module defines will see it.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	emitted = {
+		"cpp":    generate_cpp(schema, resolved, path.stem).header,
+		"python": generate_py(schema, resolved, path.stem).module,
+		"rust":   generate_rs(schema, resolved, path.stem).module,
+	}
+	assert set(emitted) == set(DIRTY_SPELLINGS), (
+		"a backend was added to one of these and not the other")
+
+	for backend, text in sorted(emitted.items()):
+		where, how = DIRTY_SPELLINGS[backend]
+		defined = set(re.findall(where, text, re.M))
+		used    = set(re.findall(how, text))
+		missing = sorted(used - defined)
+		assert not missing, (
+			f"{path.name}: {backend} refers to {missing}, which it never "
+			f"defines -- a bit named one way where it was defined another")
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_no_two_obligations_of_a_struct_share_a_name(path: Path) -> None:
+	"""One obligation, one bit, one name for it.
+
+	Every backend derives a dirty bit's name from `Obligation.name`, the
+	obligation's LEAF, while its accessors are named for the PATH. Those
+	agree until two paths end in the same word. `twin_sigs` in
+	`edges.situ` is that shape -- two nested members whose checksums are
+	both called `sig` -- and before this was fixed the C header defined
+	`SITU_TWIN_SIGS_SIG_DIRTY` twice, as `0x1u` and `0x2u`.
+
+	Asked of the shared DECISION rather than of four emitted texts, and
+	that is the second instrument this question got. The first read each
+	backend's output with a regex and reported `crc`, `mac`, `mask` and
+	`tag` as collisions in three of them -- names repeated across
+	different structs, which are different scopes there and perfectly
+	fine, mixed in with the one real within-struct collision. A pattern
+	that cannot tell a scope boundary from a name cannot answer this;
+	`obligations()` can, and all four backends read it.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	seen = 0
+	for name, struct in sorted(resolved.structs.items()):
+		held  = obligations(schema, struct)
+		seen += len(held)
+		# `local`, the obligation's path, because that is what the four
+		# backends name the bit from. `name` is the leaf and is what they
+		# used to name it from, which is the fault.
+		names = [one.local for one in held]
+		clash = sorted({one for one in names if names.count(one) > 1})
+		assert not clash, (
+			f"{path.name}: `{name}` has {len(held)} obligations and "
+			f"{clash} names more than one of them, so they share a dirty "
+			f"bit in every backend at once")
+
+	# A population claim, not a per-schema one: most schemas carry no
+	# obligation at all and an empty answer is their fact. What would be
+	# wrong is this walking nothing anywhere, which the corpus-wide
+	# companion below refuses.
+	assert seen >= 0
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_c_header_defines_no_macro_twice(path: Path) -> None:
+	"""The artifact, not the decision that produced it.
+
+	The sweep above reads `obligations()`, which is what all four
+	backends consult -- so it and they agree by construction, and
+	`evidence.md` calls two things that agree by construction one
+	witness. This is the second: C's macros share one namespace, so a
+	`#define` emitted twice is unambiguous whatever anybody intended,
+	and it is exactly how `SITU_TWIN_SIGS_SIG_DIRTY` announced itself.
+
+	Every macro rather than the dirty bits alone, since the question
+	"did this header define a name twice" has no reason to be narrower
+	than the header. `check_collisions` asks a related question at the
+	top of the emitter and reads struct and enum names only.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+	header   = generate(schema, resolved, path.stem).header
+
+	defined = _macros_that_can_coexist(header)
+	assert defined, f"{path.name}: no macros found; this is reading nothing"
+
+	twice = sorted({one for one in defined if defined.count(one) > 1})
+	assert not twice, (
+		f"{path.name}: {twice} defined more than once -- C refuses the "
+		f"header under -Werror and takes the last definition without it")
+
+
+def _macros_that_can_coexist(header: str) -> list[str]:
+	"""Every macro the header defines, counting the arms of a conditional
+	once between them.
+
+	`#if SITU_HOST_BIG / #define X A / #else / #define X B / #endif`
+	defines `X` twice in the TEXT and once in any compilation, and a flat
+	`re.findall` reported `SITU_TIFF_HEADER_BYTE_ORDER_HOST` and
+	`SITU_MARKED_EDGE_ORDER_HOST` as collisions on that basis -- a
+	finding manufactured by the instrument, which is the third time this
+	class of check has been wrong before the code was.
+
+	So the arms of one conditional contribute the union of their names
+	rather than the sum, and two definitions at the same level still
+	count twice. Not a preprocessor: it does not evaluate the condition,
+	because it does not need to -- the question is whether two
+	definitions can ever both be live, and two arms of one `#if` cannot.
+	"""
+	live: list[str] = []
+	# Each open conditional is a list of ARMS, each arm a list of names.
+	# Per arm rather than per block, because the first version of this
+	# unioned the whole block -- and every header opens with an
+	# `#ifndef SITU_<NAME>_H` guard that closes at the last line, so one
+	# arm held the entire file and every duplicate in it was unioned
+	# away. It passed on a header carrying the exact collision it was
+	# written for, which is a vacuous pass introduced while fixing a
+	# false positive.
+	stack: list[list[list[str]]] = []
+
+	def emit(name: str) -> None:
+		if stack:
+			stack[-1][-1].append(name)
+		else:
+			live.append(name)
+
+	for line in header.splitlines():
+		stripped = line.strip()
+		if stripped.startswith(("#ifdef", "#ifndef", "#if")):
+			stack.append([[]])
+			continue
+		if stripped.startswith(("#else", "#elif")):
+			if stack:
+				stack[-1].append([])
+			continue
+		if stripped.startswith("#endif"):
+			if stack:
+				arms = stack.pop()
+				# A name defined in two ARMS is defined once in any
+				# build; a name defined twice in ONE arm is a duplicate.
+				# So the block contributes each name as many times as
+				# the worst single arm defines it.
+				for name in {one for arm in arms for one in arm}:
+					for _ in range(max(arm.count(name) for arm in arms)):
+						emit(name)
+			continue
+		found = re.match(r"#define\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+		if found is not None:
+			emit(found.group(1))
+
+	# An unbalanced `#endif` would silently swallow names; say so rather
+	# than reporting a clean header.
+	assert not stack, "unbalanced conditional in the generated header"
+	return live
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_coverage_label_names_exactly_one_obligation(
+		path: Path) -> None:
+	"""`covered_by` is a key into this struct's obligations, and a key
+	that matches zero or two of them is a wrong dirty bit either way.
+
+	EXACTLY one, because the two failures are opposite and both silent.
+	Two matches is the original fault: `twin_sigs.left.x` and
+	`.right.y` both recorded the bare leaf `sig`, `obligation()`
+	returned whichever came first, and a setter marked the other tag's
+	bit. Zero matches is what a half-fix produces: rename the bit
+	without re-keying the coverage and every lookup misses, which the
+	C emitter turns into a macro nothing defines.
+
+	Neither is visible to the two guards above -- distinct names and a
+	header with no repeated `#define` are both true while this is
+	wrong -- so this is the one that has to exist. It is also the only
+	one of the three that would have failed on the tree as it stood
+	before any of this was touched.
+	"""
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	checked = 0
+	for name, struct in sorted(resolved.structs.items()):
+		labels = [one.label for one in obligations(schema, struct)]
+		for placement in struct.layout.placements:
+			for label in placement.covered_by:
+				checked += 1
+				assert labels.count(label) == 1, (
+					f"{path.name}: `{placement.path}` is covered by "
+					f"`{label}`, which names {labels.count(label)} of "
+					f"`{name}`'s obligations {labels} -- a dirty bit that "
+					f"is wrong rather than missing")
+
+	# Per-schema liveness would fail on the many schemas carrying no
+	# coverage at all; the corpus-wide companion asserts the population.
+	assert checked >= 0
+
+
+def test_the_corpus_carries_a_struct_whose_obligations_could_collide() -> None:
+	"""The sweep above is worth nothing without a struct that has two
+	obligations reached through different paths.
+
+	`twin_sigs` is that struct and it was added for this. Asserted so
+	that deleting it from the corpus fails here rather than quietly
+	making three tests vacuous -- `put the construct in the corpus`,
+	with the corpus entry itself under guard.
+	"""
+	found = []
+	for path in SCHEMAS:
+		source   = Source(str(path), path.read_text(encoding="ascii"))
+		schema   = parse(source)
+		resolved = resolve(schema, solve(schema))
+		for name, struct in resolved.structs.items():
+			held = obligations(schema, struct)
+			leaves = [one.name for one in held]
+			if len(held) > 1 and len(set(leaves)) < len(leaves):
+				found.append(f"{path.name}:{name}")
+
+	assert found, (
+		"no struct in the corpus has two obligations whose LEAF names "
+		"agree, so nothing here exercises the collision these guards "
+		"are about")
+
+
+def test_the_corpus_carries_obligations_for_that_question_to_be_about() -> None:
+	"""The sweep above is vacuous on a schema with no tags, and most of
+	them have none. This is where the population is asserted.
+
+	Named separately rather than folded in, because a per-schema
+	liveness check would fail on the schemas that are honestly empty --
+	the shape `evidence.md` calls asserting the partition instead of the
+	cell.
+	"""
+	total = 0
+	twins = 0
+	for path in SCHEMAS:
+		source   = Source(str(path), path.read_text(encoding="ascii"))
+		schema   = parse(source)
+		resolved = resolve(schema, solve(schema))
+		for name, struct in resolved.structs.items():
+			held = obligations(schema, struct)
+			total += len(held)
+			if len(held) > 1:
+				twins += 1
+
+	assert total > 0, "no schema in the corpus carries an obligation"
+	assert twins > 0, (
+		"no struct in the corpus carries TWO obligations, so nothing "
+		"here can collide and the sweep above proves nothing")
 
 
 def test_a_covered_write_discharges_every_obligation_it_marks() -> None:

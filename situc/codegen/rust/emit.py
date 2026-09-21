@@ -1468,7 +1468,11 @@ class Emitter:
 				"\t}",
 			])
 
-		held = obligation(self.schema, struct, placement.name)
+		# The PATH, not the leaf: `covered_by` and an obligation's
+		# label record the path now, because two nested members can
+		# both hold a tag called `sig` (26.467).
+		held = obligation(self.schema, struct,
+		                  placement.path[len(struct.name) + 1:])
 		if held is not None:
 			lines.extend([
 				"",
@@ -6745,7 +6749,7 @@ class Emitter:
 		ready to send while a covered byte no longer matches what
 		authenticates it.
 		"""
-		names = [f"Self::DIRTY_{c_name(held.name).upper()}"
+		names = [f"Self::DIRTY_{c_name(held.local).upper()}"
 		         for label in placement.covered_by
 		         if (held := obligation(self.schema, struct, label)) is not None]
 		return " | ".join(names) if names else "0"
@@ -6766,7 +6770,7 @@ class Emitter:
 		         "\t/// transmittable until it is cleared -- a tag by being",
 		         "\t/// recomputed and finalized, a derived field by its recompute."]
 		lines.extend(
-			f"\tpub const DIRTY_{c_name(one.name).upper()}: u32 = {hex(1 << one.bit)};"
+			f"\tpub const DIRTY_{c_name(one.local).upper()}: u32 = {hex(1 << one.bit)};"
 			for one in held)
 		lines.append(f"\tpub const DIRTY_MASK: u32 = {hex((1 << len(held)) - 1)};")
 		return lines

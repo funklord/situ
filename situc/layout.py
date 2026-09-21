@@ -1425,9 +1425,19 @@ class Solver:
 		"""
 		from situc.wellformed import auth_regions, coverage_of, tag_fields
 
+		# NOT `if not regions: return`. A struct can declare no region of
+		# its own and still carry tags, when every region belongs to a
+		# nested member: `twin_sigs` holds an `inner_left` and an
+		# `inner_right` and declares nothing itself. Returning here left
+		# both members' `covered_by` as the inner structs had written it
+		# -- the bare leaf `sig`, unambiguous inside `inner_left` and
+		# ambiguous once two of them sit side by side, which is how a
+		# setter came to mark the wrong tag's bit (26.467).
+		#
+		# Only the first loop below needs this struct's own regions; the
+		# rest works from `tag_covers`, which a nested placement brings
+		# with it.
 		regions = auth_regions(decl.members)
-		if not regions:
-			return
 
 		# A TAG THIS STRUCT DID NOT DECLARE arrives here from a nested struct
 		# that covers its own region: laying `outer` out inlines `inner`'s
@@ -1440,7 +1450,8 @@ class Solver:
 		# Before this the second loop below asked `next()` for such a tag with
 		# no default and got `StopIteration` -- a traceback rather than a
 		# diagnostic, for a shape the language allows (26.437).
-		own = {tag.name: tag for tag in tag_fields(decl.members)}
+		own = ({tag.name: tag for tag in tag_fields(decl.members)}
+		       if regions else {})
 
 		for index, held in enumerate(layout.placements):
 			if held.kind not in ("tag", "checksum"):
@@ -1471,12 +1482,22 @@ class Solver:
 		# staling `osig` and not `isig`, though it sits inside `ibody` -- a
 		# dirty bit that is wrong rather than absent, which 14.1 says is the
 		# one outcome this pass must not produce.
+		# Keyed on the tag's PATH within this struct, not its leaf name. Two
+		# nested members can both hold a tag called `sig`, and on the leaf
+		# they are one key: the second overwrote the first's `order` entry,
+		# and every member covered by either reported the same ambiguous
+		# label. What that cost is 26.467 -- `twin_sigs.right.y`'s setter
+		# marking `twin_sigs.left`'s dirty bit, silently, because the label
+		# resolved to whichever obligation came first.
+		local = {id(held): held.path[len(decl.name) + 1:]
+		         for held in layout.placements}
+
 		for position, held in enumerate(layout.placements):
 			if held.kind not in ("tag", "checksum") or not held.tag_covers:
 				continue
-			order[held.name] = (len(held.tag_covers), position)
+			order[local[id(held)]] = (len(held.tag_covers), position)
 			for region in held.tag_covers:
-				covering.setdefault(region, []).append(held.name)
+				covering.setdefault(region, []).append(local[id(held)])
 
 		for index, held in enumerate(layout.placements):
 			tags = {name for region in held.regions
@@ -1486,7 +1507,7 @@ class Solver:
 			# bytes leaves that tag stale" -- which is false of the bytes the
 			# tag is *written into*, and would tell a caller that computing
 			# the checksum invalidates the checksum.
-			tags.discard(held.name)
+			tags.discard(local[id(held)])
 			if not tags:
 				continue
 

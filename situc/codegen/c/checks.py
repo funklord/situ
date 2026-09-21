@@ -2915,7 +2915,9 @@ def _dirty_mask_check(suite: Suite, struct: ResolvedStruct,
 		return
 
 	mask = macro(prefix, struct.name, "DIRTY_MASK")
-	bits = [macro(prefix, struct.name, c_name(one.name), one.suffix)
+	# `local`, as the emitter names it: a nested obligation's bit is
+	# `SITU_TWIN_SIGS_LEFT_SIG_DIRTY`, and the leaf names nothing.
+	bits = [macro(prefix, struct.name, c_name(one.local), one.suffix)
 	        for one in held]
 
 	body = [*_acquire(struct, prefix, extent), ""]

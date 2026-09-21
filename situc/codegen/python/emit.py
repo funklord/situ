@@ -866,7 +866,7 @@ class Emitter:
 			held = obligation(self.schema, struct, f"invariant {field}")
 			assert held is not None, "the layout solver recorded this"
 			# Named, like the other three. It was the literal here.
-			bit = f"self.DIRTY_{py_name(held.name).upper()}"
+			bit = f"self.DIRTY_{py_name(held.local).upper()}"
 
 			lines.extend([
 				"",
@@ -1683,7 +1683,7 @@ class Emitter:
 		         "\t# Dirty bits. A covered write sets one; the message is not",
 		         "\t# transmittable until it is cleared -- a tag by being",
 		         "\t# recomputed and finalized, a derived field by its recompute."]
-		lines.extend(f"\tDIRTY_{py_name(one.name).upper()} = {hex(1 << one.bit)}"
+		lines.extend(f"\tDIRTY_{py_name(one.local).upper()} = {hex(1 << one.bit)}"
 		             for one in held)
 		lines.append(f"\tDIRTY_MASK = {hex((1 << len(held)) - 1)}")
 		return lines
@@ -1870,9 +1870,13 @@ class Emitter:
 				f"\t\treturn {at}, {extent}",
 			])
 
-		held = obligation(self.schema, struct, placement.name)
+		# The PATH, not the leaf: `covered_by` and an obligation's
+		# label record the path now, because two nested members can
+		# both hold a tag called `sig` (26.467).
+		held = obligation(self.schema, struct,
+		                  placement.path[len(struct.name) + 1:])
 		if held is not None:
-			bit = f"self.DIRTY_{py_name(placement.name).upper()}"
+			bit = f"self.DIRTY_{py_name(held.local).upper()}"
 			lines.extend([
 				"",
 				f"\tdef {name}_is_dirty(self) -> bool:",
@@ -3708,7 +3712,7 @@ class Emitter:
 		# and the other three backends name theirs; this wrote the literal, so
 		# a reader comparing `mark_dirty(1)` here against `DIRTY_MAC` there had
 		# to work out that they were the same bit.
-		named = [f"self.DIRTY_{py_name(one.name).upper()}"
+		named = [f"self.DIRTY_{py_name(one.local).upper()}"
 		         for label in placement.covered_by
 		         if (one := obligation(self.schema, struct, label)) is not None]
 		return " | ".join(named) if named else "0x1"
