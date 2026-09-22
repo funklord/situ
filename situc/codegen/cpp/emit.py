@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen import arm_label, sized_shown
 from situc.codegen.c.names import KEYWORDS, bare_name, c_name
 from situc.codegen.cpp.names import check_collisions, class_name, renamed
 from situc.codegen.doc import extractable
@@ -1376,7 +1377,8 @@ class Emitter:
 		# spelling was the one the differential never compared (26.320).
 		return [
 			"",
-			f"\t\t/* {placement.path}: {placement.array_count or placement.sized_by}"
+			f"\t\t/* {placement.path}:"
+			f" {placement.array_count or sized_shown(placement)}"
 			f" bytes, reached through the gate. */",
 			f"\t\t[[nodiscard]] ::situ::rt::bytes {name}() const noexcept",
 			"\t\t{",
@@ -3410,7 +3412,8 @@ class Emitter:
 		                             or nested.layout.is_fixed_size)
 		if start is None or wanted:
 			return ["", f"\t/* {placement.path}: sized by"
-			        f" `{placement.sized_by}`, which this backend cannot resolve"
+			        f" `{sized_shown(placement)}`, which this backend"
+			        " cannot resolve"
 			        f" yet. */"]
 		lines  = ["",
 		          f"\t/* {placement.path}: offset and extent both from the data. */",
@@ -4824,7 +4827,7 @@ class Emitter:
 		head = [
 			"",
 			f"\t/* {placement.path}, present when the discriminant selects"
-			f" `{arm.source or arm.value}`. */",
+			f" `{arm_label(arm)}`. */",
 		]
 		refuse = [f"\t\tif ({test}) {{",
 		          "\t\t\treturn ::situ::rt::err::version;",
@@ -6925,6 +6928,18 @@ class Emitter:
 					steps.append(f"\t\tout.{held} = at + {held}_lead(at);")
 				else:
 					steps.append(f"\t\tout.{held} = at;")
+			elif step.kind == "align":
+				# Rust and Python have had this branch since the offset
+				# cache was written and C++ never did, so a `pad_to` fell
+				# through to the `else`, which asked `_length_expression`
+				# how long a PAD is. It answers None, and the generator
+				# formatted it: `at += None;` in the emitted C++, twice, from
+				# `test/schema/padded.situ` -- a committed schema. The header
+				# does not compile, `'None' was not declared in this scope`,
+				# and only `--materialize` reaches it, which is why nothing
+				# noticed (26.486).
+				steps.append(f"\t\tat = situ_align_up_u32(at, {step.size},"
+				             " raw_.limit);")
 			elif step.placement is None:
 				steps.append(f"\t\tat += {step.size};")
 			else:

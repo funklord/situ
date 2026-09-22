@@ -30769,6 +30769,229 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.486 `at += None;` -- generated C++ that does not compile
+
+**A committed schema produced a header no compiler accepts, and the gate
+written that same hour to catch exactly this passed over it.**
+
+    $ situc build test/schema/padded.situ --target cpp --materialize
+    $ g++ -fsyntax-only padded.hpp
+    padded.hpp:250:23: error: 'None' was not declared in this scope
+    padded.hpp:442:23: error: 'None' was not declared in this scope
+
+**One missing branch.** `offset_plan` emits an `OffsetStep("align", ...)`
+for a `pad_to`. Rust has `elif step.kind == "align"` and so does Python;
+C emits no offset cache at all; **C++ never had the branch**, so the step
+fell through to the `else`, which asks `_length_expression` how long a
+PAD is. It answers `None`, and the generator formatted it into an
+assignment. C++ already spells the operation `situ_align_up_u32(at, n,
+raw_.limit)` forty lines away.
+
+**Why it survived: it is reachable only under `--materialize`.** That is
+the flag that emits the offset cache, and nothing in the suite compiled a
+materialized C++ header.
+
+**And it is not a comment.** 26.485's three instances were all inside
+`/* ... */`, which is why they had shipped for so long without anybody
+noticing -- a wrong comment is read by people and a wrong statement is
+read by a compiler. The same root produced both, and only this one had a
+symptom.
+
+**The gate took three corrections, and every one came from running it
+against the previous commit rather than from reading it.**
+
+    v1  backticked words, all four backends   22 of 42 schemas FAILED,
+                                              every one a false positive
+    v2  per language, backticked only         caught 4, missed dtls
+    v3  + unbackticked None in C and C++      caught 5, missed padded
+    v4  + the `--materialize` mode            caught 6
+
+v1 failed because Rust discusses `None` legitimately. v2 missed the C++
+sealed instance because it carries no backticks. **v3 missed this one
+because the mode is part of the population and I had treated it as a
+flag** -- the same mistake as a sweep that reads one file of several, and
+`evidence.md` has it as *whether the thing you are worried about is in
+the set it looked at*.
+
+**A control that passes is not yet evidence of anything.** Each version
+of this gate passed on the live tree; what separated them was pointing
+each at `git archive HEAD` and counting which schemas went red. Three of
+the four versions would have been committed green.
+
+### 26.485 A Python object, shipped in three languages out of four
+
+**`None` reached generated C++, Rust and Python source, from committed
+schemas, in three separate places.** Not a diagnostic mentioning it -- the
+object, formatted into a comment by a generator that reached for an
+Optional without checking it.
+
+    cpp/hpp   present when the discriminant selects `None`.
+    c/h       present when the discriminant selects `default`.
+
+Same schema, same member, `example/json/json.situ:76`. **C was right in
+all three places, which is the only reason any of them was findable.**
+
+  - **`arm.source or arm.value`**, for a `default:` arm, which has
+    neither. 10 occurrences across `json`, `sexpr`, `netlink` and
+    `edges`. C tests `arm.value is None` on its way to building the
+    guard and had the word `default` to hand; the other three had only
+    the expression, and an `or` chain cannot tell "no spelling" from "no
+    value either".
+  - **`placement.sized_by`** in the note a backend writes when it
+    declines a member: `sized_by` holds a PATH and holds nothing for a
+    member sized by arithmetic, where `size_expr` holds it.
+  - **`placement.array_count or placement.sized_by`** in C++'s sealed
+    accessor, which said `record.sealed.fragment: None bytes` on
+    `example/dtls`.
+
+**The tree already held the fix for the second, and it had not
+travelled.** `dissector.py` carries `size_shown or size_expr or sized_by`
+and a comment recording this exact bug being found in the Lua backend.
+The other three never received it -- the same shape as 26.483, where
+`_sized_by` was taught to resolve a const and the expression path was
+not.
+
+**So both are now one function rather than four.** `arm_label` and
+`sized_shown` live in `situc/codegen/__init__.py`, which is where 0017
+puts a fact a second backend should re-spell rather than re-derive.
+`arm_label` is not an `or` chain, because an arm whose value is `0` is
+not an arm without one.
+
+**The gate is per-language, and that is the whole of why it works.** A
+Python value is a leak only where the target language has no such word:
+Rust says `None` legitimately -- *"the getter answers `None` for a value
+section 8.7 does not admit"* is correct Rust prose, and 48 of 55
+backticked hits were that -- while C and C++ have no such token, so any
+occurrence there is an object on the page. A first version matched
+backticks in all four and failed on 22 of 42 schemas, every one a false
+positive.
+
+**And it matches `None` UNBACKTICKED in C and C++**, measured before
+widening: zero across all 42 schemas. The C++ sealed instance carries no
+backticks, so a quoted-only pattern missed the very bug it was written
+for -- it caught four schemas and the fifth was the one that prompted it.
+
+**What it cannot see is recorded beside it rather than left to be
+assumed:** a leak in Rust or Python alone, in a language that spells the
+word legally. Both instances here were caught through C++ emitting the
+same comment, which is the property being relied on -- four backends
+describing one layout, so a value in three and not the fourth is a
+defect however harmless the text looks.
+
+### 26.484 An enum member inside a size expression, four ways wrong
+
+**`u8 a[kv.alpha]` builds in all four backends. `u8 a[kv.alpha + n]`
+builds in none of them correctly, and only one says so.** Measured with a
+control -- the same schema written `17 + n` is clean in all four.
+
+    c       rc=1  uncaught traceback: situc.names.UnknownName: 'kv.alpha'
+    cpp     rc=0  /* s.a: sized by `None`, which this backend cannot
+                     resolve yet. */    and no length accessor
+    rust    rc=0  the same comment, the same absence
+    python  rc=0  the same, three times
+
+**Three of the four print a Python `None` into generated source.** Not a
+diagnostic mentioning it -- the literal object, interpolated into a C++
+comment, a Rust comment and a Python comment, because `size_expr` is
+`None` for this shape and the emitter formatted it anyway. The control
+schema contains the string nowhere.
+
+**The C backend's is a crash rather than a refusal**, from
+`names.over_fields` by way of `c/emit.py:_over_fields`, which is handed
+`kv.alpha` and has consts and field locals to resolve it against but no
+enum arms.
+
+**The bare form works, which is what hides it.** `sizing_field` returns a
+path for `[kv.alpha]` and `_sized_by` resolves a dotted arm by hand, so
+the fixed-size case never reaches the expression machinery. Put the same
+name in arithmetic and every backend loses it -- one loudly and three
+quietly, and the three quiet ones emit a message whose text is a bug.
+
+**Found while fixing 26.483, from the other side.** That entry's
+`_valued` did not resolve a dotted enum member either, which is how the
+construct came up at all; resolving it in the signature is why the wire
+half now works and the code half still does not. A signature that records
+`sized-by=17+n` beside four backends that cannot emit an accessor for it
+is a contract describing code nobody generated -- worth knowing before
+anyone relies on the line.
+
+**Worse than any of that: `situc pack` and the walker agree on a WRONG
+answer, and `validate` passes.** The packed image is 16 bytes shorter --
+266 against the literal control's 282 -- and the walker reads the member
+after the array from the wrong offset:
+
+    n=0   literal  p[2] 255      enum  p[2] 255     <- agrees
+    n=1   literal  p[2] 255      enum  p[2] 170     <- wrong
+    n=2   literal  p[2] 255      enum  p[2] 170     <- wrong
+    both report  validate 0 throughout
+
+**A crash is a bad day; this is a parser that runs, answers, and is
+believed.**
+
+**The mechanism is not what this entry first said, and the correction is
+worse than the claim.** The array's placement is NOT absent and the
+following member is not read at a fixed wrong offset. The row is written
+with `size_code = NONE`, and `walker/walk.py` falls back to
+`placement.size_bits` -- the array's STATIC MINIMUM, 17 bytes, which is
+the `n = 0` case of `kv.alpha + n`. So the walker is **exactly right on
+the message anybody would reach for first** and wrong by `n` thereafter.
+A fixed wrong answer gets noticed; one that is correct on the simplest
+input does not.
+
+**And the image asserts it can do this.** Both carry
+`struct_flags = 3` -- validatable and measurable -- because `_measurable`
+(`pack.py:732`) asks the RESOLVED SCHEMA whether the extent is
+computable and never asks whether a program for it was actually encoded.
+`pack.py:970` records the failure into `coverage.unencodable` and
+continues; the flags never hear about it.
+
+**`situc pack --coverage` already detects it and exits 1** -- *"s.a: no
+placement for `kv.alpha`"* -- but that run returns before writing the
+image, so the check and the artifact are two separate invocations and the
+one that writes ignores the one that knows. That is the gap, not the
+detection.
+
+**A refusal there is safe, measured across the whole corpus.** 42
+schemas, 995 placement rows, 179 members carrying a size expression, 179
+programs encoded, **zero unencodable** -- by three independent witnesses:
+the packer's own `--coverage`, a reader that asks the image and the AST
+separately, and two committed tests (`test_pack.py:450` and `:739`) that
+already assert it. And `whole = False` is not a new mechanism: this file
+uses it **31 times** for exactly this -- *the image cannot carry this
+check, so the struct is not fully validatable and says so*. A missing
+size program is the one case that never got the branch.
+
+**And `at` is the same defect one construct over, with no working
+spelling at all.** `u8 payload[2] at spot + kv.alpha` raises
+`UnknownName` from **all four** backends, the literal equivalent builds
+clean in all four, and `wellformed.py:2727` states in as many words that
+an `at` expression may name *"a field declared earlier in this struct, a
+`const`, or an enum member"*. The front end documents it as supported and
+every backend dies on it.
+
+**The shape, which is what to carry:** every clean case is one where the
+value is folded before a backend sees it -- `[must_eq]`, a `case` label,
+a `while ... max` cap. Every broken case is a SIZE-OR-OFFSET expression
+reaching a backend as source text, rewritten name by name by
+`names.over_fields`, which knows fields, consts and three builtins --
+and not enum arms. `Env.enums` is in hand at all five call sites; it is
+simply absent from the list each one passes.
+
+**Not fixed here.** Five call sites to teach, plus a one-line change in
+C so its crash becomes the refusal the other three already give, plus a
+decision on the packer -- which must not be left answering confidently.
+A refusal in `wellformed.py` would be the smaller change and it breaks
+nothing committed, but it would refuse a construct `situc wire`,
+`situc map`, `situc doc`, `explain`, the dissector and the layout solver
+all handle correctly, and which works today in the bare form
+`u8 a[kv.alpha]` in every backend. That is the holder's call, and the
+packer's wrong answer is the part that should not wait for it.
+
+**Not fixed here.** It wants `over_fields` and the three backends' size
+rendering to learn enum arms, which is four code paths and a decision
+about whether the C crash should become a refusal or a working accessor.
+Recorded with the reproduction rather than half-done.
+
 ### 26.483 The contract recorded a spelling, in both directions at once
 
 **`sized-by=` and `while=` published the author's SOURCE, so the wire

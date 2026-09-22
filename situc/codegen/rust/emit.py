@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen import arm_label, sized_shown
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
@@ -2555,7 +2556,7 @@ class Emitter:
 		head = [
 			"",
 			f"\t/// `{placement.path}`, present when the discriminant selects",
-			f"\t/// `{arm.source or arm.value}`; `Error::Version` otherwise.",
+			f"\t/// `{arm_label(arm)}`; `Error::Version` otherwise.",
 		]
 		refuse = [f"\t\tif {self._unparen(test)} {{",
 		          "\t\t\treturn Err(Error::Version);",
@@ -6274,7 +6275,8 @@ class Emitter:
 		if start is None or (length is None and (nested is None
 		                                         or nested.layout.is_fixed_size)):
 			return ["", f"\t// {placement.path}: sized by"
-			        f" `{placement.sized_by}`, which this backend cannot resolve."]
+			        f" `{sized_shown(placement)}`, which this backend cannot"
+			        " resolve."]
 		lines  = [
 			"",
 			f"\t/// {placement.path}: offset and extent both from the data.",

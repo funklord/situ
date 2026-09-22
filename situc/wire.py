@@ -537,10 +537,18 @@ def _valued_source(tree: ast.Expr | None, shown: str | None,
 		env: Env, *, fields: bool = False) -> str:
 	"""`tree` resolved to values, or the spelling where no tree travelled.
 
-	The fallback is not decoration. `size_ast` is set exactly where
-	`size_expr` is, but a placement built before this field existed -- or by
-	a path that does not set it -- would otherwise publish an empty
-	`sized-by=`, which reads as a member nothing sizes.
+	**The fallback is unreachable today, and that is worth saying rather
+	than implying it guards something.** Eleven sites construct a
+	`Placement`; two set `size_expr`, one `repeat_while` and one `located`,
+	and all four set the matching tree beside it. `dataclasses.replace`
+	copies what it is not given, so the five `replace` sites keep both.
+
+	What would make it fire is a NEW construction site that sets a string
+	and not a tree -- and then this would quietly publish the spelling
+	again, which is the whole defect. It is a fallback rather than an
+	assertion because a rendering path is the wrong place to abort a user's
+	build; the guard against it is that the two are set together, in four
+	places, named here so the next reader can check.
 	"""
 	from situc.unparse import expr_to_source
 

@@ -1102,3 +1102,97 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	assert in_c == in_cpp, f"{path.name}: c and cpp"
 	assert in_c == in_rs, f"{path.name}: c and rust"
 	assert in_c == in_py, f"{path.name}: c and python"
+
+
+# -- Python objects reaching shipped source (26.485) ------------------------
+
+#: A Python value is a leak only where the TARGET LANGUAGE has no such word,
+#: which is why this is per backend rather than one pattern. Rust discusses
+#: `None` legitimately -- "the getter answers `None` for a value section 8.7
+#: does not admit" is correct Rust prose -- and Python's output may use all
+#: three as keywords. C and C++ have none of them, so a backticked one there
+#: is always a Python object that reached the page.
+#:
+#: Backticked, because that is how a generated comment quotes a spelling.
+#: `True`/`False` are capitalised, so they are Python's even in Rust, whose
+#: own are lowercase.
+#: `None` is matched UNBACKTICKED in C and C++, because a leak need not be
+#: quoted: `record.sealed.fragment: None bytes` was the C++ instance and
+#: carries no backticks at all. Measured before widening -- zero bare `None`
+#: across all 42 schemas in either language -- so it costs no false positive,
+#: and a backticked-only pattern would have missed the bug it was written for.
+LEAKED = {
+	"c":      re.compile(r"\bNone\b|`(True|False|\[\]|\{\}|set\(\))`"),
+	"cpp":    re.compile(r"\bNone\b|`(True|False|\[\]|\{\}|set\(\))`"),
+	"rust":   re.compile(r"`(True|False|set\(\))`"),
+	"python": re.compile(r"(?!)"),	# every such word is Python's own
+}
+
+#: Everywhere, in every language: nothing legitimately prints a repr.
+REPRS = re.compile(r"<\w+ object at 0x|<class '|dict_keys\(|Ellipsis")
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_no_backend_prints_a_python_object_into_its_output(path: Path) -> None:
+	"""A generator formatting an Optional it did not check.
+
+	`/* s.a: sized by `None` ... */` shipped in C++, Rust and Python, from
+	`placement.sized_by` -- which holds a path and holds NOTHING for a member
+	sized by arithmetic. So did `present when the discriminant selects
+	`None``, for every `default:` arm in the corpus: `example/json`,
+	`example/sexpr`, `example/netlink` and `test/schema/edges`. And C++
+	alone said `record.sealed.fragment: None bytes` on `example/dtls`.
+
+	C was right in all three places, which is what made them findable: same
+	schema, same member, `default` in one language and a Python object in
+	the others. Four backends describing one layout is this project's whole
+	claim, so a value in three of them and not the fourth is a defect
+	however harmless the text looks.
+
+	WHAT THIS DOES NOT CATCH, so that nobody quotes it for more: a leaked
+	`None` in Rust or Python output, because both use the word themselves
+	and no pattern separates their prose from a leak. Both were caught here
+	through C++ emitting the same comment, which is the property to rely on
+	-- a leak in one backend alone, in a language that spells it legally,
+	would pass this.
+	"""
+	found = [f"{backend} {mode}: {line.strip()}"
+	         for mode, texts in _every_mode(path).items()
+	         for backend, text in texts.items()
+	         for line in text.splitlines()
+	         if LEAKED[backend].search(line) or REPRS.search(line)]
+
+	assert not found, (
+		f"{path.name}: a Python value reached generated source:\n  "
+		+ "\n  ".join(found))
+
+
+def _every_mode(path: Path) -> dict[str, dict[str, str]]:
+	"""Plain AND `--materialize`, because the leak that mattered was there.
+
+	`emitted()` next door builds the plain header, which is the right
+	question for "which members does each backend refuse". It is the wrong
+	one here: C++'s offset cache is emitted only under `--materialize`, and
+	that is where `at += None;` lived -- generated C++ that does not compile,
+	`'None' was not declared in this scope`, from `test/schema/padded.situ`.
+
+	A first version of this gate swept only the plain build and passed over
+	it. The mode is part of the population, not a flag.
+	"""
+	schema   = parse(Source(str(path), path.read_text(encoding="utf-8")))
+	resolved = resolve(schema, solve(schema))
+	name     = path.stem
+
+	return {
+		mode: {
+			"c":      generate_c(schema, resolved, name,
+			                     materialize=held).header,
+			"cpp":    generate_cpp(schema, resolved, name,
+			                       materialize=held).header,
+			"python": generate_py(schema, resolved, name,
+			                      materialize=held).module,
+			"rust":   generate_rs(schema, resolved, name,
+			                      materialize=held).module,
+		}
+		for mode, held in (("plain", False), ("materialize", True))
+	}

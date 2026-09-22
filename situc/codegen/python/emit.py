@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 from situc import ast
 from situc.capability import Axis
+from situc.codegen import arm_label, sized_shown
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
@@ -2794,7 +2795,7 @@ class Emitter:
 			"", "\t@property",
 			f"\tdef {name}(self) -> {self._arm_hint(placement, scalar)}:",
 			f'\t\t"""{placement.path}, present when the discriminant selects',
-			f'\t\t`{arm.source or arm.value}`. Raises VersionError otherwise."""',
+			f'\t\t`{arm_label(arm)}`. Raises VersionError otherwise."""',
 			f"\t\tif {test}:",
 			f'\t\t\traise VersionError("{placement.path}: that arm is not'
 			' the one present")',
@@ -2947,7 +2948,7 @@ class Emitter:
 					f'\t\t"""How many {scalar.name} elements of'
 					f' {placement.path} are here,',
 					f'\t\twhen the discriminant selects'
-					f' `{arm.source or arm.value}`."""',
+					f' `{arm_label(arm)}`."""',
 					f"\t\tif {test}:",
 					f'\t\t\traise VersionError("{placement.path}: that arm is'
 					' not the one present")',
@@ -4108,7 +4109,7 @@ class Emitter:
 		if start is None or (length is None and (nested is None
 		                                         or nested.layout.is_fixed_size)):
 			return ["", f"\t# {placement.path}: sized by"
-			        f" `{placement.sized_by}`, which this backend cannot",
+			        f" `{sized_shown(placement)}`, which this backend cannot",
 			        "\t# resolve yet."]
 		# Accumulating, like the delimited members' own offset elsewhere in
 		# this file. This summed instead, and every term in the sum re-derived

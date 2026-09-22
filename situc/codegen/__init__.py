@@ -55,6 +55,51 @@ def refuse_parameters(schema: ast.Schema) -> None:
 		])
 
 
+def sized_shown(placement: Placement) -> str:
+	"""How a reader should see what sizes this member.
+
+	`placement.sized_by` holds a PATH and holds nothing for a member sized
+	by arithmetic -- `size_expr` holds that -- so three backends printed
+	`sized by `None`` into shipped source for every such member. The Lua
+	dissector met the same bug and was fixed; `dissector.py` has carried the
+	working spelling ever since and the other three never received it.
+
+	Order matters and is the dissector's: the reader's form first, the
+	compiler's parenthesised form second, the bare path last. A member with
+	none of the three is sized by nothing a comment can name, and `?` says
+	that rather than naming a Python object.
+	"""
+	return (placement.size_shown or placement.size_expr
+	        or placement.sized_by or "?")
+
+
+def arm_label(arm: object) -> str:
+	"""What a variant arm selects, as a reader should see it.
+
+	`arm.source or arm.value` reads like the whole answer and is not: a
+	`default:` arm has NEITHER, so three backends printed the Python object
+	into shipped source --
+
+	    cpp/hpp:  present when the discriminant selects `None`.
+	    c/h:      present when the discriminant selects `default`.
+
+	-- from the same member of `example/json/json.situ`, which is committed.
+	C was right because it tests `arm.value is None` on its way to building
+	the guard and has the word to hand; the other three had only the
+	expression, and an `or` chain cannot distinguish "no source spelling"
+	from "no value either".
+
+	Here rather than four times: what an arm selects is one fact about the
+	schema, and 0017 asks a second backend to re-spell rather than
+	re-derive. A `0` value is why this is not an `or` chain either.
+	"""
+	source = getattr(arm, "source", None)
+	if source is not None:
+		return str(source)
+	value = getattr(arm, "value", None)
+	return "default" if value is None else str(value)
+
+
 def arguments(struct: ResolvedStruct) -> list[Placement]:
 	"""The `parameter`s a struct takes, in declaration order (0050).
 
