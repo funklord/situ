@@ -30753,6 +30753,79 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.474 The wire signature recorded a spelling, not a value
+
+**`must_eq=PROTOCOL_VERSION` promised a deployed receiver nothing.** The
+name lives in one schema's source; the byte is what arrives. The
+generated C has always flattened it -- `!= 2` -- so the signature was
+recording something other than what is enforced, which 0041 calls the
+defect rather than a lesser form of the truth: "the artifacts record
+exactly what is enforced", and "recording an unenforced fact is the
+defect, and worse than absence".
+
+**Both directions were broken, and the second is the one nobody would
+have looked for.** Measured with `situc wire --check`:
+
+    const TAG = 4 -> 7        before: "is current"     after: BREAKING
+    must_eq = 0x0800 -> 2048  before: 1 breaking       after: "is current"
+
+The first is a byte every peer checks, moving in silence. The second is
+the same byte twice, reported as a break because the file compared
+spellings. A gate that is silent on a real change and loud on a no-op is
+worse than either fault alone, because the noise teaches a reader to
+discount the signal.
+
+**`evaluate` is the discriminator, not a second rule kept in step with
+the first.** It reaches `env.consts` and `env.enums` and RAISES for a
+field reference -- which is exactly the case whose spelling must stay,
+because a field is a pointer into the byte stream that a peer resolves
+at parse time. There is no number to substitute: the value differs per
+message. Same call and same environment `pack.py` already uses at three
+sites, so the two cannot disagree about a value.
+
+**Restricted to `VALUE_ATTRS`, and the reason is `encoding`.** Its value
+is a NAME matched against `TEXT_ENCODINGS`, not an integer. A schema
+declaring `const ascii = 7;` compiles today, and blind evaluation would
+publish `encoding=7` -- a number no peer can act on, naming a different
+encoding from the one enforced. So four attributes resolve and the rest
+do not.
+
+**`sized-by=` needed the same treatment and a guard the attributes did
+not.** `placement.sized_by` is a plain string rather than an expression,
+so the lookup mirrors `evaluate`'s order by hand: consts, then a dotted
+enum member, then the name. And `remaining` is checked FIRST, because
+`const remaining = 4;` is legal and coexists with the `[remaining]`
+keyword -- which wins the layout. Measured: the member is genuinely
+unbounded while `env.consts` holds a 4, so resolving the name would have
+published a length the format does not have.
+
+**The width column is not a substitute for resolving a const here**,
+which is the measurement that settled whether `sized-by` was worth
+touching at all. A member carrying `[size = N]` has its width frozen by
+the pin while the meaningful length moves with the constant: `const
+NAME_BYTES = 8` becoming `16` changed the generated `_COUNT` macro and
+left both the signature and the map byte-identical.
+
+**Seven committed contracts moved and every line was read.** Enum
+members to their values (`hardware_type.ethernet` -> `1`), consts to
+theirs (`PROTOCOL_VERSION` -> `2`, `DEVICE_ID_BYTES` -> `8`,
+`MAX_PAYLOAD` -> `1500`), and hex literals canonicalised. No `.situ.map`
+changed; no field reference was touched.
+
+**One real cost.** `must_eq=0x0800` now reads `2048`, so an EtherType
+loses the form a human reads it in. Canonical is right for a file whose
+job is comparison and whose consumer is a differ -- and the schema still
+carries the hex -- but it is a loss rather than a pure gain, and worth
+knowing before somebody reads the arp contract and wonders.
+
+**Three controls, and the third was a sabotage that did not apply.**
+Dropping the `VALUE_ATTRS` restriction reds the encoding test; dropping
+the `remaining` guard reds that one. The field-reference sabotage passed
+first time -- because the substitution had missed, not because the guard
+was untested. `evidence.md` says a sabotage that did not apply and a
+check that cannot fail are indistinguishable from the output; asserting
+the substitution landed is what separated them.
+
 ### 26.473 One name for two widths, declined
 
 **Settled by the copyright holder 2026-09-22: a variant arm keeps its own

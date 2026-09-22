@@ -32,5 +32,5 @@ struct header size=9
   @0x0000   1         u8         version  must_eq=1
   @0x0001   1         msg_type   type
   @0x0002   1         flags      flags
-  @0x0003   2         u16        length  big max=MAX_PAYLOAD
+  @0x0003   2         u16        length  big max=1500
   @0x0005   4         u32        seq  big

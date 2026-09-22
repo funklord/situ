@@ -33,6 +33,8 @@ from situc.layout import (
 	Arm, BITS_PER_BYTE, IndexTable, KnownTag, Placement, ValueRule)
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.invariant import paths_in
+from situc.diagnostics import SituError
+from situc.expr import Env, evaluate
 from situc.traverse import own_members
 from situc.unparse import expr_to_source
 
@@ -73,7 +75,7 @@ def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
 
 	for name in sorted(resolved.structs):
 		lines.append("")
-		lines.extend(_struct(resolved.structs[name]))
+		lines.extend(_struct(resolved.structs[name], resolved.layout.env))
 		lines.extend(_refusals(schema, name))
 
 	return "\n".join(lines) + "\n"
@@ -191,7 +193,7 @@ def _enums(schema: ast.Schema, resolved: ResolvedSchema) -> list[str]:
 	return lines
 
 
-def _struct(struct: ResolvedStruct) -> list[str]:
+def _struct(struct: ResolvedStruct, env: Env) -> list[str]:
 	layout = struct.layout
 	if layout.is_fixed_size:
 		extent = f"size={layout.size_bytes}"
@@ -206,7 +208,8 @@ def _struct(struct: ResolvedStruct) -> list[str]:
 		head += f" version={version}"
 
 	lines = [head]
-	lines.extend(f"  {_member(placement)}" for placement in own_members(struct))
+	lines.extend(f"  {_member(placement, env)}"
+	             for placement in own_members(struct))
 	lines.extend(_composites(struct))
 	lines.extend(_coverage(struct))
 	return lines
@@ -229,7 +232,7 @@ def _version_field(struct: ResolvedStruct) -> str | None:
 	return None
 
 
-def _member(placement: Placement) -> str:
+def _member(placement: Placement, env: Env) -> str:
 	"""One member's contract, as one line so a diff points at one thing."""
 	# A parameter is an argument the caller supplies rather than bytes
 	# (0050), and it is named here for 0048's reason: two peers that
@@ -257,7 +260,7 @@ def _member(placement: Placement) -> str:
 		placement.type_name.ljust(10),
 		placement.name,
 	]
-	facts = _constraints(placement)
+	facts = _constraints(placement, env)
 	return " ".join(parts).rstrip() + (f"  {' '.join(facts)}" if facts else "")
 
 
@@ -293,7 +296,7 @@ def _width(placement: Placement) -> str:
 	return str(placement.size_bits // BITS_PER_BYTE)
 
 
-def _constraints(placement: Placement) -> list[str]:
+def _constraints(placement: Placement, env: Env) -> list[str]:
 	"""Everything a peer may rely on, and nothing it may not.
 
 	A receiver written against this file is entitled to assume each of these
@@ -310,7 +313,7 @@ def _constraints(placement: Placement) -> list[str]:
 	if placement.marker is not None:
 		facts.append(f"endian-from={placement.marker}")
 	if placement.sized_by is not None:
-		facts.append(f"sized-by={placement.sized_by}")
+		facts.append(f"sized-by={_sized_by(placement.sized_by, env)}")
 	# The same question -- where does the length come from -- where the answer
 	# is arithmetic rather than a name. `sized_by` holds a path and holds
 	# nothing at all for `u8 body[hi * 256 + lo]`, so the commonest shape there
@@ -411,7 +414,7 @@ def _constraints(placement: Placement) -> list[str]:
 	if placement.sealed_key is not None:
 		facts.append(f"key={placement.sealed_key}")
 
-	facts.extend(_attribute_facts(placement))
+	facts.extend(_attribute_facts(placement, env))
 	return facts
 
 
@@ -439,7 +442,51 @@ WIRE_ATTRS = (
 )
 
 
-def _attribute_facts(placement: Placement) -> list[str]:
+#: The wire attributes whose value is a NUMBER the compiler resolves, as
+#: against one that is a spelling checked by name. `[encoding = utf8]` is
+#: the second kind: `utf8` is matched against `TEXT_ENCODINGS` and is not
+#: an integer, so a schema declaring `const ascii = 7;` would otherwise
+#: publish `encoding=7` -- which no peer could act on and which names a
+#: different encoding from the one enforced (26.474).
+VALUE_ATTRS = ("must_eq", "min", "max", "self_as")
+
+
+def _sized_by(name: str, env: Env) -> str:
+	"""What sizes this run: a field a peer can read, or a number.
+
+	`sized_by` is a plain string rather than an expression, so `evaluate`
+	is unavailable and the lookup mirrors its order by hand -- consts
+	first, then a dotted enum member. A name in neither is a FIELD path,
+	and a field's name is the enforceable fact: a peer locates it in the
+	byte stream, where it cannot locate a constant that exists only in
+	one schema's source.
+
+	The width column is not a substitute for resolving a const here. A
+	member carrying `[size = N]` has its width frozen by the pin while
+	the meaningful length moves with the constant, so `const NAME = 8`
+	becoming `16` changed the generated `_COUNT` macro and left the
+	signature byte-identical (26.474).
+
+	`remaining` is guarded FIRST and deliberately: `const remaining = 4;`
+	is legal and coexists with the `[remaining]` keyword, which wins the
+	layout -- measured, the member is genuinely unbounded while
+	`env.consts` holds a 4. Resolving it would publish a length the
+	format does not have. The keyword is the only way this string can
+	arrive, `sizing_field` returning it literally for `ast.Remaining`.
+	"""
+	if name == "remaining":
+		return name
+	if name in env.consts:
+		return str(env.consts[name])
+	held, dot, member = name.rpartition(".")
+	if dot and held in env.enums:
+		found = env.enums[held].get(member)
+		if found is not None:
+			return str(found)
+	return name
+
+
+def _attribute_facts(placement: Placement, env: Env) -> list[str]:
 	from situc.unparse import expr_to_source
 
 	facts = []
@@ -448,8 +495,31 @@ def _attribute_facts(placement: Placement) -> list[str]:
 			continue
 		if attr.value is None:
 			facts.append(attr.name)
-		else:
-			facts.append(f"{attr.name}={expr_to_source(attr.value)}")
+			continue
+
+		# The VALUE, not the author's spelling of it. This file is read by
+		# a receiver that is already deployed and cannot be recompiled, so
+		# `must_eq=PROTOCOL_VERSION` promises it nothing: the name lives in
+		# one schema's source and the byte is what arrives. The generated
+		# code has always flattened it -- the C reads `!= 2` -- so the
+		# signature was recording something other than what is enforced,
+		# which 0041 calls the defect rather than a lesser form of the
+		# truth.
+		#
+		# `evaluate` is the discriminator as well as the resolver: it
+		# reaches `env.consts` and `env.enums` and RAISES for a field
+		# reference, which is exactly the case whose spelling must stay --
+		# a field is a pointer into the byte stream, and a peer resolves it
+		# at parse time. Same call and same environment as `pack.py`, so
+		# the two cannot disagree about a value.
+		shown = None
+		if attr.name in VALUE_ATTRS:
+			try:
+				shown = evaluate(attr.value, env)
+			except SituError:
+				shown = None
+		facts.append(f"{attr.name}="
+		             f"{shown if shown is not None else expr_to_source(attr.value)}")
 	return facts
 
 

@@ -41,8 +41,8 @@ struct adv_report size=10..41
   ~         1         i8         rssi
 
 struct le_advertising_report size=4..10459
-  @0x0000   1         u8         evt  must_eq=0x3E
+  @0x0000   1         u8         evt  must_eq=62
   @0x0001   1         u8         plen
-  @0x0002   1         u8         subevent  must_eq=0x02
+  @0x0002   1         u8         subevent  must_eq=2
   @0x0003   1         u8         num
   @0x0004   0..10455  adv_report reports  sized-by=num

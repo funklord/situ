@@ -23,7 +23,7 @@ enum content_type : u8 unknown=error
 
 struct record size=37..16421
   @0x0000   1         content_type type
-  @0x0001   2         u16        version  big must_eq=0xFEFD
+  @0x0001   2         u16        version  big must_eq=65277
   @0x0003   2         u16        epoch  big
   @0x0005   6         u8         sequence  big
   @0x000b   2         u16        length  big min=24 max=16408

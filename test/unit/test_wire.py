@@ -842,3 +842,78 @@ def test_stream_is_part_of_the_contract() -> None:
 	row = next(one for one in plain.splitlines()
 	           if one.strip().startswith("parameter"))
 	assert "[stream]" not in row, row
+
+
+# -- the value, not the author's spelling of it (26.474) --------------------
+
+
+def test_a_constant_is_recorded_as_its_value() -> None:
+	"""A receiver that is already deployed cannot resolve `TAG`.
+
+	The signature recorded `must_eq=TAG` while the generated C enforced
+	`!= 4`, so the file was recording something other than what is
+	enforced -- which 0041 calls the defect rather than a lesser form of
+	the truth. The consequence was measurable: changing the constant
+	moved the byte every peer checks and `situc wire --check` reported
+	"is current", where the identical change written as a literal
+	reported a breaking one.
+	"""
+	shown = signature("const TAG = 4;\n\nstruct s { u8 tag [must_eq = TAG]; u8 r; }",
+	                  preamble="endian big;\n\n")
+	assert "must_eq=4" in shown
+	assert "must_eq=TAG" not in shown, (
+		"the signature published a name that exists only in this schema")
+
+
+def test_a_field_reference_keeps_its_name() -> None:
+	"""The control, and the reason this is not a blanket flattening.
+
+	A field is a pointer INTO the byte stream: a peer locates `n` and
+	reads the length from it, so the name is the enforceable fact and a
+	number would destroy it -- there is no one number, the value differs
+	per message. `evaluate` raises for a field reference, which is what
+	makes it the discriminator rather than a second rule to keep in step.
+	"""
+	shown = signature(
+		"struct s { u8 n; u8 body[n]; u8 limit; u8 value [max = limit]; }",
+		preamble="endian big;\n\n")
+	assert "sized-by=n" in shown, "a field-sized run lost the field's name"
+	assert "max=limit" in shown, "a field reference was flattened to a number"
+
+
+def test_an_encoding_keeps_its_spelling() -> None:
+	"""The second control. `[encoding = utf8]` is checked against
+	`TEXT_ENCODINGS` by NAME and is not a number, so a schema declaring
+	`const ascii = 7;` would otherwise publish `encoding=7` -- a value no
+	peer can act on, naming a different encoding from the one enforced.
+	That is why the resolution is restricted to `VALUE_ATTRS` rather than
+	applied to every wire attribute."""
+	shown = signature(
+		"const ascii = 7;\n\nstruct s { u8 n; u8 body[n] [encoding = ascii]; }",
+		preamble="endian big;\n\n")
+	assert "encoding=ascii" in shown
+	assert "encoding=7" not in shown
+
+
+def test_a_remaining_run_is_not_confused_with_a_constant() -> None:
+	"""`const remaining = 4;` is legal and coexists with the `[remaining]`
+	keyword, which wins the layout -- the member is genuinely unbounded
+	while `env.consts` holds a 4. Resolving the name would publish a
+	length the format does not have, so the keyword is guarded before the
+	lookup."""
+	shown = signature("const remaining = 4;\n\nstruct s { u8 a; u8 body[remaining]; }",
+	                  preamble="endian big;\n\n")
+	assert "sized-by=remaining" in shown
+	assert "sized-by=4" not in shown, (
+		"the `[remaining]` keyword was resolved as though it were the const")
+
+
+def test_two_spellings_of_one_value_compare_equal() -> None:
+	"""The mirror defect, and the one that cried wolf. `must_eq = 0x0800`
+	and `must_eq = 2048` are the same byte, and the signature reported a
+	BREAKING change between them because it compared spellings. Canonical
+	form removes it."""
+	assert signature("struct s { u16 t [must_eq = 0x0800]; u8 r; }",
+	                 preamble="endian big;\n\n") == \
+	       signature("struct s { u16 t [must_eq = 2048]; u8 r; }",
+	                 preamble="endian big;\n\n")
