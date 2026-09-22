@@ -2343,7 +2343,7 @@ emits a property-based suite from the signature:
 | `deterministic` | repeated encoding of identical input is byte-identical |
 | `invertible` | decode(encode(x)) == x over random and edge-case inputs |
 | `seekable = linear` | byte N produced from a partial input equals byte N of the full output |
-| `seekable = permuted` | the position map is a bijection over a full block |
+| `seekable = permuted` | the position map is a bijection over a full block, and not the identity: nothing leaves its own block, no position is written twice, and at least one moves. A different permutation of the right shape passes -- this asserts the property the signature states, not the map |
 | `systematic` | input bytes appear verbatim at the offsets the compiler computed |
 | `granularity = block(N)` | modifying one input block changes only the corresponding output block |
 
@@ -30767,6 +30767,61 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.476 The conformance row that promised a test nobody generated
+
+**13.1's table said `seekable = permuted` gets "the position map is a
+bijection over a full block", and `codectests.py` contained zero
+occurrences of the word.** `_seekable_test` returned early unless the
+codec was `LINEAR`, so `interleave_16` -- the only permuted codec in the
+tree -- got `invertible`, `deterministic` and `length` and nothing about
+the property its signature is about. A conformance table is a list of
+guarantees, and one row of it was a guarantee nobody made.
+
+**It is generated now, and the case for it is one sabotage.** Making
+`interleave_16` the identity in BOTH directions is what a port that
+quietly stopped permuting produces:
+
+    sabotage                    invertible  deterministic  length  permuted
+    identity, both directions   OK          OK             OK      FAIL
+    encode duplicates a source  FAIL        OK             OK      FAIL
+    encode drops block offset   FAIL        OK             OK      FAIL
+
+The identity row is the whole argument: it is a bijection, it round
+trips, it preserves length, and every existing check passes it.
+
+**Three assertions, because a map can fail to be a bijection three
+ways**: nothing leaves its own block, no output position is written
+twice -- which over a full block is onto as well as one-to-one -- and at
+least one position moves.
+
+**What it does NOT catch is in the table row now.** A DIFFERENT
+permutation of the right shape passes. The test asserts the property the
+signature states, not the specific map; the map is the kernel's and
+`gen-derived`'s vectors are where that lives. `evidence.md` asks that a
+gate's limits be pinned in the same breath as the gate, so the row says
+it rather than leaving a reader to assume more.
+
+**The block width comes from the kernel, not the granularity, and that
+distinction is the one that would have made this silently do nothing.**
+`_step` already returns rows*columns for a `permutation` kernel -- 16
+for `interleave_16`. `granularity_size` is None there, because
+`kernels.py` derives `granularity = byte` for a permutation, so a
+granularity-based lookup yields None and the test is never emitted: a
+gate over an empty population, wearing the appearance of coverage.
+
+**Two ABIs, one body.** A tier-1 codec takes a capacity and an
+out-parameter and returns a status; a derived one takes three arguments
+and returns a count. The bijection being asserted is the same, so the
+body is shared and only the call differs.
+
+**And the sabotage had to be forced to land twice.** The first attempt
+patched a regex that matched nothing and the assertion caught it; the
+second matched encode and decode with one pattern and found only one,
+because the decoder is the inverse and reads differently. Both times the
+binary would have run the UNMODIFIED codec and reported OK --
+`evidence.md`'s "a sabotage that did not apply and a check that cannot
+fail are indistinguishable from the output", met twice in five minutes.
 
 ### 26.475 A derived codec reached the clause that said it could not
 

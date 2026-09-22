@@ -195,7 +195,8 @@ def _codec_suite(codec: ast.CodecDecl,
 	names: list[str] = []
 
 	for builder in (_length_test, _deterministic_test, _invertible_test,
-	                _seekable_test, _systematic_test, _granularity_test,
+	                _seekable_test, _permuted_test,
+	                _systematic_test, _granularity_test,
 	                _authenticated_note, _error_propagating_note):
 		body, name = builder(codec, encode, decode)
 
@@ -391,6 +392,113 @@ def _seekable_test(codec: ast.CodecDecl, encode: str,
 		"\tassert_memory_equal(partial, whole, partial_len);",
 		"}",
 	], name)
+
+
+def _permuted_body(name: str, encode: str, block: int, unit: str,
+		derived: bool = False, blocks: int = 4) -> list[str]:
+	"""The bijection a `seekable = permuted` codec claims, as C.
+
+	Shared by the two tiers because the claim is the same one: the map
+	takes each position of a block to a distinct position of that same
+	block, and does not take every position to itself.
+
+	Three assertions, each a different way for a map to fail to be the
+	bijection the signature promises, and each caught alone by nothing
+	else in this suite:
+
+	  * nothing left its own block -- a port that dropped the block
+	    offset writes into a neighbour;
+	  * no output position was written twice -- over a full block,
+	    one-to-one is also onto, so this is the whole of "bijection";
+	  * at least one position moved. The identity IS a bijection, and is
+	    exactly what a port that quietly stopped permuting produces:
+	    measured, it passes `invertible`, `deterministic` and `length`
+	    and is caught only here.
+
+	What it does NOT catch, said plainly so the row is not read for more
+	than it is: a DIFFERENT permutation of the right shape passes. This
+	asserts the property the signature states, not the specific map --
+	the map is the kernel's, and `gen-derived`'s own vectors are where
+	that lives.
+	"""
+	total = block * blocks
+	return [
+		f"/* Declared: `seekable = permuted`. The position map must be a",
+		f" * bijection over each {block}-byte block{unit}: one-to-one, onto,",
+		" * and not the identity. */",
+		f"static void {name}(void **state)",
+		"{",
+		f"\tuint8_t input[{total}u];",
+		"\tuint8_t coded[SITU_CODEC_MAX_OUTPUT];",
+		f"\tuint8_t seen[{block}u];",
+		"\tuint32_t coded_len = 0;",
+		"\tuint32_t at;",
+		"\tuint32_t i;",
+		"\tuint32_t moved = 0u;",
+		"",
+		"\t(void)state;",
+		f"\tfor (i = 0; i < {total}u; i++) {{",
+		"\t\tinput[i] = (uint8_t)i;",
+		"\t}",
+		"",
+		# Two ABIs. A tier-1 codec takes a capacity and an out-parameter
+		# and returns a status; a derived one takes three arguments and
+		# returns the count. `unit` is what that count measures.
+		*([f"\tcoded_len = {encode}(input, {total}u{unit}, coded);"]
+		  if derived else
+		  [f"\tassert_int_equal({encode}(input, sizeof(input), coded,",
+		   "\t\tsizeof(coded), &coded_len), SITU_OK);"]),
+		f"\tassert_int_equal(coded_len, {total}u{'' if not unit else ' * 8u'});",
+		"",
+		f"\tfor (at = 0; at < {total}u; at += {block}u) {{",
+		"\t\tmemset(seen, 0, sizeof(seen));",
+		f"\t\tfor (i = 0; i < {block}u; i++) {{",
+		"\t\t\tuint32_t value = coded[at + i];",
+		"",
+		"\t\t\t/* Inside its own block. */",
+		"\t\t\tassert_true(value >= at);",
+		f"\t\t\tassert_true(value < at + {block}u);",
+		"",
+		"\t\t\t/* And nowhere twice, which over a full block is onto. */",
+		"\t\t\tassert_int_equal(seen[value - at], 0);",
+		"\t\t\tseen[value - at] = 1;",
+		"",
+		"\t\t\tif (value != at + i) {",
+		"\t\t\t\tmoved++;",
+		"\t\t\t}",
+		"\t\t}",
+		"\t}",
+		"",
+		"\t/* The identity is a bijection too, and is what a port that",
+		"\t * stopped permuting produces. */",
+		"\tassert_true(moved > 0u);",
+		"}",
+	]
+
+
+def _permuted_test(codec: ast.CodecDecl, encode: str,
+		decode: str) -> tuple[list[str], str | None]:
+	"""Tier 1: the block width comes from `granularity = block(n)`.
+
+	Where the granularity states no size there is no extent to walk, so
+	this says so rather than emitting nothing -- silence would read as
+	coverage, which is this suite's standing rule.
+	"""
+	del decode
+	if codec.seekable is not ast.Seekable.PERMUTED:
+		return ([], None)
+
+	if codec.granularity is not ast.Granularity.BLOCK \
+			or codec.granularity_size is None:
+		return ([
+			f"/* `{codec.name}` declares `seekable = permuted` and no block",
+			" * size, so the extent the map is a bijection OVER is not",
+			" * stated. Declare `granularity = block(n)` and this is",
+			" * generated. */",
+		], None)
+
+	name = f"test_{codec.name}_seekable_permuted"
+	return (_permuted_body(name, encode, codec.granularity_size, ""), name)
 
 
 def _systematic_test(codec: ast.CodecDecl, encode: str,
@@ -701,6 +809,11 @@ def _derived_suite(codec: ast.CodecDecl, encode: str,
 		body.extend(seek[0])
 		names.append(seek[1])
 
+	permuted = _derived_permuted(codec, encode, unit, step)
+	if permuted is not None:
+		body.extend(permuted[0])
+		names.append(permuted[1])
+
 	return (head + body if names else
 	        [*head, "/* Nothing declared that this shape can attack. */", ""],
 	        names)
@@ -749,6 +862,24 @@ def _derived_length(codec: ast.CodecDecl, encode: str, unit: str,
 		"}",
 		"",
 	], name)
+
+
+def _derived_permuted(codec: ast.CodecDecl, encode: str, unit: str,
+		step: int) -> tuple[list[str], str] | None:
+	"""Tier 2: the block width is the kernel's, not the granularity's.
+
+	`_step` already returns rows*columns for a `permutation` kernel, and
+	that is the number to use. `granularity_size` is NOT: `kernels.py`
+	derives `granularity = byte` with no size for a permutation, so a
+	granularity-based lookup yields None and the test would silently
+	never be emitted -- a gate over an empty population, which is the
+	failure this suite exists to avoid rather than one to add.
+	"""
+	if codec.seekable is not ast.Seekable.PERMUTED or step <= 1:
+		return None
+
+	name = f"test_{codec.name}_derived_permuted"
+	return (_permuted_body(name, encode, step, unit, derived=True), name)
 
 
 def _derived_seekable(codec: ast.CodecDecl, encode: str, unit: str,
