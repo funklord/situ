@@ -13437,9 +13437,10 @@ the difference is a wrong answer nobody sees.**
    trial they never run.
 
 104. **A verdict of "not for us" can be worth more than an adoption.** Five
-   sibling projects evaluated situ; three said no. Between them those three
-   produced the differential oracle, the missing floor-level example, the
-   stated floor, and this mode -- more change than the two adoptions did.
+   sibling projects had evaluated situ when this was written; three said no.
+   Between them those three produced the differential oracle, the missing
+   floor-level example, the stated floor, and this mode -- more change than
+   the two adoptions did.
    A project that has decided against a tool has no stake in flattering it
    and has just spent real effort finding out exactly where it stops being
    worth the cost, which is the most expensive information to obtain and
@@ -30767,6 +30768,210 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.481 Two ordinals a later insertion falsified, and one overclaim
+
+**Three comment claims in `std/kernels.situ` were wrong; two of them were
+wrong by arithmetic nobody performed and one by a universal nobody
+tested.** Every CRC comment in the file was checked by computing the value
+from the declared parameters rather than by recalling a catalogue.
+
+  - **`crc24_ble` called itself "the first entry here whose width is not a
+    C word".** It is the fourth. In file order the widths that are not
+    8, 16, 32 or 64 run 5, 7, 15, 24, 40.
+  - **`crc40_gsm` called itself "the second".** It is the fifth.
+  - **`crc32_bzip2` claimed "a different answer for every input" against
+    reflected CRC-32.** They agree on the empty input, where both are
+    zero: all-ones reverses to itself and `xorout` cancels it either way,
+    so reflection has nothing to act on. Confirmed here, and no collision
+    in any of the 256 one-byte inputs.
+
+**Both ordinals were true on the day and neither line was ever edited.**
+`ca4b9e3` (2026-08-02) wrote them when 24 and 40 genuinely were the only
+two; `2cc3407` (2026-09-14) added `crc5_usb`, `crc7_mmc` and `crc15_can`
+*above* them and falsified both without touching either. Nothing failed,
+because nothing compares a comment to the file it sits in.
+
+**So the fix is to delete the ordinals rather than correct them.** An
+ordinal about the file's own shape is falsified by an insertion anywhere
+above it, silently, by somebody who never read the line -- which is
+exactly what happened, and correcting "first" to "fourth" only resets the
+clock. What replaced them is the property that made the ordinal worth
+stating: `crc24_ble`'s width is not a C word, `crc40_gsm`'s is the one
+above thirty-two. Both survive an insertion.
+
+**The universal beside them was kept, and the difference is the point.**
+"Every other reflected CRC in this file starts all-ones or all-zeros" is
+also a claim about the file's shape, and it stays -- checked, and true of
+all eight others. A universal is falsified by a counter-example that
+arrives *with* the thing that breaks it, so the next codec to violate it
+makes the sentence wrong in front of whoever added it. An ordinal is
+falsified by an insertion that has nothing to do with it. **The two
+failure modes are not comparable, and only one of them has a reader.**
+
+**What the verification could not reach is enumerated rather than
+passed.** 23 claims in the file are not settleable by computing a CRC --
+catalogue provenance, standards attributions, statements about generated
+register widths, and the CCSDS parameters -- and they are listed in the
+sweep rather than counted as clean. A separate note: the file's assertion
+that CRC-5/USB is the catalogue's only `confirmed` entry of its three
+appears verbatim in `test_differential_oracle.py` as well, so the two are
+one witness, not two.
+
+**One control worth copying.** The check routine was proved able to be
+wrong before anything was believed: with reflection removed it returns
+`0xFC891918` rather than `0xCBF43926`, so a run agreeing with the
+catalogue is agreement rather than a constant. The sixteen values in
+`CRC_CHECK_VALUES` were transcribed from the catalogue by hand and all
+sixteen match computation from the declarations -- independent in the one
+way that matters, since a mistyped parameter breaks the agreement. It is
+not evidence that a declaration names the right catalogue entry.
+
+### 26.480 An accepted record the tree overruled by building the thing
+
+**0002 is `Status: accepted`, says "No `CMakeLists.txt` is written", and
+declares that it supersedes section 24. There is a `CMakeLists.txt`, it is
+126 lines, and `test/unit/test_cmake.py` exercises it against a real cmake
+-- 3.31.6 on this machine, so the gate runs rather than skips.** Section 24
+has meanwhile been rewritten to assert CMake as current reality and names
+0002 nowhere.
+
+**The order is the finding.** 0002 is dated 2026-07-26. `dd7d74f` added the
+CMake entry point on 2026-07-31, five days later, and its message says why:
+
+> "Both CMake and GNU Make, maintained in parallel, as separate and
+> independently usable entry points" has been section 24's opening line for
+> a long time, and `git log --all` had never seen a `CMakeLists.txt`.
+
+That session read section 24, found a promise the tree did not keep, and
+kept it. It had no reason to think section 24 was not authoritative,
+because **nothing in section 24 said it had been superseded.** 0002
+recorded the supersession in 0002. The text it superseded was left
+unmarked, and the next reader to arrive followed it.
+
+**So the defect is not that somebody ignored a record.** It is the shape
+this document already knows from the other direction: a claim lives in more
+than one place, and the correction has to go where a reader will next look
+for it. A supersession written only into the superseding record is a
+correction filed where nobody who needs it is reading.
+
+**0002's own reconsideration trigger has fired, and not in the way it
+imagined.** The record says to reconsider "when someone outside this
+repository needs CMake". `suggestion/hydra.md` is such a project and says
+so in its own words -- *Hydra's build is CMake plus Qt's own `moc`, with no
+other code generation and no Python.* But what hydra asked for is not the
+CMake entry point. Their largest objection is the build-time Python
+dependency, and the remedy they name is documentation:
+
+> The alternative -- commit the generated `.h`/`.c` and regenerate by hand
+> -- is viable but wants a documented, blessed workflow, including how
+> `situc map --check` fits into CI when the generator is not run at build
+> time.
+
+`situ_generate()` is the opposite of that: it runs the compiler as a build
+step, which is the thing hydra said it would rather avoid. So the consumer
+exists, the trigger has fired, and the artifact it fired for is not the
+artifact that was built.
+
+**Three further statements are stale behind 0002 and are listed rather than
+fixed**, because each cites the record: the decision index row at section 5
+still reads "GNU Make only; CMake deferred"; the phase-0 acceptance
+criterion says CMake "is deferred and recorded in
+`doc/decision/0002-build-system.md`, so the acceptance criterion above
+stands against `make test` alone until CMake lands"; and CMake has landed.
+
+**Not resolved here, and the reason is not caution.** A record is not
+edited once accepted -- a later one supersedes it and says so -- so the
+only instrument is a new record, and writing it decides something real:
+whether CMake is a supported entry point carrying a maintenance
+commitment, or an artifact built against a superseded requirement that
+should go. Both branches are live. The second is cheaper than it looks --
+one file and one test -- and the first is what the tree currently behaves
+as if it had chosen, without anybody having chosen it. That is the
+holder's, and the evidence above is assembled so it can be taken once
+rather than rediscovered per session.
+
+### 26.479 The floor above the reach, in a line the map publishes
+
+**`situc map` prints `# layers: floor=edit reach=view` for a schema whose
+only above-`view` construct is an unbounded codec.** Measured on a
+four-line schema -- a `u16` and one `coded body(squeeze)` with
+`expansion = unbounded`:
+
+    # layers: floor=edit reach=view
+
+Read against `layers.reach`'s own docstring -- *the highest rung this
+schema has content for* -- that line is false. Rung 2 is exactly what
+emits storage for an unbounded expansion, per 0032's own table, so the
+schema plainly has content for `edit`. `reach()` never looks: it asks
+only whether a relation exists, and returns one of `view`, `relate` or
+`drive`. Three of the six rungs can never be the reach, and
+`FUTURE_LAYERS` is empty, so all six are built.
+
+**The code matches 0032 and 0032's gloss does not match 0032's rule.**
+The record says "the highest rung this schema has content for" and then
+gives the rule as *a `relation` gives it `relate`; a declared retry
+policy gives it `drive`* -- two sources, named exhaustively. The
+implementation is that rule exactly. So this is not code drifting from a
+record; it is a definition sentence wider than the rule beneath it, and
+the artifact prints the definition's shape.
+
+**Nothing is wrong today, and that is why it is recorded rather than
+fixed.** Nothing compares the two scalars: no code indexes `LAYERS` with
+`reach`, and the floor is separately enforced -- `cli.py` refuses a build
+below it, naming the construct. A consumer who read `reach=view` and
+concluded that `frame` emits nothing for them would be wrong, since
+`framed_structs` has content for nearly every struct with a frameable
+one; but no consumer does that, and `reach` is advisory by 0032's own
+words -- *building below the reach is ordinary*.
+
+**It is the holder's, because every available fix is a change to a
+committed artifact.** Widening `reach` to see allocation or framing
+rewrites the `layers:` line in every committed map that has one, under
+`map --check`; narrowing the docstring to the rule leaves an artifact
+whose two scalars are not comparable and does not say so. 0032 is
+accepted. Flagged rather than resolved, per the rule that a document and
+its code disagreeing is not a discrepancy to spend in either direction.
+
+### 26.478 A count that was right twice, over two different populations
+
+**README said six projects had evaluated situ and `project.md` said
+five, and neither was wrong when written.** Both were dated 2026-08-05.
+The README's six counts every project that produced a verdict; the
+`project.md` five counts those that wrote it up in `suggestion/`, and
+`hydra` is the difference -- its file is there and says in its own words
+that the verdict lives in hydra's `project.md`. Two denominators, not a
+contradiction, and a session reconciling them to one number would have
+destroyed a real distinction.
+
+**Three evaluations have landed since, all yes**, which is what made the
+README's line stale: `ossacli` 2026-09-05, `openmlx4` 2026-09-06,
+`raidcfgd` 2026-09-17. Nine now, and the README says nine.
+
+**Their verdicts are relayed, not summarised.** The line now reads *five
+said yes* where it read *two adopted*. Adoption is a claim about the
+current state of five trees that this tree cannot check; a verdict is
+what each file states in its own first paragraph and a reader can
+confirm by opening it. The weaker word is the honest one, and it is also
+the one that stops rotting -- a verdict written in 2026 stays written,
+where an adoption can be reversed without anybody here hearing.
+
+**26.66 and item 104 were left as history, and 104 needed two words.**
+26.66 is an episode with a date in its title and reads correctly. Item
+104 opened *Five sibling projects evaluated situ* in the present tense,
+which is the shape `evidence.md` names as the one that rots: a countable
+claim about the tree's own shape. It now says *had evaluated situ when
+this was written*. The lesson underneath -- that three noes produced
+more change than the adoptions did -- is untouched and was never the
+thing that went stale.
+
+**The instrument note, because it cost a measurement.** `git log -S"Six
+projects evaluated it"` returned nothing, and the claim is in the file:
+the phrase wraps at column 75, so `Six` and `projects` are on different
+lines. An empty `-S` result over prose is not evidence of absence until
+the pattern has been checked against the wrapping. `git log -S"projects
+evaluated it against real trees"` -- one line, no wrap -- dated it in one
+command.
 
 ### 26.477 Three claims in accepted records, corrected the tree's own way
 

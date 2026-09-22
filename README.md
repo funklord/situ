@@ -1329,9 +1329,9 @@ to disagree.
 
 ## Is your format worth a schema?
 
-Situ is worth its cost above a floor, and the floor is not a field count. Six
+Situ is worth its cost above a floor, and the floor is not a field count. Nine
 projects evaluated it against real trees and wrote the result up in
-`suggestion/`; two adopted, three said no, and the sixth recorded its verdict
+`suggestion/`; five said yes, three said no, and the ninth recorded its verdict
 in its own tree. What follows is their reasoning rather than an argument from
 this side.
 
