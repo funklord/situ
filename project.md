@@ -493,8 +493,8 @@ enum_body     = { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
 struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
-member        = field | parameter | reserved | marker_field | block
-              | variant | tag_field | pad ;
+member        = field | parameter | reserved | preamble | marker_field
+              | block | variant | tag_field | pad ;
 pad           = "pad_to" "(" digits ")" ";"        (* section 8.4 *)
               | "pad_random" "(" digits "," digits ")" scalar_type
                 [ array_spec ] [ attrs ] ";" ;    (* 14.7, 0045 *)
@@ -508,6 +508,8 @@ located       = "at" expr ;                  (* decision 0042 *)
 repeat        = "while" "(" expr ")" [ "max" expr ] ;   (* section 8.6.6 *)
 radix         = "decimal" | "hex" | "scaled" ;   (* section 8.6.2, 0056 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
+preamble      = "preamble" "u8" [ array_spec ] "=" string   (* 0052 *)
+                [ attrs ] ";" ;
 tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
                 [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
 
@@ -30731,6 +30733,57 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.472 A keyword in no grammar, and the gate that could not see it
+
+**`preamble` appears nowhere in either published grammar.** Zero
+occurrences in `doc/grammar.ebnf`'s 341 lines, none in section 7's copy,
+and the `member` production listed eight alternatives without it. The
+parser accepts it, `example/png` uses it for the eight-byte PNG
+signature, and `preamble u8[4] = "WOZ2";` compiles at exit 0. Both
+in-tree users were underivable from the grammar the project publishes.
+
+**The gate that should hold this has a population it cannot state.**
+`test_the_grammar_names_every_spelling_the_parser_accepts` iterates the
+members of `ast` enums, and its docstring argues the point exactly:
+"these enums are what the parser turns source text into, so every member
+of them is a spelling somebody can type". True -- and the converse is
+false. `parse_member` branches on the literal text `"preamble"` and
+builds an `ast.Reserved`, so no enum carries the word and the check was
+never asked about it.
+
+`evidence.md`'s *a name that claims exhaustiveness is not a check that
+achieved it*, with the quantifier as the thing needing verification
+rather than the assertion under it. The test was right about every
+member of its population and its population was short by one.
+
+**The second gate is derived rather than enumerated.** It reads the
+literals `parse_member` compares a token against -- 23 of them -- and
+requires the grammar to name each. A keyword added to the dispatch is in
+the population the day it is added, which is the property the enum-based
+one could not have. Its own liveness is asserted too: fewer than fifteen
+spellings means the dispatch has been rewritten and the check is reading
+the wrong thing.
+
+**One of 23 was missing, which is the number worth keeping.** The
+grammar is otherwise complete, so this is a single omission rather than
+a document that had drifted -- and a single omission is exactly what a
+gate over the wrong population lets through while looking clean.
+
+**And a sibling gate caught the half-fix immediately.** Adding the
+production to `doc/grammar.ebnf` alone failed
+`test_the_two_grammars_agree_about_every_shared_production`, because
+section 7 carries the other copy. Two documents that must agree, with a
+check that makes disagreement loud: the arrangement working, and the
+reason the fix went to both.
+
+**Found by a completeness critic at the end of a verification
+workflow**, asking what the sweep had missed rather than what it had
+found. Its answer named two files nobody had read -- `doc/grammar.ebnf`
+and `doc/capability-axes.md`, both second copies of a normative fact,
+both saying in their header that project.md is authoritative and they
+are the bug. The critic is the cheapest agent in the run and found the
+only defect in it.
 
 ### 26.471 A counted run of a struct nothing can measure
 

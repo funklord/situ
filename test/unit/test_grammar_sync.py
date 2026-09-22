@@ -155,6 +155,42 @@ def test_the_grammar_names_every_spelling_the_parser_accepts() -> None:
 		"doc/grammar.ebnf names no spelling for: " + ", ".join(missing))
 
 
+def test_the_grammar_names_every_member_keyword_the_parser_dispatches_on(
+		) -> None:
+	"""The population the test above cannot see.
+
+	Its name says "every spelling the parser accepts" and its population
+	is every member of an `ast` enum -- true of every enum value, and
+	silent about a keyword that is not one. `preamble` is exactly that:
+	`parse_member` branches on the literal text and builds an
+	`ast.Reserved`, so no enum carries the word, and it appeared nowhere
+	in either grammar's 341 lines while `example/png` used it for the
+	eight-byte PNG signature (26.472).
+
+	`evidence.md` calls this a name that claims exhaustiveness over a
+	hand-written enumeration. The quantifier is what needed checking, not
+	the assertion under it -- so this derives its list from the PARSER's
+	own dispatch rather than from a second enumeration, and a keyword
+	added there is in this population the day it is added.
+	"""
+	import re
+
+	source = (ROOT / "situc/parser.py").read_text(encoding="ascii")
+	grammar = (ROOT / "doc/grammar.ebnf").read_text(encoding="ascii")
+
+	# Every literal the parser compares a token's text against. Wider than
+	# member keywords alone, which is the point: a spelling is a spelling.
+	spellings = sorted(set(re.findall(r'token\.text == "([a-z_]+)"', source)))
+	assert len(spellings) > 15, (
+		f"only {len(spellings)} spellings found; the dispatch has been "
+		f"rewritten and this is reading the wrong thing")
+
+	missing = [word for word in spellings if f'"{word}"' not in grammar]
+	assert not missing, (
+		"the parser dispatches on these and doc/grammar.ebnf names none of "
+		"them: " + ", ".join(missing))
+
+
 def test_the_extracted_grammar_says_which_one_wins() -> None:
 	"""Two copies of a grammar disagree eventually. The file is only safe to
 	keep if a reader knows which one is the bug."""

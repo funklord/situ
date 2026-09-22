@@ -82,8 +82,8 @@ tokens_decl	= "tokens" ident [ attrs ] "{" enum_body "}" ;
 
 struct_decl	= "struct" ident [ attrs ] "{" { member } "}" ;
 
-member		= field | parameter | reserved | marker_field | block | variant
-	| tag_field | pad ;
+member		= field | parameter | reserved | preamble | marker_field
+	| block | variant | tag_field | pad ;
 
 (* Section 8.4, decision 0043. Aligns the offset to the next multiple of n;
  * it occupies whatever that costs and shows nothing. *)
@@ -139,6 +139,14 @@ repeat		= "while" "(" expr ")" [ "max" expr ] ;	(* section 8.6.6 *)
  * are the value, and the scalar beside them names its domain. *)
 radix		= "decimal" | "hex" | "scaled" ;
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
+
+(* Section 8.4a, decision 0052. Fixed bytes nobody may read: a reserved
+ * run whose content is stated rather than governed by a policy. Anonymous
+ * like `reserved`, which is what makes it inaccessible -- there is no name
+ * for an accessor to be called. `u8` only, for the byte-run `[must_eq]`'s
+ * reason: a span of wider scalars has an endianness the literal does not
+ * (0024). `example/png` is the case -- the eight-byte PNG signature. *)
+preamble	= "preamble" "u8" [ array_spec ] "=" string [ attrs ] ";" ;
 (* The name is optional and defaults to the keyword, so an unnamed tag is
  * `tag` and an unnamed sealed region is `sealed` -- which is what lets
  * `require verify_gated(Packet.sealed)` resolve in example 5.3. See
