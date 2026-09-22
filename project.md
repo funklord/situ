@@ -30769,6 +30769,69 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.487 An image that claimed it could measure what it had not encoded
+
+**The packer dropped a member's length program, said nothing, and wrote
+the struct as `validatable | measurable` anyway.** A walker then answers
+confidently and wrongly -- and, worse, answers *correctly* for the
+smallest message:
+
+    n=0   literal p[2] 255    enum p[2] 255   <- agrees
+    n=1   literal p[2] 255    enum p[2] 170   <- wrong
+    n=2   literal p[2] 255    enum p[2] 170   <- wrong
+    validate 0 throughout
+
+`walker/walk.py` takes the size-program branch only where
+`size_code != NONE` and otherwise falls back to `placement.size_bits` --
+the array's static MINIMUM, which is exactly the `n = 0` case. **A fixed
+wrong answer gets noticed; one that is right on the input anybody reaches
+for first does not.**
+
+**`_measurable` asks the schema, never the image.** `pack.py:732` asks
+`traverse.has_computable_extent` whether an extent is computable and
+never asks whether a program for it was encoded. `pack.py:970` records
+the failure into `coverage.unencodable` and continues; the flags never
+hear about it.
+
+**`situc pack --coverage` already detects it and exits 1**, naming the
+member -- *"s.a: no placement for `kv.alpha`"*. But that run returns
+before writing the image, so the check and the artifact are two separate
+invocations and the one that writes ignores the one that knows. **The
+gap was never detection.**
+
+**The fix is this file's own answer, which it uses 31 times.** `whole =
+False` -- the image cannot carry this check, so the struct is not fully
+validatable and says so -- stated at the top of `pack.py` and applied to
+region extents, `[since]` members and indexed counts. A missing size
+program is the one case that never got it.
+
+**One place rather than nine.** The disown is computed where the flags
+are assembled, from `coverage.unencodable` itself, so all nine sites that
+record into it are covered at once rather than the one with a
+reproduction. That is this arc's recurring lesson applied before the fact
+instead of after it.
+
+**And keying on placement paths is what scopes it, rather than a special
+case.** `unencodable` also records relations, under keys like
+`relation pairs` -- with a space, so it can never match a path. A schema
+whose relation the planner refuses therefore keeps its flags, and this
+file's own `test_a_relation_the_planner_refuses_is_reported` still holds.
+The third new test is that case, so the two fail together if the key
+shape ever moves.
+
+**Blast radius measured rather than argued: zero.** 42 schemas, 995
+placement rows, 179 members carrying a size expression, 179 programs
+encoded, **nothing unencodable anywhere** -- and the packed images are
+**byte-identical** before and after, all 42. Three independent witnesses
+agreed on the count: the packer's own `--coverage`, a reader asking the
+image and the AST separately, and two committed tests that already assert
+it.
+
+**The control that matters is not the failing test.** Both new controls
+pass before AND after, which is the point -- they guard against a disown
+keyed on something broader. Only the defect test discriminates, and it
+was watched failing against `3800dbe`.
+
 ### 26.486 `at += None;` -- generated C++ that does not compile
 
 **A committed schema produced a header no compiler accepts, and the gate

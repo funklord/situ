@@ -2058,12 +2058,33 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if not changed:
 			break
 
+	# A struct with a member whose program did not encode. `_measurable`
+	# below asks the RESOLVED SCHEMA whether an extent is computable and
+	# never asks whether this image actually carries the program for it, so
+	# a struct whose array size failed to compile was still written
+	# `validatable | measurable`. A walker then falls back to
+	# `placement.size_bits` -- the array's static MINIMUM -- and answers
+	# correctly for the smallest message and wrongly by exactly the count
+	# thereafter, with `validate` passing throughout (26.487).
+	#
+	# `whole = False` is this file's established answer, used 31 times: the
+	# image cannot carry this check, so the struct is not fully validatable
+	# and says so. A missing size program is the one case that never got it.
+	#
+	# Keyed on placement paths, which is what scopes it: `unencodable` also
+	# records relations, whose keys match no placement, so a schema whose
+	# RELATION the planner refuses keeps its flags and `test_pack.py:352`
+	# still holds.
+	unsized = {owner for owner, placement in rows
+	           if placement.path in coverage.unencodable}
+
 	structs_blob = bytearray()
 	for (name, rstruct), (first, count) in zip(order, spans):
 		size = (rstruct.layout.size_bits
 		        if rstruct.layout.is_fixed_size else None)
-		flags = 1 if validatable.get(name) else 0
-		if _measurable(resolved, rstruct):
+		whole = name not in unsized
+		flags = 1 if validatable.get(name) and whole else 0
+		if _measurable(resolved, rstruct) and whole:
 			flags |= 2
 		structs_blob += _struct.pack("<IIII", first, count, _u32(size),
 		                             flags)

@@ -821,3 +821,84 @@ def test_an_unknown_section_kind_is_skippable() -> None:
 	block = block[:block.index("}")]
 	assert "default      = pass" in block, \
 		"a section kind must be skippable, or the directory buys nothing"
+
+
+# -- a member whose program did not encode (26.487) --------------------------
+
+#: An enum arm inside a size expression. The packer cannot compile it --
+#: `consts` holds only `ConstDecl`s, so `kv.alpha` falls through to
+#: `resolve_path`, which finds no placement -- and the literal control is
+#: the same layout written without the arm.
+UNSIZED = ("target buffer;\nendian big;\nbit_order msb_first;\n"
+	"enum kv : u8 { alpha = 17, beta = 18, }\n"
+	"struct s { u8 n; u8 a[SIZE]; u8 t; }\n")
+
+
+def _struct_flags(blob: bytes) -> list[int]:
+	"""What a walker reads, through the walker's own loader.
+
+	Asking `walker.image.load` rather than unpacking the blob here: the
+	walker is who was misled, so it is who should be asked. A reader of my
+	own would be a second opinion about the format rather than the
+	consumer's.
+	"""
+	from walker.image import load
+
+	return [held.struct_flags for held in load(blob).structs]
+
+
+def test_a_member_whose_program_did_not_encode_disowns_its_struct() -> None:
+	"""The image claimed it could measure a struct it had no program for.
+
+	`_measurable` asks the RESOLVED SCHEMA whether an extent is computable
+	and never asks whether this image carries the program, so a struct whose
+	array size failed to compile was written `validatable | measurable` all
+	the same. A walker then falls back to `placement.size_bits` -- the
+	array's static MINIMUM -- and is right for the smallest message and
+	wrong by exactly the count thereafter, with `validate` passing
+	throughout. Being correct on the input anybody reaches for first is what
+	makes it worse than a fixed wrong answer.
+	"""
+	schema, resolved = _resolved(UNSIZED.replace("SIZE", "kv.alpha + n"))
+
+	blob, coverage = packer.pack(schema, resolved)
+
+	assert coverage.unencodable, "the packer has to have noticed at all"
+	assert _struct_flags(blob) == [0], (
+		"a struct with an unencodable member is neither fully validatable "
+		"nor measurable by this image")
+
+
+def test_the_same_layout_written_as_a_literal_keeps_its_flags() -> None:
+	"""The control, and it is the one that matters.
+
+	A disown keyed on the wrong thing would clear these too, and the test
+	above would still pass. Same struct, same bytes, same static minimum --
+	the only difference is a spelling the packer can compile.
+	"""
+	schema, resolved = _resolved(UNSIZED.replace("SIZE", "17 + n"))
+
+	blob, coverage = packer.pack(schema, resolved)
+
+	assert not coverage.unencodable
+	assert _struct_flags(blob) == [3], "validatable and measurable"
+
+
+def test_a_refused_relation_leaves_every_struct_alone() -> None:
+	"""`unencodable` records relations too, and their keys are not paths.
+
+	That is what scopes the disown rather than a special case: it is keyed
+	on placement paths, and `relation pairs` -- with a space in it -- can
+	never match one. The schema is this file's own relation-refusal case, so
+	the two tests fail together if the key shape ever changes.
+	"""
+	schema, resolved = _resolved(
+		"target buffer;\nendian big;\n"
+		"struct msg { u64 wide; i8 narrow; }\n"
+		"relation pairs(a: msg, b: msg) { must b.wide == a.narrow; }\n")
+
+	blob, coverage = packer.pack(schema, resolved)
+
+	assert coverage.unencodable, "the planner has to have refused it"
+	assert _struct_flags(blob) == [3], (
+		"a refused relation must not reach a struct's flags")
