@@ -933,6 +933,45 @@ def test_a_nonce_of_the_wrong_width_is_refused() -> None:
 	assert "takes a 12-byte nonce" in text
 
 
+def test_an_out_of_band_nonce_is_told_what_it_cannot_be() -> None:
+	"""The remedy has to be one the reader can reach.
+
+	A `parameter` is an argument the caller supplies, and 0050 makes it a
+	member of ZERO WIDTH: it has no position in the buffer, so it is a
+	scalar and scalars stop at 64 bits. "Widen the field" is therefore
+	impossible for a 12-byte nonce -- which is AES-GCM's and
+	ChaCha20-Poly1305's, so the case an author is most likely to hit --
+	and a diagnostic sending them to do it sends them nowhere.
+
+	The general remedy is unchanged for a nonce carried in the message,
+	where widening is exactly right; the asymmetry is the point.
+	"""
+	body = ("endian big;\n\n"
+	        "codec ae {\n\tauthenticated;\n\texpansion = +16;\n"
+	        "\ttag_bytes = 16;\n\tnonce_bytes = 12;\n}\n\n"
+	        "struct s {\n"
+	        "\tparameter u64 iv;\n"
+	        "\tu8 kind;\n"
+	        "\tsealed body (ae, nonce = iv) {\n\t\tu8 payload[4];\n\t}\n"
+	        "\ttag u8 seal[16];\n}\n")
+	text = rendered(body)
+
+	assert "takes a 12-byte nonce" in text
+	assert "scalars stop at 64 bits" in text, (
+		"the parameter case was told to widen a field it cannot widen")
+	assert "carry it in the message" in text
+	assert "widen the field" not in text
+
+
+def test_a_nonce_in_the_message_is_still_told_to_widen() -> None:
+	"""The control for the case above. A nonce the message carries is a
+	byte run with no ceiling worth speaking of, so widening is the right
+	advice and must survive the parameter case being special-cased."""
+	text = rendered(sealed("tag u8[16];", "u8 nonce[8];"))
+	assert "widen the field" in text
+	assert "scalars stop at" not in text
+
+
 def test_a_codec_that_states_no_size_checks_nothing() -> None:
 	"""Silence claims nothing, which is already the rule for a declaration the
 	compiler cannot verify. An extern codec's implementation belongs to

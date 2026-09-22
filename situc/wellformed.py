@@ -19,7 +19,7 @@ import difflib
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
-from situc.types import (NUMERIC_BOUNDS, TEXT_ENCODINGS, ScalarKind,
+from situc.types import (MAX_WIDTH, NUMERIC_BOUNDS, TEXT_ENCODINGS, ScalarKind,
                          is_scalar_name, literal_bytes)
 
 Structs = dict[str, ast.StructDecl]
@@ -4126,6 +4126,22 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 			# result, so a narrower one is not a truncation of anything -- it
 			# is simply a different nonce, and the primitive will read past it
 			# or pad it without either side saying so.
+			# "Widen the field" is the remedy in general and is UNREACHABLE
+			# for a parameter: 0050 makes one a member of zero width, so it
+			# is a scalar, and scalars stop at 64 bits. A 12-byte nonce --
+			# which is AES-GCM's and ChaCha20-Poly1305's, so the common case
+			# -- cannot be carried out of band at all, and sending a reader
+			# to widen a `u64` sends them nowhere (26.470).
+			remedy = ("widen the field, or correct `nonce_bytes` on the "
+			          "codec (project.md section 14.8, decision 0038)")
+			if getattr(field, "parameter", False) \
+					and codec.nonce_bytes * 8 > MAX_WIDTH:
+				remedy = (f"a `parameter` is a scalar and scalars stop at "
+				          f"{MAX_WIDTH} bits, so a "
+				          f"{codec.nonce_bytes}-byte nonce cannot be one: "
+				          f"carry it in the message, or correct "
+				          f"`nonce_bytes` (project.md section 14.8)")
+
 			raise error(
 				f"`{field.name}` is {width} bytes and `{codec.name}` takes a "
 				f"{codec.nonce_bytes}-byte nonce",
@@ -4134,8 +4150,7 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 				notes = ["a nonce is an input rather than a result, so a "
 				         "different width is a different nonce rather than a "
 				         "truncation of one",
-				         "widen the field, or correct `nonce_bytes` on the "
-				         "codec (project.md section 14.8, decision 0038)"],
+				         remedy],
 			)
 
 

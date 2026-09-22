@@ -3393,7 +3393,15 @@ construct here names a key and the setting would be read by nothing. The three
 constructs below are unblocked by it rather than settled by it: each needs its
 own record.
 
-**Three more, each a construct real protocols need and this cannot express.**
+**~~Three more, each a construct real protocols need and this cannot
+express.~~ All three are sayable now, and the lead outlived every one of
+its own bullets.** Two were closed by their own records -- key selection
+by 0040, a wide conversation key by 0042 -- and each bullet says so
+where it stands; out-of-band material closed half way under a different
+name and 26.470 has the measurement. The sentence stayed because a lead
+is read as the setup for the list under it rather than as a claim with
+its own shelf life, which is how a line can be falsified three separate
+times and survive all three.
 
 - **Key selection -- expressible now (0040).** DTLS carries a 16-bit epoch,
   QUIC a key-phase bit, WireGuard a receiver index.
@@ -3403,9 +3411,22 @@ own record.
   it reaches no backend yet: its value is its checks and its sayability,
   and whether both belong in the capability map and wire signature stays
   with 26.117's open question.
-- **Out-of-band material.** A nonce or key supplied by the caller rather than
-  carried in the message cannot be distinguished from one left out by
-  accident, because both spell the same thing.
+- **~~Out-of-band material.~~ Half built, and what is left is a width
+  ceiling rather than an expressiveness gap (26.470).** 0050's
+  `parameter` is exactly "supplied by the caller", so
+  `parameter u64 iv;` with `sealed body (ae, nonce = iv)` says it while
+  an omitted `nonce =` says the other thing: the map prints
+  `message.iv parameter`, the wire signature prints `parameter - u64 iv`
+  beside `nonce=iv`, and `check_codec_sizes` holds the width against the
+  codec's `nonce_bytes`. What remains is that a `parameter` is a member
+  of ZERO WIDTH by 0050's own reasoning, so it is a scalar and scalars
+  stop at 64 bits -- which puts the 12-byte nonce of AES-GCM and
+  ChaCha20-Poly1305 out of reach while an 8-byte one works. **A key is
+  named the same way** -- 0040's `key = field` takes a `parameter`
+  too, and the wire signature prints `key=kid` beside `nonce=iv` --
+  under the same ceiling. What a key lacks is the CHECK: there is no
+  `key_bytes`, so a `key =` field is held against nothing where a
+  `nonce =` field is held against `nonce_bytes`.
 - **A conversation key of more than 64 bits -- expressible now (0042).** TLS
   session identifiers are 32 bytes, QUIC connection identifiers up to 20, and
   WireGuard and Noise identify a peer by a 32-byte public key. The collision
@@ -30710,6 +30731,57 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.470 A gap that had half closed, and an unreachable remedy
+
+**14.8 listed out-of-band material as a construct situ cannot express:
+"a nonce or key supplied by the caller rather than carried in the
+message cannot be distinguished from one left out by accident, because
+both spell the same thing". Measured, that is no longer true.** 0050's
+`parameter` is precisely "supplied by the caller", and it composes with
+`nonce =` today:
+
+    parameter u64 iv;
+    sealed body (ae, nonce = iv) { ... }
+
+The map prints `message.iv  parameter`, the wire signature prints
+`parameter -  u64  iv` beside `codec=ae nonce=iv`, and
+`check_codec_sizes` holds the width against the codec's `nonce_bytes`.
+An omitted `nonce =` still says the other thing. The two no longer
+spell the same.
+
+**Nobody built that on purpose.** 0050 was about arguments a caller
+supplies to a layout, and the crypto section was written before it; the
+construct arrived under a different name and the older entry went on
+saying the thing could not be said. That is `working-practice`'s *check
+whether the project has already decided it somewhere else under a
+different name*, paying out -- and the deferral it removes is the kind
+nothing catches, because a stale gap claim reads exactly like diligence.
+
+**What is left is a width ceiling rather than an expressiveness gap,
+and it lands on the common case.** A `parameter` is a member of ZERO
+WIDTH by 0050's own reasoning -- no position in the buffer, nothing to
+read a count from -- so it is a scalar, and scalars stop at 64 bits. An
+8-byte nonce works; the 12-byte nonce of AES-GCM and ChaCha20-Poly1305
+cannot be carried out of band at all. A key is further out still:
+nothing in the language names one.
+
+**And the diagnostic sent the reader somewhere they could not go.** A
+width mismatch on a nonce said "widen the field, or correct
+`nonce_bytes`" -- correct for a nonce the message carries, impossible
+for a `parameter`, which cannot be widened past `u64` at any spelling.
+project.md's own rule about this is that a pointer at the wrong place
+costs more than no pointer, because the reader goes and looks. It now
+names the real constraint in the parameter case and is unchanged in the
+other; the test asserts both, the second being the control, since a
+special case that swallowed the general remedy would pass a check that
+only read the first.
+
+**The fix is a diagnostic and the finding is the section.** Whether a
+`parameter` should be able to be a byte run -- which would close the
+rest -- is a language question with 0050's zero-width reasoning on the
+other side of it, and it belongs to the copyright holder rather than to
+the pass that noticed.
 
 ### 26.469 What the Rust port is actually blocked on, measured
 
