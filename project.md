@@ -1305,10 +1305,13 @@ of a number the format has to carry and keep true.
   (accept and preserve). Default is `error`, deliberately: see 14.5.
 
   **Enforced in every backend**, which it was not until three of them existed
-  to be compared. Each emits an `is_known` predicate over the declared members
-  and calls it from `validate`, so a field declared to admit seven protocol
-  numbers no longer accepts all 256. `default = pass` still emits the
-  predicate, because a caller may want to ask, and does not call it -- a schema
+  to be compared. C, C++ and Rust each emit an `is_known` predicate over
+  the declared members and call it from `validate`, so a field declared to
+  admit seven protocol numbers no longer accepts all 256. Python emits no
+  predicate: it imports `known_enum` from the runtime and `validate` calls
+  it -- the same rule reached through a shared helper rather than a
+  generated one. `default = pass` still emits the predicate in the three
+  that generate one, because a caller may want to ask, and does not call it -- a schema
   that opts out of the rule is not second-guessed.
 
   It had been a comment in the generated C since phase 4. The Python backend is
@@ -2580,8 +2583,9 @@ Three hard prohibitions:
 ### 13.4 Kernel families for derived codecs
 
 The reassuring result of surveying this space: essentially every line code,
-FEC, scrambler, and framing code in practical use is expressible as one of five
-kernel families, or a pipeline of them. This bounds the tier-2 design.
+FEC, scrambler, and framing code in practical use is expressible as one of
+seven kernel families, or a pipeline of them. This bounds the tier-2
+design.
 
 | Family | Description form | Covers | Derived properties |
 |---|---|---|---|
@@ -2675,19 +2679,21 @@ which is `ratio_exact(2, 1)` *and* `+64` at once. A composed signature may
 carry both; a hand-written one still gives one form
 (`doc/decision/0016-composed-expansion.md`).
 
-**What is generated, and what a decoder is handed.** All six families emit an
-implementation, and the twenty codecs in `std/kernels.situ` do so without a
-refusal among them. The interface is one shape -- `(in, count, out) -> count`
--- and what differs is what `count` measures. A `table` kernel is bit-oriented
+**What is generated, and what a decoder is handed.** All seven families emit
+an implementation, and the forty-two kernel-bearing codecs in
+`std/kernels.situ` do so without a refusal among them. The interface is one
+shape -- `(in, count, out) -> count` -- and what differs is what `count`
+measures. A `table` kernel is bit-oriented
 by construction; the byte families count bytes; and `stuffing` declares `unit`,
 because HDLC counts bits where COBS scans bytes. That is not a detail a
 generated call may guess at: passing a byte count to a bit loop decodes an
 eighth of the region and returns confidently.
 
 A `stuffing` kernel names its code, and only a named code somebody wrote is
-generated -- `cobs`, `hdlc`, `smtp_dot`. The list lives in one place now. It
-lived in two, the dispatch and the prototype gate, and adding a code to one of
-them emitted a definition that nothing declared.
+generated -- `cobs`, `hdlc`, `ppp_async`, `slip`, `smtp_dot`, `usb`. The
+list lives in one place now. It lived in two, the dispatch and the prototype
+gate, and adding a code to one of them emitted a definition that nothing
+declared.
 
 The decode accessor on a coded region (13.5) covers `table` and `stuffing`,
 which are the shapes settled here, in all four backends. It was `table` alone
@@ -2777,9 +2783,10 @@ The bound is the schema's, from the codec's declared ratio against the
 region's largest encoded form. A buffer short of it is refused rather than
 half-filled: half a decode is not a shorter message.
 
-**Only for a `table` kernel**, because the generated decoder's shape is
-settled there -- `(in, bits, out) -> bits` -- and is not for the families that
-are described and not yet generated (13.4). Guessing a signature for those
+**Only where the generated decoder's shape is settled**, which
+`traverse.decodes_here` decides: a `table`, `permutation` or `shift_register`
+kernel, and a `stuffing` one whose named code is in `DERIVED_STUFFING`. Not
+for the families that are described and not yet generated (13.4). Guessing a signature for those
 would be a header that names a function nobody agreed to write. The note
 above such a region already says the transform is the caller's.
 
@@ -3694,8 +3701,8 @@ no -- byte order and bit packing being the first two. A field can fail it for
 several reasons at once, and the blame chain names each: `q8_8` in a
 big-endian schema is both byte-swapped and scaled.
 
-**Four of these the compiler names and cannot decide**, and it says which and
-why rather than passing them. They were once recorded against the phase that
+**Three of these the compiler names and cannot decide**, and it says which
+and why rather than passing them. They were once recorded against the phase that
 would implement them; every one of those phases landed without the predicate
 arriving with it, so `needs phase 7` had become a promise the schedule no
 longer backed -- a reader would wait for something that had already happened.
@@ -4675,7 +4682,7 @@ Three parts, the first now mechanical:
 | every example, in every backend | pytest + each toolchain | each worked example generated *and compiled* -- C since phase 4, the other three only recently, which is how three C++ examples and two Rust ones came to be broken with the suite green. Generating is not compiling, and the examples are the schemas anyone reads |
 | compiler mutation | by hand, recorded in 26.13a | deliberate bugs in the generator, judged by what a *user's* suite catches rather than situ's own. Not automated: choosing the mutation is the work, and a mutation nobody thought of is the gap that survives |
 | test mutation | by hand, at the point of writing | a probe that walks generated code is run once against a deliberately wrong expectation, to find out whether it is a test or a compile check. Three of mine were the latter -- `-fsyntax-only`, a `main` nobody executed, an `assert!` in an unrun binary -- and each passed identically before and after the fix it was written for (invariant 35) |
-| the emitted Lua | lua5.4 | parsed for every schema, and four dissected: a UDP header, an IPv4 header with its bit-packed first row, a DNS name walked label by label, and an HTTP request line found by scanning. Offsets and values are compared against the layout the accessors come from |
+| the emitted Lua | lua5.4 | parsed for every schema, and four dissected over chosen packets: a UDP header, an IPv4 header with its bit-packed first row, a DNS name walked label by label, and an HTTP request line found by scanning, with offsets and values compared against the layout the accessors come from. Beyond those four, every dissector in the tree is run over random bytes and what it showed is diffed against the walker's own `listing` -- a third kind of check, and the reason this row understated itself for as long as it did |
 | one list of schemas | pytest | five places answered "which schemas are there" and each had its own glob. They read one list now, except where a narrower one is deliberate and says so |
 | every schema is built | pytest | `test/generated/Makefile` names the schemas it compiles, checks and fuzzes, by hand, and it is the third answer in this repository to "which schemas are there". A schema left out of it is one whose generated C nothing in the build ever runs -- the shape that let `edges.situ` go unbuilt in C++ for weeks |
 | the emitted C and C++ comments | doxygen | run over every schema's headers in both languages, and its XML read back: the capability vector must arrive against the accessor it describes, and a reason for an accessor that does *not* exist must not be attached to whatever declaration follows it |
@@ -4945,9 +4952,14 @@ situ/
     lua/                      a stub of the Wireshark API, big enough to run a
                               generated dissector over real bytes and report
                               what it showed (26.14)
-    schema/                  header.situ, the three in Section 5, and
-                              edges.situ -- constructs no protocol here uses,
-                              which exists so their generated code runs at all
+    schema/                  five schemas. header.situ is example 5.1;
+                              lenient.situ, native.situ and padded.situ each
+                              isolate a construct nothing else in the tree
+                              sets -- `strictness = lenient`, `endian native`
+                              at the widths nothing else reaches, `pad_to(n)`;
+                              and edges.situ holds constructs no protocol here
+                              uses, which exists so their generated code runs
+                              at all
   example/                   one directory per protocol, name matching its
                               `.situ` file, each with at least one `require`.
                               A `<name>.vectors` beside a schema is bytes
@@ -4966,7 +4978,10 @@ land.
 Append-only, in `doc/decision/`. A decision goes here when the reasoning
 would otherwise be lost -- when the obvious reading of this document is not
 what the code does, or when an alternative was rejected for a reason worth
-keeping. They are referenced from the sections they bear on; this is the index.
+keeping. They are referenced from the sections they bear on. There are 58, 0001
+through 0058 with no gaps; the table below lists 0001 to 0022, and the
+rest are cited by number from the sections they belong to rather than
+from here.
 
 | # | Decision |
 |---|---|
