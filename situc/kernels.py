@@ -12,7 +12,7 @@ only interface (13.1): the lattice reads the same nine properties whether a
 human wrote them or this module worked them out.
 
 The survey behind 13.4 is what makes this bounded. Essentially every line code,
-FEC, scrambler and framing code in practical use is one of six families or a
+FEC, scrambler and framing code in practical use is one of seven families or a
 pipeline of them, so deriving properties is six functions rather than an open
 problem.
 

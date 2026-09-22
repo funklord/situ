@@ -96,8 +96,9 @@ class _PrintStdDir(argparse.Action):
 		if root is None:
 			sys.stderr.write(
 				"situc: cannot find situ's own schema directory.\n"
-				"       It is <tree>/std when run from the source tree and\n"
-				"       <prefix>/share/situc/std when installed.\n")
+				"       The directory printed CONTAINS std/: it is the\n"
+				"       tree root when run from the source tree, and\n"
+				"       <prefix>/share/situc when installed.\n")
 			parser.exit(1)
 		sys.stdout.write(f"{root}\n")
 		parser.exit()
@@ -170,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
 	                       help="output directory (default: the current one)")
 	build_cmd.add_argument("--target", choices=("c", "cpp", "python", "rust"),
 	                       default="c",
-	                       help="backend; rust arrives in phase 11")
+	                       help="backend for the generated accessors")
 	build_cmd.add_argument("--prefix", default="situ",
 	                       help="identifier prefix for generated symbols")
 	build_cmd.add_argument("--single-file", action="store_true",

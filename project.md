@@ -4586,8 +4586,9 @@ situc gen-checks <schema>         tests holding the accessors to the map
 situc gen-derived <schema>        implementations from kernel descriptions
 situc gen-tamper <schema>         the harness that watches a tag's gate refuse
 situc advise  <schema>            ranked design suggestions with costs
-situc explain <schema> <path>     one field's capability vector and blame chains
-situc diff    <old> <new>         capability regressions between revisions
+situc explain <schema> <path>     one struct or field's capability vector
+                                  and its blame chains
+situc diff    <old> <new>         capability changes between revisions
 situc wire    <schema>            the byte-level contract [--check] (19.3)
 situc verify  <schema> <vectors>  do real bytes conform? generates nothing
 situc pack    <schema>            the packed layout image a walker reads
@@ -4612,8 +4613,11 @@ answers inside one, for a build system that wants to depend on a shipped
 schema or hand it to a tool that is not situc. It exits non-zero with a
 diagnostic where the directory cannot be found, rather than printing nothing
 and exiting 0 -- which a shell would read as an empty path and use. `--out`,
-`--target=c|cpp|python|rust` and `--prefix=NAME` belong to the subcommands that
-take them, which is not the same thing and was written here as though it were.
+`--target` and `--prefix=NAME` belong to the subcommands that take them,
+which is not the same thing and was written here as though it were. The three
+that take `--target` do not accept the same set: `build` takes
+`c|cpp|python|rust`, `gen-derived` takes `c|rust|python`, and `gen-dissector`
+takes none, emitting Lua.
 There is no `--strict`; it was listed for a while and never existed.
 
 `--out` names a **directory** in nine subcommands and a **file** in two, and

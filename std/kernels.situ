@@ -81,7 +81,8 @@ impl crc16_modbus derived;
 // C word: a 24-bit register held in a `uint32_t` and masked after every shift.
 // Its initial value is also the first reflected one that is not its own
 // reverse, which is what made the missing reflection visible -- every other
-// reflected CRC in this file starts all-ones.
+// reflected CRC in this file starts all-ones or all-zeros, and both of those
+// reverse to themselves.
 codec crc24_ble {
 	kernel = polynomial(width = 24, poly = 0x00065B, init = 0x555555, reflect);
 }

@@ -439,7 +439,7 @@ at every tab width.
 
 ## Switch labels sit at the switch's own indentation
 
-Measured across `walker/`, `runtime/` and `editor/`: 45 `case` and `default`
+Measured across `walker/`, `runtime/` and `editor/`: 53 `case` and `default`
 labels, every one of them at the same tab count as its `switch`, and none a
 level deeper. The bodies are one deeper than the labels.
 

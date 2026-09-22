@@ -2107,8 +2107,8 @@ def pad_alignment(placement: Placement) -> int | None:
 def pinned_bytes(placement: Placement) -> int | None:
 	"""The footprint `[size = N]` pinned, in bytes, or None where none is.
 
-	The decision layer answers this once so four backends and two walkers
-	spell one rule rather than each deriving it (0039). A pinned member is
+	The decision layer answers this once so four backends, two walkers and
+	the dissector spell one rule rather than each deriving it (0039). A pinned member is
 	`Fixed(N)` in the layout while its length stays whatever the message says,
 	so "does the declared length fit the footprint" is a question no other
 	check asks: the frame check compares against what is left in the *view*,

@@ -182,9 +182,10 @@ directory copy. `bin/situc` works in place or symlinked onto `PATH`;
 
 ## What it generates
 
-Every command that reads a schema takes `--define name=value`, which sets a
-declared `const` before the layout is solved -- a deployment constant, fixed
-at generation (decision 0050).
+Every command that takes a single schema takes `--define name=value`, which
+sets a declared `const` before the layout is solved -- a deployment constant,
+fixed at generation (decision 0050). `situc diff`, which reads two revisions,
+does not take it.
 
 | Command | Artifact |
 |---|---|
@@ -249,8 +250,9 @@ udp_header  8 bytes
 
 The bracket is what a write would cost, read out of the image's capability
 vectors: `read-only` where the schema lets nobody write, `moves` where the
-bytes after it shift, `tag` where a write invalidates a checksum or an
-authentication tag. Nothing is the ordinary case -- an in-place store that
+bytes after it shift, `rewrites` where the field cannot be stored into on its
+own and the whole word or region goes back, `tag` where a write invalidates a
+checksum or an authentication tag. Nothing is the ordinary case -- an in-place store that
 invalidates nothing -- so the marker means something when it is there. A
 `--format json` document carries the same as `writable`, `mutate`, `auth` and
 `write_cost`. An image packed without `--metadata` carries no vectors, and
@@ -916,7 +918,7 @@ codec scrambler_additive {
 impl scrambler_additive derived;
 ```
 
-Six kernel families cover essentially every line code, FEC, scrambler and
+Seven kernel families cover essentially every line code, FEC, scrambler and
 framing code in practical use, which is what bounds the design:
 
 | family | described by | covers |
@@ -1111,7 +1113,7 @@ walker; `[minimal]` is refused on one for now, because `10` and `1e1` are
 one value that no local rule separates, and what a canonical decimal
 spelling is has not been settled (decision 0056).
 
-`[encoding = ascii | utf8 | utf16le | leb128]` says what a run holds and
+`[encoding = ascii | utf8 | utf16le | utf16be]` says what a run holds and
 gets a validity check that rejects a lone surrogate the way the UTF-8 one
 rejects an overlong form. `[trim]`,
 `[case_insensitive]`, `[nul_terminated]`, `[quoted = "\""]` and

@@ -48,8 +48,10 @@ def _walk(members: tuple[ast.Member, ...]) -> list[ast.Member]:
 	    member form   allocating=['one.body']   floor=edit
 	    arm form      allocating=[]             floor=view
 
-	That is a wrong answer rather than a missing check -- `no_alloc(X)` is
-	one of the four predicates section 16 has the compiler name (26.434).
+	That is a wrong answer rather than a missing check. `no_alloc(X)` was
+	once one of the four predicates section 16 recorded as named and
+	undecidable (26.434); it is decided here now, and section 16 names the
+	three that remain.
 	"""
 	found: list[ast.Member] = []
 	for member in members:
