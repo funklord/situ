@@ -278,3 +278,73 @@ def test_tag_order_without_a_tag_is_refused() -> None:
 def test_an_unknown_tag_order_is_refused() -> None:
 	assert "unknown `tag_order`" in refusal(
 		TAGGED % " [tag_order = sideways]")
+
+
+# -- a derived codec cannot take a span list (26.475) -----------------------
+
+#: The same codec twice, differing only in how it is bound. `hp` in the
+#: preamble above is extern; this one is situ's own.
+DERIVED_PREAMBLE = """endian big;
+bit_order msb_first;
+
+codec scr {
+	kernel = shift_register(taps = 0x60, width = 7, seed = 0x7F,
+	                        feedback = input);
+}
+
+impl scr derived;
+"""
+
+SCATTERED = """struct p {
+	u8 flags;
+	u8 cid[4];
+	coded prot(scr) covers(flags, pn) { u8 unused; }
+	u8 pn[2];
+}
+"""
+
+
+def test_a_derived_codec_may_not_cover_scattered_spans() -> None:
+	"""The ABI that carries a span list is bound by an extern symbol.
+
+	A codec situ generates itself takes one pointer and one length, so a
+	`covers(...)` naming members outside the region has nowhere to be
+	delivered. All four backends emitted the single-span shape anyway and
+	`situc wire` published `prot covers: prot flags pn` regardless -- a
+	contract claiming bytes the generated code never transforms.
+
+	project.md 14.1a asserted "a derived codec never reaches this clause"
+	and that sentence was the recorded reason the widening was removed
+	from the derived path. It reached it; nothing refused it.
+	"""
+	with pytest.raises(SituError) as caught:
+		parse_text(DERIVED_PREAMBLE + SCATTERED, path="s.situ")
+
+	shown = caught.value.diagnostic.render()
+	assert "covers other spans, and `scr` is derived" in shown
+	assert "takes one span, not a list" in shown
+	assert 'extern' in shown, "the remedy has to name the binding that works"
+
+
+def test_an_extern_codec_may_cover_scattered_spans() -> None:
+	"""The control, and the shape `example/dtls` and QUIC header
+	protection actually use. The same schema with the same coverage,
+	bound to a symbol somebody supplies, is exactly what 13.2b widened the
+	ABI for -- a refusal catching this would have removed the construct
+	the clause exists for."""
+	parse_text(
+		DERIVED_PREAMBLE.replace("impl scr derived;", 'impl scr extern "m";')
+		+ SCATTERED, path="s.situ")
+
+
+def test_a_derived_codec_may_cover_its_own_bytes() -> None:
+	"""The second control. Being derived is not the fault; taking a span
+	LIST is. A `coded` region with no `covers(...)` transforms its own
+	interior through one pointer and one length, which is the shape every
+	derived codec has."""
+	parse_text(DERIVED_PREAMBLE + """struct p {
+	u8 flags;
+	coded prot(scr) { u8 unused; }
+	u8 tail;
+}
+""", path="s.situ")

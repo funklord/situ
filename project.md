@@ -2905,13 +2905,28 @@ than it was given would move it -- the decoded form would not correspond to the
 struct. So `covers` on a `ratio_bounded` codec like SMTP's dot-stuffing is an
 error, and a mask or a scramble is what the clause is for.
 
-That rule has a consequence for tier 2 worth writing down, because it was found
-by trying to test the path and not finding one: **a derived codec never reaches
-this clause.** The scattered ABI is a tier-1 shape, bound by an `impl ... extern`
-symbol, and a derived codec's implementation is situ's own. The widening was
-written into the derived path in three backends before this was measured, and
-removed again: an unreachable branch claiming to handle a case is worse than an
-absent one, because nothing can ever exercise it.
+That rule has a consequence for tier 2, and the first statement of it was
+wrong in the way that costs most. It read: **a derived codec never reaches
+this clause** -- the scattered ABI being a tier-1 shape bound by an
+`impl ... extern` symbol while a derived codec's implementation is situ's own
+-- and on that basis the widening, which had been written into the derived
+path in three backends, was **removed again**, since "an unreachable branch
+claiming to handle a case is worse than an absent one".
+
+**It reached the clause.** `coded prot(scr) covers(flags, pn)` with
+`impl scr derived;` was accepted by every rung, all four backends emitted the
+single-span shape, and `situc wire` published `prot covers: prot flags pn`
+either way -- a contract claiming bytes the generated code never transforms.
+The sentence was not merely stale: it was the recorded justification for
+deleting the code that would have made the case work, and an impossibility
+claim with no remedy beside it is the shape `evidence.md` calls the expensive
+one, because it tells the next person not to write something that would run.
+
+**It is refused now rather than widened** (26.475). A derived codec taking a
+span list is a real feature and is not built; what is built is the refusal,
+which says so and names the binding that works. The corpus's only
+`coded ... covers(...)` is extern, and so is header protection, the case the
+clause exists for -- so nothing that worked stopped working.
 
 What that investigation turned up was a separate defect, since fixed and
 recorded in 13.6a: a length-preserving derived codec emitted **no decode
@@ -30752,6 +30767,58 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.475 A derived codec reached the clause that said it could not
+
+**14.1a asserted "a derived codec never reaches this clause", and that
+sentence was the recorded reason working code was deleted.** The
+scattered-span widening had been written into the derived path in three
+backends and was removed again on the grounds that "an unreachable
+branch claiming to handle a case is worse than an absent one, because
+nothing can ever exercise it".
+
+**Measured, it is reachable in every backend.** `coded prot(scr)
+covers(flags, pn)` with `impl scr derived;` compiles at exit 0 through
+`map`, `wire` and `build` for all four targets. The extern form of the
+same schema emits a span list -- 4 occurrences in C, 21 in C++, 25 in
+Rust, 4 in Python -- and the derived form emits none in any of them,
+while `situc wire` publishes `prot covers: prot flags pn` either way. A
+contract claiming bytes the generated code never transforms, in four
+backends at once.
+
+**This is `evidence.md`'s expensive class, exactly.** An absence claim
+that has been closed wastes a reader's time; an impossibility claim that
+was never true tells the next person not to write something that would
+work -- and here it went further, and was the justification for removing
+something that already did. The tell that entry gives is the right one:
+the dangerous impossibility claim is the one with no remedy beside it,
+and this one had a deletion beside it instead.
+
+**Refused rather than widened, and that is a choice rather than the only
+answer.** A derived codec taking a span list is a real feature: situ
+generates those codecs itself and could generate a span-taking form. It
+is not built. What is built is a refusal naming the binding that does
+work, because the alternative to refusing was not "leave it" -- the
+contract was publishing a claim the code did not honour, so the status
+quo was the one option that was certainly wrong.
+
+**Nothing that worked stopped working, and that was measured before the
+refusal was written.** The corpus's only `coded ... covers(...)` is
+`edges.situ`'s `pn(masking)`, twice, and `masking` is
+`impl masking extern "app_header_mask";`. Header protection -- the case
+13.2b widened the ABI for, and QUIC's -- is extern too. The refusal
+cannot reach either.
+
+**Two orderings are load-bearing and both are asserted by existing
+tests.** The refusal sits after the unknown-span loop, which makes
+"covers something inside the region" structurally unreachable rather
+than a second condition to get right: `_coverable_spans` records a coded
+region's own name and never its interior, so any name surviving to the
+new block is outside every region. And it sits after the expansion
+refusal, because a derived codec that also changes length has two faults
+and the length one is more useful to say --
+`test_a_length_changing_codec_may_not_cover_anything` uses exactly that
+schema and pins the order.
 
 ### 26.474 The wire signature recorded a spelling, not a value
 

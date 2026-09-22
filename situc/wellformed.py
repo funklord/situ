@@ -3674,6 +3674,7 @@ def _coverable_spans(members: tuple[ast.Member, ...]) -> dict[str, ast.Member]:
 
 def check_coded_coverage(schema: ast.Schema) -> None:
 	"""`covers(...)` on a `coded` region names spans that exist (14.1a)."""
+	impls = {decl.codec: decl for decl in schema.impls()}
 	for struct in schema.structs():
 		spans = _coverable_spans(struct.members)
 
@@ -3732,6 +3733,40 @@ def check_coded_coverage(schema: ast.Schema) -> None:
 					         "the interior of another coded or sealed region "
 					         "cannot be named -- those bytes are transform "
 					         "output and do not exist until it has run"],
+				)
+
+			# AFTER the loop above, and after the expansion refusal, both
+			# deliberately. Any name still standing here is in `spans`,
+			# and `_coverable_spans` records a coded region's own name and
+			# never its interior -- so "covers something outside this
+			# region" needs no test of its own, it is what surviving to
+			# this line means. And the expansion refusal must be reached
+			# first: a derived codec that also changes length has two
+			# faults, and the one about length is the more useful thing to
+			# say.
+			#
+			# A derived codec cannot take a scattered span list. The ABI
+			# that carries one is bound by an `impl ... extern` symbol;
+			# situ's own generated codecs take a single pointer and a
+			# length, and all four backends silently emit that shape here
+			# while `situc wire` publishes the coverage -- a contract
+			# claiming bytes the code never transforms (26.475).
+			covers = getattr(region, "covers", ())
+			held = impls.get(region.codec)
+			if covers and held is not None \
+					and held.kind is ast.ImplKind.DERIVED:
+				raise error(
+					f"`{region.name}` covers other spans, and `{region.codec}` "
+					f"is derived",
+					region.span,
+					label = "a derived codec takes one span, not a list",
+					notes = ["a scattered span list reaches a codec through "
+					         "the ABI an `impl ... extern` symbol is bound "
+					         "to; a codec situ generates itself takes one "
+					         "pointer and one length",
+					         "bind it with `impl ... extern \"name\";` and "
+					         "supply the transform, or drop the `covers(...)` "
+					         "and let the region cover its own bytes"],
 				)
 
 
