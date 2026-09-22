@@ -406,7 +406,10 @@ class Placement:
 	#: field counted in units rather than bytes.
 	size_expr: str | None		= None
 	#: The same two expressions as a reader would write them, for `situc doc`
-	#: and nothing else. `size_expr` and `repeat_while` are parenthesised at
+	#: and for the dissector's comments -- this said "and nothing else"
+	#: until `dissector.py` was found reading both, one of them into text
+	#: `test_dissector.py` asserts on.
+	#: `size_expr` and `repeat_while` are parenthesised at
 	#: every operator because they are handed to four host compilers whose
 	#: precedence tables are not all situ's -- correct, and `payload[(length
 	#: - 8)]` in a diagram whose whole point is to be read. The generated
@@ -414,6 +417,23 @@ class Placement:
 	#: one form being asked to be both.
 	size_shown: str | None		= None
 	repeat_shown: str | None	= None
+	#: The same two expressions as TREES, for the wire signature, which
+	#: needs neither of the renderings above. Both are source spellings, and
+	#: a contract that records a spelling reports a change nobody can
+	#: observe and stays silent on one everybody can: `const HEADER_BYTES`
+	#: reached `.wire` by name, so redefining it moved the padding run in
+	#: every cpio entry and `wire --check` said the signature was current
+	#: (26.483). `wire.py` resolves these against its own const environment,
+	#: which is why the tree travels rather than a third string -- the
+	#: solver has no consts to substitute with.
+	size_ast: ast.Expr | None	= None
+	repeat_ast: ast.Expr | None	= None
+	#: And `at`, which leaks the same way and which a search for `_shown`
+	#: does not find, the spelling arriving on `located` under an ordinary
+	#: name. `u8 payload[2] at spot + AT_BIAS` published the const by name,
+	#: so redefining it moved where the member is read from and the
+	#: signature did not move.
+	located_ast: ast.Expr | None	= None
 	#: `while (cond)`: the run ends after the element that fails this.
 	#: Held as source rather than as a tree, because every consumer of it
 	#: either renders it or hands it to a backend that renders it.
@@ -1156,6 +1176,7 @@ class Solver:
 			sized_by      = _path_of(member.size),
 			size_expr     = _expression_source(member.size),
 			size_shown    = _expression_source(member.size, explicit=False),
+			size_ast      = _expression_tree(member.size),
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
@@ -2174,6 +2195,7 @@ class Solver:
 			sized_by       = self.sizing_field(member),
 			size_expr      = _size_source(member),
 			size_shown     = _size_source(member, explicit=False),
+			size_ast       = _size_tree(member),
 			access_mode    = _access_mode(member, decl),
 			on_read        = _read_effect(member, decl),
 			on_write       = _side_effect(member.attrs, "on_write"),
@@ -2189,6 +2211,7 @@ class Solver:
 			skip_declared      = bool(skip and skip.declared),
 			repeat_while       = _repeat_source(member),
 			repeat_shown       = _repeat_source(member, explicit=False),
+			repeat_ast         = _repeat_tree(member),
 			repeat_cap         = self._repeat_cap(member),
 			radix              = getattr(member, "radix", None),
 			scaled             = bool(getattr(member, "scaled", False)),
@@ -2213,6 +2236,7 @@ class Solver:
 			scan_cause         = state.scan[0] if state.scan else None,
 			scan_cause_span    = state.scan[1] if state.scan else None,
 			located            = _located_source(member),
+			located_ast        = _located_tree(member),
 		))
 
 		if member.until is not None and state.scan is None:
@@ -3517,6 +3541,35 @@ def _located_source(member: ast.Field | ast.Reserved) -> str | None:
 
 	located = getattr(member, "located", None)
 	return None if located is None else expr_to_source(located)
+
+
+def _located_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
+	located = getattr(member, "located", None)
+	return None if located is None else located
+
+
+def _expression_tree(size: ast.Expr | None) -> ast.Expr | None:
+	"""The same expression `_expression_source` renders, untouched.
+
+	Gated identically, so `size_ast` is present exactly when `size_expr` is:
+	a bare path and a bare constant are already carried elsewhere, and a
+	second copy of either is a second thing to be wrong.
+	"""
+	if size is None:
+		return None
+	if isinstance(size, ast.Remaining) or _path_of(size) is not None:
+		return None
+	return size if paths_in(size) else None
+
+
+def _size_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
+	array = getattr(member, "array", None)
+	return None if array is None else _expression_tree(array.size)
+
+
+def _repeat_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
+	repeat = getattr(member, "repeat", None)
+	return None if repeat is None else repeat.predicate
 
 
 def _repeat_source(member: ast.Field | ast.Reserved,

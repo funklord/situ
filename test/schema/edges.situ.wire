@@ -64,7 +64,7 @@ struct beat size=2
   @0x0001   1         u8         payload
 
 struct beats size=4..14
-  @0x0000   2..12     beat       pulse  big while=kind==0x33 while-max=6
+  @0x0000   2..12     beat       pulse  big while=kind==51 while-max=6
   ~         2         u16        after  big
 
 struct bounded_varint size=3..19
@@ -231,7 +231,7 @@ struct link size=4..1024
   @0x0002   2..1022   u8         body  big sized-by=(units+1)*4-2
 
 struct linked size=4..
-  @0x0000   4..6144   link       chain  big while=kind==0x11||kind==0x22 while-max=6
+  @0x0000   4..6144   link       chain  big while=kind==17||kind==34 while-max=6
   ~         0..       u8         tail  sized-by=remaining
 
 struct located_tail size=3..258

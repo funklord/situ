@@ -30769,6 +30769,123 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.483 The contract recorded a spelling, in both directions at once
+
+**`sized-by=` and `while=` published the author's SOURCE, so the wire
+signature was silent on a change every peer sees and loud about one no
+peer can.** Both halves are the same defect, and the tree held an
+instance of each.
+
+**Silent on a real change**, which is the direction that costs:
+
+    $ situc wire --check --define HEADER_BYTES=200 example/cpio/cpio.situ
+    situc: example/cpio/cpio.situ.wire is current
+
+The const reached the contract by NAME, so redefining it moved the
+padding run in every cpio entry -- confirmed in the generated C, `110`
+becoming `200` at multiple sites -- and the artifact whose header reads
+*a promise to a receiver that is already deployed and cannot be
+recompiled* reported nothing.
+
+**Loud on no change**, measured at `1d55a46` with a control:
+
+    BREAKING: a deployed peer misreads these bytes
+      beats[0]: pulse: while=kind==0x33 -> while=kind==51;
+                the same bytes now mean something else
+
+They are the same bytes. `expr_to_source` renders `IntLiteral.text`,
+which is what the author typed.
+
+**This is 26.474 one code path along, and 26.474 was mine.** That entry
+taught `_sized_by` to resolve a bare const and stopped there; `_sized_by`
+takes a plain STRING and this path takes an EXPRESSION, and only the
+string was taught. The half that was fixed is the half that had a
+reproduction attached.
+
+**The tree was already disagreeing with itself about what a literal
+is.** `example/arp/arp.situ` writes `[must_eq = 0x0800]` and its
+committed signature records `must_eq=2048`, because 26.474 made the
+attribute path evaluate. One artifact, two answers, decided by which
+branch of `wire.py` a value happened to arrive through.
+
+**So the fix is one rule rather than two patches: resolve to values
+before rendering.** A const becomes its number, an integer literal
+becomes its value rather than its spelling, and a character literal
+becomes the `code` its encodings agree it is worth. `Access` and
+`Remaining` are left whole -- the first is a field path whose base is a
+struct rather than a const, and rewriting inside one would turn a member
+name into a number.
+
+**The tree travels, not a third string.** `layout.py` already carries
+two renderings of each expression and the solver has no const
+environment to substitute with, so `Placement` gains the AST and
+`wire.py` resolves it against its own `Env`. That keeps 0041's rule
+where 0041's rule lives, and leaves `size_shown` exactly as `situc doc`
+wants it.
+
+**Three of 42 signatures move, and every one is a spelling losing to a
+value**: `cpio` (`HEADER_BYTES` to `110`), `json` (`sep==','` to
+`sep==44`), `edges` (`kind==0x33` to `51`, `0x11||0x22` to `17||34`).
+
+**The first fixture was wrong in the way that matters, and the runner
+would not have said so.** A const over a plain `u8 fill[PAD + n]`
+reports BREAKING at HEAD as well -- the WIDTH column sees it, so the
+test would have passed against the unfixed compiler for a reason that
+has nothing to do with the fix. cpio's actual shape is what
+discriminates: `align_up(PAD + n, 4) - (PAD + n)` is **0..3 bytes wide
+for every value of PAD**, so the width cannot move and only `sized-by=`
+can. Verified both ways -- identical signatures at HEAD, and a finding
+naming 110 and 200 after.
+
+**The fix's first version had a worse bug than the one it fixed, and a
+worker found it.** A const may legally share a field's name, and
+substituting on `name in env.consts` then ate the field:
+
+    const kind = 0x99;
+    beat pulse[] while (kind == 0x33) max 6;
+        ->  while=153==51
+
+Two constants compared to each other, published as the contract, with the
+field reference gone. **Nothing in the corpus collides**, which is exactly
+why nothing caught it.
+
+**The scope is a property of the call site, not of the name, and one
+function was serving two.** In a `while` predicate every bare name is a
+field of the element struct -- `check_repeats` refuses anything else -- so
+a const there is never what the predicate means. A size expression is the
+opposite, and the COMPILER settles it rather than this file: `const n = 99`
+beside a field `n` emits `SITU_S_A_COUNT 100u`, so the const wins and
+`sized-by=99+1` is the honest line where `n+1` would suggest a field sizes
+the run. Measured, not assumed, and it is why `_valued` now takes the
+answer from its caller.
+
+**Nine instances across two keys, not the two that had reproductions.**
+Five are radix and format spellings nobody would go looking for -- `0x10`,
+`0b10000`, `1_6`, `016`, and hex digit case -- and the lexer already
+normalises them (`body.replace("_","")`, `int(body, radix)`) before the
+signature un-normalised them. Each is a parametrized row now.
+
+**And a third leak, which a search for `_shown` structurally cannot
+find.** `at=` publishes `placement.located`, a spelling arriving under an
+ordinary attribute name: `u8 payload[2] at spot + AT_BIAS` recorded the
+const by name, so redefining it moved WHERE the member is read from --
+a stronger claim than how wide it is -- and the signature did not move.
+It was also the one fact rendered unsquashed, putting the author's spaces
+inside a line whose facts are space-delimited. Both are fixed.
+
+**What made the count wrong was the search, not the care taken.** The two
+known instances were found by grepping for the renderings they used; the
+other seven were found by asking what ELSE can be respelled and by
+enumerating every published fact against whether a const can reach it. A
+detector keyed on the first instance answers about the first instance.
+
+**An existing test pinned the spelling and was updated rather than worked
+around.** `test_it_records_what_ends_a_run` asserted
+`while=kind==0x11`. What it exists to check -- that a run's ending
+condition reaches the contract at all -- is untouched; the literal moved
+with the rule, and the test says why, because the next reader deserves
+better than a changed constant with no reason beside it.
+
 ### 26.482 The encoder's worst case, inverted into a decode buffer
 
 **A heap-buffer-overflow WRITE in generated code, from an unmodified

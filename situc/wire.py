@@ -329,19 +329,23 @@ def _constraints(placement: Placement, env: Env) -> list[str]:
 		# signature that churned to `sized-by=(length-8)` would be reporting
 		# a change no peer can observe.
 		facts.append(f"sized-by="
-		             f"{_squash(placement.size_shown or placement.size_expr)}")
+		             f"{_valued_source(placement.size_ast, placement.size_shown or placement.size_expr, env)}")
 	# `at hdr.pixel_offset`: where the bytes *are*. `_position` renders `~` for
 	# this member exactly as it does for one the data merely displaced, and the
 	# two are different promises -- a displaced member follows the line above,
 	# and this one goes wherever a field says, however far that is from
 	# anything. The line above is not the reason, so it has to be stated.
 	if placement.located is not None:
-		facts.append(f"at={placement.located}")
+		# `at` names where the bytes ARE, so a const in it moves the member
+		# and must not reach the contract as a name. Squashed too: this was
+		# the one fact rendered with the author's spaces, inside a line
+		# whose facts are space-delimited.
+		facts.append(f"at={_valued_source(placement.located_ast, placement.located, env)}")
 	# Where a run stops, which is the boundary between this member and the
 	# next. Nothing else ends one, so the condition is the width.
 	if placement.repeat_while is not None:
 		facts.append(f"while="
-		             f"{_squash(placement.repeat_shown or placement.repeat_while)}")
+		             f"{_valued_source(placement.repeat_ast, placement.repeat_shown or placement.repeat_while, env, fields=True)}")
 	if placement.repeat_cap is not None:
 		facts.append(f"while-max={placement.repeat_cap}")
 	# The alignment a pad promises (0043): a peer that pads to a different
@@ -449,6 +453,101 @@ WIRE_ATTRS = (
 #: publish `encoding=7` -- which no peer could act on and which names a
 #: different encoding from the one enforced (26.474).
 VALUE_ATTRS = ("must_eq", "min", "max", "self_as")
+
+
+def _valued(expr: ast.Expr, env: Env, *, fields: bool) -> ast.Expr:
+	"""The expression with every const and literal reduced to its value.
+
+	0041 asks the signature to record what is enforced, and both renderings
+	the solver carries are SPELLINGS. That fails in two directions at once,
+	and the tree had one of each:
+
+	  - silent on a real change -- `align_up(HEADER_BYTES + ..., 4)` names
+	    the const, so `HEADER_BYTES` going from 110 to 200 moves the padding
+	    run in every cpio entry and the signature does not move;
+	  - loud on no change -- `expr_to_source` prints `IntLiteral.text`, so
+	    respelling `0x33` as `51` reports BREAKING over bytes that are
+	    identical.
+
+	26.474 fixed the first for a BARE const, in `_sized_by`, and this is the
+	same defect one code path along: that path takes a plain string and this
+	one an expression, and only the string was taught to resolve.
+
+	A character literal reduces to its `code` for the same reason -- it is
+	what the schema's encodings agree the byte is worth, and it is the byte
+	a peer sees. `Access` and `Remaining` are left whole: the first is a
+	field path whose base is a struct rather than a const, and rewriting
+	inside one would turn a member name into a number.
+	"""
+	if isinstance(expr, ast.IntLiteral):
+		return ast.IntLiteral(expr.span, expr.value, str(expr.value))
+	if isinstance(expr, ast.CharLiteral):
+		return ast.IntLiteral(expr.span, expr.code, str(expr.code))
+	if isinstance(expr, ast.NameRef):
+		# `fields`: whether a BARE name here is a field rather than a const,
+		# which is a property of the call site and not of the name. In a
+		# `while` predicate every bare name is a field of the element struct
+		# -- `check_repeats` refuses anything else -- so a const sharing a
+		# field's name must not be substituted. It is legal to write one,
+		# and doing so turned `while (kind == 0x33)` into `while=153==51`:
+		# a predicate comparing two constants, published as the contract,
+		# with the field reference destroyed. Zero collisions in the corpus
+		# today, which is why nothing caught it.
+		#
+		# A size expression is the other way, and the COMPILER decides it
+		# rather than this file: `const n = 99` beside a field `n` emits
+		# `SITU_S_A_COUNT 100u`, so the const wins and `sized-by=99+1` is
+		# the honest line -- `n+1` would suggest a field sizes the run.
+		held = None if fields else env.consts.get(expr.name)
+		return (expr if held is None
+		        else ast.IntLiteral(expr.span, held, str(held)))
+	if isinstance(expr, ast.Binary):
+		return ast.Binary(expr.span, expr.op,
+		                  _valued(expr.left, env, fields=fields),
+		                  _valued(expr.right, env, fields=fields))
+	if isinstance(expr, ast.Unary):
+		return ast.Unary(expr.span, expr.op,
+		                 _valued(expr.operand, env, fields=fields))
+	if isinstance(expr, ast.Call):
+		return ast.Call(expr.span, expr.name,
+		                tuple(_valued(one, env, fields=fields)
+		                      for one in expr.args))
+	if isinstance(expr, ast.Index):
+		# Only the subscript is arithmetic; the base is a path.
+		return ast.Index(expr.span, expr.base,
+		                 None if expr.index is None
+		                 else _valued(expr.index, env, fields=fields))
+	if isinstance(expr, ast.Access) and isinstance(expr.base, ast.NameRef):
+		# `Kind.alpha` is a VALUE and `header.namesize` is a field, and both
+		# are an `Access` over a `NameRef`. `_sized_by` already tells them
+		# apart -- consts, then a dotted enum member, then a field path --
+		# and leaving this branch out made `_valued` disagree with it inside
+		# one artifact: `u8 a[Kind.alpha]` resolved to a number through the
+		# string path while `u8 a[Kind.alpha + n]` published the name. That
+		# is this entry's own defect one code path along, which is the thing
+		# it is about.
+		arms = env.enums.get(expr.base.name)
+		held = None if arms is None else arms.get(expr.name)
+		if held is not None:
+			return ast.IntLiteral(expr.span, held, str(held))
+	return expr
+
+
+def _valued_source(tree: ast.Expr | None, shown: str | None,
+		env: Env, *, fields: bool = False) -> str:
+	"""`tree` resolved to values, or the spelling where no tree travelled.
+
+	The fallback is not decoration. `size_ast` is set exactly where
+	`size_expr` is, but a placement built before this field existed -- or by
+	a path that does not set it -- would otherwise publish an empty
+	`sized-by=`, which reads as a member nothing sizes.
+	"""
+	from situc.unparse import expr_to_source
+
+	if tree is None:
+		return _squash(shown or "")
+	return _squash(expr_to_source(_valued(tree, env, fields=fields),
+	                              explicit=False))
 
 
 def _sized_by(name: str, env: Env) -> str:

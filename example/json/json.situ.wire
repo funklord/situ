@@ -20,7 +20,7 @@ target buffer
 
 struct array size=2..
   @0x0000   1         u8         open
-  @0x0001   1..       element    entries  while=sep==','
+  @0x0001   1..       element    entries  while=sep==44
 
 struct element size=1..
   @0x0000   0..       value      held
@@ -44,7 +44,7 @@ struct number size=1..
 
 struct object size=5..
   @0x0000   1         u8         open
-  @0x0001   4..       member     entries  big while=sep==','
+  @0x0001   4..       member     entries  big while=sep==44
 
 struct text size=2..
   @0x0000   1         u8         open

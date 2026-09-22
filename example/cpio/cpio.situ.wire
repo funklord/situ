@@ -24,7 +24,7 @@ enum format : u8[6] unknown=error
 struct cpio_entry size=111..4294971507
   @0x0000   110       cpio_header header  big
   @0x006e   1..4096   u8         name  sized-by=header.namesize
-  ~         0..3      u8         <reserved0>  sized-by=align_up(HEADER_BYTES+header.namesize,4)-(HEADER_BYTES+header.namesize)
+  ~         0..3      u8         <reserved0>  sized-by=align_up(110+header.namesize,4)-(110+header.namesize)
   ~         0..4294967295 u8         data  sized-by=header.filesize
   ~         0..3      u8         <reserved1>  sized-by=align_up(header.filesize,4)-header.filesize
 

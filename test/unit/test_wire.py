@@ -379,9 +379,16 @@ struct s { hdr chain[] while (kind == 0x11) max 4; u8 tail[remaining]; }
 
 
 def test_it_records_what_ends_a_run() -> None:
+	"""`17` and not `0x11`, since 26.483: the signature records the value.
+
+	This asserted the spelling until the day `sized-by=` was found publishing
+	a const by name. What the test is for -- that a run's ending condition
+	reaches the contract at all -- is unchanged, and the literal moved with
+	the rule rather than the rule being bent to keep the literal.
+	"""
 	text = signature(WHILE)
 
-	assert "while=kind==0x11" in text
+	assert "while=kind==17" in text, "0x11 is 17; the contract records bytes"
 	assert "while-max=4" in text
 
 
@@ -917,3 +924,147 @@ def test_two_spellings_of_one_value_compare_equal() -> None:
 	                 preamble="endian big;\n\n") == \
 	       signature("struct s { u16 t [must_eq = 2048]; u8 r; }",
 	                 preamble="endian big;\n\n")
+
+
+# -- the signature records values, not spellings (26.483) --------------------
+
+#: cpio's shape, reduced. The pad run is `align_up(PAD + n, 4) - (PAD + n)`,
+#: which is 0..3 bytes wide for EVERY value of `PAD` -- so the width column
+#: cannot see the constant move and only `sized-by=` can. A fixture whose
+#: width changed would pass against the unfixed compiler for the wrong
+#: reason, which is what the first draft of this test did.
+PADDED = ("const PAD = %d;\n"
+	"struct s { u16 n; u8 body[n];\n"
+	"  reserved u8 [align_up(PAD + n, 4) - (PAD + n)];\n"
+	"  u8 tail; }\n")
+
+#: A `while` predicate is the other expression the signature publishes.
+BEATS = ("struct beat { u8 kind; u8 payload; }\n"
+	"struct beats { beat pulse[] while (kind == %s) max 6; }\n")
+
+
+def test_redefining_a_const_a_size_expression_uses_is_breaking() -> None:
+	"""Silent on a real change, which is the direction that costs.
+
+	`sized-by=` published the author's spelling, so the constant reached the
+	contract by NAME and redefining it moved the padding run in every cpio
+	entry while `wire --check` reported the signature current. 26.474 fixed
+	this for a BARE const in `_sized_by`; that path takes a plain string and
+	this one an expression, and only the string had been taught to resolve.
+	"""
+	found = verdict(PADDED % 110, PADDED % 200)
+
+	assert found.breaking
+	assert "110" in detail(found) and "200" in detail(found), (
+		"the finding has to name both values, not the const")
+
+
+def test_respelling_a_literal_is_not_a_wire_change() -> None:
+	"""And loud on no change, which is the same defect pointed the other way.
+
+	`expr_to_source` prints `IntLiteral.text`, so `0x33` and `51` rendered
+	differently and `wire --check` called identical bytes "not backward
+	compatible". A contract nobody can trust to be quiet is one people stop
+	reading.
+	"""
+	assert not verdict(BEATS % "0x33", BEATS % "51").findings
+
+
+def test_a_character_literal_is_recorded_as_the_byte_it_is() -> None:
+	"""`','` and `44` are one fact, and the attributes already agreed.
+
+	`arp.situ` writes `[must_eq = 0x0800]` and its committed signature
+	records `must_eq=2048`, because 26.474 made the attribute path evaluate.
+	A `while` predicate comparing against `','` had stayed a spelling, so the
+	two halves of one artifact disagreed about what a literal is.
+	"""
+	assert not verdict(BEATS % "','", BEATS % "44").findings
+
+
+#: Four spellings of sixteen the lexer already normalises -- it strips `_`
+#: and reads the radix -- and which the signature then un-normalised. Nobody
+#: would go looking for these; they were found by asking what else can be
+#: respelled, rather than by reading the two instances already known.
+SIXTEEN = ("0x10", "0b10000", "1_6", "016")
+
+
+@pytest.mark.parametrize("spelling", SIXTEEN)
+def test_a_size_expression_records_the_number_not_its_radix(
+		spelling: str) -> None:
+	"""The case a user actually meets, since hex lives in size expressions.
+
+	`while=` had the instance that was found, and `sized-by=` had the same
+	defect and no reproduction. Testing only the found one is how a class
+	gets half-fixed -- which is what 26.474 did to this very file.
+	"""
+	assert not verdict(f"struct s {{ u16 n; u8 a[{spelling} + n]; }}",
+	                   "struct s { u16 n; u8 a[16 + n]; }").findings
+
+
+def test_an_enum_member_resolves_inside_an_expression_too() -> None:
+	"""`_sized_by` resolved a dotted arm and `_valued` did not, so one
+	artifact gave two answers: `u8 a[kv.alpha]` published `17` through the
+	string path while `u8 a[kv.alpha + n]` published the name. Same defect
+	one code path along as the entry this test belongs to, found inside the
+	fix for it.
+	"""
+	held = ("enum kv : u8 { alpha = 17, beta = 18, }\n"
+		"struct s { u8 n; u8 a[%s]; u8 t; }\n")
+
+	assert not verdict(held % "kv.alpha + n", held % "17 + n").findings
+
+
+def test_the_case_of_a_hex_digit_is_not_a_wire_change() -> None:
+	"""`0xFF` and `0xff`, which `0X10` is not -- the lexer refuses a capital
+	radix marker and accepts either case in the digits, so this is the case
+	variation the language actually has. Measured rather than assumed: the
+	first draft of the row above tried `0X10` and was refused.
+	"""
+	assert not verdict("struct s { u16 n; u8 a[0xFF + n]; }",
+	                   "struct s { u16 n; u8 a[0xff + n]; }").findings
+
+
+def test_a_const_sharing_a_field_name_does_not_eat_the_field() -> None:
+	"""The substitution is scope-aware, and the first version was not.
+
+	A bare name in a `while` predicate is a field of the element struct --
+	`check_repeats` refuses anything else -- so a const that happens to share
+	the name is not what the predicate means. Substituting on `name in
+	env.consts` turned `while (kind == 0x33)` into `while=153==51`: two
+	constants compared to each other, published as the contract, with the
+	field reference gone.
+
+	Legal to write, and zero schemas in the corpus do it, which is exactly
+	why nothing caught it. A size expression is the opposite case and the
+	compiler settles it rather than this file: `const n = 99` beside a field
+	`n` emits `SITU_S_A_COUNT 100u`, so there the const wins.
+	"""
+	collides = ("const kind = 0x99;\n"
+		"struct beat { u8 kind; u8 payload; }\n"
+		"struct beats { beat pulse[] while (kind == %s) max 6; }\n")
+
+	text = signature(collides % "0x33")
+
+	assert "while=kind==51" in text, "the field reference has to survive"
+	assert "153" not in text, "the const is not what the predicate names"
+	assert not verdict(collides % "0x33", collides % "51").findings
+
+
+def test_where_a_member_is_read_from_records_values_too() -> None:
+	"""`at=` is the third leak and the one a `_shown` grep cannot find.
+
+	The spelling arrives on `placement.located` under an ordinary name, so
+	it was invisible to the search that found the other two. A const in it
+	moves WHERE the member is read from -- a stronger claim than how wide it
+	is -- and it reached the contract by name. It was also the one fact
+	rendered unsquashed, putting the author's spaces inside a line whose
+	facts are space-delimited.
+	"""
+	held = ("const AT_BIAS = %d;\n"
+		"struct s { u32 spot; u8 payload[2] at spot + AT_BIAS; }\n")
+
+	text = signature(held % 3)
+
+	assert "at=spot+3" in text, "resolved, and squashed"
+	assert "AT_BIAS" not in text
+	assert verdict(held % 3, held % 5).breaking
