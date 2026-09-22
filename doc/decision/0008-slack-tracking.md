@@ -26,7 +26,9 @@ to it later is a breaking change for every schema already compiled against it.
 
 ## Decision
 
-No field is added. A view is `{ base, limit, generation }` and stays that way.
+No field is added ~~and a view is `{ base, limit, generation }` and stays
+that way~~ *for slack*. The view has since gained a fourth field for an
+unrelated reason; see the amendment at the end.
 
 `limit` **is** the capacity. It is established once, at acquisition, from
 whatever extent the schema says the region can hold. The *used* extent is not a
@@ -87,3 +89,25 @@ dynamic position. Two view families is exactly what that warns against.
 **Defer to phase 6.** Rejected: the view struct is ABI, so this has to be
 settled before anything is compiled against it, which is what makes it a phase 5
 question rather than a phase 6 one.
+
+
+## Amendment, 2026-09-22: the view gained a field, and not for slack
+
+The decision stands exactly as written: slack needs no field, because
+`limit` **is** the capacity. Nothing below changes.
+
+What was falsified is the clause "and stays that way", which was a claim
+about the whole ABI rather than about slack. `situ_view_t` is
+`{ base, limit, generation, owner }` today: `const struct situ_msg *owner`
+was added so that 12.3's generation check could fire in C and C++ at all,
+and is recorded in project.md 26.306. It carries nothing about capacity and
+does not touch this decision's reasoning.
+
+The distinction is worth keeping rather than quietly widening the sentence:
+a record that says "no field for X" is falsified only by a field for X, and
+this record has not been. A reader who found a fourth field and read the
+original clause would reasonably have concluded the decision had been
+abandoned.
+
+Found by a sweep that checked each record's factual claims against the
+runtime header (26.477).

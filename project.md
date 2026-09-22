@@ -30768,6 +30768,60 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.477 Three claims in accepted records, corrected the tree's own way
+
+**Two of the three were wrong on the day they were written, not gone
+stale**, which is the part worth separating: a claim that rots had a
+moment of being true and a reader could have relied on it honestly; a
+claim that was never true has been misleading since the commit that
+introduced it.
+
+  - **0052 showed `preamble u8 sync[4] = "..."`.** The named form does
+    not parse -- "expected `=` after the preamble's type, found `sync`"
+    -- and the record's own Consequences say why it cannot: the
+    anonymity is the mechanism of inaccessibility, "there is no name for
+    an accessor to be called". `git log -S` puts the line in the
+    original design commit.
+  - **0052 showed `[must_eq]` over `uN[k]`.** The element must be `u8`;
+    `u16 sig[2] [must_eq = "WOZ2"]` is refused. The same record's
+    Consequences already state the narrowing, so the body disagreed with
+    its own closing section. `uN[k]` was a hapax in the tree.
+  - **0008 said a view "is `{ base, limit, generation }` and stays that
+    way".** True when written and falsified later: `situ_view_t` ends
+    `const struct situ_msg *owner;` today, added so 12.3's generation
+    check could fire in C and C++ (26.306).
+
+**"Append-only" in this tree means annotated in place, and that was
+measured rather than assumed.** project.md rule 5 says the directory is
+append-only, which reads like "never edited". Over the whole history of
+`doc/decision/` there are 265 deleted lines -- 136 in `Status:` headers,
+129 in bodies -- and every body deletion is either the directory-rename
+pass or a rewrite INSTALLING a struck-through annotation. No commit has
+ever silently replaced a false sentence. Six records carry
+`## Amendment, <date>:` sections, twenty-nine headings between them.
+`0043-pad-to.md` is the model: "Everything above stands except one
+word."
+
+**So no record 0059.** A new record supersedes a DECISION; none of these
+three is a decision changing. Two are illustrations that never compiled
+and one is a sub-clause that overreached, and filing a decision record
+for a typo would leave the next reader hunting a policy change that
+never happened.
+
+**The two records are annotated differently, on purpose.** 0052's
+examples are corrected IN PLACE, because a reader copying a fenced block
+is the entire failure mode and a struck-through example is still there
+to copy. 0008's clause is struck and left visible, because that decision
+is correct and only an over-broad sub-clause died: "no field is added"
+is still true, slack still needs none, and `owner` carries nothing about
+capacity. A reader who found four fields and a silently-rewritten
+sentence would have no way to tell whether the decision had been
+abandoned.
+
+**The rule this leaves behind:** a record that says "no field for X" is
+falsified only by a field for X. Widening the sentence to match the
+struct would have retired a decision that is still in force.
+
 ### 26.476 The conformance row that promised a test nobody generated
 
 **13.1's table said `seekable = permuted` gets "the position map is a

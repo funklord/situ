@@ -779,9 +779,13 @@ def _readme_as_code() -> str:
 	nothing.
 
 	Inline spans are matched across newlines: the README hard-wraps, so a
-	span like `preamble u8 sync[4] = "..."` runs over the break. A version
-	that stopped at the newline reported `preamble` missing while it was
-	there, which is the same fault from the other side.
+	span like `preamble u8[4] = "..."` runs over the break. A version that
+	stopped at the newline reported `preamble` missing while it was there,
+	which is the same fault from the other side. (The example carried a
+	member name until 26.477 -- `preamble` is anonymous and the named form
+	does not parse. The test never depended on that, needing only the
+	keyword inside a span, but a docstring quoting a README line should
+	quote the line that is there.)
 	"""
 	readme = (ROOT / "README.md").read_text(encoding="utf-8")
 	fenced = re.findall(r"```[\w]*\n(.*?)\n```", readme, re.S)

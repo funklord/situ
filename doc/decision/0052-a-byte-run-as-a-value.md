@@ -71,7 +71,7 @@ spelling leaves the author with nothing, so the two belong in one motion.
 **Three constructs, because these are three facts and not one.**
 
 *A byte run is comparable to a byte run.* `[must_eq]` on a member whose type
-is `uN[k]` takes a string or byte literal of exactly `k` elements, and
+is `u8[k]` takes a string or byte literal of exactly `k` elements, and
 compiles to one span comparison:
 
     u8 sig[4] [must_eq = "WOZ2"];
@@ -96,7 +96,7 @@ reason signatures are written as text in every format reference there is.
 *A preamble is fixed and not exposed.* A new member kind, spelled to be read
 as "these bytes are here and they are not yours":
 
-    preamble u8 sync[4] = "\x8d\x57\x4f\x5a";
+    preamble u8[4] = "\x8d\x57\x4f\x5a";
 
 It is checked on validate exactly as `[must_eq]` is, and it generates no
 getter, no setter, no walker member, no dissector row and no editor field.
@@ -199,3 +199,31 @@ Each backend names the arms rather than enumerating them -- there is no
 integer to enumerate, and inventing one would give the arm the byte order
 the construct exists to avoid. C emits `situ_m_bmp[2]` and
 `situ_m_is_known`, and the others their own spelling of the same pair.
+
+
+## Amendment, 2026-09-22: two examples that never compiled
+
+Everything above stands. The decision is unchanged and so is every
+consequence it draws; what was wrong was two lines of illustration, both
+wrong on the day this was written rather than gone stale.
+
+**The preamble was shown with a name.** `preamble u8 sync[4] = "..."` does
+not parse -- situc answers "expected `=` after the preamble's type, found
+`sync`" -- and the record's own Consequences paragraph says why it cannot:
+the anonymity is the mechanism of inaccessibility, since "there is no name
+for an accessor to be called". The form is `preamble u8[4] = "...";`, which
+is what `example/png` and `test/schema/edges.situ` both write. The example
+is corrected in place above rather than struck, because a reader copying a
+fenced block is the whole failure and a struck-through one is still there
+to copy.
+
+**`[must_eq]` was shown over `uN[k]`.** The element must be `u8`:
+`u16 sig[2] [must_eq = "WOZ2"]` is refused with "`[must_eq]` means nothing
+here". This record's own Consequences already state the narrowing -- "the
+front end refuses a literal whose length disagrees with the run, and
+refuses an element wider than a byte" -- so the body disagreed with its own
+closing section. `uN[k]` was a hapax in the tree; every other mention says
+`u8[k]`.
+
+Found by a sweep that probed each of this record's checkable claims against
+the compiler rather than reading them (26.477).

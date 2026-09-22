@@ -1666,8 +1666,9 @@ today and which is a written-down design.
 
 - **A byte run as a value** (decision 0052). `u8 sig[4] [must_eq = "WOZ2"]`
   is one span comparison taking one check id, `enum format : u8[2] { bmp =
-  "BM" }` is an enum whose arms are byte runs, and `preamble u8 sync[4] =
-  "\\x8d\\x57\\x4f\\x5a"` is fixed bytes that generate no accessor at all.
+  "BM" }` is an enum whose arms are byte runs, and `preamble u8[4] =
+  "\\x8d\\x57\\x4f\\x5a"` is fixed bytes that generate no accessor at all --
+  anonymous, which is what leaves no name for an accessor to be called.
   What they replaced was one field per byte -- which three unrelated schemas
   arrived at independently -- generating six branches and six invented
   member names for one fact, with comments rendering the magic in decimal.
