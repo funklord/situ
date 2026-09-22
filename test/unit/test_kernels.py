@@ -2523,3 +2523,92 @@ def test_rust_stuffs_the_published_way(tmp_path: Path) -> None:
 	for line, (name, plain, wire, source) in zip(lines, STUFF_VECTORS):
 		assert line == f"{name} {wire}", (
 			f"Rust {name} {plain}: {line}, against {source}")
+
+
+# -- the capacity a decode demands (26.482) ----------------------------------
+
+def test_a_bounded_ratio_does_not_size_a_decode_buffer() -> None:
+	"""`worst_case:per` is what the ENCODER may do; inverted it under-sizes.
+
+	`slip` declares `worst_case = 2, per = 1` -- at most two bytes out per
+	byte in, and only for a payload that is nothing but END or ESC. Three
+	backends inverted that into `need = encoded * 1 / 2` and emitted it as
+	the capacity a decode demands, which is a LOWER bound on what decoding
+	produces: a frame with nothing stuffed encodes 1:1, so the guard admitted
+	a buffer half the message and the decode wrote past it. Reproduced under
+	ASan from unmodified `example/slip` output, with the buffer at exactly
+	the capacity the generated guard itself computes.
+
+	Decoding a stuffing code removes bytes and never adds them, so 1:1 is the
+	tight upper bound and the only safe one.
+
+	The population is derived rather than listed: a family named by hand is a
+	family that stops naming itself the day somebody adds to it.
+	"""
+	schema  = parse_text((ROOT / "std" / "kernels.situ").read_text())
+	bounded = [codec for codec in schema.codecs()
+	           if getattr(codec, "expansion", None)
+	           is ast.Expansion.RATIO_BOUNDED]
+
+	assert bounded, "no bounded-ratio codec in the corpus, so this proves nothing"
+
+	for codec in bounded:
+		assert traverse.decode_ratio(codec) == (1, 1), (
+			f"`{codec.name}` sizes a decode buffer from the encoder's worst"
+			f" case {getattr(codec, 'ratio', None)}")
+
+
+def test_no_codec_demands_less_capacity_than_its_decode_produces() -> None:
+	"""The relationship, rather than either number.
+
+	This is the check that would have caught the above without anybody
+	knowing which family was wrong: encode a payload, apply the arithmetic
+	the backends emit, and assert the answer covers what decoding gives back.
+	It fails on five codecs against the unfixed `decode_ratio` and on none
+	after it, which is the difference between a test that documents a fix and
+	one that defends it.
+	"""
+	schema    = parse_text((ROOT / "std" / "kernels.situ").read_text())
+	namespace: dict[str, Any] = {}
+	exec(compile(py_derived.generate(schema, "kern"), "<kernels>", "exec"),
+	     namespace)
+
+	payloads = (b"", b"a", b"abc", b"abcdefgh", bytes(range(32)),
+	            b"x" * 40, bytes(range(64)))
+
+	exercised: set[str] = set()
+	for codec in schema.codecs():
+		if codec.kernel is None or not traverse.decodes_here(codec):
+			continue
+		ratio = traverse.decode_ratio(codec)
+		if ratio is None or ratio[0] == 0:
+			continue
+		encode = namespace.get(f"{codec.name}_encode")
+		decode = namespace.get(f"{codec.name}_decode")
+		if not callable(encode) or not callable(decode):
+			continue
+		bitwise = traverse.decode_counts_bits(codec)
+
+		for payload in payloads:
+			out     = bytearray(8192)
+			written = cast(Callable[..., int], encode)(
+				payload, len(payload) * 8 if bitwise else len(payload), out)
+			encoded = (written + 7) // 8 if bitwise else written
+			if encoded == 0 and payload:
+				continue	# the encoder took no whole block from it
+			need = encoded * ratio[1] // ratio[0]
+			exercised.add(codec.name)
+			assert need >= len(payload), (
+				f"`{codec.name}`: {len(payload)} bytes encode to {encoded},"
+				f" and the capacity the backends demand is {need}")
+
+	# The population assertion. Without it a `decodes_here` that stopped
+	# answering would empty the loop and the test would pass over nothing --
+	# and the family that broke is exactly the one that must be in here.
+	bounded = {codec.name for codec in schema.codecs()
+	           if getattr(codec, "expansion", None)
+	           is ast.Expansion.RATIO_BOUNDED
+	           and codec.kernel is not None
+	           and traverse.decodes_here(codec)}
+	assert bounded <= exercised, f"never reached: {sorted(bounded - exercised)}"
+	assert len(exercised) >= 15, f"only {len(exercised)} codecs reached"

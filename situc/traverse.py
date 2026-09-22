@@ -2378,11 +2378,30 @@ def decode_ratio(codec: object) -> tuple[int, int] | None:
 	then the decoded size genuinely is not computable without decoding, and a
 	wrong number would size a buffer the decode overruns.
 	"""
+	expansion = getattr(codec, "expansion", None)
+
+	# A BOUNDED ratio is the ENCODER's worst case, and inverting it sizes the
+	# buffer from the most favourable input rather than the least. `slip`
+	# declares `worst_case = 2, per = 1` -- at most two bytes out per byte in,
+	# and only for a payload that is nothing but END or ESC. A frame with
+	# nothing stuffed encodes 1:1, so `encoded / 2` is a LOWER bound on what
+	# decoding produces: the guard it sized admitted a buffer half the message
+	# and the decode wrote past it. Reproduced under ASan from unmodified
+	# `example/slip` output, with the buffer at exactly the capacity the
+	# generated guard demands -- a heap-buffer-overflow WRITE reachable from
+	# any frame that happens not to need stuffing, which is most of them.
+	#
+	# Decoding a stuffing code removes bytes and never adds them, so 1:1 is
+	# the tight upper bound and the only safe one. The docstring above named
+	# this failure -- "a wrong number would size a buffer the decode overruns"
+	# -- for every case but the one that was committing it.
+	if expansion is ast.Expansion.RATIO_BOUNDED:
+		return (1, 1)
+
 	ratio: tuple[int, int] | None = getattr(codec, "ratio", None)
 	if ratio is not None:
 		return ratio if ratio[0] else None
 
-	expansion = getattr(codec, "expansion", None)
 	return (1, 1) if expansion is ast.Expansion.PRESERVING else None
 
 

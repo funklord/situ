@@ -5739,6 +5739,38 @@ class Emitter:
 		           else self._length_expression(struct, placement))
 		decoded = macro(self.prefix, struct.name, local, "DECODED_MAX")
 		bound   = decode_bound(codec, placement)
+
+		# The macro is emitted only where `decode_bound` has a number, and
+		# the sentence above it named the macro unconditionally -- so a
+		# delimited region, whose encoded extent nothing bounds, told the
+		# caller to size by an identifier no header defines. `example/slip`
+		# and `example/smtp` are both that shape, and both said it.
+		capacity = (f"`{decoded}`" if bound is not None else
+		            f"`{span}`" if ratio == (1, 1) else
+		            f"`{span}` scaled by {ratio[1]}/{ratio[0]}")
+
+		# Three shapes, not two. A BOUNDED ratio now yields 1:1 from
+		# `decode_ratio`, and calling that "preserves length" would be a new
+		# false sentence where the old one had been the wrong arithmetic:
+		# `slip` does not preserve length, it shrinks whenever the sender
+		# stuffed anything, and the buffer is sized for the frame that did
+		# not need to.
+		if getattr(codec, "expansion", None) is ast.Expansion.RATIO_BOUNDED:
+			shape = [f" * `{placement.codec}` stuffs bytes in, so decoding"
+			         " takes them out and",
+			         " * never puts more back. The decoded form is at most as"
+			         " long as the",
+			         " * bytes on the wire, and that is the buffer. */"]
+		elif ratio == (1, 1):
+			shape = [f" * `{placement.codec}` preserves length, so the"
+			         " decoded form is exactly",
+			         " * as long as the bytes on the wire -- the buffer is the"
+			         " same size. */"]
+		else:
+			shape = [f" * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so"
+			         " the decoded form is that much",
+			         " * smaller than the bytes on the wire. */"]
+
 		out = [
 			"",
 			f"/* The decoded bytes of `{placement.name}`, into a buffer the"
@@ -5750,16 +5782,9 @@ class Emitter:
 			" somewhere",
 			" * to put its answer. Nothing allocates, so the buffer is the"
 			" caller's",
-			f" * and `{decoded}` is how large it has to be.",
+			f" * and {capacity} is how large it has to be.",
 			" *",
-			*([f" * `{placement.codec}` preserves length, so the decoded"
-			   " form is exactly",
-			   " * as long as the bytes on the wire -- the buffer is the same"
-			   " size. */"]
-			  if ratio == (1, 1) else
-			  [f" * `{placement.codec}` is {ratio[0]}:{ratio[1]}, so the"
-			   " decoded form is that much",
-			   " * smaller than the bytes on the wire. */"]),
+			*shape,
 		]
 		if bound is not None:
 			out.append(f"#define {decoded} {bound}u")

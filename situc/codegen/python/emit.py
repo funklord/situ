@@ -54,7 +54,7 @@ from situc.traverse import (
 	data_sized,
 	dynamic_frame_owner,
 	readable_names,
-	decode_bound, region_extent, offset_plan,
+	decode_bound, decode_ratio, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	pinned_runs,
@@ -2565,9 +2565,28 @@ class Emitter:
 
 		name   = py_name(local_name(struct, placement))
 		bound  = decode_bound(codec, placement)
-		sized  = (f"{bound} bytes is what it needs" if bound is not None
-		          else f"it needs the encoded length scaled by the codec's"
-		               f" ratio, which `{name}_len` gives")
+		# NOT "scaled by the codec's ratio". For a stuffing code the declared
+		# ratio is the ENCODER's worst case, so a reader following that advice
+		# scaled DOWN -- `dot_stuffing` is 4:3, and a body with nothing
+		# stuffed decodes 1:1. The other three backends emitted the same
+		# mistake as arithmetic and overran the buffer; here it was only ever
+		# prose, which is why it survived the fix to `decode_ratio` and needs
+		# saying separately.
+		ratio  = decode_ratio(codec)
+		if bound is not None:
+			sized = f"{bound} bytes is what it needs"
+		elif ratio is None:
+			# Neither a ratio nor length-preservation, so the decoded size
+			# genuinely is not computable ahead of the decode. The old text
+			# said "scaled by the codec's ratio" here too, for a codec that
+			# has none.
+			sized = (f"nothing bounds the decoded size ahead of the decode;"
+			         f" `{name}_len` gives the encoded length")
+		elif ratio == (1, 1):
+			sized = f"it needs the encoded length, which `{name}_len` gives"
+		else:
+			sized = (f"it needs the encoded length -- which `{name}_len`"
+			         f" gives -- scaled by {ratio[1]}/{ratio[0]}")
 
 		# A tier-1 codec is the user's own, bound to a symbol and to 13.2a's
 		# ABI. The note names that rather than a `situ_` function nobody

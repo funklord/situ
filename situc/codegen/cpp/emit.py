@@ -4424,7 +4424,20 @@ class Emitter:
 			"\t/* The decoded bytes, into a buffer the caller owns. Nothing",
 			"\t * here allocates, so the capacity is a parameter.",
 			"\t *",
-			*([f"\t * `{placement.codec}` preserves length, so the value is"
+			*(
+			  # A BOUNDED ratio yields 1:1 from `decode_ratio` -- it is the
+			  # only safe upper bound -- but a stuffing code does not
+			  # preserve length, so it needs its own sentence rather than
+			  # the preserving one.
+			  [f"\t * `{placement.codec}` stuffs bytes in, so decoding takes"
+			   " them out and",
+			   "\t * never puts more back. The value is at most as long as"
+			   " the wire",
+			   "\t * form. A short buffer is refused rather than"
+			   " half-filled. */"]
+			  if getattr(codec, "expansion", None)
+			  is ast.Expansion.RATIO_BOUNDED else
+			  [f"\t * `{placement.codec}` preserves length, so the value is"
 			   " exactly as",
 			   "\t * long as the wire form. A short buffer is refused rather",
 			   "\t * than half-filled. */"]

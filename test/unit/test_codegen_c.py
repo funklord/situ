@@ -4959,6 +4959,31 @@ def test_the_prose_does_not_claim_a_preserving_codec_shrinks() -> None:
 	assert "smaller than the bytes on the wire" not in header
 
 
+def test_the_prose_does_not_claim_a_stuffing_codec_preserves_length() -> None:
+	"""The third shape, and it arrived with the fix to the second.
+
+	`decode_ratio` now answers 1:1 for a bounded ratio, because the declared
+	`worst_case:per` is the ENCODER's and inverting it under-sized the buffer
+	(26.482). That left the comment branch keyed on `ratio == (1, 1)` about
+	to call `stuff` length-preserving -- which would have replaced wrong
+	arithmetic with a wrong sentence, in the same lines, on the same day.
+	A stuffing code shrinks by however much the sender stuffed, and the
+	buffer is sized for the frame that needed none.
+
+	The capacity sentence is checked too: it named a `DECODED_MAX` macro that
+	is emitted only where `decode_bound` has a number, and a delimited region
+	never does -- so `example/slip` and `example/smtp` both told the caller
+	to size by an identifier no header defines.
+	"""
+	header, _ = emit(STUFFED, preamble=STUFF_PREAMBLE)
+
+	assert "stuffs bytes in" in header
+	assert "preserves length" not in header
+	assert "smaller than the bytes on the wire" not in header
+	assert "DECODED_MAX` is how large" not in header, (
+		"the comment names a macro this region has no bound to define")
+
+
 def test_a_hamming_region_still_gets_none() -> None:
 	"""The control, and the reason the gate exists at all. A codeword is a
 	nibble in and a byte out with a correction flag, so a generic region

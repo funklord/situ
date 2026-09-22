@@ -30769,6 +30769,108 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.482 The encoder's worst case, inverted into a decode buffer
+
+**A heap-buffer-overflow WRITE in generated code, from an unmodified
+corpus schema, with the buffer sized to exactly the capacity the generated
+guard itself computes and enforces.** Reproduced under ASan against
+`example/slip`:
+
+    WRITE of size 1 ... in situ_slip_decode slip_derived.c:88
+      #1 in situ_frame_datagram_decode slip.h:144
+    0 bytes after 4-byte region
+
+**One inverted bound.** `stuffing(worst_case = 2, per = 1)` is what the
+ENCODER may do -- at most two bytes out per byte in, and `slip.situ`'s own
+comment says when: *a payload of nothing but END or ESC*. `decode_ratio`
+handed that ratio to the backends, which emitted
+`need = encoded * per / worst_case`. A frame with nothing stuffed encodes
+1:1, so `encoded / 2` is a **lower** bound on what decoding produces, and
+the guard admitted a buffer half the message.
+
+**Measured, by encoding a payload and comparing the demanded capacity
+against what comes back:**
+
+    slip_framing       2:1   64 in   65 encoded   need 32
+    ppp_async_framing  2:1   64 in   65 encoded   need 32
+    smtp_dot_stuffing  4:3   64 in   64 encoded   need 48
+    hdlc_bit_stuffing  6:5   64 in   65 encoded   need 54
+    usb_bit_stuffing   7:6   64 in   65 encoded   need 55
+
+`cobs` survives on arithmetic accident -- 255:254 is conservative enough
+at every length -- and `usb_line` never reaches the accessor, being a
+composed pipeline that `decodes_here` declines. Six of the seven
+bounded-ratio codecs reach the path; five are demonstrably wrong.
+
+**The reach is by expansion, not by name.** Enumerated over all 42
+committed schemas rather than grepped for the seven: `example/slip` and
+`example/smtp` are the only two placing such a region, and neither imports
+`std/kernels.situ` -- each declares its own `stuffing` codec inline, which
+derives `RATIO_BOUNDED` from `worst_case`/`per` whatever it is called.
+
+**The fix is one return in the shared layer**, which is the whole argument
+for having one: `decode_ratio` answers 1:1 for a bounded ratio, and four
+backends stop being wrong together. Decoding a stuffing code removes bytes
+and never adds them, so 1:1 is the tight upper bound and the only safe one.
+
+**The docstring named the failure it was committing.** Its closing line
+reads *"a wrong number would size a buffer the decode overruns"* -- true of
+every case it returned `None` for, and of the one it returned a number for.
+
+**One file in the tree had it right, which is the corroboration nobody
+collected.** `codegen/c/codectests.py` reads the same `(2,1)` as an encode
+bound and asserts `out_len <= (in_len * 2 + 0) / 1`. One reader treated the
+ratio as the encoder's and four treated it as the decoder's, in the same
+repository, against the same attribute.
+
+**Fixing the arithmetic would have written a new false sentence into the
+same lines.** The comment branch is keyed on `ratio == (1, 1)`, so a
+stuffing codec would have begun announcing that it *preserves length* --
+which it does not; it shrinks by however much the sender stuffed, and the
+buffer is sized for the frame that needed none. Three shapes now, keyed on
+the expansion rather than on the ratio's value.
+
+**A second, independent defect on the same lines, which the ratio fix does
+not touch.** The comment told the caller to size by `..._DECODED_MAX`,
+emitted only where `decode_bound` has a number -- and a delimited region
+over `[remaining]` never does, so both affected schemas named an identifier
+no header defines. It names the length accessor now, which exists.
+
+**And the Python backend carried the mistake as prose, where it survived
+the fix.** Its note said the caller *"needs the encoded length scaled by
+the codec's ratio"*, advice that sends a reader to scale DOWN by 4:3. It is
+on the `bound is None` path, so nothing about `decode_ratio` changed it.
+A dangling macro is a compile error somebody hits; wrong advice about a
+live accessor is silent.
+
+**Why nothing caught it, and the answer is not "no test ran this".** Two
+tests compile and RUN a stuffing decode accessor -- `test_codegen_rust.py`
+and `test_codegen_cpp.py`, both named `test_the_decode_unstuffs_a_real_body`,
+both against genuine SMTP dot-stuffed bytes. Neither can see it: `out` is
+64 bytes against a 16-byte wire form, so the wrong `need` of 12 and the
+right one of 16 both fit, and the negative case is `cap == 1`, refused
+under both. **Fixtures chosen so the right answer passes, not so the two
+candidate arithmetics separate** -- 0017's rule about choosing a fixture
+for the disagreement, met from the losing side.
+
+**The test that defends it asserts the relationship.** Encode a payload,
+apply the arithmetic the backends emit, assert it covers what decoding
+gives back. It needs to know nothing about which family is wrong: against
+the unfixed `decode_ratio` it fails on five codecs and after it on none,
+and it derives its population from the schema rather than listing a family
+that would stop naming itself the day somebody added to it.
+
+**Both new tests were watched failing before they were kept.** The guard
+was sabotaged to match `UNBOUNDED`, the substitution asserted, and the
+run named `hdlc_bit_stuffing` and the capacity `0` against one byte;
+`traverse.py` was then restored and compared byte-for-byte.
+
+**Nothing committed needed regenerating, measured rather than assumed.**
+No generated code is committed anywhere in this tree, and the 84 committed
+`.map` and `.wire` files are rendered by `capmap.py` and `wire.py`, which
+read `codec.ratio` directly and call neither `decode_ratio` nor
+`decode_bound`.
+
 ### 26.481 Two ordinals a later insertion falsified, and one overclaim
 
 **Three comment claims in `std/kernels.situ` were wrong; two of them were
