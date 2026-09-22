@@ -30753,6 +30753,59 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.473 One name for two widths, declined
+
+**Settled by the copyright holder 2026-09-22: a variant arm keeps its own
+name, and two arms may not share one.** A protocol that switches a field
+between `u8` and `u16` on an earlier flag writes two arms with two names
+and the caller branches, which is what situ does today:
+
+    variant len switch (wide) {
+        case 0: u8  narrow;
+        case 1: u16 broad;
+        default: error;
+    }
+
+`case 0: u8 value; case 1: u16 value;` is refused -- "field `value` is
+declared more than once" -- and stays refused until a real need arrives.
+
+**The reason is the TYPE rather than the branch, and the first statement
+of it had that backwards.** The obvious objection to a merged accessor is
+that it forces a runtime check; measured, that check is already there and
+is deliberate. `situ_frame_len_narrow_get` opens with
+`if (situ_frame_wide_get(view) != 0u) return SITU_ERR_VERSION;`, and
+`c/emit.py` records why: "A caller who has already dispatched pays for the
+branch twice, which is the price of an accessor that cannot be used
+wrongly."
+
+So a merged accessor would add no dynamism that is not already paid. What
+it would add is a return type covering both widths -- and C, which is the
+language situ caters for first, cannot express a type that depends on a
+value. One `value_get` would have to return the wider one, so every read
+of the narrow arm becomes a widened read, and the member's `repr` goes
+from `MemoryIdentical` to `ValueConverted` for both arms. The map would
+stop being true of the narrow case in order to make one accessor
+possible, which is the trade situ exists to refuse.
+
+**C++ would absorb it and that does not decide anything.** An overload or
+a template hides the widening at the call site in one backend out of
+four, and the capability map is backend-independent by construction -- so
+a convenience only one language can spell would either fracture the map
+or be recorded in it as a loss all four pay.
+
+**What the current form costs, stated so the next reader can weigh it.**
+It is per FIELD: a message that widens six fields on one flag needs six
+variants and twelve names, and a caller branches at each. Nothing
+composes them into "this message is the wide flavour". That is the real
+friction and the shape a future need would take -- a whole-message
+dispatch rather than a merged field.
+
+**The alternative not taken, recorded so it is not re-derived.** A reader
+over the variant -- one call returning the widened value and which arm it
+came from -- keeps the layout truthful and moves the convenience into the
+API rather than into the type. It is the shape to reach for if this comes
+back, and it is not built.
+
 ### 26.472 A keyword in no grammar, and the gate that could not see it
 
 **`preamble` appears nowhere in either published grammar.** Zero
