@@ -6511,6 +6511,24 @@ class Emitter:
 				"\t}",
 			]
 
+		# The same fault as the block above, on the branch that DOES declare
+		# its own length. `_raw_length_expression` names `<member>_span`
+		# for a counted run, and that function is emitted only where the
+		# element has an extent this backend can compute -- so a run of a
+		# struct whose variant ends in a bare `opaque` default produced
+		# `check` calling a function nothing defines. The accessor path has
+		# declined this shape since it learned to; the check did not ask
+		# (26.471).
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is not None and self._is_counted_run(placement)
+				and not has_computable_extent(self.resolved.structs, element)):
+			return [
+				f"\t/* {placement.path}: no extent this backend can compute,",
+				f"\t * one `{placement.type_name}` being as long as the view it",
+				"\t * was handed. The accessor is declined above; there is no",
+				"\t * length here to hold against the frame either. */",
+			]
+
 		declared = self._raw_length_expression(struct, placement)
 		base     = self._base_expression(struct, placement)
 		lines = [

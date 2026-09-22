@@ -6546,3 +6546,45 @@ def test_the_skipped_harness_compiles_and_runs(tmp_path: Path) -> None:
 	for payload in (b"", b"\x00", b"\x00" * 64, bytes(range(64))):
 		run = subprocess.run([str(binary)], input=payload, capture_output=True)
 		assert run.returncode == 0, run.stderr
+
+
+# -- a counted run of a struct nothing can measure (26.471) -----------------
+
+#: `m` ends in a bare `opaque` default, so one is as long as the view it was
+#: handed. `outer` COUNTS them, which is the spelling that reached the
+#: unguarded branch; the `while` form of the same shape has always been fine.
+SWALLOWING_RUN = """
+struct m {
+	u8 kind;
+	variant body switch (kind) {
+		case 1: u32 word;
+		default: opaque;
+	}
+}
+
+struct outer {
+	u16 count;
+	m items[count];
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_a_counted_run_of_an_unmeasurable_struct_compiles(
+		tmp_path: Path) -> None:
+	"""It did not: `implicit declaration of function
+	'situ_outer_items_span'`.
+
+	`_fits_check` builds the frame test from `_raw_length_expression`,
+	which names `<member>_span` for a counted run -- and that function is
+	emitted only where the element has an extent this backend can compute.
+	The accessor path has declined this shape since it learned to; the
+	check did not ask, so `check` called a function nothing defines.
+
+	The `while` form of the identical shape has always been fine, which is
+	what makes this a missing question rather than a missing feature.
+	`example/dnsname` is a run of labels whose last arm swallows and it
+	builds; only the counted spelling reached the unguarded branch, and no
+	schema in the corpus writes that one.
+	"""
+	compile_generated(tmp_path, SWALLOWING_RUN)

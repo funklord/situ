@@ -30732,6 +30732,54 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.471 A counted run of a struct nothing can measure
+
+**A struct whose variant ends in a bare `default: opaque;`, counted as a
+run, produced C that does not compile.** `check` calls
+`situ_<struct>_<run>_span`, a function nothing defines: `implicit
+declaration of function`, which under this project's warnings is a build
+failure and without them is a call into nothing. Accepted at exit 0 by
+`map`, `wire` and `build` in all four backends.
+
+**The `while` form of the identical shape has always been fine, and that
+is the whole finding.** `example/dnsname` is a run of labels whose last
+arm swallows, and it builds; `_fits_check`'s other branch has declined
+this shape since it learned to, with a comment saying why -- "a schema
+with a counted run of variable elements produced a header that names a
+function nothing defines". Only the counted spelling reached the branch
+that asks a member for the length it declares, and that branch never
+asked whether the element had an extent to declare. A missing question
+rather than a missing feature.
+
+**The first fix was wrong, and the suite is what said so.** 11.6 reads
+"A variant is measurable when every arm is. An `opaque` default arm is
+the exception and is refused, because it swallows whatever is left" --
+and that sentence sits in a section about MEASURABILITY, where "refused"
+means refused as measurable, not rejected as a schema. Read as a
+schema-level refusal it produced a wellformedness check that broke seven
+tests, and those seven encode the correct design: a struct nothing can
+measure gets no accessor and the backends decline with a note naming it.
+Reverted.
+
+**The blast radius was measured against the wrong population, which is
+why the mistake got as far as a green local run.** `has_computable_extent`
+was checked over the 42 corpus schemas -- five counted runs of variable
+records, all computable, none affected -- and the shape that mattered
+lives in `test_codegen_{rust,cpp,python}`'s inline fixtures, which no
+sweep of `*.situ` can see. The corpus is not the population; the corpus
+plus every schema written inside a test is.
+
+**What the revert bought.** Reading the tests that broke is what
+produced the real diagnosis: the language supports this shape, one
+emitter path handles it, and the sibling path does not. A refusal would
+have removed a working construct to avoid a missing guard -- and
+`example/dnsname` is that construct, so the cost would have surfaced as
+DNS names becoming unsayable.
+
+**The corpus is byte-identical across all four backends**, which is what
+a guard on a shape nothing in the corpus writes should produce, and the
+control is the revert: drop the guard and the new case stops compiling.
+
 ### 26.470 A gap that had half closed, and an unreachable remedy
 
 **14.8 listed out-of-band material as a construct situ cannot express:
