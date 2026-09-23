@@ -4,12 +4,22 @@ The arithmetic is `codegen.kernel_math`'s, shared with the C and Python
 backends, so three languages cannot disagree about what a polynomial
 means. What is here is the rendering.
 
-Two families, deliberately. `polynomial` and `ones_complement` are what a
-`checksum ... is <codec>` binding can name (0053), and until this existed
-that binding was refused outright for Rust -- a schema C honoured and Rust
-could not read. The other five decline with a note, exactly as C does for
-a kernel it cannot generate: the properties are still derived and still
-correct, and an `extern` impl supplies the code.
+Every family, now. It began as two -- `polynomial` and `ones_complement`
+are what a `checksum ... is <codec>` binding can name (0053), and until
+that existed the binding was refused outright for Rust, a schema C
+honoured and Rust could not read -- and the other five followed.
+Reed-Solomon was the last, and is the one that could not be re-spelled
+from C: its encoder and decoder are `codegen.kernel_program`'s statement
+tree, which `_RustRenderer` at the foot of this file renders, so
+Berlekamp-Massey, the Chien search and Forney's formula exist once for
+all three backends rather than three times.
+
+What declines is a particular code rather than a family: a linear or
+permutation code this backend has no name for, a CRC whose schema gives
+no width or no polynomial, a Reed-Solomon over a field other than
+GF(256). A decline carries a note, exactly as C does -- the properties
+are still derived and still correct, and an `extern` impl supplies the
+code.
 """
 
 from __future__ import annotations
@@ -18,8 +28,15 @@ from math import lcm
 
 from situc import ast
 from situc.codegen.kernel_math import (accumulator, crc_register, crc_shift,
-                                       crc_start, crc_table, crc_width, number,
-                                       reverse)
+                                       crc_start, crc_table, crc_width,
+                                       gf_tables, number, reverse,
+                                       rs_generator_coefficients)
+from situc.codegen.kernel_program import (Array, Assign, Binary, Blank,
+                                          Comment, Declare, Expr, Gf, If,
+                                          Increment, Index, Lit, Loop, Name,
+                                          Return, Stmt, XorAssign,
+                                          rs_decoder_program,
+                                          rs_encoder_program)
 from situc import __version__
 
 
@@ -1130,10 +1147,14 @@ def _for_kernel(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	assert kernel is not None
 
 	if kernel.family is ast.KernelFamily.POLYNOMIAL:
-		# A polynomial over an extension field is Reed-Solomon, which is a
-		# different code and not one of the two this backend generates.
+		# A polynomial over an extension field is Reed-Solomon: the same
+		# family, a different code, and a different generator below. A
+		# CRC's register is a machine word and its table is indexed by a
+		# byte; a Reed-Solomon symbol is a field element and the division
+		# runs over a generator polynomial, so the two share the schema
+		# keyword and nothing else.
 		if kernel.argument("field") is not None:
-			return None
+			return _reed_solomon(decl, prefix)
 		return _polynomial(decl, prefix)
 	if kernel.family is ast.KernelFamily.ONES_COMPLEMENT:
 		return _ones_complement(decl, prefix)
@@ -1409,3 +1430,350 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		f"\t{final}",
 		"}",
 	]
+
+
+# ---------------------------------------------------------------------------
+# Reed-Solomon over GF(2^m)
+#
+# The algorithm is `kernel_program`'s and must not be copied here: 26.457
+# measured Reed-Solomon as 250 lines of C against 39 of shared derivation,
+# and a third backend transcribing Berlekamp-Massey, the Chien search and
+# Forney's formula by hand is the act 0017 was written to prevent. What
+# this section decides is where Rust puts a `mut`.
+#
+# The tables are computed from the two parameters rather than copied. A
+# transcribed log table is exactly the artefact that is wrong in one entry
+# and produces a codec that works on most inputs.
+# ---------------------------------------------------------------------------
+
+
+def _reed_solomon(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
+	"""Rust's spelling of `kernel_program`'s encoder and decoder."""
+	field = number(decl, "field")
+	n     = number(decl, "n")
+	k     = number(decl, "k")
+
+	if field != 256 or not n or not k:
+		return None
+
+	primitive  = number(decl, "primitive", 0x11D)
+	first_root = number(decl, "first_root", 0)
+	nroots     = n - k
+	size       = field - 1
+
+	exp, log = gf_tables(field, primitive)
+
+	# Constant term first, as C's and Python's are: the division loop
+	# indexes from the low end, which is the standard formulation.
+	generator = list(reversed(
+		rs_generator_coefficients(nroots, first_root, exp, log, size)))
+
+	name   = _ident(prefix, decl.name)
+	upper  = name.upper()
+	render = _RustRenderer(name)
+
+	return [
+		"",
+		f"/// `{decl.name}`: Reed-Solomon({n}, {k}) over GF({field}),",
+		f"/// primitive polynomial 0x{primitive:X}, first root"
+		f" alpha^{first_root}.",
+		"///",
+		f"/// {nroots} parity symbols, correcting up to {nroots // 2} symbol"
+		" errors",
+		"/// anywhere in the block. Systematic: the message sits verbatim",
+		"/// ahead of the parity, so a reader that trusts the block takes it",
+		"/// with no decode at all.",
+		"///",
+		"/// Every table here is computed from those two numbers rather than",
+		"/// copied, so a code nobody has standardised works as well as one",
+		"/// that has -- and no transcription can be wrong in one entry.",
+		"///",
+		"/// This one is the antilog, doubled so a product of logs needs no",
+		"/// modulo.",
+		f"static {upper}_EXP: [u8; {len(exp)}] = [",
+		*_rust_table_rows(exp),
+		"];",
+		"",
+		f"static {upper}_LOG: [u8; {len(log)}] = [",
+		*_rust_table_rows(log),
+		"];",
+		"",
+		"/// The generator polynomial, multiplied out from its roots.",
+		f"static {upper}_GENERATOR: [u8; {len(generator)}] = [",
+		*_rust_table_rows(generator),
+		"];",
+		"",
+		"/// The block length, which `decode` requires of its slice.",
+		f"pub const {upper}_BLOCK: usize = {n};",
+		"",
+		"/// The message length, which `encode` requires of `data`.",
+		f"pub const {upper}_DATA: usize = {k};",
+		"",
+		"/// The parity length: what `encode` writes, and the shortest",
+		"/// `parity` slice it will accept.",
+		f"pub const {upper}_PARITY: usize = {nroots};",
+		"",
+		f"fn {name}_mul(a: u8, b: u8) -> u8 {{",
+		"\tif a == 0 || b == 0 {",
+		"\t\treturn 0;",
+		"\t}",
+		f"\t{upper}_EXP[{upper}_LOG[a as usize] as usize",
+		f"\t\t+ {upper}_LOG[b as usize] as usize]",
+		"}",
+		"",
+		f"fn {name}_inv(a: u8) -> u8 {{",
+		f"\t{upper}_EXP[{size} - {upper}_LOG[a as usize] as usize]",
+		"}",
+		"",
+		"/// alpha raised to a power, with the exponent reduced first.",
+		f"fn {name}_pow(power: usize) -> u8 {{",
+		f"\t{upper}_EXP[power % {size}]",
+		"}",
+		"",
+		"/// Systematic encode: the message is left alone and the parity is",
+		"/// the remainder of dividing it, shifted, by the generator.",
+		"///",
+		f"/// Returns {nroots}, or 0 where the caller passed something this",
+		"/// cannot encode.",
+		f"pub fn {name}_encode(data: &[u8], parity: &mut [u8]) -> usize {{",
+		"\tlet length = data.len();",
+		"",
+		"\t// C writes the parity through a bare pointer, so a short buffer",
+		"\t// is an overflow nobody sees. Rust bounds-checks the slice, so",
+		"\t// the same call is a panic instead -- an abort in `no_std`, which",
+		"\t// is not an answer either. Refusing is, and 0 is already what",
+		"\t// this program returns when the caller passed something wrong",
+		"\t// (the length check below). A parity slice too short to hold the",
+		"\t// result is that same mistake, so it says so the same way rather",
+		"\t// than inventing a second code.",
+		f"\tif parity.len() < {upper}_PARITY {{",
+		"\t\treturn 0;",
+		"\t}",
+		"",
+		*render.program(rs_encoder_program(nroots, k)),
+		"}",
+		"",
+		"/// Correct `block` in place. Returns the number of symbols",
+		"/// corrected, or -1 where the block holds more errors than the code",
+		"/// can correct -- which it detects rather than guessing at, because",
+		"/// a miscorrection is worse than a refusal.",
+		f"pub fn {name}_decode(block: &mut [u8]) -> i32 {{",
+		"\tlet length = block.len();",
+		*render.program(rs_decoder_program(n, nroots, first_root, size)),
+		"}",
+	]
+
+
+def _rust_table_rows(values: list[int]) -> list[str]:
+	"""A field table's rows, sixteen to a line as C and Python write them."""
+	return ["\t" + ", ".join(f"0x{value:02X}"
+	                         for value in values[start:start + 16]) + ","
+	        for start in range(0, len(values), 16)]
+
+
+#: As C's and Python's: the program's arrays that are module tables rather
+#: than locals, and so carry the codec's name.
+_RUST_SHARED = {"generator"}
+
+#: The program's one array of INDICES rather than field elements. C and
+#: Python hold both in the same kind of array; Rust subtracts a `position`
+#: entry from a length and indexes `block` with one, so a `u8` there would
+#: need three casts and would still meet a mixed-type subtraction rustc
+#: refuses. Declaring what it holds is cheaper than casting at every use.
+_RUST_INDEX_ARRAYS = {"position"}
+
+#: Rust's types for the two the program names. `u32` is `usize` because
+#: every one of them is a subscript somewhere -- `at` is simultaneously a
+#: subscript, an argument to `pow` and a comparand -- and a subscript in
+#: Rust is a `usize` or it is a compile error.
+_RUST_TYPE = {"u8": "u8", "u32": "usize"}
+
+
+class _RustRenderer:
+	"""How Rust spells the statements of `kernel_program`, and nothing else.
+
+	No decision about Reed-Solomon is taken here; everything this class
+	knows is which characters Rust uses for a loop, a binding and an
+	array. Four differences from C's renderer, each measured:
+
+	No casts. C promotes a `uint8_t` xor to `int`, so it narrows on the
+	way back into a byte; Rust does not promote, so every one of C's
+	`(uint8_t)` casts disappears and the arithmetic is `u8` throughout.
+
+	No hoisted loop variables. C wants them declared ahead of the block
+	and the program does not name them; Rust binds one per loop, which is
+	what every other target does.
+
+	`mut` is earned rather than given. `unused_mut` is an error under
+	`-D warnings`, which every generated crate is built with, so a
+	binding is `mut` only where something later assigns it -- five of the
+	program's nineteen declarations are not, and that set is walked out
+	of the tree rather than listed here, because a list is a thing to be
+	wrong.
+
+	Parentheses go where Rust wants them and not where C does. C's
+	renderer brackets every `Binary` on the grounds that its precedence
+	table is not worth a reader checking; doing the same here produced 22
+	`unused_parens`, which `-D warnings` makes hard errors -- ten around
+	subscripts, eight around assigned values, four around arguments.
+
+	Indexing is plain `[i]`, with no `get().unwrap_or(0)` anywhere. The
+	program says every index is provably in range and a renderer is
+	entitled to rely on it. A fallback would not see a bad index in any
+	case, because the one way to make one is an underflowing subtraction
+	that panics first; and substituting a zero in an error-correcting
+	decoder turns a refusal into a miscorrection, which
+	`rs_decoder_program` names as the worse of the two.
+	"""
+
+	def __init__(self, name: str) -> None:
+		self.name = name
+		self.assigned: set[str] = set()
+
+	# -- expressions --------------------------------------------------
+
+	def expr(self, node: Expr) -> str:
+		"""An operand of something with a precedence of its own."""
+		if isinstance(node, Lit):
+			return str(node.value)
+		if isinstance(node, Name):
+			return node.name
+		if isinstance(node, Index):
+			return f"{self.array(node.array)}[{self.bare(node.at)}]"
+		if isinstance(node, Gf):
+			args = ", ".join(self.bare(arg) for arg in node.args)
+			return f"{self.name}_{node.op}({args})"
+		return f"({self.bare(node)})"
+
+	def bare(self, node: Expr) -> str:
+		"""An expression the surrounding syntax already delimits: an
+		assigned value, a subscript, an argument, an `if` condition."""
+		if isinstance(node, Binary):
+			return (f"{self.expr(node.left)} {node.op} "
+			        f"{self.expr(node.right)}")
+		return self.expr(node)
+
+	def array(self, name: str) -> str:
+		"""A local array keeps its name; a module table takes the codec's,
+		which is what keeps two codecs' tables apart in one module."""
+		if name in _RUST_SHARED:
+			return f"{self.name.upper()}_{name.upper()}"
+		return name
+
+	# -- statements ---------------------------------------------------
+
+	def program(self, body: tuple[Stmt, ...]) -> list[str]:
+		"""A whole function body, at one tab."""
+		self.assigned = _assigned_names(body)
+		return self.render(body, 1)
+
+	def render(self, body: tuple[Stmt, ...], depth: int) -> list[str]:
+		pad = "\t" * depth
+		out: list[str] = []
+
+		for statement in body:
+			if isinstance(statement, Blank):
+				out.append("")
+			elif isinstance(statement, Comment):
+				out.extend(f"{pad}// {line}" for line in statement.lines)
+			elif isinstance(statement, Array):
+				kind = ("usize" if statement.name in _RUST_INDEX_ARRAYS
+				        else "u8")
+				out.append(f"{pad}let {self.binding(statement.name)}"
+				           f"{statement.name} = "
+				           f"[0{kind}; {statement.length}];")
+			elif isinstance(statement, Declare):
+				out.append(f"{pad}let {self.binding(statement.name)}"
+				           f"{statement.name}: "
+				           f"{_RUST_TYPE[statement.kind]} = "
+				           f"{self.bare(statement.init)};")
+			elif isinstance(statement, Assign):
+				out.append(f"{pad}{self.expr(statement.target)} = "
+				           f"{self.bare(statement.value)};")
+			elif isinstance(statement, XorAssign):
+				out.append(f"{pad}{self.expr(statement.target)} ^= "
+				           f"{self.bare(statement.value)};")
+			elif isinstance(statement, Increment):
+				out.append(f"{pad}{statement.name} += 1;")
+			elif isinstance(statement, Loop):
+				out.extend(self.loop(statement, pad, depth))
+			elif isinstance(statement, If):
+				out.extend(self.branch(statement, pad, depth))
+			elif isinstance(statement, Return):
+				out.append(f"{pad}return {self.returned(statement.value)};")
+			else:
+				out.append(f"{pad}continue;")
+
+		return out
+
+	def binding(self, name: str) -> str:
+		"""`mut ` where something later writes to this, and nothing where
+		it does not: `unused_mut` is an error here."""
+		return "mut " if name in self.assigned else ""
+
+	def loop(self, statement: Loop, pad: str, depth: int) -> list[str]:
+		"""A range, which is what Rust has instead of C's three clauses.
+
+		The start carries a `usize` suffix where it is a literal. Every
+		loop variable in this program is a subscript or an argument to
+		`pow`, so inference would reach `usize` on its own in all of
+		them -- but a bare `0..32` is an `i32` until something several
+		lines away says otherwise. Pinning it at the range makes the loop
+		readable on its own and costs a suffix.
+		"""
+		start = self.bare(statement.start)
+		if isinstance(statement.start, Lit):
+			start = f"{start}usize"
+		limit = self.bare(statement.limit)
+		span = (f"{start}..={limit}" if statement.inclusive
+		        else f"{start}..{limit}")
+		if statement.step != 1:
+			span = f"({span}).step_by({statement.step})"
+		return [
+			f"{pad}for {statement.var} in {span} {{",
+			*self.render(statement.body, depth + 1),
+			f"{pad}}}",
+		]
+
+	def branch(self, statement: If, pad: str, depth: int) -> list[str]:
+		out = [f"{pad}if {self.bare(statement.cond)} {{",
+		       *self.render(statement.body, depth + 1)]
+		if statement.orelse:
+			out.append(f"{pad}}} else {{")
+			out.extend(self.render(statement.orelse, depth + 1))
+		out.append(f"{pad}}}")
+		return out
+
+	def returned(self, node: Expr) -> str:
+		"""The decoder returns `i32` and counts in `usize`, so the one
+		counter it returns is cast where C casts to `int`."""
+		if isinstance(node, Lit):
+			return str(node.value)
+		if isinstance(node, Name):
+			return f"{node.name} as i32"
+		raise AssertionError("the decoder returns a literal or a counter")
+
+
+def _assigned_names(body: tuple[Stmt, ...]) -> set[str]:
+	"""Every name this program writes to, arrays included.
+
+	Walked rather than listed: which of the bindings are never assigned
+	is a property of the program, and a renderer carrying the answer
+	would be a second place for it to be wrong.
+	"""
+	found: set[str] = set()
+	for statement in body:
+		if isinstance(statement, (Assign, XorAssign)):
+			target = statement.target
+			if isinstance(target, Name):
+				found.add(target.name)
+			elif isinstance(target, Index):
+				found.add(target.array)
+		elif isinstance(statement, Increment):
+			found.add(statement.name)
+		elif isinstance(statement, Loop):
+			found |= _assigned_names(statement.body)
+		elif isinstance(statement, If):
+			found |= _assigned_names(statement.body)
+			found |= _assigned_names(statement.orelse)
+	return found

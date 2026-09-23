@@ -41,6 +41,7 @@ from situc.codegen import c as generate_c
 from situc.codegen import python as generate_py
 from situc.codegen.c import derived as generate_derived
 from situc.codegen.python import derived as generate_py_derived
+from situc.codegen.rust import derived as generate_rs_derived
 from situc.codegen.c.derived import _C_SHARED
 from situc.codegen.kernel_math import (gf_tables,
                                       rs_generator_coefficients)
@@ -1832,3 +1833,297 @@ def test_a_block_whose_leading_syndromes_vanish_is_refused(
 		assert decode(bytearray(block)) == -1, (  # type: ignore[operator]
 			f"a codeword of RS(64,{64 - roots}) was accepted by the "
 			f"RS(64,56) decoder rather than refused")
+
+
+# -- the third rendering (26.462's third differential) ----------------------
+
+
+#: Rust is compiled and run rather than read, for the reason C is: a
+#: generated body that parses has demonstrated nothing about what it
+#: computes. `-D warnings` is not tidiness here -- it is what holds the
+#: renderer's spelling decisions in place, `unused_parens` and
+#: `unused_mut` being the lints a wrong one trips -- and overflow checks
+#: are what turn an index the program promised was in range into an
+#: abort rather than into a wrong answer.
+RUSTC = shutil.which("rustc")
+
+#: One driver and one compile, reading a case per line and writing a
+#: result per line. Every case below is chosen in Python beside the
+#: oracle rather than duplicated in Rust: a second copy of the case
+#: generation would have to agree with this one before either proved
+#: anything, which is `evidence.md`'s two documents and one witness.
+_RUST_DRIVER = """#[path = "unit.rs"] mod unit;
+use unit::*;
+use std::io::{{self, BufRead, Write}};
+
+fn unhex(text: &str) -> Vec<u8> {{
+\t(0..text.len() / 2)
+\t\t.map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap())
+\t\t.collect()
+}}
+
+fn hex(bytes: &[u8]) -> String {{
+\tbytes.iter().map(|b| format!("{{:02x}}", b)).collect()
+}}
+
+fn main() {{
+\tlet input = io::stdin();
+\tlet mut output = io::stdout();
+
+\tfor line in input.lock().lines() {{
+\t\tlet line = line.unwrap();
+\t\tlet mut field = line.split(' ');
+\t\tlet operation = field.next().unwrap();
+\t\tlet codec = field.next().unwrap();
+\t\tlet mut bytes = unhex(field.next().unwrap());
+\t\tlet room: usize = field.next().unwrap().parse().unwrap();
+
+\t\tlet answer = match (operation, codec) {{
+{arms}
+\t\t\t_ => panic!("unknown case"),
+\t\t}};
+\t\twriteln!(output, "{{}}", answer).unwrap();
+\t}}
+}}
+"""
+
+
+def _rust_driver() -> str:
+	"""The driver's match arms, built from `RS_CASES` so the codec names
+	live in one place rather than in a Rust string as well."""
+	arms = []
+	for name, _n, _k in RS_CASES:
+		arms.append(
+			f'\t\t\t("E", "{name}") => {{\n'
+			f"\t\t\t\tlet mut parity = vec![0u8; room];\n"
+			f"\t\t\t\tlet wrote = {name}_encode(&bytes, &mut parity);\n"
+			f'\t\t\t\tformat!("{{}} {{}}", wrote, hex(&parity))\n'
+			f"\t\t\t}}")
+		arms.append(
+			f'\t\t\t("D", "{name}") => {{\n'
+			f"\t\t\t\tlet result = {name}_decode(&mut bytes);\n"
+			f'\t\t\t\tformat!("{{}} {{}}", result, hex(&bytes))\n'
+			f"\t\t\t}}")
+	return _RUST_DRIVER.format(arms="\n".join(arms))
+
+
+@pytest.fixture(scope="module")
+def kernel_rust(tmp_path_factory: pytest.TempPathFactory) -> Path:
+	"""The generated Rust, compiled once, as a program that answers cases.
+
+	Module-scoped because rustc over the whole generated module is slow
+	enough that a compile per test would be this file's whole cost, and
+	the answers are a function of the binary rather than of the test.
+	"""
+	if RUSTC is None:
+		pytest.skip("no rustc; the Rust rendering was neither built nor run")
+
+	kernels = ROOT / "std" / "kernels.situ"
+	source  = parse(Source(str(kernels), kernels.read_text(encoding="ascii")))
+
+	root = tmp_path_factory.mktemp("kernel-rust")
+	(root / "unit.rs").write_text(
+		generate_rs_derived.generate(source, "kernels"), encoding="ascii")
+	(root / "main.rs").write_text(_rust_driver(), encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings",
+		 "-C", "opt-level=s", "-C", "overflow-checks=yes",
+		 "-o", str(root / "run"), str(root / "main.rs")],
+		capture_output=True, text=True)
+	# The compiler's own words rather than the exit status: a generated
+	# body that will not build says which line and why, where a bare
+	# "exit 1" is what three runs of diagnosing this from a distance
+	# cost (26.87).
+	assert built.returncode == 0, built.stderr
+	return root / "run"
+
+
+def _ask_rust(driver: Path, cases: list[str]) -> list[str]:
+	"""One process for the whole batch, one answer per case, in order."""
+	ran = subprocess.run([str(driver)], input="\n".join(cases) + "\n",
+	                     capture_output=True, text=True)
+	assert ran.returncode == 0, ran.stderr
+	answers = ran.stdout.splitlines()
+	assert len(answers) == len(cases), (
+		f"asked for {len(cases)} answers and got {len(answers)}")
+	return answers
+
+
+def _rust_encode(driver: Path, name: str, messages: list[bytes],
+		nroots: int) -> list[tuple[int, bytes]]:
+	"""What Rust returns and what it wrote, for each message."""
+	answers = _ask_rust(driver,
+	                    [f"E {name} {data.hex()} {nroots}" for data in messages])
+	return [(int(answer.split(" ")[0]), bytes.fromhex(answer.split(" ")[1]))
+	        for answer in answers]
+
+
+def _rust_decode(driver: Path, name: str,
+		blocks: list[bytes]) -> list[tuple[int, bytes]]:
+	"""What Rust returns and what it left in the block, for each block."""
+	answers = _ask_rust(driver,
+	                    [f"D {name} {block.hex()} 0" for block in blocks])
+	return [(int(answer.split(" ")[0]), bytes.fromhex(answer.split(" ")[1]))
+	        for answer in answers]
+
+
+@pytest.mark.skipif(not have("reedsolo"),
+                    reason="no reedsolo; the Reed-Solomon oracle did not run")
+@pytest.mark.parametrize("name,n,k", RS_CASES,
+                         ids=[case[0] for case in RS_CASES])
+def test_the_rust_reed_solomon_matches_reedsolo(
+		name: str, n: int, k: int, kernel_rust: Path) -> None:
+	"""The third rendering, held to the same outside implementation.
+
+	The same argument as the Python case above, and it is the argument
+	rather than a repeat: three backends render one program, so they
+	agree with each other by construction and a program that is wrong is
+	wrong in all three at once. `reedsolo` shares nothing with any of
+	them.
+	"""
+	nroots = n - k
+	limit  = nroots // 2
+
+	random.seed(20260923)
+	messages = [bytes(random.randrange(256) for _ in range(k))
+	            for _trial in range(4)]
+
+	blocks = []
+	for data, (wrote, parity) in zip(messages,
+	                                 _rust_encode(kernel_rust, name, messages,
+	                                              nroots)):
+		assert wrote == nroots, (
+			f"{name}: Rust wrote {wrote} parity symbols, not {nroots}")
+		assert parity == _reedsolo_parity(data, nroots), (
+			f"{name}: Rust and reedsolo disagree about the parity")
+		blocks.append(data + parity)
+
+	damaged = []
+	for block in blocks:
+		copy = bytearray(block)
+		for spot in random.sample(range(n), limit):
+			copy[spot] ^= 0xFF
+		damaged.append(bytes(copy))
+
+	for whole, (result, got) in zip(blocks,
+	                                _rust_decode(kernel_rust, name, damaged)):
+		assert result == limit, (
+			f"{name}: Rust corrected {result} of {limit} damaged symbols")
+		assert got == whole, f"{name}: Rust recovered a different block"
+
+
+@pytest.mark.parametrize("name,n,k", RS_CASES,
+                         ids=[case[0] for case in RS_CASES])
+def test_rust_and_python_render_the_same_reed_solomon(
+		name: str, n: int, k: int, kernel_rust: Path,
+		kernel_python: dict[str, object]) -> None:
+	"""One program, a third renderer, and the answer has to be the same one.
+
+	What this can see and the oracle above cannot is damage past `t`,
+	where the right answer is undefined and `reedsolo` is entitled to
+	differ -- but two renderings of one program are not. A refusal is a
+	verdict, and both must reach it.
+
+	It is also where the renderer's own decisions show. An inclusive
+	bound rendered half-open, a step-2 loop rendered as step 1, or a
+	subtraction that underflows are all correct-looking on a clean block
+	and wrong here: rendering the Forney derivative loop as step 1
+	miscorrects from two errors upward and leaves the clean case green,
+	which is how this was seen to fail.
+	"""
+	py_encode = kernel_python[f"{name}_encode"]
+	py_decode = kernel_python[f"{name}_decode"]
+	nroots = n - k
+
+	random.seed(20260924)
+	counts   = list(range(0, nroots // 2 + 3))
+	messages = [bytes(random.randrange(256) for _ in range(k))
+	            for _ in counts]
+
+	damaged: list[bytes] = []
+	for data, errors, (wrote, parity) in zip(
+			messages, counts,
+			_rust_encode(kernel_rust, name, messages, nroots)):
+		theirs = bytearray(nroots)
+		assert wrote == py_encode(data, theirs), (  # type: ignore[operator]
+			f"{name}: the two renderings disagree about what encode returns")
+		assert parity == bytes(theirs), (
+			f"{name}: the two renderings disagree about the parity")
+
+		block = bytearray(data + bytes(theirs))
+		for spot in random.sample(range(n), errors):
+			block[spot] ^= 0xFF
+		damaged.append(bytes(block))
+
+	for errors, given, (result, got) in zip(
+			counts, damaged, _rust_decode(kernel_rust, name, damaged)):
+		theirs = bytearray(given)
+		mine   = py_decode(theirs)  # type: ignore[operator]
+		assert result == mine, (
+			f"{name}: Rust returned {result} and Python {mine} for {errors} "
+			f"damaged symbols")
+		assert got == bytes(theirs), (
+			f"{name}: the two renderings left different bytes in the block "
+			f"after {errors} damaged symbols")
+
+
+def test_the_rust_decoder_refuses_the_blocks_the_others_refuse(
+		kernel_rust: Path, kernel_python: dict[str, object]) -> None:
+	"""Two refusals the random cases above do not reach.
+
+	A block of the wrong length is the one refusal the program states
+	outright. A codeword of a shorter Reed-Solomon code is the one that
+	drives the Berlekamp-Massey degree past `half` (26.465): 0 of 4000
+	random 64-byte blocks reach it and 300 of 300 of these do, so it is
+	constructed here rather than left to chance.
+
+	Python is asked the same question in the same test rather than
+	trusted to have been asked elsewhere -- a Rust refusal is only
+	evidence of agreement if the other rendering still refuses too.
+	"""
+	decode = kernel_python["reed_solomon_64_56_decode"]
+
+	lengths = [bytes(length) for length in (0, 63, 65)]
+	shorter = [_shorter_codeword(
+		bytes((i * 31 + roots) & 0xFF for i in range(64 - roots)), roots)
+		for roots in (4, 5, 6)]
+
+	answers = _rust_decode(kernel_rust, "reed_solomon_64_56",
+	                       lengths + shorter)
+	for block, (result, _got) in zip(lengths + shorter, answers):
+		assert result == -1, (
+			f"Rust accepted a {len(block)}-byte block every other rendering "
+			f"refuses")
+
+	for block in shorter:
+		assert decode(bytearray(block)) == -1, (  # type: ignore[operator]
+			"the Python rendering stopped refusing a shorter codeword, so "
+			"the Rust cases above are no longer comparing two refusals")
+
+
+def test_the_rust_encoder_refuses_a_parity_slice_too_short_to_hold_it(
+		kernel_rust: Path) -> None:
+	"""The one behaviour Rust has that C and Python cannot be asked for.
+
+	C writes `nroots` bytes through a bare pointer, so a short buffer is
+	an overflow nobody sees; Python indexes a `bytearray` and raises.
+	Rust's slice is bounds-checked, which makes the same call a panic --
+	an abort in `no_std` -- so the generated encoder refuses first and
+	returns 0, which is already what it returns for a message of the
+	wrong length.
+
+	There is nothing to differential, so it is asserted from both sides.
+	A guard checked only where it fires cannot be told from one that
+	refuses everything.
+	"""
+	message = bytes(56)
+	answers = _ask_rust(kernel_rust, [
+		f"E reed_solomon_64_56 {message.hex()} {room}"
+		for room in (0, 7, 8, 40)])
+	wrote = [int(answer.split(" ")[0]) for answer in answers]
+
+	assert wrote[:2] == [0, 0], (
+		f"a parity slice shorter than 8 was accepted: {wrote[:2]}")
+	assert wrote[2:] == [8, 8], (
+		f"a parity slice long enough was refused: {wrote[2:]}")

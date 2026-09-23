@@ -30769,6 +30769,89 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.496 Rust renders Reed-Solomon, and the blocker had already gone
+
+**Rust generated 40 of the 42 derived codecs in `std/kernels.situ`; it
+generates all 42 now.** The two it declined were the Reed-Solomon pair.
+C and Python already generated both.
+
+**Nothing about Reed-Solomon was ported.** The encoder and decoder are
+one statement tree in `codegen/kernel_program.py`; what was missing was
+a renderer. `_RustRenderer` is 165 lines against C's 160 and Python's
+88, and holds no more of the algorithm than either -- which is the claim
+26.462 made for the arrangement, now tested by a third backend rather
+than argued.
+
+**The recorded blocker did not survive measurement, and the reason it
+went is this session's own earlier fix.** 26.457 and this project's
+notes both carried "`no_std` and no-panic indexing" as the obstacle,
+sized at seven unprovable subscripts. That record predates 9319ca9,
+which moved Berlekamp-Massey's `degree > half` guard from after the loop
+to inside it. With the guard where it belongs the invariant holds, and
+asserting `degree <= at` **inside the Rust** never fired across 20,000
+decodes -- with a sabotage of the degree update firing it immediately,
+so the assertion was alive.
+
+**Plain `[i]` everywhere, and `.get(i).copied().unwrap_or(0)` is the
+wrong instrument for four reasons rather than one.** `kernel_program`
+says every index is provably in range and a renderer may rely on it. The
+fallback never sees a bad index anyway -- the underflow is in the
+SUBTRACTION, which evaluates first, so a sabotaged build panics on
+"attempt to subtract with overflow" in debug and on the index in
+release. Eight of the 31 index sites are assignment TARGETS, and a
+sabotage substituting the fallback fails to compile at all:
+`error[E0070]: invalid left-hand side of assignment`. And substituting
+zero in an error-correcting decoder is a MISCORRECTION, which this
+program ranks as worse than a refusal.
+
+**Three things Rust needed that neither sibling did.** `mut` is earned
+-- `unused_mut` is a hard error under `-D warnings`, five of nineteen
+declarations must not carry it, and the set is walked out of the tree
+rather than listed, because a list is a thing to be wrong.
+Parenthesisation follows Python's split and not C's: C brackets every
+`Binary` on the grounds that its precedence table is not worth
+checking, and doing that here produced **22 hard `unused_parens`**. And
+`position` is `[usize; half]` rather than `[u8; half]`, because it holds
+indices; that removes three casts and one mixed-type subtraction Rust
+would reject outright where C promotes silently.
+
+**One behavioural divergence, decided rather than defaulted.** `parity`
+is the caller's slice. C writes through a bare pointer and a short
+buffer overflows silently; Rust's `&mut [u8]` panics, which aborts in
+`no_std`. The generated code now guards it and returns 0 -- which
+already means *the caller passed something wrong* in this program --
+rather than inventing a second code or letting the panic stand.
+
+**Verified against a witness that is not situ.** 3,120 encode/decode
+cases across both codecs and corruption from 0 to t+2, one PRNG and one
+draw order in both languages: **byte-identical to the generated Python,
+`diff` empty**, run at `-Os` with `-C overflow-checks=yes`, which never
+fired. Then 300 parity blocks against `reedsolo` at `prim=0x11D`: all
+300 agree. The first link proves the renderer; only the second proves
+the code, and 26.462 is explicit about why -- two backends rendering one
+program agree by construction.
+
+**The gate that would have caught the 22 parenthesis errors did not
+exist, and now does.** Every test compiling DERIVED Rust used
+`-A warnings`; every test using `-D warnings` compiled ACCESSOR Rust.
+Disjoint sets -- while `test_codegen_rust.py` says in as many words that
+the flag matters *"because a great deal of CI does and generated code
+that only compiles without it is generated code that fails for the
+user"*. Measured before writing it: the module was already clean, so the
+gate cost nothing on the day and exists for the next renderer. Sabotaged
+by making every binding `mut`, it goes red through `unused_mut`.
+
+**Two coverage sentences are now wrong and I cannot reconcile the
+older one.** 26.457's *"Coverage is 40 of 42 and stops there
+deliberately"* is falsified outright. 26.462's *"Coverage is 41 of 42"*
+does not match anything measurable today -- C, Rust and Python each
+generate 42 of the 42 kernel-bearing codecs, and before this change
+Rust generated 40 while the other two generated 42, so no backend was
+ever at 41. Rather than guess what the figure counted, the measurement
+is recorded and the sentence left for whoever wrote it: **the method is
+`_for_kernel(decl, "situ") is not None` per backend over
+`std/kernels.situ`'s codecs**, which is the emitters' own question.
+
 ### 26.495 Keyword collisions are handled; the lens that found 26.490 is not
 
 **An empty sweep, recorded because it says where the next fault is

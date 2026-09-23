@@ -2656,3 +2656,74 @@ def test_no_codec_demands_less_capacity_than_its_decode_produces() -> None:
 	           and traverse.decodes_here(codec)}
 	assert bounded <= exercised, f"never reached: {sorted(bounded - exercised)}"
 	assert len(exercised) >= 15, f"only {len(exercised)} codecs reached"
+
+
+#: The two Reed-Solomon codes the standard kernels declare. The
+#: parameters are repeated from `std/kernels.situ` only to build a schema
+#: of the same shape; what is asserted is that a body comes out, not what
+#: the parameters mean.
+REED_SOLOMON_CODES = {
+	"reed_solomon_255_223": "field = 256, n = 255, k = 223, primitive = 0x11D",
+	"reed_solomon_64_56":   "field = 256, n = 64, k = 56",
+}
+
+
+@pytest.mark.parametrize("name", sorted(REED_SOLOMON_CODES))
+@pytest.mark.parametrize("language", sorted(DERIVED_EMITTERS))
+def test_every_backend_writes_a_body_for_reed_solomon(
+		language: str, name: str) -> None:
+	"""Rust declined both until it carried a renderer for the program.
+
+	The same shape as the table-code case above and for the same reason:
+	a decline is a comment rather than a failure, so a gap and a body
+	look alike to anything that does not read the output. C and Python
+	have passed this since they were written, which is what the control
+	for the third backend looks like -- and what makes this fail for the
+	one reason it is about.
+	"""
+	text = (f"codec {name} {{ kernel = polynomial("
+	        f"{REED_SOLOMON_CODES[name]}); }}\n"
+	        f"impl {name} derived;\n")
+	out = DERIVED_EMITTERS[language].generate(parse_text(text), "unit")
+
+	assert f"No implementation for `{name}`" not in out, (
+		f"{language} still declines {name}")
+	assert f"{name}_encode" in out and f"{name}_decode" in out, (
+		f"{language} emitted no entry points for {name}")
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_whole_derived_module_compiles_under_denied_warnings(
+		tmp_path: Path) -> None:
+	"""Every test that compiles DERIVED Rust allows warnings; every test
+	that denies them compiles ACCESSOR Rust. The two sets were disjoint.
+
+	`test_codegen_rust.py` says why the flag matters -- "a great deal of CI
+	does, and generated code that only compiles without it is generated
+	code that fails for the user" -- and then eight invocations there deny
+	warnings over `rust/emit.py`'s output while six here allow them over
+	`rust/derived.py`'s. So a renderer emitting `unused_parens`,
+	`unused_mut` or `non_upper_case_globals` would have shipped silently.
+
+	Measured before this was written: the module is already clean, so the
+	gate costs nothing today and exists for the next renderer. It was
+	worth writing because the next renderer was being written when this
+	was found -- a first draft of the Reed-Solomon one, parenthesised the
+	way C parenthesises, produced 22 hard errors of exactly this class.
+
+	`std/kernels.situ` rather than a fixture: it binds all 42 derived
+	codecs, so one compile covers every family this backend renders.
+	"""
+	module = rs_derived.generate(
+		parse_text((ROOT / "std" / "kernels.situ").read_text()), "unit")
+	(tmp_path / "unit.rs").write_text(module, encoding="ascii")
+	(tmp_path / "lib.rs").write_text(
+		"#[path = \"unit.rs\"]\nmod unit;\n", encoding="ascii")
+
+	built = subprocess.run(
+		[RUSTC or "rustc", "--edition", "2021", "-D", "warnings",
+		 "--crate-type", "lib", "--emit=metadata",
+		 "-o", str(tmp_path / "out.rmeta"), str(tmp_path / "lib.rs")],
+		capture_output=True, text=True, cwd=tmp_path)
+
+	assert built.returncode == 0, built.stderr
