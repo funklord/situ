@@ -30769,6 +30769,131 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.489 A cross-check that cannot fire on the axis it matters most for
+
+**Eleven spellings bypass the kernel-contradiction check, not the seven
+first counted -- and one axis it guards cannot be checked at all.**
+
+`kernels.apply_to` compares only the properties `_explicit()` returns,
+and `_explicit` recovers "what the author wrote" by diffing against a
+bare `CodecDecl`. **A declaration whose value equals the dataclass
+default is therefore invisible**, and its docstring states the defect as
+its justification: *"a property equal to its own default was not worth
+arguing about anyway"*.
+
+**The count was wrong because the first pass listed spellings it had
+thought of.** Derived instead from `DERIVED_PROPERTIES` against every
+assignment site in the parser -- seventeen of them -- it is eleven, and
+the three additions are the interesting ones:
+
+  - **`expansion_add`, a whole axis nobody had looked at.** `expansion =
+    ratio_bounded(255, 254)` beside a `code = cobs` kernel, addend simply
+    omitted, is accepted -- and that is precisely the pre-0048
+    declaration `STUFFING_BOUNDS` was added to catch, which `kernels.py`
+    records as having *"overran by one on every encode"*.
+  - **`granularity_size`** via `granularity = X(any)`.
+  - **`seekable = none`**, a second spelling of the seekable hole.
+
+`ratio` is the only one of the ten with no invisible spelling, every
+ratio form requiring two positive literals.
+
+**And `deterministic` is worse than under-enforced: it is vacuous by
+construction.** All eight kernel families assign `deterministic = True`
+unconditionally and the `Derived` default is `True`, so **no kernel can
+derive `False`**. The only declaration that could contradict one is
+`not deterministic` -- which is exactly the invisible spelling. **The
+check has never been able to fire on that axis in either direction.**
+`kernels.py:229` already records the hazard it would guard: a table
+kernel derives `deterministic` unconditionally, 8b10b is not
+deterministic, and a false `deterministic` propagates a false `canonical`
+through the lattice.
+
+**Why it survived: both existing tests sit on the visible side.**
+`test_a_declaration_that_contradicts_its_kernel_is_refused` uses
+`systematic;` and its partner uses `seekable = linear; invertible;` --
+all non-default. **Nothing in the tree has ever exercised a
+default-valued declaration beside a kernel.**
+
+**The corpus cannot be affected, measured two ways that agree exactly.**
+79 codec blocks, 54 with a kernel, and **not one of the 54 declares any
+property at all** -- `seen == {"kernel"}` for every one. Stronger than
+"none uses those spellings". The test tree is clean too: 5,896 kernelled
+parses across the suite, 0 that would newly refuse.
+
+**But it is not a two-line fix, and it would make an existing footgun
+loud.** The parser's `seen` set answers exactly this question and is
+discarded -- a local, never stored on the decl, and `apply_to` receives a
+`replace()` copy, so no side table reaches it. Carrying it is about
+twenty-five lines across `ast.py`, `parser.py` and `kernels.py`, and it
+must record FIELD names at each assignment rather than spellings, since
+`expansion` covers three fields and `granularity` two.
+
+**And `unparse` generates the defect.** Unparsing an UNRESOLVED schema
+writes a kernel and a full property body, so `std/kernels.situ` round
+-trips to 42 codecs each carrying three declarations that contradict
+their own kernel -- `length_preserving; granularity = stream; not
+seekable;` against a `crc32` that derives `+4`, `block`, `linear` -- and
+`situc map` accepts it, rc=0. Confirmed here. Under a fix that becomes 42
+refusals. The exposure is bounded to `parse_decls`, which does not
+resolve; `dump-ast --format=source` uses the resolving path and
+re-parses clean.
+
+**Not fixed here, and the reason is the measurement rather than
+caution.** The rule is stated twice -- section 2324 calls a contradicting
+declaration *the single most dangerous kind of mistake in this system* --
+and the corpus cost is zero. What makes it the holder's is that closing
+it turns a latent unparser footgun into a loud one, and that the axis
+with the recorded hazard is vacuous whatever the fix does.
+
+### 26.488 The crash is not C's, and the narrow fix unmasks a worse one
+
+**`names.over_fields` raises `UnknownName` for any name it cannot
+rewrite, and the paths that do not guard are the defect. It is not about
+enum arms.** A second construct, with no enum in it:
+
+    struct s { u8 n; e a[2]; e b[] while (a[-1].v != 0); }
+
+`situc map` completes, `situc wire` publishes `while=a[-1].v!=0`, and
+**all four backends crash** with `UnknownName: 'a'` from the same line
+that the enum case hits. So "teach the backends about enum arms" would
+fix one construct and leave this one.
+
+**C's guard already exists and one path never asks it.**
+`_length_is_readable` asks the RENDERER rather than re-deriving the name
+table -- *"so the two cannot drift"* -- and is consulted at three sites.
+`_fits_check` is the fourth and does not. Every other C `_over_fields`
+call site was enumerated: of eleven, the rest are unreachable with an
+unresolvable name because the front end refuses a qualified name in a
+discriminant, a run condition and a `when` predicate.
+
+**The narrow guard is provably inert on the corpus**: 84 generated files,
+1,927,713 bytes, byte-identical each side, with a sabotage control
+showing 16 of the 84 do reach the branch. The guard predicate answers
+True 2,188 times and False never.
+
+**And it is still the wrong thing to do alone.** With it in place a
+nested struct carrying the same unresolvable length reaches
+`assert self._struct_extent(nested), "_has_length checks this first"` --
+a different crash, masked today because the inner struct's own
+`UnknownName` fires first. `_has_length` answers a nested member from the
+shared `has_computable_extent`, which cannot know whether THIS backend
+could render the nested struct's members; there is a per-member question
+and no per-struct one.
+
+**The other three are not graceful on that shape either.** For the nested
+schema all three emit `head_extent()` calling an `extent` the nested type
+never defines -- measured, `g++ -fsyntax-only` gives *"'class situ::inner'
+has no member named 'extent'"*. C tracebacks; the others emit code that
+does not build.
+
+**So the earlier framing here was wrong and this entry corrects it.** It
+was recorded as "teach enum arms, or refuse them" and as a fix within
+reach. It is neither: it is one shared defect about unguarded rendering
+paths, reachable without enums, and the smallest honest change to C
+converts one crash into another for the nested shape. **A guard that
+turns a loud failure into a different loud failure is not progress
+worth committing on its own.**
+
 ### 26.487 An image that claimed it could measure what it had not encoded
 
 **The packer dropped a member's length program, said nothing, and wrote
