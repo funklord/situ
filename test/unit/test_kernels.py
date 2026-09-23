@@ -380,6 +380,50 @@ def test_a_pipeline_takes_the_weakest_seekability() -> None:
 	assert codecs(PIPELINE)["framed"].seekable is ast.Seekable.PERMUTED
 
 
+def test_a_blockwise_stage_is_refused_rather_than_crashing() -> None:
+	"""`_weakest_seekable` ranked three of `Seekable`'s four members.
+
+	It is used as a TOTAL function, so composing a `blockwise` stage
+	reached `order.index` and raised `ValueError: tuple.index(x): x not in
+	tuple` -- an uncaught Python traceback out of `situc map`, with no span
+	and no diagnostic (26.492). `_coarsest_granularity` next door lists all
+	five of its own members.
+
+	Refused rather than ranked: where `blockwise` sits between `permuted`
+	and `none` is a question about what the value means, and nothing in the
+	compiler reads it yet. Ranking it here would settle that silently, in
+	the one place nobody would look.
+	"""
+	rendered = refusal("codec inter { seekable = blockwise; invertible; }\n"
+		"codec plain { seekable = linear; invertible; }\n"
+		"codec both = inter |> plain;\n")
+
+	assert "`seekable = blockwise` has no place in the ordering" in rendered
+	assert "not settled" in rendered, "the diagnostic has to say why"
+
+
+def test_a_rankable_stage_still_composes() -> None:
+	"""The control. A refusal keyed on the wrong thing would take this too,
+	and the test above would still pass -- same schema, one word changed."""
+	composed = codecs("codec inter { seekable = permuted; invertible; }\n"
+		"codec plain { seekable = linear; invertible; }\n"
+		"codec both = inter |> plain;\n")
+
+	assert composed["both"].seekable is ast.Seekable.PERMUTED
+
+
+def test_a_standalone_blockwise_codec_is_untouched() -> None:
+	"""The crash is composition's, so the refusal is scoped to a pipeline.
+
+	A codec declaring `seekable = blockwise` on its own is accepted today
+	and stays accepted: widening the refusal to the VALUE would decide the
+	same open question from the other side, and would refuse schemas that
+	compile now.
+	"""
+	assert codecs("codec inter { seekable = blockwise; invertible; }\n"
+		)["inter"].seekable is ast.Seekable.BLOCKWISE
+
+
 def test_a_pipeline_is_systematic_only_if_every_stage_is() -> None:
 	found = codecs(PIPELINE)
 	assert found["rs"].systematic

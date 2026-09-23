@@ -786,6 +786,38 @@ def compose(decl: ast.CodecDecl, stages: list[ast.CodecDecl]) -> ast.CodecDecl:
 		raise error(f"`{decl.name}` is an empty pipeline", decl.span,
 		            label="no stages")
 
+	# `_weakest_seekable` ranks three of `Seekable`'s four members and is
+	# used as a TOTAL function, so a `blockwise` stage reached
+	# `order.index` and raised `ValueError: tuple.index(x): x not in tuple`
+	# -- an uncaught Python traceback out of `situc map`, with no span and
+	# no diagnostic (26.492). `_coarsest_granularity` next door lists all
+	# five of its own members and is total.
+	#
+	# **Refused rather than ranked.** Where `blockwise` sits between
+	# `permuted` and `none` is a question about what the value MEANS, and
+	# nothing in the compiler reads it yet -- `Seekable.BLOCKWISE` has no
+	# reference outside its own definition in `ast.py`. Ranking it here
+	# would take that decision silently, in the one place nobody would
+	# look for it; a refusal naming the stage stops the crash and leaves
+	# the decision where it belongs.
+	#
+	# Scoped to a pipeline deliberately: a standalone `seekable = blockwise`
+	# is accepted today and this does not change that, because the crash is
+	# composition's and so is the ordering question.
+	unranked = next((stage for stage in stages
+	                 if stage.seekable is ast.Seekable.BLOCKWISE), None)
+	if unranked is not None:
+		raise error(
+			f"`{decl.name}` composes `{unranked.name}`, whose"
+			" `seekable = blockwise` has no place in the ordering",
+			decl.span,
+			label="this pipeline cannot rank it",
+			notes=["`seekable` composes to the weakest stage, and where "
+			       "`blockwise` sits between `permuted` and `none` is not "
+			       "settled",
+			       "every other property of the stage composes normally -- "
+			       "only this one has no ordering"])
+
 	expansion, ratio, add = _compose_expansion(decl, stages)
 
 	return replace(

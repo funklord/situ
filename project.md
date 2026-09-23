@@ -30769,6 +30769,47 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.494 A ranking that had to be total, and was not
+
+**26.492's crash is fixed and its open question is untouched, which is
+the whole shape of the change.** `_weakest_seekable` ranked three of
+`Seekable`'s four members and is used as a total function, so composing
+a `blockwise` stage reached `order.index` and raised
+`ValueError: tuple.index(x): x not in tuple` -- an uncaught Python
+traceback out of `situc map`, no span, no diagnostic. It now says:
+
+    error: `both` composes `inter`, whose `seekable = blockwise` has no
+           place in the ordering
+      = `seekable` composes to the weakest stage, and where `blockwise`
+        sits between `permuted` and `none` is not settled
+
+**Refused rather than ranked, and that is the point rather than
+timidity.** Where `blockwise` belongs between `permuted` and `none` is a
+question about what the value MEANS, and nothing in the compiler reads
+it -- `Seekable.BLOCKWISE` has no reference outside its own definition.
+Giving it a rank here would settle an open language question silently,
+inside a helper, in the one place nobody would look for the decision. A
+refusal naming the stage removes the crash and leaves the question where
+it belongs.
+
+**Scoped to a pipeline, deliberately.** A standalone
+`seekable = blockwise` is accepted today and stays accepted: the crash
+is composition's and so is the ordering question, and widening the
+refusal to the VALUE would decide the same thing from the other side
+while refusing schemas that compile now. There is a test for each half,
+and the standalone one is the one that would catch an over-broad fix.
+
+**The control is the test that passes in both states.** Same schema, one
+word changed -- `permuted` for `blockwise` -- composing to `PERMUTED`
+before and after. A refusal keyed on something broader would take it too
+and the defect test would still be green.
+
+**`not_yet_implemented` was the tempting helper and the wrong one.** It
+exists for exactly this shape and requires a phase number, which
+`project.md` does not give for this value; supplying one would have been
+an invented fact in a diagnostic a user reads. `error()` says what is
+true without claiming a schedule.
+
 ### 26.491 A line code that declares itself authenticated, and is believed
 
 **`authenticated` is not in `DERIVED_PROPERTIES`, so no kernel can
@@ -30803,8 +30844,63 @@ none, `impl is None` and the check is skipped, and `std/codecs.situ:16`
 calls a signature with no binding *"the normal case for a protocol under
 design"*.
 
-**`tag_bytes` and `nonce_bytes` are outside the checked set too**, making
-three declarable properties a kernel cannot contradict.
+**Amendment: the consequence is narrower than this entry first put it,
+and one third of the claim is withdrawn.**
+
+**The generated code is IDENTICAL.** `situ_msg_sealed_open` for the
+Manchester codec and for a real extern AEAD are byte-for-byte the same
+function -- 187 bytes each, `diff` empty:
+
+    static inline situ_err_t situ_msg_sealed_open(situ_view_t view,
+                                                  int verified, ...)
+    {
+        if (!verified) { return SITU_ERR_TAG; }
+        out->view = view;
+        return SITU_OK;
+    }
+
+**`verified` is the caller's parameter and situ reads no tag.** It
+performs no cryptography for either codec. So what the generated code
+guarantees is a reachability property of the API surface -- no interior
+accessor without a gate object, and the only producer refuses on zero --
+and that is true and unchanged.
+
+**What the hole costs is the one refusal that protects what `verified`
+MEANS.** `wellformed.py:3532` says it in its own words: *"the caller
+passes `verified`, nothing checked anything, and the type system carries
+a promise the cryptography never made."* A kernel codec walks past
+exactly that. The map then prints `stage=VerifyGated auth=Covered(tag)`
+over a line code and the generated prose says parsing before
+authenticating *"does not compile"*. **Nobody forges anything; an
+assertion is made that nothing is positioned to keep.**
+
+**And `tag_bytes`/`nonce_bytes` are withdrawn from this finding.** They
+are outside `DERIVED_PROPERTIES`, and **no kernel could contradict them
+anyway**: none of the seven families is a MAC or an AEAD, so `Derived`
+has no left-hand side for a tag width. They also reach no generated code
+-- three schemas differing only in those declarations produce
+byte-identical `.c` and headers differing only in the include guard --
+and the cross-check that matters, declared width against the `tag u8[N]`
+field, fires in all three directions.
+
+**That asymmetry is what makes `authenticated` the real one.** All seven
+families imply **not** authenticated, so *"this kernel implies `not
+authenticated`"* is a sentence `Derived` could carry and does not. A tag
+width is a gap with nothing behind it; this is a gap with a fact behind
+it that nobody wired up.
+
+**Two smaller things came with it.** `_authenticated_note`
+(`c/codectests.py:541`) emits a comment claiming *"`tag_bytes` is checked
+against that field by the compiler"* for a codec that declares none and
+is not length-preserving -- two false clauses, in a note whose stated job
+is that *"silence would read as coverage"*. And with no `impl` at all,
+`gen-codec-tests` emits `no suite` and not even that note, so the claim
+passes the falsification harness in silence.
+
+**Nothing in the tree does this**: 42 schemas, 54 kernel-bearing codecs,
+6 `authenticated` codecs, intersection empty. And `grep -rn
+DERIVED_PROPERTIES test/` returns nothing, so no gate asserts the tuple
+covers what it should -- which is why an omission is invisible.
 
 ### 26.492 `seekable = blockwise` does not merely misprice, it crashes
 
