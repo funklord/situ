@@ -30769,6 +30769,162 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.491 A line code that declares itself authenticated, and is believed
+
+**`authenticated` is not in `DERIVED_PROPERTIES`, so no kernel can
+contradict it.** Every other declarable property on a kernel-bearing
+codec is computed and a disagreement is refused. This one is trusted --
+and a codec WITH a kernel is exactly the case where trust is not the
+model.
+
+    codec manch {
+        authenticated;
+        kernel = table(input_bits = 1, output_bits = 2,
+                       code = manchester_802_3);
+    }
+    struct msg { u8 kind; u8 nonce[12]; tag u8[16];
+                 sealed(manch, nonce = nonce) { u32 secret_seq; } }
+
+`situc map` rc=0:
+
+    codec manch unbound ... granularity=bit(1) authenticated invertible
+    struct msg ... stage=VerifyGated auth=Covered(tag)
+
+and `situc build` rc=0, emitting
+`situ_msg_sealed_open(situ_view_t view, int verified, ...)` -- a real
+verify gate. **A Manchester line code has no key, no MAC and nothing in
+its output but the code**, and the lattice carries `VerifyGated` out into
+generated C on its word.
+
+**The gate that should stop it is `wellformed.py:3542`,
+`if not codec.authenticated`.** Its sibling at `:3555` -- a derived impl
+may not seal -- does stop it, but only when an `impl` is declared. With
+none, `impl is None` and the check is skipped, and `std/codecs.situ:16`
+calls a signature with no binding *"the normal case for a protocol under
+design"*.
+
+**`tag_bytes` and `nonce_bytes` are outside the checked set too**, making
+three declarable properties a kernel cannot contradict.
+
+### 26.492 `seekable = blockwise` does not merely misprice, it crashes
+
+**Sharpening a finding recorded earlier as inert.** `blockwise` is
+declarable, reaches the AST, and is missing from a ranking that must be
+total:
+
+    def _weakest_seekable(stages):
+        order = (LINEAR, PERMUTED, NONE)
+        return max((stage.seekable for stage in stages), key=order.index)
+
+Compose it into a pipeline and the compiler raises an uncaught
+`ValueError: tuple.index(x): x not in tuple` -- no diagnostic, no span.
+The control is the same schema with `permuted`: rc=0. So this value is
+not only priced as the strongest class and read by nothing; it takes the
+compiler down when composed.
+
+**The live contrast is next door.** `_coarsest_granularity` lists all
+five `Granularity` members and is total. A sweep of enum-keyed containers
+across `situc/` found `kernels.py:865` to be the only incomplete one used
+as a total function -- the others are read with `.get()` and document
+absence.
+
+### 26.493 Four axes blind at the default, and the base rates behind them
+
+**26.489 recorded `deterministic` as the vacuous axis. It is four**, and
+`length_preserving` is the one that matters most: it is a load-bearing
+claim about offsets, and it is silently discarded over a CRC kernel that
+adds 32 bits.
+
+    not deterministic  + table       rc=0   declaration dropped
+    not seekable       + table       rc=0   dropped, kernel's LINEAR used
+    seekable = none    + table       rc=0   dropped
+    granularity = stream + table     rc=0   dropped, kernel's bit(1) used
+    length_preserving  + polynomial  rc=0   dropped, kernel's +4 used
+
+Against seven live controls on the same axes, all rc=1. And the
+declaration IS recorded -- `not seekable; seekable = linear;` is refused
+with *"seekable is given twice"* -- so it is the check that cannot see
+it, not the parser discarding it.
+
+**The base rates are the part worth keeping.** 379 `raise error(` sites;
+of the 154 in `wellformed.py` all were read and 42 executed against
+purpose-written schemas -- **40 alive, 2 dead**. Ten codec properties,
+all ten reproduced: **six alive, four vacuous at the default**. And the
+enum axis: 27 classes, 145 members, 23 flagged by a reference sweep and
+**all 23 false positives** once parameterised construction
+(`{x.value: x for x in Enum}`) and `.value` consumers were accounted for.
+
+**That 23-of-23 is the instrument lesson.** A sweep counting
+`EnumClass.MEMBER` references cannot see a member built from schema text
+by a table keyed on `.value`, nor one compared as a string after
+`layout.py` stores `member.unknown.value`. Two corrections, each killing
+a batch, before anything survived -- and what survived did so on a
+reproduced crash rather than on the sweep's say-so.
+
+**One control handed to this sweep did not hold up, and the correction is
+recorded rather than buried.** `c/emit.py:6791`'s assert message misstates
+its guarantee -- `_has_length` and `_struct_extent` are different
+predicates -- but 1,102 reaches across the corpus and a purpose-built
+fixture never made it fail. It is **undecided, leaning alive**, not the
+confirmed-bad control it was offered as. 26.488's claim stands
+separately: that assert fires once `_fits_check` declines, which is a
+state the tree does not reach today.
+
+### 26.490 Five ordinary field names produce C++ that does not compile
+
+**A generated local shadows the getter its own initialiser calls.** From
+`struct s { u8 n [max = 4]; reserved u8[n + 1]; u16 tail; }`:
+
+    const std::uint32_t n  = ::situ::rt::nonneg(
+                                 ::situ::rt::leaf_u(n()) + 1);
+
+In C++ a name is in scope from its declarator, so `n()` binds to the
+`uint32_t` being declared rather than to the member function. `g++
+-fsyntax-only` says *"'n' cannot be used as a function"*.
+
+**Five of eight ordinary names tried break it**, each with a real
+compiler error naming the identifier:
+
+    n       error: 'n' cannot be used as a function
+    at      error: 'at' cannot be used as a function
+    value   error: 'value' cannot be used as a function
+    need    error: expression cannot be used as a function
+    raw     error: could not convert ...
+    i, encoded, limit                     compile clean
+
+**Narrow in construct and wide in name**, which is the awkward
+combination. `u8 body[n + 1]` and `opaque o[n + 1]` both compile; only
+`reserved u8[n + 1]` does not, because the reserved block declares `at`
+and `n` around the `must_be_zero` loop. Two other sites declare the same
+pair.
+
+**C is clean on all five. Rust is UNDETERMINED and was nearly reported
+as broken.** `rustc` returned non-zero for every case and the reason is
+`unresolved import crate::situ_rt` -- the generated module wants its
+runtime, which my harness did not supply. Reading the error rather than
+the exit status is the only thing that stopped five false findings.
+Python's output parses, and parsing is not a check.
+
+**Latent in the corpus, which is why the gate is green**: 15 fields named
+`n`, 12 named `value` and 4 named `raw` are committed, and not one of
+them appears in an arithmetic size on a `reserved` run.
+
+**The fix is not a rename, and that is what makes it the holder's.** A
+schema may name a field anything, so no fixed local name is provably
+safe -- `at_` collides with a field called `at_`. The robust answer is
+what `cpp/names.py check_collisions` already does for CLASS names a
+member has taken: detect the collision and rename. Extending that to
+generated locals is an emitter-wide change and would move generated C++
+for every schema carrying one of these blocks.
+
+**Found by a differential that compiled what it generated.** Over 734
+constructed schemas, 315 of which the front end accepted, `gcc` and
+`g++ -fsyntax-only` were run on the output rather than the output being
+read. The sweep's own instrument note is worth keeping: `python3 -m
+py_compile` passed a generated module containing a free `remaining`,
+because compiling Python does not resolve names -- it was replaced with
+an AST free-name detector carrying its own control.
+
 ### 26.489 A cross-check that cannot fire on the axis it matters most for
 
 **Eleven spellings bypass the kernel-contradiction check, not the seven
