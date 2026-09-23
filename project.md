@@ -30769,6 +30769,49 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.495 Keyword collisions are handled; the lens that found 26.490 is not
+
+**An empty sweep, recorded because it says where the next fault is
+not.** A field named after a target language's own keyword survives in
+all four backends, checked by compiling rather than by reading:
+
+    C++     class int new delete template operator   g++ -fsyntax-only rc=0
+    Rust    match fn impl type move ref unsafe       rustc --emit=metadata rc=0
+    Python  class def lambda None import global pass import succeeds
+
+Each backend has its own answer and each is deliberate. C and C++ share
+`CPP_KEYWORDS` and append an underscore. Rust emits raw identifiers --
+*"the whole reason they exist"*. Python asks `keyword.iskeyword` rather
+than restating a list, *"because the interpreter that will read this file
+is the authority on what it can parse"*, and leaves SOFT keywords alone
+on purpose, since `match` and `type` parse fine as names and mangling
+them would rename a member for nothing.
+
+**So the interesting question is why 26.490 exists at all beside that.**
+Both are name collisions in generated code and only one is handled,
+because they have different sources. A keyword is a name the LANGUAGE
+reserves -- knowable in advance, listable, and every backend lists it. The
+collision in 26.490 is between a generated LOCAL and the getter the same
+expression calls: `const std::uint32_t n = ... leaf_u(n()) + 1`. That name
+comes from the EMITTER, and no list of the language's words can contain
+it, because the language never reserved `n`.
+
+**Which is why the fix shapes differ too.** A keyword collision is fixed
+by a table. `26.490`'s is fixed the way `cpp/names.py check_collisions`
+already fixes a class name a member has taken: detect and rename. A
+lookup cannot solve a collision whose other half is chosen by the
+generator.
+
+**Three harness failures, all mine, before this sweep said anything.**
+`mod match;` in my own `lib.rs` is invalid Rust, so the first run blamed
+the generated file for an error on line 2 of a file I wrote. The second
+failed on `rustc` having nowhere to put a temp dir. The third needed
+`runtime/python` on `PYTHONPATH`. **Every one exited non-zero with a
+plausible-looking message**, and the only thing that separated them from
+findings was reading where the error pointed. That is the third time in
+this arc that a harness error nearly became a defect report, and the
+remedy has not changed: read the error, not the status.
+
 ### 26.494 A ranking that had to be total, and was not
 
 **26.492's crash is fixed and its open question is untouched, which is
