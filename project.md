@@ -30769,6 +30769,124 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.497 A subscript is invisible to the walker every gate is built on
+
+**`invariant.paths_in` had no case for `ast.Index`, so a subscripted path
+reported its tail and not its base.** `a[-1].v` parses as
+`Access(Index(NameRef('a'), -1), 'v')`; the `Index` fell through to the
+function's `return []`, and the `Access` branch -- which builds
+`f"{base[0]}.{name}"` from whatever the base reported -- was handed an
+empty list and answered `["v"]`. **The name `a` was not reported as
+unreachable. It was not reported at all.**
+
+Sixteen call sites in six modules read that list to decide what an
+expression may name. **Fourteen minimal schemas were accepted that should
+not have been**, and five more were refused by a diagnostic naming the
+wrong identifier. What the fix changes, measured one fixture at a time:
+
+    while (a[-1].v != 0)           accepted -> UnknownName in all four
+    while (v[0] == 0)              accepted -> C: not a pointer/vector
+    at n[0]  /  at a[0]            accepted -> subscripts a scalar
+    at p[0]  on a parameter        accepted -> 0050's rule skipped
+    when s.a[0].b == 1             accepted -> filed against the WRONG struct
+    invariant t == size(m.no[0])   accepted -> silently not enforced
+    invariant t == t[0].d.other    accepted -> defeats the circularity check
+    must a.x[0].b.c == a.c         accepted -> compiled as `b.c == a.c`
+    tag_decode { kind = tag[0] }   accepted -> subscripts an integer
+
+**Three of those are worse than the crashes, because nothing downstream
+disagrees with them.**
+
+`when s.a[0].b == 1` reported `["b"]`, so the predicate was read as naming
+`struct b`, and the refusal was recorded against it -- in `situc doc`, and
+in the committed wire signature as `b refuses: bad_a when s.a[0].b == 1`.
+**A peer contract naming a struct the predicate never reads is not a
+compiler bug that somebody trips over; it is a published claim.**
+
+`must a.x[0].b.c == a.c` yielded `["b.c", "a.c"]` -- a real parameter and
+a real member -- so it passed, planned, and emitted a relate layer
+**byte-identical to `must b.c == a.c`**. The schema says one thing and the
+generated comparison does another, with no diagnostic anywhere.
+
+`invariant msg.total == size(msg.nosuchfield[0])` names a field the struct
+does not have, and compiled: the gate iterates `paths_in(invariant.expr)`,
+which was empty, so it inspected nothing and passed exactly as loudly as a
+real pass. The generated Python then carried
+
+    # No recompute_total: this backend cannot evaluate
+
+where the same invariant without the subscript emits a working
+`recompute_total`/`total_is_stale` pair. **A declared invariant dropped,
+with the comment blaming the backend.** Removing the `[0]` was refused
+all along -- the control showing the gate works when it can see the name.
+
+**The nastiest spelling is the one where the dropped base is real.**
+`while (v[0] == 0)`, where `v` IS a field of the element, was not merely
+accepted: it was accepted *for a correct-looking reason*. Every backend
+emitted `situ_elem_v_get(element)[0]` and gcc refused it. The guard that
+should have caught it was written for this exact crash, citing 26.253 --
+whose complaint was `UnknownName` reaching a backend "still available
+under any other spelling". A subscript is that other spelling, and the
+guard's test, `test_a_while_condition_may_only_read_the_element`, uses
+`while (k == 1)` where `k` is not a field of the element. **The safe path.**
+
+**The first fix considered made it worse, and only a position matrix said
+so.** Reporting the base as a dotted path -- `a[-1].v` as `a.v` -- closes
+the `while` crash and **opens `at`**: `a` is a member, so `a.v` resolves,
+the scope check that had been refusing starts accepting, and all four
+backends crash. The corpus is unchanged under either candidate. **A path
+the author did not write is not a safer answer than no path.**
+
+What is reported instead is the written spelling, via
+`unparse.expr_to_source` rather than a fourth hand-rolled renderer --
+`unparse._expr` raises `TypeError` for a kind it does not know and is the
+only complete expression walker in the tree.
+
+**And the honest report broke two cells, which is the half a corpus proof
+cannot show.** `layout.check_bound_arithmetic` skips its check when a name
+does not resolve, deliberately: *"a bound may name a field declared LATER,
+and whether that is legal is somebody else's question"*. With the subscript
+visible, `n[0].n` stopped resolving, the skip fired, and two bounds that
+had been refused went silent. **A subscripted name cannot be a forward
+reference under any spelling**, so it no longer triggers that skip, and
+both refusals are back. The guard's stated intent is unchanged; what moved
+is that it can now tell the two cases apart.
+
+**Blast radius: zero, with a control.** 42 schemas through four backends
+plus `map` and `wire` -- 252 invocations, identical exit codes, **294
+generated files and 6,494,106 bytes byte-identical**. The comparison was
+shown able to speak by appending a marker to `render_delimiter` and
+re-running: 30 of the 294 went red. Only two committed schemas subscript
+anything, both `recs[]` inside a `require`, which is the position
+`ast.Index` documents itself for and which routes through
+`expr.path_text` -- a walker that already handled it.
+
+**Two holes are left and are not this entry's to close.**
+`[max = n[0].n]` still compiles, publishing `max=n[0].n` into the wire
+signature while the accessors ignore it -- accepted before this change and
+after it, so a sibling finding rather than a regression.
+`relation.paths_in` carries the identical gap and is now unreachable: four
+shapes written to reach it -- a dotted tail, a parameter shadowing the
+dropped name, both sides indexed, an empty subscript -- are all refused by
+the wellformed gate first, and adding the case changes none of them.
+Recorded rather than changed, as 26.442 records its two unreachable
+`pack.py` sites.
+
+**The durable half is the partition test.** A walker answering `[]` for a
+kind it does not know drops the next `ast.Expr` subclass as silently as it
+dropped this one, so the test asserts that all ten are classified -- the
+literals and `remaining` which name no field, the five that recurse, and
+`Index` which names its base. Sabotaged by declaring an eleventh subclass:
+the assertion goes false.
+
+**This supersedes 26.488's framing.** That entry called it "one shared
+defect about unguarded rendering paths" whose smallest honest fix
+"converts one crash into another", and concluded a backend guard was not
+worth committing alone. It was right about the backends and looking in the
+wrong place: the backends are where this raises, not where it is wrong.
+The front end had the guard, the message and the citation already, and
+could not see the name.
+
 ### 26.496 Rust renders Reed-Solomon, and the blocker had already gone
 
 **Rust generated 40 of the 42 derived codecs in `std/kernels.situ`; it
@@ -31224,6 +31342,17 @@ it turns a latent unparser footgun into a loud one, and that the axis
 with the recorded hazard is vacuous whatever the fix does.
 
 ### 26.488 The crash is not C's, and the narrow fix unmasks a worse one
+
+**SUPERSEDED by 26.497, which found the cause a layer earlier.** The
+reading below is right that the backends are not where this is wrong,
+and wrong that no small honest fix exists: `invariant.paths_in` had no
+case for `ast.Index`, so the front-end guard that already refuses this
+construct -- with the right message, citing 26.253 -- was reading the
+subscript's tail instead of its base. The crash is one of fourteen
+shapes that mis-read closed, and the nested-struct assertion this
+entry feared is not reached, because the schema is refused before any
+backend runs.
+
 
 **`names.over_fields` raises `UnknownName` for any name it cannot
 rewrite, and the paths that do not guard are the defect. It is not about

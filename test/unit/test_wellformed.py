@@ -601,6 +601,65 @@ def test_a_while_condition_may_only_read_the_element() -> None:
 	assert "not against `s`" in message
 
 
+def test_a_run_condition_may_not_reach_an_element_through_a_subscript() -> None:
+	"""The test above uses a name the element does not have, which is the safe
+	path: a subscript whose TAIL names a real field walked straight through it.
+
+	`paths_in` had no case for `ast.Index`, so `a[-1].v` reported `["v"]` --
+	and `v` is a field of `e`, so the check found it and passed. All four
+	backends then raised `UnknownName: 'a'` from `names.over_fields`, which is
+	the complaint 26.253 answered and this spelling reopened (26.497)."""
+	message = rendered("struct e { u8 v; }\n"
+	                   "struct s { u8 n; e a[2]; e b[] while (a[-1].v != 0); }")
+
+	assert "`a[-1].v` is a qualified name" in message
+
+
+def test_a_subscript_on_a_field_the_element_really_has_is_refused() -> None:
+	"""The worst spelling of the same thing, because nothing looks wrong.
+
+	Here the dropped base IS a field of the element, so the shortened list was
+	not merely accepted -- it was accepted for a correct-looking reason. The
+	backends emitted `situ_elem_v_get(element)[0]`, subscripting a scalar, and
+	the C compiler refused it: *"subscripted value is neither array nor
+	pointer nor vector"*."""
+	message = rendered("struct elem { u8 v; }\n"
+	                   "struct s { elem items[] while (v[0] == 0); }")
+
+	assert "has no field `v[0]`" in message
+
+
+def test_a_when_predicate_may_not_reach_a_field_through_a_subscript() -> None:
+	"""A `when` was attributed to the struct its truncated path named.
+
+	`when s.a[0].b == 1` reported `["b"]`, so the predicate was read as naming
+	`struct b` and the refusal was recorded against it -- in `situc doc`, and
+	in the committed wire signature as `b refuses: bad_a when s.a[0].b == 1`.
+	A peer contract naming a struct the predicate never reads is worse than a
+	crash, because nothing downstream disagrees with it."""
+	message = rendered("struct b { u8 q; }\n"
+	                   "struct s { u8 n; u8 a[4]; }\n"
+	                   "when s.a[0].b == 1 refuse bad_a \"wrong\";")
+
+	assert "`s` has no field `a[0].b`" in message
+
+
+def test_an_invariant_may_not_name_a_field_through_a_subscript() -> None:
+	"""The silent one, and the reason this is not just a crash bug.
+
+	`size(msg.nosuchfield[0])` names a field the struct does not have, and the
+	schema compiled: `check_invariants` iterates `paths_in(invariant.expr)`,
+	which was empty, so it inspected nothing and passed as loudly as a real
+	pass. The generated Python then carried *"No recompute_total: this backend
+	cannot evaluate"* -- a declared invariant dropped, with the comment
+	blaming the backend. Removing the `[0]` was refused all along."""
+	message = rendered("struct rec { u8 v; }\n"
+	                   "struct msg { u8 total; rec recs[2]; }\n"
+	                   "invariant msg.total == size(msg.nosuchfield[0]);")
+
+	assert "has no field `nosuchfield[0]`" in message
+
+
 def test_a_run_may_not_say_twice_where_it_ends() -> None:
 	message = rendered('struct e { u8 n; }\n'
 	                   'struct s { e x[] until "\\r\\n" while (n == 1); }')

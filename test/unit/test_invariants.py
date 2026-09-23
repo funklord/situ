@@ -30,7 +30,7 @@ from situc import ast
 from situc.capability import Axis
 from situc.resolve import ResolvedSchema, resolve
 from situc.diagnostics import Source, SituError
-from situc.invariant import BUILTINS, OPERATORS
+from situc.invariant import BUILTINS, OPERATORS, paths_in
 from situc.traverse import (arm_members, classify_check, Check,
                             obligations, own_members)
 
@@ -1605,3 +1605,51 @@ def test_a_member_inside_a_region_is_placed_from_the_region() -> None:
 
 	assert "uint32_t offset = 1u;" in source
 	assert "offset = 17u;" not in source
+
+
+# -- a subscript is part of the path (26.497) -------------------------------
+
+
+def test_paths_in_reports_a_subscript_as_it_was_written() -> None:
+	"""`a[-1].v` names `a`, and this answered `v`.
+
+	`Access(Index(NameRef('a'), -1), 'v')` met no `Index` case, so the base
+	fell through to the empty list and the `Access` branch -- which builds its
+	answer from `base[0]` -- had nothing to build from. The base was not
+	reported as unreachable; it was not reported at all, and sixteen call
+	sites decided what an expression may name from the shortened list.
+
+	A `require` is the position a subscript is FOR -- `ast.Index` documents
+	itself as an element reference inside a capability path -- so the two
+	forms are asked there, where they are legal and where two committed
+	schemas already use them.
+	"""
+	schema = parse_text(PREAMBLE + "struct rec { u8 value; }\n"
+	                    "struct message { u8 n; rec recs[2]; }\n"
+	                    "require in_place(message.recs[].value);\n"
+	                    "require frame_static(message.recs[1]);\n")
+	held   = [decl.expr for decl in schema.decls
+	          if isinstance(decl, ast.Requirement)]
+
+	assert [paths_in(expr) for expr in held] == [
+		["message.recs[].value"], ["message.recs[1]"]]
+
+
+def test_every_expression_kind_is_classified_by_paths_in() -> None:
+	"""The partition, not the cell.
+
+	`paths_in` answers `[]` for any node it has no case for, so a kind added
+	to `ast.py` contributes no paths and nothing says so -- which is exactly
+	how a subscript walked past the guard written to refuse it. Three groups,
+	and every `ast.Expr` subclass belongs to one. A new kind fails here rather
+	than quietly costing sixteen callers their sight.
+
+	`unparse._expr` raises `TypeError` for a kind it does not know and is the
+	only expression walker in the tree that cannot have this defect."""
+	names_no_field = {"IntLiteral", "StringLiteral", "CharLiteral", "Remaining"}
+	recurses       = {"Access", "NameRef", "Call", "Binary", "Unary"}
+	names_its_base = {"Index"}
+
+	every = {kind.__name__ for kind in ast.Expr.__subclasses__()}
+
+	assert every == names_no_field | recurses | names_its_base

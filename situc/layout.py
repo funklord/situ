@@ -2565,8 +2565,15 @@ class Solver:
 			# refusal. Asked by resolving the names rather than by reading
 			# the diagnostic, because a message is the wrong thing to branch
 			# on.
+			# A SUBSCRIPTED name is not a forward reference, so the skip
+			# above does not cover it: `n[0].n` cannot be a field declared
+			# later under any spelling. Before `paths_in` reported the
+			# subscript at all this read as the resolvable `n` and the check
+			# ran by accident; reporting it honestly made the skip fire and
+			# turned two refusals into silence (26.497).
 			if any(name.partition(".")[0] not in state.fields
 			       and name not in state.fields
+			       and "[" not in name
 			       for name in paths_in(attr.value)):
 				continue
 			interval_of(attr.value, env)

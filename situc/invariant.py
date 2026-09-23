@@ -222,10 +222,30 @@ def paths_in(expr: ast.Expr) -> list[str]:
 	A dotted path is not one node. `s.hdr` parses as `Access(NameRef('s'),
 	'hdr')`, and code that expected a `NameRef` carrying a dot found nothing
 	and concluded the expression named no fields at all.
+
+	**A subscript is part of the path, spelled as it was written.** `a[-1].v`
+	parses as `Access(Index(NameRef('a'), -1), 'v')`, and with no case for
+	`Index` the base fell through to the empty list below -- so the `Access`
+	branch answered `["v"]` and `a` was not reported as unreachable, it was
+	not reported at all. Sixteen call sites read this list to decide what an
+	expression may name, and every one of them ran short (26.497).
+
+	Reporting `a.v` instead was tried and is worse: `a` resolves, so a scope
+	check that had been refusing starts accepting, and the backends crash
+	where they had been given a diagnostic. **A path the author did not write
+	is not a safer answer than no path** -- so the spelling is the schema's,
+	via the one complete expression walker in the tree, and every caller
+	refuses on a name its author will recognise.
 	"""
 	if isinstance(expr, ast.Access):
 		base = paths_in(expr.base)
 		return [f"{base[0]}.{expr.name}"] if base else [expr.name]
+	if isinstance(expr, ast.Index):
+		from situc.unparse import expr_to_source
+
+		base  = paths_in(expr.base)
+		inner = "" if expr.index is None else expr_to_source(expr.index)
+		return [f"{base[0]}[{inner}]"] if base else []
 	if isinstance(expr, ast.NameRef):
 		return [expr.name]
 	if isinstance(expr, ast.Call):
