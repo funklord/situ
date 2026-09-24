@@ -82,11 +82,77 @@ class BoundTerms(Terms, Protocol):
 			placement: "Placement") -> str | None:
 		"""The member's value, read from the view being validated."""
 
+	def element_value(self, struct: "ResolvedStruct", run: "Placement",
+			index: int, member: "Placement") -> str | None:
+		"""One element's member, for a bound that names `n[0].f`.
+
+		Separate from `value` because the receiver differs: that one reads a
+		sibling through its own accessor, and this one reads at an offset
+		computed from the run's start, the element stride and the member's
+		place inside an element. A backend that cannot spell it answers
+		None and the bound is refused, as an unrenderable bound always is.
+		"""
+
 	def bound_literal(self, value: int) -> str:
 		"""A constant in a bound, which is not the same context as a constant
 		in an invariant. `literal` spells one for the type the *invariant*
 		assigns to -- `1u`, `1usize` -- and a bound is compared against a
 		widened signed value, where those do not type-check."""
+
+
+def element_target(struct: "ResolvedStruct", expr: ast.Expr
+		) -> tuple["Placement", int, "Placement"] | None:
+	"""The run, the index and the member that `n[0].f` names, or None.
+
+	A bound may read a field of one element of a run -- `[max = n[0].n]` --
+	and every part of the answer is already in this struct's own entry table.
+	The resolver records `outer.n` for the run, carrying the element stride
+	and the field that counts it, and `outer.n[].n` for the member, carrying
+	its offset *within* an element. So resolving a subscript is a path rewrite
+	rather than a walk into another struct's placements, which is the whole
+	reason this is short.
+
+	Deliberately narrow, and each refusal is a case a later change may open
+	rather than a case that is wrong:
+
+	- the index is a non-negative literal, because a computed one would have
+	  to be bounds-checked against a count the check has not read yet;
+	- the element's stride is a whole number of bytes and a constant, so
+	  element `k` is at a computable offset and no walk is needed;
+	- the member is a scalar, for the reason `bound_terms.value` already
+	  gives -- a bound compares against one value, and an array is not one.
+
+	Whether the run is long enough is NOT decided here. Element `k` of a run
+	shorter than `k + 1` does not exist, and what that means for a message is
+	the caller's to say: `validate` refuses it as malformed.
+	"""
+	if not isinstance(expr, ast.Access):
+		return None
+	inner = expr.base
+	if not isinstance(inner, ast.Index) or inner.index is None:
+		return None
+	if not isinstance(inner.base, ast.NameRef):
+		return None
+	if not isinstance(inner.index, ast.IntLiteral) or inner.index.value < 0:
+		return None
+
+	run = next((entry.placement for entry in struct.entries
+	            if entry.placement.path
+	            == f"{struct.name}.{inner.base.name}"), None)
+	if run is None or run.element_bits is None or run.element_bits % 8 != 0:
+		return None
+
+	member = next((entry.placement for entry in struct.entries
+	               if entry.placement.path
+	               == f"{struct.name}.{inner.base.name}[].{expr.name}"), None)
+	if member is None or member.scalar is None:
+		return None
+	if member.offset_bits is None or member.array_count is not None:
+		return None
+	if member.offset_bits % 8 != 0 or member.scalar.bits % 8 != 0:
+		return None
+
+	return (run, inner.index.value, member)
 
 
 def bound(struct: "ResolvedStruct", expr: ast.Expr,
@@ -104,6 +170,14 @@ def bound(struct: "ResolvedStruct", expr: ast.Expr,
 	"""
 	if isinstance(expr, ast.IntLiteral):
 		return terms.bound_literal(expr.value)
+
+	if isinstance(expr, ast.Access) and isinstance(expr.base, ast.Index):
+		# A bound may read one element of a run. Resolved here rather than in
+		# each backend, so that what compiles does not depend on the target.
+		target = element_target(struct, expr)
+		if target is None:
+			return None
+		return terms.element_value(struct, *target)
 
 	if isinstance(expr, (ast.NameRef, ast.Access)):
 		# Not `member()`: it strips everything before the first dot, which is

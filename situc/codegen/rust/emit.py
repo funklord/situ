@@ -4990,6 +4990,40 @@ class Emitter:
 				f"self.{_ident(local_name(struct, placement))}_value()"))
 		return lines
 
+	def _element_guard(self, struct: ResolvedStruct,
+			expr: "ast.Expr") -> list[str] | None:
+		"""Refuse a message whose run is too short for the element a bound names.
+
+		`[max = n[0].f]` reads element zero, and a run of no elements has no
+		element zero -- the bytes at that offset belong to whatever follows.
+		Reading them would compare against a number nobody wrote, which is
+		the failure situ refuses rather than the kind it cannot prevent, so
+		the message is malformed and `validate` says so.
+
+		Emitted beside the comparison rather than inside it because the two
+		say different things: one is "this run is too short to describe",
+		the other "this value is out of range".
+		"""
+		from situc.invariant import element_target
+
+		target = element_target(struct, expr)
+		if target is None:
+			return None
+		run, index, _member = target
+		count = self._count_expression(struct, run)
+		if count is None:
+			return None
+		return self._element_guard_lines(run, index, count)
+
+	def _element_guard_lines(self, run: Placement, index: int,
+			count: str) -> list[str]:
+		return [
+			f"\t\t// {run.path}[{index}] has to be present to bound against.",
+			f"\t\tif ({count}) <= {index} {{",
+			"\t\t\treturn Err(Error::Constraint);",
+			"\t\t}",
+		]
+
 	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
 			read: str) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
@@ -5020,6 +5054,10 @@ class Emitter:
 					raise too_wide from why
 				expected = f"({rendered})"
 				read_as  = f"({read} as i64)"
+
+			guard = self._element_guard(struct, attr.value)
+			if guard is not None:
+				lines.extend(guard)
 
 			lines.extend([
 				f"\t\tif {read_as} {operator} {expected} {{",
@@ -6875,6 +6913,20 @@ class Emitter:
 		if placement.type_name in self.enums:
 			name = f"{name}_bits"
 		return f"(self.{name}() as i64)"
+
+	def element_value(self, struct: ResolvedStruct, run: Placement,
+			index: int, member: Placement) -> str | None:
+		"""A bound reading one element of a run -- `[max = n[0].f]`."""
+		if run.element_bits is None or member.scalar is None:
+			return None
+		if member.offset_bits is None:
+			return None
+		base = self._offset_expression(struct, run)
+		if base is None:
+			return None
+		fixed = index * (run.element_bits // 8) + member.offset_bits // 8
+		at = f"({base}) + {fixed}"
+		return f"({self._load(member, member.scalar, at)} as i64)"
 
 	def bound_literal(self, value: int) -> str:
 		"""Plain, because a bound is compared against a widened value."""

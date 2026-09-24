@@ -965,6 +965,27 @@ class Emitter:
 			return None
 		return f"static_cast<std::int64_t>(this->{local_name(struct, placement)}())"
 
+	def element_value(self, struct: ResolvedStruct, run: Placement,
+			index: int, member: Placement) -> str | None:
+		"""A bound reading one element of a run -- `[max = n[0].f]`.
+
+		An ordinary load rather than a walk: `element_target` has already
+		refused a variable stride and a bit-packed member, so element `k`
+		sits at a computable offset and the two constants fold into one.
+
+		Whether the run HOLDS `k + 1` elements is not asked here.
+		`_attr_checks` emits that refusal beside the comparison, because a
+		message whose run is too short is malformed rather than a message
+		whose bound is satisfied.
+		"""
+		base = self._offset_expression(struct, run)
+		if base is None or run.element_bits is None:
+			return None
+		assert member.scalar is not None and member.offset_bits is not None
+		at = f"({base}) + {index * (run.element_bits // 8) + member.offset_bits // 8}u"
+		return (f"static_cast<std::int64_t>"
+		        f"({self._load(member.scalar, member, at)})")
+
 	def bound_literal(self, value: int) -> str:
 		"""Plain, because a bound is compared against a widened value."""
 		return str(value)
@@ -7761,6 +7782,40 @@ class Emitter:
 		lines.extend(self._attr_checks(struct, placement, f"{name}_value()"))
 		return lines
 
+	def _element_guard(self, struct: ResolvedStruct,
+			expr: "ast.Expr") -> list[str] | None:
+		"""Refuse a message whose run is too short for the element a bound names.
+
+		`[max = n[0].f]` reads element zero, and a run of no elements has no
+		element zero -- the bytes at that offset belong to whatever follows.
+		Reading them would compare against a number nobody wrote, which is
+		the failure situ refuses rather than the kind it cannot prevent, so
+		the message is malformed and `validate` says so.
+
+		Emitted beside the comparison rather than inside it because the two
+		say different things: one is "this run is too short to describe",
+		the other "this value is out of range".
+		"""
+		from situc.invariant import element_target
+
+		target = element_target(struct, expr)
+		if target is None:
+			return None
+		run, index, _member = target
+		count = self._count_expression(struct, run)
+		if count is None:
+			return None
+		return self._element_guard_lines(run, index, count)
+
+	def _element_guard_lines(self, run: Placement, index: int,
+			count: str) -> list[str]:
+		return [
+			f"\t\t/* {run.path}[{index}] has to be present to bound against. */",
+			f"\t\tif (({count}) <= {index}u) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+		]
+
 	def _attr_checks(self, struct: ResolvedStruct, placement: Placement,
 			read: str) -> list[str]:
 		"""`[must_eq]`, `[min]` and `[max]`, against whatever reads the value.
@@ -7797,6 +7852,10 @@ class Emitter:
 			cast     = (f"static_cast<{self._ctype(scalar)}>({read})"
 			            if scalar is not None
 			            and placement.type_name in self.enums else read)
+			guard = self._element_guard(struct, attr.value)
+			if guard is not None:
+				lines.extend(guard)
+
 			lines.extend([
 				f"\t\t/* {placement.path} [{attr.name} = {expected}] */",
 				f"\t\tif ({cast} {operator} {expected}) {{",
