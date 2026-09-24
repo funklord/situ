@@ -1351,9 +1351,18 @@ class Emitter:
 		# not only inside a gate, so the arithmetic silently became a call on
 		# the member. `raw_` is protected and no accessor is named for it, so
 		# the spelling cannot be hidden at all (26.80).
+		# `this->` is stripped rather than kept, and the two mechanisms exist
+		# for one reason between them. A leaf names a member of the ENCLOSING
+		# class with `this->` so that a local of the same name cannot capture
+		# it (26.499); inside the gate `this` is the nested class, so the
+		# qualifier has to give way to the object this rewrite supplies.
+		# Kept in the pattern rather than removed beforehand, because a bare
+		# call and a qualified one are the same member and must rewrite alike.
 		return re.sub(
-			rf"\b(?:{pattern})(?:_span|_value|_len|_offset|_count|_extent)?\(\)",
-			lambda hit: f"{owner}.{hit.group(0)}", text)
+			rf"(?:this->)?\b(?:{pattern})"
+			rf"(?:_span|_value|_len|_offset|_count|_extent)?\(\)",
+			lambda hit: f"{owner}.{hit.group(0).removeprefix('this->')}",
+			text)
 
 	def _gated_span(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -2910,7 +2919,13 @@ class Emitter:
 			if held.varint is not None or held.radix is not None:
 				return leaf(f"{c_name(name)}_value()",
 				            held.scalar is not None and held.scalar.signed)
-			return leaf(f"{c_name(name)}()",
+			# `this->` because this is a member of the class being emitted
+			# and `framed()` declares locals named `at`, `n` and `have`: a
+			# schema member of any of those names is captured by the local
+			# and the header stops compiling. The `_value()` leaves above
+			# need no qualifier, no emitter local ending in `_value`
+			# existing to capture one (26.499, 26.501).
+			return leaf(f"this->{c_name(name)}()",
 			            held.scalar is not None and held.scalar.signed)
 
 		return expand_calls(over_fields([*by_name, *consts], source, read),

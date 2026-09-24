@@ -13,27 +13,25 @@ that function and gcc answered `'sink' cannot be used as a function`. The
 fix qualifies the bound's read, which is always the emitting class's own
 member -- `bound_terms.value` checks `is_own_member` before spelling it.
 
-**Qualifying is not a rule that generalises to every emitted call, and the
-attempt to make it one is what this docstring exists to stop.** Two sites
-next to this one refuse it, for different reasons. `_over_fields` emits
-`record(raw_).length()` inside a nested `sealed_gate`, where `record`
-constructs a view of the enclosing struct rather than naming a member of the
-gate, so `this->` there is a hard error -- `example/dtls` is the schema that
-says so. And the two `_value()` leaves beside it are pinned bare by
-`test_an_expression_may_name_a_varint[cpp]`; no emitter local ends in
-`_value`, so there is nothing there to capture and nothing to fix.
+**Qualifying is still not a blanket rule.** The two `_value()` leaves beside
+the one below stay bare, and are pinned bare by
+`test_an_expression_may_name_a_varint[cpp]`: no emitter local ends in
+`_value`, so there is nothing there to capture and nothing to fix. A change
+with no failing case behind it is one this tree declines.
 
-So the rule is not a spelling but a question -- what is the receiver at this
-site -- and only a site that has established the member belongs to the
-emitting class may name `this`. Two spellings side by side in one generated
-expression are not sloppiness.
+So the rule is a question rather than a spelling -- what is the receiver at
+this site -- and only a site that has established the member belongs to the
+emitting class may name `this`. Two spellings in one generated expression
+are not sloppiness.
 
-**What this does not cover**, because the fix does not reach it: the same
-capture through `framed()`, which declares `at`, `n` and `have`. A
-discriminant named `at` still generates a header that will not compile, and
-qualifying its leaf is the edit that breaks `dtls`. That one wants the
-emitter's locals renamed to the trailing-underscore form it already uses for
-`raw_` and `which_`, which is a sweep with its own proof rather than a line.
+**The same capture through `framed()` is covered below**, and closing it
+took understanding why qualifying that leaf had broken `example/dtls`. It
+was never the qualifier: a nested `sealed_gate` has no enclosing object, so
+`_in_gate` rewrites a bare member call to one on an object built from the
+gate's own view, and `this->at()` came out as `this->record(raw_).at()`.
+The rewrite strips the qualifier now -- a bare call and a qualified one are
+the same member and must rewrite alike -- and both hazards are closed by
+one leaf and one regex rather than by renaming 43 emitter locals.
 """
 
 from __future__ import annotations
@@ -92,6 +90,68 @@ def test_a_bound_naming_a_local_still_reads_the_member(tmp_path: Path) -> None:
 	header = (gen / "shadow.hpp").read_text(encoding="ascii")
 	# The comparison must read the member and not whatever `check` declared.
 	assert "this->sink()" in header, header
+
+	source = tmp_path / "probe.cpp"
+	source.write_text(PROBE, encoding="ascii")
+
+	assert CXX is not None
+	compiled = subprocess.run(
+		[CXX, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",
+		 f"-I{gen}", f"-I{RUNTIME / 'cpp'}", f"-I{RUNTIME / 'c'}",
+		 str(source)],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr
+
+
+#: The locals `framed()` declares. A schema member of any of these names is
+#: read there through a bare accessor call, which the local then captures.
+#: `n` is absent on purpose: `framed` declares one only for a struct whose
+#: shape reaches that branch, and the three below are the ones a minimal
+#: schema reaches. The discriminant is what puts the read inside `framed`.
+CAPTURING = ("at", "need", "have")
+
+CAPTURE_SCHEMA = """target buffer;
+endian big;
+
+struct alpha {{ u16 a; }}
+struct beta  {{ u32 b; }}
+
+struct outer {{
+	u8   {name};
+	u8   len;
+	u8   pad[len];
+	variant body switch ({name}) {{
+		case 0: alpha alpha;
+		case 1: beta  beta;
+		default: error;
+	}}
+}}
+"""
+
+
+@pytest.mark.skipif(CXX is None, reason="needs a C++ compiler")
+@pytest.mark.parametrize("name", CAPTURING)
+def test_a_member_named_like_an_emitter_local_still_compiles(
+		name: str, tmp_path: Path) -> None:
+	"""Measured failing for all three before the leaf was qualified.
+
+	`framed()` holds `const std::uint32_t have`, `std::uint32_t at` and the
+	out-parameter `need`, and the variant's discriminant is read there. Bare,
+	gcc answered `'at' cannot be used as a function` -- and for `need`, whose
+	type differs, the less obvious `expression cannot be used as a function`.
+
+	The schema keeps the author's spelling, which is decision 0013's rule and
+	section 25's: a member named for something the target already uses keeps
+	its name and the emitter moves.
+	"""
+	schema = tmp_path / "shadow.situ"
+	schema.write_text(CAPTURE_SCHEMA.format(name=name), encoding="ascii")
+
+	gen = tmp_path / "gen"
+	subprocess.run(
+		[sys.executable, "-m", "situc.cli", "build", str(schema),
+		 "--target", "cpp", "--out", str(gen)],
+		cwd=ROOT, capture_output=True, text=True, check=True)
 
 	source = tmp_path / "probe.cpp"
 	source.write_text(PROBE, encoding="ascii")

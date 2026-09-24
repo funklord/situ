@@ -996,7 +996,7 @@ def test_a_hosts_precedence_cannot_regroup_an_expression() -> None:
 #: refuses it.
 SIZED_BY_EXPRESSION = {
 	"c":      "((situ_leaf_u64(situ_e_len_get(view)) + 1) * 8) - 2",
-	"cpp":    "((::situ::rt::leaf_u(len()) + 1) * 8) - 2",
+	"cpp":    "((::situ::rt::leaf_u(this->len()) + 1) * 8) - 2",
 	"python": "((leaf(self.len) + 1) * 8) - 2",
 	"rust":   "((situ_rt::leaf_u(self.len() as u64) + 1) * 8) - 2",
 }
@@ -1025,7 +1025,7 @@ SIZED_OPAQUE = "struct s { u8 n; opaque body[n + 1]; u16 tail; }\n"
 
 SIZED_OPAQUE_LENGTH = {
 	"c":      "situ_nonneg_u32(situ_leaf_u64(situ_s_n_get(view)) + 1)",
-	"cpp":    "::situ::rt::nonneg(::situ::rt::leaf_u(n()) + 1)",
+	"cpp":    "::situ::rt::nonneg(::situ::rt::leaf_u(this->n()) + 1)",
 	"python": "advance(1, nonneg(leaf(self.n) + 1), self._len)",
 	"rust":   "situ_rt::nonneg(situ_rt::leaf_u(self.n() as u64) + 1)",
 }
@@ -1056,7 +1056,7 @@ WIDE_ARITHMETIC = "struct s { u8 n; u32 d[n + 1]; u16 tail; }\n"
 
 WIDE_ARITHMETIC_LENGTH = {
 	"c":      "situ_nonneg_u32((situ_leaf_u64(situ_s_n_get(view)) + 1) * 4)",
-	"cpp":    "::situ::rt::nonneg((::situ::rt::leaf_u(n()) + 1) * 4)",
+	"cpp":    "::situ::rt::nonneg((::situ::rt::leaf_u(this->n()) + 1) * 4)",
 	"python": "nonneg((leaf(self.n) + 1) * 4)",
 	"rust":   "situ_rt::nonneg((situ_rt::leaf_u(self.n() as u64) + 1) * 4)",
 }

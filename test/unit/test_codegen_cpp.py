@@ -3810,10 +3810,16 @@ def test_an_arithmetic_size_reads_the_member() -> None:
 	# The control: with `n` a real field the same expression must read the
 	# buffer through the accessor, so the assertion above is about the
 	# parameter rather than about how an arithmetic count is spelled.
+	#
+	# `this->n()` and not `n()`: a member read is qualified so that an
+	# emitter local of the same name cannot capture it -- `framed()`
+	# declares `at`, `n` and `have` (26.501). The contrast this control
+	# draws is sharper for it rather than weaker, the parameter above
+	# being a data member and staying bare.
 	field = emit(DRIVEN_BY_A_FIELD.replace("body[n]", "body[n + 1]"))
 	span  = field[field.index("bytes body()"):]
 	span  = span[:span.index("\t}")]
-	assert "::situ::rt::leaf_u(n()) + 1" in span
+	assert "::situ::rt::leaf_u(this->n()) + 1" in span
 
 
 def test_the_framing_helper_carries_the_arguments() -> None:
