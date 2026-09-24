@@ -104,7 +104,14 @@ def test_decode_then_encode_returns_the_same_bytes(
 	if not names:
 		pytest.skip(f"{path.stem} has no fixed-size struct to own")
 
-	driver = _driver(path.stem, names, _vectors(path))
+	corpus   = _vectors(path)
+	# Only the ones the driver can use. A vector for a struct `--owned` does
+	# not own contributes nothing, which is why json skipped with 22 of them
+	# committed: they are all for `value`, and the owned structs are the
+	# three fixed-size literals.
+	supplied = sum(len(held) for name, held in corpus.items() if name in names)
+
+	driver = _driver(path.stem, names, corpus)
 	(where / "rt.c").write_text(driver, encoding="ascii")
 
 	built = subprocess.run(
@@ -123,7 +130,20 @@ def test_decode_then_encode_returns_the_same_bytes(
 	# bytes -- the decoder is right to refuse them -- so say so and skip,
 	# rather than let a green result stand for a property nothing tested.
 	# `test_the_mode_covers_something` is what stops this becoming universal.
+	#
+	# A committed vector the decoder REFUSES is a different thing and fails.
+	# Skipping there names the wrong remedy -- "needs committed vectors"
+	# where some are committed and are being rejected -- and it is the one
+	# state that can go quiet after somebody has done the work: corrupt a
+	# byte of `png.vectors` and the count goes from `refused=64` to
+	# `refused=1`, which is a disagreement between a vector and a decoder
+	# rather than an absence of either.
 	if "round-tripped=0" in ran.stdout:
+		assert not supplied, (
+			f"{path.stem}: {supplied} committed vector(s) for the owned "
+			f"struct(s) {names}, and the decoder round-tripped none of them "
+			f"({ran.stdout.strip()}) -- either the vectors or the decode is "
+			f"wrong, and both are defects rather than a gap")
 		pytest.skip(f"{path.stem}: no draw validated ({ran.stdout.strip()}); "
 		            f"its constraints need committed vectors to exercise")
 

@@ -117,3 +117,20 @@ value escaped_in_array 5B 22 61 5C 22 62 22 5D
 # the escape applies to the byte after it, itself included.
 value escaped_backslash 7B 22 61 22 3A 22 62 61 63 6B 5C 5C 73 6C 61 73 68 22 7D
 	kind = 123
+
+# The three literal structs, which `situc build --owned` owns because they are
+# the only fixed-size ones here -- a value, an object and a member are all
+# variable. Their bytes are what Python's `json` module emits for the three
+# Python values, read out of the encoder rather than typed from RFC 8259:
+#
+#   >>> [json.dumps(v) for v in (True, False, None)]
+#   ['true', 'false', 'null']
+#
+# The RFC agrees, section 3, and that agreement is the check rather than the
+# source. They were absent until now, so `test_owned` had 22 vectors for
+# `value` -- which it does not own -- and none for the three it does, and
+# skipped with "round-tripped=0 refused=192".
+
+yes     true  74 72 75 65
+no      false 66 61 6C 73 65
+nothing null  6E 75 6C 6C

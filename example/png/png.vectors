@@ -1,0 +1,23 @@
+# Golden vectors for the PNG worked example.
+#
+# The signature is not transcribed from RFC 2083; it is the first eight bytes
+# of a PNG some other encoder wrote -- `/usr/share/icons/cab_extract.png`,
+# which `file(1)` reports as "PNG image data, 22 x 22, 8-bit/color RGBA,
+# non-interlaced". Reading it off a real file rather than off the RFC is the
+# point: a description that agrees only with the document it was written from
+# has not been held to anything that ships.
+#
+# It agrees with RFC 2083 section 3.1, which is the check rather than the
+# source -- the RFC gives the same eight bytes and explains why each was
+# chosen: the high bit catches a seven-bit transport, `PNG` names the format
+# in a hex dump, the CRLF-LF pair catches a line-ending translation, and the
+# ^Z stops a DOS `type` from printing the rest.
+#
+# WHY ONLY THIS STRUCT. `situc build --owned` emits a fixed-size decode, and
+# `png_signature` is the one struct here with a fixed size -- a `chunk` is
+# `length` bytes of data and a whole file is a run of them. So this corpus
+# exercises what `--owned` owns and no more, which is what the round-trip
+# test asks of it. The chunk machinery is exercised by the generated checks
+# and by the four-backend differential instead.
+
+png_signature signature 89 50 4E 47 0D 0A 1A 0A

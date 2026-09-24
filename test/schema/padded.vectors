@@ -1,0 +1,35 @@
+# Vectors for the `pad_to(n)` fixture.
+#
+# **These are not another implementation's bytes, and saying so is the point.**
+# Every other corpus here is laid out by somebody else's code -- glibc's
+# `struct arphdr`, Python's `json`, an encoder that wrote a real PNG -- because
+# a description agreeing only with its own compiler has demonstrated nothing.
+# `padded.situ` describes no format anybody else implements: it exists so the
+# four-backend differential draws buffers against exactly one construct
+# (26.134). There is no second implementation to take bytes from.
+#
+# So these are computed by hand from section 8.4's rule, which is a second
+# reading of the rule rather than a second implementation of it, and the
+# weaker of the two kinds of evidence. What it does buy is the thing the skip
+# named: `aligned_header` carries no `must_eq`, but 64 random draws produced
+# no buffer the decoder accepted, so `test_owned` round-tripped nothing and
+# said so. One vector it does accept exercises the decode and the re-encode.
+#
+# The arithmetic, stated so a reader can check it rather than trust it:
+#
+#   offset 0   one      u8     one byte
+#   offset 1   <pad>    3 bytes, to the next multiple of 4
+#   offset 4   word     u32    big-endian, per the file's `endian big`
+#   ---------------------------------------------------------------
+#              size(aligned_header) == 8
+#
+# which is what the schema's own `require size(aligned_header) == 8` and
+# `require absolute_static(aligned_header.word)` already pin -- so a wrong
+# layout here fails the build before it reaches this file. That is the half
+# of the checking a hand-computed vector can lean on honestly.
+#
+# The pad is zeroed. Section 14.7 makes padding content explicit and `zero`
+# what `require canonical` needs, and a re-encode has to reproduce the bytes
+# it decoded for the round-trip to mean anything.
+
+aligned_header word 2A 00 00 00 DE AD BE EF
