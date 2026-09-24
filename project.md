@@ -30797,6 +30797,78 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.501 Two mechanisms for one problem, composing into a third
+
+**A schema member named `at`, `need` or `have` generated a C++ header that
+would not compile.** `framed()` declares `const std::uint32_t have`,
+`std::uint32_t at` and the out-parameter `need`, and a variant's
+discriminant is read there through a bare accessor call, so the local won
+name lookup: `'at' cannot be used as a function`, and for `need`, whose type
+differs, the less legible `expression cannot be used as a function`. All
+three measured, all three failing at the same emitted line.
+
+**26.499 recorded this as open and its stated fix was wrong.** It said the
+leaf could not be qualified because doing so broke `example/dtls`, and
+concluded the remedy was to rename the emitter's own locals to the
+trailing-underscore form it already uses for `raw_` and `which_` -- 43
+declaration sites plus every use of them. That would have worked and it was
+the expensive answer to a misread symptom.
+
+**`this->` never broke the gate. It collided with a second mechanism that
+solves the same problem.** A nested `sealed_gate` has no enclosing object,
+so `_in_gate` rewrites a bare member call to one on an object built from the
+gate's own view -- `length()` becomes `record(raw_).length()`. Its pattern
+matched a bare stem, so a qualified call was rewritten *inside* the
+qualifier and came out `this->record(raw_).length()`, where `this` is the
+gate and has no member `record`. Two mechanisms for reaching a member that
+name lookup would otherwise get wrong, each correct alone, wrong in
+composition, and the error message named the symptom of the second while the
+change was in the first.
+
+**The fix is one leaf and one regex.** The leaf names `this`, because at
+that site the member belongs to the class being emitted; the rewrite
+consumes an optional `this->` and drops it, because a bare call and a
+qualified one are the same member and must rewrite alike. The qualifier
+gives way to the object the rewrite supplies rather than fighting it.
+
+**What stays bare, and the reason is a failing case rather than symmetry.**
+The two `_value()` leaves beside it keep their spelling: no emitter local
+ends in `_value`, so nothing can capture one, and `test_an_expression_may_
+name_a_varint[cpp]` pins them. Qualifying them was tried in 26.499 and
+reverted for exactly this reason. **A change with no failing case behind it
+is one this tree declines**, which is what makes the asymmetry a decision
+rather than an oversight.
+
+**Both halves are guarded, and both were watched failing.** Reverting the
+leaf fails the three new cases; reverting the regex fails
+`test_every_schema_compiles[dtls/dtls.situ]`, which is a committed test
+rather than a script of the day's. Four pinned expectations moved with the
+spelling -- three in `test_invariants.py` and one in `test_codegen_cpp.py`
+-- and each was read before it was changed: every one is a control drawing
+some other distinction, the sharpest being *"the assertion above is about
+the parameter rather than about how an arithmetic count is spelled"*, whose
+contrast between a parameter's data member and a field's accessor is
+sharper under the qualifier than it was without it.
+
+**The general shape is worth more than the fix.** When a tree has grown two
+answers to one hazard, adding a third at a site the other two already reach
+produces a failure that names neither. The question that would have
+shortened this is not *why did my change break dtls* but *what else here is
+already solving the problem I am solving*, and the answer was forty lines
+up in the same file, with a docstring describing the exact hazard.
+
+**The work commit of this pair is red on its own, and that is a property of
+25.0's split rather than of this change.** A finding lands as two commits,
+the work and then the fold carrying its section 26 entry -- and the work's
+own comments cite that entry by number. `test_every_section_this_tree_cites
+_exists` reads every `26.N` the tree names and fails on one that is not
+written yet, so it failed on `cfee775` with
+`test/unit/test_codegen_cpp.py:3816: section 26.501` and passes once this
+entry exists. Nothing is wrong with either commit; what is true is that
+**the pair is the unit that is green, and the first half alone is not.**
+Worth knowing before somebody bisects onto a work commit and reads its
+failure as a defect.
+
 ### 26.500 A bound may name an element, and the walkers abstain rather than guess
 
 **`[max = n[0].n]` is built, in all four backends.** 26.497 left it as a
@@ -30943,15 +31015,23 @@ failed, and every one of those was `libsitu.a: No such file or directory`,
 because a `git worktree` is a checkout and nobody had built it. Neither the
 green nor the red said anything about HEAD.
 
-**What is still open, and it is the larger half.** `framed()` declares `at`,
-`n` and `have`, and `_over_fields` emits a bare accessor call into it. A
-discriminant named `at`, `need` or `have` generates a header that will not
-compile -- all three measured, all three failing at the same line.
-Qualifying that leaf is precisely the edit that breaks `dtls`, so the fix
-runs the other way: rename the emitter's own locals to the
-trailing-underscore form it already uses for `raw_` and `which_`. That is 43
-declaration sites plus every use of them, a mechanical change wanting the
-proof section 25 asks of one rather than a line in this entry.
+**~~What is still open, and it is the larger half.~~ Closed by 26.501, and
+the remedy written here was wrong.** `framed()` declares `at`, `n` and
+`have`, and `_over_fields` emits a bare accessor call into it, so a
+discriminant named `at`, `need` or `have` generated a header that would not
+compile -- all three measured, all three failing at the same line. That much
+held. What this entry then concluded did not: that qualifying the leaf *is
+the edit that breaks `dtls`*, and that the fix therefore ran the other way,
+renaming the emitter's own locals across 43 declaration sites plus every use
+of them.
+
+The qualifier never broke `dtls`. It collided with `_in_gate`, a second
+mechanism reaching a member that name lookup would otherwise get wrong, and
+teaching that one to strip a `this->` cost a regex. **This entry read a
+composition failure as a property of one of its halves, and priced the
+remedy accordingly** -- which is the expensive direction to be wrong in,
+because a sweep over 43 sites is exactly the kind of work nobody revisits
+once it is written down as necessary.
 
 **Three committed files in this tree cannot be read by the user who owns
 it.** `example/cpio/cpio.situ.wire`, `example/json/json.situ.wire` and
