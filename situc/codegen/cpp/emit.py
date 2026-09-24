@@ -963,7 +963,7 @@ class Emitter:
 			return None
 		if not is_own_member(struct, placement):
 			return None
-		return f"static_cast<std::int64_t>({local_name(struct, placement)}())"
+		return f"static_cast<std::int64_t>(this->{local_name(struct, placement)}())"
 
 	def bound_literal(self, value: int) -> str:
 		"""Plain, because a bound is compared against a widened value."""
