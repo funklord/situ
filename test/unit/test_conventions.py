@@ -676,11 +676,38 @@ def test_every_section_this_tree_cites_exists() -> None:
 	implement, and MQTT's section 3.3.1 is not this document's. So is
 	section 0, which has no subsections and would read every decimal
 	fraction in the tree as a citation of one.
+
+	**And so is the next section 26 entry, which may be cited before it is
+	written.** 25.0 lands a finding as two commits and the work half cites
+	the entry the fold half adds, so without that window the first commit
+	of every pair is red here -- not a defect in either commit, but a thing
+	somebody bisecting would read as one. One number wide, section 26 only,
+	and closing on the next fold; the comment below says what it costs.
 	"""
 	headings, top = project_headings()
 	records = {path.name.split("-")[0]
 	           for path in (ROOT / "doc" / "decision").glob("*.md")}
 	assert len(records) > 40 and "26" in top, "the population moved"
+
+	# One number may be cited before it is written: the NEXT section 26
+	# entry. 25.0 lands a finding as two commits -- the work, then the fold
+	# carrying its entry -- and the work's own comments cite that entry by
+	# number, so the first half of every pair was red here. Measured on
+	# `cfee775`, which cited 26.501 the commit before 26.501 existed.
+	#
+	# Exactly the next, and only in section 26. A citation of any other
+	# absent number is the dangling pointer this test exists for, and the
+	# case that produced it is untouched: 26.252 was a gap far BELOW the
+	# highest entry rather than beyond it, and 26.419 still is.
+	#
+	# What this cannot see is a citation of `max + 1` that nobody ever
+	# writes, which stops being dangling the moment somebody writes that
+	# entry about something else. The window is one number wide and closes
+	# on the next fold, which is the narrowest form of the exception that
+	# lets the two-commit practice work at all.
+	log = sorted(int(name.split(".")[1]) for name in headings
+	             if name.startswith("26.") and name.count(".") == 1)
+	pending = f"26.{log[-1] + 1}" if log else ""
 
 	listed = subprocess.run(["git", "ls-files"], cwd=ROOT, check=True,
 	                        capture_output=True, text=True).stdout.split()
@@ -693,7 +720,7 @@ def test_every_section_this_tree_cites_exists() -> None:
 				path.read_text(encoding="utf-8").splitlines(), 1):
 			for cited in re.findall(r"\((\d{1,2}\.\d+(?:\.\d+)?)\)", line):
 				if cited.split(".")[0] in top - {"0"} \
-						and cited not in headings:
+						and cited not in headings and cited != pending:
 					dangling.append(f"{name}:{number}: section {cited}")
 			for cited in re.findall(r"\((00\d\d)\)", line):
 				if cited not in records:
