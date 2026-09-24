@@ -1,0 +1,27 @@
+# Golden vectors for the DTLS 1.2 record example.
+#
+# An OpenSSL 3.5.7 record, not a constructed one. Packet capture is not
+# permitted on this machine, so the bytes were taken in userspace instead: a
+# small UDP relay sat between `openssl s_client -dtls1_2` and
+# `openssl s_server -dtls1_2` and wrote down every datagram on the way past.
+# The handshake is OpenSSL's on both sides, so this is an encrypted record
+# under a session OpenSSL negotiated with itself -- epoch 1, the cipher
+# forced to AES128-GCM-SHA256 so the AEAD is the one the schema names.
+#
+# That it validates is the whole claim. `record` says a DTLS record is
+# thirteen bytes of header, an eight-byte explicit nonce, `length - 24`
+# bytes of ciphertext and a sixteen-byte tag; this is 56 bytes with
+# `length = 0x2B`, so the arithmetic closes exactly and the tag lands where
+# the schema puts it.
+#
+# The interior is NOT read and cannot be: `require verify_gated(record.sealed)`
+# means no accessor reaches the fragment before a caller has verified the
+# tag, and nothing here has the key. What the vector exercises is the frame
+# around the seal, which is the part situ describes -- the cipher is the
+# caller's, per 13.1.
+#
+# Only an application_data record. A handshake record carries no explicit
+# nonce and no tag, so `[min = 24]` refuses one, correctly: this schema
+# describes the protected record and says so in its own header.
+
+record application_data 17 FE FD 00 01 00 00 00 00 00 02 00 2B 73 B8 B0 FB 33 74 05 61 AA F0 B8 41 4B 5E 9B 38 63 D9 1D BF 2B 45 56 8A D3 1D 7A 64 BD 25 9C A0 AC 9D 86 18 37 7B 22 AE EB 21 64
