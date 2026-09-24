@@ -74,6 +74,27 @@ Rules for the implementer:
    -- and the check that found that also found two runtimes short of one.
    Prefer adding a check to adding a promise -- a normative table nobody
    verifies is a comment, and a list a reader types from is worse than that.
+7. **Read 0 through 25 and 27 through 28; look 26 up.** Those are 5,578
+   lines against section 26's 31,066 -- the log is 85% of this file, and the
+   whole of it is past what one reader holds at once. So an instruction to
+   "read project.md" is not one instruction: the specification is read
+   through, and the log is reached by number, which is what the
+   cross-references are for, or by `grep`.
+
+   Measured 2026-09-24, and the method matters more than the figures because
+   the figures rot on every fold -- these were taken twice, the first set
+   having been falsified by the entry that recorded it. `wc -lc project.md`
+   gives 36,644 lines and 2,054,242 bytes; the same over section 26's own
+   line range gives 31,066 and 1,747,884, which `grep -n '^## 2[6-7]\. '`
+   locates without anybody quoting a line number that moves. Where the
+   reader counts tokens rather than bytes, derive the ratio rather than
+   quoting one -- four disjoint ranges here came out between 2.765 and
+   3.053 bytes per token, putting this file near 700,000 of them, and
+   that ratio belongs to whichever reader is asking.
+
+   26.100 and 26.113 are the same rule met from the other end: each exists so
+   that a reader need not walk a run of phase entries to find what they
+   settled. That is the shape to add to when the next run has a rule in it.
 
 ---
 
@@ -30768,6 +30789,54 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.498 The log is 85% of the document, and the first measure of it was 30% high
+
+**Section 26 is 31,066 of this file's 36,644 lines and 1,747,884 of its
+2,054,242 bytes.** The specification -- 0 through 25, 27 and 28 -- is 5,578
+lines, a seventh of the whole. Section 0 tells an implementer how to use this
+document and had never said how much of it there is, which matters precisely
+because every rule in it is addressed to somebody assumed to have read it.
+Rule 7 says it now.
+
+**Measured against the reader rather than guessed.** Four disjoint ranges,
+each one a token count the reader reported divided by `awk | wc -c` over the
+same lines: 2.765, 2.867, 2.988 and 3.053 bytes per token. That puts the file
+between roughly 670,000 and 740,000 tokens and section 26 alone between
+570,000 and 640,000. A reader with a million to spend loads this document
+once, carrying nothing else, and has little left to work with afterwards.
+
+**Both counts above are of the document including this entry, which is the
+only version of them that survives being written down.** The first draft of
+this paragraph quoted the file as 36,575 lines, measured minutes earlier, and
+adding rule 7 and these paragraphs made it longer before the edit was saved.
+A present-tense count of the tree's own shape is falsified by the commit that
+records it, so it is stated here after the fact and with the command that
+re-takes it, not as a figure to be quoted forward.
+
+**The first measure was about 30% high, and that error is the instructive
+half.** It reported 26.5 tokens per line, putting the file at 970,000 and
+section 26 at 820,000, and it was published before anything checked it. The
+cause was a ratio inferred from a refusal instead of derived from two
+measurements: this reader declines an over-large range by naming the token
+count it would have returned, and one such refusal -- 34,449 -- was
+attributed to a 1,300-line request when it had been a 1,900-line one. Nothing
+about the figure looked wrong, because a number arriving with arithmetic
+attached reads as one somebody has already re-taken.
+
+**It failed in the direction that ends an investigation rather than opening
+one.** 970,000 against a million-token budget says the document cannot be
+read, which is a conclusion and excuses the reading; 700,000 says it can be
+read once by a reader holding nothing else, which is a decision about how to
+spend a session. The wrong number was the comfortable one.
+
+What separates the two methods is that the second has a denominator anybody
+can re-take -- `awk 'NR>=a&&NR<=z' project.md | wc -c` over the exact lines
+whose token count is in hand. A ratio read off an error message has no second
+term to check, which is why it agreed with itself.
+
+Found while re-reading this document in order to empty a session, and folded
+before the session was cleared.
 
 ### 26.497 A subscript is invisible to the walker every gate is built on
 
