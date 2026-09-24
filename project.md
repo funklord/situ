@@ -30797,6 +30797,89 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.500 A bound may name an element, and the walkers abstain rather than guess
+
+**`[max = n[0].n]` is built, in all four backends.** 26.497 left it as a
+hole: `situc wire` published `max=n[0].n` as committed contract while
+`situc build` refused the schema outright, which is 26.233's class -- `map`
+and `wire` call `solve` and not codegen, so a guard in an emitter lets those
+two publish an artefact for a schema that does not compile. **The signature
+line does not change.** It was already right; what changed is that it is now
+true.
+
+**Reading element `k` turned out not to need a walk, and the docstring that
+said otherwise was naming a harder problem than the one in front of it.**
+`bound_terms.value` in every backend carries the same sentence -- *"a bound
+reaching into a nested struct would need a sub-view the check does not
+hold"* -- and no sub-view was needed. The resolver already records
+`outer.n[].n` as an entry of `outer` itself, carrying the member's offset
+*within* an element, beside `outer.n` carrying the stride and the counting
+field. So element `k` is at `run + k * stride + member`, an ordinary load at
+a computed offset, and `invariant.element_target` is a path rewrite rather
+than a search into another struct's placements.
+
+It is deliberately narrow, and each refusal is a case a later change may
+open rather than a case that is wrong: a literal index, because a computed
+one would have to be bounds-checked against a count the check has not read;
+a constant stride, so no walk is needed; a byte-aligned scalar member, since
+the load is a byte read. The resolution is shared so that what compiles does
+not depend on the target -- four backends spell it, one answers what it
+means.
+
+**An empty run makes the message malformed**, settled by the copyright
+holder 2026-09-24. Element zero of a run of no elements does not exist and
+the bytes at that offset belong to whatever follows, so comparing against
+them is comparing against a number nobody wrote. The refusal is emitted
+beside the comparison rather than inside it, because the two say different
+things: one is *this run is too short to describe*, the other *this value is
+out of range*.
+
+**The fixture took a sabotage to get right, and the first one was vacuous.**
+With `count = 0` the read for element zero lands on `len`'s own high byte,
+so the obvious packet -- `len = 5`, high byte 5 -- is refused by the
+COMPARISON as readily as by the guard. A four-way differential over it
+passed with Rust's guard deleted. `len = 0` makes the misread value zero and
+`0 <= 0` satisfies the bound, so the guard is the only thing that can speak:
+sabotaged, Rust answers `validate 0` where the other three answer
+`validate 2`. **A differential is only as sharp as the packet it is asked
+about**, and a packet that two different mechanisms both reject cannot tell
+you which one fired.
+
+**The two walkers ABSTAIN on such a bound, which is the design working and
+not a gap this feature opened.** `pack` folds a bound to a constant and
+cannot fold one naming a field, so it sets `whole = False`, the struct's
+`validatable` flag is cleared, and `_validate` returns None -- the listing
+then carries no verdict line at all. That is this file's stated convention:
+*the image cannot carry this check, so the struct is not fully validatable
+and says so.* A plain `[max = count]` has behaved that way since it existed.
+
+**The first reading of that was wrong, and the error was in the probe.** It
+was reported as the walker ACCEPTING a message all four backends refuse,
+which would have been the worst kind of disagreement. The listing prints one
+`validate` line per struct and prints none for a struct that abstains, so a
+probe taking the first such line read the NESTED struct's verdict and
+attributed it to the outer one. The control that settles it is the same
+schema with `[max = 3]`: validatable, and answering `validate 0` and
+`validate 2` correctly. **A reader that declines to answer and a reader that
+answers wrongly are one line apart in the output and opposite in what they
+mean**, and only naming the struct tells them apart.
+
+**Measured before it was quoted as a cost: 0 of 197 structs in the corpus
+images abstain.** No committed schema carries a non-constant bound, so
+nothing in the tree is affected today, and the abstention is reachable only
+through `[max = count]` and through this feature. Making the image carry a
+bound as expression bytecode instead of a folded constant would close it --
+that is the image format, `pack.py`, and BOTH walkers, one of which is 4,653
+lines of C. Recorded rather than closed, as 26.497 recorded its two, and
+deliberately not begun on the strength of a number that turned out to be
+zero.
+
+**What this cost nowhere:** no committed `.situ.map` or `.situ.wire` moves,
+because no schema in the corpus carries a subscripted bound. That is the
+awkward half -- the feature's own proof is a fixture rather than a committed
+artefact, so the test carries the packet and the sabotage that makes it
+real.
+
 ### 26.499 C++ is the only backend a local can capture a member in, and a bound found it
 
 **`u8 sink; u8 value [max = sink];` generates a header that does not
