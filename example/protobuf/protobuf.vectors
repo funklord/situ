@@ -1,0 +1,25 @@
+# Golden vectors for the protobuf conformance example (section 9.7).
+#
+# Encoded by `protoc` from `user.proto` in this directory, which is the whole
+# argument for the example existing: that file's own comment says "a
+# description that agrees only with its own compiler has demonstrated
+# nothing." These are what the reference implementation emits.
+#
+#   printf 'user_id: 4294967297\nusername: "situ-oracle"\nscore: 0.5\n' \
+#       | protoc --encode=User user.proto
+#
+# The first is the case `test/unit/oracles.py` already reasons about, and it
+# is here for the varint: 4294967297 is five LEB128 bytes with the
+# continuation bit set in four of them, which is where an off-by-one in a
+# shift shows up. The other two bracket it -- a one-byte varint beside a
+# two-byte one, and an empty length-delimited field, which is the length a
+# walk over the region has to step past without reading anything.
+#
+# Field 1 is a varint, field 2 is length-delimited and field 3 is a 32-bit
+# float, so between them these exercise three of the four wire types the
+# schema's `value_size` dispatch admits. Wire type 3 and 4 are groups, which
+# that dispatch refuses by name, so no vector can carry one.
+
+proto_message oracle 08 81 80 80 80 10 12 0B 73 69 74 75 2D 6F 72 61 63 6C 65 1D 00 00 00 3F
+proto_message small  08 01 12 01 61 1D 00 00 80 3F
+proto_message empty  08 AC 02 12 00 1D 00 00 00 00

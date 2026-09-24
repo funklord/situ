@@ -1,0 +1,30 @@
+# Golden vectors for the HTTP/1.1 request and response heads.
+#
+# Neither of these was typed out. The request is what
+# `http.client.HTTPConnection` put on the socket, captured by standing a
+# recorder in for the socket; the response is what
+# `http.server.BaseHTTPRequestHandler` wrote to `wfile`. Both are Python's,
+# and Python's client and server are two different pieces of code -- so the
+# two directions here are not one implementation checked against itself.
+#
+#   c.putrequest("GET", "/index.html", skip_host=True,
+#                skip_accept_encoding=True)
+#   c.putheader("Host", "example.invalid"); c.putheader("User-Agent", "situ")
+#   c.endheaders()
+#       -> b'GET /index.html HTTP/1.1\r\nHost: example.invalid\r\n...'
+#
+# `skip_host` and `skip_accept_encoding` are passed so the head is the two
+# headers written here and nothing the library adds on its own -- a vector
+# whose content depends on the library's defaults would change under it.
+#
+# The host is `example.invalid` because RFC 2606 reserves that TLD for
+# exactly this: a name in a committed file that must never resolve.
+#
+# What these exercise is the scan. Every member of a head is delimited --
+# the method by a space, the target by a space, each field name by a colon
+# and each value by CRLF -- so the offsets are found rather than computed,
+# and the blank line is what ends the run. That is the construct the schema
+# is here for, and random bytes reach none of it.
+
+request_head  get 47 45 54 20 2F 69 6E 64 65 78 2E 68 74 6D 6C 20 48 54 54 50 2F 31 2E 31 0D 0A 48 6F 73 74 3A 20 65 78 61 6D 70 6C 65 2E 69 6E 76 61 6C 69 64 0D 0A 55 73 65 72 2D 41 67 65 6E 74 3A 20 73 69 74 75 0D 0A 0D 0A
+response_head ok  48 54 54 50 2F 31 2E 31 20 32 30 30 20 4F 4B 0D 0A 43 6F 6E 74 65 6E 74 2D 54 79 70 65 3A 20 74 65 78 74 2F 70 6C 61 69 6E 0D 0A 43 6F 6E 74 65 6E 74 2D 4C 65 6E 67 74 68 3A 20 32 0D 0A 0D 0A

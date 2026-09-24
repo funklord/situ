@@ -1,0 +1,35 @@
+# Golden vectors for the Modbus TCP worked example.
+#
+# Built by pymodbus 3.8.6 rather than by hand: each PDU is what
+# `pdu.encode()` produced and each header is the first seven bytes of what
+# `FramerSocket.buildFrame` put in front of it. pymodbus is what the Python
+# side of this protocol is actually tested against, so these are bytes an
+# independent implementation considers well formed.
+#
+#   framer = FramerSocket(DecodePDU(False))
+#   pdu = ReadHoldingRegistersRequest(address=0x006B, count=3, dev_id=17)
+#   pdu.transaction_id = 1
+#   framer.buildFrame(pdu)   ->  00 01 00 00 00 06 11 03 00 6B 00 03
+#
+# The read-holding pair is also the worked example the specification itself
+# gives -- registers 107 to 109, answering AE41 5652 4340 -- so the one case
+# a reader is most likely to check by eye agrees with the document as well as
+# with the library.
+#
+# Three structs because the schema splits the frame three ways: the MBAP
+# header is its own fixed seven bytes, and `request` and `response` are the
+# same function code over two different layouts, which is the point that
+# schema makes. The vectors are therefore the header and the PDUs separately
+# rather than whole frames, since no struct here spans both.
+
+# The MBAP header, taken off the front of the framed read-holding request.
+mbap_header read_holding 00 01 00 00 00 06 11
+
+# Requests: the four-code read shape, both single writes, and the multiple.
+request read_coils      01 00 13 00 25
+request read_holding    03 00 6B 00 03
+request write_register  06 00 01 00 03
+request write_registers 10 00 01 00 02 04 00 0A 01 02
+
+# A response: the same code, the other layout -- a byte count and the data.
+response read_holding   03 06 AE 41 56 52 43 40
