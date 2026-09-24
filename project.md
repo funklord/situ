@@ -30857,17 +30857,26 @@ shortened this is not *why did my change break dtls* but *what else here is
 already solving the problem I am solving*, and the answer was forty lines
 up in the same file, with a docstring describing the exact hazard.
 
-**The work commit of this pair is red on its own, and that is a property of
-25.0's split rather than of this change.** A finding lands as two commits,
-the work and then the fold carrying its section 26 entry -- and the work's
-own comments cite that entry by number. `test_every_section_this_tree_cites
-_exists` reads every `26.N` the tree names and fails on one that is not
-written yet, so it failed on `cfee775` with
-`test/unit/test_codegen_cpp.py:3816: section 26.501` and passes once this
-entry exists. Nothing is wrong with either commit; what is true is that
-**the pair is the unit that is green, and the first half alone is not.**
-Worth knowing before somebody bisects onto a work commit and reads its
-failure as a defect.
+**The work commit of every 25.0 pair was red on its own, and is not any
+more.** A finding lands as two commits, the work and then the fold carrying
+its section 26 entry -- and the work's own comments cite that entry by
+number, so `test_every_section_this_tree_cites_exists` failed on the first
+half of each pair. Measured on `cfee775`:
+`test/unit/test_codegen_cpp.py:3816: section 26.501`, the commit before this
+entry was written. Nothing was wrong with either commit, and the pair was
+the unit that was green.
+
+**The test now allows exactly one absent number, the next section 26
+entry**, and both directions were measured rather than argued: citing 26.419
+-- a real gap far below the highest -- still fails, and citing the pending
+number passes. That keeps the case the test was written for, since 26.252
+was a gap BELOW the highest entry rather than beyond it.
+
+What the window cannot see is a citation of `max + 1` that nobody ever
+writes, which stops being dangling the moment somebody writes that entry
+about something else. One number wide, closing on the next fold: **the
+narrowest exception that lets the practice work, and it is stated where it
+is paid for rather than only in the commit that bought it.**
 
 ### 26.500 A bound may name an element, and the walkers abstain rather than guess
 
