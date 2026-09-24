@@ -41,7 +41,7 @@ from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
 from situc.traverse import invalidating_members
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import data_sized
+from situc.traverse import Member, classify, data_sized
 from situc import __version__
 
 #: The value runs to the end of the line rather than being one token: a byte
@@ -412,6 +412,19 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 		# the question, and this is the fourth place that was asking a
 		# narrower one.
 		if data_sized(placement):
+			continue
+		# ...and neither is a run the DELIMITER sizes, which `data_sized`
+		# does not answer for: its extent comes from a scan rather than from
+		# an expression over the data, so the narrower question says no and
+		# the member has `_ptr`, `_len` and `_span` where this loop wants a
+		# getter and a setter. `example/smtp` is the case -- `command.verb`
+		# runs `until " "` -- and it was invisible because no schema with a
+		# delimited member had committed vectors until one did.
+		#
+		# Asked through `classify` rather than by testing for a delimiter
+		# here, which would have been the FIFTH private copy of a question
+		# this module already answers once.
+		if classify(struct, placement, resolved.structs) is Member.DELIMITED:
 			continue
 
 		local = placement.path[len(struct.name) + 1 :]

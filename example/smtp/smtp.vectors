@@ -1,0 +1,33 @@
+# Golden vectors for the SMTP worked example.
+#
+# Written by `smtplib.SMTP.putcmd`, captured by standing a recorder in for
+# the socket, so the bytes are Python's rather than typed here:
+#
+#   s.putcmd("MAIL", "FROM:<a@b.invalid>")
+#       ->  b'MAIL FROM:<a@b.invalid>\r\n'
+#
+# Only the commands that carry an argument, which is the boundary the schema
+# states rather than one these vectors discovered: `command.verb` scans
+# `until " "`, and `DATA`, `QUIT` and `RSET` have no space at all. Running
+# `situc verify` over all five is what the note beside `struct command`
+# predicts -- three conform and two are refused with
+#
+#     ConstraintError: command.verb has no b' ': the frame stops first
+#
+# which is the documented limit behaving as documented. They are left out
+# rather than wished into the file: a vector the decoder refuses is a
+# disagreement between a vector and a decoder, and `test_owned` fails on one
+# now rather than skipping.
+#
+# `reply_line` gets none. It is what a SERVER writes, and there is no
+# independent SMTP server on this machine to write one -- `smtpd` left the
+# standard library in 3.12 and aiosmtpd is not installed. Hand-typing three
+# digits and a separator would be this file agreeing with itself, which is
+# the one thing a corpus must not be.
+#
+# The domains are `.invalid`, which RFC 2606 reserves so that a name in a
+# committed file can never resolve.
+
+command ehlo 45 48 4C 4F 20 73 69 74 75 2E 69 6E 76 61 6C 69 64 0D 0A
+command mail 4D 41 49 4C 20 46 52 4F 4D 3A 3C 61 40 62 2E 69 6E 76 61 6C 69 64 3E 0D 0A
+command rcpt 52 43 50 54 20 54 4F 3A 3C 63 40 64 2E 69 6E 76 61 6C 69 64 3E 0D 0A
