@@ -74,23 +74,30 @@ Rules for the implementer:
    -- and the check that found that also found two runtimes short of one.
    Prefer adding a check to adding a promise -- a normative table nobody
    verifies is a comment, and a list a reader types from is worse than that.
-7. **Read 0 through 25 and 27 through 28; look 26 up.** Those are 5,578
-   lines against section 26's 31,066 -- the log is 85% of this file, and the
-   whole of it is past what one reader holds at once. So an instruction to
-   "read project.md" is not one instruction: the specification is read
-   through, and the log is reached by number, which is what the
-   cross-references are for, or by `grep`.
+7. **Read 0 through 25 and 27 through 28; look 26 up.** The log is around
+   six sevenths of this file and the whole of it is past what one reader
+   holds at once. So an instruction to "read project.md" is not one
+   instruction: the specification is read through, and the log is reached by
+   number, which is what the cross-references are for, or by `grep`.
 
-   Measured 2026-09-24, and the method matters more than the figures because
-   the figures rot on every fold -- these were taken twice, the first set
-   having been falsified by the entry that recorded it. `wc -lc project.md`
-   gives 36,644 lines and 2,054,242 bytes; the same over section 26's own
-   line range gives 31,066 and 1,747,884, which `grep -n '^## 2[6-7]\. '`
-   locates without anybody quoting a line number that moves. Where the
-   reader counts tokens rather than bytes, derive the ratio rather than
-   quoting one -- four disjoint ranges here came out between 2.765 and
-   3.053 bytes per token, putting this file near 700,000 of them, and
-   that ratio belongs to whichever reader is asking.
+   **No count of this document appears in this rule, and that is the
+   remedy rather than an omission.** A present-tense count of the tree's
+   own shape is falsified by the commit that records it -- the first
+   version of this rule quoted four, and every one was wrong before the
+   day was out. The proportion is stable and the figures are not, so what
+   is kept here is the method:
+
+       wc -lc project.md                 the whole
+       grep -n '^## 2[6-7]\. '           where the log starts and ends
+       awk 'NR>=a && NR<=z' | wc -lc     the log, between those two
+
+   Where the reader counts tokens rather than bytes, derive the ratio
+   rather than quoting one: divide a range's byte count by the token count
+   that reader reports for the same range. Measured that way on
+   2026-09-24 it fell between 2.765 and 3.053 bytes per token over four
+   disjoint ranges, which put the file near 700,000 -- readable once, by
+   a reader carrying nothing else. That ratio belongs to whichever reader
+   is asking and is re-derived, never quoted forward.
 
    26.100 and 26.113 are the same rule met from the other end: each exists so
    that a reader need not walk a run of phase entries to find what they
@@ -30790,11 +30797,106 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.499 C++ is the only backend a local can capture a member in, and a bound found it
+
+**`u8 sink; u8 value [max = sink];` generates a header that does not
+compile.** `check()` declares `std::uint32_t sink`, the bound emitted
+`static_cast<std::int64_t>(sink())` inside it, and gcc answered `'sink'
+cannot be used as a function`. Measured both ways before it was committed:
+red on the unfixed emitter, green with the read qualified. The fix is one
+line -- `bound_terms.value` spells `this->`, which it may because it has
+already checked `is_own_member`.
+
+**Only C++ can have this defect, and that is structural rather than luck.**
+C reaches a member through a prefixed free function taking the view; Rust
+spells `self.at()`; Python spells `self.at`. All three name the receiver, so
+nothing an emitter declares can stand in front of one. A C++ member call may
+omit it, so name lookup finds the local first. The same schema compiles in
+the other three backends -- which is why no differential could have found
+this. All four agree about the bytes, and one of them does not build.
+
+**The obvious generalisation is wrong twice over, and both refusals were
+measured.** Qualifying every emitted member call breaks `example/dtls`: the
+leaf in `_over_fields` also emits `record(raw_).length()` inside a nested
+`sealed_gate`, where `record` CONSTRUCTS a view of the enclosing struct
+rather than naming a member of the gate, so `this->record(raw_)` is a hard
+error. And qualifying the two `_value()` leaves beside it breaks
+`test_an_expression_may_name_a_varint[cpp]`, which pins the bare spelling on
+purpose. No emitter local ends in `_value`, so there is nothing there to
+capture and nothing to fix.
+
+**So the rule is not a spelling but a question: what is the receiver at this
+site?** Only the site that has established the member belongs to the
+emitting class may name `this`. Two spellings side by side in one generated
+expression are not sloppiness.
+
+**The working tree held an unowned edit that had generalised it, and it
+looked like an unfinished one.** Two of the three sibling leaves carried
+`this->`: uncommitted, dated 2026-09-23, held by no branch, stash or
+session, surviving a session clear. Read as half-done, the natural repair is
+to make the third match -- which is the edit that breaks `dtls`. Read as
+deliberate, it is still wrong, because it breaks a committed test. **An edit
+with no owner has no reasoning attached to it, and reconstructing the
+reasoning from its shape is what both wrong readings have in common.** What
+settled it was asking each site for a failing case and keeping only the site
+that produced one.
+
+**The sweep that judged all this was worthless on its first run.** Both arms
+were invoked from the repository's own working directory, where `''`
+precedes `PYTHONPATH` on `sys.path`, so both loaded the repository's
+`situc/codegen/cpp/emit.py` and the comparison was a file against itself. It
+reported zero differences across 42 schemas and read as a clean result. What
+exposed it was the positive control -- a marker appended to what was
+supposed to be the other arm -- going **0 of 42 red**. Rebuilt against a real
+`git worktree`, the control fired and the true comparison found 32 differing
+lines in two schemas. A sweep whose two arms are one file cannot be told
+from a sweep that found nothing.
+
+**And the baseline it was compared against was not a baseline.** The first
+full run was backgrounded by the harness, its redirect was cut at 93%, and
+it was reported as exit 0 with no summary line anywhere in the output --
+pytest always prints one. Re-run with an explicit `EXIT=` marker it was 13
+failed, and every one of those was `libsitu.a: No such file or directory`,
+because a `git worktree` is a checkout and nobody had built it. Neither the
+green nor the red said anything about HEAD.
+
+**What is still open, and it is the larger half.** `framed()` declares `at`,
+`n` and `have`, and `_over_fields` emits a bare accessor call into it. A
+discriminant named `at`, `need` or `have` generates a header that will not
+compile -- all three measured, all three failing at the same line.
+Qualifying that leaf is precisely the edit that breaks `dtls`, so the fix
+runs the other way: rename the emitter's own locals to the
+trailing-underscore form it already uses for `raw_` and `which_`. That is 43
+declaration sites plus every use of them, a mechanical change wanting the
+proof section 25 asks of one rather than a line in this entry.
+
+**Three committed files in this tree cannot be read by the user who owns
+it.** `example/cpio/cpio.situ.wire`, `example/json/json.situ.wire` and
+`test/schema/edges.situ.wire` are mode 0600 and owned by another account, so
+`test_committed_wire_signature_is_current` fails on three schemas with
+`PermissionError`. It is not a wire change and no diff will show it. Noted
+here because a red gate whose cause is a file mode reads exactly like a red
+gate whose cause is a contract, and this one had to be opened to tell them
+apart.
+
+**And 26.498's counts rotted inside the hour, which is the cheapest
+possible demonstration of its own point.** Adding rule 7 falsified them
+once before that entry was committed; adding THIS entry falsified them
+again. They are stated as a dated measurement now, and rule 7 quotes no
+number at all -- it carries the three commands that re-take one. The
+remedy for a count that is quoted often is to stop quoting it, which
+`evidence.md` says in as many words and which took two roundings-off here
+to actually do.
+
+
 ### 26.498 The log is 85% of the document, and the first measure of it was 30% high
 
-**Section 26 is 31,066 of this file's 36,644 lines and 1,747,884 of its
-2,054,242 bytes.** The specification -- 0 through 25, 27 and 28 -- is 5,578
-lines, a seventh of the whole. Section 0 tells an implementer how to use this
+**Measured on 2026-09-24, section 26 was 31,066 of this file's 36,644 lines
+and 1,747,884 of its 2,054,242 bytes** -- the specification, 0 through 25,
+27 and 28, being the remaining seventh. Those four figures are a record of
+one measurement and not a claim about the file you are reading; rule 7
+carries the commands that re-take them and deliberately quotes no number.
+Section 0 tells an implementer how to use this
 document and had never said how much of it there is, which matters precisely
 because every rule in it is addressed to somebody assumed to have read it.
 Rule 7 says it now.
