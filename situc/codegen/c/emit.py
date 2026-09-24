@@ -9337,10 +9337,13 @@ class Emitter:
 		if target is None:
 			return None
 		run, index, _member = target
-		count = self._count_expression(struct, run)
-		if count is None:
-			return None
-		return self._element_guard_lines(run, index, count)
+		# No `count is None` branch: this backend's `_count_expression`
+		# returns a `str`, where the other three return `str | None`. The
+		# guard was copied across all four and is dead here -- mypy strict
+		# said so, and a branch that cannot be taken is a claim about this
+		# emitter that is not true of it.
+		return self._element_guard_lines(
+			run, index, self._count_expression(struct, run))
 
 	def _element_guard_lines(self, run: Placement, index: int,
 			count: str) -> list[str]:
