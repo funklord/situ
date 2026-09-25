@@ -1,0 +1,27 @@
+# Golden vectors for DNS name compression.
+#
+# From the same relayed exchange as `example/dns`: `dig` wrote the query and
+# the resolver on 127.0.0.1 wrote the reply, and a UDP relay between them
+# recorded both. `localhost` was asked for so the resolver answered without
+# forwarding.
+#
+# **The compressed name is the point, and it is a real one.** The reply's
+# answer section names the owner as `C0 0C` -- form 3, a pointer whose low
+# fourteen bits are 12, which is where the question's name starts in that
+# message. That is the construct this schema exists for, and it is a
+# resolver's own encoding rather than one assembled here to look like one.
+#
+# The uncompressed spelling beside it is the same name written out, which is
+# what makes the pair worth committing: `non_canonical` on the run says a
+# name may be spelled either way, and here are both, for one name, from one
+# exchange.
+#
+# What situ does not do is FOLLOW the pointer -- 11.5 says so, and nothing
+# here needs it to: the vector exercises the label, its two forms, and where
+# the run stops.
+
+header   query        03 07 01 20 00 01 00 00 00 00 00 00
+header   reply        03 07 85 80 00 01 00 01 00 00 00 00
+name     uncompressed 09 6C 6F 63 61 6C 68 6F 73 74 00
+name     compressed   C0 0C
+question localhost    09 6C 6F 63 61 6C 68 6F 73 74 00 00 01 00 01

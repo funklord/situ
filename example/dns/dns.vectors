@@ -1,0 +1,34 @@
+# Golden vectors for the DNS header example.
+#
+# A reply written by the resolver on 127.0.0.1, taken in userspace because
+# packet capture is not permitted here: a UDP relay sat between `dig` (BIND
+# 9.20.26) and the resolver and recorded both datagrams. `localhost` was
+# asked for on purpose -- the resolver answers it without forwarding, so
+# obtaining these bytes put nothing on the network.
+#
+#   dig @127.0.0.1 -p <relay> localhost +tries=1 +noedns
+#
+# **The QUERY from that same exchange is not here, and its absence is a
+# finding rather than a gap.** `situc verify` refuses it:
+#
+#     ConstraintError: dns_header.<reserved0> is reserved [must_be_zero]
+#
+# and it is right to, given what the schema says. dig set the flags to
+# 0x0120, whose second byte is 0010 0000 -- the three bits this schema
+# declares `reserved u3 [must_be_zero]` carry 010, because RFC 2535 and
+# RFC 4035 reassigned two of RFC 1035's Z bits as AD and CD, and modern
+# BIND sets AD on a query by default.
+#
+# So the schema describes RFC 1035 exactly and refuses traffic every current
+# resolver emits. Which of those should change is not this file's to decide:
+# the note beside `require canonical(dns_header)` argues deliberately that
+# reserved bits are rejected rather than preserved, because an ignored bit is
+# a malleability surface and DNS is a known covert channel. That argument is
+# about the Z field of RFC 1035; whether it still holds for a field two later
+# RFCs have assigned meanings to is a question for whoever owns the example.
+#
+# Committing the reply alone is what this corpus can honestly say today: a
+# vector the decoder refuses now fails rather than skipping, so the query
+# cannot be parked here quietly.
+
+dns_header reply 03 07 85 80 00 01 00 01 00 00 00 00
