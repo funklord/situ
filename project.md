@@ -30814,6 +30814,60 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.506 The three ways to refuse it, and the one where it was already legal
+
+**`u8 a[kv.alpha + n]` generates in all four backends now, and none of the
+three remedies 26.484 weighed is what did it.** That entry offered a
+refusal in `wellformed.py`, five call sites to teach, and a decision about
+whether C's crash should become a refusal or an accessor. All three are
+about what to REFUSE. The construct did not need refusing: an enum member
+is a compile-time constant, section 10 says so, and `expr._access` has
+folded one all along.
+
+**What the renderers lacked was the NAME.** `u8 a[kv.alpha]` built
+everywhere because the whole expression is constant and folds before a
+renderer sees it; `kv.alpha + n` reaches one, because a field in it means
+the expression is emitted. They were handed `Env.consts`, which holds the
+`const` declarations and not the enum members -- two fields kept apart
+because they are DECLARED apart, joined in the evaluator and nowhere a
+renderer could reach. `Env.named_constants` joins them and each backend's
+`_over_fields` reads it: one question, one answer, four thin callers.
+
+**A defect described by its symptom invites a remedy shaped like the
+symptom.** One backend crashed and three declined, so the question became
+which caller to teach and what to refuse -- and the shorter question was
+what the schema MEANS. `kv.alpha` is 17 everywhere 17 is, and the test
+says exactly that: `kv.alpha + n` and `17 + n` must generate the same
+code. They do, byte for byte apart from the include guard, which follows
+the file name. **That assertion cannot pass by accident and pins nothing
+about how the arithmetic is rendered**, which a text match on the emitted
+expression would have.
+
+**The filter is the half worth reviewing, and it is there because adding
+names to a table is not additive by default.** `local_name` is a dotted
+PATH for a nested member, so `hdr.len` can name a field and an enum member
+at once -- and every renderer asks its constant table BEFORE its field
+table. A straight merge would have silently handed back the enum's value
+for a name that had always resolved to the field, which is a wrong answer
+rather than a refused build: the worse kind. Enum members are filtered
+against the field table, so a name that resolved before resolves the same
+way and only a name that resolved to nothing gains one. Measured against
+the commit before the fix: the shadowing schema generates identically.
+
+**Blast radius measured, and the measurement controlled.** The whole
+corpus, all 42 schemas in all four backends, before and after: zero
+differing lines. That is worth nothing until the comparison is shown able
+to speak, so the banner was sabotaged and the same comparison reported
+twelve lines over three schemas.
+
+**The walkers abstain on it, unchanged and honestly.** `pack` cannot fold
+the expression, so the struct's `validatable` flag is clear and
+`_validate` returns None -- the same state 26.500 records for a
+non-constant bound, and untouched by this fix, which reaches only the
+renderers. The packer question 26.484 raises is therefore still open and
+still not a drive-by; what is closed is the crash, and the four backends
+now agreeing where three used to decline and one used to raise.
+
 ### 26.505 Six open items swept, five of them already closed
 
 **A sweep of this section for things recorded as open found 40 candidates
@@ -32338,6 +32392,22 @@ nothing committed, but it would refuse a construct `situc wire`,
 all handle correctly, and which works today in the bare form
 `u8 a[kv.alpha]` in every backend. That is the holder's call, and the
 packer's wrong answer is the part that should not wait for it.
+
+**~~Not fixed here.~~ Fixed in 26.506, and none of the three routes this
+paragraph weighed is the one that worked.** Neither a refusal in
+`wellformed.py` nor five call sites nor a decision about C's crash: an
+enum member IS a compile-time constant, section 10 says so and
+`expr._access` already folds one, and the renderers had simply never been
+given the names. `Env.named_constants` joins `consts` with the enum
+members and each backend's `_over_fields` reads it. `kv.alpha + n` and
+`17 + n` now generate the same code byte for byte, which is what being
+the same number means.
+
+**The three options were all about what to REFUSE**, and the construct
+did not need refusing. That is worth more than the fix: a defect
+described by its symptom -- one backend crashes, three decline -- invites
+a remedy shaped like the symptom, and the question that shortened it was
+what the schema actually means rather than which caller to teach.
 
 **Not fixed here.** It wants `over_fields` and the three backends' size
 rendering to learn enum arms, which is four code paths and a decision
