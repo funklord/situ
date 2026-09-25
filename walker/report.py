@@ -472,6 +472,54 @@ def _gated(image: Image, gate: int) -> list[int]:
 	return found
 
 
+def _arm_runs(image: Image,
+		struct_index: int) -> list[tuple[int, int, int, str]]:
+	"""A variant's arms that are a RUN, as (arm, discriminant, case, shape).
+
+	`_arm_values` says SCALAR in its name and means it. This is the other
+	half, and until now nothing here answered it: the differ asks all four
+	backends `ok= len=` for a byte-run arm and `ok= count= [0]=` for a run
+	of wider elements, and the walker named neither. That matters because
+	the four-way comparison intersects the member names both sides mention,
+	so a member this never names is not a disagreement -- it is dropped.
+	Measured when this was written: 16 such arms across `icmp`, `dnsname`
+	and `edges`, every one answered by four backends and by nobody here.
+
+	The shapes are the differ's own, keyed on the same two facts: an element
+	width of one byte is `bytes`, anything wider is `element`. An arm with
+	neither a count nor a size program is a scalar and belongs above.
+
+	A DELIMITED arm is deliberately not here, and the reason is not that it
+	is hard. The differ asks one at any element width; this walker declines
+	a delimited run everywhere, `_runs` skipping `image.delimiters` for a
+	plain member too. Answering it only when it is an arm would make the arm
+	path wider than the plain path, which is how two lists of what counts
+	come apart -- so the delimited question is one question, asked in one
+	place, and it is still open.
+	"""
+	found = []
+	for index in image.members(image.structs[struct_index]):
+		if index not in image.arms:
+			continue
+		selects, arms = image.arms[index]
+		if selects == NONE:
+			continue
+		for case, chosen, flags in arms:
+			if flags or chosen == NONE:
+				continue		# the default arm, or `default: error`
+			arm = image.placements[chosen]
+			if arm.is_tag or chosen in image.delimiters:
+				continue
+			if arm.element_bits == NONE or arm.element_bits > 64:
+				continue
+			if arm.array_count == NONE and arm.size_code == NONE:
+				continue		# a scalar arm: `_arm_values` has it
+			found.append((chosen, selects, case,
+			              "bytes" if arm.element_bits == BITS_PER_BYTE
+			              else "element"))
+	return found
+
+
 def _arm_values(image: Image, struct_index: int) -> list[tuple[int, int, int]]:
 	"""A variant's scalar arms, as (arm placement, discriminant, case).
 
@@ -1665,6 +1713,27 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		except Refused:
 			continue
 		lines.append(f"{local} ok={1 if chosen else 0} value={value}")
+
+	for arm, selects, case, shape in _arm_runs(image, struct_index):
+		local = _local(image, arm)
+		try:
+			# Reachability has to gate the READ, not merely the answer. The
+			# bytes at an unselected arm's offset are the selected arm's,
+			# and `_run_bytes` would hand them over without complaint -- so
+			# a length taken first and discarded second is a length taken
+			# from somebody else's member.
+			chosen = read_scalar(view, selects) == case
+			if shape == "bytes":
+				held = len(_run_bytes(view, arm)) if chosen else 0
+				line = f"{local} ok={1 if chosen else 0} len={held}"
+			else:
+				count = _run_count(view, arm) if chosen else 0
+				first = _element(view, arm, 0) if chosen and count else 0
+				line  = (f"{local} ok={1 if chosen else 0} "
+				         f"count={count} [0]={first}")
+		except (Refused, Unplaceable):
+			continue
+		lines.append(line)
 
 	for index, shape in _runs(image, struct_index):
 		local = _local(image, index)

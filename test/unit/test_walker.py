@@ -33,7 +33,7 @@ from fourway import COMPLETE, answers, build, draw
 
 sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
-from walker.image import Image, load                      # noqa: E402
+from walker.image import NONE, Image, load                 # noqa: E402
 from walker import walk as walk_module             # noqa: E402
 from walker.walk import Refused, View, acquire, read_scalar  # noqa: E402
 
@@ -1685,3 +1685,145 @@ def test_a_walk_with_no_argument_is_refused_rather_than_defaulted() -> None:
 	view = acquire(image, FIVE, 0, (2,))
 	assert read_scalar(view, held[0]) == 2
 	assert walk_module.offset_bits(view, held[2]) == 16
+
+
+# ---------------------------------------------------------------------------
+# A variant's arm that is a run
+# ---------------------------------------------------------------------------
+
+BYTE_RUN_ARM = """target buffer;
+endian big;
+
+enum sig : u8[2] {
+	bmp = "BM",
+	pe  = "MZ",
+}
+
+struct m {
+	u8   kind;
+	variant body switch (kind) {
+		case 1: sig  marker;
+		case 2: u16  number;
+		default: error;
+	}
+	u16  tail;
+}
+"""
+
+
+def test_a_byte_run_enum_arm_is_rendered() -> None:
+	"""26.413's reproduction, which printed nothing for `marker`.
+
+	`enum sig : u8[2]` widens to a two-byte span, so the arm is a run and
+	not a scalar: `_arm_values` declined it by name and `_runs` never sees
+	an arm, which left the one arm in this schema answered by four backends
+	and by nothing here.
+
+	Both cases are asserted, and the unselected one is the half that
+	matters. The bytes at an unselected arm's offset are the OTHER arm's,
+	and `_run_bytes` hands them over without complaint -- so a walker that
+	read first and checked reachability afterwards would print `len=2` for
+	an arm that is not there, which is a wrong answer where there had been
+	an honest silence.
+	"""
+	image = load(packed(BYTE_RUN_ARM))
+
+	selected   = report.listing(image, b"\x01BM\xbe\xef").splitlines()
+	unselected = report.listing(image, b"\x02\x12\x34\xbe\xef").splitlines()
+
+	assert "body_marker ok=1 len=2" in selected
+	assert "body_number ok=0 value=0" in selected
+	assert "body_marker ok=0 len=0" in unselected
+	assert "body_number ok=1 value=4660" in unselected
+
+	# `tail` is 48879 either way, which says the widening 26.413 fixed still
+	# holds: the member after a two-byte arm is placed two bytes along.
+	assert "tail 48879" in selected
+	assert "tail 48879" in unselected
+
+
+def test_the_walker_names_every_run_shaped_arm_the_differ_asks_about() -> None:
+	"""The quantifier, derived rather than enumerated.
+
+	A test naming icmp's three arms would pass while a fourth schema's arm
+	went unrendered -- and the population is not this walker's to invent,
+	because it is the differ that decides which members four backends are
+	asked about. So the list comes from `differ.asks`, and what is asserted
+	is that `_arm_runs` names the same set.
+
+	The delimited arms are the one difference, and they are asserted as a
+	POPULATION rather than filtered away: every arm the differ asks about
+	and this walker declines must be delimited. An arm arriving in that
+	cell for any other reason fails here, addressed to whoever added it,
+	instead of being absorbed by a filter that would have excused it.
+	"""
+	from situc.codegen.differ import Probe, asks
+
+	asked = set()
+	named = set()
+	declined: list[tuple[str, str, str, bool]] = []
+
+	for schema in SCHEMAS:
+		parsed   = parse_text(schema.read_text(encoding="ascii"))
+		resolved = resolve(parsed, solve(parsed))
+		names    = set(resolved.structs)
+
+		by_struct: dict[str, set[str]] = {}
+		for struct_name, struct in resolved.structs.items():
+			for ask in asks(struct, names, dict(resolved.structs)):
+				if ask.probe in (Probe.ARM_BYTES, Probe.ARM_ELEMENT):
+					by_struct.setdefault(struct_name, set()).add(ask.local)
+		if not by_struct:
+			continue
+
+		image = load(packer.pack(parsed, resolved, metadata=True)[0])
+		for index in range(len(image.structs)):
+			struct_name = image.struct_name(index)
+			wanted = by_struct.get(struct_name, set())
+			asked |= {(schema.name, struct_name, one) for one in wanted}
+
+			# Every arm placement in this struct, by the name the differ
+			# calls it, so a declined one can be asked what it IS rather
+			# than what it is called.
+			arms_here = {}
+			for member in image.members(image.structs[index]):
+				if member not in image.arms:
+					continue
+				for _, chosen, flags in image.arms[member][1]:
+					if not flags and chosen != NONE:
+						arms_here[report._local(image, chosen)] = chosen
+
+			here = set()
+			for arm, _, _, _ in report._arm_runs(image, index):
+				local = report._local(image, arm)
+				here.add(local)
+				named.add((schema.name, struct_name, local))
+
+			for one in wanted - here:
+				placement = arms_here.get(one)
+				declined.append((schema.name, struct_name, one,
+				                 placement in image.delimiters))
+
+	# The partition first, and the vacuity floor after it, because the two
+	# catch different things and the floor intercepts. Dropping the
+	# `element` shape takes the count from 16 to 13 AND puts three
+	# non-delimited arms in the declined cell: a floor checked first
+	# reports a number, where the loop below names `arm_run.body_wide` and
+	# says what is wrong with it.
+	assert named | {one[:3] for one in declined} >= asked
+
+	# Every decline is a DELIMITED arm, asked of the image rather than read
+	# off the name. `_arm_runs` documents that one exclusion and no other,
+	# so this is the cell that must stay empty of anything else.
+	for schema_name, struct_name, local, delimited in sorted(declined):
+		assert delimited, (
+			f"{schema_name}: {struct_name}.{local} is asked of four "
+			f"backends, declined here, and is not delimited -- which is "
+			f"the only exclusion `_arm_runs` records")
+
+	# Not vacuous: the corpus really does carry these, and a helper that
+	# returned nothing would satisfy every assertion above but this one --
+	# an empty `named` makes the partition hold through `declined`, and
+	# every decline would then be delimited only if nothing else were
+	# asked, which is not the case here but would be in a smaller corpus.
+	assert len(named) >= 16, f"only {len(named)} run-shaped arms named"
