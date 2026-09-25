@@ -2873,7 +2873,17 @@ class Emitter:
 		# the target as `HEADER_BYTES` -- an identifier that exists in the
 		# schema and in no generated file. Folding it here keeps the emitted
 		# arithmetic the arithmetic the schema wrote.
-		consts = self.resolved.layout.env.consts
+		# An enum member loses to a MEMBER of the same spelling.
+		# `local_name` is a dotted path for a nested member, so
+		# `hdr.len` can name both a field and an enum member, and
+		# `read` below consults constants before fields -- which
+		# would hand back the enum's value for a name that has
+		# always resolved to the field. Filtering keeps this
+		# additive: a name that resolved before resolves the same
+		# way, and only a name that resolved to nothing gains one.
+		consts = {name: value for name, value
+		          in self.resolved.layout.env.named_constants.items()
+		          if name not in by_name}
 
 		def read(name: str) -> str:
 			if name in consts:

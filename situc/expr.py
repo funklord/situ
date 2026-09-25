@@ -561,6 +561,30 @@ class Env:
 	#: only the solver has it and every other caller wants the value alone.
 	explain: Callable[[str, str], tuple[str, str]] | None = None
 
+	@property
+	def named_constants(self) -> dict[str, int]:
+		"""Every name an expression may use as a compile-time CONSTANT.
+
+		`consts` and the enum members together. Section 10 permits both --
+		"integer literals, `const` references" and an enum member is one of
+		the two things `_access` below folds -- and they are separate fields
+		here because they are declared separately, not because an expression
+		tells them apart.
+
+		A renderer needs them joined. The evaluator folds `kv.alpha` through
+		`_access`, so `u8 a[kv.alpha]` built in all four backends: the whole
+		expression is constant and never reaches a renderer. `u8 a[kv.alpha +
+		n]` does reach one, because a field in it means the expression is
+		emitted rather than folded -- and the renderers were given `consts`
+		alone, so the name was left over. C raised `UnknownName` out of the
+		emitter and the other three declined the member with a note (26.484).
+		"""
+		named = dict(self.consts)
+		for enum, members in self.enums.items():
+			for member, value in members.items():
+				named[f"{enum}.{member}"] = value
+		return named
+
 	def with_layout(self, resolver: Callable[[str, str], int | None],
 			explain: Callable[[str, str], tuple[str, str]] | None = None) -> Env:
 		# Keyword rather than positional: a field added to `Env` shifted
