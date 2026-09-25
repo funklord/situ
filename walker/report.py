@@ -445,9 +445,16 @@ def _gated(image: Image, gate: int) -> list[int]:
 	"""Plain scalars inside one sealed region, in declaration order.
 
 	Only the scalars. A `[secret]` member has no debug accessor at all by
-	design (14.6), and a byte run inside a gate is spelled four ways that
-	have not been compared -- so the differ asks about neither and this
-	renders neither.
+	design (14.6), which is why this renders none.
+
+	A byte run inside a gate is NOT that case, and this docstring said it
+	was from 2026-08-07 to 2026-09-25: "spelled four ways that have not been
+	compared -- so the differ asks about neither and this renders neither".
+	They were compared on 2026-09-09 (26.320) and the differ asks about them
+	as `inside_bytes`, so the second clause was false rather than stale and
+	the first clause was this walker's own question wearing the differ's
+	clothes. That question is still open: what this renders for a byte run
+	behind a gate is nothing, and nothing has decided it should be.
 	"""
 	found = []
 	for index, placement in enumerate(image.placements):

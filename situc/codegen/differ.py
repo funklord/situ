@@ -776,8 +776,13 @@ def _interior_scalars(struct: ResolvedStruct,
 	"""Plain scalars inside a region, in declaration order.
 
 	Only the scalars: a `[secret]` member has no debug accessor at all by
-	design (14.6), and a byte run inside a gate is spelled four ways that have
-	not been checked against each other yet.
+	design (14.6). A byte run inside a gate is `inside_bytes`, asked
+	separately and answered by all four.
+
+	This sentence said from 2026-08-02 to 2026-09-25 that the four spellings
+	"have not been checked against each other yet". They were checked on
+	2026-09-09, by the commit that added `inside_bytes` -- which quoted this
+	wording in that field's own comment and left this copy standing.
 
 	Split out from `_gated` when a second caller appeared. A waived region has
 	no gate to read its interior through, and its members are read on the

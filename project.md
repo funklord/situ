@@ -7634,13 +7634,20 @@ test, converging by hand; a committed `a.out`; a generated build not held to the
 tree. One list now, in `test/unit/every_schema.py`, and a check that the build
 tracks it.
 
-**What is open, and why one of them stayed open.** `example/ble` -- a radio
-frame this project has a real use for -- is deliberately unwritten. 26.32's rule
-is that the worked example is the claim, and field constants recalled rather
-than verified would make it a false one. It waits on a citable source, named in
-the schema's own header. That is a worse outcome than having the example and a
-better one than having it wrong. Beyond it: the two shapes the differential
-check cannot ask about (26.31), and 26.33.
+**~~What is open, and why one of them stayed open.~~ Closed by 26.36, two
+entries along.** `example/ble` -- a radio frame this project has a real use
+for -- was deliberately unwritten. 26.32's rule is that the worked example is
+the claim, and field constants recalled rather than verified would make it a
+false one. It waited on a citable source, named in the schema's own header.
+That is a worse outcome than having the example and a better one than having
+it wrong. Beyond it: the two shapes the differential check cannot ask about
+(26.31), and 26.33.
+
+Re-measured 2026-09-25: `example/ble/ble.situ` is 7181 bytes and its header
+cites the Linux Bluetooth stack by file and line -- `hci.h:3330` for the
+event header, `hci.h:2911` for the advertising report, `hci_event.c:6421`
+for where the RSSI sits. The source arrived and the schema with it, in
+`171ef61` on 2026-08-03.
 
 **Status:** 2230 unit tests, 7 skipped; generated C compiled on the host and
 both aarch64 targets; `make fuzz` clean at thirty seconds a harness.
@@ -22097,12 +22104,21 @@ qtype @17 = 1, qclass @19 = 1`, which is what the four backends and
 where C refused. dnsname is closed by this and cpio, dtls, netlink,
 pickle and tcp are not.
 
-**tcp's is a different root and is left open deliberately.**
-`u8 options[(data_offset - 5) * 4]` goes negative on bytes nobody meant
-to send, and that schema's own comment says it "reads as zero rather than
-as a length (14.2b)". `walk.py` answers 0; the C walker refuses. That is
-the length VM's arithmetic rather than anything about bits, and folding
-it in here would have hidden it inside a change about something else.
+**~~tcp's is a different root and is left open deliberately.~~ Closed
+since, by no entry of its own.** `u8 options[(data_offset - 5) * 4]` goes
+negative on bytes nobody meant to send, and that schema's own comment says
+it "reads as zero rather than as a length (14.2b)". `walk.py` answered 0
+and the C walker refused. That is the length VM's arithmetic rather than
+anything about bits, and folding it in here would have hidden it inside a
+change about something else.
+
+Re-measured 2026-09-25 by driving both walkers over a TCP header with
+`data_offset = 0`: `options` is 0 bytes in both and `payload` places after
+it. The control is the same readout with `data_offset` at 5 and at 6 --
+`options` 0 then 4 -- which says the comparison answers the expression
+rather than a constant. 14.2a settles the rule as *a negative computed
+length is zero*, with all five implementations bounding identically, and
+`walk.py` no longer holds the message this entry quotes.
 
 ### 26.265 A pad counted as no bytes, and the total that is not an offset
 
@@ -25599,8 +25615,9 @@ without a sanitizer and feeds eight random inputs, which is a check that
 the harness still runs. What changed is what `make fuzz` under libFuzzer
 can see, and that is where this class gets found.
 
-**Left open, and measured: 13 members sit behind a verified gate the
-harness never opens** -- `dtls.record.sealed`, `keystore.sealed`,
+**~~Left open, and measured:~~ Closed by 26.318, the next entry, on the
+copyright holder's instruction. 13 members sat behind a verified gate the
+harness never opened** -- `dtls.record.sealed`, `keystore.sealed`,
 `packet.sealed`, `edges.sealed_run` and their interiors, against 1111 it
 can reach. Those 13 are every `[secret]` in the tree bar the one 26.316
 added, so the bytes a fuzzer would most like to reach are the ones it
@@ -25722,12 +25739,20 @@ it:
     -body_seq 12851
     +body_seq 12852
 
-**Still open, and already written down:** `_gated`'s docstring says a byte
-run inside a gate "is spelled four ways that have not been checked
-against each other yet", and that is still true. Given that four separately
-written erasers disagreed about a data-sized span in 26.316, a byte run
-behind a gate is the next place to look rather than a limitation to
-leave recorded.
+**~~Still open, and already written down:~~ Closed by 26.320, the next
+entry, and the prediction was right.** `_gated`'s docstring said a byte run
+inside a gate "is spelled four ways that have not been checked against each
+other yet". Given that four separately written erasers disagreed about a
+data-sized span in 26.316, a byte run behind a gate was the next place to
+look rather than a limitation to leave recorded -- and looking found an
+unclamped span over a wire-declared length, C++ answering 60000 where the
+other three answered 33.
+
+Re-measured 2026-09-25: the differ asks about them as `inside_bytes` and all
+four backends emit the line. **Both docstrings still said they had not been
+compared**, five months after they were -- `_interior_scalars` in `differ.py`
+and `_gated` in `walker/report.py`, the second adding "so the differ asks
+about neither", which had become simply false. Corrected with this entry.
 
 ### 26.320 The gap that was written down, and a wild pointer behind it
 
@@ -26769,11 +26794,17 @@ every other thing it cannot speak for. Teaching the walker to read that
 section is its own piece of work; answering wrongly in the meantime is the
 one option that was not available.
 
-**Still open:** `[minimal]` and `canonical`, the dissector's rendering of
-one, and the walker's INDEXES section -- all four in the register at
-26.335, re-measured. **Converting json's `number`** was blocked on a
-non-consuming dispatch, which is 0057 as of 2026-09-12; it is now blocked
-on the walker instead, and 26.337 says on what. And the second-asker question stays
+**~~Still open:~~ Two of the four closed, and the pointer is what went
+stale.** `[minimal]` and `canonical`, the dissector's rendering of one, and
+the walker's INDEXES section -- all four in the register at 26.335. Two of
+them are struck closed there, by 26.340 and 26.341 on 2026-09-12, and this
+sentence went on naming four. The register was maintained; the pointer to it
+was not, which is what *closing an entry updates the entry and not the
+pointers* names. **~~Converting json's `number`~~ Converted 2026-09-12 in
+`28263b5`, and 26.339 records it** -- it was blocked on a non-consuming
+dispatch, which is 0057, and then on the walker, which is 26.337; `number`
+reads `scaled i64 value before ',' | ']' | '}' [trim]` now, so 0056's
+construct has the worked example the register filed it as lacking. And the second-asker question stays
 open in a way 0055's did not: json is the only schema here that asks, and
 the copyright holder's instruction is what stands in for 8.6.6's second
 protocol.
@@ -30814,6 +30845,173 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.508 One case name, three structs, and two explanations that failed
+
+**`make check` went red on committed work, and the commit was this
+session's own.** `example/modbus/modbus.vectors` names `read_holding`
+three times -- once under `mbap_header`, once under `request`, once under
+`response` -- which is exactly how that schema splits a Modbus frame and
+is the reason its own header comment gives for having three structs. The
+generator named each C identifier from the CASE alone, so the file
+carried three `static void test_read_holding` and `-Werror` refused it as
+a redefinition.
+
+**A case name is unique within its struct and nothing made it unique
+across them.** The struct was already in the comment above every case and
+was the one thing not in the identifier. It is `test_<struct>_<case>`
+now, and `vector_<struct>_<case>` with it -- the buffers collided too,
+which would have given two cases one set of bytes if the compiler had let
+it through.
+
+**The struct cannot separate a line repeated verbatim, so that is refused
+where it is written**, before any code is emitted -- a redefinition in
+generated C is a compiler error a long way from the file somebody edited:
+
+    situc: vector `request read_coils` is declared twice
+
+Seen to fire: that is `make`'s output, with a duplicate line appended to
+the real vectors file and then removed.
+
+**Scope re-derived by enumeration rather than by the query that found
+it.** Every `.vectors` file in the tree, grouped by case name across
+structs: one hit, modbus. The three other files committed in the same
+commit have no repeat.
+
+**And the proof covered the generator, not its readers.** The rename was
+made with an assertion that no `vector_{case.name}` survived in the
+emitter, which held -- and a unit test a hundred lines away pinned
+`vector_basic` as a literal and went red in the gate. *Mechanical changes
+carry a proof* and the proof is only as wide as the file it was taken
+over; the sweep that finds this is for the old SPELLING across the tree,
+not for the old expression inside the tool.
+
+**The window is the part worth recording, and it is unexplained.** The
+vectors landed in `0370d41` at 20:17 on 2026-09-24, and this session
+reported the gate green afterwards, more than once. It could not have
+been. Two explanations were available and both were tested rather than
+accepted:
+
+- **A missing prerequisite.** The rule does depend on the `.vectors`
+  file. Measured by appending a line and asking for that one target:
+  make regenerated and failed.
+- **Make's missing-intermediate rule** -- the trap this very Makefile
+  documents at length for `_relate.c`, `_fuzz.c` and three more, and
+  `_vectors.c` is not in its `.SECONDARY` list. It is deleted as spent
+  after every build. But the control above shows a changed vectors file
+  rebuilds it anyway, so the trap is real and is not this.
+
+A clean build of that single target fails at once -- measured, the
+binary and the generated source removed first. So the defect was always
+visible to anything that built it. **What is left is not a better theory
+but the absence of one**, and naming a mechanism here would be the
+comfortable explanation `running-code.md` warns costs more than no
+explanation at all.
+
+**What would have made the window answerable is an artifact, and this
+tree has none.** `make check` reports a status and writes nothing down,
+so "the gate was green at that commit" is a claim about a run nobody can
+re-take -- which is the shape `evidence.md` names when it says to believe
+the receipt over anything measurable about the process that produced it.
+A sibling here writes one: beerssh's `check-ci` leaves a file naming the
+commit it built, and its `pre-push` hook refuses when that is not HEAD.
+**The option is a receipt; the cost is a hook that can refuse a push and
+a gate run nobody can skip; and the decision is the copyright holder's,
+not this entry's.**
+
+### 26.507 Four of six closures sat within three entries of the claim
+
+**26.505 swept this section, checked six of 40 candidates and said
+plainly that the other 34 were candidates rather than open items. Eight
+of those claim a reproducible behaviour, and this is the eight
+reproduced.**
+
+    26.34   ble unwritten            closed by 26.36    +2
+    26.264  tcp's negative length    closed by NOTHING
+    26.288  the walkers' off-by-one  closed IN ITSELF   a false candidate
+    26.317  13 members behind gates  closed by 26.318   +1
+    26.319  four spellings unchecked closed by 26.320   +1
+    26.332  four register items      two closed, in the register
+    26.413  two sibling walkers      closed by NOTHING
+    26.497  `[max = n[0].n]`         closed by 26.500   +3
+
+**Six of the eight were closed already, which is 26.505's ratio again and
+is not the finding. The finding is how CLOSE the closures are.** Four of
+them sit within three entries of the sentence that reads as open, two in
+the very next one. A reader going through this section in order meets the
+closure on the following page.
+
+**Nobody reads it in order, and this session is why.** Section 0's rule 7
+-- read 0 through 25 and 27 through 28, look 26 up -- was added six
+entries ago because the log is most of the document and reading it
+through is not affordable. The rule is right and it has a cost that had
+not been named: **the cheapest closure to find is the one a look-up
+reader is guaranteed to miss.**
+
+**So 26.505's method gains a step that costs nothing.** Grep for
+candidates, then reproduce each one -- that stands. Before reproducing,
+**read the two entries after**: it answered three of these eight in the
+time it takes to scroll. It cannot answer the other five, and the two it
+is furthest from are the ones worth knowing about: 26.264 and 26.413 were
+closed by **no entry at all**. The behaviour changed under them, nobody
+came back, and only running the tree says so.
+
+**26.264 is the sharper of those because it names a disagreement.** It
+recorded that `walk.py` answered 0 for tcp's `u8 options[(data_offset -
+5) * 4]` where the C walker refused. Driving both over a header with
+`data_offset = 0`: `options` is 0 bytes in both and `payload` places
+after it. The control is the same readout at `data_offset` 5 and 6 --
+`options` 0 then 4 -- which says the comparison answers the expression
+rather than a constant. 14.2a settles the rule, all five implementations
+bound identically, and the refusal message that entry quotes is not in
+`walk.py` any more.
+
+**One live defect, and it is the one the sweep existed to find.** 26.319
+left a gap written down: `_gated`'s docstring said a byte run inside a
+gate "is spelled four ways that have not been checked against each other
+yet", and the entry argued that was the next place to look rather than a
+limitation to leave recorded. 26.320 looked and found C++ answering 60000
+where the other three answered 33 -- an unclamped span over a
+wire-declared length, and a heap overflow to read.
+
+**The docstrings never learned, and the commit that falsified them quoted
+one of them.** `cfd34fe` on 2026-09-09 added `inside_bytes` and, in that
+field's own comment, wrote out the old wording as something the docstring
+"said for a long time" -- while leaving both live copies standing.
+`_interior_scalars` in `differ.py` had carried it since 2026-08-02 and
+`_gated` in `walker/report.py` since 2026-08-07; both said it until
+today. The walker's went further -- "**so the differ asks about neither
+and this renders neither**" -- and the differ asks, which makes that half
+false rather than stale.
+
+**Sixteen days, and the remedy is the one that does not need a sweep.**
+This is a justification for silence sitting in the file that does the
+comparing, telling the next reader a comparison has not happened when it
+has and when it caught a heap overflow -- and the moment to have fixed it
+was inside `cfd34fe`, by the author who already had the sentence in front
+of them to quote. Corrected in both, each now carrying the date it was
+written and the date it stopped being true, and the walker's saying which
+question is its own and still open.
+
+**What stays open is one thing, reproduced rather than read.** 26.413's
+byte-run enum arm is rendered by no walker path: a two-arm variant over
+`enum sig : u8[2]`, walked on `01 42 4D be ef` and on `02 12 34 be ef`,
+prints `body_number` for the scalar arm and nothing at all for `marker`.
+`tail` is 48879 in both, so the widening 26.413 fixed holds and it is the
+rendering that is absent. That entry records a fallback written at the
+obvious site, found dead and reverted, so the site is known and the fix
+is not in it.
+
+**And one pointer rotted while the thing it pointed at was maintained.**
+26.332 names four open items and defers to the register at 26.335. The
+register is exactly right: two of the four carry strike-throughs and
+closing dates, 26.340 and 26.341 on 2026-09-12. The sentence pointing at
+it went on saying four, and json's `number` reads `scaled i64` since
+`28263b5` the same day, so 0056's construct has the worked example the
+register filed it as lacking. **A register is the remedy for this class
+and it does not defend its own citations** -- `working-practice.md`
+already says closing an entry updates the entry and not the pointers,
+and this is the first measurement of it here.
+
 ### 26.506 The three ways to refuse it, and the one where it was already legal
 
 **`u8 a[kv.alpha + n]` generates in all four backends now, and none of the
@@ -31556,10 +31754,12 @@ anything, both `recs[]` inside a `require`, which is the position
 `ast.Index` documents itself for and which routes through
 `expr.path_text` -- a walker that already handled it.
 
-**Two holes are left and are not this entry's to close.**
-`[max = n[0].n]` still compiles, publishing `max=n[0].n` into the wire
-signature while the accessors ignore it -- accepted before this change and
-after it, so a sibling finding rather than a regression.
+**~~Two holes are left and are not this entry's to close.~~ One closed by
+26.500, one recorded.** `[max = n[0].n]` compiled, publishing `max=n[0].n`
+into the wire signature while the accessors ignored it -- accepted before
+this change and after it, so a sibling finding rather than a regression. It
+is rendered in all four backends now, with the walkers abstaining and an
+empty run refused as malformed.
 `relation.paths_in` carries the identical gap and is now unreachable: four
 shapes written to reach it -- a dotted tail, a parameter shadowing the
 dropped name, both sides indexed, an empty subscript -- are all refused by
@@ -36711,13 +36911,21 @@ and both walkers do not have the feature yet (26.417). The corpus had `signature
 the other, which is 26.411's own sentence for the third time: **the
 population is not constructs but their products.**
 
-**Two siblings of the same blind spot, found and not fixed.**
-`layers.py:_walk` and `pack.py:walk` recurse the same way and miss
-variant arms identically -- measured, not inferred: `_walk` over a
-`positional` block inside an arm reaches `kind` and `held` and stops. No
-corpus schema puts a container in an arm, so neither miss costs anything
-today, and neither is provable by a gate. Recorded with the reproduction
+**~~Two siblings of the same blind spot, found and not fixed.~~ Both
+fixed since.** `layers.py:_walk` and `pack.py:walk` recursed the same way
+and missed variant arms identically -- measured, not inferred: `_walk` over
+a `positional` block inside an arm reached `kind` and `held` and stopped. No
+corpus schema puts a container in an arm, so neither miss cost anything at
+the time, and neither was provable by a gate. Recorded with the reproduction
 rather than changed.
+
+Re-measured 2026-09-25: both walk arms now and both say why in place.
+`_walk` extends over `arm.member for arm in getattr(member, "arms", ())`,
+and its docstring records what the miss cost when it was finally paid --
+a region with an unbounded codec inside an arm reported `allocating=[]` and
+the schema emittable at rung 1, a wrong answer rather than a missing check.
+`pack.walk` recurses arms under a comment naming the same fact. **Neither
+was closed by an entry**, which is why this one read as open.
 
 **And one gap this fix exposed rather than caused.** A byte-run enum arm
 is now correctly a span, and no walker path renders it: `_arm_values` is
@@ -36726,6 +36934,12 @@ which is right, and `_runs` does not pick an arm up. Before the fix the
 arm was a one-byte scalar, so that loop read it and printed a wrong
 value; now it prints nothing. A fallback added there is unreachable --
 written, tested by running, found dead and reverted.
+
+**Still open, and reproduced 2026-09-25** rather than read: a two-arm
+variant over `enum sig : u8[2]`, walked on `01 42 4D be ef` and on
+`02 12 34 be ef`, prints `body_number` for the scalar arm and nothing at
+all for `marker`. `tail` is 48879 in both, so the widening this entry
+fixed still holds and it is only the rendering that is absent.
 
 ### 26.412 The C++ backend crashed on a variant arm at a dynamic offset
 
