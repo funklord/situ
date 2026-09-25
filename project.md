@@ -30845,6 +30845,83 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.511 The readers took an arm all along; nothing could name one
+
+**26.509 recorded that the two walkers agree about WHICH arm a
+discriminant selects and never about what the arm holds. They compare its
+contents now, and the thing in the way was not a reader.**
+`situ_walk_bytes`, `situ_walk_count`, `situ_walk_element` and
+`situ_walk_scan` each take an arm's placement and always have. What was
+missing was any way to LEARN the placement: the arm table was read by the
+walk, kept to itself, and reachable by no public entry point. So the gap
+was an accessor rather than an algorithm, which is why it survived a
+walker that has otherwise been taken apart repeatedly -- **nothing was
+broken, something was unreachable, and unreachable has no symptom.**
+
+`situ_walk_arms` and `situ_walk_arm_at` are the two, shaped after
+`situ_walk_placement_at` and decoding the row in the one other place in
+that file that knows its offsets.
+
+**The line has a fixed shape and no dispatch, deliberately.** The differ
+picks one question per arm from the member's kind; reproducing that choice
+in the driver would put a dispatch on each side and compare THOSE before
+comparing an answer. All five accessors are asked, each prints its answer
+or `-`, and a disagreement about which question an arm deserves surfaces
+as a field differing rather than as a line nobody emitted.
+
+**The fixture searches for the discriminant instead of carrying it.**
+`edges` spells its case values `0x11`, `0x22` and `0x33`; the first
+version used 0 through 3, selected nothing in two structs, and would have
+reported perfect agreement about `ok=0`. A list of case values copied out
+of a schema is a second copy of the schema and goes stale in the direction
+that looks like a pass. So byte zero is searched, with the Python walk
+choosing which INPUTS are interesting rather than what the answer is --
+every assertion afterwards is C against Python on those inputs, `ok=`
+included.
+
+**The guard that caught it is the one worth keeping.** Two vacuity
+assertions per struct: that an arm enumerated at all, and that some
+message SELECTED one. The second failed for `arm_run` and `equalized`
+before the search existed, which is the whole reason the search exists.
+
+**And no field is a constant, which is asserted rather than measured
+once.** Each of the five both answers and refuses somewhere across the
+nine structs -- no single struct has all five, `icmp` having no delimiter
+and the delimited structs no wide element, so the claim is over the set.
+A field reading `-` on both sides for every message agrees perfectly and
+compares nothing.
+
+**One harness limit, named rather than papered over.** Frames are padded
+to the struct's own minimum, derived from the image because `edges` holds
+structs wanting 6 and 11 bytes. Below that, `acquire` refuses and the C
+driver never acquires, so a short message compares a refusal against
+`ok=0` rows -- a disagreement about what the two DRIVERS do, not what the
+two walkers say. Truncation stays with the verdict test, which carries
+three short frames for exactly that.
+
+**Compiling once, because the cost was all in the wrong place.** `_drive`
+wrote and compiled a driver per message; a compile is about five seconds
+and a run is milliseconds, so a test asking thirty messages spent thirty
+compilations on one binary. Split into `_build_driver` and `_run_driver`,
+with the old one-shot wrapper kept so every existing caller is unchanged:
+**5m37 to 15s** for the same nine structs.
+
+**Two sabotages, and the first attempt at the second did not apply.**
+Decoding the arm's case value one too high makes C answer `ok=0` where
+Python answers `ok=1`. Asking `situ_walk_element` for element one rather
+than zero gives `elem0=89` against `elem0=88` -- which is the one that
+matters, because it is the contents half being shown to be live. That
+second sabotage was first written with a pattern that matched nothing,
+and the run reported nine passed. **A sabotage that did not apply and a
+check that cannot fail are the same output**, so the marker was grepped
+out of the file before the second run was believed.
+
+**Nothing disagreed.** Six of the nine structs agreed on every field
+before the fixture was even selecting arms properly, and all nine after.
+That is an empty result and it is recorded with its lens: five accessors,
+nine structs, every arm the differ asks a content question about, on
+messages chosen to reach each one.
+
 ### 26.510 The reason was a guess, and it read as a decision
 
 **26.509 left three delimited arms out and gave a reason: this walker
@@ -30984,6 +31061,9 @@ discriminant selects. What they still do not compare is the arm's
 CONTENTS -- a length, a count, an element -- which is the half this entry
 gives the Python walker and the half `test_walker_c.py` has no probe for.
 That is a real gap, one layer along, and it is not what this fixes.
+**~~Still open~~ Closed by 26.511**, which found the missing piece was an
+accessor rather than a reader: every content reader in the C walker takes
+an arm's placement and nothing could learn the placement.
 
 ### 26.508 One case name, three structs, and two explanations that failed
 
