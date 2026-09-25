@@ -485,17 +485,21 @@ def _arm_runs(image: Image,
 	Measured when this was written: 16 such arms across `icmp`, `dnsname`
 	and `edges`, every one answered by four backends and by nobody here.
 
-	The shapes are the differ's own, keyed on the same two facts: an element
-	width of one byte is `bytes`, anything wider is `element`. An arm with
-	neither a count nor a size program is a scalar and belongs above.
+	The shapes are the differ's own, keyed on the same facts. A DELIMITED
+	arm is asked first and at any element width, because what the scan finds
+	is bytes whether the arm is `u8 line[] until "\n"` or `decimal u32
+	code[] until " "` -- the differ's own ordering, for its own reason. An
+	element width of one byte is `bytes`, anything wider is `element`, and
+	an arm with neither a count nor a size program is a scalar and belongs
+	above.
 
-	A DELIMITED arm is deliberately not here, and the reason is not that it
-	is hard. The differ asks one at any element width; this walker declines
-	a delimited run everywhere, `_runs` skipping `image.delimiters` for a
-	plain member too. Answering it only when it is an arm would make the arm
-	path wider than the plain path, which is how two lists of what counts
-	come apart -- so the delimited question is one question, asked in one
-	place, and it is still open.
+	The delimited arms were left out when this was written, on the stated
+	grounds that the walker declines a delimited run everywhere. That was
+	wrong and was never checked: `_delimited` renders a plain delimited
+	member and has since before any of this, so the arm was not consistent
+	with the plain path -- it was missing from it. A reason that sounds like
+	a design decision and is really an unchecked guess is the expensive kind,
+	because it reads as settled.
 	"""
 	found = []
 	for index in image.members(image.structs[struct_index]):
@@ -508,7 +512,13 @@ def _arm_runs(image: Image,
 			if flags or chosen == NONE:
 				continue		# the default arm, or `default: error`
 			arm = image.placements[chosen]
-			if arm.is_tag or chosen in image.delimiters:
+			if arm.is_tag:
+				continue
+			# Before the width clauses, and before the count one: a
+			# delimited arm has neither a count nor a size program, so
+			# asking those first classifies it as a scalar and drops it.
+			if chosen in image.delimiters:
+				found.append((chosen, selects, case, "delimited"))
 				continue
 			if arm.element_bits == NONE or arm.element_bits > 64:
 				continue
@@ -1723,7 +1733,17 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			# a length taken first and discarded second is a length taken
 			# from somebody else's member.
 			chosen = read_scalar(view, selects) == case
-			if shape == "bytes":
+			if shape == "delimited":
+				# The same number `_delimited` renders for a plain member:
+				# the scan's content, without the delimiter and under
+				# whatever `max` caps it. Not the span -- `before ","`
+				# leaves the comma out of the member and `until "\n"` puts
+				# the newline in, and the four backends' pointer getter
+				# hands back the content either way.
+				held = _trimmed(view, arm, scan(view, arm)[0]) if chosen \
+				       else 0
+				line = f"{local} ok={1 if chosen else 0} len={held}"
+			elif shape == "bytes":
 				held = len(_run_bytes(view, arm)) if chosen else 0
 				line = f"{local} ok={1 if chosen else 0} len={held}"
 			else:

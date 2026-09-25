@@ -1804,26 +1804,109 @@ def test_the_walker_names_every_run_shaped_arm_the_differ_asks_about() -> None:
 				declined.append((schema.name, struct_name, one,
 				                 placement in image.delimiters))
 
-	# The partition first, and the vacuity floor after it, because the two
-	# catch different things and the floor intercepts. Dropping the
-	# `element` shape takes the count from 16 to 13 AND puts three
-	# non-delimited arms in the declined cell: a floor checked first
-	# reports a number, where the loop below names `arm_run.body_wide` and
-	# says what is wrong with it.
-	assert named | {one[:3] for one in declined} >= asked
+	# The declined cell is EMPTY now, and is asserted empty rather than
+	# walked. It used to hold the three delimited arms and this was a loop
+	# checking each was delimited -- which, the moment the cell emptied,
+	# became a loop over nothing that passes however broken `_arm_runs`
+	# gets. An empty cell is asserted as a cell; a loop over it is not a
+	# check at all.
+	assert not declined, (
+		"asked of four backends and declined here:\n  "
+		+ "\n  ".join(f"{one[0]}: {one[1]}.{one[2]}"
+		              f"{' (delimited)' if one[3] else ''}"
+		              for one in sorted(declined)))
 
-	# Every decline is a DELIMITED arm, asked of the image rather than read
-	# off the name. `_arm_runs` documents that one exclusion and no other,
-	# so this is the cell that must stay empty of anything else.
-	for schema_name, struct_name, local, delimited in sorted(declined):
-		assert delimited, (
-			f"{schema_name}: {struct_name}.{local} is asked of four "
-			f"backends, declined here, and is not delimited -- which is "
-			f"the only exclusion `_arm_runs` records")
+	# The partition, which the line above reduces to an equality: every arm
+	# the differ asks about is named here, and this is what fails by NAME
+	# when a shape is dropped.
+	assert named >= asked, f"never named {sorted(asked - named)}"
 
 	# Not vacuous: the corpus really does carry these, and a helper that
-	# returned nothing would satisfy every assertion above but this one --
-	# an empty `named` makes the partition hold through `declined`, and
-	# every decline would then be delimited only if nothing else were
-	# asked, which is not the case here but would be in a smaller corpus.
-	assert len(named) >= 16, f"only {len(named)} run-shaped arms named"
+	# returned nothing would fail the line above -- this one is the floor
+	# for the case where `differ.asks` and `_arm_runs` go quiet together.
+	assert len(named) >= 19, f"only {len(named)} run-shaped arms named"
+
+
+#: Messages that reach a delimited arm, which random draws do not. `pick` is
+#: the first byte, so a buffer selects arm 1 about once in 256 -- the
+#: corpus-wide comparison draws eighteen and has never reached one of these.
+#: Each is chosen so the three structs disagree with each other about where
+#: the arm ends, which is what makes the comparison say anything.
+DELIMITED_ARM_MESSAGES = [
+	b"\x01AB\nX",		# `until "\n"` terminates; `before ","` does not
+	b"\x01AB,X",		# `before ","` terminates; `until "\n"` does not
+	b"\x01404 X",		# `until " " max 4` terminates the text number
+	b"\x01ABCD",		# nothing terminates anything: truncated, not empty
+	b"\x02abcX",		# the other arm, so every delimited one reads ok=0
+	b"\x01\n",			# the delimiter first: an empty content run
+	b"\x01",			# the arm has no bytes at all
+]
+
+
+@pytest.mark.skipif(not COMPLETE, reason="needs all four toolchains")
+def test_a_delimited_arm_agrees_with_the_compiled_backend(
+		tmp_path: Path) -> None:
+	"""The three delimited arms, on messages that actually select them.
+
+	`edges` holds `u8 line[] until "\\n"`, `u8 line[] before ","` and
+	`decimal u32 code[] until " " max 4` as arms, and the differ asks all
+	four backends about each -- `ok= len=`, the span-shaped question, for
+	the text number too, because what a scan finds is bytes either way.
+
+	The length is the CONTENT and not the span: `until` puts the delimiter
+	inside the member and `before` leaves it out, and both hand back the
+	bytes before it. So `AB,X` is len=2 to `before ","` and len=4 to
+	`until "\\n"`, which never finds its delimiter -- and a walker that
+	returned the span would agree with C on one of those and not the other.
+
+	Held to the compiled backend rather than to a hand-written expectation,
+	for the reason the corpus comparison gives: the four are five spellings
+	of `traverse.py`, and a number written here would be a sixth.
+	"""
+	schema  = ROOT / "test" / "schema" / "edges.situ"
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	resolved = resolve(parsed, solve(parsed))
+	image    = load(packer.pack(parsed, resolved, metadata=True)[0])
+
+	wanted = {("delimited_arm", "held_line"),
+	          ("separated_arm", "held_line"),
+	          ("wide_delim_arm", "held_code")}
+	seen: set[tuple[str, str]] = set()
+	selected: set[tuple[str, str]] = set()
+	lengths: set[str] = set()
+
+	for message in DELIMITED_ARM_MESSAGES:
+		walked   = _by_member(report.listing(image, message))
+		compiled = _by_member(answers(command["c"], message, tmp_path))
+
+		for key in wanted:
+			if key not in walked or key not in compiled:
+				continue
+			seen.add(key)
+			assert walked[key] == compiled[key], (
+				f"the walker and C disagree about {key} for "
+				f"{message.hex()}:\n  walker: {walked[key]!r}\n"
+				f"  C:      {compiled[key]!r}")
+			if " ok=1 " in walked[key]:
+				selected.add(key)
+				lengths.add(walked[key].rsplit(" ", 1)[-1])
+
+	# Every one of the three, not merely some line somewhere: a fixture that
+	# reached two of them would pass while the third went uncompared, which
+	# is the failure this whole entry is about.
+	assert seen == wanted, f"never compared {sorted(wanted - seen)}"
+
+	# And each was actually SELECTED. Both sides print `ok=0 len=0` for an
+	# arm nothing chose, so a fixture that never picked arm 1 would agree
+	# seven times over and say nothing at all about the scan.
+	assert selected == wanted, f"never selected {sorted(wanted - selected)}"
+
+	# More than one length, or the agreement is about a constant. `AB,X` is
+	# len=2 to `before ","` and len=4 to `until "\n"` in the same message,
+	# which is the disagreement between the two constructs that a walker
+	# returning the span would get half right.
+	assert len(lengths) > 1, f"every selected arm answered {lengths}"
