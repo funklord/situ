@@ -30845,6 +30845,67 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.510 The reason was a guess, and it read as a decision
+
+**26.509 left three delimited arms out and gave a reason: this walker
+declines a delimited run everywhere, `_runs` skipping `image.delimiters`
+for a plain member too, so answering one only when it is an arm would
+make the arm path wider than the plain path. Every clause of that is
+checkable and the load-bearing one is false.**
+
+`_runs` skips a delimited member because **`_delimited` renders it**, and
+has since long before any of this. So the arm was never consistent with
+the plain path -- it was MISSING from it, which is the opposite of what
+the sentence claimed, and the remedy it argued against was the one the
+tree was already using twenty lines away. All 19 run-shaped arms are
+compared now.
+
+**This is 26.508's own lesson, ignored one entry later and by the same
+hand.** That entry is about two comfortable explanations tested and
+failed, and it says naming a mechanism without testing it costs more than
+saying nothing. The delimited exclusion was then written as settled
+design, in a docstring, with a rationale -- and the check that would have
+refused it is one grep for `image.delimiters` in the file the docstring
+is in. **A wrong reason that sounds like a decision is worse than an
+unexplained gap**, because a gap invites somebody to look and a decision
+tells them not to.
+
+**The length is the CONTENT, and the two constructs disagree about it in
+the same message.** `until "\n"` puts the delimiter inside the member and
+`before ","` leaves it out, and both hand back the bytes before it -- so
+`01 41 42 2c 58` is `len=2` to `before ","` and `len=4` to `until "\n"`,
+which never finds its delimiter and is truncated rather than empty. A
+walker returning the span would agree with C on one and not the other:
+sabotaged exactly that way, it answered `len=3` where C said `len=2`.
+
+**A delimited text number gets the span question, not the value one.**
+`decimal u32 code[] until " " max 4` is asked `ok= len=` like the other
+two, because what a scan finds is bytes either way -- the differ's own
+ordering, its delimited branch sitting above every width and radix
+clause. The plain path excludes a radix member from `_delimited` and
+sends it to the text probe; the arm path must not, and the asymmetry is
+the differ's rather than an oversight. `len=3` for `404 `, capped by
+`max 4` and stopping at the space.
+
+**Random draws cannot reach any of this.** `pick` is the first byte, so a
+buffer selects arm 1 about once in 256, and the corpus comparison draws
+eighteen per schema. The fixture is seven deliberate messages, held to
+the compiled backend rather than to numbers written here -- and it
+asserts that each of the three was actually SELECTED, because both sides
+print `ok=0 len=0` for an arm nothing chose and a fixture that never
+picked arm 1 would agree seven times over while saying nothing.
+
+**And closing the gap killed the test that guarded it.** 26.509's
+quantifier test asserted the exceptional cell as a population: every arm
+asked about and not named must be delimited. That was a loop over the
+three. Emptying the cell turned it into a loop over nothing, which passes
+however broken `_arm_runs` gets -- **a population assertion written as a
+loop over the exception dies silently the moment the exception is
+fixed**, and it dies in the commit that fixes it, where nobody is looking
+for a test getting weaker. It asserts the cell EMPTY now, by name, and
+`named >= asked` is what fails when a shape is dropped: sabotaged, it
+names all three delimited arms rather than reporting a count.
+
 ### 26.509 An intersection is a filter with two directions, and one was argued for
 
 **26.413 recorded that a byte-run enum arm is rendered by no walker path,
@@ -30866,17 +30927,24 @@ the opposite consequence -- **C answering where the walker is silent is
 exactly a member losing its comparison**, and it reads identically from
 outside. Nineteen of them did.
 
-    before   16 named by four backends, by nobody here
-    after    16 compared on both sides, 3 declined and delimited
+    before   19 asked of four backends, named by nobody here
+    after    16 compared on both sides, 3 declined
+    26.510   19 compared, the 3 being a wrong reason rather than a rule
 
-**The three that stay out are a decision and not a remainder.** The differ
-asks about a delimited arm at any element width; this walker declines a
-delimited run everywhere, `_runs` skipping `image.delimiters` for a plain
-member too. Answering one only when it is an arm would make the arm path
-wider than the plain path, which is how two lists of what counts come
-apart -- so the delimited question stays one question asked in one place,
-and it is still open. `delimited_arm.held_line`, `separated_arm.held_line`
-and `wide_delim_arm.held_code` are it.
+**~~The three that stay out are a decision and not a remainder.~~ They
+were a wrong reason, and 26.510 is the correction.** What this said: the
+differ asks about a delimited arm at any element width, this walker
+declines a delimited run everywhere, `_runs` skipping `image.delimiters`
+for a plain member too, so answering one only when it is an arm would
+make the arm path wider than the plain path.
+
+The load-bearing clause is false. `_runs` skips a delimited member
+because **`_delimited` renders it**, and has all along -- so the arm was
+not consistent with the plain path, it was missing from it, and the
+remedy this argued against was already in the file. All three --
+`delimited_arm.held_line`, `separated_arm.held_line` and
+`wide_delim_arm.held_code` -- are compared now. The sentence stood for one
+entry, which is how long it took somebody to grep the word it turned on.
 
 **Reachability has to gate the READ, not the answer.** The bytes at an
 unselected arm's offset are the selected arm's, and `_run_bytes` hands
