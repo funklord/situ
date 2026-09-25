@@ -31823,6 +31823,22 @@ member has taken: detect the collision and rename. Extending that to
 generated locals is an emitter-wide change and would move generated C++
 for every schema carrying one of these blocks.
 
+**~~That is the holder's.~~ Closed by 26.501, and the estimate above was
+the expensive answer to a misread symptom.** No local was renamed and no
+generated C++ moved for any schema that did not carry the bug: the leaf
+names `this`, which no local can shadow, and `_in_gate` was taught to
+strip the qualifier so the nested-class rewrite still reaches the
+enclosing object. Measured on this entry's own five names against
+`cfee775~1` and `cfee775`: every one refused before and compiles after.
+
+**The reason the estimate was wrong is worth more than the correction.**
+"No fixed local name is provably safe" is true and was answered as though
+the only remedy were a better name. `this->` is not a name -- it is a
+receiver, and a receiver cannot be shadowed by a declaration. The search
+that would have shortened it is the one 26.501 records: asking what else
+in the emitter already solves the problem, rather than pricing a fix for
+the shape the symptom suggested.
+
 **Found by a differential that compiled what it generated.** Over 734
 constructed schemas, 315 of which the front end accepted, `gcc` and
 `g++ -fsyntax-only` were run on the output rather than the output being
