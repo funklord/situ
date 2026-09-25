@@ -1552,7 +1552,7 @@ def test_a_byte_run_expectation_of_the_wrong_length_is_refused() -> None:
 def test_generated_vector_test_round_trips() -> None:
 	text = vector_source("struct S { u32 a; }", "S basic 00 00 00 2A\n")
 	assert "situ_S_a_set(view, situ_S_a_get(view));" in text
-	assert "assert_memory_equal(buf, vector_basic, sizeof(buf));" in text
+	assert "assert_memory_equal(buf, vector_S_basic, sizeof(buf));" in text
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
@@ -6613,3 +6613,49 @@ def test_a_counted_run_of_an_unmeasurable_struct_compiles(
 	schema in the corpus writes that one.
 	"""
 	compile_generated(tmp_path, SWALLOWING_RUN)
+
+
+# -- one case name, several structs ------------------------------------------
+
+#: Two structs of the same shape, so one case name can legitimately name a
+#: vector in each -- which is what `example/modbus` does with `read_holding`
+#: across its MBAP header, its request and its response.
+TWO_STRUCTS = """struct a { u8 x; u8 y; }
+struct b { u8 x; u8 y; }
+"""
+
+
+def test_one_case_name_in_two_structs_emits_two_identifiers() -> None:
+	"""A case name is unique within its struct and was not across them.
+
+	`modbus` splits a frame three ways and names the same exchange in each,
+	so `read_holding` appeared under `mbap_header`, `request` and `response`
+	-- three `static void test_read_holding` in one file, which C refuses
+	as a redefinition. The identifier carries the struct now.
+
+	Asserting the two identifiers rather than counting the definitions: a
+	count of one would also be satisfied by emitting nothing.
+	"""
+	source = vector_source(TWO_STRUCTS, "a same 01 02\nb same 03 04\n")
+
+	assert "static void test_a_same(void **state)" in source
+	assert "static void test_b_same(void **state)" in source
+	assert "cmocka_unit_test(test_a_same)," in source
+	assert "cmocka_unit_test(test_b_same)," in source
+	# The bytes are named the same way, and they differ, so a collision here
+	# would have silently given both cases one buffer.
+	assert "vector_a_same[SITU_A_SIZE_FIXED] = {\n\t0x01, 0x02," in source
+	assert "vector_b_same[SITU_B_SIZE_FIXED] = {\n\t0x03, 0x04," in source
+
+
+def test_the_same_struct_and_case_twice_is_refused() -> None:
+	"""What the struct in the identifier cannot separate.
+
+	Making the struct part of the symbol fixes the case that found this and
+	leaves one open: a line repeated verbatim still collides. That is a
+	mistake in a vectors file rather than a second case, and a redefinition
+	in generated C is a compiler error a long way from the file somebody
+	edited -- so it is refused where it is written.
+	"""
+	with pytest.raises(ValueError, match="`a same` is declared twice"):
+		vector_source(TWO_STRUCTS, "a same 01 02\na same 03 04\n")

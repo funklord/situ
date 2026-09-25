@@ -118,8 +118,35 @@ def _error(source: Source, number: int, line: str, message: str, label: str):  #
 	return error(message, Span(source, begin, begin + len(line)), label=label)
 
 
+def _symbol(case: Case) -> str:
+	"""The C identifier for one case: the struct AND the case name.
+
+	A case name is unique within its struct and nothing made it unique
+	across them, so `modbus`'s `read_holding` -- an MBAP header, a request
+	and a response, which is exactly how that schema splits a frame --
+	emitted `test_read_holding` three times and the file would not compile.
+	The struct is what separates them, and it is already in the comment
+	above every case.
+	"""
+	return f"{case.struct}_{case.name}"
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		basename: str, prefix: str = "situ") -> str:
+	# Uniqueness of the emitted identifier, asserted rather than assumed.
+	# `_symbol` makes the struct part of it, which is what fixed the
+	# collision that found this; two cases naming one struct AND one case
+	# still collide, and a duplicate line in a vectors file is a mistake
+	# rather than a second case. A redefinition in generated C is a
+	# compiler error a long way from the file somebody edited.
+	seen: dict[str, Case] = {}
+	for case in cases:
+		symbol = _symbol(case)
+		if symbol in seen:
+			raise ValueError(
+				f"vector `{case.struct} {case.name}` is declared twice")
+		seen[symbol] = case
+
 	for case in cases:
 		_check(resolved, case)
 
@@ -231,18 +258,18 @@ def _case_body(resolved: ResolvedSchema, case: Case, prefix: str) -> list[str]:
 
 	lines = [
 		f"/* {case.struct} / {case.name} */",
-		f"static const uint8_t vector_{case.name}[{size}] = {{",
+		f"static const uint8_t vector_{_symbol(case)}[{size}] = {{",
 		f"\t{bytes_},",
 		"};",
 		"",
-		f"static void test_{case.name}(void **state)",
+		f"static void test_{_symbol(case)}(void **state)",
 		"{",
 		f"\tuint8_t     buf[{size}];",
 		"\tsitu_msg_t  msg;",
 		"\tsitu_view_t view;",
 		"",
 		"\t(void)state;",
-		f"\tmemcpy(buf, vector_{case.name}, sizeof(buf));",
+		f"\tmemcpy(buf, vector_{_symbol(case)}, sizeof(buf));",
 		f"\tsitu_msg_init(&msg, buf, {size});",
 		f"\tassert_int_equal({acquire}, SITU_OK);",
 		f"\tassert_int_equal({ident(prefix, case.struct, 'validate')}(view), SITU_OK);",
@@ -454,14 +481,14 @@ def _round_trip(resolved: ResolvedSchema, struct: ResolvedStruct, case: Case,
 		"\t/* Every value written back through its own setter must reproduce the",
 		"\t * bytes it came from. This is what catches a layout change. */",
 		*writes,
-		f"\tassert_memory_equal(buf, vector_{case.name}, sizeof(buf));",
+		f"\tassert_memory_equal(buf, vector_{_symbol(case)}, sizeof(buf));",
 	]
 
 
 def _main(cases: list[Case]) -> list[str]:
 	lines = ["int main(void)", "{", "\tconst struct CMUnitTest tests[] = {"]
 	for case in cases:
-		lines.append(f"\t\tcmocka_unit_test(test_{case.name}),")
+		lines.append(f"\t\tcmocka_unit_test(test_{_symbol(case)}),")
 	lines.extend([
 		"\t};",
 		"",
