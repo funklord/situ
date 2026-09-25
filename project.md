@@ -30845,6 +30845,78 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.509 An intersection is a filter with two directions, and one was argued for
+
+**26.413 recorded that a byte-run enum arm is rendered by no walker path,
+and filed it as one gap that fix exposed. Measured across the corpus it
+is nineteen**, in `icmp`, `dnsname` and `edges` -- every one of them a
+member the differ asks all four backends about, and none of them named
+here. `_arm_values` says SCALAR in its name and means it; `_runs` never
+sees an arm, because an arm is not in `image.members`. So the shape fell
+between two helpers that were each right about their own half.
+
+**Why it cost more than a missing line.** The walker is the fifth column,
+and `test_the_walker_agrees_with_the_compiled_backends` compares
+`walked.keys() & compiled.keys()` -- so a member the walker never names
+is not a disagreement, it is dropped. That intersection has a docstring
+and the docstring argues ONE direction: a member the walker answers and C
+never mentions is a difference in what was asked rather than in the
+answer, which is true. The reverse has the same shape, no argument, and
+the opposite consequence -- **C answering where the walker is silent is
+exactly a member losing its comparison**, and it reads identically from
+outside. Nineteen of them did.
+
+    before   16 named by four backends, by nobody here
+    after    16 compared on both sides, 3 declined and delimited
+
+**The three that stay out are a decision and not a remainder.** The differ
+asks about a delimited arm at any element width; this walker declines a
+delimited run everywhere, `_runs` skipping `image.delimiters` for a plain
+member too. Answering one only when it is an arm would make the arm path
+wider than the plain path, which is how two lists of what counts come
+apart -- so the delimited question stays one question asked in one place,
+and it is still open. `delimited_arm.held_line`, `separated_arm.held_line`
+and `wide_delim_arm.held_code` are it.
+
+**Reachability has to gate the READ, not the answer.** The bytes at an
+unselected arm's offset are the selected arm's, and `_run_bytes` hands
+them over without complaint: measured, `marker` reads `12 34` -- which is
+`number` -- when the discriminant says `number`. A walker that took the
+length first and zeroed it afterwards would print `len=2` for an arm that
+is not there, which is a wrong answer where there had been an honest
+silence.
+
+**The test derives its list rather than carrying one**, because the
+population is not this walker's to invent: it is `differ.asks` that
+decides which members four backends are asked about, so the test walks
+that and asserts `_arm_runs` names the same set. The declined cell is
+asserted as a POPULATION -- every arm asked and not named must be
+delimited, asked of `image.delimiters` rather than read off the name --
+so an arm arriving there for any other reason fails addressed to whoever
+added it.
+
+**Both controls, and the second needed two goes.** The behaviour test
+fails against the previous walker; the quantifier test also failed, by
+`AttributeError`, which is failing by the wrong mechanism and proves
+nothing about the assertion. Sabotaged properly -- `_arm_runs` dropping
+the `element` shape, with the helper present -- and the VACUITY FLOOR
+fired first, reporting "only 13 run-shaped arms named". A number, where
+the partition below it names `arm_run.body_pinned` and says what is wrong
+with it. The floor now runs last: *a control has to be reached*, and a
+cheap outer assertion is the commonest thing that stops one arriving.
+
+**What the two walkers compare about an arm, checked rather than
+assumed.** The first draft of this entry said they compare nothing,
+reasoning from `c_answers` and `python_answers` walking `image.members`,
+where an arm is not a member. That was an inference and it was wrong:
+`test_walker_c.py` holds them to each other on `arm_selected` over
+`dnsname`'s `label`, with eight fixtures covering three of the four
+verdicts and three short frames. What they agree about is WHICH arm a
+discriminant selects. What they still do not compare is the arm's
+CONTENTS -- a length, a count, an element -- which is the half this entry
+gives the Python walker and the half `test_walker_c.py` has no probe for.
+That is a real gap, one layer along, and it is not what this fixes.
+
 ### 26.508 One case name, three structs, and two explanations that failed
 
 **`make check` went red on committed work, and the commit was this
@@ -36935,11 +37007,18 @@ arm was a one-byte scalar, so that loop read it and printed a wrong
 value; now it prints nothing. A fallback added there is unreachable --
 written, tested by running, found dead and reverted.
 
-**Still open, and reproduced 2026-09-25** rather than read: a two-arm
-variant over `enum sig : u8[2]`, walked on `01 42 4D be ef` and on
-`02 12 34 be ef`, prints `body_number` for the scalar arm and nothing at
+**~~Still open, and reproduced 2026-09-25~~ Closed by 26.509 the same
+day**, and the reproduction is what it was closed from: a two-arm variant
+over `enum sig : u8[2]`, walked on `01 42 4D be ef` and on
+`02 12 34 be ef`, printed `body_number` for the scalar arm and nothing at
 all for `marker`. `tail` is 48879 in both, so the widening this entry
-fixed still holds and it is only the rendering that is absent.
+fixed held and it was only the rendering that was absent.
+
+It was also narrower here than in the tree. This entry has one schema in
+front of it and says "a byte-run enum arm"; the differ asks four backends
+about **nineteen** run-shaped arms across `icmp`, `dnsname` and `edges`,
+and the walker named none of them. 26.509 has the count and what the
+comparison was doing with the silence.
 
 ### 26.412 The C++ backend crashed on a variant arm at a dynamic offset
 
