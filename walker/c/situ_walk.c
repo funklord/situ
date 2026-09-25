@@ -1148,6 +1148,55 @@ static const uint8_t *arm_rows(const situ_walk_image *image, uint32_t index,
 	return found;
 }
 
+/* The public half of `arm_rows`, so a caller can reach an arm's placement.
+ *
+ * `situ_walk_bytes`, `situ_walk_count` and `situ_walk_element` take an
+ * arm's placement and always have; nothing could learn the placement, so
+ * the two walkers compared a variant's verdict and never its contents. */
+situ_walk_err situ_walk_arms(const situ_walk_image *image, uint32_t index,
+                             uint32_t *count)
+{
+	if (index >= image->placement_count) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	uint32_t       n    = 0u;
+	const uint8_t *rows = arm_rows(image, index, &n);
+	if (rows == NULL || n == 0u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+
+	*count = n;
+	return SITU_WALK_OK;
+}
+
+situ_walk_err situ_walk_arm_at(const situ_walk_image *image, uint32_t index,
+                               uint32_t which, situ_walk_arm *out)
+{
+	uint32_t count = 0u;
+	const situ_walk_err err = situ_walk_arms(image, index, &count);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (which >= count) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	uint32_t       n   = 0u;
+	const uint8_t *row = arm_rows(image, index, &n)
+	                     + which * image->arm_stride;
+
+	/* The same four offsets `variant_bits` reads, and deliberately the only
+	 * other place in this file that knows them. A second decoder of one row
+	 * format is a second thing to be wrong about it. */
+	out->chosen  = u32_at(row + 4);
+	out->when    = i64_at(row + 8);
+	out->selects = u32_at(row + 16);
+	out->flags   = row[20];
+
+	return SITU_WALK_OK;
+}
+
 /* A variant's extent: the arm the discriminant selects, not the worst case
  * and not the minimum.
  *

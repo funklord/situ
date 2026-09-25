@@ -121,6 +121,124 @@ SHOW = """static void show(const situ_walk_placement *held, uint64_t value,
 }
 """
 
+#: Every accessor, asked of one ARM, in a line of fixed shape.
+#:
+#: The shape is fixed on purpose and no field is chosen by a dispatch. The
+#: differ picks one question per arm from a member's kind, and reproducing
+#: that choice here would compare two dispatches before comparing any
+#: answer -- so each accessor is asked and prints its own answer or `-`,
+#: and a disagreement about WHICH question an arm should get shows up as a
+#: field differing rather than as a line nobody emitted.
+#:
+#: Keyed by placement index rather than by name: names live in the image's
+#: optional tail and a device omits them, so the index is the one thing
+#: both walkers always have.
+ARMS = """uint32_t arm_count = 0;
+		if (situ_walk_arms(&image, first + i, &arm_count) != SITU_WALK_OK) {
+			continue;
+		}
+		for (uint32_t a = 0; a < arm_count; a++) {
+			situ_walk_arm arm;
+			if (situ_walk_arm_at(&image, first + i, a, &arm)
+					!= SITU_WALK_OK) {
+				return 1;
+			}
+			/* `default:` matches whatever matched nothing and `default:
+			 * error` matches nothing at all, so neither names a case value
+			 * to compare a discriminant against. The Python walk drops both
+			 * on the same test. */
+			if ((arm.flags & (SITU_WALK_ARM_DEFAULT | SITU_WALK_ARM_ERROR))
+					!= 0u || arm.chosen == SITU_WALK_NONE) {
+				continue;
+			}
+
+			situ_walk_placement sel;
+			uint64_t            which  = 0;
+			int                 picked = 0;
+			if (situ_walk_placement_at(&image, arm.selects, &sel)
+					== SITU_WALK_OK
+					&& situ_walk_read(&image, msg, len, shape, arm.selects,
+					                  &which) == SITU_WALK_OK) {
+				/* A value comes back sign-extended through a `uint64_t`, so
+				 * the comparison has to know which it is looking at -- the
+				 * same reason `show` exists. */
+				picked = ((sel.flags & SITU_WALK_SIGNED) != 0u)
+				         ? ((int64_t)which == arm.when)
+				         : (which == (uint64_t)arm.when);
+			}
+
+			printf("arm%u ok=%d", arm.chosen, picked);
+			if (!picked) {
+				printf("\\n");
+				continue;
+			}
+
+			situ_walk_placement held;
+			if (situ_walk_placement_at(&image, arm.chosen, &held)
+					!= SITU_WALK_OK) {
+				return 1;
+			}
+
+			uint64_t value = 0;
+			if (situ_walk_read(&image, msg, len, shape, arm.chosen, &value)
+					== SITU_WALK_OK) {
+				printf(" read=");
+				show(&held, value, "");
+			} else {
+				printf(" read=-");
+			}
+
+			const uint8_t *raw = NULL;
+			uint32_t       n   = 0;
+			if (situ_walk_bytes(&image, msg, len, shape, arm.chosen, &raw, &n)
+					== SITU_WALK_OK) {
+				printf(" bytes=%u", n);
+			} else {
+				printf(" bytes=-");
+			}
+
+			uint32_t held_count = 0;
+			if (situ_walk_count(&image, msg, len, shape, arm.chosen,
+			                    &held_count) == SITU_WALK_OK) {
+				uint64_t zero = 0;
+				printf(" count=%u", held_count);
+				if (held_count > 0u
+						&& situ_walk_element(&image, msg, len, shape,
+						                     arm.chosen, 0u, &zero)
+						   == SITU_WALK_OK) {
+					printf(" elem0=");
+					show(&held, zero, "");
+				} else {
+					printf(" elem0=-");
+				}
+			} else {
+				printf(" count=- elem0=-");
+			}
+
+			/* `situ_walk_scan` takes an absolute offset where the Python one
+			 * derives it, so the driver derives it the same way and declines
+			 * a member that does not start on a byte -- which is what the
+			 * Python scan's own guard does. */
+			uint32_t off = 0;
+			if (situ_walk_offset_bits(&image, msg, len, shape, arm.chosen,
+			                          &off) == SITU_WALK_OK
+					&& (off % 8u) == 0u) {
+				uint32_t content = 0;
+				int      term    = 0;
+				uint32_t took    = 0;
+				if (situ_walk_scan(&image, msg, len, arm.chosen, off / 8u,
+				                   &content, &term, &took) == SITU_WALK_OK) {
+					printf(" scan=%u/%d/%u", content, term, took);
+				} else {
+					printf(" scan=-");
+				}
+			} else {
+				printf(" scan=-");
+			}
+			printf("\\n");
+		}"""
+
+
 #: The value read: what a caller asks a member for.
 VALUES = """uint64_t value = 0;
 		situ_walk_placement held;
@@ -323,8 +441,14 @@ def python_widths(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	return found
 
 
-def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
-		shape: int = 0) -> list[str]:
+def _build_driver(tmp_path: Path, blob: bytes, ask: str) -> Path:
+	"""Write the image and compile one driver, answering where it landed.
+
+	Split out from `_drive` because compiling is the whole cost: a driver
+	is about five seconds and running it is milliseconds, so a test asking
+	thirty messages spent thirty compilations on one binary. The one-shot
+	wrapper below keeps every existing caller unchanged.
+	"""
 	(tmp_path / "img").write_bytes(blob)
 	(tmp_path / "drive.c").write_text(
 		DRIVER.replace("SHOW", SHOW).replace("ASK", ask), encoding="ascii")
@@ -335,17 +459,111 @@ def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
 		 str(WALKER / "situ_walk.c"), "-o", str(tmp_path / "drive")],
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
+	return tmp_path / "drive"
 
-	ran = subprocess.run([str(tmp_path / "drive"), str(tmp_path / "img"),
+
+def _run_driver(drive: Path, tmp_path: Path, message: bytes, shape: int,
+		by_line: bool) -> list[str]:
+	ran = subprocess.run([str(drive), str(tmp_path / "img"),
 	                      message.hex(), str(shape)],
 	                     capture_output=True, text=True)
 	assert ran.returncode == 0, ran.stdout + ran.stderr
+	# Whitespace for the asks that print one token a line, and lines for
+	# the ones that print fields. Splitting an `ARMS` line on spaces would
+	# compare six answers as six unlabelled tokens and report the first
+	# difference as a disagreement about whichever field happened to align.
+	if by_line:
+		return [one for one in ran.stdout.splitlines() if one]
 	return ran.stdout.split()
+
+
+def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
+		shape: int = 0, by_line: bool = False) -> list[str]:
+	drive = _build_driver(tmp_path, blob, ask)
+	return _run_driver(drive, tmp_path, message, shape, by_line)
 
 
 def c_answers(tmp_path: Path, blob: bytes, message: bytes,
 		shape: int = 0) -> list[str]:
 	return _drive(tmp_path, blob, message, VALUES, shape)
+
+
+def c_arms(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int = 0) -> list[str]:
+	return _drive(tmp_path, blob, message, ARMS, shape, by_line=True)
+
+
+def python_arms(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
+	"""The same six questions, asked of the Python walk.
+
+	Every field is asked and every field prints, `-` where the accessor
+	refused. The alternative is choosing one question per arm from its
+	kind, which would put a dispatch on each side of the comparison and
+	compare those before comparing an answer.
+	"""
+	image = load(blob)
+	view  = acquire(image, message, shape)
+	found = []
+
+	for index in image.members(image.structs[shape]):
+		if index not in image.arms:
+			continue
+		selects, arms = image.arms[index]
+		for case, chosen, flags in arms:
+			if flags or chosen == NONE:
+				continue
+			picked = False
+			if selects != NONE:
+				try:
+					picked = read_scalar(view, selects) == case
+				except (Refused, Unplaceable, Unsupplied):
+					picked = False
+			if not picked:
+				found.append(f"arm{chosen} ok=0")
+				continue
+
+			placement = image.placements[chosen]
+			parts = [f"arm{chosen} ok=1"]
+
+			def _ask(label: str, call: object) -> None:
+				try:
+					parts.append(f"{label}={call()}")	# type: ignore[operator]
+				except (Refused, Unplaceable, Unsupplied):
+					parts.append(f"{label}=-")
+
+			_ask("read", lambda: read_scalar(view, chosen))
+			_ask("bytes", lambda: len(read_bytes(view, chosen)))
+
+			# The same split `test_it_agrees_with_the_python_walker` makes:
+			# a `while` run answers through the walk and everything else
+			# through `_count`, which is what `situ_walk_count` resolves to.
+			def _count() -> int:
+				if placement.repeat_code != NONE:
+					return walk.while_count(view, chosen)
+				return walk._count(view, chosen)
+
+			try:
+				held = _count()
+				parts.append(f"count={held}")
+				if held > 0:
+					try:
+						parts.append(f"elem0={report._element(view, chosen, 0)}")
+					except (Refused, Unplaceable, Unsupplied):
+						parts.append("elem0=-")
+				else:
+					parts.append("elem0=-")
+			except (Refused, Unplaceable, Unsupplied):
+				parts.extend(["count=-", "elem0=-"])
+
+			try:
+				content, terminated, took = walk.scan(view, chosen)
+				parts.append(f"scan={content}/{1 if terminated else 0}/{took}")
+			except (Refused, Unplaceable, Unsupplied):
+				parts.append("scan=-")
+
+			found.append(" ".join(parts))
+
+	return found
 
 
 def c_widths(tmp_path: Path, blob: bytes, message: bytes,
@@ -3031,3 +3249,164 @@ def test_an_argument_belongs_to_the_struct_it_was_supplied_for(
 	assert read_scalar(view, mine) == 4
 	with pytest.raises(Unsupplied):
 		read_scalar(view, other)
+
+
+# -- the arms, between the two walkers ---------------------------------------
+
+#: Schemas whose structs hold an arm the differ asks a content question
+#: about, and the shape to enter each by. Named rather than swept, because
+#: entering the wrong struct gets a refusal that reads like agreement.
+ARM_SCHEMAS = [
+	("example/icmp/icmp.situ",       "icmp_message"),
+	("example/dnsname/dnsname.situ", "label"),
+	("test/schema/edges.situ",       "delimited_arm"),
+	("test/schema/edges.situ",       "separated_arm"),
+	("test/schema/edges.situ",       "wide_delim_arm"),
+	("test/schema/edges.situ",       "arm_run"),
+	("test/schema/edges.situ",       "equalized"),
+	("test/schema/edges.situ",       "signed_kind"),
+	("test/schema/edges.situ",       "spanned_arm"),
+]
+
+#: Tails that differ in where each delimiter falls, so `until "\n"`,
+#: `before ","` and `until " "` give three different lengths for one
+#: message. The DISCRIMINANT is not here: it is searched for below, because
+#: `edges` spells its case values `0x11`, `0x22` and `0x33` and a range of
+#: small integers written here selects nothing at all -- which a comparison
+#: would report as perfect agreement about `ok=0`.
+ARM_TAILS = [b"AB\nXYZW", b"AB,XYZW", b"404 XYZW", b"ABCDEFGH",
+             b"\nABCDEFG", bytes(range(8)), b"\xff" * 8]
+
+
+def _selecting_messages(blob: bytes, shape: int) -> list[bytes]:
+	"""Messages that between them select every arm, found rather than listed.
+
+	A list of discriminant values copied out of the schema is a second copy
+	of the schema, and it goes stale in the direction that looks like a
+	pass: an arm whose case value moves stops being selected and the
+	comparison agrees about `ok=0` forever.
+
+	So the first byte is SEARCHED. The Python walk is one of the two things
+	under test and using it to build the fixture would be circular if it
+	decided the answer -- it does not. It decides which INPUTS are
+	interesting, and every assertion afterwards is C against Python on those
+	inputs, `ok=` included. A Python walk that picked the wrong arm would
+	make this search choose odd messages and then fail on them.
+
+	Padded to the struct's own minimum frame, which is derived here for the
+	reason the values are: `edges` holds structs wanting 6 and 11 bytes.
+	"""
+	image = load(blob)
+	held  = image.structs[shape]
+	need  = ((held.size_bits + 7) // 8) if held.fixed else 0
+
+	wanted = {chosen
+	          for index in image.members(held)
+	          if index in image.arms
+	          for _, chosen, flags in image.arms[index][1]
+	          if not flags and chosen != NONE}
+
+	found: list[bytes] = []
+	reached: set[str] = set()
+	for tail in ARM_TAILS:
+		for first in range(256):
+			message = (bytes([first]) + tail).ljust(need, b"Z")
+			try:
+				said = python_arms(blob, message, shape)
+			except (Refused, Unplaceable, Unsupplied):
+				continue
+			picked = {one.split(" ", 1)[0] for one in said if " ok=1" in one}
+			if picked - reached:
+				reached |= picked
+				found.append(message)
+			if len(reached) == len(wanted):
+				break
+
+	# Two messages that reach nothing, kept on purpose: an unselected arm is
+	# `ok=0` on both sides and that is an answer to compare too -- it is the
+	# arm-selection logic, which is the half the two walkers already agreed
+	# about and which must not break while the contents half is added.
+	found.append((bytes([0x00]) + ARM_TAILS[0]).ljust(need, b"Z"))
+	found.append((bytes([0xFE]) + ARM_TAILS[3]).ljust(need, b"Z"))
+	return found
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("path,struct", ARM_SCHEMAS,
+                         ids=[f"{Path(p).stem}.{s}" for p, s in ARM_SCHEMAS])
+def test_they_agree_about_an_arm_s_contents(path: str, struct: str,
+		tmp_path: Path) -> None:
+	"""The half the two walkers had never compared.
+
+	They have agreed about which arm a discriminant selects since the C
+	build learned variants, through `validate`'s verdict. What neither
+	could ask the other was what the selected arm HOLDS -- a length, a
+	count, an element, a scan -- because `situ_walk_bytes` and its
+	siblings take an arm's placement happily and nothing could learn the
+	placement. `situ_walk_arms` and `situ_walk_arm_at` are the accessors
+	that were missing, and this is what they are for.
+
+	Six questions per arm in a line of fixed shape, each printing its own
+	answer or `-`. Not one question chosen per arm from its kind: that
+	would put a dispatch on each side and compare those before comparing
+	an answer, and a disagreement about which question an arm deserves is
+	exactly the kind this is meant to catch.
+	"""
+	schema = ROOT / path
+	blob   = image_for(schema)
+	shape  = shape_named(schema, struct)
+
+	messages = _selecting_messages(blob, shape)
+	drive    = _build_driver(tmp_path, blob, ARMS)
+
+	compared = 0
+	selected = 0
+	for message in messages:
+		c_said  = _run_driver(drive, tmp_path, message, shape, by_line=True)
+		py_said = python_arms(blob, message, shape)
+
+		assert c_said == py_said, (
+			f"{path} {struct}, message {message.hex()}:\n"
+			f"  C:      {c_said}\n  python: {py_said}")
+		compared += len(py_said)
+		selected += sum(1 for one in py_said if " ok=1" in one)
+
+	# Not vacuous in two separate ways, and both have to hold. A struct
+	# whose arms never enumerate compares empty lists forever; a struct
+	# whose arms never get SELECTED compares `ok=0` forever, which is the
+	# answer both walkers give for an arm that is not there and says
+	# nothing at all about its contents.
+	assert compared > 0, f"{path} {struct}: no arm enumerated"
+	assert selected > 0, f"{path} {struct}: no message selected an arm"
+
+
+def test_every_arm_field_both_answers_and_refuses() -> None:
+	"""No field of the arm line is a constant.
+
+	`A control that passes everywhere is not evidence; it is a constant.`
+	Five accessors print into one line and each can answer `-`, so a field
+	that reads `-` on both sides for every message in the fixture agrees
+	perfectly and compares nothing -- `scan=` would, on any corpus with no
+	delimited arm in it, and `elem0=` on one with no run of wide elements.
+
+	Asserted across the whole schema set rather than per struct, because
+	no single struct has all five: `icmp` has no delimiter and the
+	delimited structs have no wide element. Python-only, and fast: this is
+	about the fixture's reach, and the C comparison is the test above.
+	"""
+	answered: set[str] = set()
+	refused:  set[str] = set()
+
+	for path, struct in ARM_SCHEMAS:
+		schema = ROOT / path
+		blob   = image_for(schema)
+		shape  = shape_named(schema, struct)
+		for message in _selecting_messages(blob, shape):
+			for line in python_arms(blob, message, shape):
+				for field in line.split()[2:]:
+					name, _, value = field.partition("=")
+					(refused if value == "-" else answered).add(name)
+
+	want = {"read", "bytes", "count", "elem0", "scan"}
+	assert answered >= want, f"never answered: {sorted(want - answered)}"
+	assert refused >= want, f"never refused: {sorted(want - refused)}"

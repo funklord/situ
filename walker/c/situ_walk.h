@@ -354,6 +354,45 @@ situ_walk_err situ_walk_placement_at(const situ_walk_image *image,
                                          uint32_t index,
                                          situ_walk_placement *out);
 
+/* One arm of a variant, decoded out of the table.
+ *
+ * `chosen` is SITU_WALK_NONE for `default: error`, which names no member:
+ * a discriminant reaching it makes the message one this build cannot READ
+ * rather than one that breaks a rule, which is 14.5's distinction and the
+ * reason that case has a verdict of its own.
+ *
+ * `selects` is the discriminant's own placement and is the same for every
+ * arm of one variant. It is carried per row because that is how the image
+ * stores it, and repeating it here is cheaper than a second accessor. */
+typedef struct {
+	uint32_t chosen;
+	int64_t  when;
+	uint32_t selects;
+	uint8_t  flags;
+} situ_walk_arm;
+
+/* Bits of `situ_walk_arm.flags`. A row carrying either names no case value
+ * to match: DEFAULT answers whatever matched nothing, and ERROR answers
+ * nothing at all. */
+#define SITU_WALK_ARM_DEFAULT 0x01u
+#define SITU_WALK_ARM_ERROR   0x02u
+
+/* How many arms a variant has, SITU_WALK_UNSUPPORTED where the member is
+ * not one.
+ *
+ * The walk has read this table since it learned variants and kept it to
+ * itself, so a caller could compare a variant's VERDICT against another
+ * reader and not its contents -- the arm is where the bytes are, and it is
+ * reached by no public entry point. `situ_walk_bytes`, `situ_walk_count`
+ * and `situ_walk_element` all take an arm's placement happily; what was
+ * missing was any way to learn the placement. */
+situ_walk_err situ_walk_arms(const situ_walk_image *image, uint32_t index,
+                                 uint32_t *count);
+
+/* One arm, decoded, `which` counting from zero in declaration order. */
+situ_walk_err situ_walk_arm_at(const situ_walk_image *image, uint32_t index,
+                                   uint32_t which, situ_walk_arm *out);
+
 /* Decode one varint at `at`, answering the bytes it consumed and the value.
  *
  * Two encodings, differing in which end the groups come from: `leb128` puts
