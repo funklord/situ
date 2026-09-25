@@ -30797,6 +30797,117 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.502 Nine corpora, and what committing them found
+
+**`gen-tests` emits nothing for a schema with no committed vectors, and
+twenty-seven schemas were in that state.** Eight are not, now, and the
+rule that governed every one of them is 23's: a `<name>.vectors` beside a
+schema is bytes SOME OTHER IMPLEMENTATION wrote. A corpus situ produced
+would be the known-answer test `evidence.md` calls the same failure
+wearing a lab coat.
+
+| schema | who wrote the bytes |
+|---|---|
+| `png` | the first eight bytes of a real PNG on this machine |
+| `json` | Python's `json`, for `true`, `false` and `null` |
+| `mqtt` | paho-mqtt's own packet writer, through a stand-in socket |
+| `modbus` | pymodbus 3.8.6, `pdu.encode()` and `FramerSocket` |
+| `protobuf` | `protoc --encode=User` over the example's own `.proto` |
+| `http` | `http.client` for the request, `http.server` for the reply |
+| `smtp` | `smtplib.SMTP.putcmd` |
+| `dtls` | OpenSSL 3.5.7, both ends of a relayed DTLS 1.2 session |
+| `padded` | nobody -- see below |
+
+**A corpus can be present and still not reach the thing under test.**
+`json` had twenty-two vectors and skipped anyway, because every one is for
+`value` and `situc build --owned` owns the three fixed-size literals
+instead. The skip said "its constraints need committed vectors to
+exercise" and the committed vectors were there, for a struct the test
+cannot use. **Asking whether a corpus EXISTS is not asking whether it
+covers what is being checked**, and only the driver's own `names` list
+answers the second.
+
+**A committed vector the decoder REFUSES produced the same skip as no
+vector at all**, under a message naming the wrong remedy. That is the one
+state that can go quiet after somebody has done this work: corrupt a byte
+of `png.vectors` and the count moves from `refused=64` to `refused=1`,
+which is a disagreement between a vector and a decoder rather than an
+absence of either. It fails now, and the skip is kept for the case it was
+written for. Without that, every closure recorded here could have rotted
+back into a skip silently.
+
+**Committing a corpus for a delimited schema found a defect in
+`gen-tests`.** Its round trip reads every settable field and writes it
+back, and it decided which those are by skipping reserved, nested,
+located, covered and data-sized members. A run the DELIMITER sizes is none
+of those -- `traverse.data_sized` asks whether the extent comes from an
+expression over the data, and a scan is not one -- so `command.verb`
+looked like a scalar and the harness called `situ_command_verb_get`, which
+the header does not declare. It has `_ptr`, `_len`, `_span`, `_eq` and
+`_which`.
+
+It was invisible because **no schema with a delimited member had committed
+vectors**, which is the shape worth keeping: a generator's blind spot can
+be held open by the absence of the very corpus that would close it, and
+adding the corpus is what makes the generator wrong out loud.
+`test_generated_c_calls_only_accessors_the_headers_declare` caught it,
+which is the test written for exactly this -- a build failure `make test`
+finds three quarters of an hour later and the fast gate reads past.
+
+**`padded` is the honest exception and its header says so.** It describes
+no format anybody else implements, so there is no second implementation to
+take bytes from; its vector is computed by hand from 8.4, which is a
+second reading of the rule rather than a second implementation of it, and
+the weaker evidence. It leans on the schema's own
+`require size(aligned_header) == 8`, which fails the build before the
+vector is reached. Saying which kind of evidence a corpus is costs a
+paragraph and is the difference between a fixture and a claim.
+
+**`smtp` carries only the commands that take an argument**, and that is the
+schema's own documented boundary rather than a discovery: `command.verb`
+scans `until " "`, and `DATA`, `QUIT` and `RSET` have no space. Running
+`situc verify` over all five is the note beside `struct command` behaving
+as written -- three conform, two are refused with *command.verb has no
+b' ': the frame stops first*. The two were left out rather than wished in.
+
+**`dtls` needed a way round a missing permission.** Packet capture is not
+allowed here, so the bytes were taken in userspace: a UDP relay between
+`openssl s_client` and `openssl s_server`, cipher forced to
+AES128-GCM-SHA256 so the AEAD is the one the schema names. The record
+closes exactly -- `length` 0x2B, thirteen of header, eight of explicit
+nonce, `length - 24` of ciphertext, sixteen of tag, 56 bytes. Its interior
+is not read and cannot be, `require verify_gated(record.sealed)` being the
+whole point.
+
+**And recording it left an orphan, which is this workspace's own rule
+failing in the direction it warns about.** The server ran under `timeout`
+and was killed THROUGH it, so the SIGKILL landed on the wrapper and
+openssl was reparented to init, still holding its port. `running-code.md`
+records that shape for containers; a `timeout` around any process that
+outlives the signal is the same thing. It was found by the sweep that
+section asks for afterwards and killed by name, `/proc/<pid>/cmdline`
+re-read before signalling.
+
+**What is left is nineteen, and none of it is a gate gone quiet.** Checked
+per schema rather than counted: three have no struct to carry bytes at all
+(`std/codecs.situ` and `std/kernels.situ` declare none, and a `register`
+is a bus transaction); six are situ's own inventions, where no other
+implementation exists by construction -- `telemetry`'s first line says
+"designed rather than described"; one is `image`, whose agreement with the
+packer `test_pack.py` already holds more precisely than a corpus would;
+and nine are real formats with no independent source ON THIS MACHINE --
+no DNS library, no capture permission, no stored `.pcap`, no Lisp, and
+`pickle` is Chromium's rather than Python's. Those nine close the day a
+library or a capture appears, and nothing about them is wrong.
+
+**Measured 2026-09-24 and 2026-09-25**, by `pytest test/unit -q -rs`
+grouped by reason: the suite went from 75 skips to 64 across four runs,
+`commits no golden vectors` from 27 to 19, and the three
+`no draw validated` rows to none. Each run was predicted before it was
+started and matched after it, which is the only reason the counts are
+quoted at all -- rule 7's objection is to a number nobody re-derives, and
+the command that re-derives this one is in this sentence.
+
 ### 26.501 Two mechanisms for one problem, composing into a third
 
 **A schema member named `at`, `need` or `have` generated a C++ header that
