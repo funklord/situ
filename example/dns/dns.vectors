@@ -1,34 +1,31 @@
 # Golden vectors for the DNS header example.
 #
-# A reply written by the resolver on 127.0.0.1, taken in userspace because
-# packet capture is not permitted here: a UDP relay sat between `dig` (BIND
-# 9.20.26) and the resolver and recorded both datagrams. `localhost` was
-# asked for on purpose -- the resolver answers it without forwarding, so
-# obtaining these bytes put nothing on the network.
+# A query written by `dig` (BIND 9.20.26) and the reply written by the
+# resolver on 127.0.0.1, taken in userspace because packet capture is not
+# permitted here: a UDP relay sat between the two and recorded both
+# datagrams. Neither header was typed.
 #
 #   dig @127.0.0.1 -p <relay> localhost +tries=1 +noedns
 #
-# **The QUERY from that same exchange is not here, and its absence is a
-# finding rather than a gap.** `situc verify` refuses it:
+# `localhost` on purpose. The local resolver answers it without forwarding,
+# so obtaining these bytes put nothing on the network.
+#
+# The pair is what makes them worth having: the same id in both, the request
+# flags against the response flags, and `answer_count` going from zero to
+# one. A header is twelve bytes with four counts and two packed bytes, and
+# reading one of those bytes backwards is the mistake this catches.
+#
+# THE QUERY IS WHY THE SCHEMA CHANGED. Its flags are 0x0120, and the AD bit
+# dig sets by default lands in what RFC 1035 called the Z field. Committed
+# against `reserved u3 [must_be_zero]` it was refused with
 #
 #     ConstraintError: dns_header.<reserved0> is reserved [must_be_zero]
 #
-# and it is right to, given what the schema says. dig set the flags to
-# 0x0120, whose second byte is 0010 0000 -- the three bits this schema
-# declares `reserved u3 [must_be_zero]` carry 010, because RFC 2535 and
-# RFC 4035 reassigned two of RFC 1035's Z bits as AD and CD, and modern
-# BIND sets AD on a query by default.
-#
-# So the schema describes RFC 1035 exactly and refuses traffic every current
-# resolver emits. Which of those should change is not this file's to decide:
-# the note beside `require canonical(dns_header)` argues deliberately that
-# reserved bits are rejected rather than preserved, because an ignored bit is
-# a malleability surface and DNS is a known covert channel. That argument is
-# about the Z field of RFC 1035; whether it still holds for a field two later
-# RFCs have assigned meanings to is a question for whoever owns the example.
-#
-# Committing the reply alone is what this corpus can honestly say today: a
-# vector the decoder refuses now fails rather than skipping, so the query
-# cannot be parked here quietly.
+# which was the description being older than the protocol rather than the
+# message being wrong. `authentic_data` and `checking_disabled` are named
+# fields now and one Z bit remains, so both of these parse and the reserved
+# bit is still held to zero -- which both of them satisfy, because neither
+# BIND nor the resolver sets it.
 
+dns_header query 03 07 01 20 00 01 00 00 00 00 00 00
 dns_header reply 03 07 85 80 00 01 00 01 00 00 00 00

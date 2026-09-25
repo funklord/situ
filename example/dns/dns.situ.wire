@@ -33,7 +33,9 @@ struct dns_header size=12
   @0x0002:6 1bit      bit        truncated  msb_first
   @0x0002:7 1bit      bit        recursion_desired  msb_first
   @0x0003   1bit      bit        recursion_available  msb_first
-  @0x0003:1 3bit      u3         <reserved0>  msb_first must_be_zero
+  @0x0003:1 1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0003:2 1bit      bit        authentic_data  msb_first
+  @0x0003:3 1bit      bit        checking_disabled  msb_first
   @0x0003:4 4bit      response_code response_code  msb_first
   @0x0004   2         u16        question_count  big
   @0x0006   2         u16        answer_count  big

@@ -43,9 +43,24 @@ struct dns_header {
 	bit           truncated;
 	bit           recursion_desired;
 
-	// One byte: the recursion flag, three unused bits, the response code.
+	// One byte: the recursion flag, one reserved bit, the two DNSSEC flags,
+	// and the response code.
+	//
+	// RFC 1035 section 4.1.1 calls all three of the bits after RA a Z field
+	// "reserved for future use", to be zero in every message. The future
+	// arrived: RFC 2535 took two of them and RFC 4035 section 4.9.3 settled
+	// their meanings, so only the first is still Z.
+	//
+	// This schema said `reserved u3 [must_be_zero]` until a real query
+	// refused to parse. `dig` sets AD by default, so BIND's flags are
+	// 0x0120 and those three bits carry 010 -- a message every current
+	// resolver emits, rejected by a description of what the field used to
+	// be. A layout language describes the format as it is (section 1), and
+	// what the format is now has two named bits where it had padding.
 	bit           recursion_available;
-	reserved      u3    [must_be_zero];
+	reserved      u1    [must_be_zero];
+	bit           authentic_data;
+	bit           checking_disabled;
 	response_code  response_code;
 
 	u16           question_count;
@@ -62,9 +77,16 @@ require absolute_static(dns_header);
 require in_place(dns_header.response_code);
 require in_place(dns_header.answer_count);
 
-// The reserved bits are rejected on parse rather than preserved. Section 14.5
+// The reserved bit is rejected on parse rather than preserved. Section 14.5
 // is deliberate about this: every ignored bit is a malleability surface, and
 // DNS responses are a well-known covert channel.
+//
+// That argument is unchanged and its SCOPE is what moved. It applies to a
+// bit nobody has assigned a meaning to, which is one bit here rather than
+// three -- AD and CD are fields a receiver reads, so refusing them was not
+// malleability control, it was refusing the protocol. The canonicity claim
+// survives the narrowing for the same reason: a named bit carrying its own
+// value is not a second spelling of anything.
 require canonical(dns_header);
 
 // What pairs a reply with its query, and what to do when one does not
