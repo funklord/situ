@@ -30797,6 +30797,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.503 A green suite is not a green gate, and a skip is not a gap
+
+Two findings about the gates rather than the code, from a session that ran
+the suite five times and `make check` never.
+
+**`make test` is `test-py test-c`. `make check` is `style typecheck lint
+test cross-test`.** So a session that runs the suite has run two of five,
+and the three it skipped are the ones that answer different questions:
+`typecheck` reads the source mypy-strict, `lint` and `style` read its
+shape, and `cross-test` runs the generated accessors on aarch64 under
+emulation. 24.0 already says `check` is "what has to pass before a
+commit"; what this records is what the other four commits cost.
+
+**A dead branch shipped, in four commits, behind a green suite.**
+`_element_guard` was written once and copied into all four backends, and
+its `count is None` arm cannot be taken in C, whose `_count_expression`
+returns `str` where the other three return `str | None`. mypy strict said
+`Statement is unreachable`; the suite said nothing, because there is
+nothing to say -- a branch that cannot be taken breaks no test. It was
+fixed in `81695c6`, and the emitted code is byte-identical either way,
+which is precisely why no behavioural gate could have found it.
+
+**The shape: a type checker and a test suite fail on different axes**, so
+one standing in for the other is a population error rather than a
+shortcut. The floor gates of 22 already record this from the other side --
+`sys.monitoring` is syntactically valid, so only the type checker could
+refuse it -- and this is the same division met while writing ordinary
+code. Run `check`, not `test`.
+
+**And a skip is not a gap, which took getting wrong to notice.** Reading
+the suite's 64 skips by reason, three stood out as checks that inspect
+nothing: `test_future_examples_*`, parametrised over examples marked
+`// STATUS: needs phase N.`, of which there are none. They were reported
+as inert.
+
+They are not. `test_every_example_builds` asserts
+`FUTURE == []` and `len(CURRENT) >= 12` -- the partition, not the cell --
+and its docstring names what pins the phase-gating machinery while the
+group is empty. That is `evidence.md`'s remedy for an empty population,
+already in place, and an empty parametrisation sitting beside an assertion
+that the population IS empty is covered rather than silent.
+
+**What made the misreading easy is that the skip line looks identical
+either way.** `got empty parameter set ['path']` is pytest's, not this
+tree's, so it carries no reason and cannot say whether the emptiness is
+asserted somewhere. The question to ask of an empty parametrisation is
+therefore not "what does this test cover" but **"what asserts that this
+population is empty"** -- and if nothing does, that is the finding rather
+than the skip.
+
 ### 26.502 Nine corpora, and what committing them found
 
 **`gen-tests` emits nothing for a schema with no committed vectors, and
