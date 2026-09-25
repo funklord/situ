@@ -30797,6 +30797,68 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.504 A hand-written vector would have agreed with the bug
+
+**`example/dns` described RFC 1035 exactly and refused traffic every
+current resolver emits.** `reserved u3 [must_be_zero]` is that RFC's Z
+field, three bits reserved for future use. The future arrived: RFC 2535
+took two of them and RFC 4035 section 4.9.3 settled them as AD and CD, and
+`dig` sets AD by default. So BIND's flags are 0x0120, those three bits
+carry 010, and `situc verify` answered
+
+    ConstraintError: dns_header.<reserved0> is reserved [must_be_zero]
+
+correctly, about a message nothing is wrong with.
+
+**The whole of 23's independent-source rule is in how this was found.** A
+vector written by hand would have been written from RFC 1035 -- the same
+document the schema was written from -- and it would have set the Z field
+to zero and passed. The bug is not reachable from the specification at
+all: it is only reachable from bytes, because only an implementation knows
+which year it is. **Two readings of one document are one witness however
+carefully either is made**, and that is the argument for the rule stated
+as a case rather than as a principle.
+
+**What changed is scope, not the argument.** 14.5 rejects reserved bits
+because an ignored bit is a malleability surface and DNS is a known covert
+channel, and that reasoning is untouched -- it applies to a bit nobody has
+assigned a meaning to, which is one here rather than three. AD and CD are
+fields a receiver READS, so refusing them was never malleability control;
+it was refusing the protocol. `require canonical(dns_header)` survives for
+the same reason: a named bit carrying its own value is not a second
+spelling of anything.
+
+**Nothing moved.** Every member keeps its offset, the packed byte is still
+eight bits, `require size(dns_header) == 12` still holds, and the wire
+signature records three lines at the same bit positions where there was
+one. It is a WIDENING -- the schema accepts what it used to refuse and
+refuses nothing it used to accept -- which is the rare direction for a
+contract change and the reason this one is cheap.
+
+**And the corpus came from a permission this machine does not grant.**
+Packet capture is refused here, which had been recorded as "no independent
+source for dns" and was wrong: a UDP relay between `dig` and the resolver
+on 127.0.0.1 records both datagrams in userspace, and `localhost` is
+answered without forwarding so nothing goes on the network. The same shape
+had already worked for `example/dtls` against two OpenSSL processes.
+**A missing PERMISSION is not a missing SOURCE**, and the difference is
+one relay.
+
+Worth keeping because the wrong classification was made confidently and
+twice: nine schemas were sorted as unclosable, the list was reported, and
+the list was repeated unchanged when the question came round again.
+`evidence.md` names that -- a frame that has just been right is the hardest
+one to drop -- and what broke it was asking what the DTLS entry had
+actually done rather than re-reading the classification.
+
+**The reply carried the other half.** Its answer section names its owner
+`C0 0C`, a pointer whose low fourteen bits are 12, which is where the
+question's name starts in that message. So `example/dnsname` holds a real
+resolver's compressed name beside the same name written out: both
+spellings of one name, from one exchange, which is exactly what the
+`non_canonical` attribute on that run asserts and what nothing in the tree
+had demonstrated.
+
 ### 26.503 A green suite is not a green gate, and a skip is not a gap
 
 Two findings about the gates rather than the code, from a session that ran
