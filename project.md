@@ -22212,6 +22212,11 @@ a counted run and has to be walked, so a later member's offset calls a
 span function nothing emits. Folding it in here would have hidden a
 second defect inside a change about the first.
 
+**~~Left open.~~ Closed since, and re-measured 2026-09-25.** `vrec run[2]`
+behind a variable member generates in all four backends and compiles in C
+and C++ under the build's own warning set; `run_span_from` is emitted and
+the following member's offset walks the run through it.
+
 ### 26.267 Two predicates, one spelling apart, six descriptions wrong
 
 `T x[2]` where the element has no single size. `classify` called it an
@@ -30290,6 +30295,13 @@ imported and uncalled in the Rust and Python emitters once each stopped
 refusing; both imports are gone now, and the function keeps its real
 callers in the generators that still refuse.
 
+**~~The first of those two is their own piece.~~ Closed since,
+re-measured 2026-09-25.** Every upper rung -- `edit`, `relate`, `frame`,
+`converse`, `drive` -- emits `::situ::s::at(owner, 0u, len, n_, view)` for
+a struct declaring `parameter u16 n [stream]`, and the generated headers
+compile. A parameter that SIZES a member is refused before any of this,
+by 0050's `[stream]` rule, which is a different gate and not this gap.
+
 ### 26.397 A C view takes its arguments, by a tail rather than a wrapper
 
 **The fourth and last backend**, and the one whose view is not its own to
@@ -30789,6 +30801,11 @@ arguments* without making anything compile. A speculative edit to that
 path was made and then reverted, on the grounds that **a change nobody
 can prove is worse than an absence somebody has written down.**
 
+**Closed by 26.430, as that entry says and as this one predicted.**
+Re-measured 2026-09-25: a variant arm holding a struct that takes a
+parameter is refused in C and C++ with *`held` takes an argument, so it
+cannot be a member*, which is 0050's rule reaching an arm.
+
 That reasoning held, and it was aimed at the wrong question. The shape
 needed no plumbing at all: 0050 had already decided such a struct cannot
 be nested, and the refusal simply was not reaching an arm. 26.430 closes
@@ -30796,6 +30813,64 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.505 Six open items swept, five of them already closed
+
+**A sweep of this section for things recorded as open found 40 candidates
+in 505 entries. Six were checked by reproducing them. Five were fixed
+already.**
+
+    26.490  closed by 26.501 -- this session's own work
+    26.464  closed by 26.467 -- the entry three along
+    26.266  closed since, `run_span_from` emitted and compiling
+    26.396  closed since, every rung passes the argument
+    26.408  closed by 26.430, as a refusal, as that entry predicted
+    26.484  LIVE, reproduced with a control
+
+**The ratio is the finding, not any of the six.** A log this size
+accumulates entries that read as live defects and are not, and nothing in
+the ordinary course of work brings such a sentence together with the tree
+it describes: the commit that falsifies it is somewhere else, under
+another number, and its author had no reason to come back here. 26.490
+priced a remedy at "an emitter-wide change and the holder's" for a defect
+that closed in one leaf and one regex; a reader who believed it would have
+declined the fix that worked.
+
+**The detector cannot see any of this, and the shape of why is worth
+keeping.** These entries are written as HISTORY -- a gap stated and closed
+inside one entry -- so a phrase search matches the setup sentence of every
+remedy. Splitting per entry and keeping only open-language in the final
+third fixes that and does not fix the real case: **every one of the five
+was closed by a DIFFERENT entry**, which no filter over this entry's own
+text can detect. What found them was reproducing the claim, which is the
+only instrument that reads the tree rather than the record.
+
+Two of them could not have been found by reading even the closing entry.
+26.464's closure is recorded in 26.467 and also in a source comment in
+`traverse.py`, and it was the comment that gave it away; 26.396's is in
+no entry at all -- the behaviour had simply changed, and only a build said
+so.
+
+**So the sweep that works is: grep for candidates, then REPRODUCE each
+one.** The grep is a way of choosing what to reproduce and is worth
+nothing on its own. Six at roughly ten minutes each is the real cost, and
+the 34 unchecked candidates are still candidates rather than open items --
+this entry does not turn them into a list of known bugs, and a later
+reader should not read it as one.
+
+**What is live: 26.484.** `u8 a[kv.alpha + n]` -- an enum member inside a
+size expression -- raises `UnknownName` uncaught out of the C emitter and
+is declined with a note by the other three. The control is the same schema
+written `17 + n`, clean in all four. A guard was added at
+`_stride_helpers`, the one site of four that did not ask
+`_length_is_readable` first, and the crash moved to `validate`: there are
+a dozen routes into the length renderers, so guarding them one at a time
+is the fifth private copy of a question this emitter already asks. The
+fix declines the member once, early, as the other three do, and it carries
+the packer decision 26.484 records as not being a drive-by. The guard was
+reverted rather than left: with the crash still present it changes no
+outcome, and a change with no failing case behind it is one this tree
+declines.
 
 ### 26.504 A hand-written vector would have agreed with the bug
 
@@ -33464,6 +33539,17 @@ nothing to say about it. No schema in the corpus has the shape; the fix
 is `local` in the macro too, and it changes a generated macro name in
 every backend, which is its own piece of work rather than a side effect
 of this one.
+
+**~~Its own piece of work.~~ Closed by 26.467, which is the entry three
+along.** `Obligation.local` is the path from the owning struct and the
+macro is built from it in all four backends; `twin_sigs` carries the
+shape. Re-measured 2026-09-25 across four constructed schemas -- two
+nested obligations sharing a leaf, sharing their last two path parts, and
+two spellings that flatten together -- and the macros come out distinct
+every time, or the schema is refused by the path-flattening gate in
+`codegen/c/names.py` before it reaches a macro at all. That gate is the
+one this paragraph said had nothing to say: it reads member paths, not
+only struct and enum names.
 
 ### 26.463 A harness that names accessors the backend stopped writing
 
