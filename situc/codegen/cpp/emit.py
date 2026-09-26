@@ -3818,7 +3818,21 @@ class Emitter:
 				" std::uint32_t count);")], "}", ""]
 
 	def _decodes(self, placement: Placement) -> bool:
-		"""Whether a decode accessor is emitted for this region."""
+		"""Whether a DERIVED decode accessor is emitted for this region.
+
+		Not merely whether one is. A codec whose `impl` binds an extern
+		symbol decodes through that symbol under the tier-1 ABI, and
+		`_decode_accessor` returns `_extern_decode` before it ever asks the
+		kernel -- so the derived prototype this gates is one nothing calls.
+
+		`checksums` above already drops a symbol with no provider, for the
+		same reason and in 26.368's words: "harmless to the linker while
+		nothing calls it, and a promise the header cannot keep". That
+		argument reaches here and had not been carried across. C declares
+		neither, this backend and Rust declared both (26.138, 26.513).
+		"""
+		if extern_symbol(self.schema, placement.codec or "") is not None:
+			return False
 		codec = self.codecs.get(placement.codec or "")
 		return codec is not None and decodes_here(codec)
 

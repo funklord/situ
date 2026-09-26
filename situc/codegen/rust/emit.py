@@ -2446,6 +2446,18 @@ class Emitter:
 		]
 
 	def _decodes(self, placement: Placement) -> bool:
+		"""Whether a DERIVED decode is declared for this region.
+
+		Not merely whether one is. A codec whose `impl` binds an extern
+		symbol decodes through that symbol under the tier-1 ABI, and
+		`_decode_accessor` returns `_extern_decode` before it ever asks the
+		kernel -- so the `fn situ_<name>_decode` this gates is one nothing
+		calls. C declares neither, this backend and C++ declared both
+		(26.138, 26.513); the C++ copy carries the longer note and 26.368's
+		precedent.
+		"""
+		if extern_symbol(self.schema, placement.codec or "") is not None:
+			return False
 		codec = self.codecs.get(placement.codec or "")
 		return codec is not None and decodes_here(codec)
 

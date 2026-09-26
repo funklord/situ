@@ -8,8 +8,15 @@ concluded.
 
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
+from every_schema import ROOT
 from situc import ast, capmap
 from situc.diagnostics import SituError
 from situc.layout import solve
@@ -561,3 +568,151 @@ def test_the_standard_library_generates_a_full_suite() -> None:
 	assert "test_aes_ctr_128_seekable_linear" in text
 	assert "test_manchester_invertible" in text
 	assert "test_crc32_systematic" in text
+
+
+# ---------------------------------------------------------------------------
+# Which decoder a header declares, when the impl is extern
+# ---------------------------------------------------------------------------
+
+#: A stuffing codec over a `coded` region: length-changing, so nothing inside
+#: is addressable without decoding, and `decodes_here` is true -- which is
+#: what makes the derived prototype reachable at all.
+#:
+#: The combination this needs is not in the corpus, which is why the defect
+#: lived. Every committed `extern` binding is an AEAD or a transform whose
+#: decode shape is not a settled kernel, so `decodes_here` is False for all
+#: six and none reaches the branch below. Measured: `doubling`,
+#: `sealing_aead`, `masking`, `aes_gcm_128`, `aes_128_gcm`, `aes_gcm_256`.
+_STUFFED = """target buffer;
+endian big;
+
+codec puffer {
+\tkernel = stuffing(worst_case = 2, per = 1, unit = byte, code = slip);
+}
+impl puffer IMPL
+
+struct frame {
+\tcoded payload(puffer) until "\\xC0" {
+\t\tu8  body[remaining];
+\t}
+}
+"""
+
+
+def _built(tmp_path: Path, impl: str, target: str) -> str:
+	schema = tmp_path / "stuffed.situ"
+	schema.write_text(_STUFFED.replace("IMPL", impl), encoding="ascii")
+	out = tmp_path / target
+	done = subprocess.run(
+		[sys.executable, "-m", "situc.cli", "build", str(schema),
+		 "--target", target, "--out", str(out)],
+		cwd=ROOT, capture_output=True, text=True)
+	assert done.returncode == 0, done.stdout + done.stderr
+	suffix = {"c": "h", "cpp": "hpp", "rust": "rs"}[target]
+	text: str = (out / f"stuffed.{suffix}").read_text(encoding="ascii")
+	return text
+
+
+def _declared(source: str, target: str) -> set[str]:
+	"""Symbols the header DECLARES, which is not the same as mentions.
+
+	A header names a codec in a comment and calls it in a body, so a search
+	of the whole file answers "does this appear" where the question is
+	"does a consumer get a prototype". Anchoring on each language's
+	declaration form is what separates them -- the first measurement of
+	this did not, and reported C declaring a symbol that was a comment
+	(26.513).
+	"""
+	forms = {
+		"c":    r"^extern .*?\b(situ_puffer|app_puffer)_(\w+)",
+		"cpp":  r"^(?:extern )?(?:uint32_t|situ_err_t) .*?\b"
+		        r"(situ_puffer|app_puffer)_(\w+)",
+		"rust": r"^\tfn (situ_puffer|app_puffer)_(\w+)",
+	}
+	found = set()
+	for line in source.splitlines():
+		match = re.search(forms[target], line)
+		if match:
+			found.add(f"{match.group(1)}_{match.group(2)}")
+	return found
+
+
+@pytest.mark.parametrize("target", ["c", "cpp", "rust"])
+def test_an_extern_impl_declares_only_the_symbol_it_binds(
+		target: str, tmp_path: Path) -> None:
+	"""A header must not promise a function no `impl` provides.
+
+	With `impl puffer extern "app_puffer"` the accessor decodes through
+	`app_puffer_decode` under the tier-1 ABI -- `_decode_accessor` returns
+	`_extern_decode` before it ever asks the kernel. C++ and Rust declared
+	`situ_puffer_decode` anyway: a symbol no binding provides and nothing
+	calls, inert in both languages and still a header describing a
+	function that will not exist. C never did (26.138, 26.513).
+
+	The same argument had already been made and applied one list over:
+	`checksums` in the C++ backend drops a codec nothing writes, in
+	26.368's words -- "harmless to the linker while nothing calls it, and
+	a promise the header cannot keep".
+	"""
+	extern  = _declared(_built(tmp_path, 'extern "app_puffer";', target),
+	                    target)
+	assert "app_puffer_decode" in extern, (
+		f"{target}: the bound symbol is not declared, so this is testing "
+		f"nothing about which of two it chose")
+	assert "situ_puffer_decode" not in extern, (
+		f"{target}: declares a derived decoder no `impl` provides")
+
+
+@pytest.mark.parametrize("target", ["c", "cpp", "rust"])
+def test_a_derived_impl_still_declares_the_derived_decoder(
+		target: str, tmp_path: Path) -> None:
+	"""The control, and the half a one-sided fix would break.
+
+	Dropping the declaration for an extern binding is right; dropping it
+	for a derived one would remove the prototype the accessor calls. Both
+	directions are asserted, because the change that produced this test
+	could satisfy the other test by declaring nothing at all.
+	"""
+	derived = _declared(_built(tmp_path, "derived;", target), target)
+	assert "situ_puffer_decode" in derived, (
+		f"{target}: a derived impl must still declare its decoder")
+	assert "app_puffer_decode" not in derived
+
+
+@pytest.mark.parametrize("impl", ['extern "app_puffer";', "derived;"])
+def test_the_stuffed_header_compiles_either_way(impl: str,
+		tmp_path: Path) -> None:
+	"""A declaration removed must not take its caller with it.
+
+	The corpus cannot answer this: every committed `extern` binding is an
+	AEAD or a transform whose decode is not a settled kernel, so none of
+	the six reaches the branch, and 84 corpus builds came back byte-for-
+	byte identical across the change. A comparison that finds nothing is
+	worth nothing until it is shown able to speak, and that one was --
+	sabotaging the emitter's banner moved `slip` and `edges` at once. So
+	the zero is real and the gate will not protect this; only a schema
+	built here will.
+
+	Syntax-only, which is the right depth: the question is whether the
+	header still declares what it calls, not whether anybody supplies the
+	implementation. A tier-1 symbol is the consumer's to provide and
+	`-fsyntax-only` does not ask for it.
+	"""
+	host = shutil.which("g++") or shutil.which("clang++")
+	if host is None:
+		pytest.skip("no C++ compiler")
+
+	source = _built(tmp_path, impl, "cpp")
+	(tmp_path / "stuffed.hpp").write_text(source, encoding="ascii")
+	(tmp_path / "main.cpp").write_text(
+		'#include "stuffed.hpp"\nint main() { return 0; }\n', encoding="ascii")
+
+	runtime = ROOT / "runtime"
+	built = subprocess.run(
+		[host, "-std=c++17", "-pedantic-errors", "-Wall", "-Wextra",
+		 "-Werror", "-fsyntax-only",
+		 f"-I{runtime / 'c'}", f"-I{runtime / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp")],
+		capture_output=True, text=True)
+
+	assert built.returncode == 0, built.stderr
