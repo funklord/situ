@@ -15368,11 +15368,14 @@ in a comment and calls it in a body:
 
 Four backends still give three answers and the complaint above has
 changed shape rather than gone. C declares what will be called. Python
-declares nothing either way. **C++ and Rust now declare
-`situ_slip_decode` even when the `impl` is extern** -- a symbol no
+declares nothing either way. **~~C++ and Rust now declare
+`situ_slip_decode` even when the `impl` is extern~~ -- a symbol no
 binding provides and nothing in the generated code calls, which is inert
 in both languages and is still a header telling a consumer about a
-function that will not exist.
+function that will not exist. Fixed by 26.514**, one predicate in each
+backend's `_decodes`, leaving all four consistent: C declares what it
+defines plus what it calls, C++ and Rust what they call, Python
+nothing.
 
 The rule each backend is following is legible -- C declares what it
 defines, and the others declare the symbol an accessor calls, which for a
@@ -30916,6 +30919,68 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.514 The same argument, one list over, three months apart
+
+**26.513 found C++ and Rust declaring `situ_<codec>_decode` where the
+`impl` binds an extern symbol -- a function no binding provides and
+nothing calls.** They declare the bound symbol too, and the accessor
+calls that: `_decode_accessor` returns `_extern_decode` before it ever
+asks the kernel. C declared only the bound one and always had.
+
+**The fix is one predicate in each backend's `_decodes`, and the
+argument for it was already in the file.** Twenty lines above the C++
+site, `checksums` drops a codec nothing writes, in 26.368's words --
+"harmless to the linker while nothing calls it, and a promise the header
+cannot keep". That is this case exactly, applied to the neighbouring
+list and never carried across. **A rule with its reason written down,
+one screen away from the place it was not applied.**
+
+**`_decodes` had exactly one caller in each backend**, which is what made
+the predicate safe to put inside it rather than at the call site. Its
+C++ docstring said "whether a decode accessor is emitted for this
+region" and that had stopped being true: an extern-bound region emits
+one, through a different symbol.
+
+**The corpus cannot see this, measured rather than assumed.** All 84
+corpus builds in C++ and Rust are byte-for-byte identical across the
+change. Every committed `extern` binding is an AEAD or a transform whose
+decode shape is not a settled kernel -- `doubling`, `sealing_aead`,
+`masking`, `aes_gcm_128`, `aes_128_gcm`, `aes_gcm_256`, and
+`decodes_here` is False for all six -- so none reaches the branch. The
+combination needs a stuffing or table kernel bound to an extern impl,
+and no schema here has one. **That is why the defect lived, and it is
+why the gate will not protect the fix.**
+
+**The zero was controlled before it was believed.** A comparison finding
+nothing is worth nothing until it is shown able to speak, so the C++
+emitter's banner was sabotaged and the same comparison moved `slip` and
+`edges` at once. Two of three, `packet` not reaching that emitter block
+at all -- which is the control doing its job twice, since a third hit
+would have meant the sabotage was wider than the block.
+
+**The control on the tests is the shape worth copying: C stays green.**
+Both tests run over C, C++ and Rust, and against the emitters before the
+change only C++ and Rust fail. A test that went red everywhere would be
+asserting a universal property; this one discriminates the two backends
+that were wrong from the one that was right, which is the same
+separation the finding was made from.
+
+The derived direction is asserted beside it, because the change that
+satisfies the extern test could also satisfy it by declaring nothing at
+all -- and a syntax-only compile of both headers is what says a
+declaration removed did not take its caller with it. That compile was
+itself controlled, with a line of nonsense appended to the generated
+header.
+
+**What is not done: the corpus still has no schema with the
+combination.** 26.329 argues for landing a corpus schema WITH a
+construct rather than after it, and `edges` is where it would go. It
+would change a committed wire signature and a committed map, which is a
+reviewed artifact moving for a test's sake, so it is the copyright
+holder's call rather than a drive-by. The unit test covers the fix
+today; what it does not do is make the corpus able to find the next one
+of these.
 
 ### 26.513 Thirty-one candidates, seven claims, three that had moved
 
