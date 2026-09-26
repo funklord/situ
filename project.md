@@ -30924,6 +30924,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.518 The corpus schema hit Lua's ceiling, which nothing had measured
+
+**26.517 left the corpus without a schema putting an enum member in a
+size expression and named adding one as the holder's call. It was made,
+and like 26.515's it paid before it landed -- this time by breaking
+something.**
+
+`edges` has `span_base` and `enum_sized` now: `u8 body[span_base.narrow
++ n]`, `narrow` being 4, so the map reads `Bounded(4, 259)` and a reader
+checking the comment does one addition. Against the commit before the
+packer fix it answers `enum_sized.body: no placement for
+`span_base.narrow``; against this one it encodes, 88 expressions and
+nothing unencodable. So it would have caught 26.517 and 26.506's
+renderer half with it.
+
+**Then `make check` went red in the dissector, and not about enums.**
+
+    edges.lua:3656: too many local variables (limit is 200)
+                    in main function
+
+**One struct too many, and the struct was mine.** Lua allows 200 locals
+per function; the generated dissector declared one per struct in the
+main chunk -- `local X_f = X.fields`, an alias that read better than
+`X.fields` -- and `edges` had 83 of them among 203. Adding `enum_sized`
+was the 203rd. **A limit nothing had measured, reached by one line of
+schema.**
+
+**Block-scoping the alias is not available**, which is worth saying
+because it is the first thing to reach for: every dissect function
+closes over it as an upvalue, so a `do ... end` around the declarations
+would leave the reads unbound. The alias is gone instead and the field
+table is named directly. `edges` is at 120 locals now and the next worst
+dissector in the corpus is at 32.
+
+**The change is mechanical and carries the proof `evidence.md` asks
+for.** Every dissector regenerated before and after, 42 of them, each
+differing line classified: 220 alias declarations removed, 1609 lines
+rewritten by exactly `X_f.` -> `X.fields.`, and **zero lines changed by
+anything else**. `luac -p` accepts all 42.
+
+**What the ceiling says is worth more than the fix.** `edges` is the
+corpus of odd shapes and it grows every time a construct needs one --
+twice this week on instruction. Its dissector was three locals from
+refusing to parse, and nothing measured that: the gate checks whether
+`luac` accepts the file, which is a pass/fail with no margin in it, so
+the first sign of the limit was hitting it. **A resource a generated
+artifact consumes per schema element is a budget, and a gate that only
+reports exhaustion reports it once, too late to plan around.**
+
+**And the diagnostic was Lua's, which named the limit and the number.**
+Third time this week a tool's own message answered faster than reading
+the code would have, after `internet_checksum: no suite` and the
+compiler refusing `short` as a C++ keyword -- that last one in this very
+schema, which is why the enum members are `narrow` and `wide`.
+
 ### 26.517 The third copy of one question, and the order that made it safe
 
 **26.484's packer half is closed.** `u8 a[kv.alpha + n]` now encodes a
@@ -30993,9 +31048,10 @@ both halves of the pair use the same spelling with the injection as the
 only variable. Sabotaged by removing the disown: flags come back `3`
 where the test demands `0`.
 
-**The corpus still has no schema with this construct.** `edges` is
-where one would go, at the cost of a map and a wire signature moving,
-the same trade 26.515 took on instruction. Named rather than done.
+**~~The corpus still has no schema with this construct.~~ Added on the
+holder's instruction; 26.518 has it, and it broke the dissector on the
+way in.** `edges` is where it went, at the cost of a map and a wire
+signature moving, the same trade 26.515 took.
 
 ### 26.516 The rule, broken three times by the session that wrote it
 
