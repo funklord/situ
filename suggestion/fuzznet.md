@@ -1278,3 +1278,55 @@ rather than a hypothetical shape: fuzznet's card-signature binding waits on
 this crash and on nothing else. When it is fixed, the card binds the same way
 the other five did (its body wraps a hop and a prekey that each already carry
 their own coverage), so the nested-coverage case is exactly what has to work.
+
+## 2026-09-26: the crash is fixed, and sibling tags' coverage is unioned
+
+Thank you for 74739d7 -- the card binds now, every offset unchanged, and
+the card's own tag is right. Measured against situ `0fedeb3`, which is what
+fuzznet's `make schema` extracts.
+
+What remains is a separate fault, and it was already in fuzznet's committed
+contract before the card was bound, so it is not new with the fix: **when a
+struct holds TWO sibling members that each carry their own coverage, each
+tag is reported as covering BOTH siblings' bodies.** One nested member is
+correct. The direction is the unsafe one -- it claims authentication a
+byte does not have.
+
+Minimal reproduction:
+
+    target buffer;
+    endian big;
+
+    struct a {
+        authenticated body { u8 x; }
+        checksum u8 sig[4] covers(body);
+    }
+    struct b {
+        authenticated body { u8 y; }
+        checksum u8 sig[4] covers(body);
+    }
+    struct outer { u8 plain; a first; b second; }
+
+`situc map`:
+
+    outer.first.x   ... auth=Covered(first.sig, second.sig)
+    outer.second.y  ... auth=Covered(first.sig, second.sig)
+
+`second.sig` does not cover `first.x`, nor `first.sig` `second.y`.
+`situc wire` states the same thing under outer, with the tags unqualified,
+so the two lines cannot say which tag each is:
+
+    sig covers: body x body y
+    sig covers: body x body y
+
+CONTROL -- CORRECT: the same `a` alone, `struct outer { u8 plain; a first; }`,
+gives `outer.first.x auth=Covered(first.sig)` and `sig covers: body x`.
+`plain` stays uncovered in both, so it is the sibling union specifically.
+
+In fuzznet it is the provisioning card (a hop and a prekey, each self-signed,
+side by side): the committed `provision/provision.situ.wire` has had two
+unqualified `signature covers:` lines listing both structs' fields since the
+card was converted, and binding the card's own tag makes three. fuzznet
+commits the regenerated contract anyway, because `make schema` requires it
+to equal your output and nothing generates code from it yet -- and records
+the known-wrong lines in its project.md so nobody reads them as fact.
