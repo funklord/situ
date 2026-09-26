@@ -289,8 +289,8 @@ def test_a_bit_packed_field_gets_its_byte_span_and_mask() -> None:
 
 	assert 'ProtoField.uint8("s.version", "version", base.DEC, nil, 0xf0)' in text
 	assert 'ProtoField.uint8("s.ihl", "ihl", base.DEC, nil, 0xf)' in text
-	assert "subtree:add(s_f.version, tvb(0, 1))" in text
-	assert "subtree:add(s_f.ihl, tvb(0, 1))" in text
+	assert "subtree:add(s.fields.version, tvb(0, 1))" in text
+	assert "subtree:add(s.fields.ihl, tvb(0, 1))" in text
 
 
 def test_a_straddling_field_is_read_through_both_bytes() -> None:
@@ -303,18 +303,18 @@ def test_a_straddling_field_is_read_through_both_bytes() -> None:
 
 	assert 'ProtoField.uint16("s.fragment_offset"' in text
 	assert "0x1fff)" in text
-	assert "subtree:add(s_f.fragment_offset, tvb(0, 2))" in text
+	assert "subtree:add(s.fields.fragment_offset, tvb(0, 2))" in text
 
 
 def test_little_endian_fields_use_add_le() -> None:
 	"""Wireshark reads big endian by default; the other way needs saying."""
-	assert "subtree:add(s_f.a, tvb(0, 2))" in emit("struct s { u16 a; }\n")
+	assert "subtree:add(s.fields.a, tvb(0, 2))" in emit("struct s { u16 a; }\n")
 
 	schema   = parse_text("target buffer;\nendian little;\nbit_order lsb_first;\n"
 	                      "struct s { u16 a; }\n")
 	resolved = resolve(schema, solve(schema))
 
-	assert "subtree:add_le(s_f.a, tvb(0, 2))" in generate(schema, resolved, "unit")
+	assert "subtree:add_le(s.fields.a, tvb(0, 2))" in generate(schema, resolved, "unit")
 
 
 def test_an_enum_becomes_a_value_string() -> None:
@@ -364,7 +364,7 @@ def test_a_dynamic_count_is_read_from_the_field_that_drives_it() -> None:
 def test_remaining_runs_to_the_end_of_the_frame() -> None:
 	text = emit("struct s { u8 head; u8 rest[remaining]; }\n")
 
-	assert "subtree:add(s_f.rest, tvb(at))" in text
+	assert "subtree:add(s.fields.rest, tvb(at))" in text
 	assert "at = tvb:len()" in text
 
 
@@ -729,8 +729,8 @@ def test_a_variant_shows_the_arm_the_discriminant_selects() -> None:
 	though which one is present is not."""
 	text = emit(DNS_LABEL)
 
-	assert 'label_f.body_text = ProtoField.bytes("label.body.text"' in text
-	assert "label_f.body_pointer_low = ProtoField.uint8(" in text
+	assert 'label.fields.body_text = ProtoField.bytes("label.body.text"' in text
+	assert "label.fields.body_pointer_low = ProtoField.uint8(" in text
 	assert "if arm == 0 then" in text
 	assert "elseif arm == 3 then" in text
 
@@ -781,8 +781,8 @@ def test_a_member_after_a_variable_one_is_placed_and_typed() -> None:
 	a u16, and declared `ProtoField.bytes`."""
 	text = emit(DNS_LABEL)
 
-	assert 'question_f.qtype = ProtoField.uint16(' in text
-	assert "subtree:add(question_f.qtype, tvb(at, 2))" in text
+	assert 'question.fields.qtype = ProtoField.uint16(' in text
+	assert "subtree:add(question.fields.qtype, tvb(at, 2))" in text
 	assert "no bytes of its own" not in text
 
 
@@ -905,12 +905,12 @@ def test_nothing_is_placed_after_a_member_with_no_computable_extent(
 	assert "coded_run.trailer: not shown" in lua
 
 	body = lua[lua.index("function segments.dissector"):]
-	assert "subtree:add(segments_f.after" not in body[:body.index("\nend")]
+	assert "subtree:add(segments.fields.after" not in body[:body.index("\nend")]
 
 	beats = lua[lua.index("function beats.dissector"):]
 	beats = beats[:beats.index("\nend")]
 	assert "local size = 2" in beats, "a fixed element walks by its constant"
-	assert "subtree:add(beats_f.after" in beats
+	assert "subtree:add(beats.fields.after" in beats
 
 
 @pytest.mark.skipif(LUA is None, reason="no Lua")
@@ -1439,7 +1439,7 @@ def test_a_located_member_is_read_where_the_data_says() -> None:
 
 	# `file.pixel_offset` is at 0x0A, four bytes, little endian.
 	assert "local pixels_at = situ_uint(tvb, 10, 4, true)" in lua
-	assert "subtree:add(bitmap_file_f.pixels, tvb(pixels_at, pixels_n))" in lua
+	assert "subtree:add(bitmap_file.fields.pixels, tvb(pixels_at, pixels_n))" in lua
 
 	# And the cursor is not advanced past it: nothing in its block touches
 	# `at`, because the member after it sits where it would without it.
@@ -1640,7 +1640,8 @@ def test_a_value_spelled_in_characters_is_shown_as_one() -> None:
 		source, resolved, _ = analyse(path)
 		text = generate(parse(source), resolved, path.stem)
 		declared = {found[1]: found[0] for found in re.findall(
-			r'^\w+_f\.\w+ = ProtoField\.(\w+)\("([\w.]+)"', text, re.M)}
+			r'^\w+\.fields\.\w+ = ProtoField\.(\w+)\("([\w.]+)"',
+			text, re.M)}
 
 		for struct in resolved.structs.values():
 			for entry in struct.entries:
@@ -1800,7 +1801,7 @@ def test_a_stream_parameter_becomes_a_preference() -> None:
 	assert 'frame.prefs.n = Pref.uint("n", 0,' in text
 	# And no ProtoField for it: a parameter is not bytes in the packet, so
 	# a row in the tree would show a byte belonging to the member after it.
-	assert "frame_f.n" not in text
+	assert "frame.fields.n" not in text
 
 
 @pytest.mark.skipif(LUA is None, reason="no lua")

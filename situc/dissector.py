@@ -445,7 +445,7 @@ def _conversation_fields(struct: ResolvedStruct) -> list[str]:
 	of why this is worth generating.
 	"""
 	proto = _lua(struct.name)
-	return [f"{proto}_f.{name}_request = ProtoField.framenum("
+	return [f"{proto}.fields.{name}_request = ProtoField.framenum("
 	        f"\"situ.{name}.request\", \"request in frame\")"
 	        for name, _, response, _ in _CONVERSATIONS
 	        if response == struct.name]
@@ -524,10 +524,16 @@ def _proto(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	# The table always, even when nothing goes in it. A struct whose only
 	# member is a nested one shows no field of its own -- and the body still
-	# names `X_f` for anything that arrives later, so declaring it costs a
-	# line and its absence is a `nil` index at run time.
+	# names `X.fields` for anything that arrives later, so declaring it
+	# costs a line and its absence is a `nil` index at run time.
+	#
+	# `X.fields` and not a `local X_f` alias. The alias read better and was
+	# one local per struct in the MAIN CHUNK, where Lua allows two hundred:
+	# `edges` reached 203 the day a struct was added to it and `luac -p`
+	# refused the file -- *too many local variables (limit is 200) in main
+	# function* (26.518). Block-scoping the alias is not available, because
+	# every dissect function closes over it as an upvalue.
 	lines.append(f"{proto}.fields = {{}}")
-	lines.append(f"local {proto}_f = {proto}.fields")
 	lines.extend(fields)
 	lines.extend(_conversation_fields(struct))
 	lines.extend(_experts(struct))
@@ -585,7 +591,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# from `bytes` to `string` and nothing else moved at all. The rule
 	# swept exactly the members it names.
 	if placement.radix is not None:
-		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
 
 	# **A token set.** Its arms are keywords, so an analyst reading an SMTP
@@ -595,7 +601,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# `subtree:add(nil, ...)`, a Lua error at the first packet rather than a
 	# wrong display.
 	if placement.type_name in resolved.layout.env.token_sets:
-		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.string(\"{abbrev}\", \"{name}\")")
 
 	# **And it stops there, which is the half worth writing down.** The
@@ -608,7 +614,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# this branch is not the place to guess at it.
 
 	if data_sized(placement) or placement.array_count is not None:
-		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
 	# A varint and a `coded` or `sealed` region have no scalar, and the
@@ -621,13 +627,13 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# spells, and a region's are the transform's output. Showing them as an
 	# integer would be a number nobody wrote.
 	if placement.varint is not None or placement.kind in ("coded", "sealed"):
-		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
 	# Host order: the bytes are what this dissector can honestly show, since
 	# the capture does not say which machine wrote them.
 	if _host_order(placement):
-		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
 	scalar = placement.scalar
@@ -642,7 +648,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 		width = next((one for one in FIELD_WIDTHS
 		              if placement.size_bits <= one), None)
 	if width is None:
-		return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+		return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 		        f"ProtoField.bytes(\"{abbrev}\", \"{name}\")")
 
 	kind = ("int" if scalar.signed else "uint") + str(width)
@@ -665,7 +671,7 @@ def _field(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if mask is not None:
 		args.append(f"{mask:#x}")
 
-	return (f"{_lua(struct.name)}_f.{_lua(name)} = "
+	return (f"{_lua(struct.name)}.fields.{_lua(name)} = "
 	        f"ProtoField.{kind}({', '.join(args)})")
 
 
@@ -996,7 +1002,7 @@ def _conversation_calls(resolved: ResolvedSchema,
 		if struct.name == response:
 			lines += ["",
 			          f"	situ_conv_{name}_lookup(tvb, pinfo, subtree, "
-			          f"{_lua(struct.name)}_f.{name}_request)"]
+			          f"{_lua(struct.name)}.fields.{name}_request)"]
 		if struct.name == request:
 			lines += [f"	situ_conv_{name}_record(tvb, pinfo)"]
 	return lines
@@ -1137,7 +1143,7 @@ def _lead(placement: Placement) -> list[str]:
 def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement) -> list[str]:
 	name  = _local(struct, placement)
-	field = f"{_lua(struct.name)}_f.{_lua(name)}"
+	field = f"{_lua(struct.name)}.fields.{_lua(name)}"
 
 	# A static offset is assigned; a dynamic one is already in `at` from the
 	# member before it, and `at = at` is noise.
@@ -1945,7 +1951,7 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 			        " dissector can compute"]
 
 		name  = _lua(_local(struct, member))
-		field = f"{_lua(struct.name)}_f.{name}"
+		field = f"{_lua(struct.name)}.fields.{name}"
 		test  = ("else" if arm.value is None
 		         else f"{'if' if first else 'elseif'} arm == {arm.value} then")
 		shown = bool(_field(resolved, struct, member))

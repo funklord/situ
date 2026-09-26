@@ -1048,7 +1048,7 @@ def test_the_dissector_tracks_the_conversation() -> None:
 
 	assert "local situ_conv_response_to = {}" in lua
 	assert "situ_conv_response_to_record(tvb, pinfo)" in lua
-	assert "frame_f.response_to_request = ProtoField.framenum(" in lua
+	assert "frame.fields.response_to_request = ProtoField.framenum(" in lua
 
 
 def test_the_dissector_looks_up_before_it_records() -> None:
