@@ -1488,9 +1488,12 @@ class Solver:
 				held, tag_covers=coverage_of(tag, regions),
 				tag_prefix=tag.prefix)
 
-		# region name -> the tags covering it. A region may appear under more
-		# than one tag when coverage nests (decision 0011).
-		covering: dict[str, list[str]] = {}
+		# (owning struct's path, region name) -> the tags covering it. A
+		# region may appear under more than one tag when coverage nests
+		# (decision 0011), and the OWNER is in the key because the name
+		# alone is not unique: two sibling members that each hold an
+		# `authenticated body` both say `body` (26.519).
+		covering: dict[tuple[str, str], list[str]] = {}
 		# Innermost first is narrowest first: coverage is disjoint or nested, so
 		# a tag covering fewer regions is the inner one. That is the order the
 		# generated code must recompute in, because an inner tag's own bytes are
@@ -1513,16 +1516,73 @@ class Solver:
 		local = {id(held): held.path[len(decl.name) + 1:]
 		         for held in layout.placements}
 
+		# Keyed on the region's PATH in this struct, not on its name, and
+		# resolved by containment rather than by matching the name a member
+		# happens to carry. `regions` records the NAMES of the regions a
+		# member sits inside, and a nested struct brings its own along
+		# unqualified: two siblings that each hold an `authenticated body`
+		# both say `body`, so a dict keyed on the name merged them and every
+		# member of either reported BOTH tags. `outer.first.x` read
+		# `Covered(first.sig, second.sig)` where `second.sig` covers nothing
+		# of `first` -- authentication claimed for bytes that do not have it,
+		# which is the unsafe direction (26.519).
+		#
+		# This is 26.467's fix one dict over. That entry keyed the TAG on its
+		# path for the same reason, two nested members both holding a `sig`;
+		# the region stayed on its leaf name and the collision moved rather
+		# than went.
+		#
+		# Qualifying `regions` at the point a nested layout is inlined would
+		# be the other repair and is not taken: those names are compared
+		# against a struct's own bare region names in six modules, so the
+		# meaning of the field would move under all of them. Containment is
+		# computed here instead, where it is the question being asked.
+		# A region is identified by the struct that OWNS it, which is the
+		# path it sits under. `tag.path` and the region's path share that
+		# parent, because a tag names the regions of its own struct.
+		#
+		# NOT by containment over paths, which was the first repair and is
+		# wrong: a region does not prefix its members' paths. `outer.first.x`
+		# is a sibling of `outer.first.body`, not a child, and membership is
+		# recorded only in `regions`. Testing `startswith` therefore matched
+		# nothing and every member lost its coverage -- the UNDER-claiming
+		# direction, which is worse than the bug, and it is why this is
+		# written down rather than quietly replaced.
+		def owner_of(path: str) -> str:
+			return path.rpartition(".")[0]
+
 		for position, held in enumerate(layout.placements):
 			if held.kind not in ("tag", "checksum") or not held.tag_covers:
 				continue
 			order[local[id(held)]] = (len(held.tag_covers), position)
 			for region in held.tag_covers:
-				covering.setdefault(region, []).append(local[id(held)])
+				covering.setdefault((owner_of(held.path), region),
+				                    []).append(local[id(held)])
 
 		for index, held in enumerate(layout.placements):
-			tags = {name for region in held.regions
-			        for name in covering.get(region, ())}
+			# Name AND owner. `regions` records the NAMES of the regions a
+			# member sits inside, and a nested struct brings its own along
+			# unqualified -- two siblings that each hold an `authenticated
+			# body` both say `body`, so matching on the name alone merged
+			# them and every member of either reported BOTH tags.
+			# `outer.first.x` read `Covered(first.sig, second.sig)` where
+			# `second.sig` covers nothing of `first`: authentication claimed
+			# for bytes that do not have it (26.519).
+			#
+			# The owner disambiguates them. A region encloses this member
+			# only if the struct owning the region owns this member too, or
+			# owns an ancestor of it -- `outer.second` is neither for
+			# anything under `outer.first`. This is 26.467's fix one dict
+			# over: that entry keyed the TAG on its path for the same
+			# reason, two nested members each holding a `sig`, and left the
+			# region on its leaf name so the collision moved rather than
+			# went.
+			mine = owner_of(held.path)
+			tags = {name
+			        for (owner, region), names in covering.items()
+			        if region in held.regions
+			        and (mine == owner or mine.startswith(owner + "."))
+			        for name in names}
 			# A tag does not cover itself. It can now sit inside the region it
 			# covers (14.2, `[self_as]`), and coverage means "writing these
 			# bytes leaves that tag stale" -- which is false of the bytes the
