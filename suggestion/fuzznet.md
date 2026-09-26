@@ -1330,3 +1330,31 @@ card was converted, and binding the card's own tag makes three. fuzznet
 commits the regenerated contract anyway, because `make schema` requires it
 to equal your output and nothing generates code from it yet -- and records
 the known-wrong lines in its project.md so nobody reads them as fact.
+
+## 2026-09-26: qualify a tag's name in the `covers:` lines
+
+Relayed from fuzznet, in their words, and recorded here rather than acted
+on: it is a rendering change to a committed contract and belongs to
+whoever owns situ's output format.
+
+`situc wire` prints a tag's covered members as `NAME covers: ...` using the
+tag's LEAF name. fuzznet's `provision.situ.wire` therefore has three lines
+that all begin `signature covers:` -- the card's own tag, the hop's and the
+prekey's -- and nothing on the line says which is which.
+
+**What the ambiguity cost, which is why this is not cosmetic.** It is what
+let the sibling union (above, fixed in 26.519) sit in fuzznet's committed
+contract from the day the card was converted: two identical-looking lines,
+each listing both structs' fields, read as a plausible description rather
+than as two tags making the same wrong claim. Verifying the fix from this
+side needed the same workaround in the other direction -- telling the lines
+apart by their lengths and by diffing two versions, because the rendering
+cannot say which tag it is describing.
+
+The ask is `signature`, `hop.signature`, `prekey.signature`: the tag's
+PATH, which `layout.resolve_coverage` already keys on internally and
+has since 26.467. Then a member list is checkable by reading, which is
+the property a committed contract exists for.
+
+Every `.wire` holding a nested tag would regenerate. fuzznet has one
+and says it will take the change with the fix.

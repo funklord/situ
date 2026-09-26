@@ -30924,6 +30924,88 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.519 The same key, one dict over, and a repair worse than the bug
+
+**fuzznet reported that two sibling members which each carry their own
+`covers(body)` are each reported as covering BOTH bodies.** Reproduced
+here before their report was committed: `outer.first.x` reads
+`auth=Covered(first.sig, second.sig)`, and `second.sig` covers nothing
+of `first`. The direction is the unsafe one.
+
+**`regions` records the NAMES of the regions a member sits inside, and a
+nested struct brings its own along unqualified.** Two siblings that each
+hold an `authenticated body` both say `body`, and `resolve_coverage`
+collected the tags into a dict keyed on that name, which merged them.
+
+**This is 26.467's fix one dict over.** That entry keyed the TAG on its
+path within the struct, for the same reason -- two nested members each
+holding a `sig` -- and its comment says so at length. The REGION stayed
+on its leaf name, so the collision moved rather than went. **Third time
+this week a rule was applied to one list and not its neighbour**, after
+26.514's declaration filter and 26.517's third constant table.
+
+**Five shapes, and four were already right**, which is what makes this a
+scoping fault rather than a blanket over-claim:
+
+    1 nested self-signed child      correct
+    2 siblings                      union of 2   <- reported
+    3 siblings                      union of 3
+    3 deep, each level tagged       accumulates, and should
+    2 tags in one struct            correct
+
+The third was built because two siblings cannot tell a SWAP from a
+union; the fifth because "a struct with two tags" was the other
+candidate and it exonerates the collection.
+
+**The first repair was wrong in the opposite and worse direction.** It
+tested containment over paths -- a region's path being a prefix of the
+member's -- and took coverage away from EVERYTHING, because a region
+does not prefix its members' paths: `outer.first.x` is a sibling of
+`outer.first.body`, not a child, and membership lives only in `regions`.
+Over-claiming authentication is unsafe; removing it silently is worse,
+and nothing about the change said so. **What caught it was running the
+five fixtures, not reading the diff** -- and it is why the two
+always-correct shapes are in the suite: against the bug three of five
+fail, against that repair all five do, and the pair is what separates a
+scoping fault from an over-correction.
+
+**The fix keys on the owning struct and matches by name AND owner.** A
+region belongs to the struct whose path it sits under; a tag names its
+own struct's regions, so tag and region share that parent. A region
+encloses a member when the name is one the member records and the
+region's owner owns the member or an ancestor of it. Qualifying
+`regions` at inline time was the other repair and is not taken: those
+names are compared against bare region names in six modules, so the
+field's meaning would move under all of them.
+
+**Blast radius zero across 42 corpus schemas, and controlled** -- the
+three fixtures with nesting or siblings differ, the two without do not.
+No committed schema has the shape, which is why fuzznet found it and we
+did not.
+
+**~~One judgement rides along and is the holder's.~~ fuzznet settled it,
+and the two readings are not in tension.** Nesting narrows: `top.body`
+went from three tags to one, because the tags of regions INSIDE it no
+longer attach to the region itself. This was recorded as an open
+question between *which tags authenticate these bytes* and *writing
+these bytes stales which tags*, with `propagate.py` stating the axis the
+second way and `capmap` rendering it the first.
+
+They are different VIEWS rather than competing defaults, which is
+fuzznet's correction and is better than the framing it replaces. A
+region line may only name a tag covering the WHOLE region -- their card
+body is 359 bytes where the hop's signature covers 115 -- so narrow at
+the region and full at the field is simply right, and the old region
+line was simply wrong. The tag's own view, `situc wire`'s `covers:`, is
+the other axis and must not shrink: an outer tag does cover its nested
+members.
+
+**Checked, because that is the unsafe direction and it was the one to
+get wrong.** Diffing `situc wire` over the three-deep fixture, the
+outermost tag's line is identical before and after; the three lines that
+change are inner tags shrinking to their own struct's members. So the
+question is closed rather than deferred, by the reporter.
+
 ### 26.518 The corpus schema hit Lua's ceiling, which nothing had measured
 
 **26.517 left the corpus without a schema putting an enum member in a
