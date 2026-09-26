@@ -15932,6 +15932,36 @@ record states.
   by target. Never built. Both documents said the slot "exists ... and is
   empty" and now say it is specified and unimplemented, which is what
   0017's amendment had already measured without being able to date.
+- **What a STRUCT's `auth=` line means, which is now the one place the
+  two readings differ.** Raised by fuzznet 2026-09-26, after they
+  verified 26.519 against their provisioning card: `card.hop` reads
+  `Covered(signature, hop.signature)` over 179 bytes of which
+  `hop.signature` covers 115, and the standalone `fzn_chain_hop` reads
+  `Covered(signature)` for all 179 -- its own 64 signature bytes among
+  them, which no tag covers.
+
+  **The mechanism is deliberate and says so.** A struct's vector is
+  `meet_all` over its members (`resolve._struct_vector`), and
+  `capability.py` records that `auth` meets toward Covered and UNIONS
+  the tag parameters, "since mutating covered bytes marks a tag dirty".
+  That is the *writing these bytes stales which tags* reading and it is
+  the right one for a meet. The member and region lines are read the
+  other way -- *which tags authenticate these bytes* -- which is what
+  26.519 settled with fuzznet. So the struct line is computed under one
+  reading and rendered beside lines meaning the other.
+
+  Measured on 26.519's own fixtures: `struct outer` still reads
+  `Covered(first.sig, second.sig)` where every member line under it is
+  now correct, and `struct leaf` reads `Covered(sig)` across bytes that
+  include `sig` itself.
+
+  **Three ways out and none is a drive-by**: render the struct line
+  under the authenticating reading, which needs a tag covering the WHOLE
+  struct or nothing; say on the line which reading it is; or leave it
+  and write the distinction into `doc/capability-axes`. The first
+  changes every committed map holding a nested tag, the second changes
+  the format, the third changes no bytes. fuzznet says nothing is needed
+  back unless the contract changes.
 - **`linear_block` knows one code.** `hamming_7_4`, and going further
   needs the generator matrix expressible in a schema, which is a language
   addition rather than a table entry.
