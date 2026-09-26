@@ -30954,6 +30954,54 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.520 The third layer of one fact, and the fixture that showed it
+
+**A tag's `covers:` line named the tag and its members by LEAF, so a
+struct holding two self-signed members rendered two lines both reading
+`sig covers:`, both listing a `body`, with nothing saying which was
+which.** fuzznet asked for the tag qualified by its path. It is, and so
+are the members, because the property they asked for -- a member list
+checkable by reading -- needs both.
+
+**It is not only unreadable, and that is the half nobody had.**
+`_annotations` keys the comparison on the text before `": "`, so two
+lines with one name are ONE key and the later overwrites the earlier.
+Measured on a constructed pair: a tag losing coverage inside a parent
+produced a finding for the standalone struct and NONE for the parent --
+1 breaking where there were 2. After the fix, both, the second naming
+`first.sig covers`. **A tag that exists only within a parent has no
+standalone line to be caught by.**
+
+**This is the third layer of one fact, and `twin_sigs` is the fixture
+for all three.** 26.467 keyed the tag's internal label on its path,
+because two nested members can both hold a `sig`, and `twin_sigs` is the
+struct it was written against. 26.519 found the REGION still keyed on
+its leaf and fixed that. The RENDERING kept the leaf through both, so
+`edges`' committed signature has carried
+
+    sig covers: left_body x
+    sig covers: right_body y
+
+since `twin_sigs` was added -- two indistinguishable lines, one of them
+invisible to `situc wire --check`, in the very fixture that exists to
+demonstrate the problem. **A fixture proves the fix it was written for
+and goes on demonstrating the ones nobody has made yet.**
+
+**Situ's own corpus had the ambiguity fuzznet described, in committed
+contracts.** `icmp`'s checksum listed `identifier` and `sequence` TWICE
+-- echo's and reply's, indistinguishable -- and `ipv4`'s listed two bare
+`octets` for source and destination. Six signatures regenerate:
+`dtls`, `icmp`, `ipv4`, `keystore`, `packet` and `edges`.
+
+**The cost, which is fuzznet's to absorb and anyone else's with a
+committed signature.** Every `.wire` predating this reports COVERAGE
+findings on its next `--check`, because every covers line's text
+changed. Nothing about the bytes moved and no coverage changed; the
+names did. fuzznet knew and said they would take it with the fix. There
+is no version marker on the format that would distinguish a renamed
+line from a narrowed one, which is worth knowing before the next
+rendering change rather than after it.
+
 ### 26.519 The same key, one dict over, and a repair worse than the bug
 
 **fuzznet reported that two sibling members which each carry their own
