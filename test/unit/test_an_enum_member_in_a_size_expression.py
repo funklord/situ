@@ -34,6 +34,11 @@ from pathlib import Path
 import pytest
 
 from every_schema import ROOT
+from situc.layout import solve
+from situc.pack import Coverage, pack
+from situc.parser import parse_text
+from situc.resolve import resolve
+from walker.image import load
 
 CC = shutil.which("cc") or shutil.which("gcc")
 
@@ -148,3 +153,90 @@ def test_the_enum_sized_member_compiles(tmp_path: Path) -> None:
 		 f"-I{out}", f"-I{ROOT / 'runtime' / 'c'}", str(probe)],
 		capture_output=True, text=True)
 	assert built.returncode == 0, built.stderr
+
+
+# ---------------------------------------------------------------------------
+# The packer half
+# ---------------------------------------------------------------------------
+
+def _packed(text: str, metadata: bool = True) -> tuple[bytes, Coverage]:
+	schema = parse_text(text)
+	return pack(schema, resolve(schema, solve(schema)), metadata=metadata)
+
+
+def test_the_packer_encodes_an_enum_member_in_a_size_program() -> None:
+	"""The half 26.484 left open and 26.506 could not reach.
+
+	`Program.compile` looked the name up as a path, found no placement,
+	and raised -- which `situc pack --coverage` reported as *`s.a`: no
+	placement for `kv.alpha`*. The struct came back with `validatable`
+	clear, so both walkers abstained: honest, and less than the four
+	backends say about the same schema.
+
+	The fallback is consulted only where the resolver has already failed,
+	which is what keeps it additive -- `consts` is asked BEFORE the
+	resolver and an enum member after it, so no name that resolves today
+	can change meaning. `test_a_member_path_beats_an_enum_member...`
+	above is the same guarantee for the renderers; the one below is this
+	one's.
+	"""
+	blob, coverage = _packed(ENUM_SIZED)
+
+	assert not coverage.unencodable, (
+		f"the packer still declines it: {coverage.unencodable}")
+	assert coverage.expressions >= 1, "no size program was encoded"
+
+	image = load(blob)
+	assert all(struct.validatable for struct in image.structs), (
+		"the struct is still not validatable, so both walkers abstain")
+
+
+def test_the_packed_program_reads_the_same_as_the_literal() -> None:
+	"""A relationship again, not a value.
+
+	`kv.alpha + n` and `17 + n` must produce the same image, because 17 is
+	what `kv.alpha` is -- the same assertion the four backends get above,
+	applied to the bytecode. It cannot pass by accident and it pins
+	nothing about how the program is encoded.
+
+	Without metadata, so the comparison is the layout and the bytecode
+	rather than two different name pools: the enum spelling carries the
+	string `kv` and the literal one does not, and that difference is not
+	the question.
+	"""
+	by_enum, _    = _packed(ENUM_SIZED, metadata=False)
+	by_literal, _ = _packed(LITERAL_SIZED, metadata=False)
+
+	assert by_enum == by_literal, (
+		"`kv.alpha + n` and `17 + n` pack to different images, and 17 is "
+		"what `kv.alpha` is")
+
+
+def test_a_member_path_still_beats_an_enum_member_in_the_packer() -> None:
+	"""The additive guarantee, asserted rather than argued.
+
+	`hdr.len` names a nested field and an enum member at once. The
+	renderers needed a filter because their constant table is asked
+	before their field table; the packer needs none because the order is
+	the other way -- but "needs none" is a claim about control flow, and
+	this is the case that would catch it being wrong.
+
+	Held to the image the packer produced BEFORE the fallback existed:
+	byte for byte, since a schema whose every name already resolved must
+	be unaffected by a table consulted only where resolution fails.
+
+	**This one passes against the old packer too, and that is the point.**
+	The two tests above fail there, which is what makes them regression
+	tests; this pins an invariant the change must not move, so a version
+	of it that went red on the old code would be asserting the opposite of
+	what it is for.
+	"""
+	blob, coverage = _packed(SHADOWED, metadata=False)
+
+	assert not coverage.unencodable, coverage.unencodable
+	# 99 is the enum member's value and the field is one byte at offset 0.
+	# A program that pushed 99 would be sizing `body` from the enum, which
+	# is the wrong answer rather than a refused build.
+	assert b"\x63\x00\x00\x00\x00\x00\x00\x00" not in blob, (
+		"the enum member's value reached the size program, where the "
+		"field `hdr.len` should have")

@@ -323,7 +323,8 @@ class Program:
 			self.code += _struct.pack(width, operand)
 
 	def compile(self, expr: ast.Expr, resolve_path: Resolver,
-	            consts: dict[str, int] | None = None) -> None:
+	            consts: dict[str, int] | None = None,
+	            enum_members: dict[str, int] | None = None) -> None:
 		"""Append a postfix program computing `expr`.
 
 		`resolve_path` maps a dotted path to a placement index, and returns
@@ -331,8 +332,21 @@ class Program:
 		`const` name to its value: a const is a compile-time constant, so it
 		becomes a literal here rather than a load a walker would have to
 		resolve against a table it does not carry.
+
+		`enum_members` is the same thing for `kv.alpha`, and it is a SECOND
+		table rather than more entries in the first because of where it is
+		consulted. `consts` is asked before `resolve_path`, so adding names
+		to it can change which value an existing schema reads: `local_name`
+		is a dotted path and `hdr.len` may name a nested field and an enum
+		member at once. This is asked only where `resolve_path` has already
+		failed -- the position that currently raises -- so a name that
+		resolves today resolves the same way and only a name that resolved
+		to nothing gains a value. The renderers reached the same guarantee
+		by filtering their merged table against the field table (26.506);
+		here the ORDER gives it, and there is nothing to filter.
 		"""
 		known: dict[str, int] = consts or {}
+		folded: dict[str, int] = enum_members or {}
 		if isinstance(expr, ast.IntLiteral):
 			self.emit(Op.PUSH, expr.value, "<q")
 			return
@@ -354,6 +368,14 @@ class Program:
 				return
 			found = resolve_path(path) if path else None
 			if found is None:
+				# An enum member, which is a compile-time constant that
+				# section 10 admits and `expr._access` has always folded.
+				# The packer looked for a placement and there is none:
+				# `s.a: no placement for `kv.alpha`` was its own coverage
+				# report saying so (26.484, 26.517).
+				if path is not None and path in folded:
+					self.emit(Op.PUSH, folded[path], "<q")
+					return
 				raise PackError(f"no placement for `{path or expr}`")
 			index, base = found
 			if base:
@@ -363,7 +385,7 @@ class Program:
 				self.emit(Op.FIELD, index)
 			return
 		if isinstance(expr, ast.Unary):
-			self.compile(expr.operand, resolve_path, known)
+			self.compile(expr.operand, resolve_path, known, folded)
 			op = UNARY.get(expr.op, ...)
 			if op is ...:
 				raise PackError(f"unary `{expr.op}`")
@@ -374,12 +396,12 @@ class Program:
 			op = BINARY.get(expr.op)
 			if op is None:
 				raise PackError(f"binary `{expr.op}`")
-			self.compile(expr.left, resolve_path, known)
-			self.compile(expr.right, resolve_path, known)
+			self.compile(expr.left, resolve_path, known, folded)
+			self.compile(expr.right, resolve_path, known, folded)
 			self.emit(op)
 			return
 		if isinstance(expr, ast.Call):
-			self._call(expr, resolve_path, known)
+			self._call(expr, resolve_path, known, folded)
 			return
 		raise PackError(f"{type(expr).__name__} is not in section 10")
 
@@ -431,7 +453,8 @@ class Program:
 		raise PackError(f"a relation cannot hold {type(expr).__name__}")
 
 	def _call(self, expr: ast.Call, resolve_path: Resolver,
-	          consts: dict[str, int]) -> None:
+	          consts: dict[str, int],
+	          enum_members: dict[str, int] | None = None) -> None:
 		if expr.name in PATH_CALLS:
 			if len(expr.args) != 1:
 				raise PackError(f"`{expr.name}` takes one path")
@@ -454,7 +477,7 @@ class Program:
 			if len(expr.args) != 2:
 				raise PackError(f"`{expr.name}` takes two values")
 			for arg in expr.args:
-				self.compile(arg, resolve_path, consts)
+				self.compile(arg, resolve_path, consts, enum_members)
 			self.emit(VALUE_CALLS[expr.name])
 			return
 		raise PackError(f"`{expr.name}` is not a section 10 builtin")
@@ -952,6 +975,21 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	          if isinstance(decl, ast.ConstDecl)
 	          and isinstance(decl.value, ast.IntLiteral)}
 
+	# The enum members, as the fallback `Program.compile` consults where a
+	# path resolves to no placement. Taken from the shared environment
+	# rather than rebuilt from `schema.decls` beside `consts` above: this
+	# was the THIRD copy of "which names are compile-time constants", after
+	# the evaluator's and the four renderers', and 26.506 had already
+	# joined the first two into `Env.named_constants`. Reading it here
+	# makes five callers of one answer instead of a fourth spelling.
+	#
+	# `consts` stays as it is: a `const` is asked BEFORE the resolver and
+	# an enum member after it, which is what keeps this additive.
+	enum_members = {name: value
+	                for name, value
+	                in resolved.layout.env.named_constants.items()
+	                if name not in consts}
+
 	# -- the bytecode, first, because a placement record points into it --
 	program = Program()
 	code_at: dict[str, int] = {}
@@ -968,7 +1006,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			continue
 		start = len(program.code)
 		try:
-			program.compile(expr, lambda p: resolve_path(p, owner), consts)
+			program.compile(expr, lambda p: resolve_path(p, owner), consts,
+			                enum_members)
 		except PackError as why:
 			del program.code[start:]
 			coverage.unencodable[placement.path] = str(why)
@@ -1082,7 +1121,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			where = placement.type_name if scope else owner
 			start = len(program.code)
 			try:
-				program.compile(expr, lambda p: resolve_path(p, where), consts)
+				program.compile(expr, lambda p: resolve_path(p, where),
+				                consts, enum_members)
 			except PackError as why:
 				del program.code[start:]
 				coverage.unencodable[placement.path] = str(why)
@@ -1248,7 +1288,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 		start = len(program.code)
 		try:
-			program.compile(when.expr, resolve_path, consts)
+			program.compile(when.expr, resolve_path, consts, enum_members)
 		except PackError as why:
 			# Recorded rather than dropped: an image that carried a message
 			# it cannot evaluate would answer about a schema nobody wrote,

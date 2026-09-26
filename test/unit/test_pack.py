@@ -861,7 +861,30 @@ def test_a_member_whose_program_did_not_encode_disowns_its_struct() -> None:
 	"""
 	schema, resolved = _resolved(UNSIZED.replace("SIZE", "kv.alpha + n"))
 
-	blob, coverage = packer.pack(schema, resolved)
+	# The refusal is INJECTED rather than spelled, and that is a change
+	# forced by 26.517. This fixture used to be `kv.alpha + n` against a
+	# packer that could not compile an enum member; the packer learned to,
+	# so the spelling stopped refusing and this test stopped having a
+	# subject. Picking another uncompilable spelling would put the same
+	# trap back one construct along -- the population of things the packer
+	# declines is exactly the population somebody is working through.
+	#
+	# What is under test is the DISOWN, not which expressions compile. So
+	# the compiler is made to refuse this one member and the flags are read:
+	# the guard is exercised whether or not any schema can still reach it.
+	real = packer.Program.compile
+
+	def refuse(self: packer.Program, expr: ast.Expr,
+			resolve_path: object,
+			consts: dict[str, int] | None = None,
+			enum_members: dict[str, int] | None = None) -> None:
+		raise packer.PackError("injected: no program for this member")
+
+	packer.Program.compile = refuse		# type: ignore[method-assign]
+	try:
+		blob, coverage = packer.pack(schema, resolved)
+	finally:
+		packer.Program.compile = real		# type: ignore[method-assign]
 
 	assert coverage.unencodable, "the packer has to have noticed at all"
 	assert _struct_flags(blob) == [0], (
@@ -874,9 +897,13 @@ def test_the_same_layout_written_as_a_literal_keeps_its_flags() -> None:
 
 	A disown keyed on the wrong thing would clear these too, and the test
 	above would still pass. Same struct, same bytes, same static minimum --
-	the only difference is a spelling the packer can compile.
+	the only difference is that nothing refuses the compile.
+
+	Since 26.517 this is the same SPELLING as the test above as well, both
+	being `kv.alpha + n`, which makes the pair sharper than it was: the one
+	variable left between them is the injected refusal.
 	"""
-	schema, resolved = _resolved(UNSIZED.replace("SIZE", "17 + n"))
+	schema, resolved = _resolved(UNSIZED.replace("SIZE", "kv.alpha + n"))
 
 	blob, coverage = packer.pack(schema, resolved)
 
