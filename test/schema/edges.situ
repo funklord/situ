@@ -685,6 +685,44 @@ struct externally_stuffed {
 	}
 }
 
+// AN ENUM MEMBER IN A SIZE EXPRESSION, which nothing here had.
+//
+// Section 10 admits "integer literals, `const` references" in a size
+// expression and `expr._access` folds an enum member alongside them, so
+// `u8 body[span_base.narrow]` built everywhere: the whole expression is
+// constant and never reaches a renderer or the packer. Adding a FIELD is
+// what makes it reach one, and that spelling was wrong in four places at
+// once -- C raised `UnknownName` out of the emitter, C++, Rust and Python
+// declined the member with a note (26.484), and the packer encoded no
+// program at all, so the struct came back not validatable and both
+// walkers abstained (26.517).
+//
+// Three fixes and one cause: `Env.consts` holds the `const` declarations
+// and the enum members sit in a separate table, because they are DECLARED
+// separately and not because an expression tells them apart. Every reader
+// that needed them joined had to join them itself, and each did it or
+// failed to do it alone.
+//
+// `+ n` rather than `* n` deliberately: the arithmetic is not the point
+// and a sum keeps the expected length readable by eye. `span_base.narrow`
+// is 4, so `body` is `4 + n` bytes and a reader checking the map against
+// this comment does one addition.
+// `narrow` and `wide` rather than `short` and `long`, which the
+// compiler refuses by name: an enumerator is not spellable in one of
+// the backends if it is a C++ keyword, and Rust's `r#` escape has no
+// equivalent for one (0025). The refusal names the fix, which is how
+// this got its spelling.
+enum span_base : u8 {
+	narrow = 4,
+	wide   = 12,
+}
+
+struct enum_sized {
+	u8   n;
+	u8   body[span_base.narrow + n];
+	u16  tail;
+}
+
 // Every operator a size expression can carry.
 //
 // A measurement rather than a hunch: across every schema this repository

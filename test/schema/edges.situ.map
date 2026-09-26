@@ -122,6 +122,11 @@ struct edges size=27 repr=ValueConverted atomic=NonAtomic
   edges.<reserved0>                      offset=AbsoluteStatic(0x17) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   edges.kind                             offset=AbsoluteStatic(0x19) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct enum_sized size=7..262 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  enum_sized.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  enum_sized.body                        offset=AbsoluteStatic(0x01) size=Bounded(4, 259) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  enum_sized.tail                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct equalized size=11 repr=ValueConverted atomic=NonAtomic
   equalized.which                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   equalized.body                         offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
