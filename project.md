@@ -15340,42 +15340,44 @@ fail on the byte rather than on anything a reader could act on. The
 round-trip test asserts the printed source is ASCII, and reverting the
 `_escape` arm turns it red.
 
-**Still open, and found while checking this**: which codec entry points a
-consumer gets declared has four backends giving three answers. Measured on
-one schema built twice, identical but for its `impl`, with a
-length-changing coded region so that no generated accessor decodes:
+**~~Still open, and found while checking this~~ Closed by 26.514 on
+2026-09-26**: which codec entry points a consumer gets declared had four
+backends giving three answers. Measured on one schema built twice,
+identical but for its `impl`, with a length-changing coded region so
+that no generated accessor decodes:
 
 | backend | `impl ... derived` | `impl ... extern "app_slip"` |
 |---|---|---|
+| when found | | |
 | C | both declared | not declared |
 | C++ | not declared | declared |
 | Rust | not declared | declared |
 | Python | not declared | not declared |
-
-**~~Still open~~ Re-measured 2026-09-26, and three of the eight cells
-have moved.** Same method, `example/slip/slip.situ` built twice with only
-its `impl` line differing, counting DECLARATIONS rather than occurrences
--- the first attempt at the re-measurement grepped for the symbol
-anywhere and answered a different question, since a header names a codec
-in a comment and calls it in a body:
-
-| backend | `impl ... derived` | `impl ... extern "app_slip"` |
-|---|---|---|
+| today | | |
 | C | `situ_slip_encode`, `situ_slip_decode` | `app_slip_decode` |
-| C++ | `situ_slip_decode` | both |
-| Rust | `situ_slip_decode` | both |
+| C++ | `situ_slip_decode` | `app_slip_decode` |
+| Rust | `situ_slip_decode` | `app_slip_decode` |
 | Python | none | none |
 
-Four backends still give three answers and the complaint above has
-changed shape rather than gone. C declares what will be called. Python
-declares nothing either way. **~~C++ and Rust now declare
-`situ_slip_decode` even when the `impl` is extern~~ -- a symbol no
-binding provides and nothing in the generated code calls, which is inert
-in both languages and is still a header telling a consumer about a
-function that will not exist. Fixed by 26.514**, one predicate in each
-backend's `_decodes`, leaving all four consistent: C declares what it
-defines plus what it calls, C++ and Rust what they call, Python
-nothing.
+**The extern column agrees exactly now**, which is 26.514's fix: C++ and
+Rust had declared `situ_slip_decode` there as well -- a symbol no
+binding provides and nothing calls. What is left in the derived column
+is C also declaring the ENCODER, and that is the legible rule rather
+than a residue: C is where `gen-derived` emits the encoder, so C
+declares what it defines as well as what it calls, and the other two
+declare what they call. Python declares nothing either way because it
+binds at run time and has nothing to declare.
+
+**Two corrections to this entry, and the second is about the first.**
+The re-measurement was taken twice: grepping the generated files for the
+symbol counts a comment and a call, where the claim is about
+DECLARATIONS, and it reported C declaring `app_slip` under `derived` --
+a comment. And the first write-up of that re-measurement was APPENDED
+below the original paragraph, leaving "Still open, and found while
+checking this" standing above it unstruck. The next sweep found it as a
+live candidate the following day. **That is 26.512's own finding, made
+by the session that wrote it, one entry later** -- a correction lands
+where the author's eye is, and a reader meets whichever comes first.
 
 The rule each backend is following is legible -- C declares what it
 defines, and the others declare the symbol an accessor calls, which for a
@@ -22282,12 +22284,14 @@ everywhere. **Which instrument covers a fix is a property of the failure,
 not of the construct** -- and the way to know is to sabotage and watch,
 which is how both were settled rather than assumed.
 
-**The neighbouring family is a different root, left open deliberately.**
-`vrec run[2]` -- a fixed count of a VARIABLE record -- still fails 18 of
-20 with `error: 'run_span' was not declared in this scope`. That shape is
-a counted run and has to be walked, so a later member's offset calls a
-span function nothing emits. Folding it in here would have hidden a
-second defect inside a change about the first.
+**~~The neighbouring family is a different root, left open
+deliberately.~~ Closed; the paragraph below is its closure and this one
+was left standing above it.** `vrec run[2]` -- a fixed count of a
+VARIABLE record -- failed 18 of 20 with `error: 'run_span' was not
+declared in this scope`. That shape is a counted run and has to be
+walked, so a later member's offset called a span function nothing
+emitted. Folding it in here would have hidden a second defect inside a
+change about the first.
 
 **~~Left open.~~ Closed since, and re-measured 2026-09-25.** `vrec run[2]`
 behind a variable member generates in all four backends and compiles in C
@@ -30920,6 +30924,69 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.516 The rule, broken three times by the session that wrote it
+
+**Fourth sweep in three days, and the instrument had to change.**
+Re-triaging 81 candidates a day after triaging 78 answers the same
+question with the same answer, so this diffed the candidate set against
+the last sweep instead:
+
+    entries      513 -> 515
+    candidates    80 -> 81
+    new           26.514, written yesterday
+    entered       none
+    left          none
+    changed       26.138
+
+**A standing detector over a log is worth running once; after that what
+is worth running is the diff.** The three previous sweeps cost a full
+read each and returned five stale claims, then a register, then three
+moved. A fourth full triage would have re-read 78 unchanged entries to
+find the one that moved -- and the one that moved was the finding.
+
+**26.138 was a candidate because yesterday's correction to it was
+APPENDED.** The re-measurement went in below the original paragraph and
+"Still open, and found while checking this" stayed standing above it. A
+reader meets the live claim first. That is 26.512's own finding, in
+26.512's own words -- *a correction lands where the author's eye is* --
+committed one entry after it was written.
+
+**So the next lens came from the last fault**, which is
+`working-practice.md`'s rule: scan for an entry that STRIKES a phrase
+and leaves the same phrase standing. Six hits.
+
+**Four are legitimate and the reason matters.** Three are the corrected
+wording being QUOTED by the correction that replaced it -- exactly the
+case `evidence.md` lists under *four ways a sweep reports a sentence
+that is fine*, and unavoidable in a document that records its own
+corrections. The fourth is 26.144's 0017 item, genuinely unbuilt beside
+three that are struck.
+
+**Two were real, and one of them was three.** 26.266 had its closure
+below an unstruck "left open deliberately". 26.484 carried **two**
+original "Not fixed here" paragraphs with the closure INSERTED BETWEEN
+them, so the entry said the thing, then that it was fixed, then the
+thing again. Yesterday's pass struck the one after the closure and not
+the one before it.
+
+**All three stranded corrections are this session's, from the last two
+days.** The rule was written, then broken three times by its author, and
+found by a detector pointed at the rule. **Inserting a closure is not
+closing an entry** -- the edit has to reach every paragraph making the
+claim, and an entry long enough to make it twice is exactly the entry
+where one will be missed.
+
+**Not a gate, deliberately.** Four of six hits are correct prose, and a
+gate at that rate acquires an ignore list and is then switched off by
+instalments. This is the other kind of check: read once, by the person
+who ran it, where over-reporting costs a minute and buys the errors that
+can be caught at all.
+
+**One live half restated rather than closed.** 26.484's packer question
+is open -- the packer abstains rather than answering, `validatable`
+False re-measured today, so the wrong answer is gone and whether it
+should learn to fold an enum member is the holder's.
+
 ### 26.515 The corpus schema found a second defect on its way in
 
 **26.514 left the corpus without a schema carrying the combination its
@@ -33152,15 +33219,18 @@ reaching a backend as source text, rewritten name by name by
 and not enum arms. `Env.enums` is in hand at all five call sites; it is
 simply absent from the list each one passes.
 
-**Not fixed here.** Five call sites to teach, plus a one-line change in
-C so its crash becomes the refusal the other three already give, plus a
-decision on the packer -- which must not be left answering confidently.
-A refusal in `wellformed.py` would be the smaller change and it breaks
-nothing committed, but it would refuse a construct `situc wire`,
-`situc map`, `situc doc`, `explain`, the dissector and the layout solver
-all handle correctly, and which works today in the bare form
-`u8 a[kv.alpha]` in every backend. That is the holder's call, and the
-packer's wrong answer is the part that should not wait for it.
+**~~Not fixed here.~~ The renderer half was fixed in 26.506; the packer
+half is open and is below.** Five call sites to teach, plus a one-line
+change in C so its crash becomes the refusal the other three already
+give, plus a decision on the packer -- which must not be left answering
+confidently. A refusal in `wellformed.py` would be the smaller change
+and it breaks nothing committed, but it would refuse a construct `situc
+wire`, `situc map`, `situc doc`, `explain`, the dissector and the layout
+solver all handle correctly, and which works today in the bare form
+`u8 a[kv.alpha]` in every backend. **The packer is still the open half**
+-- it abstains rather than answering, `validatable` False as of
+2026-09-26, so the wrong answer is gone and the decision about whether
+it should learn to fold an enum member is the holder's.
 
 **~~Not fixed here.~~ Fixed in 26.506, and none of the three routes this
 paragraph weighed is the one that worked.** Neither a refusal in
@@ -33178,10 +33248,12 @@ described by its symptom -- one backend crashes, three decline -- invites
 a remedy shaped like the symptom, and the question that shortened it was
 what the schema actually means rather than which caller to teach.
 
-**Not fixed here.** It wants `over_fields` and the three backends' size
-rendering to learn enum arms, which is four code paths and a decision
-about whether the C crash should become a refusal or a working accessor.
-Recorded with the reproduction rather than half-done.
+**~~Not fixed here.~~ Fixed in 26.506, which the paragraphs above
+record -- this one is the same claim, left standing below its own
+closure.** It wanted `over_fields` and the three backends' size
+rendering to learn enum members, which read as four code paths and a
+decision about whether the C crash should become a refusal or a working
+accessor. It was one shared property and four thin callers.
 
 ### 26.483 The contract recorded a spelling, in both directions at once
 
