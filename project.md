@@ -30920,6 +30920,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.515 The corpus schema found a second defect on its way in
+
+**26.514 left the corpus without a schema carrying the combination its
+fix was for, and named adding one as the holder's call. It was made, and
+it paid before it landed.**
+
+`edges` now has `stuffed_apart`: a codec with a `stuffing` KERNEL bound
+to an extern `impl`. Nothing here had both. `doubling` is extern and
+declares its properties directly with no kernel, so `decodes_here` is
+false for it; every other tier-1 binding in the tree is an AEAD, false
+for the same reason. Six bindings, none of them the case.
+
+**It reaches the branch, measured against a pre-fix worktree rather than
+against a stash.** Built from `7a5d9ca`, C++ and Rust declare both
+`my_stuffed_apart_decode` and `situ_stuffed_apart_decode`; built from
+the fix, only the bound one. So the schema would have caught 26.514, and
+a later regression will not be silent.
+
+**And it found something else, which is the argument for landing a
+schema WITH a construct rather than after it (26.329).** The generated
+property suite holds a tier-1 codec to its declared expansion, and its
+`RATIO_BOUNDED` branch read the ratio alone:
+
+    map            ratio_bounded(2,1)+1
+    codec test     out_len <= (in_len * 2 + 0) / 1
+
+The `+ 0` there is ceiling-division rounding, `b - 1` with `b` of one --
+not the codec's constant. So the test demanded a bound TIGHTER than the
+signature publishes, and an encoder emitting exactly what it promised
+would fail it. That constant is 0048's frame delimiter, built in 26.357
+and never reaching this file.
+
+**Nobody had met it because every codec carrying a constant is
+derived**, and a derived codec gets no length test. `stuffed_apart` is
+the first tier-1 one that does. The branch adds `expansion_add //
+BITS_PER_BYTE` now, for the reason the `FIXED_ADD` branch beside it
+already gave: that field is bits since 0046 and this test counts bytes.
+
+**The control is the whole point of the exercise.** With the bound fix
+reverted, `test_stuffed_apart_length` goes red -- so the corpus schema
+turns what was an absence into a failing test, which is exactly what
+26.329 claimed for `spoken` and what this entry is the second instance
+of. Without the schema the fix would have been unfalsifiable; without
+the fix the schema cannot land.
+
+**The implementation is real, not a placeholder.** `my_stuffed_apart` is
+RFC 1055 SLIP in `codec_impl.c`: END terminates, a literal END becomes
+ESC ESC_END and a literal ESC becomes ESC ESC_ESC, and the trailing END
+is the `+ 1` in the signature. It has to be real, because the three
+generated tests are the kernel's claims rather than the file's --
+`ratio_bounded(2, 1) + 1`, `invertible`, `deterministic` -- and a
+placeholder satisfying them would be a working SLIP anyway.
+
+**A note on the delimited form, which was the second thing tried.** The
+first shape was `coded body(stuffed_apart) { u8 content[n]; }`, matching
+`coded_run` beside it. Every backend declines that region -- its encoded
+extent is not computable from a bounded ratio -- so the spurious
+declaration sat next to no accessor at all. That is a sharper statement
+of the bug and a weaker test, since nothing decodes. `until "\xC0"`
+makes the region one all three backends decode THROUGH the bound symbol,
+which is the habitat the defect actually lives in.
+
+**And the before/after was taken twice.** The first comparison ran `git
+stash` on a clean tree, so both arms were the fixed compiler and the
+answer was that nothing changed -- the self-comparison this session has
+now made twice, and caught both times only because the result was
+implausible. A worktree at the parent commit is what answered it.
+
 ### 26.514 The same argument, one list over, three months apart
 
 **26.513 found C++ and Rust declaring `situ_<codec>_decode` where the
@@ -30973,14 +31041,12 @@ declaration removed did not take its caller with it. That compile was
 itself controlled, with a line of nonsense appended to the generated
 header.
 
-**What is not done: the corpus still has no schema with the
-combination.** 26.329 argues for landing a corpus schema WITH a
-construct rather than after it, and `edges` is where it would go. It
-would change a committed wire signature and a committed map, which is a
-reviewed artifact moving for a test's sake, so it is the copyright
-holder's call rather than a drive-by. The unit test covers the fix
-today; what it does not do is make the corpus able to find the next one
-of these.
+**~~What is not done: the corpus still has no schema with the
+combination.~~ Added on the holder's instruction; 26.515 has it, and it
+found a second defect on the way in.** 26.329 argues for landing a
+corpus schema WITH a construct rather than after it, and `edges` is
+where it went -- at the cost of a committed wire signature and map
+moving, which is why it was asked rather than assumed.
 
 ### 26.513 Thirty-one candidates, seven claims, three that had moved
 
