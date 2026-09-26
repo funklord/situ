@@ -30924,6 +30924,79 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.517 The third copy of one question, and the order that made it safe
+
+**26.484's packer half is closed.** `u8 a[kv.alpha + n]` now encodes a
+size program, the struct is validatable, and both walkers answer what
+the four backends answer. The packer had reported the defect itself and
+nobody had read it as a task: `situc pack --coverage` printed *`s.a`: no
+placement for `kv.alpha`* the whole time.
+
+**It was the third copy of "which names are compile-time constants".**
+The evaluator has `Env.consts` and the enum table; the four renderers
+were handed `consts` alone until 26.506 joined them into
+`Env.named_constants`; and `pack()` built its own from `schema.decls`
+beside them, so joining the first two reached four callers and not the
+fifth. It reads the shared property now. **A question answered in three
+places is not fixed by fixing two of them, and the third was not hard to
+find -- it was the one that had been printing the symptom.**
+
+**The safety argument is the ORDER, and it is different from the
+renderers'.** `Program.compile` asks `consts` BEFORE the path resolver,
+so adding names there can change which value a working schema reads --
+`local_name` is a dotted path and `hdr.len` may name a nested field and
+an enum member at once. The renderers met that and filtered their merged
+table against the field table. Here the enum members are a SECOND table
+consulted only where the resolver has already failed, which is the
+position that currently raises. **A name that resolves today resolves
+the same way; only a name that resolved to nothing gains a value.** No
+filter, and nothing to keep in step.
+
+**Threading it through the recursion is the part that could have been
+missed silently.** `kv.alpha + n` is a Binary, so the member is an ARM
+of the expression rather than the whole of it: a fallback added at the
+top and not passed down would leave the failing case untouched while
+the code read as fixed. Four recursive sites and the builtin-call
+helper carry it.
+
+**Blast radius zero across 42 schemas, and the zero is controlled.** No
+committed schema puts an enum member in a size expression -- which is
+why neither the renderers nor the packer was caught, and the same
+measurement 26.514 took for its own fix. The control is not a sabotage
+this time but the real case: the exercising schema's image changes and
+`edges` does not, so the comparison is shown able to speak by the thing
+it exists to detect.
+
+**Three tests, and one of them passes against the old packer on
+purpose.** Two are regressions and fail there. The third asserts that a
+name resolving to a field still does -- the invariant the order
+argument claims -- and a version of it that went red on the old code
+would be asserting the opposite of what it is for. Saying so in the
+docstring is what stops the next reader filing it as a test that never
+bites.
+
+**And the fix took a test's fixture away with it, which is a shape
+worth keeping.** `test_a_member_whose_program_did_not_encode_disowns_
+its_struct` proves the image does not claim `measurable` for a struct
+whose size program failed to compile. Its fixture was `kv.alpha + n`,
+chosen because the packer could not compile it -- so the moment the
+packer could, the test had no subject and went red asserting *the
+packer has to have noticed at all*.
+
+**A fixture drawn from the set of things that do not work is a fixture
+with a shelf life**, and the set it was drawn from is exactly the set
+somebody is working through. Picking another uncompilable spelling puts
+the trap back one construct along. The refusal is INJECTED now -- the
+expression compiler is made to refuse that one member -- so what is
+under test is the disown rather than which expressions compile, and
+both halves of the pair use the same spelling with the injection as the
+only variable. Sabotaged by removing the disown: flags come back `3`
+where the test demands `0`.
+
+**The corpus still has no schema with this construct.** `edges` is
+where one would go, at the cost of a map and a wire signature moving,
+the same trade 26.515 took on instruction. Named rather than done.
+
 ### 26.516 The rule, broken three times by the session that wrote it
 
 **Fourth sweep in three days, and the instrument had to change.**
@@ -30982,10 +31055,10 @@ instalments. This is the other kind of check: read once, by the person
 who ran it, where over-reporting costs a minute and buys the errors that
 can be caught at all.
 
-**One live half restated rather than closed.** 26.484's packer question
-is open -- the packer abstains rather than answering, `validatable`
-False re-measured today, so the wrong answer is gone and whether it
-should learn to fold an enum member is the holder's.
+**~~One live half restated rather than closed.~~ Closed the same day by
+26.517**, on the holder's instruction: 26.484's packer question is
+answered, the size program encodes, and both walkers agree with the four
+backends.
 
 ### 26.515 The corpus schema found a second defect on its way in
 
@@ -33227,10 +33300,10 @@ confidently. A refusal in `wellformed.py` would be the smaller change
 and it breaks nothing committed, but it would refuse a construct `situc
 wire`, `situc map`, `situc doc`, `explain`, the dissector and the layout
 solver all handle correctly, and which works today in the bare form
-`u8 a[kv.alpha]` in every backend. **The packer is still the open half**
--- it abstains rather than answering, `validatable` False as of
-2026-09-26, so the wrong answer is gone and the decision about whether
-it should learn to fold an enum member is the holder's.
+`u8 a[kv.alpha]` in every backend. **~~The packer is still the open
+half~~ Closed by 26.517** -- it abstained rather than answering, and it
+encodes the size program now, with the enum members as a fallback
+consulted only where a path resolves to no placement.
 
 **~~Not fixed here.~~ Fixed in 26.506, and none of the three routes this
 paragraph weighed is the one that worked.** Neither a refusal in
