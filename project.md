@@ -15932,6 +15932,30 @@ record states.
   by target. Never built. Both documents said the slot "exists ... and is
   empty" and now say it is specified and unimplemented, which is what
   0017's amendment had already measured without being able to date.
+- **How a signature comparison should treat a RENDERING change, and a
+  version field nothing reads.** Raised by fuzznet 2026-09-26 after
+  taking 26.520: their own schema gate, which runs `situc wire
+  --check`, told them the frame "no longer authenticates capability,
+  chunks, commitment, ... sender" -- which reads as a regression and
+  was a rename.
+
+  **`wire.FORMAT_VERSION` is written into every signature and read by
+  nothing.** `compare` never looks at it. Its own comment says the
+  number moves when "a reader that cannot tell the two apart has to be
+  told" -- which 26.520 was, and it did not move it. Bumping is sound
+  and inert while nothing reads the field, so the decision is really
+  whether `compare` should read it at all.
+
+  **fuzznet's alternative is cheaper and not sound**, and they say so
+  themselves by naming what it rests on: classify a covers line whose
+  member multiset is unchanged after stripping path prefixes as RENAMED
+  rather than COVERAGE. It uses what the checker already has. It cannot
+  see a swap -- a tag that stops covering `first.x` and starts covering
+  `second.x` strips to the same multiset, which is a real change
+  reported as a rename.
+
+  Either, both, or neither. Nothing is blocked on it: the misreport is
+  one-off per consumer and fuzznet has already absorbed theirs.
 - **What a STRUCT's `auth=` line means, which is now the one place the
   two readings differ.** Raised by fuzznet 2026-09-26, after they
   verified 26.519 against their provisioning card: `card.hop` reads
@@ -30997,10 +31021,32 @@ contracts.** `icmp`'s checksum listed `identifier` and `sequence` TWICE
 committed signature.** Every `.wire` predating this reports COVERAGE
 findings on its next `--check`, because every covers line's text
 changed. Nothing about the bytes moved and no coverage changed; the
-names did. fuzznet knew and said they would take it with the fix. There
-is no version marker on the format that would distinguish a renamed
-line from a narrowed one, which is worth knowing before the next
-rendering change rather than after it.
+names did. fuzznet knew and said they would take it with the fix.
+
+**~~There is no version marker on the format that would distinguish a
+renamed line from a narrowed one.~~ There is, and it is never read** --
+written the same day, and wrong. `wire.FORMAT_VERSION` is rendered into
+every signature's first line and `compare` does not look at it: a value
+written and read by nothing, which is the vacuous pass moved from a
+check to a format. The tree looks able to tell two signature
+generations apart and is not.
+
+**Its own comment states the rule this change met.** The number went to
+1 because a new KIND of line arrived and "a reader that cannot tell the
+two apart has to be told, so the number moves". A rendering that renames
+every token on a line is that case, and this change did not move it.
+Bumping alone would still accomplish nothing while nothing reads the
+field, which is why it is recorded rather than done.
+
+**fuzznet proposed the other mechanism and it is cheaper and not
+sound.** Classify a covers line whose member multiset is unchanged after
+stripping path prefixes as RENAMED rather than COVERAGE -- they verified
+all four of their contracts that way, which is a better check than the
+diff situ used. It uses information the checker already has and it
+cannot see a SWAP: a tag that stops covering `first.x` and starts
+covering `second.x` strips to the same multiset, and that is a real
+coverage change reported as a rename. Cheap and unsound the one way that
+matters, against sound and inert; both are in the register.
 
 ### 26.519 The same key, one dict over, and a repair worse than the bug
 
