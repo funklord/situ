@@ -19,6 +19,7 @@ codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=by
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
 codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
+codec stuffed_apart trusted expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec summing derived expansion=+2 seekable=linear granularity=block systematic deterministic
 
 struct arithmetic size=14..43 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
@@ -131,6 +132,10 @@ struct equalized size=11 repr=ValueConverted atomic=NonAtomic
 struct escaped_run size=1.. access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical
   escaped_run.field                      offset=AbsoluteStatic(0x00) size=Bounded(1, 64) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   escaped_run.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
+struct externally_stuffed size=1.. access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
+  externally_stuffed.body                offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
+  externally_stuffed.body.content        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
 
 struct fixed_text size=3 atomic=NonAtomic
   fixed_text.body                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic

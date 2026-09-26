@@ -651,6 +651,40 @@ struct coded_run {
 	u8  trailer;
 }
 
+// A KERNEL AND AN EXTERN IMPL ON ONE CODEC, which nothing here had.
+//
+// `doubling` above is extern and declares its properties directly, with no
+// kernel -- so `decodes_here` is false for it and it never reaches the code
+// that declares a DERIVED decoder. Every other tier-1 binding in this file
+// and in the examples is an AEAD, false for the same reason. Six of them,
+// and not one exercised the combination, so C++ and Rust declared both
+// `situ_stuffed_apart_decode` and the bound symbol while C declared only
+// the bound one, and no committed schema could tell anybody (26.514).
+//
+// The two halves are separate questions and this is the schema that says
+// so: the KERNEL is what the signature is derived from -- the ratio, the
+// granularity, the seekability -- and the `impl` is who supplies the code.
+// A tier-1 codec may be described by a kernel it does not get its
+// implementation from.
+//
+// It found a second thing on the way in. `ratio_bounded(a, b) + k` carries
+// the constant the code appends, which for SLIP is the frame delimiter
+// (0048, built in 26.357) -- and `gen-codec-tests` asserted the ratio
+// without it, a bound TIGHTER than the signature publishes. Every codec
+// carrying a constant is derived and a derived codec gets no length test,
+// so this is the first one to sit under that assertion (26.515).
+codec stuffed_apart {
+	kernel = stuffing(worst_case = 2, per = 1, unit = byte, code = slip);
+}
+
+impl stuffed_apart extern "my_stuffed_apart";
+
+struct externally_stuffed {
+	coded body(stuffed_apart) until "\xC0" {
+		u8  content[remaining];
+	}
+}
+
 // Every operator a size expression can carry.
 //
 // A measurement rather than a hunch: across every schema this repository

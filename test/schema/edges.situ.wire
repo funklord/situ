@@ -142,6 +142,9 @@ struct escaped_run size=1..
   @0x0000   until:2c  u8         field  escape=0x5c cap=64
   ~         0..       u8         rest  sized-by=remaining
 
+struct externally_stuffed size=1..
+  @0x0000   until:c0  stuffed_apart body  codec=stuffed_apart
+
 struct fixed_text size=3
   @0x0000   3         u8         body  big encoding=ascii
 

@@ -211,3 +211,116 @@ situ_err_t app_header_mask_decode_spans(const situ_span_t *spans,
 {
 	return app_header_mask_encode_spans(spans, count);
 }
+
+/* my_stuffed_apart -- SLIP, supplied rather than derived.
+ *
+ * `edges` binds a codec that HAS a kernel to an extern implementation, which
+ * no schema here did before: the kernel is what the signature is derived
+ * from and the `impl` is who supplies the code, and nothing had separated
+ * them (26.514). So this has to be a real SLIP, not a placeholder: the
+ * generated property tests hold it to `ratio_bounded(2, 1) + 1`,
+ * `invertible` and `deterministic`, which are the kernel's claims and not
+ * this file's.
+ *
+ * RFC 1055. END terminates a frame; a literal END in the payload becomes
+ * ESC ESC_END and a literal ESC becomes ESC ESC_ESC. The trailing END is
+ * the `+ 1` in the signature and is what makes the region's `until "\xC0"`
+ * sound -- END appears exactly once in an encoded frame and at the end,
+ * which is the property the stuffing exists to create.
+ *
+ * A reviewer wanting to see the tests bite can drop the trailing END and
+ * watch the round-trip fail, or escape only END and watch it fail on an
+ * input containing ESC.
+ */
+
+#define SLIP_END     0xC0u
+#define SLIP_ESC     0xDBu
+#define SLIP_ESC_END 0xDCu
+#define SLIP_ESC_ESC 0xDDu
+
+situ_err_t my_stuffed_apart_encode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+situ_err_t my_stuffed_apart_decode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+
+situ_err_t my_stuffed_apart_encode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	uint32_t at = 0u;
+	uint32_t i;
+
+	if ((in == NULL && in_len != 0u) || out == NULL || out_len == NULL) {
+		return SITU_ERR_CONSTRAINT;
+	}
+
+	for (i = 0u; i < in_len; i++) {
+		/* Two bytes may be needed, so the room is checked for two. */
+		if (at + 2u > out_cap) {
+			return SITU_ERR_BOUNDS;
+		}
+		if (in[i] == SLIP_END) {
+			out[at++] = (uint8_t)SLIP_ESC;
+			out[at++] = (uint8_t)SLIP_ESC_END;
+		} else if (in[i] == SLIP_ESC) {
+			out[at++] = (uint8_t)SLIP_ESC;
+			out[at++] = (uint8_t)SLIP_ESC_ESC;
+		} else {
+			out[at++] = in[i];
+		}
+	}
+
+	if (at + 1u > out_cap) {
+		return SITU_ERR_BOUNDS;
+	}
+	out[at++] = (uint8_t)SLIP_END;
+
+	*out_len = at;
+	return SITU_OK;
+}
+
+situ_err_t my_stuffed_apart_decode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	uint32_t at = 0u;
+	uint32_t i  = 0u;
+
+	if ((in == NULL && in_len != 0u) || out == NULL || out_len == NULL) {
+		return SITU_ERR_CONSTRAINT;
+	}
+
+	while (i < in_len) {
+		uint8_t byte = in[i++];
+
+		if (byte == SLIP_END) {
+			break;		/* the frame ends here, by construction */
+		}
+		if (byte == SLIP_ESC) {
+			if (i >= in_len) {
+				/* An escape with nothing after it. CONSTRAINT
+				 * rather than BOUNDS: the buffer was read
+				 * correctly and what it holds is not a frame,
+				 * which is the same code `my_doubling_decode`
+				 * uses for an input its code cannot describe. */
+				return SITU_ERR_CONSTRAINT;
+			}
+			byte = in[i++];
+			if (byte == SLIP_ESC_END) {
+				byte = (uint8_t)SLIP_END;
+			} else if (byte == SLIP_ESC_ESC) {
+				byte = (uint8_t)SLIP_ESC;
+			} else {
+				/* An escape the code does not define. Refusing rather
+				 * than computing something: there is nothing to
+				 * compute and guessing would invent a byte. */
+				return SITU_ERR_CONSTRAINT;
+			}
+		}
+		if (at >= out_cap) {
+			return SITU_ERR_BOUNDS;
+		}
+		out[at++] = byte;
+	}
+
+	*out_len = at;
+	return SITU_OK;
+}

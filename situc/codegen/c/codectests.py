@@ -253,8 +253,25 @@ def _length_test(codec: ast.CodecDecl, encode: str,
 	elif codec.expansion is ast.Expansion.RATIO_BOUNDED:
 		assert codec.ratio is not None
 		a, b = codec.ratio
+		# Plus the constant the code appends, which 0048 put into the
+		# signature and 26.357 built: `ratio_bounded(a, b) + k`, where for
+		# COBS, SLIP and PPP the k is the frame delimiter. This branch read
+		# the ratio alone and asserted a bound TIGHTER than the signature
+		# publishes -- so an encoder emitting exactly what it promised would
+		# fail here, and the map and this test disagreed about one codec.
+		#
+		# Nothing had met it: every codec carrying a constant is `derived`,
+		# and a derived codec gets no length test. `edges`' tier-1 stuffing
+		# codec is the first that does (26.515).
+		#
+		# `// BITS_PER_BYTE` for the reason the `FIXED_ADD` branch above
+		# gives: `expansion_add` is bits since 0046 and this test counts
+		# bytes.
+		added = codec.expansion_add // BITS_PER_BYTE
+		bound = f"(in_len * {a}u + {b - 1}u) / {b}u"
 		check = [
-			f"\t\tassert_true(out_len <= (in_len * {a}u + {b - 1}u) / {b}u);",
+			f"\t\tassert_true(out_len <= {bound}"
+			+ (f" + {added}u);" if added else ");"),
 		]
 		claim = "the declared worst case"
 	else:
