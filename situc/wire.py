@@ -834,6 +834,29 @@ def _coverage(struct: ResolvedStruct) -> list[str]:
 	authenticates less than the old one and nothing about the structure says
 	so.
 	"""
+	def local(path: str) -> str:
+		"""A name in this struct's terms: the path with the struct dropped.
+
+		The LEAF was used here, for both the tag and the members it covers,
+		and a nested member brings its own leaf along -- so a struct holding
+		two self-signed members renders two lines that both read `signature
+		covers:` and both list a `body`, with nothing saying which is which.
+
+		fuzznet met it from the consuming end: their provisioning card has
+		three such lines and the wrong coverage of 26.519 sat in their
+		committed contract unread, because two identical-looking lines each
+		listing both structs' fields read as a description rather than as
+		two tags making the same claim.
+
+		It is not only unreadable. `_annotations` keys the comparison on the
+		text before `": "`, so two lines with one name are ONE key and the
+		later overwrites the earlier: measured, a tag losing coverage inside
+		a parent produced no finding for that parent, and was caught only
+		because the same struct is also rendered standalone. A tag that
+		exists only within a parent has no such second chance (26.520).
+		"""
+		return path[len(struct.name) + 1:]
+
 	lines = []
 	for placement in struct.entries:
 		held = placement.placement
@@ -844,7 +867,8 @@ def _coverage(struct: ResolvedStruct) -> list[str]:
 		# which is the shape of change this signature exists to catch.
 		if held.kind == "coded" and held.coded_covers:
 			over = " ".join(sorted(held.coded_covers))
-			lines.append(f"  {held.name} covers: {held.name} {over}")
+			lines.append(f"  {local(held.path)} covers: {local(held.path)}"
+			             f" {over}")
 			continue
 
 		if held.kind not in ("tag", "checksum"):
@@ -852,16 +876,15 @@ def _coverage(struct: ResolvedStruct) -> list[str]:
 
 		covered = sorted(
 			entry.placement.path for entry in struct.entries
-			if held.path[len(struct.name) + 1:]
-			   in entry.placement.covered_by)
-		names = " ".join(path.rpartition(".")[2] for path in covered) or "nothing"
+			if local(held.path) in entry.placement.covered_by)
+		names = " ".join(local(path) for path in covered) or "nothing"
 		# The prefix is part of what a peer has to sum (14.2a), and it is
 		# invisible in the structure: every member, offset and size is
 		# identical whether or not a pseudo-header is covered, so a change
 		# here is exactly the kind this signature exists to catch.
 		if held.tag_prefix is not None:
 			names = f"{held.tag_prefix}(prefix) {names}"
-		lines.append(f"  {held.name} covers: {names}")
+		lines.append(f"  {local(held.path)} covers: {names}")
 	return lines
 
 

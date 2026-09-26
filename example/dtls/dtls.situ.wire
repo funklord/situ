@@ -30,4 +30,4 @@ struct record size=37..16421
   @0x000d   8         u8         explicit  big
   @0x0015   0..16384  aes_128_gcm sealed  codec=aes_128_gcm nonce=explicit key=epoch
   ~         16        u8         tag
-  tag covers: sealed fragment
+  tag covers: sealed sealed.fragment

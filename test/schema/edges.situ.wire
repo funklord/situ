@@ -91,7 +91,7 @@ struct covered_tail size=8..12
   @0x0001   0..4      u8         pad  sized-by=n
   ~         3         beacon     head  big
   ~         4         u8         mac
-  mac covers: body head flags seq
+  mac covers: body head head.flags head.seq
 
 struct declared_fixed size=17..
   @0x0000   until:3b  document_charset kind
@@ -346,7 +346,7 @@ struct sealed_run size=19..27
   @0x0000   1         u8         n  max=4
   @0x0001   2..10     sealing_aead body  codec=sealing_aead
   ~         16        u8         seal_mac
-  seal_mac covers: body trailer vals
+  seal_mac covers: body body.trailer body.vals
 
 struct secret_run size=3..258
   @0x0000   1         u8         n
@@ -402,8 +402,8 @@ struct signed_whole size=16
   @0x0001   11        signed_part piece  big
   @0x000c   2         u16        stamp  big
   @0x000e   2         u8         whole_sig
-  part_sig covers: a b part_body
-  whole_sig covers: piece a b part_body part_sig stamp version whole_body
+  piece.part_sig covers: piece.a piece.b piece.part_body
+  whole_sig covers: piece piece.a piece.b piece.part_body piece.part_sig stamp version whole_body
 
 struct sized_text size=1..256
   @0x0000   1         u8         n
@@ -444,8 +444,8 @@ struct texty size=2..65543
 struct twin_sigs size=6
   @0x0000   3         inner_left left  big
   @0x0003   3         inner_right right  big
-  sig covers: left_body x
-  sig covers: right_body y
+  left.sig covers: left.left_body left.x
+  right.sig covers: right.right_body right.y
 
 struct two_tags size=23
   @0x0000   1         u8         hop
@@ -476,7 +476,7 @@ struct unverified size=19
   @0x0000   1         u8         hop
   @0x0001   2         sealing_aead body  codec=sealing_aead
   @0x0003   16        u8         mac
-  mac covers: body seq
+  mac covers: body body.seq
 
 struct usb_token size=2
   @0x0000   7bit      u7         address  lsb_first

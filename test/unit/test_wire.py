@@ -1068,3 +1068,62 @@ def test_where_a_member_is_read_from_records_values_too() -> None:
 	assert "at=spot+3" in text, "resolved, and squashed"
 	assert "AT_BIAS" not in text
 	assert verdict(held % 3, held % 5).breaking
+
+
+# -- two tags of one name, in one struct ------------------------------------
+
+#: `a` and `b` each sign their own body, and both tags are called `sig`.
+#: Their leaf names are identical inside `outer`, which is the shape
+#: `edges`' own `twin_sigs` has had since it was written (26.520).
+TWINS = (
+	"struct a {{\n"
+	"\tauthenticated body {{ u8 x;{extra} }}\n"
+	"\tchecksum u8 sig[4] covers(body);\n"
+	"}}\n"
+	"struct b {{ authenticated body {{ u8 y; }} checksum u8 sig[4]"
+	" covers(body); }}\n"
+	"struct outer {{ a first; b second; }}\n"
+)
+
+
+def test_each_tag_is_named_by_its_path_in_the_covers_line() -> None:
+	"""Two tags of one name must not render two identical lines.
+
+	The leaf was used for the tag and for every member it covers, so a
+	struct holding two self-signed members produced two lines both reading
+	`sig covers:` and both listing a `body`. fuzznet met it from the
+	consuming end: their contract has three such lines and the wrong
+	coverage of 26.519 sat in it unread.
+	"""
+	text = signature(TWINS.format(extra=""))
+	lines = [line.strip() for line in text.splitlines() if "covers:" in line]
+
+	assert "first.sig covers: first.body first.x" in lines
+	assert "second.sig covers: second.body second.y" in lines
+	# And the standalone structs keep their own unqualified names, because
+	# inside `a` there is only one `sig` and nothing to disambiguate.
+	assert "sig covers: body x" in lines
+
+
+def test_a_sibling_tag_losing_coverage_is_not_hidden_by_its_twin() -> None:
+	"""The half that is not about reading.
+
+	`_annotations` keys the comparison on the text before `": "`, so two
+	lines with one name are ONE key and the later overwrites the earlier.
+	Measured before the fix: `first.sig` losing a member produced a finding
+	for the standalone `a` and NONE for `outer`, because `second.sig`'s line
+	won the key and had not changed. A tag that exists only inside a parent
+	has no standalone line to be caught by.
+
+	Asserted on `outer` specifically rather than on the finding count: the
+	count was 1 and is 2, and a test on the number would pass for any second
+	finding at all.
+	"""
+	found = verdict(TWINS.format(extra=" u8 w;"), TWINS.format(extra=""))
+
+	assert "coverage" in kinds(found)
+	blamed = {finding.subject for finding in found.findings
+	          if finding.kind == "coverage"}
+	assert blamed == {"a", "outer"}, (
+		f"the parent's view of the change is missing: {sorted(blamed)}")
+	assert "first.sig covers" in detail(found)
