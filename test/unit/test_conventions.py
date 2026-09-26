@@ -875,3 +875,100 @@ def test_the_readme_check_can_fail() -> None:
 	held = _readme_as_code()
 	assert not re.search(r"\bnot_a_situ_keyword\b", held)
 	assert re.search(r"\bstruct\b", held), "and a real one has to be found"
+
+
+# ---------------------------------------------------------------------------
+# The open register against the records it cites
+# ---------------------------------------------------------------------------
+
+def _register_items() -> list[tuple[str, str]]:
+	"""26.144's bullets, as (text-with-corrections-applied, raw).
+
+	Strike-through is how this document records a correction, so a struck
+	claim is one the entry has already withdrawn and must not be read as
+	live. Dropping those spans first is the difference between checking
+	what the register SAYS and checking every sentence it has ever said.
+	"""
+	text = (ROOT / "project.md").read_text(encoding="utf-8")
+	start = text.index("### 26.144 ")
+	body  = text[start:text.index("\n### ", start + 10)]
+
+	found = []
+	for raw in re.split(r"\n- ", body)[1:]:
+		item = re.sub(r"~~.*?~~", "", raw, flags=re.S)
+		found.append((item, raw))
+	return found
+
+
+def test_the_open_register_agrees_with_the_records_it_cites() -> None:
+	"""26.144 says which decision records are built; the records say too.
+
+	A register is written as STATUS, so nothing in it goes stale loudly --
+	its own opening paragraph says exactly that and answers it with a
+	dated manual check. That check was 23 days old when this was written
+	and its first claim was false: it said 0045 and 0046 still read
+	`Status: proposed`, and both had been accepted the day after and built
+	since. Three of the four items reading "not yet built" had been built,
+	each on a date the record itself carries.
+
+	So the duplication is the problem and a fresher date is not the fix. A
+	record's `Status:` line is machine-readable and the register restates
+	it in prose; this asks the two to agree, which is the only version
+	that cannot rot between readings.
+
+	It checks one direction. A record saying `built` under an item saying
+	`not yet built` is a contradiction. The reverse -- a register calling
+	something built that the record does not -- is not asserted here,
+	because a record's Status is the author's summary and lags a build by
+	however long it takes them to write the line.
+	"""
+	statuses = {}
+	for path in sorted((ROOT / "doc" / "decision").glob("*.md")):
+		text  = path.read_text(encoding="ascii")
+		# The Status block, which runs to the next `Key:` line: these
+		# records write a status as a sentence and wrap it, so the first
+		# line alone says `accepted 2026-09-04;` and drops the half that
+		# says when it was built.
+		block = re.search(r"^Status:(.*?)(?=^[A-Z][a-z]+:)", text,
+		                  re.S | re.M)
+		statuses[path.name.split("-")[0]] = (
+			block.group(1).strip().lower() if block else "")
+
+	assert len(statuses) > 40, "the population moved"
+
+	items = _register_items()
+	assert len(items) > 8, f"only {len(items)} register items parsed"
+
+	# The instrument, before the finding. Every piece of it has to be shown
+	# alive, and NOT by requiring that a disagreement exist: the first
+	# version asserted that some item both cited a record and claimed to be
+	# unbuilt, which passed while the register was wrong and went red the
+	# moment it was corrected. An assertion that demands the bad state
+	# persist is worse than none -- it is 26.510's dead-cell loop with the
+	# polarity flipped, and it fails in the commit that fixes the thing.
+	seen = {number for _, raw in items
+	        for number in re.findall(r"doc/decision/(\d{4})-", raw)}
+	assert seen, "no register item cites a decision record"
+	assert seen <= set(statuses), f"cited but absent: {sorted(seen - set(statuses))}"
+	assert any("built" in statuses[number] for number in seen), (
+		"no cited record's Status says `built`, so this cannot tell a "
+		"built one from an unbuilt one")
+
+	wrong = []
+	for item, raw in items:
+		# The CLAIM is read from the corrected text and the CITATION from
+		# the raw: an item's record path usually sits inside the struck
+		# span, because what was struck is the sentence naming the record
+		# and its old status. Reading both from the stripped text finds no
+		# citation at all.
+		if not re.search(r"not (yet )?built", item, re.I):
+			continue
+		for number in set(re.findall(r"doc/decision/(\d{4})-", raw)):
+			status = statuses.get(number, "")
+			if "built" in status:
+				summary = " ".join(status.split())[:110]
+				wrong.append(f"{number}: the register says it is not built "
+				             f"and the record says {summary!r}")
+
+	assert not wrong, "the register and the records disagree:\n  " \
+	                  + "\n  ".join(wrong)
