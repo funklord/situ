@@ -15352,6 +15352,28 @@ length-changing coded region so that no generated accessor decodes:
 | Rust | not declared | declared |
 | Python | not declared | not declared |
 
+**~~Still open~~ Re-measured 2026-09-26, and three of the eight cells
+have moved.** Same method, `example/slip/slip.situ` built twice with only
+its `impl` line differing, counting DECLARATIONS rather than occurrences
+-- the first attempt at the re-measurement grepped for the symbol
+anywhere and answered a different question, since a header names a codec
+in a comment and calls it in a body:
+
+| backend | `impl ... derived` | `impl ... extern "app_slip"` |
+|---|---|---|
+| C | `situ_slip_encode`, `situ_slip_decode` | `app_slip_decode` |
+| C++ | `situ_slip_decode` | both |
+| Rust | `situ_slip_decode` | both |
+| Python | none | none |
+
+Four backends still give three answers and the complaint above has
+changed shape rather than gone. C declares what will be called. Python
+declares nothing either way. **C++ and Rust now declare
+`situ_slip_decode` even when the `impl` is extern** -- a symbol no
+binding provides and nothing in the generated code calls, which is inert
+in both languages and is still a header telling a consumer about a
+function that will not exist.
+
 The rule each backend is following is legible -- C declares what it
 defines, and the others declare the symbol an accessor calls, which for a
 length-changing region is only ever the tier-1 one reached through the
@@ -16816,8 +16838,10 @@ implemented" is not a mood. Three things say where it stands: 26.31, the
 frontier list, has no open gap; the layer ladder ships all six rungs in all
 four backends; and 26.144 is the list of what is open, which today holds
 `linear_block` knowing one code, the 8b10b/CoAP question about state carried
-between items, the plugin slot that was designed and never built, and the
-delimiter question 26.147 opened. A fifth and sixth backend before those are
+between items, the plugin slot that was designed and never built, and ~~the
+delimiter question 26.147 opened~~ -- that last **settled by 0048 and built
+in 26.357**, which is this paragraph restating a register in prose and
+going stale where the register did not (26.512). A fifth and sixth backend before those are
 settled would be spelling an unsettled language twice more.
 
 **Why the cost is smaller than four backends make it look.** The layout
@@ -23021,8 +23045,17 @@ the caller checked something else.**
 **Three, behind that and not mine:** `gen-codec-tests` emits calls to
 `situ_internet_checksum_encode`, and `gen-derived` emits `_holed` and
 `_spans` for a `ones_complement` kernel and no `_encode`. Identical at
-base and HEAD. Left open: whether the signature over-claims or the
-generator under-emits is a question about the codec layer, not a typo.
+base and HEAD. ~~Left open: whether the signature over-claims or the
+generator under-emits is a question about the codec layer, not a typo.~~
+**Answered since, and the answer is neither.** Re-measured 2026-09-26:
+`gen-derived` still emits `_holed` and `_spans` and no `_encode`, and
+`gen-codec-tests` now writes `internet_checksum: no suite` with the
+reason -- *a `ones_complement` kernel is a digest over its input rather
+than a transform with an inverse, so its implementation is one function
+and there is no pair to attack (13.4)*. A digest has no encode to emit,
+so the generator is right and the signature never claimed one; what was
+wrong was a test generator calling a function nobody defines, and it
+names itself now instead.
 
 **What this is really about is which gate was being run.** The Python
 suite is 4667 tests and green throughout; `make test-c` builds the
@@ -30884,6 +30917,64 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.513 Thirty-one candidates, seven claims, three that had moved
+
+**26.512 left 31 unclassified candidates and said they were candidates
+rather than open items. All 31 read, and the split is the finding:**
+
+     7  make a checkable claim
+     5  a decision, recorded as one, and the holder's
+    19  noise -- history, a pointer to a closure, or the detector
+
+**Nineteen of thirty-one is a detector problem, and two of them are the
+pattern rather than the genre.** 26.27's match is `once it is open`,
+about a sealed region's GATE; 26.1's is a phase plan naming what a
+decision record left open before it was accepted. The rest are entries
+describing a gap they then close, which is 26.505's genre argument
+arriving for the third time: **these are logs, and a log states a gap in
+order to fix it.**
+
+**Three of the seven had moved, and each by a different route.**
+
+- **26.279's question is answered in code.** It found `gen-derived`
+  emitting `_holed` and `_spans` for a `ones_complement` kernel and no
+  `_encode`, and left open whether the signature over-claimed or the
+  generator under-emitted. Neither: a digest has no encode. The
+  generator was right all along and what was wrong was a third thing --
+  `gen-codec-tests` calling a function nobody defines -- which now
+  writes `internet_checksum: no suite` and says why, quoting 13.4. **The
+  answer was in a generated comment nobody had re-read.**
+- **26.138's table moved in three of eight cells.** Four backends still
+  give three answers about which codec entry point a consumer gets
+  declared, and the complaint has changed shape: C++ and Rust now
+  declare `situ_slip_decode` even when the `impl` is extern, which is a
+  symbol no binding provides. Inert in both languages, and still a
+  header describing a function that will not exist.
+- **26.157 restates the register in prose and went stale where the
+  register did not.** It lists what 26.144 "today holds" and names the
+  delimiter question, settled by 0048 and built in 26.357. The register
+  itself has that struck. **A summary of a maintained list is a second
+  copy with none of the maintenance**, which is 26.512's finding met
+  from the other side: there the register was stale against the records,
+  here an entry is stale against the register.
+
+**The other four checked out and are live.** 26.198's protobuf
+disagreement is pinned by a test reading both sides, which still does.
+26.506's packer abstains rather than answering confidently --
+`validatable` is False, measured. 26.245 waits on the same thing 0017's
+Rust question waits on, which 26.144 still records as unbuilt and which
+still does not parse. 26.356 was reproduced yesterday.
+
+**The re-measurement of 26.138 was taken twice, and the first one
+answered a different question.** Grepping the generated files for the
+symbol counts every mention -- a header names a codec in a comment and
+calls it in a body -- where the claim is about DECLARATIONS. The first
+pass reported C declaring `app_slip` under `derived`, which is a comment.
+Anchoring on the declaration forms per language gave the table above.
+**A proxy that is easier to reach agrees with the thing right up until
+it matters**, and here it disagreed immediately and still read as a
+result.
+
 ### 26.512 The register named its own method, and it was 23 days old
 
 **A third sweep of this section, with a wider net than 26.505's: 78 of
@@ -30968,7 +31059,8 @@ open is one thing" and named 26.413's byte-run arm; 26.509 closed it the
 next day, and it was nineteen things rather than one. Struck.
 
 **The 31 unclassified are candidates and not a list of known bugs**, on
-exactly 26.505's terms. Nothing here turns them into one.
+exactly 26.505's terms. Nothing here turns them into one. **All 31 were
+read the next day; 26.513 has the split.**
 
 ### 26.511 The readers took an arm all along; nothing could name one
 
