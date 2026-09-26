@@ -15778,27 +15778,59 @@ Written down because it was carried in a session rather than in the tree,
 and a question nobody can find is one that gets answered twice or not at
 all. Each of these is the copyright holder's; none is blocked on work.
 
-**Checked against the tree on 2026-09-03, and every claim below still
-holds.** 0045 and 0046 both still say `Status: proposed`; the parser still
+**~~Checked against the tree on 2026-09-03, and every claim below still
+holds.~~ Re-checked 2026-09-26, and three of four held.** The parser still
 answers `impl crc32 derived for rust` with "expected `;` after the impl
 binding, found `for`", so the plugin slot still does not exist; the
-delimiter guard still names three codecs, so a fourth would still fail it;
-and `8b10b` appears in `kernels.py` only in the docstring saying why it is
-not a table kernel, so it is still an absence rather than an entry.
+delimiter guard still names three codecs, though 0048 turned that list
+into a claim about which codes carry a CONSTANT and it means the opposite
+thing now; and `8b10b` appears in `kernels.py` only in the docstring
+saying why it is not a table kernel, so it is still an absence rather than
+an entry.
 
-The date is the point rather than the result. **A register is written as
-status, not as history, so nothing in it goes stale loudly** -- unlike the
-entries above, where a claim and its remedy sit in the same block and a
-reader cannot take one without the other. A list of open questions has no
-such pairing: an item answered elsewhere simply keeps reading as open, and
-its cost falls on whoever picks it up believing it. That is worth a dated
-check rather than a standing assumption, and the check is cheap -- four
-greps and one parse.
+**The one that failed is the one this paragraph opened with.** 0045 and
+0046 did not still say `Status: proposed`: both were accepted the day
+AFTER this check was taken, and both have since been built -- 0045 on
+2026-09-14 and 0046 on 2026-09-16. The body below had recorded the
+acceptances and not the builds, so four items read "not yet built" when
+the records say otherwise, 0050 and 0051 among them. All four are
+corrected.
+
+**0045's is the one worth looking at.** Its item said "Not yet built" in
+one sentence and, four lines later, "~~Not yet built.~~ **Built
+2026-09-14**". Whoever closed it struck the mention they were looking at
+and left the earlier one standing. **A correction lands where the author's
+eye is, and a reader meets whichever comes first.**
+
+The date was the point rather than the result, and that was not enough.
+**A register is written as status, not as history, so nothing in it goes
+stale loudly** -- unlike the entries above, where a claim and its remedy
+sit in the same block and a reader cannot take one without the other. A
+list of open questions has no such pairing: an item answered elsewhere
+simply keeps reading as open, and its cost falls on whoever picks it up
+believing it.
+
+**So the dated manual check is now a test, for the half that can be
+one.** Every item here cites its decision record, and a record carries a
+machine-readable `Status:` that its author updates when they build the
+thing -- so the register restates, in prose, a fact that already exists in
+a form a tool can read.
+`test_the_open_register_agrees_with_the_records_it_cites` asks the two to
+agree in the one direction that is a contradiction: a record saying
+`built` under an item saying `not yet built`. It reads the CLAIM from the
+item with its strike-throughs applied and the CITATION from the raw text,
+because the record's path usually sits inside the struck span. The other
+three checks stay manual, being a parse and two greps over things no
+record states.
 
 **Decisions waiting.**
 
 - ~~**`doc/decision/0051-messages-a-schema-carries.md` is
-  `Status: proposed`.**~~ **Accepted 2026-09-04, not yet built.** Raised
+  `Status: proposed`.**~~ **Accepted 2026-09-04; ~~not yet built~~ BUILT
+  2026-09-17**, in 26.377 through 26.382 -- the construct and its checks,
+  the image and the walker and the editor, the dissector's expert info,
+  the `messages` sibling in all four backends and the `refuse` half in all
+  six descriptions. Raised
   by the copyright holder: a schema should be
   able to say "when these fields hold, this is what it means", so that
   `situ-edit` and a dissector can be helpful about a format without
@@ -15812,7 +15844,8 @@ greps and one parse.
   and at no other point, so no `when` can see another and an accessor stays
   arithmetic. Accepting or refusing it is the decision.
 - ~~**`doc/decision/0050-external-arguments.md` is
-  `Status: proposed`.**~~ **Accepted 2026-09-04, not yet built.** Raised
+  `Status: proposed`.**~~ **Accepted 2026-09-04; ~~not yet built~~ BUILT
+  in four passes**, the first `--define` on 2026-09-15 (26.362). Raised
   by the copyright holder: a format whose shape follows a fact the
   message does not carry -- a negotiated cipher suite, a card class, a
   block size. The record splits the question by *when* the argument is
@@ -15828,7 +15861,8 @@ greps and one parse.
 - ~~**`doc/decision/0046-sub-byte-checksums.md` is `Status: proposed`.**~~
   **Accepted 2026-09-04**, on the reasoning it already carried and on
   26.137's standing answer that a protocol needing something makes it work.
-  Not yet built. A
+  ~~Not yet built.~~ **Built 2026-09-16**, and the cost was re-measured
+  first (26.360): this record's four places are six. A
   checksum narrower than a byte is refused in two places, and USB's token
   packets, CAN's frames and MMC's commands each carry one. The record
   measures where the bytes assumption lives -- four places, from
@@ -15841,7 +15875,7 @@ greps and one parse.
 - ~~**`doc/decision/0045-pad-random.md` is `Status: proposed`.**~~
   **Accepted 2026-09-04**, and 14.7 has lost `random` accordingly: a schema
   declaring it would state what the generated code cannot test, which is
-  14.5's rule and not a new one. Not yet built. It proposes
+  14.5's rule and not a new one. ~~Not yet built.~~ It proposes
   that `pad_random(min, max)` be bounds and a name, and that 14.7's
   `random` content policy be dropped as unenforceable -- a schema cannot
   state what the generated code cannot test. ~~Not yet built.~~ **Built
@@ -28311,8 +28345,13 @@ end, and that is the right refusal for a reason the `native` comment does
 not give.
 
 **The open question: should a walker answer for `endian native` at
-all?** The two walkers answer it differently today and nothing puts them
-side by side.
+all?** The two walkers answer it differently today and ~~nothing puts
+them side by side~~ **`test/schema/native.situ` does, since 2026-09-26.**
+Driven over `01 02 03 .. 20`, the Python walk answers `197121`,
+`795458214266537220` and `3340` for the three native members and the C
+walk refuses all three; the fourth member, which is not native, reads 14
+in both. The divergence is reproduced and dated, and the question it
+raises is unchanged and is still the copyright holder's.
 
     walk.py          `_order` returns `sys.byteorder`   answers
     situ_walk.c      refuses a multi-byte native read   declines
@@ -30845,6 +30884,92 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.512 The register named its own method, and it was 23 days old
+
+**A third sweep of this section, with a wider net than 26.505's: 78 of
+511 entries read as open.** Triaged before anything was reproduced:
+
+    15  struck closed in place already
+    18  named by one of the next two entries
+    11  recorded as a deliberate non-fix, with the reason
+     3  citing section 27's numbered questions, not a gap
+    31  unclassified -- a claim of some kind
+
+**26.507's free step paid again: 18 of 78 answered by scrolling.** It
+costs nothing and it cannot answer the rest, which is the same split as
+last time.
+
+**But the find was not in the log at all, and that is the lesson.** Two
+entries here are REGISTERS -- 26.144 and 26.335 -- and 26.157 calls 26.144
+"the list of what is open". A register is the artifact; the log is a
+fresh measurement of where the artifact came from, and `evidence.md` says
+which of those to believe. Reading 26.144 first was worth more than the
+other 77 candidates together.
+
+**It names its own method, which is why this took minutes.** "The check
+is cheap -- four greps and one parse", and the four are written out. Run
+again on 2026-09-26, three held: the plugin slot still does not parse,
+the delimiter guard still names three codecs, `8b10b` is still only a
+docstring. **The one that failed is the sentence the paragraph opens
+with**: 0045 and 0046 no longer say `Status: proposed`. Both were
+accepted the day AFTER that check was taken, and both have since been
+built.
+
+**Four items read "not yet built" against records that say otherwise**,
+each on a date the record itself carries -- 0045 on 09-14, 0046 on 09-16,
+0050 in four passes from 09-15, 0051 across six entries on 09-17. The
+body had recorded the acceptances and not the builds.
+
+**0045's is the one to look at.** Its item says "Not yet built" in one
+sentence and, four lines later, "~~Not yet built.~~ **Built
+2026-09-14**". Whoever closed it struck the mention in front of them and
+left the earlier one standing. **A correction lands where the author's
+eye is, and a reader meets whichever comes first** -- which is
+`working-practice.md`'s rule about where a claim lives, met inside a
+single paragraph rather than across two documents.
+
+**The remedy is that the register was duplicating a machine-readable
+fact.** Every item cites its decision record, and a record's `Status:` is
+updated by whoever builds the thing -- so the prose restates, in a form
+nothing can check, something that already exists in a form anything can.
+`test_the_open_register_agrees_with_the_records_it_cites` asks the two to
+agree in the one direction that is a contradiction: a record saying
+`built` under an item saying `not yet built`. Not the reverse, because a
+Status lags a build by however long its author takes to write the line.
+It reads the CLAIM from the item with strike-throughs applied and the
+CITATION from the raw text, the record's path usually sitting inside the
+struck span.
+
+**And the first version of that test demanded the bad state persist.** It
+asserted that some item both cited a record and claimed to be unbuilt --
+true while the register was wrong, and false the moment it was corrected,
+so it went red in the commit that fixed the thing it was guarding. That
+is 26.510's dead-cell loop with the polarity flipped, and the pair is
+worth keeping together: **one dies silently when the exception is fixed
+and the other dies loudly, and neither was checking what its author
+meant.** What it asserts now is the INSTRUMENT -- that items parse, that
+citations resolve against the record set, that at least one cited record
+says `built` so a built one can be told from an unbuilt one -- and then
+the finding. Sabotaged by un-striking 0046's correction, with the marker
+grepped out of the file first, it names the record and quotes its Status.
+
+**One candidate reproduced, and it is a question rather than a defect.**
+26.356 asked whether a walker should answer for `endian native` at all
+and said nothing put the two side by side. `test/schema/native.situ`
+does: over `01 02 03 .. 20` the Python walk answers 197121,
+795458214266537220 and 3340 where the C walk refuses all three, and the
+one non-native member reads 14 in both. Recorded with the date. The
+question is unchanged and is the copyright holder's -- a generated
+backend is compiled into the reading machine and knows its order; a
+walker reading a capture does not know the writing machine's.
+
+**And one entry went stale in a day.** 26.507 closed with "what stays
+open is one thing" and named 26.413's byte-run arm; 26.509 closed it the
+next day, and it was nineteen things rather than one. Struck.
+
+**The 31 unclassified are candidates and not a list of known bugs**, on
+exactly 26.505's terms. Nothing here turns them into one.
+
 ### 26.511 The readers took an arm all along; nothing could name one
 
 **26.509 recorded that the two walkers agree about WHICH arm a
@@ -31212,8 +31337,9 @@ of them to quote. Corrected in both, each now carrying the date it was
 written and the date it stopped being true, and the walker's saying which
 question is its own and still open.
 
-**What stays open is one thing, reproduced rather than read.** 26.413's
-byte-run enum arm is rendered by no walker path: a two-arm variant over
+**~~What stays open is one thing, reproduced rather than read.~~ Closed
+by 26.509 the next day, and it was nineteen things rather than one.**
+26.413's byte-run enum arm was rendered by no walker path: a two-arm variant over
 `enum sig : u8[2]`, walked on `01 42 4D be ef` and on `02 12 34 be ef`,
 prints `body_number` for the scalar arm and nothing at all for `marker`.
 `tail` is 48879 in both, so the widening 26.413 fixed holds and it is the
