@@ -31028,6 +31028,18 @@ This one is sound and needed a field that already existed.
 insertions, 42 deletions, and the only distinct changed lines across
 all of them are `-v1` and `+v2`.
 
+**Confirmed from outside, which is the part this tree could not
+supply.** The claims above -- the notice is not a break, is not
+tallied, and a pure rendering-generation change reports as nothing
+else -- are asserted here by tests written beside the code they check.
+fuzznet took v2 as their `6244519` and measured it in a consuming tree:
+against b73ac27 their gate showed the FORMAT notice with **0 breaking
+and 0 compatible**, and afterwards passed, with the diff being 14
+contracts whose only removed lines are `v1` and only added lines `v2`.
+A design claim tested by its author and observed by a consumer is two
+witnesses; tested by its author alone is one, however many tests it
+carries.
+
 ### 26.520 The third layer of one fact, and the fixture that showed it
 
 **A tag's `covers:` line named the tag and its members by LEAF, so a
