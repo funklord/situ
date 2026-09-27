@@ -31050,6 +31050,25 @@ Six committed maps regenerate, fourteen struct lines move, and **no
 member line changes at all** -- the narrowing is exactly where it was
 aimed. The wire signature is untouched: it does not render this axis.
 
+**The exemption was the judgement in this change and fuzznet withdrew
+their objection to it.** They had called `Covered(signature)` over a
+179-byte struct whose signature covers 115 an over-claim one level up;
+under the exemption it says the signature covers everything it can,
+which is true, and their point turned out to be about the UNION of
+member tags, which this removes. Settled by the reporter rather than by
+whoever wrote the rule, which is the better way round.
+
+**And it found a fourteenth over-claim, in a real protocol rather than
+in this corpus.** fuzznet took it as their `050f683` -- three maps,
+checked per struct against each contract's own `covers:` lines rather
+than against situ's summary of them -- and `fzn_frame` lost
+`Covered(tag)`: the AEAD tag covers the head and the sealed region, and
+a five-byte routing hop in front of them is deliberately outside it.
+Their words: an over-claim of ours that the new rule caught. **A rule
+whose whole content is refusing to say something has no way to
+demonstrate itself on the tree that wrote it**, and a consumer's format
+is where it showed.
+
 ### 26.521 A version field written into every file and read by nothing
 
 **`wire.FORMAT_VERSION` was rendered into every signature's first line
