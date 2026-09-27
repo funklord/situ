@@ -15958,8 +15958,11 @@ record states.
   ~~Either, both, or neither.~~ **The version half is built (26.521);
   fuzznet's heuristic is not, and the caveat above is why it is
   recorded rather than added.** Nothing is blocked on it.
-- **What a STRUCT's `auth=` line means, which is now the one place the
-  two readings differ.** Raised by fuzznet 2026-09-26, after they
+- ~~**What a STRUCT's `auth=` line means, which is now the one place
+  the two readings differ.**~~ **Settled by the copyright holder
+  2026-09-27: narrow it to the tags authenticating the whole struct.
+  Built in 26.522, which records what the literal rule would have cost.**
+  Raised by fuzznet 2026-09-26, after they
   verified 26.519 against their provisioning card: `card.hop` reads
   `Covered(signature, hop.signature)` over 179 bytes of which
   `hop.signature` covers 115, and the standalone `fzn_chain_hop` reads
@@ -30979,6 +30982,73 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.522 The literal rule emptied the axis, and the exemption existed
+
+**A struct's `auth=` line names only the tags that authenticate the whole
+struct now.** 26.519 settled that reading for regions and members with
+fuzznet; the struct line was still the meet over its members, which
+unions the tags, so a struct read `Covered` when its tags between them
+reached everything and no one of them reached all of it. fuzznet's
+`card.hop` read `Covered(signature, hop.signature)` over 179 bytes of
+which `hop.signature` covers 115.
+
+**Taken literally the instruction empties the axis, and measuring that
+first is what changed the work.** A tag never covers its own bytes --
+`resolve_coverage` discards it, because coverage means "writing these
+bytes leaves that tag stale" and that is false of the bytes the tag is
+written into. So no tag covers ALL of a struct it sits in. Requiring
+that:
+
+    struct lines reading Covered today          22
+      keeping a tag under the literal rule       0
+      keeping one with the tag's own bytes exempt 9
+      Uncovered either way                      13
+
+**Zero of twenty-two, `ipv4_header` among them** -- a header whose
+checksum genuinely does cover everything but itself. A rule that makes
+every answer the same answer has stopped being a rule, so the exemption
+is taken and the nine that survive are the headers anybody would name:
+icmp, ipv4, tcp, udp, and edges' two signed shapes. **The exemption is
+not invented here**; it is `resolve_coverage`'s existing sentence
+applied one level up, which is the fourth time this week a rule already
+written turned out to be the answer one layer over.
+
+**The thirteen that go are the over-claims.** `packet`, `keystore` and
+`record` have a tag over a sealed region and a header outside it;
+`png`'s `chunk` has a CRC over the data and a length field outside;
+`usb`'s token likewise. Each said the whole struct was authenticated by
+a tag that reaches part of it.
+
+**Both boundaries are pinned by the tests, which is what the literal
+reading bought.** Against the old union three fail; against the literal
+rule two fail, one of them the quantifier's vacuity floor reporting
+*only 0 struct lines name a tag*. A suite that only refused the old
+behaviour would have accepted the empty axis.
+
+**And the first version of the exemption was wrong in a way the flat
+fixtures could not see.** It found a tag's own placement by dotted
+suffix -- `path.endswith("." + tag)` -- which for a tag called `sig`
+also matches a nested member's `held.sig`. One placement too many was
+excused, so `mid`, whose `sig` genuinely covers every byte that is not
+`sig`, named no tag. Every test passed: the corpus does not contain the
+collision and the fixtures asserting the struct line were flat. **A
+rule keyed on a name needs a fixture where two members share it**, and
+the tree already had one -- `deep`, built two exchanges earlier for a
+different question. It is asserted now.
+
+**A test asserted the old behaviour deliberately, which is not the same
+as a fixture going stale.** `test_the_auth_axis_unions_tags_on_meet`
+said a struct under two tags reports both, and gave the reason: which
+tags go stale when this field is written. That reason is the member's
+and it was asserted on the struct -- the same confusion of the two
+readings, in a test. The union is still the meet's behaviour and is now
+asserted on `meet_values` directly, where it is still live; the struct
+rule has a test of its own.
+
+Six committed maps regenerate, fourteen struct lines move, and **no
+member line changes at all** -- the narrowing is exactly where it was
+aimed. The wire signature is untouched: it does not render this axis.
 
 ### 26.521 A version field written into every file and read by nothing
 
