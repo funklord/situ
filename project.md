@@ -15939,12 +15939,13 @@ record states.
   chunks, commitment, ... sender" -- which reads as a regression and
   was a rename.
 
-  **`wire.FORMAT_VERSION` is written into every signature and read by
-  nothing.** `compare` never looks at it. Its own comment says the
-  number moves when "a reader that cannot tell the two apart has to be
-  told" -- which 26.520 was, and it did not move it. Bumping is sound
-  and inert while nothing reads the field, so the decision is really
-  whether `compare` should read it at all.
+  **~~`wire.FORMAT_VERSION` is written into every signature and read by
+  nothing.~~ Read since 26.521, and the number is 2.** `compare` never
+  looked at it. Its own comment says the number moves when "a reader
+  that cannot tell the two apart has to be told" -- which 26.520 was,
+  and it did not move it. It reports the mismatch and suppresses
+  nothing, because a false break costs an investigation and a
+  suppressed one ships.
 
   **fuzznet's alternative is cheaper and not sound**, and they say so
   themselves by naming what it rests on: classify a covers line whose
@@ -15954,8 +15955,9 @@ record states.
   `second.x` strips to the same multiset, which is a real change
   reported as a rename.
 
-  Either, both, or neither. Nothing is blocked on it: the misreport is
-  one-off per consumer and fuzznet has already absorbed theirs.
+  ~~Either, both, or neither.~~ **The version half is built (26.521);
+  fuzznet's heuristic is not, and the caveat above is why it is
+  recorded rather than added.** Nothing is blocked on it.
 - **What a STRUCT's `auth=` line means, which is now the one place the
   two readings differ.** Raised by fuzznet 2026-09-26, after they
   verified 26.519 against their provisioning card: `card.hop` reads
@@ -30977,6 +30979,54 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.521 A version field written into every file and read by nothing
+
+**`wire.FORMAT_VERSION` was rendered into every signature's first line
+since 0041 and `compare` never looked at it.** A value written and read
+by nothing, which is the vacuous pass moved from a check to a format:
+the tree looked able to tell two signature generations apart and could
+not. `compare` reads it now, and it is v2.
+
+**Its own comment had the rule and the case arrived without moving the
+number.** The field went to 1 because a new KIND of line appeared and
+"a reader that cannot tell the two apart has to be told, so the number
+moves". 26.520 renamed every token on the `covers:` lines the day
+before and left the number at 1. **A rule written beside the thing it
+governs is not a rule that gets applied** -- the fourth instance this
+week, after 26.514's neighbouring list, 26.517's third constant table
+and 26.519's second key.
+
+**What it prints, on exactly the case that produced it.** fuzznet's
+consuming tree read a rename as a loss of coverage. Against a
+pre-26.520 signature the build now leads with
+
+    FORMAT: the two signatures were rendered by different versions of
+    situc, so a line may differ in how it is WRITTEN rather than in
+    what it says; read what follows knowing that
+      signature: rendered by format v1, compared against v2
+
+**It does not suppress the findings under it, and that is the trade.**
+Suppressing was the other design and is worse: a false break costs a
+reader an investigation and their trust in the gate, and a suppressed
+one ships. So the reader is told and the comparison still speaks --
+which is what the field's comment asks for and no more. The notice is
+not a break and is not tallied, because "1 breaking, 40 compatible"
+with the notice among the forty would be the tally describing itself.
+
+**An absent version line reads as v0** rather than as unreadable, since
+0041 kept those files readable on purpose.
+
+**fuzznet's alternative stays unbuilt and is recorded with why.** They
+proposed classifying a covers line whose member multiset is unchanged
+after stripping path prefixes as RENAMED -- cheaper, uses what the
+checker already has, and blind to a swap: a tag that stops covering
+`first.x` and starts covering `second.x` strips to the same multiset.
+This one is sound and needed a field that already existed.
+
+**42 signatures regenerate and every change is the header line**: 42
+insertions, 42 deletions, and the only distinct changed lines across
+all of them are `-v1` and `+v2`.
 
 ### 26.520 The third layer of one fact, and the fixture that showed it
 
