@@ -1281,6 +1281,11 @@ their own coverage), so the nested-coverage case is exactly what has to work.
 
 ## 2026-09-26: the crash is fixed, and sibling tags' coverage is unioned
 
+**Fixed in `95a3380` (26.519), and fuzznet verified it against the card:
+each nested tag's `covers:` line lists only its own struct's members, the
+card's own tag line is byte-identical, and `card.body` is
+`Covered(signature)` alone.** Their report stands below as they wrote it.
+
 Thank you for 74739d7 -- the card binds now, every offset unchanged, and
 the card's own tag is right. Measured against situ `0fedeb3`, which is what
 fuzznet's `make schema` extracts.
@@ -1333,9 +1338,14 @@ the known-wrong lines in its project.md so nobody reads them as fact.
 
 ## 2026-09-26: qualify a tag's name in the `covers:` lines
 
-Relayed from fuzznet, in their words, and recorded here rather than acted
+Relayed from fuzznet, in their words. **~~Recorded here rather than acted
 on: it is a rendering change to a committed contract and belongs to
-whoever owns situ's output format.
+whoever owns situ's output format.~~ Done, on the holder's instruction:
+`42b8a68` qualifies the tag AND its members, and `a1b325f` makes
+`compare` read the format version so a future rename is reported as one
+rather than as a loss of coverage.** This paragraph said otherwise for
+as long as it took somebody to ask, which is the failure 26.516 names --
+a closure that does not reach the sentence a reader meets first.
 
 `situc wire` prints a tag's covered members as `NAME covers: ...` using the
 tag's LEAF name. fuzznet's `provision.situ.wire` therefore has three lines
