@@ -15,7 +15,7 @@
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec crc5_usb derived expansion=+5 bits seekable=linear granularity=block systematic deterministic
 
-struct token size=3 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+struct token size=3 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   token.pid                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   token.addressed                        offset=AbsoluteStatic(0x01) size=Fixed(11bit) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)
   token.address                          offset=AbsoluteStatic(0x01) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic auth=Covered(crc)

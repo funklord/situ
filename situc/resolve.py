@@ -159,7 +159,59 @@ def _struct_vector(layout: StructLayout, entries: list[Resolved]) -> Vector:
 	vector = _force(vector, Axis.ALIGN, Value("Aligned"))
 	vector = _force(vector, Axis.SIZE, Value("Fixed", (
 		str(layout.size_bytes) if layout.is_byte_sized else f"{layout.size_bits}bit",)))
+	vector = _force(vector, Axis.AUTH, _whole_struct_auth(layout))
 	return vector
+
+
+def _whole_struct_auth(layout: StructLayout) -> Value:
+	"""Only the tags that authenticate the WHOLE struct (26.522).
+
+	The meet above unions the tag parameters, because `auth` meets toward
+	Covered and mutating covered bytes marks a tag dirty -- which is the
+	*writing these bytes stales which tags* reading and the right one for a
+	meet over members. Rendered beside member lines that mean *which tags
+	authenticate these bytes*, it said a struct was Covered when its tags
+	between them reached every member and no one of them reached all of it.
+
+	fuzznet named the cost: their `card.hop` read `Covered(signature,
+	hop.signature)` over 179 bytes of which `hop.signature` covers 115. On
+	the reading 26.519 settled for regions -- a line may only name a tag
+	covering the whole thing -- that is the same over-claim one level up.
+
+	**A tag's own bytes are exempt, and that is not a carve-out invented
+	here.** `layout.resolve_coverage` already discards a tag from its own
+	`covered_by`, because coverage means "writing these bytes leaves that
+	tag stale" and that is false of the bytes the tag is written into. A
+	tag therefore never covers all of a struct it sits in, so requiring it
+	to would empty the axis: measured across the corpus, 22 struct lines
+	read Covered and the literal rule keeps a tag on NONE of them --
+	`ipv4_header` among the losses, where the checksum genuinely does cover
+	the whole header but itself. With the exemption, 9 keep one and they
+	are the headers anybody would name: icmp, ipv4, tcp, udp. The other 13
+	become Uncovered, and those are fuzznet's shape.
+	"""
+	# Each placement by its path WITHIN this struct, which is the spelling
+	# `covered_by` uses for a tag. Comparing that exactly, not by dotted
+	# suffix: the first version asked `path.endswith("." + tag)` to find a
+	# tag's own placement, and for a tag called `sig` that also matches a
+	# nested member's `held.sig`. It exempted one placement too many, so
+	# `mid` -- whose `sig` genuinely covers everything but itself -- named
+	# no tag. The flat fixtures passed throughout and the nested one was
+	# not asserted, which is what let it through.
+	local = {id(held): held.path[len(layout.name) + 1:]
+	         for held in layout.placements}
+
+	covered: dict[str, int] = {}
+	for held in layout.placements:
+		for tag in held.covered_by:
+			covered[tag] = covered.get(tag, 0) + 1
+
+	whole = tuple(sorted(
+		tag for tag, seen in covered.items()
+		if seen == sum(1 for held in layout.placements
+		               if local[id(held)] != tag)))
+
+	return Value("Covered", whole) if whole else Value("Uncovered")
 
 
 def _check_file_extent(schema: ast.Schema, layout: SchemaLayout,

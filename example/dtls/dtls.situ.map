@@ -15,7 +15,7 @@
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec aes_128_gcm trusted length_preserving seekable=linear granularity=byte authenticated invertible deterministic
 
-struct record size=37..16421 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(tag)
+struct record size=37..16421 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated
   record.type                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   record.version                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   record.epoch                           offset=AbsoluteStatic(0x03) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic

@@ -142,3 +142,125 @@ def test_two_tags_in_one_struct_were_always_right() -> None:
 
 	assert held["a"] == ("sig_p",)
 	assert held["b"] == ("sig_q",)
+
+
+# ---------------------------------------------------------------------------
+# The struct's own line, which 26.519 left reading the other way
+# ---------------------------------------------------------------------------
+
+def _struct_auth(text: str, struct: str) -> tuple[str, ...] | None:
+	"""The tags a struct's OWN line names, or None where it names none."""
+	from situc.capability import Axis
+	from situc.resolve import resolve
+
+	schema   = parse_text(PREAMBLE + text)
+	resolved = resolve(schema, solve(schema))
+	held     = dict(resolved.structs[struct].vector.values)[Axis.AUTH]
+	return held.params if held.base == "Covered" else None
+
+
+def test_a_tag_covering_all_but_itself_still_names_the_struct() -> None:
+	"""The case the literal rule would have destroyed.
+
+	A tag never covers its own bytes -- `resolve_coverage` discards it,
+	because coverage means "writing these bytes leaves that tag stale" and
+	that is false of the bytes the tag is written into. So no tag covers
+	ALL of a struct it sits in, and requiring that empties the axis:
+	measured, 22 corpus struct lines read Covered and the literal rule
+	keeps a tag on none of them, `ipv4_header` among the losses.
+
+	With the tag's own bytes exempt, a header whose checksum covers the
+	rest of it still says so, which is the whole use of the line.
+	"""
+	assert _struct_auth(
+		SELF_SIGNED.format(name="a", field="x"), "a") == ("sig",)
+
+
+DEEP = (
+	"struct leaf {\n"
+	"\tauthenticated body { u8 x; }\n"
+	"\tchecksum u8 sig[4] covers(body);\n"
+	"}\n"
+	"struct mid {\n"
+	"\tauthenticated body { leaf held; }\n"
+	"\tchecksum u8 sig[4] covers(body);\n"
+	"}\n"
+)
+
+
+def test_a_nested_tag_of_the_same_name_is_not_exempted_too() -> None:
+	"""The bug the flat fixtures could not see.
+
+	Finding a tag's own placement by dotted suffix -- `path.endswith("." +
+	tag)` -- also matches a nested member's, so for a tag called `sig` the
+	exemption swallowed `mid.held.sig` as well as `mid.sig`. One placement
+	too many was excused, `mid`'s own `sig` fell one short of covering
+	everything but itself, and `mid` named no tag.
+
+	`mid` is nine bytes: a five-byte body holding `leaf` whole, and four
+	bytes of its own signature. `sig` covers the body, which is every byte
+	that is not `sig`, so it names the struct. The flat cases passed
+	throughout and this one was not asserted -- a rule keyed on a name
+	needs a fixture where two members share it.
+	"""
+	assert _struct_auth(DEEP, "mid") == ("sig",)
+	assert _struct_auth(DEEP, "leaf") == ("sig",)
+
+
+def test_two_independently_signed_children_name_no_tag() -> None:
+	"""fuzznet's shape. Their `card.hop` read `Covered(signature,
+	hop.signature)` over 179 bytes of which `hop.signature` covers 115 --
+	two tags that between them reach every member and neither of which
+	reaches all of it."""
+	assert _struct_auth(
+		SELF_SIGNED.format(name="a", field="x")
+		+ SELF_SIGNED.format(name="b", field="y")
+		+ "struct outer { u8 plain; a first; b second; }\n", "outer") is None
+
+
+def test_a_tag_over_part_of_a_struct_names_nothing() -> None:
+	"""One tag, one child, and a sibling it does not cover.
+
+	The narrowing is not about how MANY tags there are -- that reading
+	would keep this one, since there is only one candidate. It is about
+	whether the tag reaches every byte, and `plain` is outside the region.
+	"""
+	assert _struct_auth(
+		SELF_SIGNED.format(name="a", field="x")
+		+ "struct outer { u8 plain; a first; }\n", "outer") is None
+
+
+def test_every_struct_line_naming_a_tag_is_covered_by_it_throughout() -> None:
+	"""The quantifier, over the corpus, derived rather than enumerated.
+
+	A test naming ipv4 and tcp would pass while a seventh schema's line
+	over-claimed. This asks the property of every struct in the tree: if
+	the line names a tag, that tag is on every member's `covered_by` bar
+	the tag's own placement.
+	"""
+	from situc.capability import Axis
+	from situc.resolve import resolve
+
+	from every_schema import SCHEMAS
+
+	named = 0
+	for path in SCHEMAS:
+		parsed   = parse_text(path.read_text(encoding="ascii"))
+		resolved = resolve(parsed, solve(parsed))
+		for name, struct in resolved.structs.items():
+			held = dict(struct.vector.values)[Axis.AUTH]
+			if held.base != "Covered":
+				continue
+			placements = struct.layout.placements
+			for tag in held.params:
+				named += 1
+				missing = [held_one.path for held_one in placements
+				           if tag not in held_one.covered_by
+				           and not held_one.path.endswith("." + tag)]
+				assert not missing, (
+					f"{path.name}: `{name}` names {tag} and it does not "
+					f"cover {missing[:3]}")
+
+	# Not vacuous: the corpus really does carry these, and a rule that
+	# named nothing anywhere would satisfy the loop above silently.
+	assert named >= 9, f"only {named} struct lines name a tag"

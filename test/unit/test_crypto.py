@@ -317,10 +317,37 @@ def test_a_tag_is_written_by_finalize_and_by_nothing_else() -> None:
 
 
 def test_the_auth_axis_unions_tags_on_meet() -> None:
-	"""It is a set-valued identity, so a struct under two tags reports both.
+	"""It is a set-valued identity, so a meet of two tags keeps both.
 
 	Picking one would lose exactly the information a caller needs: which tags
 	go stale when this field is written.
+
+	Asserted on `meet_values` rather than through a struct, which is where
+	this test used to look. The STRUCT's line stopped being the meet in
+	26.522: it names only tags authenticating the whole struct, and two
+	tags over disjoint regions means neither does, so the struct was the
+	one place this property could no longer be read off. The meet itself is
+	unchanged and is still what a nested member's vector is built from.
+	"""
+	from situc.capability import meet_values
+
+	assert meet_values(Axis.AUTH,
+	                   Value("Covered", ("first",)),
+	                   Value("Covered", ("second",))) \
+		== Value("Covered", ("first", "second"))
+
+	# And Covered is still the more constrained side, which is the other half
+	# of what makes the meet a meet.
+	assert meet_values(Axis.AUTH, Value("Covered", ("first",)),
+	                   Value("Uncovered")) == Value("Covered", ("first",))
+
+
+def test_a_struct_under_two_disjoint_tags_names_neither() -> None:
+	"""The struct line, since the test above no longer reaches it (26.522).
+
+	`first` covers `a` and `second` covers `b`, so each authenticates half
+	the struct and neither authenticates it. The members still carry their
+	own tag each, which is where the union lives now.
 	"""
 	resolved = build("""struct S {
 		authenticated a { u32 one; }
@@ -331,7 +358,12 @@ def test_the_auth_axis_unions_tags_on_meet() -> None:
 	""")
 	struct = resolved.find_struct("S")
 	assert struct is not None
-	assert struct.vector.get(Axis.AUTH) == Value("Covered", ("first", "second"))
+	assert struct.vector.get(Axis.AUTH) == Value("Uncovered")
+
+	held = {entry.placement.name: entry.vector.get(Axis.AUTH)
+	        for entry in struct.entries}
+	assert held["one"] == Value("Covered", ("first",))
+	assert held["two"] == Value("Covered", ("second",))
 
 
 def test_a_checksum_covers_exactly_as_a_tag_does() -> None:

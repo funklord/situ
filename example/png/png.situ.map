@@ -15,7 +15,7 @@
 # unverified: run `situc gen-codec-tests` to falsify a lying one.
 codec crc32 derived expansion=+4 seekable=linear granularity=block systematic deterministic
 
-struct chunk size=12..2147483659 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical auth=Covered(crc) effect=EffectOnWrite
+struct chunk size=12..2147483659 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical effect=EffectOnWrite
   chunk.length                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=Unstable effect=EffectOnWrite
   chunk.summed                           offset=AbsoluteStatic(0x04) size=Bounded(4, 2147483651) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(crc) effect=EffectOnWrite
   chunk.kind                             offset=AbsoluteStatic(0x04) size=Fixed(4) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic address=Unstable canonical=NonCanonical auth=Covered(crc) effect=EffectOnWrite

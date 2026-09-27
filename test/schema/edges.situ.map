@@ -75,7 +75,7 @@ struct constrained size=1..5 repr=ValueConverted atomic=NonAtomic stage=ParseTim
   constrained.how                        offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord stage=ParseTime
   constrained.pad                        offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord stage=ParseTime
 
-struct covered_tail size=8..12 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic auth=Covered(mac)
+struct covered_tail size=8..12 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic
   covered_tail.n                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   covered_tail.pad                       offset=AbsoluteStatic(0x01) size=Bounded(0, 4) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   covered_tail.body                      offset=Dynamic size=Fixed(3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable auth=Covered(mac)
@@ -99,7 +99,7 @@ struct delimited_arm size=3.. mutate=Shifting address=Unstable atomic=NonAtomic 
   delimited_arm.held.fixed               offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   delimited_arm.after                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
-struct derived size=13 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(invariant total, tag)
+struct derived size=13 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   derived.total                          offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord mutate=Immutable
   derived.a                              offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord auth=Covered(invariant total)
   derived.b                              offset=AbsoluteStatic(0x03) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(invariant total)
@@ -272,7 +272,7 @@ struct messy size=3.. access=Sequential mutate=Shifting address=Unstable canonic
   messy.name                             offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting canonical=NonCanonical effect=EffectOnRead
   messy.value                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical effect=EffectOnRead
 
-struct mmc_command size=6 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
+struct mmc_command size=6 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   mmc_command.command                    offset=AbsoluteStatic(0x00) size=Fixed(5) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)
   mmc_command.index                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(crc)
   mmc_command.argument                   offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
@@ -353,7 +353,7 @@ struct scrambled size=7 repr=ValueConverted atomic=NonAtomic
   scrambled.body.payload                 offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   scrambled.tail                         offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
 
-struct sealed_run size=19..27 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated auth=Covered(seal_mac)
+struct sealed_run size=19..27 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic stage=VerifyGated
   sealed_run.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   sealed_run.body                        offset=AbsoluteStatic(0x01) size=Bounded(2, 10) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(seal_mac)
   sealed_run.body.vals                   offset=AbsoluteStatic(0x01) size=Bounded(0, 8) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(seal_mac)
@@ -408,7 +408,7 @@ struct signed_part size=11 mutate=Immutable atomic=NonAtomic auth=Covered(part_s
   signed_part.b                          offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(part_sig)
   signed_part.part_sig                   offset=AbsoluteStatic(0x09) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
-struct signed_whole size=16 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(whole_sig, piece.part_sig)
+struct signed_whole size=16 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(whole_sig)
   signed_whole.whole_body                offset=AbsoluteStatic(0x00) size=Fixed(14) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(whole_sig)
   signed_whole.version                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(whole_sig)
   signed_whole.piece                     offset=AbsoluteStatic(0x01) size=Fixed(11) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(whole_sig, piece.part_sig)
@@ -431,7 +431,7 @@ struct spanned_arm size=6 repr=ValueConverted atomic=NonAtomic canonical=NonCano
   spanned_arm.held.wide                  offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   spanned_arm.after                      offset=AbsoluteStatic(0x05) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
 
-struct split_coverage size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(sum)
+struct split_coverage size=8 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   split_coverage.first                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(sum)
   split_coverage.a                       offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord auth=Covered(sum)
   split_coverage.between                 offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
@@ -454,7 +454,7 @@ struct texty size=2..65543 access=Sequential mutate=Shifting address=Unstable re
   texty.count                            offset=AbsoluteStatic(0x00) size=Bounded(2, 8) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   texty.body                             offset=Scanned size=Bounded(0, 65535) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
-struct twin_sigs size=6 mutate=Immutable atomic=NonAtomic auth=Covered(left.sig, right.sig)
+struct twin_sigs size=6 mutate=Immutable atomic=NonAtomic
   twin_sigs.left                         offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable auth=Covered(left.sig)
   twin_sigs.left.left_body               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(left.sig)
   twin_sigs.left.x                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(left.sig)
@@ -464,7 +464,7 @@ struct twin_sigs size=6 mutate=Immutable atomic=NonAtomic auth=Covered(left.sig,
   twin_sigs.right.y                      offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(right.sig)
   twin_sigs.right.sig                    offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
-struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(tag, checksum)
+struct two_tags size=23 mutate=Immutable repr=ValueConverted atomic=NonAtomic
   two_tags.hop                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   two_tags.inner                         offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic auth=Covered(tag)
   two_tags.kind                          offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord auth=Covered(tag)
@@ -487,7 +487,7 @@ struct unknown_reserved size=4 repr=ValueConverted canonical=NonCanonical
   unknown_reserved.<reserved0>           offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord canonical=NonCanonical
   unknown_reserved.tail                  offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
 
-struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
+struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic stage=TransformTime
   unverified.hop                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   unverified.body                        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.body.seq                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
