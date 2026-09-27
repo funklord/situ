@@ -1127,3 +1127,82 @@ def test_a_sibling_tag_losing_coverage_is_not_hidden_by_its_twin() -> None:
 	assert blamed == {"a", "outer"}, (
 		f"the parent's view of the change is missing: {sorted(blamed)}")
 	assert "first.sig covers" in detail(found)
+
+
+# -- the format version, which nothing read until 26.521 --------------------
+
+SIMPLE = "struct s { u8 a; u16 b; }\n"
+
+
+def _as_version(signature: str, version: int | None) -> str:
+	"""The same signature claiming a different format version.
+
+	Doctoring the text rather than rendering with a patched constant: what
+	`compare` reads is a line, and a test that patched the renderer would
+	be asserting that two spellings of one build agree.
+	"""
+	lines = signature.splitlines()
+	assert lines[0].startswith("# situ wire signature v"), lines[0]
+	if version is None:
+		del lines[0]			# a signature written before the field
+	else:
+		lines[0] = f"# situ wire signature v{version}"
+	return "\n".join(lines) + "\n"
+
+
+def test_a_signature_from_another_format_version_says_so() -> None:
+	"""The field was rendered into every signature and read by nothing.
+
+	`compare` never looked at it, so a rendering change -- 26.520 renamed
+	every token on the `covers:` lines -- was reported as a contract
+	change, which is the misreport this number exists to prevent. fuzznet's
+	tree read "no longer authenticates capability, chunks, ... sender" for
+	a rename.
+	"""
+	now = signature(SIMPLE)
+	found = wire.compare(_as_version(now, 1), now)
+
+	assert "format" in kinds(found)
+	assert "v1, compared against v2" in detail(found)
+
+
+def test_the_same_version_says_nothing_about_the_format() -> None:
+	"""The control. A notice on every comparison would be noise, and a
+	notice that cannot be absent is not a notice."""
+	now = signature(SIMPLE)
+	assert "format" not in kinds(wire.compare(now, signature(SIMPLE + "\n")))
+
+
+def test_a_signature_with_no_version_line_reads_as_v0() -> None:
+	"""0041 kept the files that predate the field readable, so an absent
+	line is a v0 signature rather than an unreadable one."""
+	now = signature(SIMPLE)
+	found = wire.compare(_as_version(now, None), now)
+
+	assert "format" in kinds(found)
+	assert "v0, compared against v2" in detail(found)
+
+
+def test_the_format_notice_is_not_a_break_and_is_not_tallied() -> None:
+	"""It reports on the comparison, not on the contract.
+
+	Counting it as a compatible change would make the tally describe
+	itself, and treating it as a break would fail every consumer's first
+	run after a rendering change -- which is the false alarm, not the fix.
+
+	The other findings are NOT suppressed, and that is the trade chosen:
+	a false break costs a reader an investigation, a suppressed one ships.
+	"""
+	now = signature(SIMPLE)
+	found = wire.compare(_as_version(now, 1), now)
+
+	assert not found.breaking
+	assert wire.render_verdict(found).rstrip().endswith(
+		"0 breaking, 0 compatible.")
+
+	# And a real change alongside it still counts and still breaks.
+	both = wire.compare(_as_version(signature("struct s { u8 a; u8 b; }\n"), 1),
+	                    now)
+	assert "format" in kinds(both)
+	assert both.breaking, "a real break must survive the format notice"
+	assert "0 breaking" not in wire.render_verdict(both)

@@ -25,6 +25,7 @@ up as an API change and a wire non-event, which is exactly what it is.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from pathlib import PurePath
 
 from situc import ast
@@ -40,12 +41,24 @@ from situc.unparse import expr_to_source
 
 #: Bumped from 0, which 0041 kept because new facts on existing lines are
 #: what the fact list is for and a comparator ignores tokens it does not know.
-#: This adds new *kinds* of line -- the varint block, and the `name what: ...`
+#: v1 adds new *kinds* of line -- the varint block, and the `name what: ...`
 #: lines a variant and a tlv region state their contract on -- and a v0
 #: comparator reading one of those counts it as a member, which slides every
 #: member after it by one position and reports the slide as a break. A reader
 #: that cannot tell the two apart has to be told, so the number moves.
-FORMAT_VERSION = 1
+#:
+#: **v2 renames rather than adds.** 26.520 qualified a tag and its covered
+#: members by path in the `covers:` lines, so every token on those lines
+#: changed and nothing about what is covered did. fuzznet's consuming tree
+#: read the result as *no longer authenticates capability, chunks, ...* --
+#: the misreport this number exists to prevent, by the rule above, and
+#: 26.520 did not move it.
+#:
+#: **Until 26.521 nothing read this field.** It was rendered into every
+#: signature's first line and `compare` never looked at it: written and
+#: read by nothing, which is a vacuous pass wearing a format's clothes.
+#: Bumping it while that was true would have been a second inert value.
+FORMAT_VERSION = 2
 
 
 def render(schema: ast.Schema, resolved: ResolvedSchema, path: str) -> str:
@@ -936,7 +949,27 @@ KINDS = {
 	             "an old receiver still reads what a new sender produces"),
 	"api":      ("api-only",
 	             "the bytes are unchanged; calling code has to be edited"),
+	"format":   ("FORMAT",
+	             "the two signatures were rendered by different versions of "
+	             "situc, so a line may differ in how it is WRITTEN rather "
+	             "than in what it says; read what follows knowing that"),
 }
+
+
+def _format_version(signature: str) -> int:
+	"""The `v` on the first line, or 0 for a signature written before it.
+
+	0 is not a guess: the field arrived at v1 and 0041 kept the files that
+	predate it readable, so a signature with no version line is a v0 one
+	and saying so is more useful than refusing to read it.
+	"""
+	for line in signature.splitlines():
+		found = re.match(r"# situ wire signature v(\d+)\s*$", line)
+		if found:
+			return int(found.group(1))
+		if not line.startswith("#"):
+			break		# past the header; there is no version line
+	return 0
 
 
 def compare(before: str, after: str) -> Verdict:
@@ -950,6 +983,22 @@ def compare(before: str, after: str) -> Verdict:
 	old_structs = _parse_signature(before)
 	new_structs = _parse_signature(after)
 	findings: list[Finding] = []
+
+	# The version first, because it is context for everything under it: a
+	# renderer that renames every token on a line makes the line-by-line
+	# comparison unable to tell a rename from a narrowing, and this is the
+	# field that says so (26.521).
+	#
+	# It does NOT suppress the findings below, which was the other design
+	# and is the worse trade. A false break costs a reader an investigation
+	# and their trust in the gate; a suppressed one ships. So the reader is
+	# told and the comparison still speaks -- which is what this field's own
+	# comment asks for and no more.
+	was, now = _format_version(before), _format_version(after)
+	if was != now:
+		findings.append(Finding(
+			"format", "signature",
+			f"rendered by format v{was}, compared against v{now}"))
 
 	findings.extend(_compare_globals(before, after))
 
@@ -1534,7 +1583,8 @@ def render_verdict(verdict: Verdict) -> str:
 		return "The wire contract is unchanged.\n"
 
 	lines = []
-	for kind in ("breaking", "coverage", "backward", "forward", "api"):
+	for kind in ("format", "breaking", "coverage", "backward",
+	             "forward", "api"):
 		found = [f for f in verdict.findings if f.kind == kind]
 		if not found:
 			continue
@@ -1542,7 +1592,11 @@ def render_verdict(verdict: Verdict) -> str:
 		lines.extend(["", f"{heading}: {gloss}"])
 		lines.extend(f"  {f.subject}: {f.detail}" for f in found)
 
-	breaks = sum(1 for f in verdict.findings if f.is_break)
+	# The format notice is not a change to the contract, so it is not
+	# counted as one: "1 breaking, 40 compatible" where one of the forty is
+	# the notice would be the tally describing itself.
+	counted = [f for f in verdict.findings if f.kind != "format"]
+	breaks  = sum(1 for f in counted if f.is_break)
 	lines.extend(["", f"{breaks} breaking, "
-	              f"{len(verdict.findings) - breaks} compatible.", ""])
+	              f"{len(counted) - breaks} compatible.", ""])
 	return "\n".join(lines)
