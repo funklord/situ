@@ -30983,6 +30983,78 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.527 The same bare name, and this one reached the wire
+
+**The ninth and tenth instances, in `traverse.covered_run` and
+`covered_bit_span` -- and unlike every earlier one, this changed
+generated code.** `tag_covers` holds bare region names; both gathered
+from `struct.entries`, which carries a nested struct's placements under
+a dotted path. A struct declaring its own `authenticated body` while
+holding a member whose type declares one gathered both.
+
+    struct leaf  { authenticated body { u16 y; }
+                   checksum u8 lsig[2] covers(body) is summing; }
+    struct outer { authenticated body { u16 own_field; }
+                   leaf first;
+                   checksum u8 osig[2] covers(body) is summing; }
+
+`outer.osig` covers `outer.body`, two bytes. `covered_run` returned
+`outer.body..outer.first.body`, and all four backends wrote what it
+gave them:
+
+    static inline situ_err_t situ_outer_osig_covered(...)
+    {
+            uint32_t start = 0u;
+            uint32_t end   = 4u;
+
+**So the checksum ran over twice the bytes the schema declares**, in C,
+C++, Python and Rust. Confirmed by generating all four.
+
+**The differential harness could not have caught it, by
+construction.** Every backend derives the span from this one function,
+so all four agreed with each other; they were wrong together. Only the
+schema says two. This is `evidence.md`'s one-witness rule arriving as a
+wire fault: four implementations of one number are one witness however
+many languages they are written in.
+
+**The Python backend printed the invariant it was breaking.** Its
+docstring reads "A gap in the coverage raises rather than being papered
+over with a range covering bytes the tag does not" -- which is exactly
+what the range was. A comment stating the property the code violates
+is worth more than a comment stating nothing, and nobody had read it
+against the output.
+
+**Refusal is the same fault wearing a harmless face.** With a SECOND
+nested member the intervening tag breaks contiguity, `covered_run`
+answers `None`, and the backend emits no accessor with a comment
+blaming non-contiguity -- for a tag covering one region. The wrong
+range and the false refusal are one bug, and only the adjacent case is
+loud.
+
+**Fixed as one function, not two.** `covered_regions` now holds the
+scoped gather and both callers use it, because duplicating this
+particular fix across two sites is the defect being fixed. That is the
+first time in the family the repair has removed the duplication rather
+than correcting both copies -- and the reason to prefer it is that the
+next reader adding a third caller inherits the scope.
+
+**Zero of 42 corpus schemas change, controlled before it was
+believed.** The probe separates on the fixture and finds no over-broad
+gather anywhere in the corpus. The language requires every
+`authenticated` region to carry a tag, which narrows the reachable
+shape considerably -- and `edges.situ`, which carries every other
+coverage shape deliberately, names its regions distinctly. **Three
+sweeps have now found nothing in the corpus and something real beside
+it**; the corpus is a poor detector for this family because its author
+was avoiding name collisions on purpose.
+
+**One test named a symbol the fix introduced and so could not be a
+control**: against the previous commit it raised `AttributeError`,
+which is a crash where a message should be, and proved only that the
+helper was new. It asserts through `covered_run` now, which exists
+either side. **A control has to fail through the check, and a test
+that cannot run against the old code has not been controlled at all.**
+
 ### 26.526 Both halves of one question, and a fixture that missed
 
 **`advise.py` asks which regions a tag covers in two places, and both
