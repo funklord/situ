@@ -16040,6 +16040,50 @@ record states.
   objects to neither. Standardising is a convention change and belongs to
   a deliberate pass.
 
+- **A region name is bare, and that is the root of the eleven faults in
+  26.519 through 26.528.** `Placement.regions` holds the NAMES of the
+  regions a member sits inside and `tag_covers` the names a tag covers,
+  so neither is an answer without the struct it was declared in. Every
+  one of those eleven fixes is a scope check compensating for that, in
+  four modules: `layout` keys coverage on `(owner, name)`, `pack`
+  computes region ownership from scopes, `traverse` filters the covered
+  gather by owner, and `advise` does it twice. Resolving the names to
+  region PLACEMENTS once, where they are stamped, would make all four
+  correct by construction and delete the compensations.
+
+  **The cost is smaller than it looks and was measured rather than
+  guessed.** No format boundary is crossed: the image's region section
+  packs an owner INDEX and carries no name (`situc/pack.py`, the
+  `SECTION_REGIONS` record), and the wire signature already names
+  members by path in its `covers:` lines. So this is internal to the
+  compiler. Counted 2026-09-28: `grep -n '\.regions\b' situc/*.py`
+  gives nine lines, two of which CONSTRUCT the tuple and seven of which
+  read it -- two in `layout` and five in `pack`; `grep -rn tag_covers
+  situc/*.py` gives 22 lines across five modules, eight each in
+  `advise` and `layout` and two each in the rest. The walker's
+  `Image.regions` is a different field -- a set of placement indices --
+  and is not affected.
+
+  **Both of those numbers are stated with the command because the first
+  draft of this item got them wrong**, saying "four places plus two"
+  where its own grep prints nine lines. A scope number in a register is
+  the premise nobody re-derives, so it carries the method.
+
+  **What it does not fix is the language.** `covers(body)` names a
+  region by its bare name because that is what somebody writes, so the
+  resolution has to happen at layout time and a schema that reuses a
+  name is still legal. The change makes the reuse harmless rather than
+  refusing it, which is the right direction: `edges.situ` now carries
+  the reuse on purpose.
+
+  **Whose decision it is: the copyright holder's.** It is a change to
+  the data model rather than a fault, nothing is currently wrong after
+  26.528, and the compensations all carry their reason. Raised because
+  a family that has produced eleven instances in one week is worth
+  closing at the root rather than one site at a time -- and because the
+  standing gate in `test_region_names_are_scoped.py` cannot see a
+  twelfth site nobody observes, which the root fix would not need to.
+
 **Tried, measured, and not worth doing -- so that nobody spends the hour
 again.**
 
