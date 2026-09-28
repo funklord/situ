@@ -180,6 +180,17 @@ KIND = {
 	"variant": 4, "tlv": 5, "indexed": 6, "opaque": 7,
 }
 
+#: The three `Placement.kind` values that ARE a region declaration, as
+#: `layout` writes them -- `sealed` and `coded` from one branch, and
+#: `authenticated` from the other. None of them is in `KIND`, which is why
+#: a region has to be recognised before the table is consulted.
+#:
+#: This is the kind, never the path. Asking whether a path ENDS with the
+#: region's name answers yes for `body.somebody` inside `body`, and that
+#: member was written into the image as a region for no reason but its
+#: spelling (26.523).
+REGION_KINDS = ("sealed", "coded", "authenticated")
+
 ENDIAN = {None: 0, ast.Endian.BIG: 1, ast.Endian.LITTLE: 2, ast.Endian.NATIVE: 3}
 BIT_ORDER = {None: 0, ast.BitOrder.MSB_FIRST: 1, ast.BitOrder.LSB_FIRST: 2}
 
@@ -632,9 +643,82 @@ def _kind_of(placement: Placement) -> int:
 		return KIND["tlv"]
 	if placement.arm_cases:
 		return KIND["variant"]
-	if placement.regions and placement.path.endswith(placement.regions[-1]):
+	if placement.kind in REGION_KINDS:
 		return KIND["region"]
 	return KIND.get(placement.kind, KIND["field"])
+
+
+def _region_scope(placement: Placement) -> str:
+	"""The path prefix under which one region's members live.
+
+	Not the same as the region's own path, and the difference is the
+	whole of why this is a function. A `sealed` or `coded` region opens a
+	namespace, so its members are `<region>.<member>` and its scope is
+	its own path. An `authenticated` region opens none -- its members
+	"accumulate into the enclosing struct ... and keep the struct's
+	namespace" -- so `a.body` governs `a.x`, and its scope is its owner.
+
+	One relation over two shapes, which is what lets the search below ask
+	a single question. Asking `regions[-1]` instead does not work: a
+	`coded` region stamps neither itself nor its interior with its name,
+	so inside `sealed body { coded inner(...) { ... } }` every member
+	says `body` and nothing says `inner`.
+	"""
+	if placement.kind == "authenticated":
+		return placement.path.rpartition(".")[0]
+	return placement.path
+
+
+def _region_owners(rows: list[tuple[str, Placement]]) -> dict[int, int]:
+	"""For each placement inside a region, the row that IS that region.
+
+	A region encloses a member when the member is that region or sits
+	under its scope. Among the regions that do, the innermost wins, and
+	it is found on two keys in order:
+
+	  * the LONGEST scope, which settles every nesting that opens a
+	    namespace -- `nest.body.inner` beats `nest.body` for
+	    `nest.body.inner.deep`, because the inner region's scope is a
+	    longer prefix of it;
+	  * then the LATEST name in the member's own `regions`, which is
+	    stamped outermost-first. This settles the nestings the first key
+	    cannot see, and they are exactly the ones an `authenticated`
+	    region takes part in: two of them nested share one scope, and so
+	    do a sealed region and an authenticated region inside it.
+
+	Neither key alone is the answer, and the two wrong answers are this
+	function's own history. 26.523 was the NAME alone: `next()` over
+	every row in the image for one whose path ended with `regions[-1]`
+	found the first such row anywhere, so two structs each declaring
+	`sealed body` collapsed into one -- `one`'s gate was reported as
+	protecting `two`'s secret bytes while `two`'s protected nothing,
+	which is the worst direction this table can be wrong in, since 14.3
+	hands a region's interior out on its tag. 26.524 was CONTAINMENT
+	alone -- correct for the two kinds that open a namespace, and unable
+	to reach an authenticated region at all, whose members are not under
+	its path.
+	"""
+	regions = [(i, _region_scope(held), held.path)
+	           for i, (_, held) in enumerate(rows)
+	           if held.kind in REGION_KINDS]
+	owners: dict[int, int] = {}
+	for at, (_, placement) in enumerate(rows):
+		if not placement.regions:
+			continue
+		best, best_key = -1, (0, -2)
+		for i, scope, path in regions:
+			if placement.path != path \
+					and not placement.path.startswith(scope + "."):
+				continue
+			name = path.rpartition(".")[2]
+			key  = (len(scope),
+			        placement.regions.index(name)
+			        if name in placement.regions else -1)
+			if best < 0 or key > best_key:
+				best, best_key = i, key
+		if best >= 0:
+			owners[at] = best
+	return owners
 
 
 def _u32(value: int | None) -> int:
@@ -900,6 +984,25 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				placement.path.startswith(held.path + ".")
 				and held.codec is not None
 				for _, held in rows)
+			# An `authenticated` region is deliberately NOT a member --
+			# it names bytes its members already own and consumes none
+			# itself, so a walk that counted it would place everything
+			# after it one region too far along, which is why
+			# `traverse.NOT_A_MEMBER` holds it. That is right for a walk
+			# and wrong for this table: its members still say they are
+			# inside `body`, and without a row for the region there is
+			# nothing for them to point AT.
+			#
+			# So it comes in here, where an arm's member and a sealed
+			# interior come in -- after every struct's span, counted in
+			# nobody's `placement_count`. A walker iterating members sees
+			# exactly what it did before, and `region_owner` gains the
+			# one row it was missing. Before this, such a member pointed
+			# at nothing wherever no other region in the image shared
+			# the name, and at that other region where one did -- which
+			# in `edges.situ` was a sealed region in another struct
+			# (26.523, 26.525).
+			wanted = wanted or placement.kind == "authenticated"
 			if wanted:
 				rows.append((name, placement))
 
@@ -2161,6 +2264,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	marker_decls = {decl.name: decl for decl in schema.decls
 	                if isinstance(decl, ast.EndianMarkerDecl)}
 
+	region_owners = _region_owners(rows)
+
 	for at, (owner, placement) in enumerate(rows):
 		if placement.kind == "marker":
 			marker_decl = marker_decls.get(placement.type_name or "")
@@ -2239,13 +2344,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# `region_at`, not `owner`: this loop already binds `owner` to
 			# the struct's name, and the shadow made the index a string to
 			# every reader including mypy.
-			region_at = next(
-				(i for i, (_, held) in enumerate(rows)
-				 if held.path.endswith("." + placement.regions[-1])
-				 and held.regions
-				 and held.regions[-1] == placement.regions[-1]
-				 and held.path.count(".") <= placement.path.count(".")),
-				None)
+			#
+			# Computed once for the whole table rather than searched per
+			# row, because the relation is containment over paths and a
+			# per-row search is what reached across a struct boundary
+			# (26.523).
+			region_at = region_owners.get(at)
 			regions_blob += _struct.pack(
 				"<IIIB3x", at, _u32(region_at),
 				_u32(codec_index.get(placement.codec or "")), flags)

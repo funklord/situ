@@ -499,7 +499,16 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 				"<IIIB", blob, at + i * stride)
 			image.regions.add(where)
 			image.region_flags[where] = rflags
-			image.region_owner[where] = owner
+			# NONE means the image holds no row for the region this
+			# member sits in, which is what an `authenticated` region
+			# is today -- it carries no placement of its own, so its
+			# members have nothing to point at. Recording the sentinel
+			# would put 0xFFFFFFFF where this dict promises a placement
+			# index, and the first consumer to index with it reads off
+			# the end. Absent says the same thing and says it honestly
+			# (26.523).
+			if owner != NONE:
+				image.region_owner[where] = owner
 
 	if VARINTS in found:
 		at, records, stride = found[VARINTS]
