@@ -30983,6 +30983,76 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.528 The gate found the eleventh instance while being built
+
+**Asked for a standing gate against the bare-name family, the honest
+answer was not a lexical detector but a SCHEMA -- and adding it
+surfaced a fault in `layout.resolve_coverage` before the gate was
+finished.** `outer_sum covers: body nested.body nested.inner_value
+outer_value` is what the committed wire signature said about a tag
+covering two bytes of its own struct. It claimed authentication for a
+nested struct's bytes, in the artifact other trees read as the
+contract.
+
+**The rule was too loose in the one direction nothing else checks.** A
+member was covered if the tag's owner was an ancestor of the member's
+owner -- which is true of a nested struct declared BESIDE the covered
+region as well as one declared inside it. `regions` holds bare names,
+so `outer_body.nested.body` says `body` exactly as a member of the
+outer `body` does.
+
+**The discriminator was already in the data and nobody had used it: the
+step between.** `signed_whole.piece` carries `whole_body`, so
+everything under it is genuinely inside; `outer_body.nested` carries
+nothing, so its `body` is its own. `reaches` now walks every ancestor
+between the tag's struct and the member and requires each to be in the
+region. Legitimate nested coverage survives -- which is the direction
+that matters, since the first repair of this function under-claimed and
+the entry above it says so.
+
+**Why a schema rather than a detector.** A lexical gate for "matches a
+region by bare name" is a grep with an ignore list, and this file's own
+rules say a gate carrying one has been switched off by instalments. The
+corpus is the detector that failed, and it failed for a reason that can
+be removed: **every schema here was written by somebody naming regions
+distinctly**, so the one property this family needs in order to appear
+was the property the corpus was curated not to have. `edges.situ` now
+carries the construct, so the four compile gates and every sweep that
+walks SCHEMAS run over it.
+
+**Measured against a worktree at the previous commit with the same
+schema in both**: 1425 placements, exactly 2 changed, and both the
+over-claim. All 34 maps and 34 wire signatures outside `edges` are
+byte-identical, and `edges`' own diff is 26 insertions and no
+deletions.
+
+**Run against the tree before any of this week's fixes, the gate fails
+at four sites, each through its own assertion** -- the coverage
+over-claim, a covered run reaching the nested region, an advisor extent
+of 4 where the answer is 2, and `pack` recording a gate owner in
+`unverified`, a different struct entirely.
+
+**Two things the gate does NOT do, pinned here so it is not quoted for
+them.** It cannot see a NEW consumer that asks by bare name and that
+nothing observes; the four sites it checks are the ones whose answers
+are reachable from outside. And its corpus-wide half -- `layout` and
+`traverse` agreeing about which regions a tag covers -- catches
+DIVERGENCE and not shared error: before this week both derivations were
+wrong in the same direction and would have agreed. What catches a
+shared error is the four fixtures, whose expected values were read off
+the schema rather than out of the code.
+
+**The first version of that corpus check was one witness twice.** It
+asserted that `covered_regions` returns only same-owner regions, which
+is what `covered_regions` now filters on -- the function asked about
+itself. It compares the two modules' answers instead.
+
+**And the gate's own first draft named a constant this week
+introduced**, so against an older tree it raised `AttributeError`
+rather than failing an assertion. That is the third time in two days
+the same mistake has been made and caught; it is written out longhand
+in the test now, because the lesson is cheaper than the repetition.
+
 ### 26.527 The same bare name, and this one reached the wire
 
 **The ninth and tenth instances, in `traverse.covered_run` and
