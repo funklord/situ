@@ -650,8 +650,23 @@ def _find_scattered_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 			if placement.kind not in ("tag", "checksum") or len(placement.tag_covers) < 2:
 				continue
 
+			# Scoped to the tag's OWNER, for `_covered_bytes`' reason
+			# one function down: `tag_covers` holds bare names, and a
+			# struct that declares `authenticated a` and `b` while also
+			# holding two members whose type declares its own `a` and
+			# `b` has six placements answering to two names.
+			#
+			# Here the cost is a FALSE SUGGESTION rather than a wrong
+			# number. The six are spread across three structs and so are
+			# never contiguous, so the tag was told to group regions
+			# that were already adjacent -- advice that would have the
+			# reader restructure a correct schema. `detail` and `weight`
+			# meanwhile counted `tag_covers`, so the message said "2
+			# regions" about a decision taken over 6 (26.526).
+			mine    = placement.path.rpartition(".")[0]
 			covered = [held for held in regions
-			           if held.placement.name in placement.tag_covers]
+			           if held.placement.name in placement.tag_covers
+			           and held.placement.path.rpartition(".")[0] == mine]
 			if len(covered) < 2 or _is_contiguous(covered):
 				continue
 
@@ -758,12 +773,28 @@ def _find_mutable_under_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 
 
 def _covered_bytes(struct: ResolvedStruct, tag: Placement) -> int:
-	"""Worst-case extent a tag authenticates, which is what a write recomputes."""
+	"""Worst-case extent a tag authenticates, which is what a write recomputes.
+
+	Scoped to the tag's OWNER, because `tag_covers` holds bare region
+	names and a bare name is not unique. A struct holding two members
+	that each carry an `authenticated body` has two placements called
+	`body`, so summing every match credited each tag with its sibling's
+	region as well and the number grew with the number of siblings
+	(26.526).
+
+	This is the `(owner, region name)` key `layout` adopted at 26.519 and
+	`pack._region_owners` at 26.525, and the interesting part is where
+	the gap was: the candidate list ten lines above already asks
+	`covered_by`, which those passes qualified. The extent in the same
+	function still asked by name.
+	"""
+	mine  = tag.path.rpartition(".")[0]
 	total = 0
 	for entry in struct.entries:
 		placement = entry.placement
-		if placement.name in tag.tag_covers and placement.kind in ("authenticated",
-		                                                           "sealed"):
+		if placement.name in tag.tag_covers \
+				and placement.kind in ("authenticated", "sealed") \
+				and placement.path.rpartition(".")[0] == mine:
 			total += (placement.size_max_bits or placement.size_bits) // BITS_PER_BYTE
 	return total
 

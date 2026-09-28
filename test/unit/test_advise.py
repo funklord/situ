@@ -22,6 +22,7 @@ from situc.capability import Axis, Value
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import ResolvedSchema, resolve
+from situc.traverse import own_entries
 
 PREAMBLE = "endian big;\n"
 
@@ -992,3 +993,122 @@ def test_a_worst_case_that_did_not_move_is_neither_direction() -> None:
 	assert revision._parameter_change(
 		Axis.SIZE, Value("Bounded", ("0", "1500")),
 		Value("Bounded", ("0", "4096"))) == "weakened"
+
+
+# -- a tag's extent is its own region's, not every same-named region's -------
+
+
+TWIN_COVERAGE = """
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct leaf {
+	authenticated body { u16 y; }
+	checksum u8 lsig[2] covers(body) is summing;
+}
+struct outer {
+	authenticated body { u16 own_field; }
+	leaf first;
+	leaf second;
+	checksum u8 osig[2] covers(body) is summing;
+}
+"""
+
+
+def _own_tag(resolved: ResolvedSchema, struct: str, tag: str) -> int:
+	"""One tag's extent, reached the way the advisor reaches it.
+
+	Through `own_entries`, because that is what `_members` is and what
+	every rule loops over. Calling `_covered_bytes` with a tag the
+	advisor never passes it tests the function on an input it does not
+	receive -- which is what the first version of this fixture did, and
+	the shape `evidence.md` calls a test that names the hazard and
+	covers the safe path.
+	"""
+	held = resolved.structs[struct]
+	for entry in own_entries(held):
+		if entry.placement.path == tag:
+			return advise._covered_bytes(held, entry.placement)
+	raise AssertionError(f"{tag} is not an own member of {struct}")
+
+
+def test_a_tags_extent_counts_only_the_region_beside_it() -> None:
+	"""`_covered_bytes` summed every placement in the struct whose bare
+	NAME was in `tag_covers`. A struct that declares its own
+	`authenticated body` while also holding two members whose type
+	declares one has three placements called `body`, and the tag was
+	credited with all three.
+
+	`outer.body` is the `u16` this tag covers, so the answer is 2 and
+	the answer before the fix was 6 -- it grows with the number of
+	members whose type happens to reuse the name.
+
+	The extent is the suggestion's whole claim, section 18 calling the
+	cost column the differentiator, and it also sets `weight`, so an
+	inflated one outranks suggestions that really do cost more.
+
+	What makes this the interesting one is where it sat. The candidate
+	filter ten lines above asks `covered_by`, which is qualified because
+	26.519 and 26.522 qualified it. The extent, in the same function,
+	still asked by bare name.
+	"""
+	resolved = build(TWIN_COVERAGE)
+
+	assert _own_tag(resolved, "leaf", "leaf.lsig") == 2, \
+		"the un-nested case was always right"
+	assert _own_tag(resolved, "outer", "outer.osig") == 2, \
+		"the tag was credited with the nested structs' regions as well"
+
+
+SCATTERED_TWINS = """
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct leaf {
+	authenticated a { u16 la; }
+	authenticated b { u16 lb; }
+	checksum u8 lsig[2] covers(a, b) is summing;
+}
+struct outer {
+	authenticated a { u16 oa; }
+	authenticated b { u16 ob; }
+	leaf first;
+	leaf second;
+	checksum u8 osig[2] covers(a, b) is summing;
+}
+"""
+
+
+def test_scattered_coverage_does_not_see_a_nested_structs_regions() -> None:
+	"""The same bare name, one function over, and a worse failure.
+
+	`_find_scattered_coverage` gathered the covered regions the same
+	way, so `outer.osig` picked up six placements across three structs.
+	Six regions in three structs are never contiguous, so the rule fired
+	and told the reader to group regions that are already adjacent --
+	advice that would have them restructure a correct schema.
+
+	`outer.a` and `outer.b` are declared back to back with nothing
+	between them, which is what makes this a false positive rather than
+	a wrong number. The message gave it away and nobody read it: `detail`
+	and `weight` count `tag_covers`, so it said "2 regions" about a
+	decision taken over six.
+	"""
+	assert by_rule(SCATTERED_TWINS, "group-covered-regions") == []
+
+
+def test_scattered_coverage_still_fires_when_it_should() -> None:
+	"""The control for the test above, which would otherwise pass just as
+	well against a rule that had stopped working."""
+	split = """
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct split {
+	authenticated first  { u16 a; }
+	u16           between;
+	authenticated second { u16 b; }
+	checksum u8   sum[2] covers(first, second) is summing;
+}
+"""
+	assert len(by_rule(split, "group-covered-regions")) == 1
