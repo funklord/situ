@@ -18,6 +18,7 @@ from math import lcm
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from collections.abc import Iterable
 from typing import TypeVar
 
 from situc import ast, unparse
@@ -3645,6 +3646,31 @@ def _located_source(member: ast.Field | ast.Reserved) -> str | None:
 def _located_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
 	located = getattr(member, "located", None)
 	return None if located is None else located
+
+
+def regions_covered_by(placements: Iterable[Placement],
+		tag: Placement) -> list[Placement]:
+	"""The regions one tag authenticates, among `placements`.
+
+	`tag_covers` holds BARE region names, so a name is an answer only
+	together with the struct it was declared in -- and a list of
+	placements carries nested structs' regions under dotted paths. A
+	struct declaring its own `authenticated body` while holding a member
+	whose type declares one has two placements called `body`, and a
+	match on the name alone takes both.
+
+	Here rather than in each caller because there are three, in three
+	modules, and this family's whole shape is one rule landing in one
+	place and not its neighbour (26.519 through 26.529). The callers
+	hold different things -- `traverse` a `ResolvedStruct`'s entries and
+	`resolve` a `StructLayout`'s placements -- so the argument is the
+	placements and each caller passes what it has.
+	"""
+	mine = tag.path.rpartition(".")[0]
+	return [held for held in placements
+	        if held.name in tag.tag_covers
+	        and held.kind in ("authenticated", "sealed")
+	        and held.path.rpartition(".")[0] == mine]
 
 
 def _expression_tree(size: ast.Expr | None) -> ast.Expr | None:

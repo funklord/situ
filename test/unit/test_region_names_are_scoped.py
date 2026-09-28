@@ -177,3 +177,70 @@ def test_the_two_derivations_of_coverage_agree(path: Path) -> None:
 				assert local in region.covered_by, \
 					(f"{tag.path} names {region.path} as covered, and "
 					 f"{region.path} says {region.covered_by}")
+
+
+# -- the guard a collision could silence (26.529) ----------------------------
+
+
+SUB_BYTE = """target buffer;
+endian big;
+
+codec crc5_usb {
+	kernel = polynomial(width = 5, poly = 0x05, init = 0x1F, xorout = 0x1F,
+	                    reflect);
+}
+impl crc5_usb derived;
+
+struct filler {
+	authenticated body { u8 pad; }
+	checksum u8 fsig[1] covers(body) is crc5_usb;
+}
+
+struct wrong_order [allow_straddle, bit_order = msb_first] {
+	authenticated body {
+		u7  address;
+		u4  endpoint;
+	}
+	u5           gap;
+FILLER
+	checksum u5  crc covers(body) is crc5_usb;
+	u3           tail;
+}
+"""
+
+
+def _refusal(text: str) -> str:
+	from situc.diagnostics import SituError
+	schema = parse_text(text)
+	try:
+		resolve(schema, solve(schema))
+	except SituError as exc:
+		return str(exc)
+	return ""
+
+
+def test_the_sub_byte_bit_order_guard_fires_at_all() -> None:
+	"""The control, and it is the whole reason the next test means
+	anything: a guard that cannot fire is silenced by everything.
+
+	This one had NO test before 26.529 -- `grep 'covers .* bits'` over
+	`test/` found nothing -- which is why it could stop firing without
+	anybody noticing. It exists because USB's token computed a CRC over
+	three of its own check bits, stored it, and then refused its own
+	message.
+	"""
+	assert "reads them the other way round" in _refusal(
+		SUB_BYTE.replace("FILLER\n", ""))
+
+
+def test_a_same_named_region_next_door_does_not_silence_it() -> None:
+	"""The fault. `_check_bit_coverage_direction` skips a coverage that
+	is whole bytes, so the span decides whether it applies at all.
+
+	Gathering by bare name took `wrong_order.nested.body` as well and
+	widened the span from 11 bits to 24 -- byte-aligned, so the guard
+	skipped and a schema the compiler should refuse built clean. A
+	member with nothing to do with the tag turned the check off.
+	"""
+	assert "reads them the other way round" in _refusal(
+		SUB_BYTE.replace("FILLER", "\tfiller       nested;"))

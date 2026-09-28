@@ -28,7 +28,7 @@ from situc.types import ScalarType, pinned_shown, literal_bytes
 from math import lcm
 
 from situc.expr import Env
-from situc.layout import BITS_PER_BYTE, Arm, Placement
+from situc.layout import BITS_PER_BYTE, Arm, Placement, regions_covered_by
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
 
@@ -973,11 +973,8 @@ def covered_regions(struct: "ResolvedStruct", tag: Placement) -> list[Placement]
 	the differential harness could not see it -- only the schema says
 	otherwise (26.527).
 	"""
-	mine = tag.path.rpartition(".")[0]
-	return [entry.placement for entry in struct.entries
-	        if entry.placement.name in tag.tag_covers
-	        and entry.placement.kind in ("authenticated", "sealed")
-	        and entry.placement.path.rpartition(".")[0] == mine]
+	return regions_covered_by((entry.placement for entry in struct.entries),
+	                          tag)
 
 
 def covered_run(struct: "ResolvedStruct",

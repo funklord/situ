@@ -18,7 +18,8 @@ from situc import ast
 from situc.invariant import negative_value
 from situc.capability import Axis, Value, Vector, meet_all
 from situc.diagnostics import error
-from situc.layout import BITS_PER_BYTE, Placement, SchemaLayout, StructLayout
+from situc.layout import (BITS_PER_BYTE, Placement, SchemaLayout,
+                          StructLayout, regions_covered_by)
 from situc.propagate import Context, Resolved, apply
 
 
@@ -457,10 +458,15 @@ def _check_bit_coverage_direction(decl: ast.StructDecl, layout: StructLayout,
 		if placement.size_bits is None or placement.offset_bits is None:
 			continue
 
-		covered = [held for held in layout.placements
-		           if held.name in placement.tag_covers
-		           and held.kind in ("authenticated", "sealed")
-		           and held.offset_bits is not None]
+		# Scoped, because the span below decides whether this guard
+		# applies AT ALL: byte-aligned means skip. A nested struct whose
+		# type declares a region of the same name widened the span from
+		# 11 bits to 24, and the schema that should have been refused
+		# compiled clean -- the guard silenced by a member that has
+		# nothing to do with it (26.529).
+		covered = [held for held in regions_covered_by(
+		                   layout.placements, placement)
+		           if held.offset_bits is not None]
 		if not covered:
 			continue
 
