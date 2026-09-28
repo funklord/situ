@@ -30983,6 +30983,75 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.523 Two region lookups key on a bare name, and both are wrong
+
+**Found by a lens derived from the last fault and NOT fixed; recorded
+with the reproduction.** 26.522's own bug was `path.endswith("." + tag)`
+matching a nested member of the same leaf name. Sweeping `situc/` and
+`walker/` for that shape found two sites in `pack.py`, and both
+reproduce.
+
+**`pack.py:2244` records which region owns each member** by searching
+every placement in the image -- not the struct's -- for one whose path
+ends with the region's bare name. Two regions sharing a name collide and
+the first row wins:
+
+    struct one { sealed body(aead) { u8 x; } tag u8 sig[16] covers(body); }
+    struct two { sealed body(aead) { u8 y; } tag u8 sig[16] covers(body); }
+    struct outer { u8 plain; one first; two second; }
+
+    one.body             owner -> one.body
+    two.body             owner -> one.body
+    one.body.x           owner -> one.body
+    two.body.y           owner -> one.body
+    outer.first.body     owner -> one.body
+    outer.second.body.y  owner -> one.body
+
+**`two.body` is not recorded as a gate at all** -- it is recorded as
+sitting INSIDE `one.body`. So the image carries one gate where the
+schema declares four, and the walker reads `one`'s gate as protecting
+`two`'s secret bytes:
+
+    gate one.body -> interior one.body.x, two.body.y,
+                              outer.first.body.x, outer.second.body.y
+
+14.3 hands a region's interior out on its tag, so this says the wrong
+tag guards it. Same direction as 26.519 and one layer further down, in
+the image rather than the map.
+
+**`pack.py:635` decides whether a placement IS a region** by
+`path.endswith(regions[-1])` -- no leading dot, so any member whose name
+merely ENDS with the region's name is written as a region:
+
+    sealed body(aead) { u8 somebody; u8 other; }
+
+    s.body.somebody   kind=region     <-- a u8 scalar
+    s.body.other      kind=field
+
+`_gated` renders only `FIELD`, so it renders `other` and not `somebody`.
+**A member behind a gate disappears from the walk because of how its
+name is spelled**, with nothing reporting anything.
+
+**Neither is fixed here.** The repair is 26.519's -- key on the owning
+struct and the region name together rather than on a dotted suffix --
+but it writes into the image format, the last change of this shape
+needed two attempts and the first was worse than the bug, and the
+region table is read by both walkers. It wants its own pass with the
+corpus blast radius measured, not a drive-by at the end of a sweep.
+
+**Everything else the sweep looked at was clean.** The candidate set
+moved by one entry, 26.517, which is mine; nothing entered or left it.
+The stranded-correction scan returns the same four legitimate
+quotations it did two days ago -- **no correction stranded its original
+across roughly twenty strike-throughs since 26.516**, which is the rule
+that was broken three times in one day holding.
+
+**This is the fifth "the same rule one place over" this week**, after
+26.514, 26.517, 26.519 and 26.521. The four before it were found by
+reading a neighbour; this one was found by pointing the last bug's own
+shape at the tree, which is the cheaper instrument and the one to
+reach for next.
+
 ### 26.522 The literal rule emptied the axis, and the exemption existed
 
 **A struct's `auth=` line names only the tags that authenticate the whole
