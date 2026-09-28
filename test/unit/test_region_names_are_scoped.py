@@ -244,3 +244,86 @@ def test_a_same_named_region_next_door_does_not_silence_it() -> None:
 	"""
 	assert "reads them the other way round" in _refusal(
 		SUB_BYTE.replace("FILLER", "\tfiller       nested;"))
+
+
+# -- the other direction: a valid schema refused (26.530) --------------------
+
+
+TRANSFORM = """target buffer;
+endian big;
+
+codec masking {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	invertible;
+	deterministic;
+}
+impl masking extern "app_header_mask";
+
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct inner {
+	authenticated body { u16 first; }
+	checksum u8 isig[2] covers(body) is summing;
+}
+
+struct outer {
+	u16    first;
+	coded  pn(masking) covers(first) { u16 number; }
+NESTED
+}
+"""
+
+AMBIGUOUS = """target buffer;
+endian big;
+
+codec masking {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	invertible;
+	deterministic;
+}
+impl masking extern "app_header_mask";
+
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct must_say {
+	authenticated body { u16 first; }
+	coded  pn(masking) covers(first) { u16 number; }
+	checksum u8 sig[2] covers(body) is summing;
+}
+"""
+
+
+def test_tag_order_is_demanded_when_it_is_genuinely_ambiguous() -> None:
+	"""The control. `pn` transforms bytes this struct's own tag covers,
+	so 14.1b says the schema has to state the order -- and the wrong
+	choice is undetectable at run time, which is why it is an error.
+
+	Without this, the test below passes just as well against a guard
+	that has stopped firing altogether.
+	"""
+	assert "does not say in which order" in _refusal(AMBIGUOUS)
+
+
+def test_a_nested_structs_field_does_not_invent_the_ambiguity() -> None:
+	"""`_transform_covers` gathered by bare name over every placement,
+	with a depth test that admitted exactly two levels -- so a member
+	called `first` inside a nested struct came along, and the tags
+	gathered with it were that struct's.
+
+	`outer.first` is covered by nothing, so `pn` needs no `tag_order`.
+	The compiler refused the schema anyway, saying `pn` transforms bytes
+	`nested.isig` covers. It does not: those bytes are inside `nested`.
+
+	A message naming a tag from another struct is the tell, and it is
+	the same tell the eleven faults before this one left.
+	"""
+	assert _refusal(TRANSFORM.replace("NESTED\n", "")) == "", \
+		"the schema without the nested member must compile"
+	assert _refusal(TRANSFORM.replace("NESTED", "\tinner  nested;")) == "", \
+		"a nested struct reusing a field name invented an ambiguity"

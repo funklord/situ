@@ -333,11 +333,29 @@ TAG_ORDER = ("after", "before")
 
 def _transform_covers(layout: StructLayout,
 		region: Placement) -> list[Placement]:
-	"""The placements a `coded` region's transform runs over (14.1a)."""
+	"""The placements a `coded` region's transform runs over (14.1a).
+
+	Scoped to the region's own owner. `coded_covers` holds BARE member
+	names and `layout.placements` carries nested structs' members under
+	dotted paths, so a member whose name a nested struct reuses was
+	gathered too -- and the tags gathered WITH it belong to that struct.
+
+	The cost was a valid schema refused. `outer.first` covered by
+	nothing needs no `tag_order`, and a member called `first` inside a
+	nested struct, covered by that struct's own tag, made the compiler
+	say "`pn` transforms bytes that `nested.isig` covers" about bytes
+	`nested.isig` does not reach. The message naming a tag from another
+	struct is the tell (26.530).
+
+	This replaces a depth test -- no dot after the second segment --
+	which admitted exactly the two-level path the fault needs. The owner
+	is the question that test was approximating.
+	"""
+	mine = region.path.rpartition(".")[0]
 	return [placement for placement in layout.placements
 	        if placement is region
 	        or (placement.name in region.coded_covers
-	            and "." not in placement.path.partition(".")[2].partition(".")[2])]
+	            and placement.path.rpartition(".")[0] == mine)]
 
 
 def _check_transform_tag_order(decl: ast.StructDecl,
