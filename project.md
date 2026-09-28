@@ -16040,14 +16040,15 @@ record states.
   objects to neither. Standardising is a convention change and belongs to
   a deliberate pass.
 
-- **A region name is bare, and that is the root of the eleven faults in
-  26.519 through 26.528.** `Placement.regions` holds the NAMES of the
+- **A region name is bare, and that is the root of the twelve faults in
+  26.519 through 26.529.** `Placement.regions` holds the NAMES of the
   regions a member sits inside and `tag_covers` the names a tag covers,
   so neither is an answer without the struct it was declared in. Every
-  one of those eleven fixes is a scope check compensating for that, in
-  four modules: `layout` keys coverage on `(owner, name)`, `pack`
-  computes region ownership from scopes, `traverse` filters the covered
-  gather by owner, and `advise` does it twice. Resolving the names to
+  one of those twelve fixes is a scope check compensating for that, in
+  five modules: `layout` keys coverage on `(owner, name)` and now holds
+  the shared gather, `pack` computes region ownership from scopes,
+  `traverse` and `resolve` call the gather, and `advise` scopes twice
+  by hand. Resolving the names to
   region PLACEMENTS once, where they are stamped, would make all four
   correct by construction and delete the compensations.
 
@@ -16056,18 +16057,23 @@ record states.
   packs an owner INDEX and carries no name (`situc/pack.py`, the
   `SECTION_REGIONS` record), and the wire signature already names
   members by path in its `covers:` lines. So this is internal to the
-  compiler. Counted 2026-09-28: `grep -n '\.regions\b' situc/*.py`
-  gives nine lines, two of which CONSTRUCT the tuple and seven of which
-  read it -- two in `layout` and five in `pack`; `grep -rn tag_covers
-  situc/*.py` gives 22 lines across five modules, eight each in
-  `advise` and `layout` and two each in the rest. The walker's
-  `Image.regions` is a different field -- a set of placement indices --
-  and is not affected.
+  compiler. Counted 2026-09-28, after 26.529 moved the shared gather
+  into `layout`: `grep -n '\.regions\b' situc/*.py` gives nine lines,
+  four in `layout` and five in `pack`, of which two CONSTRUCT the tuple
+  and seven read it; `grep -rn tag_covers situc/*.py` gives 22 lines
+  across five modules -- ten in `layout`, eight in `advise`, two in
+  `pack` and one each in `resolve` and `traverse`, the last two having
+  been eight between them before they started calling the gather. The
+  walker's `Image.regions` is a different field, a set of placement
+  indices, and is not affected.
 
-  **Both of those numbers are stated with the command because the first
-  draft of this item got them wrong**, saying "four places plus two"
-  where its own grep prints nine lines. A scope number in a register is
-  the premise nobody re-derives, so it carries the method.
+  **Both numbers are stated with the command because this item has
+  already been wrong about them twice**: its first draft said "four
+  places plus two" where its own grep prints nine lines, and its second
+  gave a per-module split that 26.529 invalidated within the hour by
+  moving code. A scope number in a register is the premise nobody
+  re-derives, so it carries the method and the date rather than
+  confidence.
 
   **What it does not fix is the language.** `covers(body)` names a
   region by its bare name because that is what somebody writes, so the
@@ -31026,6 +31032,65 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.529 The twelfth, and this one turned a guard off
+
+**`resolve._check_bit_coverage_direction` gathered its covered regions
+by bare name, and the span it computes decides whether the guard
+applies AT ALL.** Byte-aligned means skip. So a member with nothing to
+do with the tag could widen the span to a byte boundary and switch the
+check off:
+
+    struct wrong_order [allow_straddle, bit_order = msb_first] {
+            authenticated body { u7 address; u4 endpoint; }
+            u5           gap;
+            filler       nested;        // its type also declares `body`
+            checksum u5  crc covers(body) is crc5_usb;
+            u3           tail;
+    }
+
+    without `nested`   span 0..11   refused, correctly
+    with    `nested`   span 0..24   compiles clean
+
+**Delete one line and the compiler refuses the schema; put it back and
+it accepts it.** The guard exists because USB's token computed a CRC
+over three of its own check bits, stored it, and then refused its own
+message (26.374) -- and that is the fault it stops catching.
+
+**It had no test.** `grep 'covers .* bits'` over `test/` found nothing,
+which is why it could stop firing with nothing to say so. There are two
+now and the first is the control: a guard that cannot fire is silenced
+by everything, so the fixture WITHOUT the collision has to be seen
+refusing before the one with it means anything.
+
+**The reproduction took two attempts, and the first was intercepted.**
+Putting the nested struct straight after an eleven-bit region raised
+"`filler` must start on a byte boundary" from an earlier check, so the
+guard under test never ran and the output looked like a demonstration.
+Five bits of padding put the cursor on a boundary and let the fixture
+reach it. *A control has to be REACHED, not only able to fire* -- and
+the shape of the interception is that an earlier, correct refusal
+stands in for the one being tested.
+
+**Second time in this family the repair removed the duplication rather
+than correcting the copy.** `regions_covered_by` is in `layout` now,
+which is upstream of both consumers, and `traverse` and `resolve` call
+it -- they hold different things, a `ResolvedStruct`'s entries and a
+`StructLayout`'s placements, so it takes the placements and each passes
+what it has. Three callers, one rule.
+
+**No corpus schema changes and no committed artifact moves**, 34 maps
+and 34 wire signatures byte-identical.
+
+**This is the register item earning its place the day it was
+written.** 26.144 now carries the bare region name as an open decision
+because eleven instances in a week is worth closing at the root; the
+twelfth arrived within the hour, in the fifth module, and it was the
+one that turned a compile-time refusal into silence. **A count offered
+as an argument for a root fix is stronger when it keeps going up
+without anybody hunting** -- this one was found by finishing an
+enumeration the item itself had published, which is the cheapest
+instrument here and the only one that has not yet come up empty.
 
 ### 26.528 The gate found the eleventh instance while being built
 
