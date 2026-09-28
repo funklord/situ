@@ -30983,6 +30983,67 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.526 Both halves of one question, and a fixture that missed
+
+**`advise.py` asks which regions a tag covers in two places, and both
+asked by bare name.** `tag_covers` holds bare region names, so a struct
+declaring its own `authenticated body` while also holding two members
+whose type declares one has three placements called `body`. Measured
+end to end through `advise.suggest`:
+
+    before   group-covered-regions  outer.osig  weight=2
+             uncover-mutable-field  outer.osig  weight=72
+    after    uncover-mutable-field  outer.osig  weight=24
+
+**`_covered_bytes` inflated the extent threefold** -- 6 bytes where the
+tag covers 2 -- and the extent is the suggestion's whole claim, section
+18 calling the cost column the differentiator. It also sets `weight`,
+which is why the ranked number moved 72 to 24.
+
+**`_find_scattered_coverage` produced a FALSE SUGGESTION, which is
+worse.** It gathered six placements across three structs; six regions
+in three structs are never contiguous, so the rule told the reader to
+group regions that were already declared back to back. Advice that
+would have somebody restructure a correct schema is the failure this
+rule exists to avoid being.
+
+**Its message said so and nobody read it.** `detail` and `weight` count
+`tag_covers` while the decision was taken over `covered`, so the line
+read "it covers 2 regions with other members between them" about a set
+of six. **A rule whose message and whose test disagree about which set
+they mean has already told you**, and it had been saying it in every
+firing.
+
+**The first fixture for this did not reach the hazard, and that is the
+part worth keeping.** It called `_covered_bytes` with a nested struct's
+tag -- `outer.first.sig` -- and got 16 against 8, which looked like a
+clean reproduction. But every rule loops over `_members`, which is
+`own_entries`, and a nested struct's tag is not an own member: the
+advisor never passes that tag to that function. The test was correct
+about the function's contract and silent about anything reachable.
+
+**What makes the real shape different is that the collision needs a
+struct to own one of the colliding regions.** `outer` must declare its
+own `body` for its own tag to be an own member and cover it; the
+nested copies then join. Two siblings alone -- the shape 26.519 and
+26.525 were about -- cannot reach this code at all, which is why the
+first fixture felt right and proved nothing.
+
+**Zero of 42 corpus schemas change, controlled before it was
+believed**: 157 suggestions, identical across the pushed commit and
+this one, while the same instrument separates on the fixture above.
+`edges.situ` carries the twin-signature and split-coverage shapes and
+escapes both by naming regions distinctly -- `left_body` and
+`right_body`, `first` and `second`. **A naming choice is not a guard**,
+and it is why every sweep so far has passed over this file.
+
+**Seventh and eighth of the family.** 26.514, 26.517, 26.519, 26.521,
+26.523, 26.525 and these two. The count is now the finding: a rule
+landing in one place and not its neighbour is not an occasional slip
+here, it is the defect this tree produces. The instrument has been the
+same every time -- take the shape of the last fault and point it at the
+tree, rather than reading outward from the fix.
+
 ### 26.525 The region that opens no namespace, and the row it never had
 
 **26.524 recorded an `authenticated` region's members as naming no gate
