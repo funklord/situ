@@ -30983,6 +30983,156 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.525 The region that opens no namespace, and the row it never had
+
+**26.524 recorded an `authenticated` region's members as naming no gate
+and called that honest rather than right. It is fixed, and the honest
+version understated it badly: across the whole corpus, NOT ONE such
+member had a correct owner.** Most had none; four in `edges.situ` had a
+sealed region in another struct. Twenty-two regions in nine schemas.
+
+**Two things were wrong and only one of them was the lookup.** The
+region carries no placement row, so there was nothing to point at --
+`traverse.NOT_A_MEMBER` holds `authenticated` because it names bytes
+its members already own and consumes none itself, so a walk that
+counted it would place everything after it one region too far along.
+That is right for a walk and wrong for this table. The row now goes in
+where an arm's member and a sealed interior go in: after every struct's
+span, counted in nobody's `placement_count`. A test asserts the member
+walk is unchanged, because the reason the region is not a member has
+nothing to do with the reason it needs a row.
+
+**The lookup needed generalising rather than fixing, and the first
+attempt at that was wrong in a way worth keeping.** 26.524's relation
+was containment of the member's path within the REGION's path, which
+cannot reach one of these at all: an authenticated region opens no
+namespace, so `a.body` holds `a.x` and not `a.body.x`. The obvious
+repair -- match `regions[-1]` within the owner scope -- passed every
+authenticated fixture and **regressed the nested sealed one**, because a
+`coded` region stamps neither itself nor its interior with its name: in
+`sealed body { coded inner(...) { ... } }` every member says `body` and
+nothing says `inner`.
+
+**So the relation is the SCOPE a region governs, which differs by kind
+while the question does not.** A sealed or coded region scopes its own
+path; an authenticated one scopes its owner. Then innermost wins on two
+keys in order: longest scope, then latest position in the member's own
+`regions`. Neither alone is enough, and the fixture for each is the
+other's control -- `nest.body.inner.deep` needs the first, and
+`mixed.body.z` needs the second, its two candidates sharing one scope.
+
+**The fixture that passed against the previous commit is labelled as
+not being a control.** An authenticated region nested inside a sealed
+one inherits `sealed_by`, so it was already a row for that reason --
+which is precisely why the corpus's top-level ones had none and that one
+did. It is a regression guard on the key order, and the file says so
+rather than letting eight failures and a ninth pass read as nine
+controls.
+
+**The corpus diff is by KEY, not by line.** Twenty-two rows arrive, so
+every line after the first shifts and a positional diff reported 194
+changes where there are 108: 22 rows added, none removed, 86 changed. Of
+the 86, four move from another struct's region to their own and about
+seventy gain an owner they never had -- every member of `ipv4_header`,
+`tcp_header`, `udp_header`, `icmp_message`, `png`'s chunk and the rest.
+**A diff whose instrument is line position answers a question about
+line position.**
+
+**All 34 committed maps and all 34 wire signatures regenerate
+byte-identical**, which bounds the change from a second direction: the
+image's region table moved and nothing either of those records did.
+
+**The invariant is the part that will outlive the fix.** Every placement
+carrying a region record names a region that exists, asserted over all
+42 schemas -- and it fails on eight of them against the previous commit.
+A fixture could not have caught this class from inside one schema: a
+wrong owner is a real index and a missing one was a sentinel, and
+neither is visible without asking whether the thing pointed at is a
+region. It range-checks the owner before dereferencing it, because
+against the previous commit that fault arrived as an `IndexError` two
+lines below the assertion that should have reported it.
+
+### 26.524 Structure, not spelling -- and two more faults under it
+
+**26.523's two sites are fixed, and measuring the corpus before
+believing the fix found two faults nobody had reported.** Both lookups
+ask a structural question instead of a textual one: a placement IS a
+region when its `kind` says so (`sealed`, `coded`, `authenticated`),
+and the region that OWNS a member is found by where the member sits
+rather than by what it is called. Neither is a question about how a
+name is spelled, which is what both were.
+
+**`_region_owners` replaces a per-row `next()` over the whole image**
+with one pass computed before the loop. Longest rather than first,
+because regions nest: an inner region's member is inside the outer one
+too, and the gate that holds it is the inner. The old search could not
+express that -- it answered `nest.body` for `nest.body.inner.deep` --
+and could not have, since a first match over a bare name has no notion
+of depth.
+
+**The relation this entry reached for was containment of the member's
+path within the REGION's path, and ~~that is what ships~~ 26.525
+replaced it before either was committed.** Containment is right for the
+two kinds that open a namespace and cannot reach the third at all. The
+entry is kept because the wrong first relation is the more useful half
+of the record: it is what the second fault below turned out to need.
+
+**The first new fault: seven regions in the shipped corpus were
+written into the image as plain FIELDS.** A region that is not itself
+nested inside another carries an empty `regions`, so the old guard's
+`if placement.regions and ...` was falsy, the branch never ran, and
+`KIND.get("coded")` fell through to `field`. SLIP's `frame.datagram`
+and SMTP's `data_block.body` are two of the seven -- the worked
+examples for that construct. `situ_walk_gate` refuses anything whose
+kind is not a region, so the C walker could not open a single one of
+them. **The reported bug was the region lookup answering the wrong
+row; this is the same line answering no row at all, and only the
+corpus diff showed it.**
+
+**The second is a different fault, and ~~is recorded and NOT
+fixed~~ was fixed by 26.525** in the pass this paragraph asked for. An
+`authenticated` region carries no placement of its own -- its members
+are flattened into the struct, `derived.sequence` rather than
+`derived.body.sequence`, while still naming `body` in `regions`. So
+there was no row for them to point at. The old search went hunting and
+landed on `unverified.body`, a sealed region in another struct
+entirely; four members across three structs in `edges.situ` were
+recorded as gated by it. ~~They now record no owner, which is honest
+rather than right.~~ **And "honest rather than right" understated the
+scope**: measured across the corpus rather than across `edges.situ`,
+no such member anywhere had a correct owner. The row does not change
+placement indices, struct spans or the wire signature after all -- it
+goes in after every span, and 26.525 measured all three.
+
+**The walker drops the sentinel rather than storing it.** `region_at`
+of `None` packs as `0xFFFFFFFF`, and `region_owner` is documented as a
+placement index -- so the first consumer to index with it reads off
+the end. Absent says the same thing and cannot be dereferenced.
+
+**The corpus diff is the evidence, and it was taken against a
+worktree** at the previous commit rather than against a stash, after
+this session twice manufactured a "0 differ" by comparing a tree with
+itself. 42 schemas, 1002 placement rows, 14 changed: seven kinds
+corrected, three owners corrected, four wrong owners withdrawn. The
+instrument was controlled first -- pointed at the two fixtures it
+separates them, and `grep` confirms the worktree holds the old search
+and the tree holds the new one.
+
+**The five tests fail against the previous commit, each through its
+own assertion**, which is the half that makes them evidence. Four
+fixtures and an invariant: every recorded owner contains the member it
+owns and is itself a region. The invariant is there because 26.519's
+first repair got the direction right and the scope wrong, and a
+per-answer assertion would have passed it.
+
+**Sixth of the "same rule one place over" family, and the first whose
+neighbour was in the same expression.** 26.514, 26.517, 26.519 and
+26.521 were one list beside another; 26.523 was one module over. Here
+`placement.regions` was read as a guard in one line and as the answer
+in the next, and the guard was wrong about a case the answer handled.
+**A condition and the value it guards are two places, even on one
+line.**
+
 ### 26.523 Two region lookups key on a bare name, and both are wrong
 
 **Found by a lens derived from the last fault and NOT fixed; recorded
@@ -31032,12 +31182,10 @@ merely ENDS with the region's name is written as a region:
 **A member behind a gate disappears from the walk because of how its
 name is spelled**, with nothing reporting anything.
 
-**Neither is fixed here.** The repair is 26.519's -- key on the owning
-struct and the region name together rather than on a dotted suffix --
-but it writes into the image format, the last change of this shape
-needed two attempts and the first was worse than the bug, and the
-region table is read by both walkers. It wants its own pass with the
-corpus blast radius measured, not a drive-by at the end of a sweep.
+**~~Neither is fixed here.~~ Both fixed by 26.524**, in the pass this
+paragraph asked for: the repair was 26.519's in direction and not in
+detail, and measuring the corpus first is what found the two further
+faults 26.524 records.
 
 **Everything else the sweep looked at was clean.** The candidate set
 moved by one entry, 26.517, which is mine; nothing entered or left it.
