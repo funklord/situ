@@ -1752,3 +1752,41 @@ struct negotiated {
 		default: error;
 	}
 }
+
+// A region name a struct SHARES with the type of one of its members, which
+// is the shape every "which region does this name mean" lookup has been
+// wrong about. `tag_covers`, `regions` and `covered_by` all hold BARE
+// names, so a lookup that does not scope them to the tag's own struct
+// gathers the nested copy as well.
+//
+// The cost was not uniform and the worst of it reached the wire. `pack`
+// gave a gate the wrong bytes to guard (26.523) and `advise` inflated a
+// cost and fired a suggestion that was not true (26.526), but
+// `traverse.covered_run` returned `outer_body.body..outer_body.nested.body`
+// for a tag covering two bytes, and all four backends wrote the four it
+// handed them -- a checksum over twice the declared range, in C, C++,
+// Python and Rust at once (26.527).
+//
+// It is HERE rather than only in a test because the corpus is what failed.
+// Three sweeps ran over these schemas and found nothing, while each found
+// a real fault beside them: every schema in this tree was written by
+// somebody naming regions distinctly, so the one property this family
+// needs in order to appear was the property the corpus was curated not to
+// have. `edges.situ` is where a construct no worked example carries goes,
+// and the four compile gates plus every test that walks SCHEMAS are worth
+// more than another fixture nobody runs.
+//
+// The two must stay ADJACENT. A member between them breaks contiguity, and
+// then an unscoped `covered_run` refuses instead of over-reaching -- which
+// is the same fault with a quiet face, and would let this construct go on
+// looking like it proved something.
+struct inner_body {
+	authenticated body { u16 inner_value; }
+	checksum u8   inner_sum[2] covers(body) is summing;
+}
+
+struct outer_body {
+	authenticated body { u16 outer_value; }
+	inner_body    nested;
+	checksum u8   outer_sum[2] covers(body) is summing;
+}

@@ -1551,6 +1551,39 @@ class Solver:
 		def owner_of(path: str) -> str:
 			return path.rpartition(".")[0]
 
+		by_path = {held.path: held for held in layout.placements}
+
+		def reaches(owner: str, region: str, path: str) -> bool:
+			"""Whether `path` sits inside `owner`'s region `region`.
+
+			Descending from the tag's struct to the member, EVERY step has
+			to be inside the region -- not merely the first and last. The
+			rule this replaced asked only that the member's owner descend
+			from the tag's, which is true of a nested struct declared
+			BESIDE the covered region as well as one declared inside it.
+
+			`regions` holds bare names, so the two are indistinguishable
+			by name alone: a member whose type declares its own `body`
+			says `body` exactly as a member inside the covering struct's
+			`body` does. What separates them is the step between --
+			`signed_whole.piece` carries `whole_body`, so everything under
+			it is inside; `outer_body.nested` carries nothing, so its
+			`body` is its own and the outer tag covers none of it.
+
+			Getting this wrong claimed authentication for bytes that do
+			not have it, and it reached the committed wire signature,
+			where `outer_sum covers:` named two members of a struct it
+			does not authenticate at all (26.528).
+			"""
+			if not path.startswith(owner + "."):
+				return False
+			parts = path[len(owner) + 1:].split(".")
+			for depth in range(1, len(parts)):
+				step = by_path.get(owner + "." + ".".join(parts[:depth]))
+				if step is None or region not in step.regions:
+					return False
+			return True
+
 		for position, held in enumerate(layout.placements):
 			if held.kind not in ("tag", "checksum") or not held.tag_covers:
 				continue
@@ -1577,11 +1610,10 @@ class Solver:
 			# reason, two nested members each holding a `sig`, and left the
 			# region on its leaf name so the collision moved rather than
 			# went.
-			mine = owner_of(held.path)
 			tags = {name
 			        for (owner, region), names in covering.items()
 			        if region in held.regions
-			        and (mine == owner or mine.startswith(owner + "."))
+			        and reaches(owner, region, held.path)
 			        for name in names}
 			# A tag does not cover itself. It can now sit inside the region it
 			# covers (14.2, `[self_as]`), and coverage means "writing these
