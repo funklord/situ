@@ -16040,17 +16040,22 @@ record states.
   objects to neither. Standardising is a convention change and belongs to
   a deliberate pass.
 
-- **A region name is bare, and that is the root of the twelve faults in
-  26.519 through 26.529.** `Placement.regions` holds the NAMES of the
-  regions a member sits inside and `tag_covers` the names a tag covers,
-  so neither is an answer without the struct it was declared in. Every
-  one of those twelve fixes is a scope check compensating for that, in
-  five modules: `layout` keys coverage on `(owner, name)` and now holds
-  the shared gather, `pack` computes region ownership from scopes,
-  `traverse` and `resolve` call the gather, and `advise` scopes twice
-  by hand. Resolving the names to
-  region PLACEMENTS once, where they are stamped, would make all four
-  correct by construction and delete the compensations.
+- **A region name is bare, and that is the root of the thirteen faults
+  in 26.519 through 26.530.** `Placement.regions` holds the NAMES of
+  the regions a member sits inside, `tag_covers` the names a tag covers
+  and `coded_covers` the names a transform runs over, so none of the
+  three is an answer without the struct it was declared in. **The third
+  was added to this item by 26.530**, which is its scope claim failing
+  re-derivation for the third time: `coded_covers` was absent from the
+  first two drafts because nothing had yet been wrong about it. Every
+  one of those thirteen fixes is a scope check compensating, in five
+  modules: `layout` keys coverage on `(owner, name)` and now holds the
+  shared gather, `pack` computes region ownership from scopes,
+  `traverse` and `resolve` call the gather, `resolve` scopes the
+  transform gather separately, and `advise` scopes twice by hand.
+  Resolving the names to region PLACEMENTS once, where they are
+  stamped, would make all of them correct by construction and delete
+  the compensations.
 
   **The cost is smaller than it looks and was measured rather than
   guessed.** No format boundary is crossed: the image's region section
@@ -16063,9 +16068,11 @@ record states.
   and seven read it; `grep -rn tag_covers situc/*.py` gives 22 lines
   across five modules -- ten in `layout`, eight in `advise`, two in
   `pack` and one each in `resolve` and `traverse`, the last two having
-  been eight between them before they started calling the gather. The
-  walker's `Image.regions` is a different field, a set of placement
-  indices, and is not affected.
+  been eight between them before they started calling the gather; and
+  `grep -rn coded_covers situc/*.py` gives nine lines across four
+  modules, three in `resolve` and two each in `layout`, `traverse` and
+  `wire`. The walker's `Image.regions` is a different field, a set of
+  placement indices, and is not affected.
 
   **Both numbers are stated with the command because this item has
   already been wrong about them twice**: its first draft said "four
@@ -31032,6 +31039,58 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.530 The thirteenth, pointing the other way, in the same module
+
+**`resolve._transform_covers` gathered by bare name too, and this one
+REFUSES a valid schema where 26.529 accepted an invalid one.** Both are
+in `resolve.py`, a hundred lines apart.
+
+    struct outer {
+            u16    first;                        // covered by nothing
+            coded  pn(masking) covers(first) { u16 number; }
+            inner  nested;                       // its type has a `first`
+    }
+
+    without `nested`   compiles, correctly
+    with    `nested`   `pn` transforms bytes that `nested.isig` covers,
+                       and the schema does not say in which order
+
+`nested.isig` covers `inner.first`, which is inside `nested`; `pn`
+transforms `outer.first`. Different bytes entirely. **The message names
+a tag from another struct, which is the tell this whole family leaves**
+-- 26.523's gate named another struct's members, 26.526's cost counted
+them, and here the refusal quotes one by name.
+
+**What it replaced was a depth test approximating the owner
+question.** `"." not in placement.path.partition(".")[2].partition(".")[2]`
+admits one level and two, and two is exactly what the fault needs. A
+clever predicate standing in for "declared beside this region" is the
+same shape as 26.528's ancestor rule and 26.525's containment: each was
+a structural test that happened to be right on the cases anybody had.
+
+**The detector that found it could not find the fault it came from, and
+that is the part worth carrying.** Derived from 26.529 -- a guard whose
+skip is computed from an aggregate over a gathered set -- the first
+version looked for aggregate calls inside the skip's own test and
+returned one site. 26.529's guard was not in it: its `start` and `end`
+come from `min` and `max` two lines earlier. **A detector that cannot
+find the instance it was derived from is not calibrated**, and the
+second version, widened to variables assigned from an aggregate, finds
+26.529 plus two others. One of the two is this. The third,
+`_check_required_alignment`, computes from the placement itself and is
+not exposed.
+
+**So the calibration was the whole method here.** The population was 36
+check functions that can skip before raising, which is too many to
+read; the aggregate signature narrows it to three, and the check that
+the narrowing still contains the known instance is what made three
+trustworthy rather than merely small.
+
+**No corpus schema changes and no committed artifact moves.** The
+control is a struct whose own tag covers what its `coded` region
+transforms, which still raises -- without it the case below would pass
+against a guard that had stopped firing altogether.
 
 ### 26.529 The twelfth, and this one turned a guard off
 
