@@ -948,6 +948,38 @@ def bit_addressed_tag(placement: Placement) -> bool:
 	        and placement.scalar.is_bit_packed)
 
 
+def covered_regions(struct: "ResolvedStruct", tag: Placement) -> list[Placement]:
+	"""The regions one tag authenticates, in declaration order.
+
+	`tag_covers` holds BARE region names, so the match is scoped to the
+	tag's own struct -- the `(owner, region name)` key `layout` uses for
+	coverage and `pack` for region ownership. Without the scope a struct
+	that declares its own `authenticated body` while also holding a
+	member whose type declares one gathered both, and `struct.entries`
+	carries the nested one under a dotted path.
+
+	That reached emitted code, which is why this is one function now
+	rather than the same comprehension in two. `covered_run` returned
+	`outer.body..outer.first.body` for a tag covering `outer.body`
+	alone, and all four backends wrote the span it gave them:
+
+	    static inline situ_err_t situ_outer_osig_covered(...)
+	    {
+	            uint32_t start = 0u;
+	            uint32_t end   = 4u;      /* outer.body is 2 bytes */
+
+	So the checksum ran over twice the bytes the schema declares. Every
+	backend derives from here, so all four agreed with each other and
+	the differential harness could not see it -- only the schema says
+	otherwise (26.527).
+	"""
+	mine = tag.path.rpartition(".")[0]
+	return [entry.placement for entry in struct.entries
+	        if entry.placement.name in tag.tag_covers
+	        and entry.placement.kind in ("authenticated", "sealed")
+	        and entry.placement.path.rpartition(".")[0] == mine]
+
+
 def covered_run(struct: "ResolvedStruct",
 		tag: Placement) -> tuple[Placement, Placement] | None:
 	"""The first and last region a tag authenticates, if they are contiguous.
@@ -981,9 +1013,7 @@ def covered_bit_span(struct: "ResolvedStruct",
 	exactly the case the other one cannot -- a static, contiguous, sub-byte
 	span -- and the two do not overlap (26.374).
 	"""
-	regions = [entry.placement for entry in struct.entries
-	           if entry.placement.name in tag.tag_covers
-	           and entry.placement.kind in ("authenticated", "sealed")]
+	regions = covered_regions(struct, tag)
 	if not regions:
 		return None
 
@@ -1031,9 +1061,7 @@ def covered_run_refusal(struct: "ResolvedStruct", tag: Placement) -> str | None:
 def _covered_run(struct: "ResolvedStruct", tag: Placement
 		) -> tuple[tuple[Placement, Placement] | None, str | None]:
 	"""The run and the reason there is not one, decided together."""
-	regions = [entry.placement for entry in struct.entries
-	           if entry.placement.name in tag.tag_covers
-	           and entry.placement.kind in ("authenticated", "sealed")]
+	regions = covered_regions(struct, tag)
 	if not regions:
 		return None, "it covers no region this struct places"
 

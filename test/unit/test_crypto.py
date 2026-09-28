@@ -900,3 +900,75 @@ def test_require_canonical_passes_on_a_sealed_deterministic_packet() -> None:
 	protobuf cannot offer for five independent reasons (section 9.7).
 	"""
 	assert discharge(SEALED + "require canonical(S);")[-1].satisfied
+
+
+# -- a tag's covered run is its own struct's (26.527) ------------------------
+
+
+NESTED_SAME_NAME = """
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct leaf {
+	authenticated body { u16 y; }
+	checksum u8 lsig[2] covers(body) is summing;
+}
+struct outer {
+	authenticated body { u16 own_field; }
+	leaf first;
+	checksum u8 osig[2] covers(body) is summing;
+}
+"""
+
+
+def test_a_covered_run_stops_at_its_own_structs_regions() -> None:
+	"""`tag_covers` holds bare names, so `covered_run` gathered a nested
+	struct's same-named region too and returned a span across both.
+
+	`outer.osig` covers `outer.body`, two bytes. The run returned
+	`outer.body..outer.first.body` -- four -- so the checksum ran over
+	twice the bytes the schema declares.
+
+	The language requires every `authenticated` region to carry a tag,
+	which is what makes the two adjacent: `outer.body` then `outer.first`,
+	whose own region starts immediately. With a second nested member the
+	intervening tag breaks contiguity and the run is refused instead,
+	which is the same fault wearing a harmless face.
+	"""
+	schema   = parse_text(PREAMBLE + NESTED_SAME_NAME)
+	resolved = resolve(schema, solve(schema))
+
+	held = resolved.structs["outer"]
+	tag  = next(entry.placement for entry in traverse.own_entries(held)
+	            if entry.placement.path == "outer.osig")
+
+	run = traverse.covered_run(held, tag)
+	assert run is not None, "one region is a contiguous run"
+	first, last = run
+
+	# Asserted through `covered_run`, which exists either side of the
+	# fix, rather than through the helper the fix introduced. A test
+	# that names a new symbol cannot fail against the old code -- it
+	# raises AttributeError, which is a crash where the control should
+	# be a message, and proves only that the symbol is new.
+	assert (first.path, last.path) == ("outer.body", "outer.body"), \
+		"the run reached a nested struct's region of the same name"
+	assert first.offset_bits is not None and last.offset_bits is not None
+	assert (last.offset_bits + last.size_bits) - first.offset_bits == 16, \
+		"the span is two bytes; four means it swallowed outer.first.body"
+
+
+def test_every_backend_writes_the_covered_span_it_is_given() -> None:
+	"""The reason the one above matters: all four emit this number.
+
+	They derive it from one function, so before the fix all four agreed
+	on 4 and the differential harness could not tell them apart. Only
+	the schema says 2.
+	"""
+	sources = _generated(NESTED_SAME_NAME)
+
+	for lang, text in sources.items():
+		after = text.split("osig_covered", 1)[1]
+		window = after[:400]
+		assert "end   = 2" in window or "end = 2" in window, \
+			f"{lang} emitted a covered span that is not two bytes"
