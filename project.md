@@ -16150,6 +16150,35 @@ record states.
   Recorded so the asymmetry is not reopened as one gap when it is one
   gap and one decision.
 
+- **What a grammar addition has to touch, and how to tell.** Not an
+  open question -- a checklist, here because this is the file somebody
+  reads before starting and 26.535 is otherwise the only place it
+  lives. Adding `until` to `sealed` took SIX sites and four were found
+  by a gate rather than by reading: the AST field, the parser clause,
+  C's dispatch (it does not use `traverse.classify`), the C++ and Rust
+  extern-declaration gathers, an implementation for the extern codec,
+  and the unparser.
+
+  **The unparser is the site with a rule rather than a habit**, and the
+  rule decides whether the round trip can catch you. A field the parser
+  DERIVES from something already printed cannot be dropped: `unparse`
+  renders a `tlv` as its raw `args`, and the parser recomputes
+  `unknown`, `duplicates`, `ordered`, `wire_types`, `tag_decode`,
+  `value_size`, `known` and `identity` from them -- eight fields, none
+  mentioned by the unparser, all surviving. Measured by injecting an
+  `ordering` argument no corpus schema uses and watching it come back.
+
+  A field stored INDEPENDENTLY must be rendered explicitly.
+  `Sealed.until` is that kind, which is why it broke while those nine
+  did not. **So the question to ask of a new field is not "does the
+  unparser mention it" but "is it reconstructible from something the
+  unparser already prints".**
+
+  **And the corpus round trip catches an omission only where a schema
+  exercises the field**, which is the same reason `edges.situ` carries
+  every construct no worked example has. A new field wants a schema
+  using it in the corpus, not only a unit test.
+
 **Tried, measured, and not worth doing -- so that nobody spends the hour
 again.**
 
