@@ -451,6 +451,12 @@ def _regions(struct: ResolvedStruct, fmt: str) -> list[str]:
 	an `authenticated` one only here. A section that showed the third
 	kind alone would be a "Regions" heading that omits most regions.
 	"""
+	# The dotted path, NOT `is_own_member`: that predicate excludes an
+	# `authenticated` region by kind, and such a region is exactly what
+	# this section exists to show. `traverse.coded_spans` declines it for
+	# the same reason and says so, which is why this says so too -- the
+	# sweep that found `_table` reimplementing the predicate would
+	# otherwise flag this line as the next instance of it (26.537).
 	held = [entry.placement for entry in struct.entries
 	        if entry.placement.kind in ("authenticated", "sealed", "coded")
 	        and "." not in local_name(struct, entry.placement)]
