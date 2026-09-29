@@ -16065,11 +16065,21 @@ record states.
   `layout.py` has said so at the site since 26.519, and this item
   contradicted it without citing it.
 
-  **The question that survives is a different one**: whether a member
-  should record the PLACEMENT its region resolves to, computed per
-  layout where the prefix is known, rather than carrying a name. That
-  is a new field and a migration rather than a reinterpretation, and
-  it is still the copyright holder's.
+  ~~**The question that survives is a different one**: whether a member
+  should record the PLACEMENT its region resolves to.~~ **Built and
+  discarded 2026-09-29 (26.536): the answer is no, and the code was
+  written to find out.** It is implementable -- `absorb_nested` rebases
+  a nested struct's paths before `_layout_of` finishes, which is the
+  moment `tag_covers` has no equivalent of, so 26.534's blocking claim
+  was specific to that field and wrongly generalised. But `pack` asks
+  which region OWNS some bytes, `coded` included, and no name records a
+  `coded` region; while coverage needs an ancestor walk to tell a
+  nested struct that IS inside a region from one merely beside it. A
+  field filled by that walk is a cache, and nothing here is slow.
+
+  **So this item is closed rather than waiting.** The name stays
+  relative because inlining needs it to be, and the four resolvers are
+  four questions.
 
   **The cost is smaller than it looks and was measured rather than
   guessed.** No format boundary is crossed: the image's region section
@@ -31121,6 +31131,69 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.536 The register's field: built, measured, and not kept
+
+**Answered NO, with the code written rather than reasoned about.**
+26.144 asked whether a member should record the PLACEMENT its region
+resolves to, computed per layout where the prefix is known, instead of
+a bare name. It can be done. It buys too little to keep, and three red
+gates is what established that.
+
+**26.534's blocking claim was wrong and is corrected.** That entry said
+the resolution cannot be qualified at all; it is right about
+`tag_covers` and wrong in general. `absorb_nested` rewrites a nested
+struct's paths into the parent during `place_members`, so a pass in
+`_layout_of` sees final paths for every placement --
+`outer_body.nested.body` already spelled from the parent. `tag_covers`
+has no such moment, being set in `resolve_coverage`, which the parent
+deliberately skips for a nested tag. **The obstacle was specific to one
+field and was generalised without checking the other.**
+
+**What sank it is that the two consumers ask different questions.**
+`pack._region_owners` wants the region that OWNS some bytes, `coded`
+included -- and a `coded` region does not stamp itself into `regions`,
+by design, so no name records one. Wiring pack to the field put
+`nest.body.inner.deep` under `nest.body` instead of the `coded inner`
+that gates it. Two derivations that agree on most shapes are still two
+questions, and consolidating them would have been this family's
+fifteenth instance rather than its cure.
+
+**And the surviving consumer needs a walk the field cannot shortcut.**
+Three structs nested three deep, each with an `authenticated body`,
+give a member `regions = ('body', 'body', 'body')`: it is inside all
+three and all three tags stale when it is written. Resolving each name
+against the containing scopes picks the innermost every time, so the
+two outer tags vanish -- under-claiming, which this function's own
+comment calls worse than the bug. Telling the cases apart is exactly
+`reaches`' ancestor walk: `outer_body.nested` is NOT inside
+`outer_body.body` while `top.held` IS inside `top.body`, and only
+walking the steps between says which. A field filled BY that walk is a
+cache, not a replacement, and nothing here is slow.
+
+**Three red gates, and the corpus was silent for all three.** 1429
+coverage rows and 1036 image rows stayed byte-identical at every stage,
+because no corpus schema nests a `coded` region inside a `sealed` one
+and none nests three same-named regions. Both cases live in unit
+fixtures -- 26.525's and this file's own -- and both are what caught
+it. **The lesson that this corpus is a weak detector for region shapes
+is written three times this week, and its silence was still read as a
+result.**
+
+**Two traps worth keeping, whatever happens to the field.** A sabotage
+that swapped `max(` for `min(` left the file the SAME SIZE, and Python
+invalidates a `.pyc` on source size and mtime -- so the cached
+bytecode was reused within the second and two consecutive readings of
+one input disagreed. Four commands went on reasoning about a
+contradiction that was a stale cache. And a surgical cut that removed
+`by_path` and the old `reaches` also took the loop that BUILDS
+`covering`, stripping coverage from 272 rows.
+
+**What remains is the register item, answered.** The name stays
+relative because inlining needs it to be, the resolution stays at the
+point of use because the two uses differ, and the four resolvers are
+four questions rather than one spelled four ways -- which 26.533's
+sweep had already found to be true of the three it examined.
 
 ### 26.535 `sealed ... until`, and a trap predicted then hit anyway
 
