@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from situc import ast
 from situc.capability import Axis
 from situc.diagnostics import Span
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Placement, regions_covered_by
 from situc.propagate import Resolved
 from situc.traverse import own_entries
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -650,23 +650,23 @@ def _find_scattered_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 			if placement.kind not in ("tag", "checksum") or len(placement.tag_covers) < 2:
 				continue
 
-			# Scoped to the tag's OWNER, for `_covered_bytes`' reason
-			# one function down: `tag_covers` holds bare names, and a
-			# struct that declares `authenticated a` and `b` while also
-			# holding two members whose type declares its own `a` and
-			# `b` has six placements answering to two names.
+			# `regions_covered_by`, not a fourth hand-rolled scope
+			# check. `tag_covers` holds bare names, and a struct that
+			# declares `authenticated a` and `b` while also holding two
+			# members whose type declares its own `a` and `b` has six
+			# placements answering to two names.
 			#
-			# Here the cost is a FALSE SUGGESTION rather than a wrong
-			# number. The six are spread across three structs and so are
+			# Here the cost was a FALSE SUGGESTION rather than a wrong
+			# number: the six are spread across three structs and so are
 			# never contiguous, so the tag was told to group regions
 			# that were already adjacent -- advice that would have the
-			# reader restructure a correct schema. `detail` and `weight`
-			# meanwhile counted `tag_covers`, so the message said "2
-			# regions" about a decision taken over 6 (26.526).
-			mine    = placement.path.rpartition(".")[0]
+			# reader restructure a correct schema (26.526, 26.534).
+			wanted  = {held.path for held
+			           in regions_covered_by(
+			               (entry.placement for entry in struct.entries),
+			               placement)}
 			covered = [held for held in regions
-			           if held.placement.name in placement.tag_covers
-			           and held.placement.path.rpartition(".")[0] == mine]
+			           if held.placement.path in wanted]
 			if len(covered) < 2 or _is_contiguous(covered):
 				continue
 
@@ -788,15 +788,10 @@ def _covered_bytes(struct: ResolvedStruct, tag: Placement) -> int:
 	`covered_by`, which those passes qualified. The extent in the same
 	function still asked by name.
 	"""
-	mine  = tag.path.rpartition(".")[0]
-	total = 0
-	for entry in struct.entries:
-		placement = entry.placement
-		if placement.name in tag.tag_covers \
-				and placement.kind in ("authenticated", "sealed") \
-				and placement.path.rpartition(".")[0] == mine:
-			total += (placement.size_max_bits or placement.size_bits) // BITS_PER_BYTE
-	return total
+	return sum(
+		(held.size_max_bits or held.size_bits) // BITS_PER_BYTE
+		for held in regions_covered_by(
+		    (entry.placement for entry in struct.entries), tag))
 
 
 def _find_tlv_to_positional(resolved: ResolvedSchema) -> list[Suggestion]:
