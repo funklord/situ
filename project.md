@@ -31040,6 +31040,119 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.532 Two spellings that agreed, and a red gate read as green
+
+**`traverse` and `resolve` each computed "the members a `coded`
+region's transform runs over", in their own words.** One tested the
+local name for a dot, the other the owner. `transform_covers` in
+`layout` is both of them now.
+
+**This fixes nothing, and saying so is the point.** The two agree over
+the whole language: a `covers` clause resolves against the top-level
+namespace, so a region nested deeper cannot name a sibling at all --
+`wellformed` answers "covers unknown span" and the case where the
+spellings differ is unreachable. Measured four ways over the corpus and
+found identical, and the fixture built to separate them was refused by
+the compiler before it could.
+
+**So the reason to do it is the family and not the bug.** Fourteen
+faults have come from one rule living in two places; this is the pair
+that happened to agree, which makes it the pair nobody was watching.
+**A duplicate that is currently correct is the cheapest one to remove
+and the last one anybody removes.**
+
+**`traverse` had the rationale written down, which is the part that
+stings.** Its comment says a nested struct's fields "share their bare
+names -- so an unrestricted search could bind `covers(flags)` to
+`sub.flags` while `wellformed` validated the clause against the
+top-level namespace". That is 26.530 exactly, described in the
+codebase, a module away from where 26.530 happened. **The knowledge was
+not missing; it was in the copy that did not need it.**
+
+**And the gate for 26.531 was RED, read as green, and nearly pushed.**
+The harness reported the background task "completed (exit code 0)",
+which is the SHELL's status: the command ends `echo "make check rc=$?"`,
+and an echo always succeeds. `make` had exited 2 with one failure. Only
+reading the log line -- `1 failed, 6595 passed` -- caught it, and the
+habit that produced it is this file's own rule about a pipeline's exit
+status being the last process's, met in a place where the pipeline was
+a notification rather than a pipe. **The receipt to read is `make check
+rc=` in the log, never the wrapper's own exit.**
+
+**What it had caught is a README quoting the tool.** 26.531's blast
+radius was measured by looking for committed GENERATED documents and
+there are none -- but `README.md` embeds a transcript of `situc doc`,
+and `test_cli.py` holds the README to what the tool actually prints.
+The row removed from the table was in it.
+
+**The transcript had the defect on display the whole time.** Its ASCII
+diagram omits `summed` and its field table lists it, eleven lines
+apart, in the project's own README. Nobody compared the two, which is
+what 26.531 says about the generator and is apparently also true of the
+document it generates.
+
+### 26.531 A different rule, one place over: the own-member predicate
+
+**`doc.py` decided which placements are a struct's own members by
+testing the path shape, which is two of the three things
+`traverse.is_own_member` does.** It filtered `element` and required no
+dot after the struct's name, and never learned about `authenticated` --
+the other kind in `NOT_A_MEMBER`, and the one that exists precisely
+because it names bytes its members already own.
+
+So the field table listed the region AND the members inside it:
+
+    | lead   | 0 | 2 bytes | u16           | big endian            |
+    | body   | 2 | 4 bytes | authenticated | covered by sig        |
+    | alpha  | 2 | 2 bytes | u16           | ...; covered by sig   |
+    | beta   | 4 | 2 bytes | u16           | ...; covered by sig   |
+    | sig[2] | 6 | 2 bytes | u8            |                       |
+
+**The Size column sums to twelve for an eight-byte struct, and the
+table disagrees with the diagram printed directly above it** -- the
+diagram is drawn from a partition, so it structurally could not have
+included the region. Two renderings of one layout, in one document, and
+nobody had read them against each other.
+
+**This is NOT the bare-name family, and 26.144's count stays at
+thirteen.** The rule reimplemented here is "which placements are this
+struct's own", not "which region does this name mean". It is the same
+META-shape -- a rule landing in one place and not its neighbour -- and
+letting the register item absorb it would inflate the number that
+argues for the root fix with something the root fix would not touch.
+**A count is an argument only while it counts one thing.**
+
+**A `coded` region stays, and that is what makes this about one kind
+rather than regions in general.** Such a region IS bytes on the wire,
+so it partitions the struct and its interior is what does not appear.
+Dropping every region would have been the wrong repair; the control in
+the test is the case that separates them.
+
+**21 rows leave the corpus and none arrives**, across icmp, ipv4,
+packet, png, tcp, udp, usb and edges. ~~No committed artifact carries
+generated documentation, so nothing needed regenerating.~~ **No
+committed artifact is GENERATED, and that was the wrong question**:
+`README.md` embeds a transcript of `situc doc` and `test_cli.py` holds
+it to what the tool prints, so the gate failed on a row the README
+still showed. Corrected by 26.532, which is where the reading that
+nearly pushed it anyway is written down.
+
+**What it costs, said rather than assumed: the region's extent is no
+longer one row.** Its coverage survives -- the members carry `covered
+by sig` in their notes, which is where a reader looks -- but a reader
+who wanted the span as a single number now derives it or reads the wire
+signature. If that row is wanted it should be added deliberately and
+not as a field, since a field table whose Size column does not sum to
+the struct is answering a different question than its header says.
+**That is the copyright holder's to decide; the double count is not.**
+
+**And the test's own helper read the wrong table first.** It collected
+rows beginning with `|`, which is also how the ASCII diagram's rows
+begin, so it compared names taken from the DIAGRAM against the order
+expected of the table. It passed on one fixture for the wrong reason
+and failed on the other, which is the only reason it was caught. It
+anchors on the header line now.
+
 ### 26.530 The thirteenth, pointing the other way, in the same module
 
 **`resolve._transform_covers` gathered by bare name too, and this one
