@@ -16111,7 +16111,9 @@ record states.
   standing gate in `test_region_names_are_scoped.py` cannot see a
   twelfth site nobody observes, which the root fix would not need to.
 
-- **Whether a `sealed` region may end at a delimiter** (26.533).
+- ~~**Whether a `sealed` region may end at a delimiter** (26.533).~~
+  **Added 2026-09-29 (26.535), with C's dispatch in the same commit --
+  the trap below landed exactly as this item said it would.**
   `ast.Coded` carries `until` and `ast.Sealed` does not, so
   `traverse.classify` answers DELIMITED for a condition whose `sealed`
   half no schema can reach, and `layout` reads the field as
@@ -31090,6 +31092,103 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.535 `sealed ... until`, and a trap predicted then hit anyway
+
+**The grammar is added and the construct is authenticated
+dot-stuffing**: a body that ends at a delimiter AND carries a tag.
+`ast.Sealed` simply lacked the field `ast.Coded` has, so
+`traverse.classify` had answered DELIMITED for a condition whose
+`sealed` half no schema could reach, and `layout` read it as
+`getattr(region, "until", None)`. 13.6 already settled the framing --
+the scan is over the ENCODED bytes, because that is the form the
+terminator is unambiguous in -- so the grammar was the whole of what
+was missing.
+
+**26.533 predicted the trap and it landed anyway.** That entry said
+adding the field without touching `c/emit.py` is the wrong half to do
+first: C hand-rolls the dispatch `classify` does for the others, and
+its `sealed` branch returned before reaching any delimiter handling.
+With the grammar in and C untouched, the other three followed the
+shared classifier and C emitted call sites for a scan nothing defined:
+
+    error: implicit declaration of function
+           `situ_stuffed_seal_body_span_from'
+
+The header would not compile, which is the good failure, and the
+corpus compile gate is what said so.
+
+**Both halves are in one commit for that reason -- and "both" was
+still wrong: it was three.** C's branch now emits its gate and then the
+delimiter tail, extracted so the two dispatch paths share it rather
+than the second growing a copy of the first's three arms. Then C++ and
+Rust failed to compile too: each declares the extern symbols it calls,
+and each gathered them with `held.kind == "coded"`. That population
+matched the emitters exactly until `sealed ... until` existed, and then
+the header called `my_sealed_stuffing_decode` and declared no such
+symbol.
+
+**So the shared classifier was not the protection I assumed.** 26.533
+said the other three follow `classify` and only C hand-rolls; they do,
+for DISPATCH -- and each backend still has its own list of what it
+declares, which `classify` says nothing about. `traverse.region_decodes`
+holds that question now: a `coded` region always decodes, a `sealed`
+one only when delimited, because a seal with no delimiter hands its
+bytes to the gate and calls nothing (26.514).
+
+**Then the round trip found a sixth site, and counting was the
+mistake.** `unparse` renders `until` for a `coded` region and did not
+for a `sealed` one, so `edges.situ` parsed, unparsed and reparsed to a
+different tree. **Every time this entry has said how many halves there
+are it has been wrong** -- two, then three, then five -- which is what
+a feature that touches a grammar looks like when it is counted instead
+of enumerated. The sites are: the AST field, the parser clause, C's
+dispatch, C++'s and Rust's declaration gathers, the extern
+implementation, and the unparser. **Four of the six were found by a
+gate rather than by me** -- the C compile error, the C++ and Rust
+declaration errors, the round trip, and the C suite refusing an
+invented constant.
+
+**One place it does NOT reach, established rather than assumed.** A
+sealed region always has an extern codec -- `sealed body(derived_x)`
+is refused with "has a derived implementation, so it cannot seal" -- so
+the DERIVED declaration list can never contain one and `region_decodes`
+is exercised only where the fixture exercises it. That is the untested
+half of a fix already called complete twice, so it is measured here
+rather than left to the reader.
+
+**And the implementation returned an error constant that does not
+exist.** `SITU_ERR_MALFORMED` reads like one of the nine and is none of
+them; the C suite would not compile. **An identifier completed from its
+shape is the one class of mistake re-measuring cannot catch** -- every
+run agrees, because the loop is closed and the world is not in it. The
+constant is `SITU_ERR_CONSTRAINT`, which is what the doubling decoder
+one function up already returns for a length it does not produce, and
+reading that was the whole of the fix.
+
+**The extern codec needed an implementation, and writing one made the
+fixture honest.** `my_sealed_stuffing` escapes rather than merely
+expands -- each byte becomes two nibbles in 0x10..0x1F -- so the
+encoded form cannot contain the terminator. A doubling codec that could
+emit 0xC0 would have described a format nobody can parse, which is
+13.6's whole reason for scanning before decoding.
+
+**I measured it wrong twice before the compiler said otherwise, in the
+same way.** Counting `span_from` across the four backends gave C three
+mentions and looked healthy; the mentions were CALLS. Then the first
+version of the cross-backend test asserted `"body_span_from" in text`
+and passed against the broken emitter for exactly the same reason. **A
+call site names an accessor exactly as loudly as a definition does**,
+so a grep for the name cannot tell "emits it" from "needs it". The
+test names each backend's definition spelling now, and fails against
+the previous commit with "c calls a scan for the seal that it never
+defines".
+
+**`covers` is still Coded-only and that stays deliberate.** AEAD
+associated data is what `authenticated { ... }` IS, so `sealed ...
+covers(x)` would be a second spelling of a construct the language
+already has. One asymmetry closed, one kept, and the reason written at
+the field.
 
 ### 26.534 The root fix is not implementable, and the tree said so first
 
