@@ -16123,6 +16123,17 @@ record states.
   today and no schema can express the shape, so this is a language
   addition rather than a fault.
 
+  **Its sibling is settled and is NOT the same question.** Diffing the
+  two nodes mechanically, `Sealed` is `Coded` minus exactly two fields:
+  `until` and `covers`. The second is deliberate -- AEAD associated
+  data is what `authenticated { ... }` IS, which section 6's table
+  states, so `sealed ... covers(x)` would be a second spelling of a
+  construct the language already has. And unlike `until` it carries no
+  trap: all three readers of `coded_covers` guard on `kind == "coded"`
+  or on the tuple being empty, which it always is for a sealed region.
+  Recorded so the asymmetry is not reopened as one gap when it is one
+  gap and one decision.
+
 **Tried, measured, and not worth doing -- so that nobody spends the hour
 again.**
 
