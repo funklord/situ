@@ -1790,3 +1790,34 @@ struct outer_body {
 	inner_body    nested;
 	checksum u8   outer_sum[2] covers(body) is summing;
 }
+
+// Authenticated dot-stuffing: a region that ends at a delimiter AND carries
+// a tag. `coded ... until` has been expressible since 13.6 and `sealed ...
+// until` was not, for no reason anybody had written down -- `ast.Sealed`
+// simply lacked the field, so `traverse.classify` answered DELIMITED for a
+// condition whose `sealed` half no schema could reach (26.533).
+//
+// 13.6 already settles the framing and the grammar is the only thing that
+// was missing: the scan is over the ENCODED bytes either way, because that
+// is the form the terminator is unambiguous in. Stuff first, then the
+// terminator cannot appear inside the body; decode after the scan.
+//
+// It is here rather than only in a test because the four compile gates and
+// the differential harness read every schema in this tree, and C reaches
+// its delimiter handling by a different route from the other three -- it
+// hand-rolls the dispatch `classify` does for them (26.535).
+codec sealed_stuffing {
+	granularity = byte;
+	seekable    = linear;
+	authenticated;
+	invertible;
+	deterministic;
+	expansion   = ratio_exact(2, 1);
+}
+impl sealed_stuffing extern "my_sealed_stuffing";
+
+struct stuffed_seal {
+	u8     lead;
+	sealed body(sealed_stuffing) until "\xC0" { u8 inner; }
+	tag u8 seal_sig[16] covers(body);
+}

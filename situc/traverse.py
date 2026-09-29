@@ -927,6 +927,25 @@ def offset_plan(struct: "ResolvedStruct", members: Sequence[Placement],
 	return steps
 
 
+def region_decodes(placement: Placement) -> bool:
+	"""Whether a region's transform reaches a decode helper in a backend.
+
+	A `coded` region always does. A `sealed` one does only when it is
+	DELIMITED, because that is the path that reaches the scan-then-decode
+	emitter of 13.6; a seal with no delimiter hands its bytes to the gate
+	and calls nothing, which is what 26.514 settled for an extern impl.
+
+	Here because C++ and Rust each declare the extern symbols they call,
+	and each asked `kind == "coded"` -- a population that stopped matching
+	the emitters the day `sealed ... until` became expressible. The header
+	then called `my_sealed_stuffing_decode` and declared no such symbol
+	(26.535).
+	"""
+	return bool(placement.codec) and (
+		placement.kind == "coded"
+		or (placement.kind == "sealed" and bool(placement.delimiters)))
+
+
 def bit_addressed_tag(placement: Placement) -> bool:
 	"""A `tag` or `checksum` whose value is not a whole number of bytes.
 

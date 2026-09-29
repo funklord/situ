@@ -390,8 +390,13 @@ def member_lines(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 			lines.extend(member_lines(member.members, depth + 1))
 			lines.append(f"{indent}}}")
 		elif isinstance(member, ast.Sealed):
+			# `until` where `coded` puts it, which is where the parser
+			# reads it. Omitting it here parsed, unparsed and reparsed to
+			# a DIFFERENT tree -- the round trip is what noticed, and it
+			# noticed because `edges.situ` carries the construct (26.535).
 			lines.append(f"{indent}sealed{_region_name(member.name, 'sealed')}"
 			             f"({_codec_args(member.codec, member.args)})"
+			             f"{_until_to_source(member.until)}"
 			             f"{_attrs_to_source(member.attrs)} {{")
 			lines.extend(member_lines(member.members, depth + 1))
 			lines.append(f"{indent}}}")

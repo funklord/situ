@@ -18,6 +18,7 @@ codec crc7_mmc derived expansion=+7 bits seekable=linear granularity=block syste
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
 codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
+codec sealed_stuffing trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte authenticated invertible deterministic
 codec sealing_aead trusted length_preserving seekable=linear granularity=stream authenticated invertible deterministic
 codec stuffed_apart trusted expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec summing derived expansion=+2 seekable=linear granularity=block systematic deterministic
@@ -458,6 +459,12 @@ struct spoken size=3.. access=Sequential mutate=Shifting address=Unstable canoni
   spoken.kind                            offset=Scanned size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
   spoken.word                            offset=Scanned size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
   spoken.rest                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
+
+struct stuffed_seal size=18.. access=Sequential mutate=Immutable address=Unstable atomic=NonAtomic stage=VerifyGated effect=EffectOnRead
+  stuffed_seal.lead                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  stuffed_seal.body                      offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting stage=VerifyGated auth=Covered(seal_sig) effect=EffectOnRead
+  stuffed_seal.body.inner                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential stage=VerifyGated auth=Covered(seal_sig)
+  stuffed_seal.seal_sig                  offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
 
 struct text_driver size=6..14 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
   text_driver.n                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=TextConverted atomic=NonAtomic

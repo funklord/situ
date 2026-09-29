@@ -66,6 +66,7 @@ from situc.traverse import (
 	pinned_runs,
 	extent_parts, frameable,
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
+	region_decodes,
 	is_run,
 	local_name,
 	element_bytes, is_counted_run, matched_values, obligation,
@@ -3739,8 +3740,9 @@ class Emitter:
 		tier_one = sorted({
 			symbol for struct in self.resolved.structs.values()
 			for held in own_members(struct)
-			if held.codec and held.kind == "coded"
-			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
+			if region_decodes(held)
+			and (symbol := extern_symbol(self.schema,
+			                             held.codec or "")) is not None})
 
 		# 0053's computed checksums. `gen-derived` emits C for these too,
 		# and the same rule sends the declaration here: the first version

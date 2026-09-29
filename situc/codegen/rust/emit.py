@@ -54,6 +54,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
+	region_decodes,
 	region_extent,
 	decode_counts_bits,
 	decodes_here, classify, classify_check, declares_its_own_length,
@@ -2397,8 +2398,9 @@ class Emitter:
 		tier_one = sorted({
 			symbol for struct in self.resolved.structs.values()
 			for held in own_members(struct)
-			if held.codec and held.kind == "coded"
-			and (symbol := extern_symbol(self.schema, held.codec)) is not None})
+			if region_decodes(held)
+			and (symbol := extern_symbol(self.schema,
+			                             held.codec or "")) is not None})
 
 		if not wanted and not tier_one:
 			return []

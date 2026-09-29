@@ -842,6 +842,21 @@ class Sealed(Member):
 	args: tuple[Attr, ...]
 	members: tuple[Member, ...]
 	attrs: tuple[Attr, ...] = ()
+	#: `sealed body(aead) until "\xC0" { ... }` -- the same clause `Coded`
+	#: carries, for the same reason: a region whose extent is found by
+	#: scanning rather than computed from its interior.
+	#:
+	#: Sealed rather than only coded because authenticated dot-stuffing is a
+	#: real shape -- a body that ends at a delimiter AND carries a tag -- and
+	#: 13.6 already settles the framing for it: the scan is over the ENCODED
+	#: bytes either way, because that is the form the terminator is
+	#: unambiguous in.
+	#:
+	#: `covers` is deliberately NOT here, and the asymmetry is not an
+	#: oversight: AEAD associated data is what `authenticated { ... }` is, so
+	#: `sealed ... covers(x)` would be a second spelling of a construct the
+	#: language already has (26.533, 26.535).
+	until: Until | None = None
 
 
 class TagKind(Enum):

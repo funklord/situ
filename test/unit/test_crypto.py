@@ -972,3 +972,82 @@ def test_every_backend_writes_the_covered_span_it_is_given() -> None:
 		window = after[:400]
 		assert "end   = 2" in window or "end = 2" in window, \
 			f"{lang} emitted a covered span that is not two bytes"
+
+
+# -- a sealed region that ends at a delimiter (26.535) ----------------------
+
+
+SEALED_UNTIL = """
+codec sealed_stuffing {
+	granularity = byte;
+	seekable    = linear;
+	authenticated;
+	invertible;
+	deterministic;
+	expansion   = ratio_exact(2, 1);
+}
+impl sealed_stuffing extern "my_sealed_stuffing";
+
+struct framed {
+	u8     lead;
+	sealed body(sealed_stuffing) until "\\xC0" { u8 inner; }
+	tag u8 sig[16] covers(body);
+}
+"""
+
+
+def test_a_sealed_region_can_end_at_a_delimiter() -> None:
+	"""Authenticated dot-stuffing: a body that ends at a delimiter AND
+	carries a tag.
+
+	`ast.Sealed` simply lacked the field, so `traverse.classify` had
+	answered DELIMITED for a condition whose `sealed` half no schema
+	could reach. 13.6 already settled the framing -- the scan is over
+	the ENCODED bytes, because that is the form the terminator is
+	unambiguous in -- so the grammar was the only missing part.
+	"""
+	schema   = parse_text(PREAMBLE + SEALED_UNTIL)
+	resolved = resolve(schema, solve(schema))
+
+	body = next(entry.placement
+	            for entry in resolved.structs["framed"].entries
+	            if entry.placement.path == "framed.body")
+	assert body.kind == "sealed"
+	assert body.delimiters == (b"\xc0",)
+
+
+def test_every_backend_frames_a_delimited_seal_and_gates_it() -> None:
+	"""The scan is in ADDITION to the gate, not instead of it.
+
+	C does not use `traverse.classify` -- it hand-rolls the dispatch --
+	and its `sealed` branch returned before reaching any delimiter
+	handling. The other three followed the shared classifier, so the
+	grammar alone left C emitting call sites for a scan nothing
+	defined: `implicit declaration of situ_framed_body_span_from`. The
+	header would not compile, which is the good failure, and the
+	corpus compile gates are what caught it.
+
+	Asserted on all four rather than on C, because a guard naming the
+	backend that was wrong is a guard that cannot see the next one.
+
+	**The assertion is on the DEFINITION, not on the name appearing.**
+	The first version of this test tested `"body_span_from" in text` and
+	passed against the broken emitter, because a call site mentions the
+	accessor exactly as loudly as a definition does -- which is the same
+	mis-measurement that made the bug look absent when it was counted by
+	grep. Each backend spells a definition its own way, so the patterns
+	are listed rather than inferred.
+	"""
+	defined = {
+		"c":      "uint32_t situ_framed_body_span_from(situ_view_t",
+		"cpp":    "std::uint32_t body_span_from(std::uint32_t",
+		"python": "def body_span_from(self",
+		"rust":   "fn body_span_from(&self",
+	}
+	sources = _generated(SEALED_UNTIL)
+
+	for lang, text in sources.items():
+		assert defined[lang] in text, \
+			f"{lang} calls a scan for the seal that it never defines"
+		assert ("body_open" in text or "open_body" in text
+		        or "body_gate" in text), f"{lang} emits no gate for the seal"

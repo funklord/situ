@@ -324,3 +324,71 @@ situ_err_t my_stuffed_apart_decode(const uint8_t *in, uint32_t in_len,
 	*out_len = at;
 	return SITU_OK;
 }
+
+/* my_sealed_stuffing -- behind `sealed body(...) until "\xC0"` in
+ * `test/schema/edges.situ`, so authenticated dot-stuffing has something to
+ * link against (26.535).
+ *
+ * It escapes rather than merely expands, which is what makes the construct
+ * coherent: each input byte becomes two nibbles carried in 0x10..0x1F, so
+ * the encoded form CANNOT contain 0xC0 and the terminator is unambiguous in
+ * the bytes the scan reads. That is section 13.6's whole reason for scanning
+ * before decoding, and a doubling codec that could emit the delimiter would
+ * make the fixture describe a format nobody could parse.
+ *
+ * Exactly 2:1, so it keeps `expansion = ratio_exact(2, 1)`; a table lookup
+ * is its own inverse here, so it is invertible and deterministic.
+ *
+ * It authenticates nothing, which is the one declared property that is a
+ * lie -- the same lie `my_sealing_aead` above tells, for the same reason:
+ * `impl ... extern` binds a symbol and says nothing about what is behind
+ * it, and a test needing real AEAD would be a test of somebody's crypto.
+ */
+
+situ_err_t my_sealed_stuffing_encode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+situ_err_t my_sealed_stuffing_decode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len);
+
+situ_err_t my_sealed_stuffing_encode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	uint32_t i;
+
+	if (in_len > UINT32_MAX / 2u || out_cap < in_len * 2u) {
+		return SITU_ERR_BOUNDS;
+	}
+
+	for (i = 0u; i < in_len; i++) {
+		out[i * 2u]      = (uint8_t)(0x10u | (in[i] >> 4));
+		out[i * 2u + 1u] = (uint8_t)(0x10u | (in[i] & 0x0Fu));
+	}
+
+	*out_len = in_len * 2u;
+	return SITU_OK;
+}
+
+situ_err_t my_sealed_stuffing_decode(const uint8_t *in, uint32_t in_len,
+        uint8_t *out, uint32_t out_cap, uint32_t *out_len)
+{
+	uint32_t i;
+
+	if ((in_len & 1u) != 0u || out_cap < in_len / 2u) {
+		return SITU_ERR_BOUNDS;
+	}
+
+	for (i = 0u; i + 1u < in_len; i += 2u) {
+		/* A nibble outside 0x10..0x1F is not something this codec
+		 * produces, so it is not something it decodes -- the same
+		 * reading `my_doubling_decode` above gives an odd length, and
+		 * the same constant. */
+		if ((in[i] & 0xF0u) != 0x10u || (in[i + 1u] & 0xF0u) != 0x10u) {
+			return SITU_ERR_CONSTRAINT;
+		}
+		out[i / 2u] = (uint8_t)(((in[i] & 0x0Fu) << 4)
+		                        | (in[i + 1u] & 0x0Fu));
+	}
+
+	*out_len = in_len / 2u;
+	return SITU_OK;
+}

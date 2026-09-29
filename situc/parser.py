@@ -1676,13 +1676,19 @@ class Parser:
 			args.append(self.parse_attr())
 
 		self.expect_symbol(")", "after the codec arguments")
+		# Where `coded` takes it, and for the same reason: the clause says
+		# where the encoded bytes stop, which belongs next to the codec
+		# rather than among the knobs. `coded` reads `until` then `covers`
+		# then the attributes; `sealed` has no `covers`, so it is `until`
+		# then the attributes (26.535).
+		until = self.parse_until()
 		attrs = self.parse_attrs()
 		self.expect_symbol("{", "to open the sealed region")
 		members = self.parse_members()
 		self.expect_symbol("}", "to close the sealed region")
 
 		return ast.Sealed(self.span_from(start), name, codec.text,
-		                  tuple(args), members, attrs)
+		                  tuple(args), members, attrs, until)
 
 	def parse_tag_field(self) -> ast.TagField:
 		"""`tag u8[16] covers(hdr, body);` and the same for `checksum`.

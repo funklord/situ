@@ -1759,6 +1759,32 @@ class Emitter:
 			lines.append(f"#define {base}_MAX {high}{suffix}")
 		return lines
 
+	def _delimited_tail(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The scan, and what may be said about the bytes it frames.
+
+		One method because two dispatch paths reach it: an ordinary
+		delimited member falls through to it, and a `sealed` region that
+		ends at a delimiter is handed to it after its gate. Duplicating
+		the three arms into the second caller is how this backend's
+		dispatch has drifted from `traverse.classify` before (26.535).
+		"""
+		lines = self._delimited(struct, placement)
+		if placement.radix is not None:
+			lines.extend(self._text_number(struct, placement))
+			lines.extend(self._text_value_helper(struct, placement))
+		elif placement.codec is not None:
+			# The bytes are the transform's output. A token comparison
+			# over them would compare ciphertext, or stuffed text, to a
+			# literal somebody wrote in the clear -- and the pointer is
+			# not the value either, which is the one thing a caller has
+			# to be told here (section 13.6).
+			lines.extend(self._coded_delimited_note(struct, placement))
+		else:
+			lines.extend(self._token_compare(struct, placement))
+			lines.extend(self._covered_pointer_note(struct, placement))
+		return lines
+
 	def _field_body(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 
@@ -1915,6 +1941,22 @@ class Emitter:
 					and self._offset_blocker(struct, placement) is None:
 				lines.extend(self._offset_function(struct, placement))
 			lines.extend(self._sealed_gate(struct, entry))
+			# A sealed region that ends at a delimiter is framed like any
+			# other delimited member: the scan is over the ENCODED bytes,
+			# which is the order 13.6 specifies. The gate is in ADDITION
+			# to that, not instead of it.
+			#
+			# This backend does not use `traverse.classify`, which has
+			# answered DELIMITED for `sealed` all along -- so when the
+			# grammar gained `sealed ... until` the other three followed
+			# the shared dispatch and C returned here, emitting call sites
+			# for a scan nothing defined. The header would not compile,
+			# which is the good failure; the delimited-`coded` case reaches
+			# the same tail by falling through a branch guarded against
+			# delimiters, and this is the route `sealed` had no equivalent
+			# of (26.533, 26.535).
+			if placement.delimiters:
+				lines.extend(self._delimited_tail(struct, placement))
 			return lines
 
 		if placement.kind == "authenticated":
@@ -1993,21 +2035,7 @@ class Emitter:
 			return lines
 
 		if placement.delimiters:
-			lines.extend(self._delimited(struct, placement))
-			if placement.radix is not None:
-				lines.extend(self._text_number(struct, placement))
-				lines.extend(self._text_value_helper(struct, placement))
-			elif placement.codec is not None:
-				# The bytes are the transform's output. A token comparison
-				# over them would compare ciphertext, or stuffed text, to a
-				# literal somebody wrote in the clear -- and the pointer is
-				# not the value either, which is the one thing a caller has
-				# to be told here (section 13.6).
-				lines.extend(self._coded_delimited_note(struct, placement))
-			else:
-				lines.extend(self._token_compare(struct, placement))
-				lines.extend(self._covered_pointer_note(struct, placement))
-			return lines
+			return lines + self._delimited_tail(struct, placement)
 
 		# A coded region with no delimiter. It fell through every branch
 		# below and got a comment header and nothing else -- so the encoded
