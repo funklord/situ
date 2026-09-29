@@ -31132,6 +31132,44 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.537 The region's extent, back where the arithmetic is not a partition
+
+**26.531 took the region out of the field table and said what that
+cost; this pays it.** Listing an `authenticated` region beside the
+bytes it names counted them twice -- an eight-byte struct's Size column
+summed to twelve, and the diagram above disagreed with the table under
+it. What went with the row was the extent: how far `body` reaches was
+no longer readable without adding up the members inside it.
+
+It comes back as its own section, which is the shape 26.531 said it
+would need:
+
+    Region  Offset  Size     Kind           Covered by
+    ------  ------  -------  -------------  ----------
+    summed  0       8 bytes  authenticated  checksum
+
+**The two tables answer different questions and only one of them is a
+partition.** The field table's header promises every byte once and its
+Size column sums to the struct; this one deliberately does not, and
+says so where a reader meets it rather than only here.
+
+**All three kinds, which is a choice rather than an oversight.** A
+`sealed` or `coded` region is bytes on the wire and appears in BOTH
+tables; an `authenticated` one only in this. Listing just the kind the
+field table omits would have been a `Regions` heading that leaves most
+regions out -- a true sentence that is not a characterisation, which is
+the shape `evidence.md` warns about under coextensiveness.
+
+**The empty case is the control.** A struct with no region emits no
+header at all, and without that assertion the other two would pass
+against a section that was always printed and always empty.
+
+**The README carries the same transcript and a test holds it to what
+the tool prints**, which is how 26.531's blast radius was measured
+wrongly the first time -- the question asked was which committed
+artifacts are GENERATED, and none are. It shows the second table now,
+with the sentence about why there are two.
+
 ### 26.536 The register's field: built, measured, and not kept
 
 **Answered NO, with the code written rather than reasoned about.**
@@ -31506,8 +31544,10 @@ it to what the tool prints, so the gate failed on a row the README
 still showed. Corrected by 26.532, which is where the reading that
 nearly pushed it anyway is written down.
 
-**What it costs, said rather than assumed: the region's extent is no
-longer one row.** Its coverage survives -- the members carry `covered
+**~~What it costs, said rather than assumed: the region's extent is no
+longer one row.~~ Paid by 26.537**, which gives it back as its own
+table -- the shape the rest of this paragraph asked for. Its coverage
+survives -- the members carry `covered
 by sig` in their notes, which is where a reader looks -- but a reader
 who wanted the span as a single number now derives it or reads the wire
 signature. If that row is wanted it should be added deliberately and
