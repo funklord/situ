@@ -16048,14 +16048,28 @@ record states.
   was added to this item by 26.530**, which is its scope claim failing
   re-derivation for the third time: `coded_covers` was absent from the
   first two drafts because nothing had yet been wrong about it. Every
-  one of those thirteen fixes is a scope check compensating, in five
-  modules: `layout` keys coverage on `(owner, name)` and now holds the
-  shared gather, `pack` computes region ownership from scopes,
-  `traverse` and `resolve` call the gather, `resolve` scopes the
-  transform gather separately, and `advise` scopes twice by hand.
-  Resolving the names to region PLACEMENTS once, where they are
-  stamped, would make all of them correct by construction and delete
-  the compensations.
+  one of those thirteen fixes is a scope check compensating. **~~In
+  five modules~~ In four resolvers now** (26.534): `layout` keys
+  coverage on `(owner, name)` and holds the shared gathers, `pack`
+  computes region ownership from scopes, and `traverse`, `resolve` and
+  `advise` all call those rather than scoping by hand.
+
+  **~~Resolving the names to region PLACEMENTS once, where they are
+  stamped, would make all of them correct by construction.~~ It would
+  not, and 26.534 measured why.** The names are relative to their own
+  struct BY DESIGN, which is what lets a struct be inlined anywhere:
+  `tag_covers` is set in one layout and inherited by every struct that
+  embeds it, and the parent skips it deliberately, because re-deriving
+  it there would read the wrong declaration. Qualify at set time and
+  the wrong struct's path is written, with nothing to repair it.
+  `layout.py` has said so at the site since 26.519, and this item
+  contradicted it without citing it.
+
+  **The question that survives is a different one**: whether a member
+  should record the PLACEMENT its region resolves to, computed per
+  layout where the prefix is known, rather than carrying a name. That
+  is a new field and a migration rather than a reinterpretation, and
+  it is still the copyright holder's.
 
   **The cost is smaller than it looks and was measured rather than
   guessed.** No format boundary is crossed: the image's region section
@@ -31076,6 +31090,65 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.534 The root fix is not implementable, and the tree said so first
+
+**Instructed to fix the root recorded in 26.144 -- resolve the bare
+region names to placements where they are stamped -- and it cannot be
+done that way.** The item was wrong and is corrected.
+
+**The names are relative BY DESIGN, and that is what makes a struct
+inlinable.** `tag_covers` holds a name relative to the tag's own owner,
+so the same tag means different bytes in every struct that embeds it.
+Measured in `edges.situ`:
+
+    outer_body.outer_sum         tag_covers=('body',)
+    outer_body.nested.inner_sum  tag_covers=('body',)
+
+Two tags in one struct, both saying `body`, meaning different regions.
+Qualify either at the point it is SET and it is written in the layout
+of the struct that declared it -- `inner_body.body` -- then inlined
+into a parent where the answer is `outer_body.nested.body`.
+
+**Nothing repairs it afterwards, and that is deliberate.** The parent's
+coverage loop builds its `own` dict from `tag_fields(decl.members)`,
+which for `outer_body` is `['outer_sum']` alone; a nested tag is
+skipped with a comment saying re-deriving its coverage from this
+struct's members "would be deriving it from the wrong declaration". So
+the value is set in one layout, inherited by another, and never
+revisited -- which is correct for a relative name and fatal for an
+absolute one.
+
+**The rejection was already in the tree, at the site, and I proposed it
+anyway.** `layout.py` has carried this since 26.519: "Qualifying
+`regions` at the point a nested layout is inlined would be the other
+repair and is not taken." Its stated reason was weaker than the real
+one -- that six modules compare bare names, which is a cost rather than
+an impossibility -- but the conclusion was right and the register item
+contradicted it without citing it. **Third time in three days the
+knowledge was already in the tree**, after 26.532's comment about
+`covers(flags)` and 26.531's `NOT_A_MEMBER`. The pattern is not that
+the tree is under-documented.
+
+**What was achievable was done: one resolver instead of four.**
+`advise` was the last place scoping `tag_covers` by hand, twice, and
+both now call `regions_covered_by`. What remains is four resolvers
+asking four genuinely different questions -- which region owns a
+member, which regions a tag covers, whether a member sits inside a
+region through the nesting, and which members a transform runs over --
+rather than the same question spelled per module.
+
+**159 suggestions across the corpus are byte-identical, and so is the
+collision fixture**, which is the case that separates a scoped answer
+from an unscoped one. A consolidation that changed an output would have
+been a consolidation that changed a meaning.
+
+**So the register item becomes a different question.** Not "qualify the
+names", which the data model forbids, but whether a member should
+record the PLACEMENT its region resolved to -- computed per layout,
+where the prefix is known, rather than carried as a name. That is a new
+field and a migration, it is not what was recorded, and it is the
+copyright holder's.
 
 ### 26.533 Three lenses that found nothing, and what that cost to learn
 
