@@ -19,7 +19,8 @@ from situc.invariant import negative_value
 from situc.capability import Axis, Value, Vector, meet_all
 from situc.diagnostics import error
 from situc.layout import (BITS_PER_BYTE, Placement, SchemaLayout,
-                          StructLayout, regions_covered_by)
+                          StructLayout, regions_covered_by,
+                          transform_covers)
 from situc.propagate import Context, Resolved, apply
 
 
@@ -331,33 +332,6 @@ def _check_host_dependence(decl: ast.StructDecl, layout: StructLayout) -> None:
 TAG_ORDER = ("after", "before")
 
 
-def _transform_covers(layout: StructLayout,
-		region: Placement) -> list[Placement]:
-	"""The placements a `coded` region's transform runs over (14.1a).
-
-	Scoped to the region's own owner. `coded_covers` holds BARE member
-	names and `layout.placements` carries nested structs' members under
-	dotted paths, so a member whose name a nested struct reuses was
-	gathered too -- and the tags gathered WITH it belong to that struct.
-
-	The cost was a valid schema refused. `outer.first` covered by
-	nothing needs no `tag_order`, and a member called `first` inside a
-	nested struct, covered by that struct's own tag, made the compiler
-	say "`pn` transforms bytes that `nested.isig` covers" about bytes
-	`nested.isig` does not reach. The message naming a tag from another
-	struct is the tell (26.530).
-
-	This replaces a depth test -- no dot after the second segment --
-	which admitted exactly the two-level path the fault needs. The owner
-	is the question that test was approximating.
-	"""
-	mine = region.path.rpartition(".")[0]
-	return [placement for placement in layout.placements
-	        if placement is region
-	        or (placement.name in region.coded_covers
-	            and placement.path.rpartition(".")[0] == mine)]
-
-
 def _check_transform_tag_order(decl: ast.StructDecl,
 		layout: StructLayout) -> None:
 	"""Whether a tag covers the transformed or untransformed bytes (14.1b).
@@ -387,7 +361,7 @@ def _check_transform_tag_order(decl: ast.StructDecl,
 		if region.kind != "coded" or not region.coded_covers:
 			continue
 
-		tags = sorted({tag for placement in _transform_covers(layout, region)
+		tags = sorted({tag for placement in transform_covers(layout.placements, region)
 		               for tag in placement.covered_by})
 		order = next((attr for attr in region.attrs
 		              if attr.name == "tag_order"), None)

@@ -3648,6 +3648,38 @@ def _located_tree(member: ast.Field | ast.Reserved) -> ast.Expr | None:
 	return None if located is None else located
 
 
+def transform_covers(placements: Iterable[Placement],
+		region: Placement) -> list[Placement]:
+	"""The placements a `coded` region's transform runs over (14.1a).
+
+	The region itself, plus the members its `covers` clause names,
+	scoped to the region's own struct. `coded_covers` holds BARE names
+	and a list of placements carries nested structs' members under
+	dotted paths, so an unscoped search binds `covers(flags)` to
+	`sub.flags` while `wellformed` validated the clause against the
+	top-level namespace -- and the two then disagree about which bytes
+	the transform ran over.
+
+	**Here because the question was being asked twice.** `traverse`
+	tested the local name for a dot and `resolve` tested the owner, and
+	the language makes those equivalent: a `covers` clause resolves
+	against the top level, so a region nested deeper cannot name a
+	sibling at all -- `wellformed` answers "covers unknown span". So
+	this consolidation fixes nothing and is worth doing anyway, because
+	two spellings of one rule is how this family has produced fourteen
+	faults, and the pair that agreed today is the pair nobody was
+	watching (26.532).
+
+	It also de-duplicates, where the older spelling appended the region
+	to a list that could already contain it.
+	"""
+	mine = region.path.rpartition(".")[0]
+	return [held for held in placements
+	        if held is region
+	        or (held.name in region.coded_covers
+	            and held.path.rpartition(".")[0] == mine)]
+
+
 def regions_covered_by(placements: Iterable[Placement],
 		tag: Placement) -> list[Placement]:
 	"""The regions one tag authenticates, among `placements`.

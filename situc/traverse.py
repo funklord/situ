@@ -28,7 +28,8 @@ from situc.types import ScalarType, pinned_shown, literal_bytes
 from math import lcm
 
 from situc.expr import Env
-from situc.layout import BITS_PER_BYTE, Arm, Placement, regions_covered_by
+from situc.layout import (BITS_PER_BYTE, Arm, Placement,
+                          regions_covered_by, transform_covers)
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
 
@@ -1131,15 +1132,19 @@ def coded_spans(struct: "ResolvedStruct",
 	# `wellformed` validated the clause against the top-level namespace, and
 	# the two would disagree about which bytes the transform ran over.
 	#
-	# The test is the dotted path, not `is_own_member`: that also excludes a
-	# region by kind, and a region is exactly what `covers(first)` names in
-	# the case this clause exists for. Filtering by it emitted the ordinary
-	# accessor for a coverage that should have been refused -- the clause
-	# silently ignored, which is the failure this whole feature guards.
-	named = [entry.placement for entry in struct.entries
-	         if entry.placement.name in region.coded_covers
-	         and "." not in local_name(struct, entry.placement)]
-	ordered = sorted([*named, region],
+	# NOT `is_own_member`: that also excludes a region by kind, and a
+	# region is exactly what `covers(first)` names in the case this clause
+	# exists for. Filtering by it emitted the ordinary accessor for a
+	# coverage that should have been refused -- the clause silently
+	# ignored, which is the failure this whole feature guards.
+	#
+	# `transform_covers` is the same question `resolve` was asking a
+	# module away, in its own words: this one tested the local name for a
+	# dot and that one tested the owner. They agree over the language --
+	# a `covers` clause resolves against the top level -- so one function
+	# now, before they stop agreeing (26.532).
+	ordered = sorted(transform_covers(
+	                     (entry.placement for entry in struct.entries), region),
 	                 key=lambda p: struct.layout.placements.index(p))
 
 	if any(one.offset_bits is None for one in ordered):
