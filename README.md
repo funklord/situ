@@ -1233,11 +1233,20 @@ destination_port     2       2 bytes       u16            big endian; covered..
 length               4       2 bytes       u16            big endian; min = 8..
 checksum[2]          6       2 bytes       u8             self_as = 0
 payload[length - 8]  8       [length - 8]  u8             covered by checksum
+
+Region  Offset  Size     Kind           Covered by
+------  ------  -------  -------------  ----------
+summed  0       8 bytes  authenticated  checksum
 ```
 
 (The Notes column is cut here to fit; it runs to 98 columns in the real
 output, and it is where `[min]`, `[must_eq]`, `[self_as]`, the byte order and
 the covering tag all end up.)
+
+The regions are a second table because they are not a partition: an
+`authenticated` region names bytes its own members already account for, so
+the field table above sums to the struct and this one deliberately does not.
+A `sealed` or `coded` region is bytes on the wire and appears in both.
 
 The Wireshark dissector (`situc gen-dissector`) comes off the same traversal,
 which is why a schema that parses in C parses in Wireshark.

@@ -409,3 +409,63 @@ def test_a_coded_region_is_still_a_row() -> None:
 	assert fields == ["lead", "body", "tail"], \
 		"a coded region is a member and has to stay"
 	assert "alpha" not in fields, "its interior is not a member of this struct"
+
+
+def _regions_table(text: str) -> list[str]:
+	"""The first column of the regions table, in order.
+
+	Anchored on its header for `_fields`' reason: the ASCII diagram's
+	rows begin with `|` too, and a first draft of that helper read the
+	diagram instead of the table it meant.
+	"""
+	lines = text.splitlines()
+	header = "| Region | Offset | Size | Kind | Covered by |"
+	if header not in lines:
+		return []
+	rows = []
+	for line in lines[lines.index(header) + 2:]:
+		if not line.startswith("|"):
+			break
+		rows.append(line.split("|")[1].strip())
+	return rows
+
+
+def test_a_region_gets_its_extent_back_in_its_own_table() -> None:
+	"""26.531 took the region out of the FIELD table, because listing it
+	beside the bytes it names counted them twice -- an eight-byte struct
+	summed to twelve, and the diagram above disagreed with the table
+	under it.
+
+	What that cost was the extent: how far `body` reaches was no longer
+	readable without adding up the members inside it. It comes back
+	here, where the arithmetic is not a partition and no header promises
+	it is.
+	"""
+	rendered = emit(COVERED, "markdown")
+
+	assert _fields(rendered) == ["lead", "alpha", "beta", "sig[2]"], \
+		"the region is still not a field"
+	assert _regions_table(rendered) == ["body"]
+	assert "| body | 2 | 4 bytes | authenticated | sig |" in rendered, \
+		"the extent and its covering tag are what the field table cannot say"
+
+
+def test_a_coded_region_appears_in_both_tables() -> None:
+	"""It is bytes on the wire, so it partitions the struct AND is a
+	region. A section that listed only the kind the field table omits
+	would be a `Regions` heading that leaves most regions out.
+	"""
+	rendered = emit(TRANSFORMED, "markdown")
+
+	assert _fields(rendered) == ["lead", "body", "tail"]
+	assert _regions_table(rendered) == ["body"]
+
+
+def test_a_struct_with_no_region_gets_no_table() -> None:
+	"""The control for the two above: an empty section would pass them
+	just as well if the header were emitted unconditionally."""
+	rendered = emit("struct plain { u16 a; u16 b; }", "markdown")
+
+	assert _fields(rendered) == ["a", "b"]
+	assert _regions_table(rendered) == []
+	assert "Region" not in rendered

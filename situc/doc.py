@@ -113,6 +113,11 @@ def _struct(struct: ResolvedStruct, fmt: str) -> list[str]:
 
 	lines.extend(_table(struct, fmt))
 	lines.append("")
+
+	regions = _regions(struct, fmt)
+	if regions:
+		lines.extend(regions)
+		lines.append("")
 	return lines
 
 
@@ -423,6 +428,52 @@ def _table(struct: ResolvedStruct, fmt: str) -> list[str]:
 	lines  = ["  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))),
 	          "  ".join("-" * widths[i] for i in range(len(headers)))]
 	lines.extend("  ".join(row[i].ljust(widths[i]) for i in range(len(headers))).rstrip()
+	             for row in rows)
+	return [line.rstrip() for line in lines]
+
+
+def _regions(struct: ResolvedStruct, fmt: str) -> list[str]:
+	"""The named spans a tag can cover, and how far each one reaches.
+
+	Its own section because a region is not a field. The table above
+	partitions the struct -- every byte once, and its Size column sums to
+	the struct's own -- and an `authenticated` region names bytes its
+	members already own, so listing it there put the same bytes in twice
+	and made an eight-byte struct sum to twelve (26.531).
+
+	What that cost was the extent: a reader could no longer see how far
+	`body` reaches without adding up the members inside it. This gives it
+	back where the arithmetic is not a partition, which is what the field
+	table's header promises and this one does not.
+
+	All three kinds, and they deliberately OVERLAP the table above: a
+	`sealed` or `coded` region is bytes on the wire and appears in both,
+	an `authenticated` one only here. A section that showed the third
+	kind alone would be a "Regions" heading that omits most regions.
+	"""
+	held = [entry.placement for entry in struct.entries
+	        if entry.placement.kind in ("authenticated", "sealed", "coded")
+	        and "." not in local_name(struct, entry.placement)]
+	if not held:
+		return []
+
+	rows = [(_label(struct, one), _offset(one), _size(one),
+	         one.kind, ", ".join(one.covered_by) or "-")
+	        for one in held]
+	headers = ("Region", "Offset", "Size", "Kind", "Covered by")
+
+	if fmt == "markdown":
+		lines = ["| " + " | ".join(headers) + " |",
+		         "|" + "|".join(["---"] * len(headers)) + "|"]
+		lines.extend("| " + " | ".join(row) + " |" for row in rows)
+		return lines
+
+	widths = [max(len(headers[i]), max(len(row[i]) for row in rows))
+	          for i in range(len(headers))]
+	lines  = ["  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))),
+	          "  ".join("-" * widths[i] for i in range(len(headers)))]
+	lines.extend("  ".join(row[i].ljust(widths[i])
+	                       for i in range(len(headers))).rstrip()
 	             for row in rows)
 	return [line.rstrip() for line in lines]
 
