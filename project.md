@@ -16097,6 +16097,32 @@ record states.
   standing gate in `test_region_names_are_scoped.py` cannot see a
   twelfth site nobody observes, which the root fix would not need to.
 
+- **Whether a `sealed` region may end at a delimiter** (26.533).
+  `ast.Coded` carries `until` and `ast.Sealed` does not, so
+  `traverse.classify` answers DELIMITED for a condition whose `sealed`
+  half no schema can reach, and `layout` reads the field as
+  `getattr(region, "until", None)`. Both are written as though the
+  feature were coming.
+
+  **The construct it would express is authenticated dot-stuffing**: a
+  body that ends at a delimiter AND carries a tag. 13.6 already settles
+  the framing question for the coded case -- the scan is over the
+  encoded bytes either way -- so the semantics are decided and only the
+  grammar is missing.
+
+  **The cost of leaving it is a trap rather than a gap.** C's emitter
+  returns unconditionally on `kind == "sealed"` before it reaches any
+  delimiter handling, while its delimited-`coded` case works because
+  that branch is guarded with `and not placement.delimiters`. So the
+  day `Sealed` gains `until`, three backends follow the shared
+  classifier and C alone emits no scan -- the same defect 13.6 records,
+  in the one backend that hand-rolls its dispatch. Adding the field
+  without touching `c/emit.py` is the wrong half to do first.
+
+  **Whose decision it is: the copyright holder's.** Nothing is wrong
+  today and no schema can express the shape, so this is a language
+  addition rather than a fault.
+
 **Tried, measured, and not worth doing -- so that nobody spends the hour
 again.**
 
@@ -31039,6 +31065,64 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.533 Three lenses that found nothing, and what that cost to learn
+
+**No live fault this round.** Recorded because an empty sweep is a
+measurement only if its lens is written down: the next pass needs to
+know which families have been swept, and these three have.
+
+**The biggest duplication in the tree holds.** `traverse.classify` is
+the canonical member dispatch and its docstring says the ORDER of its
+questions is the whole point. C's emitter calls it **zero times in
+10,211 lines** -- the other three call it three times each -- and
+hand-rolls a 283-line `_field_body` instead. Both orderings `classify`
+names were checked against it:
+
+  * *VARIABLE before UNPLACED*, because "a backend that bails on the
+    offset first silently skips every variable-length member it has".
+    C asks the offset question first and does NOT bail: it returns only
+    where the offset is unresolvable, otherwise emits the offset
+    function and falls through.
+  * *NESTED after ARRAY*, because an array of structs names a struct
+    type and treating it as nested emits an accessor taking no index.
+    C asks `_is_array` INSIDE its nested branch, which discriminates
+    the same two cases.
+
+Both correct, by a different arrangement rather than the same one. **A
+reimplementation that is right is worth recording precisely because the
+last four sweeps found reimplementations that were wrong** -- otherwise
+the file reads as though every duplicate has been a fault.
+
+**`bit_addressed_tag` is still the only copy of itself.** Its docstring
+says it exists because seven callers each answered the question in
+their own words. Searching for an eighth -- a tag-or-checksum kind test
+within six lines of a bit-packing test, across `situc/`, all four
+backends and `walker/`, allowing `==` and `in` -- returns only the
+definition. Consolidation worked and stayed working.
+
+**Four of the five `is_own_member` lookalikes are safe.** Of 44
+dot-in-path tests, five filter a struct's entries; three exclude a
+region incidentally because `scalar is not None` is false for one, and
+the fourth is behind `codec is None`. Only `doc.py` was exposed, which
+is 26.531.
+
+**The one thing found is latent rather than live, and it is a language
+question.** `classify` answers DELIMITED for `kind in ("coded",
+"sealed") and delimiters`, and the `sealed` half is unreachable:
+`ast.Sealed` has no `until` field, which is why `layout` reads it as
+`getattr(region, "until", None)`. So C's unconditional early return for
+`kind == "sealed"` is safe today.
+
+**It is safe only while that stays true.** C's branch emits the gate
+and returns before reaching its delimiter handling, whereas its
+delimited-`coded` case works precisely because `kind == "coded"` is
+guarded with `and not placement.delimiters` and falls through. **Give
+`Sealed` an `until` and the shared classifier is already right while C
+alone emits no scan** -- which is the bug 13.6 records for the coded
+case, reappearing in the one backend that does not ask. Whether a
+sealed region should be able to end at a delimiter -- authenticated
+dot-stuffing -- is the copyright holder's, and is in 26.144 now.
 
 ### 26.532 Two spellings that agreed, and a red gate read as green
 
