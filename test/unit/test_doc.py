@@ -323,3 +323,89 @@ def test_it_does_not_say_the_version_twice() -> None:
 	text = emit("struct s [version = v] { u8 v; u16 a; u32 b [since = 2]; }")
 
 	assert "since = 2" not in text
+
+
+# -- the field table lists members, and a region is not one (26.531) --------
+
+
+COVERED = """
+codec summing { kernel = ones_complement(width = 16); }
+impl summing derived;
+
+struct simple {
+	u16 lead;
+	authenticated body {
+		u16 alpha;
+		u16 beta;
+	}
+	checksum u8 sig[2] covers(body) is summing;
+}
+"""
+
+TRANSFORMED = """
+codec masking {
+	granularity = byte; length_preserving; seekable; invertible;
+	deterministic;
+}
+impl masking extern "app_header_mask";
+
+struct coded_one {
+	u16 lead;
+	coded body(masking) { u16 alpha; }
+	u16 tail;
+}
+"""
+
+
+def _fields(text: str) -> list[str]:
+	"""The first column of the field table, in order.
+
+	Anchored on the header rather than on a line starting with `|`: the
+	ASCII diagram's own rows do too, and a first draft of this helper
+	read `lead` and `alpha` off the DIAGRAM and compared them against
+	the table's order. It passed for the wrong reason on one fixture
+	and failed on the other, which is the only reason it was noticed.
+	"""
+	lines  = text.splitlines()
+	header = lines.index("| Field | Offset | Size | Type | Notes |")
+	rows   = []
+	for line in lines[header + 2:]:
+		if not line.startswith("|"):
+			break
+		rows.append(line.split("|")[1].strip())
+	return rows
+
+
+def test_an_authenticated_region_is_not_a_row() -> None:
+	"""It names bytes its members already own and consumes none itself,
+	so listing it beside them puts the same bytes in the table twice.
+
+	The Size column summed to twelve for an eight-byte struct, and the
+	diagram directly above disagreed with the table under it: the
+	diagram is drawn from a partition and so could never have included
+	the region.
+
+	The coverage is not lost -- the members carry `covered by sig` in
+	their notes, which is where a reader looks for it.
+	"""
+	fields = _fields(emit(COVERED, "markdown"))
+
+	assert fields == ["lead", "alpha", "beta", "sig[2]"], \
+		"the region was listed as a field alongside the bytes it names"
+	assert "covered by sig" in emit(COVERED, "markdown")
+
+
+def test_a_coded_region_is_still_a_row() -> None:
+	"""The control, and the reason this is about one kind rather than
+	regions in general.
+
+	A `coded` region IS bytes on the wire -- the transform's output --
+	so it partitions the struct and its interior is what does not
+	appear. Dropping every region would have been the wrong repair, and
+	this is the case that separates the two.
+	"""
+	fields = _fields(emit(TRANSFORMED, "markdown"))
+
+	assert fields == ["lead", "body", "tail"], \
+		"a coded region is a member and has to stay"
+	assert "alpha" not in fields, "its interior is not a member of this struct"

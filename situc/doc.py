@@ -28,7 +28,7 @@ from situc.invariant import paths_in
 from situc.names import render_delimiter
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	element_bytes, indexed_elements, local_name, own_members,
+	element_bytes, indexed_elements, is_own_member, local_name, own_members,
 )
 from situc.unparse import expr_to_source
 from situc import __version__
@@ -398,9 +398,16 @@ def _slanted(name: str, width: int) -> list[str]:
 
 def _table(struct: ResolvedStruct, fmt: str) -> list[str]:
 	"""What the diagram cannot say: types, constraints and byte order."""
+	# `is_own_member`, not a second spelling of it. This filtered
+	# `element` and tested the path shape, which is two of the three
+	# things that predicate does and misses `authenticated`: such a
+	# region names bytes its members already own and consumes none
+	# itself, so listing it beside them put the same bytes in the table
+	# twice. An eight-byte struct's Size column summed to twelve, and
+	# the diagram directly above -- which is drawn from a partition and
+	# so cannot include it -- disagreed with the table under it (26.531).
 	rows = [_row(struct, entry.placement) for entry in struct.entries
-	        if entry.placement.kind != "element"
-	        and "." not in entry.placement.path[len(struct.name) + 1:]]
+	        if is_own_member(struct, entry.placement)]
 	if not rows:
 		return []
 

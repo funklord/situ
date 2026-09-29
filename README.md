@@ -1228,7 +1228,6 @@ Size: 8 to 65535 bytes.
 
 Field                Offset  Size          Type           Notes
 -------------------  ------  ------------  -------------  --------------------
-summed               0       8 bytes       authenticated  covered by checksum
 source_port          0       2 bytes       u16            big endian; covered..
 destination_port     2       2 bytes       u16            big endian; covered..
 length               4       2 bytes       u16            big endian; min = 8..
