@@ -963,6 +963,7 @@ Five forms, with sharply different capability consequences:
 | `T x[N]` | compile-time constant | fully static |
 | `T x[expr]` | parse-time from a prior field | frame-relative static elements; everything after becomes dynamic |
 | `T x[remaining]` | to end of enclosing frame | must be last in its frame |
+| `T x[remaining] max N` | as above, but at most N elements | `Bounded`; a longer frame is refused (0059) |
 | `T x[] until "D"` | ends where the terminator would be an element | sequential access only (8.6.3) |
 | `T x[] while (cond)` | ends after the element failing `cond` | sequential access only (8.6.6) |
 
@@ -1048,6 +1049,14 @@ than `Unbounded` and a missing delimiter is an error instead of a read to the
 end of the buffer. Without one the member is also `effect = EffectOnRead`,
 because the cost of a read then depends on the data rather than the schema --
 which an embedded caller has to know before choosing the format.
+
+**`[remaining] max N` bounds the FRAME, because such a run has no scan.**
+Its length IS the remainder, so the cap cannot stop a read early -- it says
+how long the frame may be, and a longer one is refused rather than read in
+part (0059). The number counts ELEMENTS, as the brackets do, where
+`until D max N` counts bytes, as a scan does: each spelling counts what its
+own form counts. The two coincide for a `u8` run, which is why the
+difference is written down here rather than left to be discovered.
 
 **The content cannot contain the delimiter** -- structurally, not by a check.
 The scan stops at the first occurrence, so a parsed member's content never
@@ -6422,6 +6431,7 @@ early.
 Delivered:
 
 - `T x[] until "D"`, with `max N` to bound the scan (8.6.1).
+- `T x[remaining] max N`, the same word bounding a frame that has no scan to bound (0059).
 - `offset = Scanned` and `repr = TextConverted`, two distinctions that were
   being collapsed into `Dynamic` and `ValueConverted`.
 - `[quoted]` and `[escape]`, for a protocol that admits the delimiter inside a
@@ -16188,6 +16198,16 @@ record states.
   exercises the field**, which is the same reason `edges.situ` carries
   every construct no worked example has. A new field wants a schema
   using it in the corpus, not only a unit test.
+
+  **Confirmed a second time by `[remaining] max N` (26.539), which
+  touched thirteen sites and broke in the unparser again.** That
+  addition also names the question the site list cannot ask: **what
+  UNIT does the new number count?** `max` counts ELEMENTS after `[...]`
+  and BYTES after `until`, because each spelling counts what its own
+  form counts -- and the two are the same number for the `u8` run
+  either form is usually written on. A semantic question whose
+  plausible fixtures all agree is one no amount of testing raises, so
+  it has to be asked while the grammar is being written.
 
 **Tried, measured, and not worth doing -- so that nobody spends the hour
 again.**
@@ -31131,6 +31151,92 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.539 A cap on a `remaining` run, and the unit nobody asked about
+
+**`u8 content[remaining] max 470` (0059), built.** `fuzznet` reported the
+gap from a record body whose real bound lives in the ENCLOSING record, so
+a body-only schema has no field to size it from and could only say
+`[remaining]`, which reads Unbounded.
+
+They asked for `[max = 470]`, and situc refused it correctly -- `[min]`,
+`[max]` and `[must_eq]` are claims about a VALUE that `validate`
+compares, an array has no single value, and 14.5's rule is what keeps one
+attribute from meaning two things. **The refusal message already named
+the spelling the language uses**, a size cap being syntax after the run
+form as in `until D max N`, so the language did not need a new idea. It
+needed the clause it was already pointing at.
+
+**The holder settled the half the record could not: a declared cap
+REFUSES a longer frame rather than truncating the read.** Such a cap
+restates a bound the enclosing format guarantees, so a frame exceeding it
+is malformed rather than something to read part of. The cost is stated in
+0059 rather than discovered later -- a schema that UNDER-states its cap
+now rejects valid messages.
+
+**The decision nobody asked about, and the one worth carrying: the cap
+counts ELEMENTS, not bytes.** `u8 name[n]` counts elements and the cap
+sits exactly where that count sits, so `max 470` is 470 elements;
+`until D max N` counts BYTES because a scan counts bytes. **The two are
+the same number for the `u8` run either form is usually written on**,
+which is precisely why it had to be settled deliberately: every fixture
+anyone would reach for agrees, and the disagreement waits for the first
+`u16` run. A question whose test cases all agree is not a question
+anybody discovers by testing.
+
+Thirteen sites, listed in 0059. The shape is 26.144's checklist and it
+held: the AST field, the parser clause, the layout extent, four backends,
+the unparser (which drops a field it does not render -- what `Sealed.until`
+paid for two entries ago), the image, and both walkers. `traverse.frame_cap`
+is the shared predicate, so the four backends ask one question rather than
+four -- which is this section's most expensive recurring defect answered
+before it could happen rather than after.
+
+**`layout` refuses a cap on a run something already bounds**, which is
+14.5 applied to a clause rather than to an attribute: a counted run is
+bounded by its count and a delimited one by `until D max N`, so a third
+spelling would state what nothing reads.
+
+**Nine sabotages, and two of them were wrong before they were right.**
+
+The first pass over the four backends confirmed nothing for two of them:
+the marker it grepped for -- `frame_cap(struct) is not None` -- is absent
+by construction in the C++ and Python emitters, which spell it
+`capped = frame_cap(struct)` and then test `capped`. The sed matched
+nothing, the file was untouched, and the test passed. **It was the
+RESTORE check that caught it, not the landing check** -- the landing
+check had the wrong polarity for a marker that was never there, and a
+harness that only verified the sabotage applied would have reported two
+green backends as controlled.
+
+The C walker's first sabotage went red through the C compiler's
+`-Werror` rather than through the verdict comparison, so the check under
+test never ran. The second inverted the flag and went red on the table's
+FIRST entry, every uncapped member now refusing -- right check, wrong
+fixture, which proves the guard is reached and not that the new case
+discriminates. **The third disables the guard only where it should
+fire**, and fails on exactly the 6-byte message of exactly the new entry.
+Three attempts for one control, each of them a green-looking result that
+established something other than what it appeared to.
+
+**The four backends are sabotaged one at a time on purpose.** A single
+control over all four passes while three of them are wrong, which is what
+this section has spent fourteen entries on.
+
+Boundaries on both sides everywhere: 471 bytes accepted and 472 refused
+in the four backends and the Python walker, 5 and 6 in the C-versus-Python
+verdict table. A guard tested only on the bad side passes just as well
+when it refuses everything.
+
+**And the nine green tests could not see the defect the gate did.** The
+Python walker's guard named its local `held`, which is already a local
+further down the same function holding a list of `(check, against)` pairs.
+Every test passed -- Python does not care -- and mypy narrowed the whole
+scope to `Placement` and reported nine errors on lines this change never
+touched. **A name is not a type error until something checks types**, and
+the sabotages could not have found it either: the guard was correct, and
+what was wrong was what the name did to the rest of the function. It is
+`capped` now, which is what the C++ and Python emitters already call it.
 
 ### 26.538 `peek` in the C walker, and the comparison that never ran
 
