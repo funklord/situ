@@ -1966,6 +1966,27 @@ combining constructs.
 Meet is computed pointwise. A struct's vector is the meet of its members' plus
 whatever the struct construct itself imposes.
 
+**Four axes are not the meet**, and `resolve._struct_vector` forces them after
+meeting. `offset` and `align` go back to their strongest values, because a type
+is not placed anywhere and a member's position says nothing about the type;
+`size` takes the layout's own extent, which it knows directly; and `auth` is
+not the meet at all.
+
+**`auth` on any line -- member, region or struct -- names an obligation only if
+that obligation covers EVERY byte the line is about.** One rule at every level,
+settled with `fuzznet` across 26.519 and 26.522. An obligation never covers its
+own bytes, because coverage means *writing these bytes leaves it stale* and a
+checksum does not invalidate itself; that exemption is what keeps the rule from
+emptying the axis, since a tag inside a struct never literally covers all of
+it.
+
+The meet is the other reading of the same relation and stays that way: inside
+the lattice `auth` meets toward `Covered` and UNIONS its parameters, because
+there the question is *writing these bytes stales which obligations*, and
+mutating a byte covered by any of them stales all of them. A union is right
+there and over-claims on a rendered line, which is the whole of the
+distinction.
+
 ### 11.3 Propagation rules
 
 These are normative. Implement them as a table, not as scattered conditionals
@@ -16011,6 +16032,14 @@ record states.
   changes every committed map holding a nested tag, the second changes
   the format, the third changes no bytes. fuzznet says nothing is needed
   back unless the contract changes.
+
+  **The first was taken on 2026-09-27 (26.522) and the third on
+  2026-09-30 (26.541)**, the exemption for a tag's own bytes being what
+  makes the first possible at all. The third had been outstanding
+  unnoticed: `doc/capability-axes.md` had not been touched since
+  2026-08-25, so neither settlement reached it, and comparing its table
+  against 11.1 found 7 of 13 rows drifted with two missing lattice
+  values. It is checked by a test now.
 - **`linear_block` knows one code.** `hamming_7_4`, and going further
   needs the generator matrix expressible in a schema, which is a language
   addition rather than a table entry.
@@ -31162,6 +31191,100 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.541 The reading was settled; the documents were not
+
+**Asked to settle what a struct's `auth=` line means, and it was settled
+three days ago.** The copyright holder narrowed it on 2026-09-27 and
+26.522 built it. Verified against the tree rather than the entry, which is
+26.540's whole lesson:
+
+    ipv4_header   auth=Covered(header_checksum)   the checksum that
+                                                  covers all but itself
+    png `chunk`   no `auth=` on the struct line   the over-claim, gone
+
+**26.540 listed this item as open and it is struck through in the
+register.** The list was written from memory of a read rather than from
+the file -- a scope claim, in the entry written to warn about scope
+claims. Corrected there and here.
+
+**Where it WAS still unsettled is the documents, and the item said so.**
+Its third way out -- "leave it and write the distinction into
+`doc/capability-axes`" -- was the one that changes no bytes, and it was
+never taken. That file's last content change is 2026-08-25. Neither
+26.519, which settled the reading for members and regions with `fuzznet`,
+nor 26.522, which settled it for structs, reached it.
+
+**And pulling that thread found more than the auth row.** The file opens
+by declaring itself extracted from section 11.1 and says "where the two
+disagree, project.md is authoritative and this file is the bug" -- a rule
+with nothing enforcing it. Measured by extracting both tables and
+comparing:
+
+    rows in each                                        13
+      differing                                          7
+      differing about the LATTICE rather than the prose   2
+
+`offset` was missing `DataPlaced` and `Scanned`; `repr` was missing
+`TextConverted`. **A normative document was declaring domains with values
+left out**, and had been since the text-vocabulary work added them.
+`auth` still read `Covered(tag)` where 11.1 says `Covered(obligation)`.
+
+**Nothing surfaced it because nothing read the file.** One comment in
+`situc/capability.py` cites it; no test did. It is exactly the vendoring
+shape in `evidence.md` -- a copy whose check is "is this still what
+upstream says", which only a build-time comparison can answer -- and the
+copy here is inside the same repository, which is what made it invisible
+rather than what made it safe.
+
+**The table is transcribed from 11.1 mechanically and the transcription
+carries its proof**: the comparison that found 7 differences reports 0
+after. `test_the_extracted_axes_document_matches_section_11_1` now holds
+them together, asserting the population (13 rows in each, and the same
+13) before the contents, so an extraction matching nothing cannot pass.
+Three controls, each failing through its own branch: a lattice value
+removed fails the drift assertion naming the axis and both sides, a
+deleted row fails the count, and a renamed axis fails the set.
+
+**The reading itself is now stated once rather than three times.** What
+26.519 settled for members and regions and 26.522 settled for structs is
+ONE rule, and neither document said so:
+
+> A line names an obligation only if that obligation covers EVERY byte
+> that line is about -- a member's, a region's, or a whole struct's.
+
+With one exemption, which is not a carve-out but the definition working:
+**an obligation never covers its own bytes**, because coverage means
+*writing these bytes leaves it stale* and a checksum does not invalidate
+itself. Without it the rule empties the axis instead of narrowing it.
+
+**And the two readings are one relation read from opposite ends**, which
+is the sentence that was missing and the reason the confusion recurred.
+Inside the lattice `auth` meets toward `Covered` and UNIONS its
+parameters, because there the question is *writing these bytes stales
+which obligations* -- and mutating a byte covered by any of them stales
+all of them, so the union is correct. A rendered line asks *which
+obligations authenticate these bytes*, where the same union claims more
+than any single obligation delivers. Both true; only the union differs.
+The lattice keeps the first and every line a reader sees carries the
+second.
+
+11.2 gains the other half while the file is open: **four axes are not the
+meet.** `offset` and `align` are forced back to their strongest values
+because a type is not placed anywhere, `size` takes the layout's own
+extent, and `auth` is not the meet at all. The section said "the meet of
+its members' plus whatever the struct construct itself imposes", which is
+true and from which nobody could derive any of that.
+
+**The fourth mis-aimed marker in two days, and this one corrupted a
+control report.** Reading three sabotage runs with `grep -E
+'drifted|not 13|only in'` matched the ASSERTION'S SOURCE LINE in pytest's
+traceback rather than its message, so all three appeared to fail through
+`11.1 has N axis rows, not 13` -- a claim about the file I had not
+touched. Re-read properly, each fails through its own branch. **A
+traceback prints the assertion and the failure, and a grep over both
+cannot tell which one it matched**; match on the message text, or read
+the `^E` lines whole.
+
 ### 26.540 The one open item was built 25 days ago, over an empty set
 
 **26.144's register held exactly one item claiming `not yet built`, and
@@ -31235,11 +31358,17 @@ assert the substitution count in the tool rather than grepping for the
 phrase afterwards.
 
 **What is left in the register is nobody's to build.** Every remaining
-item names the copyright holder as the decider or is closed: the struct
-`auth=` reading, the root fix for bare region names, `linear_block`'s
-generator matrix, 8b10b and CoAP, which `copyright` file survives, and the
-switch-label style. This was the only unblocked one, and it was already
-done.
+item names the copyright holder as the decider or is closed: the root fix
+for bare region names, `linear_block`'s generator matrix, 8b10b and CoAP,
+which `copyright` file survives, and the switch-label style. This was the
+only unblocked one, and it was already done.
+
+**~~and the struct `auth=` reading~~ -- which was in that list and should
+not have been, corrected the same day in 26.541.** It was struck through
+and marked settled and built, and the list was written from memory of a
+read rather than from the file. **A scope claim made in the entry that
+exists to warn about scope claims**, which is the shortest distance
+between a lesson and ignoring it.
 
 ### 26.539 A cap on a `remaining` run, and the unit nobody asked about
 
