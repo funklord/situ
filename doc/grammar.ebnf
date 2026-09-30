@@ -160,7 +160,7 @@ tag_field	= ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
 
 block		= "positional" "{" { member } "}"
 	| "authenticated" [ ident ] [ attrs ] "{" { member } "}"
-	| "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
+	| "sealed" [ ident ] "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
 	| "coded" ident "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
 	| "indexed" "(" index_args ")" "{" { member } "}"
 	| "opaque" ident "[" size_expr "]" [ attrs ] ";"
@@ -178,7 +178,13 @@ variant		= "variant" ident "switch" "(" expr ")" "{"
  * when it holds "=" or "," at depth 1, or a lone known attribute name that is
  * not immediately followed by "(" -- `min` and `max` are attribute names and
  * expression builtins both. *)
-array_spec	= "[" [ size_expr ] "]" ;
+(* Section 8.6.1 and decision 0059. `max` after the brackets bounds a run
+ * whose length comes from the frame: `u8 tail[remaining] max 470`. It counts
+ * ELEMENTS, as the brackets do, where `until D max N` counts BYTES, as a scan
+ * does -- each spelling counts what its own form counts. The cap is accepted
+ * here after any size and REFUSED by `layout` on a run something already
+ * bounds, which is a well-formedness rule rather than a grammar one. *)
+array_spec	= "[" [ size_expr ] "]" [ "max" expr ] ;
 size_expr	= expr | "remaining" ;
 
 (* Section 8.6.1. Where a member ends when no length says so. The
