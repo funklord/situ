@@ -31132,6 +31132,60 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.538 `peek` in the C walker, and the comparison that never ran
+
+**0057's status line says "front end built", and the C walker was one
+of the halves it was not.** A `peek` member is read at the cursor and
+NOT spent, so the arm begins where the discriminant began. That walker
+had no spelling for the flag, and on `example/json`'s `value` -- the
+worked example 0057 names -- it answered:
+
+    python   value.kind 0   value.body 0
+    C        value.kind 0   value.body 1
+
+**The arm began after the byte that selected it**, which is the whole
+of what 0057 exists to remove, in the walker rather than the language.
+
+**`edges.situ` uses `peek` and could never have caught it.** Both its
+members sit at STATIC offsets, so the C walk reads them off the
+placement row and never sums the chain. json and sexpr are the only two
+schemas where the member after a peek is placed dynamically, and they
+are the two the new comparison fails on without the fix.
+
+**The gate that was missing is worth more than the fix.** Offsets were
+compared in exactly two assertions, both on one schema written for
+`test_walker_c.py`. The two corpus-wide differentials ask whether a
+message is well formed and which check refused -- neither can see two
+walkers that place a member differently and agree about the answer.
+That is the silence this file keeps naming: a question nobody asked
+reads exactly like a question answered.
+
+**The new comparison was wrong twice, and both answers were already in
+the file.** It went red for twenty-two schemas because the C driver
+exits non-zero for a shape it cannot acquire -- and `_verdict_pair`'s
+docstring says exactly that, ending "treating them as one made this
+test red for five schemas over its own plumbing". Then it went red for
+three more because a `refused` from one side is a decline rather than a
+disagreement, which the verdict test states in as many words: "a walker
+that declines to answer is saying something true about itself, and the
+two differ in what they render."
+
+**Fourth and fifth time in one session that the knowledge was in the
+tree and the code was written past it**, after `traverse`'s comment
+about `covers(flags)`, the `NOT_A_MEMBER` predicate and `layout.py`'s
+rejected qualification. The new helper cites the docstring it should
+have been read from rather than quietly reusing its body. **The
+pattern is not that this tree is under-documented; the reading is
+where it fails.**
+
+**What the comparison declines is counted rather than asserted away.**
+`OFFSETS_ASKED` records the pairs made and the pairs skipped per
+schema, for the reason `VERDICTS_ASKED` does: a comparison whose two
+sides never meet passes, and the count is what separates that from
+agreement. Three schemas -- cpio, netlink and png -- have members the C
+build refuses and the Python walk places, which are the classes the
+verdict test already names.
+
 ### 26.537 The region's extent, back where the arithmetic is not a partition
 
 **26.531 took the region out of the field table and said what that
