@@ -921,6 +921,20 @@ def test_the_open_register_agrees_with_the_records_it_cites() -> None:
 	something built that the record does not -- is not asserted here,
 	because a record's Status is the author's summary and lags a build by
 	however long it takes them to write the line.
+
+	**What it cannot see, pinned rather than left to be discovered.** It
+	compares two PROSE claims, so it is satisfied whenever they agree --
+	and two copies of one stale sentence agree perfectly. 0017's Rust
+	item read `Not yet built` in the register and `**Not yet built.**` in
+	the record's own amendment, both of them written the day before the
+	thing was built, and no comparison between them could have said so.
+	What caught it was generating the code and looking: the Rust module
+	for a codec-using schema holds zero `extern "C"`.
+
+	So a cited record whose `Status:` never says `built` -- 0017's says
+	`accepted`, recording its builds in the body -- is invisible to the
+	loop below even when cited. The assertion at the end closes the
+	uncited half, which is the half that can be closed mechanically.
 	"""
 	statuses = {}
 	for path in sorted((ROOT / "doc" / "decision").glob("*.md")):
@@ -972,3 +986,20 @@ def test_the_open_register_agrees_with_the_records_it_cites() -> None:
 
 	assert not wrong, "the register and the records disagree:\n  " \
 	                  + "\n  ".join(wrong)
+
+	# The population, not the cell. Everything above runs only for an item
+	# that CITES a record, so an item claiming to be unbuilt and naming no
+	# record is outside the check entirely -- and the loop over an empty
+	# set passes exactly as loudly as a real one.
+	#
+	# That is not hypothetical: it is how 0017's Rust item stayed stale for
+	# 25 days. It was the only item in the register claiming `not yet
+	# built`, it cited no record, so `wrong` was computed over nothing and
+	# this test was green throughout. Asserting the partition is what stops
+	# the next such item being added silently.
+	uncited = [" ".join(item.split())[:90] for item, raw in items
+	           if re.search(r"not (yet )?built", item, re.I)
+	           and not re.findall(r"doc/decision/(\d{4})-", raw)]
+	assert not uncited, (
+		"a register item claims it is not yet built and cites no decision "
+		"record, so nothing above can check it:\n  " + "\n  ".join(uncited))

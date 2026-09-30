@@ -1,6 +1,8 @@
 # 0017: one codec implementation, in C, with a per-language plugin slot
 
-Status: accepted
+Status: accepted, and built -- `derived` generates natively for C,
+Rust and Python; `extern` binds C. The per-language plugin slot in the
+title was specified and never implemented (see the fifth amendment).
 Date: 2026-07-27
 Phase: before 11 (backends)
 
@@ -364,8 +366,46 @@ does not have that problem -- `runtime/cpp/situ.hpp` includes `situ.h`
 already -- and Python's FFI is not a vendoring question. So the cost this
 removes is Rust's alone, which is why the question was Rust's alone.
 
-**Not yet built.** `situc/codegen/c/derived.py` is the only derived
+~~**Not yet built.** `situc/codegen/c/derived.py` is the only derived
 generator; a Rust one is the work this authorises, and a schema using a
 codec keeps linking the C runtime until it lands. The refusal in
 `gen-derived` that names the unsupported target is what should say so in the
-meantime.
+meantime.~~ **Built the next day; see the amendment below.**
+
+
+## Amendment, 2026-09-30: built, and a claim that outlived its subject
+
+**The work the amendment above authorises landed on 2026-09-05**, in
+`5babf11`, "gen-derived backends for Rust and Python" -- the day after the
+answer was written. `situc/codegen/rust/derived.py` and
+`situc/codegen/python/derived.py` join C's, with
+`situc/codegen/kernel_math.py` holding what the three share, and
+`situc gen-derived --target` offers `{c,rust,python}`.
+
+**Re-measured 2026-09-30 by generating rather than by reading**, because
+this record's own sentence is what made the measurement necessary:
+
+    situc build --target rust example/png/png.situ   ->  0 `extern "C"`
+    situc gen-derived --target rust example/png/png.situ  ->  0 `extern "C"`
+
+No `#[link]` and no `libc::` either, and `crc32` is a native `pub fn`. The
+`#![no_std]`, no-C promise the amendment above was written to protect holds
+for a schema that uses a codec.
+
+**Why it went unnoticed for twenty-five days is the part worth keeping.**
+The sentence lived in two places -- here and in `project.md`'s open register
+at 26.144 -- and a test exists to compare them. It passed the whole time.
+`test_the_open_register_agrees_with_the_records_it_cites` flags an item
+claiming `not yet built` whose record's `Status:` says `built`; this record
+said `accepted`, and the register's item cited no record at all, so the
+comparison ran over an empty set and reported success exactly as loudly as
+a real pass.
+
+**Two copies of one stale sentence agree perfectly**, which is what a
+register-against-record check cannot see however carefully it is written.
+What settled it was running the compiler and reading the output. The test
+now asserts the partition as well as the cell -- an item claiming to be
+unbuilt and citing no record fails, naming itself -- so the empty cell
+cannot be entered silently again. That closes the mechanical half; the half
+where both prose copies are wrong together is closed only by measuring, and
+this record's `Status:` now carries the word a tool can read.
