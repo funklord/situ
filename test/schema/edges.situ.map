@@ -64,6 +64,10 @@ struct bounded_varint size=3..19 mutate=InPlaceSlack address=Unstable repr=Value
   bounded_varint.large                   offset=Dynamic size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical
   bounded_varint.tail                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
+struct capped_tail size=1..471 mutate=Shifting
+  capped_tail.kind                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  capped_tail.content                    offset=AbsoluteStatic(0x01) size=Bounded(0, 470) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct coded_run size=2..512 access=Sequential mutate=Shifting address=Unstable atomic=NonAtomic stage=TransformTime
   coded_run.n                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   coded_run.body                         offset=AbsoluteStatic(0x01) size=Bounded(0, 510) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting

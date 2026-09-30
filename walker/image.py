@@ -57,6 +57,14 @@ PEEK = 32
 #: a wrong value that reads exactly like a right one.
 PARAMETER = 64
 
+#: `image_placement.text_flags` bit 128 (0059): a `[remaining]` run whose
+#: cap the schema wrote down. `size_max_bits` on the same row holds the
+#: bound; this says it was DECLARED, which is what licenses refusing a
+#: frame longer than it. Every bounded struct has a maximum and is read
+#: out of a longer buffer every day, so the number alone cannot be the
+#: condition.
+FRAME_CAP = 128
+
 #: `image_placement.flags`
 OFFSET_KNOWN, FRAME_RELATIVE, SIZE_FIXED, FRAME_BASE_DYNAMIC = 1, 2, 4, 8
 SIGNED, MARKER_GOVERNED, IS_TAG = 16, 32, 64

@@ -51,6 +51,7 @@ from situc.traverse import (
 	bit_extractor,
 	declared_value_bounds, pinned_bytes,
 	bit_addressed_tag, coded_spans, covered_bit_span, covered_run,
+	frame_cap,
 	covered_run_refusal,
 	data_sized, dynamic_frame_owner,
 	declared_depth, depth_limit, invalidating_members, is_own_member,
@@ -8656,6 +8657,23 @@ class Emitter:
 				"\t\t * that broke it -- the same case the depth checks",
 				"\t\t * meet, and `check`'s contract is that every refusal",
 				"\t\t * sets `*which` on the line above it. */",
+				f"\t\t*which = {_NO_CHECK};",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			])
+
+		# The mirror of the floor above, and only where the cap was
+		# DECLARED. A struct that merely has a maximum is read out of a
+		# longer buffer every day; one ending in `[remaining] max N` is
+		# not, because that run takes the whole remainder and a longer
+		# view means it ran past its own stated bound (0059).
+		if frame_cap(struct) is not None and struct.layout.register is None:
+			lines.extend([
+				"",
+				f"\tif (view.limit > {macro(self.prefix, struct.name, 'SIZE_MAX')}) {{",
+				"\t\t/* The trailing run reaches further than the schema",
+				"\t\t * says it may. No member is at fault -- the frame is",
+				"\t\t * -- so `*which` says so, as the floor above does. */",
 				f"\t\t*which = {_NO_CHECK};",
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",

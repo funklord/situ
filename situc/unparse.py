@@ -539,7 +539,14 @@ def _args_to_source(args: tuple[ast.Attr, ...]) -> str:
 def _array_to_source(array: ast.ArraySpec | None) -> str:
 	if array is None:
 		return ""
-	return f"[{expr_to_source(array.size)}]" if array.size is not None else "[]"
+	# The cap goes with the brackets, because that is where it was written
+	# and the parser reads it there. `cap` is stored independently rather
+	# than derived from anything already printed, so a round trip drops it
+	# unless this renders it -- which is the rule 26.144's checklist states
+	# and `Sealed.until` is the entry that paid for (0059).
+	cap  = f" max {expr_to_source(array.cap)}" if array.cap is not None else ""
+	size = expr_to_source(array.size) if array.size is not None else ""
+	return f"[{size}]{cap}"
 
 
 def _attrs_to_source(attrs: tuple[ast.Attr, ...]) -> str:

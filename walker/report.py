@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from walker import vm
-from walker.image import NONE, Image, _string_at
+from walker.image import FRAME_CAP, NONE, Image, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          Unsupplied, View,
                          acquire, digits_of,
@@ -803,6 +803,19 @@ def _validate(image: Image, view: View, struct_index: int,
 	if shape.size_bits != NONE:
 		need = (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		if view.limit - view.at < need:
+			return fail(ERR_BOUNDS)
+
+	# The mirror of that floor, and only where the cap was DECLARED: a
+	# `[remaining] max N` run takes the whole remainder, so a frame past
+	# the bound holds a run past it too (0059). Every bounded struct has a
+	# maximum and is read out of a longer buffer every day, which is why
+	# the flag rather than `size_max_bits` is the condition.
+	for index in image.members(shape):
+		capped = image.placements[index]
+		if not capped.text_flags & FRAME_CAP or capped.size_max_bits == NONE:
+			continue
+		reach = capped.offset_bits + capped.size_max_bits
+		if view.limit - view.at > (reach + BITS_PER_BYTE - 1) // BITS_PER_BYTE:
 			return fail(ERR_BOUNDS)
 
 	for index in image.members(image.structs[struct_index]):

@@ -1821,3 +1821,24 @@ struct stuffed_seal {
 	sealed body(sealed_stuffing) until "\xC0" { u8 inner; }
 	tag u8 seal_sig[16] covers(body);
 }
+
+// A `[remaining]` run with a cap the schema writes down (0059).
+//
+// `fuzznet` reported the gap from a record body whose real bound lives in
+// the ENCLOSING record -- `body_len` minus the header -- so a body-only
+// schema has no field to size it from and could only say `[remaining]`,
+// which reads Unbounded. The cap says how far it reaches without inventing
+// a field the format does not carry.
+//
+// `max N` rather than `[max = N]`: the attribute is a claim about a VALUE
+// that `validate` compares, an array has no single value, and 14.5 refuses
+// it there. This is the spelling `until D max N` already uses for the same
+// meaning, counting what the brackets count.
+//
+// It is here rather than only in a test because a declared cap refuses a
+// longer frame, and four backends plus two walkers have to agree on which
+// frames those are. Nothing in the corpus exercised that until now.
+struct capped_tail {
+	u8  kind;
+	u8  content[remaining] max 470;
+}

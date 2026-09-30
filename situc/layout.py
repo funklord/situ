@@ -243,6 +243,14 @@ class Placement:
 	# content policy is whatever the attributes say, so everything except the
 	# length check is the reserved path unchanged.
 	pad_bounds: tuple[int, int] | None	= None
+	#: `u8 content[remaining] max 470` -- the declared cap, in ELEMENTS, on a
+	#: run whose length comes from the frame (0059).
+	#:
+	#: Kept apart from `size_max_bits`, which every bounded member has: this
+	#: says the bound was WRITTEN DOWN rather than computed, and only a
+	#: declared one may refuse a frame. A struct that merely happens to have
+	#: a maximum is still legitimately read out of a longer buffer.
+	remaining_cap: int | None		= None
 	# Set when the field's type is a varint, which the propagation table reads
 	# to attach the right reasons.
 	varint: str | None		= None
@@ -2255,6 +2263,9 @@ class Solver:
 			pinned_bits    = pinned.lo if pinned is not None else None,
 			pinned_runs    = self._pinned_runs(member),
 			pad_bounds     = getattr(member, "bounds", None),
+			# The DECLARED cap, so a backend can tell it from a maximum that
+			# was merely computed: only the first may refuse a frame (0059).
+			remaining_cap  = self._remaining_cap(member),
 			scalar         = scalar,
 			endian         = local.endian,
 			bit_order      = local.bit_order,
@@ -2810,6 +2821,22 @@ class Solver:
 
 	# -- widths -----------------------------------------------------------
 
+	def _remaining_cap(self, member: ast.Member) -> int | None:
+		"""The `max N` on a `[remaining]` run, in elements, or None.
+
+		Only where the size IS `remaining`: a counted run is bounded by its
+		count and a delimited one by `until D max N`, so a cap elsewhere
+		would be a second spelling of something already said, and
+		`wellformed` refuses it by name.
+		"""
+		array = getattr(member, "array", None)
+		if array is None or array.cap is None:
+			return None
+		if not isinstance(array.size, ast.Remaining):
+			return None
+		return evaluate(array.cap, self.result.env)
+
+
 	def _pinned_runs(self, member: ast.Field | ast.Reserved
 			) -> tuple[bytes, ...] | None:
 		"""The byte runs this member may hold, or None where it is not one.
@@ -3072,8 +3099,49 @@ class Solver:
 					         "occupy (project.md section 8.5)"],
 				)
 			# The frame's extent is not known here, and for a top-level struct
-			# it is not known at all. Unbounded is the honest answer.
-			return Interval(0, None)
+			# it is not known at all. Unbounded is the honest answer -- unless
+			# the schema states a smaller one, which is what `max N` is for
+			# (0059). A body-only schema whose real cap lives in the enclosing
+			# record has no field to size this from and can still say how far
+			# it reaches.
+			if member.array.cap is None:
+				return Interval(0, None)
+
+			env = self.result.env.with_layout(
+				self.result.lookup, self.result.explain).with_fields(state.fields)
+			cap = interval_of(member.array.cap, env)
+			if cap.hi is None or cap.hi < 0:
+				raise error(
+					"a `max` on a `[remaining]` run needs a constant bound",
+					member.array.cap.span,
+					label = "the solver cannot bound this",
+					notes = ["the cap says how far the run may reach, so it "
+					         "has to be a number the layout can state",
+					         "a bound that depends on the data is the count "
+					         "form: `u8 body[n]`"],
+				)
+			# ELEMENTS, not bytes, because this cap sits where a count sits.
+			# `u8 name[n]` is n elements and `u8 c[remaining] max 470` is at
+			# most 470 of them; `until D max N` counts BYTES because a scan
+			# counts bytes, and the two are the same number for the `u8` run
+			# either form is usually written on. Each spelling counts what
+			# the form it belongs to counts (0059).
+			return Interval(0, cap.hi)
+
+		# A cap belongs to the form that has no other bound. A counted run
+		# is bounded by its count and a delimited one by `until D max N`,
+		# so `max` anywhere else states something nothing reads -- which
+		# 14.5 refuses by name rather than accepting and ignoring.
+		if member.array.cap is not None:
+			raise error(
+				"`max` means nothing on a run whose length is already bounded",
+				member.array.cap.span,
+				label = "the count above already bounds this run",
+				notes = ["`max` bounds a run whose length comes from the "
+				         "frame: `u8 tail[remaining] max 470` (0059)",
+				         "a delimited run's cap is spelled `max N` after "
+				         "`until`, which bounds the scan instead"],
+			)
 
 		self.check_not_behind_codec(member.array.size, state)
 

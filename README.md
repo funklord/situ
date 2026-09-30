@@ -554,6 +554,7 @@ decides the capability vector:
 ```situ
 u8   fixed[4];                        // a count
 u8   rest[remaining];                 // to the end of the frame
+u8   body[remaining] max 470;         // and no further, or the frame is refused
 u8   name[]    until ':';             // to a delimiter, written as a character
 u8   value[]   until "\r\n" | '\n';    // or to whichever of several comes first
 u8   method[]  until " " max 16;      // bounded, so it stays allocatable
@@ -671,6 +672,11 @@ require  offset(tcp_header.options) == 20;
 `remaining` is the one keyword that is not an expression: it means "to the
 end of the frame", and it is what makes a member's size depend on the buffer
 rather than on the message.
+
+`max N` after it says how far the run may reach, for a body whose real bound
+lives in the enclosing record and so has no field here to be sized from. The
+number counts elements, as the brackets do; `until D max N` counts bytes, as
+a scan does. A frame longer than the cap is refused rather than read in part.
 
 That second line is netlink's alignment padding written by hand, and it is
 also what `pad_to(4);` says in one member -- `base::Pickle`, cpio and most

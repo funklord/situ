@@ -332,6 +332,15 @@ typedef struct {
  * (26.538). */
 #define SITU_WALK_PEEK         0x20u
 
+/* `text_flags` bit 128.
+ *
+ * A `[remaining]` run whose cap the schema WROTE DOWN (0059). The row's
+ * `size_max_bits` holds the bound; this says it was declared rather than
+ * computed, which is what licenses refusing a longer frame. Every bounded
+ * struct has a maximum and is read out of a longer buffer every day, so
+ * the number alone cannot be the condition. */
+#define SITU_WALK_FRAME_CAP    0x80u
+
 /* Bind an image. Every table it names is bounds-checked against the whole
  * before anything reads one, because the image is the least trusted input
  * this component has. */

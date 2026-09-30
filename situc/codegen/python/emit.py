@@ -55,7 +55,7 @@ from situc.traverse import (
 	data_sized,
 	dynamic_frame_owner,
 	readable_names,
-	decode_bound, decode_ratio, region_extent, offset_plan,
+	decode_bound, decode_ratio, frame_cap, region_extent, offset_plan,
 	decodes_here, classify,
 	classify_check, declares_its_own_length,
 	pinned_runs,
@@ -5938,6 +5938,20 @@ class Emitter:
 				f"\t\tif self._len < {struct.layout.size_bytes}:",
 				f'\t\t\traise BoundsError("{struct.name} needs at least '
 				f'{struct.layout.size_bytes} bytes; "',
+				'\t\t\t\tf"{self._len} given")',
+			])
+
+		# The mirror of that floor, and only where the cap was DECLARED.
+		# A struct that merely has a maximum is read out of a longer
+		# buffer every day; one ending in `[remaining] max N` is not,
+		# because that run takes the whole remainder (0059).
+		capped = frame_cap(struct)
+		if capped is not None and struct.layout.register is None:
+			limit = (struct.layout.size_max_bits or 0) // BITS_PER_BYTE
+			lines.extend([
+				f"\t\tif self._len > {limit}:",
+				f'\t\t\traise BoundsError("{struct.name} reaches at most '
+				f'{limit} bytes; "',
 				'\t\t\t\tf"{self._len} given")',
 			])
 		lines.extend(self._depth_checks(struct))

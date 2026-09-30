@@ -946,6 +946,27 @@ def region_decodes(placement: Placement) -> bool:
 		or (placement.kind == "sealed" and bool(placement.delimiters)))
 
 
+def frame_cap(struct: "ResolvedStruct") -> Placement | None:
+	"""The member whose declared `max` bounds this struct's whole frame.
+
+	`u8 content[remaining] max 470` says the run reaches no further than
+	470 elements, and such a run is the last member of its frame -- so the
+	cap bounds the frame itself, and a view longer than it holds a run
+	longer than the schema allows (0059).
+
+	Here rather than in each backend because four of them plus both
+	walkers must agree on when a longer frame is refused, and because the
+	condition is easy to get one step wrong: a struct that merely HAS a
+	maximum is still read out of a longer buffer quite legitimately. What
+	licenses the refusal is that the bound was written down, which is what
+	`remaining_cap` records and `size_max_bits` does not.
+	"""
+	for entry in own_entries(struct):
+		if entry.placement.remaining_cap is not None:
+			return entry.placement
+	return None
+
+
 def bit_addressed_tag(placement: Placement) -> bool:
 	"""A `tag` or `checksum` whose value is not a whole number of bytes.
 

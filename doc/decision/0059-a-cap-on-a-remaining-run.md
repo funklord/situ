@@ -1,6 +1,6 @@
 # 0059: a cap on a `remaining` run
 
-Status: proposed
+Status: accepted
 Date: 2026-09-30
 Phase: raised by `fuzznet`, from a record body it cannot bound
 
@@ -63,30 +63,37 @@ and this is a bound on an extent; giving it the second meaning in one
 position is exactly what 14.5 exists to prevent, and the refusal message
 above would have to be rewritten to say when it means which.
 
-## The open question this record cannot settle by itself
+## Read or refuse: refuse
 
-**Does the cap BOUND THE READ or REFUSE A LONGER FRAME?** The two
-existing answers point different ways and only the holder can choose.
+**A declared cap REFUSES a longer frame.** Settled by the copyright
+holder; the record was written with the question open because the two
+existing answers point different ways and neither is derivable from the
+other.
 
 `until D max N` caps the SCAN: the generated code stops looking after N
-bytes, and 26.431 is the entry where an arm's accessor ignored the cap
-and read past it. A scan can stop early because the delimiter may not be
-there at all.
+bytes, and 26.431 is the entry where an arm's accessor ignored the cap and
+read past it. A scan can stop early because the delimiter may not be there
+at all. **A `remaining` run has no scan** -- its length IS the frame -- so
+the alternative was to read `min(remaining, N)` bytes and leave the rest
+unread, which is consistent with `until` and silently drops bytes the
+message contains.
 
-A `remaining` run has no scan. Its length IS the frame, so:
+What decided it is what the cap MEANS in the case that asked for it.
+`fuzznet`'s cap is "the record's `body_len` minus the header": a fact
+about the ENCLOSING format that a body-only schema is restating. A frame
+exceeding it is malformed rather than truncatable, and a reader that
+quietly ignored the tail would be reading a message no encoder of that
+format can produce.
 
-- **Cap the read** -- the member is `min(remaining, N)` bytes and anything
-  past N is unread. Consistent with `until`, and it silently drops bytes
-  the message contains.
-- **Refuse a longer frame** -- `validate` fails when the remainder exceeds
-  N. Consistent with what a cap MEANS on a record whose true bound is
-  external, which is `fuzznet`'s case, and it makes a schema that
-  under-states the cap reject valid messages.
+**The cost, stated rather than discovered later: a schema that
+UNDER-states the cap now rejects valid messages.** That is the price of
+the refusal and it falls where it should -- on the schema, loudly, rather
+than on the bytes, silently.
 
-**`fuzznet`'s own words favour the second**: their cap is "the record's
-`body_len` minus the header", a fact about the enclosing format that a
-body-only schema is restating. A message exceeding it is malformed, not
-truncatable.
+**Where the refusal lives is the floor's mirror.** Every backend already
+refuses a frame SHORTER than a fixed struct's size; this is the same
+guard pointed the other way, emitted from the same place, and it names
+the frame rather than a member because no member is at fault.
 
 ## Alternatives considered
 
@@ -120,3 +127,36 @@ unparser, which drops a field it does not render.
 **A schema in the corpus must use it**, or the differential and the
 compile gates read a construct nobody wrote. `edges.situ` is where a
 construct no worked example carries goes.
+
+**Built. Thirteen sites, and one of them is a decision the record did not
+anticipate: the cap counts ELEMENTS, not bytes.** `u8 name[n]` counts
+elements and the cap sits where that count sits, so `max 470` is 470
+elements. `until D max N` counts BYTES because a scan counts bytes. The
+two are the same number for the `u8` run either form is usually written
+on, which is exactly why the difference had to be settled deliberately
+rather than discovered on the first `u16` run.
+
+    ast.ArraySpec.cap            the field
+    parser.parse_array_spec      `max` as a soft keyword after `]`
+    layout.array_extent          `Interval(0, cap.hi)`, and the refusal
+                                 of a cap on a run already bounded
+    layout.Placement             `remaining_cap`, the DECLARED cap, kept
+                                 apart from the computed `size_max_bits`
+    traverse.frame_cap           the shared predicate, so four backends
+                                 ask one question rather than four
+    c, cpp, python, rust         the ceiling guard, all agreeing on 471
+    unparse._array_to_source     which a round trip proves
+    pack.TEXT_FRAME_CAP          -> `walker.image.FRAME_CAP`
+    walker/report.py             the Python walker's guard
+    walker/c/situ_walk.c         `SITU_WALK_FRAME_CAP`, in `validate_deep`
+
+**`layout` refuses a cap where something already bounds the run**, which
+is 14.5 applied to the clause rather than to an attribute: a counted run
+is bounded by its count and a delimited one by `until D max N`, so a
+third spelling would state what nothing reads.
+
+**Every one of these was seen to fail.** Eight sabotages, each reverted:
+the extent, the refusal, the unparser, each of the four backends
+separately, and the Python walker. The four backends are sabotaged one at
+a time on purpose -- a single control over all four would pass while three
+of them were wrong, which is this tree's most expensive recurring defect.

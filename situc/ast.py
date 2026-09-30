@@ -170,6 +170,19 @@ class ArraySpec(Node):
 
 	span: Span
 	size: Expr | None
+	#: `u8 content[remaining] max 470` -- the largest this run may be, where
+	#: its length comes from the frame and the schema knows a smaller bound
+	#: than "as far as the buffer goes" (0059).
+	#:
+	#: The same word in the same position as `until D max N`, and for the
+	#: same meaning. NOT the `[max]` attribute, which is a claim about a
+	#: VALUE that `validate` compares -- an array has no single value, which
+	#: is why 14.5 refuses it there and why this is syntax instead.
+	#:
+	#: Only where the size is `remaining`: a counted run is bounded by its
+	#: count and a delimited one by `until D max N`, so a cap anywhere else
+	#: would be a second spelling of something already said.
+	cap: Expr | None = None
 
 
 @dataclass(frozen=True)

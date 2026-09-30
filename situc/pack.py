@@ -172,6 +172,15 @@ PINNED			= 1 << 7
 #: argument, confidently.
 TEXT_PARAMETER		= 1 << 6
 
+#: A `[remaining]` run whose cap the schema WROTE DOWN (0059). The row's
+#: `size_max_bits` already holds the bound; this says it was declared
+#: rather than computed, which is the whole of what licenses refusing a
+#: longer frame. Every bounded struct has a maximum and is read out of a
+#: longer buffer quite legitimately, so the number alone cannot be the
+#: condition -- the same reason `parameter` above cannot be inferred from
+#: the row it sits in.
+TEXT_FRAME_CAP		= 1 << 7
+
 #: `image_kind`, matching the enum in std/image.situ. A kind the walker does
 #: not know is an error there rather than a guess, which is why the schema
 #: declares `default = error`.
@@ -2559,7 +2568,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			| (8 if is_bcd else 0) \
 			| (16 if placement.scaled else 0) \
 			| (32 if placement.peek else 0) \
-			| (TEXT_PARAMETER if placement.parameter else 0)
+			| (TEXT_PARAMETER if placement.parameter else 0) \
+			| (TEXT_FRAME_CAP if placement.remaining_cap is not None else 0)
 		placements_blob += _struct.pack(
 			"<BBBB",
 			_kind_of(placement),

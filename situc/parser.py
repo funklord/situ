@@ -2797,7 +2797,17 @@ class Parser:
 			size = self.parse_expr()
 
 		self.expect_symbol("]", "to close the array size")
-		return ast.ArraySpec(self.span_from(start), size)
+
+		# `max N` where `until D max N` puts it, because it is the same
+		# word for the same thing: the largest this run may be (0059).
+		# Read as a soft keyword, the way `until` reads its own cap, so no
+		# schema using `max` as a name stops parsing.
+		cap: ast.Expr | None = None
+		if self.current.is_ident("max"):
+			self.advance()
+			cap = self.parse_expr()
+
+		return ast.ArraySpec(self.span_from(start), size, cap)
 
 	def parse_pin(self) -> ast.Expr | None:
 		if self.accept_symbol("@") is None:

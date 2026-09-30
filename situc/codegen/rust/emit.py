@@ -54,6 +54,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
 	readable_names,
+	frame_cap,
 	region_decodes,
 	region_extent,
 	decode_counts_bits,
@@ -7249,12 +7250,25 @@ class Emitter:
 		         if struct.layout.size_bytes and struct.layout.register is None
 		         else [])
 
+		# The mirror of that floor, and only where the cap was DECLARED. A
+		# struct that merely has a maximum is read out of a longer buffer
+		# every day; one ending in `[remaining] max N` is not, because that
+		# run takes the whole remainder (0059).
+		ceiling = ([f"\t\tif self.bytes.len() > "
+		            f"{(struct.layout.size_max_bits or 0) // BITS_PER_BYTE} {{",
+		            "\t\t\treturn Err(situ_rt::Error::Bounds);",
+		            "\t\t}"]
+		           if frame_cap(struct) is not None
+		           and struct.layout.register is None
+		           else [])
+
 		refusals = self._refuse_checks(struct)
 
 		body = [
 			*floor,
+			*ceiling,
 			*depth,
-			*(checks or refusals or ([] if depth or floor else
+			*(checks or refusals or ([] if depth or floor or ceiling else
 			             ["\t\t// Nothing in this struct is constrained."])),
 			*(refusals if checks else []),
 			"\t\tOk(())",

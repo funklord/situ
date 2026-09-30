@@ -1899,6 +1899,14 @@ VALIDATED = {
 	"a delimiter that has to be there": (
 		'struct hdr { u8 verb[] until " " max 4; u8 rest[remaining]; }',
 		[("47455420ff", "0"), ("47455454ff", "2"), ("4720ffffff", "0")]),
+	# And the cap that counts ELEMENTS rather than bytes, which is the
+	# whole frame's bound because such a run is the last member (0059).
+	# The boundary from both sides: 5 bytes is the last frame the schema
+	# allows and 6 is the first it does not, because a guard tested only
+	# on the bad side passes just as well when it refuses everything.
+	"a `[remaining]` run that reaches no further than its cap": (
+		"struct hdr { u8 kind; u8 content[remaining] max 4; }",
+		[("11", "0"), ("1100000000", "0"), ("110000000000", "1")]),
 }
 
 

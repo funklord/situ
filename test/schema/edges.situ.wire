@@ -75,6 +75,10 @@ struct bounded_varint size=3..19
   ~         1..9      edge_varint large  varint=edge_varint min=300
   ~         1         u8         tail
 
+struct capped_tail size=1..471
+  @0x0000   1         u8         kind
+  @0x0001   0..470    u8         content  sized-by=remaining
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling

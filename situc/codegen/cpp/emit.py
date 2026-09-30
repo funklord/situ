@@ -65,7 +65,8 @@ from situc.traverse import (
 	classify_check, declares_its_own_length,
 	pinned_runs,
 	extent_parts, frameable,
-	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
+	extern_symbol, frame_cap, has_computable_extent, index_entry_bytes,
+	indexed_elements,
 	region_decodes,
 	is_run,
 	local_name,
@@ -7480,6 +7481,21 @@ class Emitter:
 				# broke it -- and `check`'s contract is that every refusal
 				# sets `*which` on the line above it, whatever it was set to
 				# on entry.
+				*(["\t\t\t*which_ = no_check;"] if ids else []),
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			])
+
+		# The mirror of that floor, and only where the cap was DECLARED. A
+		# struct that merely has a maximum is read out of a longer buffer
+		# every day; one ending in `[remaining] max N` is not, because that
+		# run takes the whole remainder (0059).
+		capped = frame_cap(struct)
+		if capped is not None and struct.layout.register is None:
+			limit = (struct.layout.size_max_bits or 0) // BITS_PER_BYTE
+			lines.extend([
+				f"\t\tif (raw_.limit > {limit}u) {{",
+				# The frame is at fault rather than any member, as above.
 				*(["\t\t\t*which_ = no_check;"] if ids else []),
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",

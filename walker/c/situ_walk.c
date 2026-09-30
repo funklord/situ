@@ -3622,6 +3622,29 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		return err;
 	}
 
+	/* The mirror of that floor, and only where the cap was DECLARED: a
+	 * `[remaining] max N` run takes the whole remainder, so a frame past
+	 * the bound holds a run past it too (0059). Every bounded struct has a
+	 * maximum and is read out of a longer buffer every day, which is why
+	 * the flag rather than `size_max_bits` is the condition. */
+	for (uint32_t i = 0u; i < count; i++) {
+		situ_walk_placement capped;
+
+		err = situ_walk_placement_at(image, first + i, &capped);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if ((capped.text_flags & SITU_WALK_FRAME_CAP) == 0u
+		                || capped.size_max_bits == SITU_WALK_NONE) {
+			continue;
+		}
+		if (len > (capped.offset_bits + capped.size_max_bits + 7u) / 8u) {
+			record(why, SITU_WALK_NONE, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+	}
+
 	for (uint32_t i = 0u; i < count; i++) {
 		const uint32_t index = first + i;
 		situ_walk_placement held;
