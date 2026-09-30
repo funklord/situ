@@ -1,6 +1,8 @@
 # 0057: a dispatch that does not consume what it reads
 
-Status: accepted 2026-09-12; front end built;
+Status: accepted 2026-09-12; front end built; the C walker's half
+built 2026-09-30 (26.538) -- it had no spelling for the flag and
+placed the arm one byte past the discriminant;
 amended 2026-09-12 -- `example/json` is the worked example (26.339)
 Date: 2026-09-12
 Phase: raised by the copyright holder, from two schemas in this tree

@@ -3410,3 +3410,101 @@ def test_every_arm_field_both_answers_and_refuses() -> None:
 	want = {"read", "bytes", "count", "elem0", "scan"}
 	assert answered >= want, f"never answered: {sorted(want - answered)}"
 	assert refused >= want, f"never refused: {sorted(want - refused)}"
+
+
+def _offset_pair(tmp_path: Path, blob: bytes, message: bytes,
+		shape: int) -> tuple[list[str], list[str]] | None:
+	"""Both walkers' offsets, or None where the drivers cannot be asked.
+
+	`_verdict_pair`'s body, for `_verdict_pair`'s reason, and its
+	docstring is the one that should have been read first: "the C driver
+	walks a struct's members and exits non-zero for one with none ...
+	treating them as one made this test red for five schemas over its own
+	plumbing". This test was written without that guard and went red for
+	twenty-two, over the same plumbing and with the answer already in the
+	file (26.538).
+	"""
+	try:
+		theirs = c_offsets(tmp_path, blob, message, shape)
+		mine   = python_offsets(blob, message, shape)
+	except (AssertionError, IndexError, Refused, Unplaceable, Unsupplied):
+		return None
+	if not theirs and not mine:
+		return None
+	return theirs, mine
+
+
+#: Per schema, how many (struct, message) offset comparisons were made and
+#: how many were skipped because no driver could acquire the shape. Reported
+#: for `VERDICTS_ASKED`' reason: a comparison whose two sides never meet
+#: passes, and the count is what separates that from a real agreement.
+OFFSETS_ASKED: dict[str, tuple[int, int]] = {}
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_two_walkers_agree_about_every_offset(
+		schema: Path, tmp_path: Path) -> None:
+	"""Where each member BEGINS, over the corpus.
+
+	The verdict comparisons beside this one ask whether a message is
+	well formed and which check refused; neither can see two walkers
+	that place a member differently and agree about the answer. Offsets
+	were compared in exactly two assertions, both on one schema written
+	for this file, and nothing asked the corpus.
+
+	That silence had a defect in it. `example/json`'s `value` is the
+	worked example decision 0057 names -- `peek u8 kind` followed by a
+	variant at the same cursor -- and the C walker had no spelling for
+	the flag, so it answered:
+
+	    python  value.kind 0   value.body 0
+	    C       value.kind 0   value.body 1
+
+	The arm began after the byte that selected it, which is the whole of
+	what 0057 exists to remove. `edges.situ` uses `peek` too and could
+	not have caught it: both its members are at STATIC offsets, so the
+	C walk reads them from the row and never sums the chain. json and
+	sexpr are the two schemas where the member after a peek is placed
+	dynamically, and they are the two this test reaches (26.538).
+
+	A `refused` from either side is an answer, not a disagreement, and
+	is compared as one: the two differ in what they render, and a walker
+	declining to place a member is saying something true about itself.
+	"""
+	blob  = image_for(schema)
+	image = load(blob)
+	rng   = random.Random(20260930)
+
+	asked = declined = 0
+	for which in range(len(image.structs)):
+		for packet in (draw(rng), draw(rng)):
+			pair = _offset_pair(tmp_path, blob, packet, which)
+			if pair is None:
+				declined += 1
+				continue	# no driver can acquire this shape
+			theirs, mine = pair
+
+			assert len(theirs) == len(mine), (
+				f"{schema.name} struct {which}: the walkers report a "
+				f"different NUMBER of members -- C {theirs}, python {mine}")
+
+			# Position by position, and a `refused` from either side is a
+			# decline rather than a disagreement. That is this file's
+			# settled treatment -- the verdict comparison says "a walker
+			# that declines to answer is saying something true about
+			# itself, and the two differ in what they render" -- and it
+			# still catches the fault this test was written for, because
+			# there BOTH walkers answered and the numbers differed.
+			for ordinal, (c_at, p_at) in enumerate(zip(theirs, mine)):
+				if c_at == "refused" or p_at == "refused":
+					declined += 1
+					continue
+				asked += 1
+				assert c_at == p_at, (
+					f"{schema.name} struct {which} "
+					f"({image.struct_name(which)}) member {ordinal}: "
+					f"the walkers place it differently -- C {c_at}, "
+					f"python {p_at}, on {packet.hex()}")
+
+	OFFSETS_ASKED[schema.name] = (asked, declined)

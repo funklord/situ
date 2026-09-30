@@ -1618,10 +1618,22 @@ static situ_walk_err size_bits_deep(const situ_walk_image *image,
 		return SITU_WALK_OK;
 	}
 
-	err = content_bits_deep(image, message, len, shape, index, depth,
-	                        &content);
-	if (err != SITU_WALK_OK) {
-		return err;
+	/* A PEEKED member is read at the cursor and not spent (0057), so its
+	 * span is its lead and nothing else: `content` stays zero and the
+	 * whitespace handling below adds what is in front of it. The lead is
+	 * still the discriminant's -- nobody else owns the bytes before it.
+	 *
+	 * The content is not merely discarded but never asked for, which is
+	 * what `walk.py` does: measuring an arm's worth of bytes to throw the
+	 * number away can fail where the span cannot. */
+	const int peeked = (first.text_flags & SITU_WALK_PEEK) != 0u;
+
+	if (!peeked) {
+		err = content_bits_deep(image, message, len, shape, index, depth,
+		                        &content);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
 	}
 	if (table_row(image->skips, image->skip_count, image->skip_stride,
 	              index) == NULL) {

@@ -317,6 +317,21 @@ typedef struct {
  * construct until a view could carry one. */
 #define SITU_WALK_PARAMETER    0x40u
 
+/* `text_flags` bit 32.
+ *
+ * A `peek` (decision 0057): a member read at the cursor and NOT spent, so
+ * the member after it begins where it began. Its span is its lead and
+ * nothing else -- the whitespace in front of a discriminant is still the
+ * discriminant's, or nobody would own it.
+ *
+ * A walker that missed the flag places everything after the peek one
+ * member too far along, which is what this one did: on `example/json`'s
+ * `value` it answered offset 1 for `body` where the Python walker answers
+ * 0, so the arm began after the byte that selected it -- exactly the
+ * defect 0057 exists to remove, in the walker rather than the language
+ * (26.538). */
+#define SITU_WALK_PEEK         0x20u
+
 /* Bind an image. Every table it names is bounds-checked against the whole
  * before anything reads one, because the image is the least trusted input
  * this component has. */
