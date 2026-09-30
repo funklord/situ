@@ -14,6 +14,12 @@ fine: the compiler never needs a total order, only meet.
 Meet is computed pointwise. A struct's vector is the meet of its members'
 vectors, plus whatever the struct construct itself imposes.
 
+Four axes are not the meet. `offset` and `align` are forced back to their
+strongest values, because a type is not placed anywhere and a member's
+position says nothing about the type; `size` is forced to the layout's own
+extent, which it knows directly; and `auth` is not the meet at all -- see
+below.
+
 ## The axes
 
 Values are listed strongest first.
@@ -21,18 +27,18 @@ Values are listed strongest first.
 | Axis | Domain | Meaning |
 |---|---|---|
 | `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | byte extent |
-| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` | position knowledge |
-| `access` | `Random` > `Sequential` | can element N be reached directly |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `DataPlaced` is one read of an offset the message chose and so cannot be bounds-checked at the frame (9.8), `Scanned` is a search that can fail (8.6.1) |
+| `access` | `Random` > `Sequential` | can reach element N directly |
 | `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | write cost |
 | `address` | `Stable` > `FrameStable` > `Unstable` | can a pointer be held |
 | `align` | `Aligned(n)` > `Unaligned` | relative to message base |
-| `repr` | `MemoryIdentical` > `ValueConverted` > `ConditionallyConverted(f)` | is the value literally the bytes |
+| `repr` | `MemoryIdentical` > `ValueConverted` > `TextConverted` > `ConditionallyConverted(f)` | is the value literally the bytes, and can the conversion fail: a byte swap is total, a decimal parse is not (8.6.2) |
 | `atomic` | `AtomicWord` > `NonAtomic` | single-instruction access possible |
 | `canonical` | `Canonical` > `CanonicalGiven(f)` > `NonCanonical` | exactly one valid encoding |
-| `stage` | `CompileTime` < `ParseTime` < `TransformTime` < `VerifyGated` | when resolvable |
-| `auth` | `Uncovered` / `Covered(tag)` | which tag covers these bytes |
-| `secrecy` | `Public` / `Secret` | affects the generated API |
-| `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | MMIO side effects |
+| `stage` | `CompileTime` < `ParseTime` < `TransformTime` < `VerifyGated` | when resolvable (later = more gated) |
+| `auth` | `Uncovered` / `Covered(obligation)` | which obligations cover these bytes: a tag (14.2), or an invariant that derives a value from them (16.1) |
+| `secrecy` | `Public` / `Secret` | affects generated API |
+| `effect` | `Pure` > `EffectOnRead` / `EffectOnWrite` / `EffectBoth` | MMIO side effects, and an uncapped scan, whose read cost depends on the data (8.6.1) |
 
 ## Notes on the axes that are easy to get wrong
 
@@ -59,8 +65,34 @@ makes no atomicity promise it cannot keep.
 **`stage`.** The only axis that increases rather than weakens. Treat it
 uniformly as monotone in the direction of less usable.
 
-**`auth`.** Not ordered. It is a set-valued tag identity. Mutating bytes with
-`Covered(t)` marks tag `t` dirty (section 14.2).
+**`auth`.** Not ordered. It is a set-valued obligation identity: a tag
+(section 14.2), or an invariant that derives a value from the bytes (16.1).
+
+**One rule decides every line, at every level.** A line names obligation `o`
+only if `o` covers EVERY byte that line is about -- a member's bytes, a
+region's, or a whole struct's. A line that named an obligation covering part
+of it would claim authentication the format does not provide, and that is
+the unsafe direction.
+
+**An obligation never covers its own bytes**, and that exemption is what
+makes the rule usable rather than empty. Coverage means *writing these bytes
+leaves `o` stale*, which is false of the bytes `o` is written into; a
+checksum does not invalidate itself. So a tag sitting inside a struct never
+covers all of that struct literally, and requiring it to would empty the
+axis rather than narrow it -- including for a header whose checksum
+genuinely does cover everything but itself. project.md 26.522 carries that
+measurement with its date and the command; it is not restated here, because
+a count copied into a second document is one that goes stale in two places.
+
+**Two readings of the same relation, and only the union differs.** Inside
+the lattice, `auth` meets toward `Covered` and UNIONS its parameters,
+because there the question is *writing these bytes stales which
+obligations* -- and mutating a byte covered by any of them stales all of
+them. A rendered line asks the other question, *which obligations
+authenticate these bytes*, where a union over members claims more than any
+single obligation delivers. Both are true of the same relation, read from
+opposite ends. The lattice keeps the first; every line a reader sees carries
+the second.
 
 ## The locality rule
 

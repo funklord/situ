@@ -1003,3 +1003,59 @@ def test_the_open_register_agrees_with_the_records_it_cites() -> None:
 	assert not uncited, (
 		"a register item claims it is not yet built and cites no decision "
 		"record, so nothing above can check it:\n  " + "\n  ".join(uncited))
+
+
+#: One axis row: the domain and the meaning, whitespace-flattened, because
+#: the two files wrap their table differently and a wrap is not a
+#: disagreement about the lattice.
+def _axis_rows(text: str) -> dict[str, tuple[str, str]]:
+	out: dict[str, tuple[str, str]] = {}
+	for line in text.splitlines():
+		found = re.match(r"\|\s*`(\w+)`\s*\|(.*?)\|(.*?)\|\s*$", line)
+		if found:
+			out[found.group(1)] = (" ".join(found.group(2).split()),
+			                       " ".join(found.group(3).split()))
+	return out
+
+
+def test_the_extracted_axes_document_matches_section_11_1() -> None:
+	"""`doc/capability-axes.md` is a copy, and nothing was checking it.
+
+	Its own header says it is extracted from project.md section 11.1 and
+	that "where the two disagree, project.md is authoritative and this file
+	is the bug". That is a rule with nothing enforcing it, which is the
+	same shape as a vendored file nobody diffs against upstream.
+
+	Measured when this was written: 7 of the 13 rows disagreed, and two of
+	them disagreed about the LATTICE rather than the prose -- the doc's
+	`offset` was missing `DataPlaced` and `Scanned`, and its `repr` was
+	missing `TextConverted`. A normative document was declaring domains
+	with values left out, and had been since the text-vocabulary work added
+	them. The `auth` row still said `Covered(tag)` where 11.1 says
+	`Covered(obligation)`.
+
+	Nothing surfaced it because nothing read the file: one comment in
+	`situc/capability.py` cites it and no test did.
+	"""
+	spec = (ROOT / "project.md").read_text(encoding="ascii")
+	start, end = spec.index("### 11.1"), spec.index("### 11.2")
+
+	theirs = _axis_rows(spec[start:end])
+	ours   = _axis_rows((ROOT / "doc" / "capability-axes.md")
+	                    .read_text(encoding="ascii"))
+
+	# The population first. An extraction that silently matches nothing
+	# would make every assertion below vacuous, and a table that grows an
+	# axis has to be noticed rather than skipped.
+	assert len(theirs) == 13, f"11.1 has {len(theirs)} axis rows, not 13"
+	assert len(ours) == 13, f"the axes document has {len(ours)} rows, not 13"
+
+	assert set(theirs) == set(ours), (
+		f"only in 11.1: {sorted(set(theirs) - set(ours))}; "
+		f"only in the document: {sorted(set(ours) - set(theirs))}")
+
+	wrong = [f"{axis}:\n    11.1: {theirs[axis]}\n    doc : {ours[axis]}"
+	         for axis in sorted(theirs) if theirs[axis] != ours[axis]]
+	assert not wrong, ("the extracted axes document has drifted from "
+	                   "section 11.1, which is authoritative:\n  "
+	                   + "\n  ".join(wrong))
