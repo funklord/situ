@@ -16243,6 +16243,17 @@ record states.
   every construct no worked example has. A new field wants a schema
   using it in the corpus, not only a unit test.
 
+  **The site the checklist itself omitted, and both additions missed:
+  the GRAMMAR.** Section 7's EBNF block is authoritative and
+  `doc/grammar.ebnf` is extracted from it, and neither described `sealed
+  ... until` (26.535) or `[remaining] max N` (26.539) until 26.542.
+  Nothing caught it: the two files agree with each other, which is what
+  their sync tests check, and both `max` and `until` were already in the
+  grammar as WORDS -- so the third witness, which derives its keyword
+  population from the parser, saw nothing missing either. **Every
+  existing witness is keyed on the spelling, and both misses were an
+  existing spelling in a NEW POSITION.**
+
   **Confirmed a second time by `[remaining] max N` (26.539), which
   touched thirteen sites and broke in the unparser again.** That
   addition also names the question the site list cannot ask: **what
@@ -16255,6 +16266,28 @@ record states.
 
 **Tried, measured, and not worth doing -- so that nobody spends the hour
 again.**
+
+- **Counting a clause's parser call sites against the grammar
+  productions that reference it**, to catch a keyword accepted in a
+  position the grammar does not describe -- the gap 26.542 found. Derived
+  from both files with no ignore list, which is what made it worth
+  probing. Measured over all 31 clauses the grammar names as productions:
+  **12 flags, 1 of them real.** `attrs` is 16 against 11 because it is
+  optional on members the grammar folds together, `type_ref` 7 against 1
+  and `field` 4 against 1 because they are called internally, and
+  `invariant`, `path`, `requirement` and `strictness` report 0 sites
+  because the parser reaches them by another spelling. One true positive
+  in twelve needs an eleven-entry ignore list, which is a gate switched
+  off by instalments.
+
+  **And it could not see the other half of the fault it was built for.**
+  The `max` case lives INSIDE `array_spec` rather than in a production
+  referencing it, so the count is 5 against 5 and correct; `until` was
+  caught only by the accident that it is its own production. An
+  instrument that finds one of two known instances, with eleven false
+  ones, is not aimed. What would catch the class is a checker that parses
+  the corpus against the EBNF -- a real build, since `edges.situ` carries
+  every construct by policy, and the copyright holder's call.
 
 - **Seeding the fuzz corpus from `example/*.vectors`.** The reasoning was
   that a magic-guarded parser cannot be reached by random bytes. Seeding
@@ -31195,6 +31228,71 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.542 Two productions the grammar never learned, and four witnesses that could not see them
+
+**`sealed ... until` and `u8 c[remaining] max N` were accepted by the
+compiler and described by neither grammar.** Section 7's EBNF block is
+authoritative and `doc/grammar.ebnf` is extracted from it; both said
+
+    array_spec = "[" [ size_expr ] "]" ;
+    | "sealed" [ ident ] "(" codec_args ")" [ attrs ] "{" { member } "}"
+
+for constructs added on 2026-09-29 and 2026-09-30. Found by taking
+26.541's lens -- a copy with no guard -- to the next copy along, and the
+first thing it asked was whether the feature built the day before had
+reached the grammar. It had not.
+
+**Four witnesses, and not one of them could have spoken.** This tree is
+unusually careful here, which is what makes the gap worth recording:
+
+    names agree             section 7's productions are all in the copy
+    BODIES agree            the shared productions say the same thing
+    enum keywords           every enum member is spelled in the grammar
+    parser dispatch         every keyword `parse_member` branches on
+
+The first two compare the two documents, so they are satisfied whenever
+the documents agree -- and they agreed, both being wrong. The third and
+fourth are the deliberate third witness, the parser, added because "two
+documents agreeing are one witness if the same hand wrote both". **But
+both are keyed on the SPELLING, and both misses were an existing spelling
+in a new position.** `max` was already in the grammar after `until` and
+inside `repeat`; `until` was already its own production and referenced by
+`coded`. Nothing was missing from the vocabulary. What was missing was a
+place.
+
+**The counts, which is how each was found by hand:**
+
+    is_ident("max")          3 parser sites   2 grammar productions
+    self.parse_until()       3 call sites     2 grammar productions
+
+`parse_while`, `parse_until` and `parse_array_spec` read the cap; only the
+first two are described. `coded`, `sealed` and `field` take an `until`;
+only the first and third are described.
+
+**Both fixed in both files, and the RHS test is the proof the two edits
+agree** -- it names the exact disagreement when one side is reverted,
+which is the control. The grammar now records where the cap's refusal
+lives, too: it is accepted after any size and refused by `layout` on a run
+something already bounds, so the permissiveness is the parser's and the
+rule is well-formedness, not grammar.
+
+**The cause is in 26.144's own grammar-addition checklist, which omits the
+grammar.** It lists the AST field, the parser clause, the layout, the
+backends, the unparser, the image and the walkers -- everything that
+executes, and not the document that defines the language. Both additions
+followed it faithfully. It names the EBNF now.
+
+**The instrument those counts suggest was built, measured and discarded**,
+and the measurement is in 26.144's second list rather than here. One true
+flag in twelve, an eleven-entry ignore list to silence the rest, and it
+cannot see the `max` case at all -- `max` lives inside `array_spec` rather
+than in a production referencing it, so the count is 5 against 5 and
+right. **It catches `until` only by the accident that `until` is its own
+production**, which is the difference between an instrument and a
+coincidence. What would catch the class is a checker that parses the
+corpus against the EBNF, since `edges.situ` carries every construct by
+policy; that is a real build and the holder's call.
 
 ### 26.541 The reading was settled; the documents were not
 
