@@ -15926,9 +15926,19 @@ record states.
   compiler holds, so four renderings are four spellings of one description
   -- which is situ's thesis rather than the failure this guards against.
   `ImplKind` has two members and the line falls between them: an `extern`
-  implementation is somebody's C and binding it stays right. What decides it
-  for Rust alone is the `#![no_std]`, no-C promise a codec currently breaks.
-  Not yet built. The original question: should `impl <codec> derived`
+  implementation is somebody's C and binding it stays right. What decided
+  it for Rust alone is the `#![no_std]`, no-C promise a codec ~~currently
+  breaks~~ broke. ~~Not yet built.~~ **Built 2026-09-05 in `5babf11`,
+  "gen-derived backends for Rust and Python", the day after the answer was
+  written** -- `situc/codegen/rust/derived.py` and its Python sibling, with
+  `situc/codegen/kernel_math.py` holding what the three share. Re-measured
+  2026-09-30 by generating rather than by reading: `situc build --target
+  rust example/png/png.situ` and `situc gen-derived --target rust` both
+  produce modules with **zero** `extern "C"` and no `#[link]` or `libc::`,
+  and `crc32` is a native `pub fn`. `situc gen-derived --target` offers
+  `{c,rust,python}`, so the refusal that was to name the unsupported target
+  in the meantime is gone too (see `doc/decision/0017-codec-implementation-sourcing.md`).
+  The original question: should `impl <codec> derived`
   generate native Rust rather than an `extern "C"` binding to the C one?
   Measured in its third amendment: `runtime/cpp/situ.hpp` includes
   `situ.h` already, so 0017's "C++ links C for free" holds; the Rust
@@ -31151,6 +31161,85 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.540 The one open item was built 25 days ago, over an empty set
+
+**26.144's register held exactly one item claiming `not yet built`, and
+the thing had been built the day after the claim was written.** 0017's
+Rust question -- should `impl <codec> derived` generate native Rust rather
+than an `extern "C"` binding -- was answered on 2026-09-04 and built on
+2026-09-05 in `5babf11`, "gen-derived backends for Rust and Python".
+`situc/codegen/rust/derived.py` has existed for 25 days.
+
+Measured by generating rather than by reading, because reading is what
+produced the stale claim:
+
+    situc build --target rust example/png/png.situ        0 `extern "C"`
+    situc gen-derived --target rust example/png/png.situ  0 `extern "C"`
+
+No `#[link]`, no `libc::`, and `crc32` is a native `pub fn`. The
+`#![no_std]`, no-C promise the amendment was written to protect holds. The
+refusal it said should "name the unsupported target in the meantime" is
+gone too: `situc gen-derived --target` offers `{c,rust,python}`.
+
+**A test exists for exactly this and it was green the whole time.**
+`test_the_open_register_agrees_with_the_records_it_cites` was written in
+26.144 against this precise failure -- a register item saying `not yet
+built` over a record saying otherwise. It flags an item that CITES a
+decision record whose `Status:` says `built`. This item cited no record at
+all, and 0017's `Status:` said `accepted`, recording its builds in the
+body. So the loop ran over an empty set and reported success **exactly as
+loudly as a real pass** -- the vacuous pass, inside the guard written to
+prevent it.
+
+**And the deeper reason no comparison could have worked: two copies of
+one stale sentence agree perfectly.** The claim lived here and in 0017's
+fourth amendment, both written the day before the build, and a check that
+asks two documents to agree is satisfied by exactly that. It is the
+one-witness-twice failure with the witness being a single sentence copied.
+What settled it was running the compiler.
+
+**Both halves fixed, and only one of them mechanically.** The test now
+asserts the PARTITION as well as the cell: an item claiming to be unbuilt
+and citing no record fails, naming itself, so the empty cell cannot be
+entered silently again. That closes the uncited half. The half where both
+prose copies are wrong together is closed only by measuring -- so 0017's
+`Status:` now carries the word a tool can read, which converts this item
+from uncheckable to checkable for the next reader. The limit that remains
+is pinned in the test's own docstring rather than left to be discovered.
+
+**The control is the best kind available: it went red on the real defect
+before the defect was fixed**, and green on the fix. Not a synthetic
+fixture -- the assertion's first run named the actual stale item. The main
+loop got its own control afterwards, by restoring the claim over the now-
+citing item and watching it flag as a disagreement.
+
+**Three mis-aimed grep markers in one day, and each was caught by a
+different check rather than by the one that used it.** The pattern is the
+same every time: a marker chosen to confirm an edit matched something it
+was not written for.
+
+    `frame_cap(struct) is not None`   absent by construction in two
+                                     emitters -> false "sabotage landed"
+    `Not yet built.`                 matched a STRUCK copy elsewhere in
+                                     the same file -> false "landed"
+    `SABOTAGE`                       matched `UNSABOTAGED` in an
+                                     unrelated entry -> false "restore
+                                     failed"
+
+The first was caught by the restore check, the second by the edit's own
+`assert count == 1`, the third by reading the file. **A landing check
+shares the blind spot of the edit it verifies whenever both are keyed on
+the same string** -- so key it on something that cannot pre-exist, and
+assert the substitution count in the tool rather than grepping for the
+phrase afterwards.
+
+**What is left in the register is nobody's to build.** Every remaining
+item names the copyright holder as the decider or is closed: the struct
+`auth=` reading, the root fix for bare region names, `linear_block`'s
+generator matrix, 8b10b and CoAP, which `copyright` file survives, and the
+switch-label style. This was the only unblocked one, and it was already
+done.
 
 ### 26.539 A cap on a `remaining` run, and the unit nobody asked about
 
