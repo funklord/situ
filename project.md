@@ -16260,7 +16260,12 @@ record states.
   grammar as WORDS -- so the third witness, which derives its keyword
   population from the parser, saw nothing missing either. **Every
   existing witness is keyed on the spelling, and both misses were an
-  existing spelling in a NEW POSITION.**
+  existing spelling in a NEW POSITION.** `test/unit/ebnf.py` checks it
+  since 26.543: the grammar has to derive every corpus schema, so a
+  construct added to `edges.situ` and not to the grammar fails the day it
+  lands. **The checklist item is therefore a check rather than a
+  reminder** -- with one limit worth knowing, that a construct no corpus
+  schema exercises is still invisible to it.
 
   **Confirmed a second time by `[remaining] max N` (26.539), which
   touched thirteen sites and broke in the unparser again.** That
@@ -16293,9 +16298,14 @@ again.**
   referencing it, so the count is 5 against 5 and correct; `until` was
   caught only by the accident that it is its own production. An
   instrument that finds one of two known instances, with eleven false
-  ones, is not aimed. What would catch the class is a checker that parses
+  ones, is not aimed. ~~What would catch the class is a checker that parses
   the corpus against the EBNF -- a real build, since `edges.situ` carries
-  every construct by policy, and the copyright holder's call.
+  every construct by policy, and the copyright holder's call.~~ **Built on
+  the holder's instruction, 2026-10-01 (26.543): `test/unit/ebnf.py`, which
+  found nine gaps and 20 of 42 schemas underivable on its first run.** So
+  the count-based probe is superseded rather than merely declined, and the
+  measurement above is kept because it is the reason the cheap instrument
+  was not shipped instead.
 
 - **Seeding the fuzz corpus from `example/*.vectors`.** The reasoning was
   that a magic-guarded parser cannot be reached by random bytes. Seeding
@@ -31236,6 +31246,104 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.543 The EBNF corpus checker, and nine gaps on its first run
+
+**Built: `test/unit/ebnf.py` recognises `doc/grammar.ebnf` and asks whether
+it derives the schemas this repository builds.** 26.542 named this as the
+instrument the other four witnesses could not be, and the first run said 20
+of 42 schemas were underivable. It is 42 of 42 now, after nine fixes, each
+of which moved the count:
+
+    before any fix                                       22/42
+    decl reaches impl, varint and pipeline               27/42
+    an enum's backing type may be a byte run             28/42
+    kernel_family names ones_complement                  29/42
+    a codec size may be `any`                            30/42
+    a variant arm: any order, error/opaque anywhere, `;`  34/42
+    a tag names its codec, its prefix, and may have no
+      length                                             40/42
+    a trailing comma closes a braced list                41/42
+    `coded` may name the bytes it covers                 42/42
+
+**A fix that does not move the number is a fix for something that was not
+wrong**, which is why the table is the evidence rather than the diff.
+
+**The gaps, and what each says about the old witnesses.**
+
+`impl` and `varint_type` are DEFINED in `doc/grammar.ebnf` and `decl` did
+not list them, so the grammar could not derive any schema containing one --
+eleven of them. **A production that exists is not a production that is
+reachable**, and every existing check was a claim about definitions.
+`pipeline_decl` was the same and `std/kernels.situ` uses `|>`.
+
+`ones_complement` is an `ast.KernelFamily` member the grammar never named.
+The keyword witness exists for exactly this and could not see it, because
+its `ENUMERATED` tuple is a hand-written list of five enums and
+`KernelFamily` is not one -- `evidence.md`'s name claiming exhaustiveness
+over a hand-maintained enumeration, in the test written to be the
+independent witness. **The corpus checker subsumes it**: it does not need
+to know which enums matter.
+
+`tag_field` was wrong in four ways at once -- `scalar_type` where the parser
+reads `type_ref`, a mandatory length where a sub-byte checksum has none,
+and no clause for `prefix(...)` or `is <codec>`. Six schemas. `variant` was
+wrong in four more: no `[ attrs ]`, `error`/`opaque` available only under
+`default`, no `;` after either, and `default` forced last where the parser
+takes arms in any order. Five schemas, `edges.situ` among them.
+
+**The one gap the checker cannot prove is recorded as such.**
+`pad_to(4) [attrs];` is accepted at `situc/parser.py:2222` and no corpus
+schema writes it, so the fix is grounded in the parser and not in a
+derivation. **Its reach is the corpus's reach** -- which is a fact about
+`edges.situ`'s policy rather than about the checker, and the honest place
+to put it is the test's own docstring.
+
+**The algorithm, because the obvious one does not fit.** This is a
+recogniser: it answers which end positions a production can reach from a
+start, as a SET, which is exact for an ambiguous grammar -- and this grammar
+is ambiguous by construction, `array_spec` and `attrs` both opening with
+`[`. Earley is the textbook answer and is O(n^3); the corpus is 13450
+tokens with a 3161-token schema in it, and Earley cannot do that. A
+memoised top-down all-ends search runs the whole corpus in 0.5s. **Ordered
+choice was not available**: a PEG commits to its first matching alternative
+and would reject strings the grammar admits.
+
+`{ X }` is evaluated iteratively rather than desugared to `rep = rep X |
+eps`, because that desugaring is left-recursive by construction and a
+nullable body would spin.
+
+**What is delegated, and why that is not a second witness.** The grammar
+leaves `expr`, `string`, `char` and `number` undefined and says so. `expr`
+is handed to situc's own expression parser, which is the authority on what
+an expression is; writing a second expression grammar here would be a
+second thing to be wrong, by the same hand as the first.
+
+**The instrument's own calibration cost a round, and the shape is worth
+keeping.** `uint = "u" digits` is a CHARACTER production -- the grammar is a
+character grammar throughout, `ident = letter { letter | digit | "_" }` --
+and the recogniser works on tokens, where `u8` is one IDENT. Overriding
+`ident` and `digits` was obvious; `uint` and `sint` were not. **And a field
+parsed anyway**, because `type_ref = scalar_type | ident` falls through to
+`ident`, so `u8 lead;` matched as an identifier. Only `tag_field`, which
+names `scalar_type` directly, could not match `u8`. **The two-level
+mismatch was invisible on the construct it appears in most and fatal on one
+it appears in once**, which is why the test asserts the undefined-name
+population and checks that `letter` and `digit` are reachable only from
+productions the recogniser overrides.
+
+**The control is not optional, and this entry is why.** Nine productions
+were WIDENED to reach 42 of 42. A tenth widening could have been `schema =
+{ ? any ? }`, which passes every derivation case and means nothing --
+measured, as a control: loosening `schema` that way leaves the corpus test
+green and turns `test_the_recogniser_refuses_a_malformed_schema` red. Ten
+malformed schemas hold that line, each one edit from a schema that does
+derive.
+
+Three controls in all, each failing through its own check: the loosened
+grammar fails the refusal test, a reverted `coded` production fails the
+corpus test, and an undefined name added to `located` fails the population
+test.
 
 ### 26.542 Two productions the grammar never learned, and four witnesses that could not see them
 
