@@ -16062,15 +16062,24 @@ record states.
   `bits`, `escape`, `quoted` and `tag_order` on an `authenticated` region,
   plus the struct attributes whose readers are conditional.
 
+  **~~Eight cells remain~~ Closed 2026-10-01 in 26.547, and the residue was
+  eleven rather than eight** -- five on an `authenticated` region and six
+  that are `STRUCT_ATTRS` themselves, inert only because a minimal fixture
+  does not create their readers' conditions. The five are settled by
+  `READ_ONLY_ON`, which decides the member KIND before the finer rules
+  speak. **The matrix has no open cells.**
+
   **The method does not scale, which is the part to carry.** An artifact
   sweep cannot see an attribute whose effect is conditional:
   `allow_host_dependent`, `bit_order` and `encoding` are read on a struct
   only where the member inside needs them, so a minimal fixture reports
-  them inert and all three would have been wrongly refused. Each remaining
-  cell wants its reader found by grep first. The original observation,
-  which still holds for the residue: an attribute with no row is correctly
-  placed everywhere, which is the right default for a table built incident
-  by incident and the wrong one for the question *is this read here*.
+  them inert and all three would have been wrongly refused. And it cannot
+  tell acting on an attribute from printing one: `doc.py` renders every
+  attribute verbatim, which made 40 cells read as READ when no backend and
+  no capability map changed for any of them. The original observation,
+  which is what the four fixes between 26.544 and 26.547 all share: a rule
+  applied to the member kinds somebody listed rather than to the members
+  that have the thing being checked.
   Measured 2026-10-01 after 26.545 closed the numeric-bound row: of the 53
   names in `ATTRIBUTE_NAMES`, **12 are still accepted on a `pad_to`** --
   `[bit_order]`, `[bits]`, `[covers]`, `[escape]`, `[non_canonical]`,
@@ -31278,6 +31287,70 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.547 The last five cells, and the instrument's fifth fault
+
+**Settled: the attribute placement matrix has no open cells.** 26.546 left
+a residue and miscounted it as eight; re-derived rather than quoted, it was
+**eleven** -- five on an `authenticated` region and six on a struct
+declaration. The six are `STRUCT_ATTRS` themselves, inert only because a
+minimal fixture does not create the conditions their readers need, so they
+were settled as allowed already. The open cells were five.
+
+**All five are one shape.** `bit_order`, `bits`, `quoted`, `escape` and
+`tag_order` each have a check of their own, and each check runs only on the
+member kind that reads it:
+
+    bit_order   `Scope.narrow`, called for a struct declaration and for a
+                field or a reserved run -- `place_one` takes
+                `member: ast.Field | ast.Reserved`
+    bits        `_narrow_bcd`, which needs a `type_ref` and a BCD scalar
+    quoted,
+    escape      `check_delimiters`, which wants a delimiter to make inert
+    tag_order   `_check_transform_tag_order`, which walks `coded` regions
+
+**A region has none of those, so it collected the attribute and nothing
+looked.** `READ_ONLY_ON` settles the KIND first and leaves the finer rules
+where they are, because their messages are better on the right kind:
+`[bits]` on a `u8` says it is for a packed-decimal field rather than that
+it is on the wrong sort of member.
+
+**The fifth fault, and it is the one that would have made this wrong.** The
+sweep called all five READ on most member kinds. That verdict was worthless:
+**`doc.py` renders every attribute verbatim into the documentation**, so any
+attribute on any member changes an artifact. Forty cells read as "read" for
+that reason alone.
+
+Checked before trusting the refusal, by reverting the guard and measuring
+the forty against the artifacts that would have to ACT on an attribute --
+the four backends' emitted files and the capability map, with the
+documentation and the wire signature excluded because one echoes and the
+other publishes a list:
+
+    cells checked                                        40
+    where a backend or the capability map changed          0
+
+**So the echo is a reason to refuse rather than to allow**, which is
+26.545's finding in a second artifact: there a bound was published into the
+wire signature while nothing enforced it, here `[bit_order = lsb_first]` on
+a region was written into the file somebody implements the format from.
+
+**Five faults in one instrument, and each was found by a different thing.**
+The incomplete artifact set, by a result that made no sense; the
+conditional reader, by the corpus using two of them; the fixture tripping
+another rule, by reading the refusals; the invalid row, by a verdict
+uniform across thirteen kinds; and the echo, by **a change that refused
+forty cells the sweep had called read** -- which is the only one that would
+have shipped a wrong refusal rather than merely confused a count.
+
+**What the matrix cost, and what it was worth.** 689 cells, settled: 527
+placed, 93 read, 63 refused for an unrelated reason, 6 known false
+positives of the measurement. Four defects fixed across 26.544 to 26.547 --
+the unknown-attribute walk, its twin, the numeric bounds, the struct row,
+`[since]`, and these five -- and every one of them was a rule applied to
+the member kinds somebody listed rather than to the members that have the
+thing being checked. **The sweep's value was not the verdicts. It was
+making the list visible.**
 
 ### 26.546 The placement matrix, and an instrument wrong four ways
 
