@@ -16053,9 +16053,24 @@ record states.
   2026-08-25, so neither settlement reached it, and comparing its table
   against 11.1 found 7 of 13 rows drifted with two missing lattice
   values. It is checked by a test now.
-- **An attribute with no row in the placement table is correctly placed
-  everywhere**, which is the right default for a table built incident by
-  incident and the wrong one for the question *is this read here*.
+- ~~**An attribute with no row in the placement table is correctly placed
+  everywhere**~~ **Settled 2026-10-01 where it could be, in 26.546**: a
+  struct declaration takes struct attributes only (45 names were accepted
+  and read by nothing), `[since]` belongs on a field or a reserved run,
+  and the unimplemented/duplicate walk was derived like its twin. **Eight
+  cells remain and are recorded rather than settled** -- `bit_order`,
+  `bits`, `escape`, `quoted` and `tag_order` on an `authenticated` region,
+  plus the struct attributes whose readers are conditional.
+
+  **The method does not scale, which is the part to carry.** An artifact
+  sweep cannot see an attribute whose effect is conditional:
+  `allow_host_dependent`, `bit_order` and `encoding` are read on a struct
+  only where the member inside needs them, so a minimal fixture reports
+  them inert and all three would have been wrongly refused. Each remaining
+  cell wants its reader found by grep first. The original observation,
+  which still holds for the residue: an attribute with no row is correctly
+  placed everywhere, which is the right default for a table built incident
+  by incident and the wrong one for the question *is this read here*.
   Measured 2026-10-01 after 26.545 closed the numeric-bound row: of the 53
   names in `ATTRIBUTE_NAMES`, **12 are still accepted on a `pad_to`** --
   `[bit_order]`, `[bits]`, `[covers]`, `[escape]`, `[non_canonical]`,
@@ -31263,6 +31278,90 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.546 The placement matrix, and an instrument wrong four ways
+
+**Asked to settle the attribute placement matrix: 53 attributes by 13
+member kinds, 689 cells.** Settled where it can be, and the honest part of
+this entry is that the method that settled 26.545 does not scale to it.
+
+**The matrix, measured.** Each cell is the attribute's spelling added to
+the smallest schema of that kind, and every file the four backends emit
+compared with and against it, plus the capability map, the wire signature
+and the documentation:
+
+    placed   470   refused already, by the table
+    read     154   some artifact changes
+    inert     23   accepted, and nothing changes
+    other     42   refused for an unrelated reason -- inconclusive
+
+**Three cells settled, and all three were grounded on more than the
+sweep.**
+
+**A struct declaration takes struct attributes only.** `struct b [secret]
+{ ... }` parsed, resolved and changed no byte: the spelling check accepts
+any known name and the placement table only ever looked at MEMBERS. 45 of
+53 were in that state. The allowed eight are derived from the readers of
+`decl.attrs` -- `depth` and `limit` (0054), `endian`, `bit_order` and
+`encoding` (`Scope.narrow`), `allow_straddle`, `allow_host_dependent` and
+`version`.
+
+**`[since]` belongs on a field or a reserved run.** On a pad, a variant, an
+`opaque`, an `endian_marker`, a `coded` region, an `authenticated` one, a
+`sealed` one and a tag it was accepted and every artifact stayed
+byte-identical -- measured with a `[version]` field present so the
+machinery could engage. **The schema said the member arrived in version 2
+and every reader ignored it.** A versioned region is a reasonable thing to
+want and is not what that was.
+
+**And `_check_member_attrs` is `_check_member_attr_names`'s twin, which
+26.544 did not notice.** Both carried the same hand-written
+`isinstance(member, (ast.Field, ast.Reserved, ast.TagField))`. Deriving
+one left the other enumerated, so a DUPLICATE attribute and an
+UNIMPLEMENTED one went unchecked on exactly the nine kinds that entry had
+just fixed for spelling: `u8 a [trusted]` was refused and
+`authenticated r [trusted] { ... }` was accepted. **A fix that derives one
+population and leaves its twin is half a fix, and the twin is eleven lines
+away.**
+
+**The instrument was wrong in four distinct ways, which is the finding
+that matters more than the cells.**
+
+- **The artifact set was incomplete.** C's accessors live in the HEADER
+  and the harness compared `.source`, the implementation -- while using
+  `.header` for C++. So an attribute read into a declaration looked inert.
+  Fixing it to compare every file each backend emits moved **42 cells**.
+- **A conditional attribute reads as inert.** `allow_host_dependent` IS
+  read on a struct, by `resolve`, only where a host-order field is inside;
+  a minimal fixture has none, so nothing changes. `bit_order` and
+  `encoding` are the same through `Scope.narrow`, and they were caught
+  only because `edges.situ` uses both on a struct. **Three attributes
+  would have been wrongly refused.**
+- **A fixture that trips another rule is not a placement verdict.** 42
+  cells are "other": refused for a missing version field, an unimplemented
+  attribute, a `[limit]` without a `[depth]`. Each needs its own fixture
+  before it says anything.
+- **A row can be invalid for a reason that is nothing to do with the
+  attribute.** The `since` row was measured against fixtures with no
+  `[version]` field, so the machinery could not engage anywhere and every
+  cell read inert. It had to be re-measured with its own fixtures, and
+  only then did Field and Reserved separate from the other eight.
+
+**So the matrix is a SCREEN and not a verdict**, and the residue is
+recorded rather than settled. Eight cells remain: `bit_order`, `bits`,
+`escape`, `quoted` and `tag_order` on an `authenticated` region, and the
+six `STRUCT_ATTRS` whose conditional readers the sweep cannot see. Each
+wants its reader found by grep before anything refuses it, which is what
+the three settled cells got and what the sweep alone cannot give.
+
+**The sweep cost one real regression on the way, caught by the suite in
+under a minute.** The `since` rule went in at one tab before a two-tab
+anchor INSIDE the numeric-bound branch, which left the radix exception,
+the array refusal, the `until` refusal and the struct-typed refusal
+unreachable after a `return` -- the whole of 26.545's rule, dead. A test
+written earlier the same day caught it. `git diff` showing two lines
+removed, both the old enumeration, is what confirmed the repair rather
+than re-reading the function.
 
 ### 26.545 A numeric bound belongs on a field, derived rather than chosen
 
