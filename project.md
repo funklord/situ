@@ -16053,6 +16053,20 @@ record states.
   2026-08-25, so neither settlement reached it, and comparing its table
   against 11.1 found 7 of 13 rows drifted with two missing lattice
   values. It is checked by a test now.
+- **`_rewrite_member`'s `Tlv` branch rewrites 2 of its 10 fields** (26.549).
+  `known` carries a `type_name` per tag and `tag_decode` and `value_size`
+  carry expressions, so a `tlv` inside a `namespace` that names a type or a
+  `const` declared beside it is the same fault the other five branches had.
+  Not fixed because each field wants its own fixture and a `tlv` fixture is
+  several lines of item grammar; measured rather than guessed.
+
+  The audit that found it is mechanical: parse `_rewrite_member`, take each
+  `isinstance(member, ...)` branch and the keywords its `replace()` sets,
+  and compare against the node's dataclass fields. **Raw it is mostly false
+  positives** -- a field needs rewriting only if it can hold a name a
+  namespace qualifies, which is the type annotation's question rather than
+  the count's.
+
 - ~~**An attribute with no row in the placement table is correctly placed
   everywhere**~~ **Settled 2026-10-01 where it could be, in 26.546**: a
   struct declaration takes struct attributes only (45 names were accepted
@@ -31287,6 +31301,67 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.549 Five ways a member changed meaning inside a namespace
+
+**A `namespace` scopes type names and nothing else, so a schema wrapped in
+one has to mean what it meant outside. Five constructs did not.** All five
+work at top level; inside a namespace one crashed and four were refused.
+
+    checksum u5 crc covers(r);              AssertionError, no diagnostic
+    checksum u8 sum[4] ... is crc32;        no codec named `crc32`
+    checksum u8 sum[2] ... prefix(pseudo);  unknown prefix `pseudo`
+    u8 x[2] at OFF;                         `OFF` is not in scope here
+    u8 v[] until "," max LIM;               `LIM` is not in scope here
+
+    u8 x[N];                                the control -- works in both
+
+**`_rewrite_member` qualifies the declaration names a member references,
+branch by branch, and each branch lists the fields somebody thought of.**
+The `TagField` branch rewrote three of six. `codec` is the `is crc32`
+clause, `prefix` names a struct, and `array` -- **optional since 0046,
+because a sub-byte checksum IS its scalar** -- was asserted non-None, so
+`checksum u5 crc covers(r)` inside a namespace raised a bare
+`AssertionError` with no diagnostic at all. `Field` missed `located` and
+the `until` and `while` caps, which are expressions and may name a `const`
+the namespace has just qualified.
+
+`covers` is left alone deliberately, and both branches agree about it: it
+names REGIONS, which are local to the struct that declares them.
+
+**The audit is mechanical and worth keeping.** Parse the function, take
+each `isinstance(member, ...)` branch and the keywords its `replace()`
+sets, and compare against the node's dataclass fields:
+
+    Field            4/12     Reserved      3/6      TagField   5/6
+    Coded            4/6      Sealed        4/5      Authenticated 1/2
+    Indexed          2/4      Tlv           2/10
+
+**Raw, that list is mostly false positives**, and narrowing it is the work:
+`peek`, `parameter` and `scaled` are bools, `radix` is an int, `skip` holds
+only byte values, `pinned` is bytes, `bounds` a pair of ints, and
+`Indexed.base_member` names a member of the enclosing struct rather than a
+declaration. **A field needs rewriting only if it can hold a name a
+namespace qualifies**, which is the type annotation's question and not the
+count's.
+
+**Still open, measured and not fixed: `Tlv` sets 2 of 10.** `known` carries
+a `type_name` per tag, and `tag_decode` and `value_size` carry expressions.
+Each is the same shape as the five above and wants the same treatment; it
+is recorded here rather than guessed at, because a `tlv` fixture is
+several lines of item grammar and each field needs its own.
+
+**The lens is 26.548's, and the shape it found is one step out from
+there.** That entry was a rule whose guard named fewer kinds than carry the
+field it reads. This is a TRANSFORM whose branch names fewer fields than
+the node has -- the same defect with the enumeration pointing the other
+way, at a node's fields rather than at a member's kinds. **What makes both
+findable is asking the AST what carries the thing, rather than reading the
+list somebody wrote.**
+
+The test parses each case twice, bare and wrapped, and requires both to
+resolve. That is the assertion a branch cannot satisfy by rewriting one
+field and forgetting its neighbour.
 
 ### 26.548 A refusal that could not fire, and the lens that found it
 
