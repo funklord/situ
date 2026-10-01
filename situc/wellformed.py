@@ -468,9 +468,45 @@ def check_delimiters(schema: ast.Schema) -> None:
 	tokens = {decl.name for decl in schema.token_sets()}
 	for struct in schema.structs():
 		for member in _walk_members(struct.members):
-			if not isinstance(member, (ast.Field, ast.Reserved)):
-				continue
-			_check_one_delimiter(member, tokens)
+			if isinstance(member, (ast.Field, ast.Reserved)):
+				_check_one_delimiter(member, tokens)
+			else:
+				_check_region_delimiter(member)
+
+
+def _check_region_delimiter(member: ast.Member) -> None:
+	"""A `coded` or `sealed` region states one delimiter or none.
+
+	This refusal lived in `_check_one_delimiter`, keyed on
+	`getattr(member, "codec", None) is not None` -- and that function is
+	handed an `ast.Field | ast.Reserved`, neither of which has a codec. **So
+	the branch written for a coded region could not fire**, and the message
+	it carries names the construct it never saw.
+
+	`until` is carried by `Coded`, `Field`, `Reserved` and `Sealed`, and the
+	walk enumerated two of the four. `Sealed` gained its `until` in 26.535,
+	which widened the gap without anybody looking at the check (26.548).
+
+	The note is the reason it matters: the delimiter frames what the codec is
+	given, so which alternative ended the region decides how many bytes are
+	decoded. Two alternatives are two extents for one region.
+	"""
+	until = getattr(member, "until", None)
+	if until is None or len(until.delimiters) <= 1:
+		return
+	if getattr(member, "codec", None) is None:
+		return
+
+	name = getattr(member, "name", None) or "the region"
+	raise error(
+		f"`{name}` is a coded region with several delimiters",
+		until.span,
+		label = "more than one alternative",
+		notes = ["the delimiter frames what the codec is given, so which "
+		         "alternative ended the region decides how many bytes are "
+		         "decoded",
+		         "state one delimiter for a coded region"],
+	)
 
 
 def _check_one_delimiter(member: ast.Field | ast.Reserved,
@@ -516,16 +552,6 @@ def _check_one_delimiter(member: ast.Field | ast.Reserved,
 				         "appear inside the content, and with several the "
 				         "scan has to carry that state past each of them",
 				         "state one delimiter, or drop the escaping form"],
-			)
-		if getattr(member, "codec", None) is not None:
-			raise error(
-				f"`{name}` is a coded region with several delimiters",
-				member.until.span,
-				label = "more than one alternative",
-				notes = ["the delimiter frames what the codec is given, so "
-				         "which alternative ended the region decides how many "
-				         "bytes are decoded",
-				         "state one delimiter for a coded region"],
 			)
 
 	if member.until is None:

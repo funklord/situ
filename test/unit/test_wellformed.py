@@ -3531,3 +3531,53 @@ def test_the_kind_guard_keeps_what_actually_reads_the_attribute(
 		case: str) -> None:
 	schema = parse_text(REGION_PREAMBLE + REGION_KEEPS[case], path="s.situ")
 	resolve(schema, solve(schema))
+
+
+DELIMITED_REGION = (BUFFER
+	+ "codec doubling { expansion = ratio_exact(2, 1); invertible; }\n"
+	+ 'impl doubling extern "my_doubling";\n'
+	+ "codec sealer { expansion = +16; authenticated; invertible;\n"
+	+ " tag_bytes = 16; nonce_bytes = 12; }\n"
+	+ 'impl sealer extern "my_sealer";\n')
+
+SEVERAL_DELIMITERS = {
+	"a coded region":  'struct b { u8 a;\n'
+	                   ' coded c(doubling) until "a" | "b" { u8 z; } }\n',
+	"a sealed region": 'struct b { u8 n[12];\n'
+	                   ' sealed s(sealer, nonce = n) until "a" | "b" { u8 z; }\n'
+	                   ' tag u8 t[16] covers(s); }\n',
+}
+
+
+@pytest.mark.parametrize("case", sorted(SEVERAL_DELIMITERS))
+def test_a_coded_region_states_one_delimiter(case: str) -> None:
+	"""The refusal existed and could not fire (26.548).
+
+	It lived in `_check_one_delimiter`, keyed on `getattr(member, "codec",
+	None) is not None` -- and that function is handed an `ast.Field |
+	ast.Reserved`, neither of which has a codec. So the branch written for a
+	coded region never saw one, and its message names a construct it could
+	not reach.
+
+	`until` is carried by `Coded`, `Field`, `Reserved` and `Sealed`, and the
+	walk enumerated two of the four. `Sealed` gained its `until` in 26.535,
+	which widened the gap without anybody looking at this check.
+
+	It matters for the reason the note gives: the delimiter frames what the
+	codec is given, so which alternative ended the region decides how many
+	bytes are decoded. Two alternatives are two extents for one region.
+	"""
+	text = rendered(DELIMITED_REGION + SEVERAL_DELIMITERS[case])
+	assert "several delimiters" in text
+
+
+@pytest.mark.parametrize("body", [
+	'struct b { u8 a; coded c(doubling) until "a" { u8 z; } }\n',
+	'struct b { u8 a; coded c(doubling) { u8 z; } }\n',
+	'struct b { u8 v[] until "\\r\\n" | "\\n"; u8 t; }\n',
+])
+def test_one_delimiter_or_none_is_kept(body: str) -> None:
+	"""And a FIELD keeps its alternatives: `until "\\r\\n" | "\\n"` is the
+	case the several-delimiter form exists for, and no codec frames it."""
+	schema = parse_text(DELIMITED_REGION + body, path="s.situ")
+	resolve(schema, solve(schema))
