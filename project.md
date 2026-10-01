@@ -496,7 +496,8 @@ strictness    = "strict" | "lenient" ;
 decl          = namespace_decl | const_decl | enum_decl | tokens_decl
               | struct_decl | endian_marker_decl | codec_decl
               | register_decl | register_block_decl | requirement
-              | invariant | when_decl | relation_decl ;
+              | invariant | when_decl | relation_decl
+              | impl_decl | varint_decl | pipeline_decl ;
 
 (* One level; nesting is rejected naming its phase. A declaration inside is
    named `outer::header`, and an unqualified reference within the same
@@ -516,14 +517,15 @@ qualified     = [ ident "::" ] ident ;
 
 const_decl    = "const" ident "=" expr ";" ;
 
-enum_decl     = "enum" ident ":" scalar_type "{" enum_body "}" ;
+enum_decl     = "enum" ident ":" scalar_type [ "[" expr "]" ]
+                "{" enum_body "}" ;
 enum_body     = { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
 struct_decl   = "struct" ident [ attrs ] "{" { member } "}" ;
 
 member        = field | parameter | reserved | preamble | marker_field
               | block | variant | tag_field | pad ;
-pad           = "pad_to" "(" digits ")" ";"        (* section 8.4 *)
+pad           = "pad_to" "(" digits ")" [ attrs ] ";"   (* section 8.4 *)
               | "pad_random" "(" digits "," digits ")" scalar_type
                 [ array_spec ] [ attrs ] ";" ;    (* 14.7, 0045 *)
 
@@ -538,22 +540,24 @@ radix         = "decimal" | "hex" | "scaled" ;   (* section 8.6.2, 0056 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 preamble      = "preamble" "u8" [ array_spec ] "=" string   (* 0052 *)
                 [ attrs ] ";" ;
-tag_field     = ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
-                [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
+tag_field     = ( "tag" | "checksum" ) type_ref [ ident ] [ array_spec ]
+                [ "covers" "(" ref_list ")" ] [ "prefix" "(" ident ")" ]
+                [ "is" ident ] [ attrs ] ";" ;
 
 block         = "positional"    "{" { member } "}"
               | "authenticated" [ ident ] [ attrs ] "{" { member } "}"
               | "sealed" [ ident ] "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
-              | "coded"  ident   "(" codec_args ")" [ until ] [ attrs ]
+              | "coded"  ident   "(" codec_args ")" [ until ]
+                [ "covers" "(" ref_list ")" ] [ attrs ]
                 "{" { member } "}"
               | "indexed" "(" index_args ")" "{" { member } "}"
               | "opaque" ident "[" size_expr "]" [ attrs ] ";"
               | "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
 
-variant       = "variant" ident "switch" "(" expr ")" "{"
-                { "case" expr ":" member }
-                [ "default" ":" ( member | "error" | "opaque" ) ]
-                "}" ;
+variant       = "variant" ident "switch" "(" expr ")" [ attrs ] "{"
+                { variant_arm } "}" ;
+variant_arm   = ( "case" expr | "default" ) ":" arm_body ;
+arm_body      = "error" ";" | "opaque" ";" | member ;
 
 (* `max` after the brackets bounds a run whose length comes from the frame:
  * `u8 tail[remaining] max 470` (8.6.1, decision 0059). It counts ELEMENTS, as
@@ -593,15 +597,16 @@ tlv_arg       = "tag_decode" "=" tag_decode
               | "value_size" "=" value_size
               | "known"      "=" known_tags
               | attr ;
-tag_decode    = "{" tag_part { "," tag_part } "}" ;
+tag_decode    = "{" tag_part { "," tag_part } [ "," ] "}" ;
 tag_part      = ident "=" expr ;      (* over `tag`, the raw tag, alone *)
-value_size    = "switch" "(" ident ")" "{" value_case { "," value_case } "}" ;
+value_size    = "switch" "(" ident ")" "{" value_case { "," value_case }
+                [ "," ] "}" ;
 value_case    = ( "case" digits | "default" ) ":" value_rule ;
 value_rule    = digits                (* a literal byte count *)
               | "self_delimiting"     (* the value carries its own extent *)
               | "prefixed" "(" ident ")"
               | "error" ;             (* a wire type this schema refuses *)
-known_tags    = "{" known_tag { "," known_tag } "}" ;
+known_tags    = "{" known_tag { "," known_tag } [ "," ] "}" ;
 known_tag     = digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
 known_attr    = "name" "=" ident
               | "wire" "=" digits
@@ -648,9 +653,12 @@ codec_prop    = "length_preserving"
               | "systematic" | "error_propagating"
               | "tag_bytes" "=" digits | "nonce_bytes" "=" digits
               | "kernel" "=" kernel ;
-granularity   = "byte" | "stream" | "bit" "(" digits ")"
-              | "symbol" "(" digits ")" | "block" "(" digits ")" ;
-seekable      = "linear" | "permuted" | "blockwise" "(" digits ")" ;
+granularity   = "byte" | "stream" | "bit" "(" size_or_any ")"
+              | "symbol" "(" size_or_any ")"
+              | "block" "(" size_or_any ")" ;
+size_or_any   = digits | "any" ;
+seekable      = "linear" | "permuted"
+              | "blockwise" "(" size_or_any ")" ;
 added         = "+" digits [ "bits" ] ;        (* 0046 *)
 ratio         = ratio_form "(" digits "," digits ")" [ added ] ;
 ratio_form    = "ratio_exact" | "ratio_padded" | "ratio_bounded" ;

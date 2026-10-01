@@ -64,11 +64,15 @@ decl		= namespace_decl
 	| requirement
 	| invariant
 	| when_decl
-	| relation_decl ;
+	| relation_decl
+	| impl_decl
+	| varint_decl
+	| pipeline_decl ;
 
 const_decl	= "const" ident "=" expr ";" ;
 
-enum_decl	= "enum" ident ":" scalar_type "{" enum_body "}" ;
+enum_decl	= "enum" ident ":" scalar_type [ "[" expr "]" ]
+		  "{" enum_body "}" ;
 enum_body	= { ident "=" expr "," } [ "default" "=" ( "error" | "pass" ) ] ;
 
 (* Decision 0055. A set of text keywords of differing length, typing a
@@ -87,7 +91,7 @@ member		= field | parameter | reserved | preamble | marker_field
 
 (* Section 8.4, decision 0043. Aligns the offset to the next multiple of n;
  * it occupies whatever that costs and shows nothing. *)
-pad		= "pad_to" "(" digits ")" ";"
+pad		= "pad_to" "(" digits ")" [ attrs ] ";"
 	| "pad_random" "(" digits "," digits ")" scalar_type
 	  [ array_spec ] [ attrs ] ";" ;
 
@@ -155,21 +159,23 @@ preamble	= "preamble" "u8" [ array_spec ] "=" string [ attrs ] ";" ;
  * runs, and is what lets a checksum sit inside the region it covers: RFC 1071
  * defines the Internet checksum over the header including the checksum field,
  * taken as zero. Without it, a tag inside its own coverage is an error. *)
-tag_field	= ( "tag" | "checksum" ) scalar_type [ ident ] array_spec
-		  [ "covers" "(" ref_list ")" ] [ attrs ] ";" ;
+tag_field	= ( "tag" | "checksum" ) type_ref [ ident ] [ array_spec ]
+		  [ "covers" "(" ref_list ")" ] [ "prefix" "(" ident ")" ]
+		  [ "is" ident ] [ attrs ] ";" ;
 
 block		= "positional" "{" { member } "}"
 	| "authenticated" [ ident ] [ attrs ] "{" { member } "}"
 	| "sealed" [ ident ] "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
-	| "coded" ident "(" codec_args ")" [ until ] [ attrs ] "{" { member } "}"
+	| "coded" ident "(" codec_args ")" [ until ]
+	  [ "covers" "(" ref_list ")" ] [ attrs ] "{" { member } "}"
 	| "indexed" "(" index_args ")" "{" { member } "}"
 	| "opaque" ident "[" size_expr "]" [ attrs ] ";"
 	| "tlv" ident "(" tlv_args ")" [ attrs ] ";" ;
 
-variant		= "variant" ident "switch" "(" expr ")" "{"
-		{ "case" expr ":" member }
-		[ "default" ":" ( member | "error" | "opaque" ) ]
-	"}" ;
+variant		= "variant" ident "switch" "(" expr ")" [ attrs ] "{"
+		{ variant_arm } "}" ;
+variant_arm	= ( "case" expr | "default" ) ":" arm_body ;
+arm_body	= "error" ";" | "opaque" ";" | member ;
 
 (* array_spec and attrs both open with "[", so this grammar is ambiguous as
  * written: `u8 x [foo];` is either an array of `foo` elements or a scalar
@@ -219,15 +225,16 @@ codec_prop	= "length_preserving"
 (* Decision 0038. The two sizes are the primitive's, and are what let the
  * compiler check a schema's own `tag` and `nonce` fields against it. *)
 granularity	= "byte" | "stream"
-	| "bit" "(" digits ")" | "symbol" "(" digits ")"
-	| "block" "(" digits ")" ;
-seekable	= "linear" | "permuted" | "blockwise" "(" digits ")" ;
+	| "bit" "(" size_or_any ")" | "symbol" "(" size_or_any ")"
+	| "block" "(" size_or_any ")" ;
+size_or_any	= digits | "any" ;
+seekable	= "linear" | "permuted" | "blockwise" "(" size_or_any ")" ;
 
 (* Section 13.4. A kernel derives both the signature and the implementation,
  * which is the whole difference between the two codec tiers. *)
 kernel		= kernel_family [ "(" [ attr { "," attr } ] ")" ] ;
-kernel_family	= "table" | "polynomial" | "linear_block"
-	| "shift_register" | "permutation" | "stuffing" ;
+kernel_family	= "table" | "polynomial" | "ones_complement"
+	| "linear_block" | "shift_register" | "permutation" | "stuffing" ;
 
 (* Properties compose pointwise and conservatively. *)
 pipeline_decl	= "codec" ident "=" stage { "|>" stage } ";" ;
@@ -320,12 +327,13 @@ tlv_arg		= "tag_decode" "=" tag_decode
 	| "value_size" "=" value_size
 	| "known"      "=" known_tags
 	| attr ;
-tag_decode	= "{" tag_part { "," tag_part } "}" ;
+tag_decode	= "{" tag_part { "," tag_part } [ "," ] "}" ;
 tag_part	= ident "=" expr ;
-value_size	= "switch" "(" ident ")" "{" value_case { "," value_case } "}" ;
+value_size	= "switch" "(" ident ")" "{" value_case { "," value_case }
+		  [ "," ] "}" ;
 value_case	= ( "case" digits | "default" ) ":" value_rule ;
 value_rule	= digits | "self_delimiting" | "prefixed" "(" ident ")" | "error" ;
-known_tags	= "{" known_tag { "," known_tag } "}" ;
+known_tags	= "{" known_tag { "," known_tag } [ "," ] "}" ;
 known_tag	= digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
 known_attr	= "name" "=" ident
 	| "wire" "=" digits

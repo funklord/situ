@@ -15,6 +15,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
+from every_schema import SCHEMAS
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # A production is a name at the left margin followed by `=`. Alternatives are
@@ -197,3 +201,147 @@ def test_the_extracted_grammar_says_which_one_wins() -> None:
 	header = (ROOT / "doc/grammar.ebnf").read_text(encoding="ascii")[:800]
 
 	assert "project.md is authoritative" in header
+
+
+#: Schemas the grammar must NOT derive. A recogniser that accepts everything
+#: reports a clean grammar exactly as loudly as a correct one, and this file
+#: made the grammar more permissive nine times to reach 42 of 42 -- so the
+#: cases that must still be refused are part of the instrument rather than a
+#: nicety. Each is one edit away from a schema that does derive.
+MALFORMED = {
+	"a missing semicolon":       "struct s { u8 a }\n",
+	"an unclosed brace":         "struct s { u8 a;\n",
+	"a word that is not a decl": "wibble w;\n",
+	"two type names":            "struct s { u8 u16 a; }\n",
+	"a cap with no expression":  "struct s { u8 c[remaining] max; }\n",
+	"covers without parens":     "struct s { tag u8 t[16] covers body; }\n",
+	"an enum with no backing":   "enum e { a = 1, }\n",
+	"a stray comma":             "struct s { u8 a,; }\n",
+	"`default` with no colon":   "struct s { u8 k;\n"
+	                             " variant v switch (k) { default error; } }\n",
+	"a trailing alternative":    'struct s { u8 a[] until "x" | ; }\n',
+}
+
+PREAMBLE = "target buffer;\nendian big;\n"
+
+
+def _grammar() -> dict[str, object]:
+	from ebnf import parse_ebnf
+	return parse_ebnf((ROOT / "doc/grammar.ebnf").read_text(encoding="ascii"))
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.stem)
+def test_the_grammar_derives_every_schema_in_the_corpus(path: Path) -> None:
+	"""The witness the other four could not be (26.542, 26.543).
+
+	Two of them compare `doc/grammar.ebnf` against project.md section 7, so
+	they are satisfied whenever the two copies agree -- and they agreed while
+	both were wrong. The other two derive a keyword population from the
+	parser, which is the deliberate third witness, and both are keyed on the
+	SPELLING: `sealed ... until` and `[remaining] max N` were an existing
+	spelling in a NEW POSITION, so nothing was missing from the vocabulary
+	and no vocabulary check could speak.
+
+	This asks the only question that separates the grammar from the parser:
+	can the grammar derive the schemas this repository builds.
+	`test/schema/edges.situ` carries every construct the worked examples
+	happen not to have, by policy, so a construct the grammar cannot derive
+	fails here the day it is added.
+
+	It found nine gaps on its first run, 20 of 42 schemas being
+	underivable -- among them `impl` and `varint_type` declarations, which
+	the grammar DEFINED and `decl` did not reach, and `ones_complement`,
+	which is an `ast.KernelFamily` member that `ENUMERATED` above does not
+	list. A production that exists is not a production that is reachable.
+
+	**What it does not prove**, pinned here rather than left to be assumed:
+	that the grammar refuses everything outside the language. It is a
+	derivability check, and a grammar loosened far enough passes it --
+	`MALFORMED` is what holds that line. And its reach is the corpus's
+	reach: a construct no schema here uses is one it cannot see, which is
+	`pad_to(4) [attrs];` today, read out of `situc/parser.py` rather than
+	proved by any schema.
+	"""
+	from ebnf import recognise
+
+	verdict = recognise(path, _grammar())
+	assert verdict.ok, (
+		f"doc/grammar.ebnf cannot derive {path.name}: {verdict.where()}")
+
+
+def test_the_recogniser_refuses_a_malformed_schema() -> None:
+	"""The control, and it is not optional.
+
+	Nine of the productions above were widened to make the corpus derive.
+	A tenth widening could have been `schema = { ? any ? }`, which would
+	pass every case in the test above and mean nothing. These are the cases
+	that must still be refused -- so the derivability result is a statement
+	about the grammar rather than about how permissive it was made.
+	"""
+	import tempfile
+
+	from ebnf import recognise
+
+	grammar = _grammar()
+	accepted = []
+	for name, body in MALFORMED.items():
+		with tempfile.NamedTemporaryFile("w", suffix=".situ",
+		                                 delete=False) as handle:
+			handle.write(PREAMBLE + body)
+			path = Path(handle.name)
+		try:
+			if recognise(path, grammar).ok:
+				accepted.append(name)
+		finally:
+			path.unlink()
+
+	assert not accepted, ("the grammar derives schemas it should refuse, so "
+	                      "the derivability check above proves nothing: "
+	                      + ", ".join(accepted))
+
+
+def test_every_undefined_name_in_the_grammar_is_one_the_recogniser_handles(
+		) -> None:
+	"""The population, before either result above is believed.
+
+	An unmatchable terminal makes every production above it unmatchable, so a
+	name the recogniser does not handle turns a clean grammar into a broken
+	corpus -- and the failure reads as a schema the grammar cannot derive,
+	which is the wrong finding entirely.
+
+	`uint = "u" digits` is why this is asserted rather than assumed. The
+	grammar is a CHARACTER grammar throughout and the recogniser works on
+	tokens, so every lexical production needs overriding; that one was
+	missed, and a field parsed anyway because `type_ref = scalar_type | ident`
+	falls through to `ident`. Only `tag_field`, which names `scalar_type`
+	directly, could not match `u8` -- so the mismatch was invisible on the
+	construct it appears in most and fatal on one it appears in once.
+	"""
+	from ebnf import BY_TOKEN, UNDEFINED, parse_ebnf
+
+	text    = (ROOT / "doc/grammar.ebnf").read_text(encoding="ascii")
+	grammar = parse_ebnf(text)
+	rules   = _productions(text)
+
+	used: set[str] = set()
+	for rhs in rules.values():
+		bare = re.sub(r'"[^"]*"|\?[^?]*\?', " ", rhs)
+		used |= set(re.findall(r"[a-z_][a-z0-9_]*", bare))
+
+	undefined = used - set(grammar)
+	assert undefined == set(UNDEFINED), (
+		f"the grammar's undefined names have moved: {sorted(undefined)}, "
+		f"where ebnf.UNDEFINED says {sorted(UNDEFINED)}")
+
+	# `letter` and `digit` are the two the recogniser does not match, and it
+	# does not need to: they are reachable only from `ident` and `digits`,
+	# which it overrides as whole tokens. That reachability is the actual
+	# guarantee, so it is checked rather than stated.
+	handled = set(BY_TOKEN) | {"expr"}
+	for name in sorted(undefined - handled):
+		callers = {rule for rule, rhs in rules.items()
+		           if re.search(rf"\b{name}\b",
+		                        re.sub(r'"[^"]*"', " ", rhs))}
+		assert callers <= set(BY_TOKEN), (
+			f"`{name}` is unmatched and reachable from {sorted(callers)}, "
+			"which the recogniser does not override")
