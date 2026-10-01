@@ -31247,6 +31247,141 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.544 The construct that could not be added, and the walk that enumerated three of thirteen
+
+**Asked to add `pad_to(4) [attrs];` to `edges.situ`, so 26.543's checker
+would prove the production the parser accepts and no schema writes. It
+cannot be added, and the reason is a defect rather than an obstacle.**
+
+**Nothing reads a `Pad`'s attributes.** `grep` for a consumer finds one:
+`unparse`, rendering them back. No `wellformed` rule, no `resolve`, no
+layout, no backend. So the only attributes a pad can carry are ones that
+change no byte -- which is what 14.5 and 17.0 refuse by name, and what the
+unknown-attribute check's own notes say: *nothing reads it, so the
+generated code is byte-identical to the schema without it.* Writing one
+into the corpus would commit the claim the checker exists to refuse.
+
+**Measured, which is what turned a question into a finding:**
+
+    pad_to(4) [wibble];        ACCEPTED by parse, layout and resolve
+    pad_to(4) [min = 1];       ACCEPTED
+    pad_to(4) [stream];        refused -- belongs on a `parameter`
+    pad_to(4) [must_be_zero];  refused -- means nothing here
+    pad_to(4) [nul_terminated]; refused -- means nothing here
+
+**An invented attribute was accepted where four known ones were refused**,
+which is the wrong way round and says the two checks disagree.
+
+**`check_attribute_names` enumerated three member kinds and THIRTEEN `ast`
+nodes carry an `attrs` field.** The recursion read
+
+    if isinstance(member, (ast.Field, ast.Reserved, ast.TagField)):
+
+so nine kinds escaped it. Five confirmed by construction:
+`pad_to(4) [wibble];`, `variant v switch (k) [wibble]`,
+`opaque o[4] [wibble];`, `endian_marker em [wibble];` and
+`coded c(x) [wibble]`, each accepted by the whole front end.
+
+**The sibling check already had it right, which is the sharpest part.**
+`check_attribute_places` asks `getattr(member, "attrs", ())` -- derived,
+complete. So **the two halves of one rule disagreed about which members
+have attributes**, and that is exactly why `[stream]` on a pad was refused
+by name while `[wibble]` beside it was not. A reader meeting those two
+diagnostics would conclude the pad was checked.
+
+`evidence.md`'s name claiming exhaustiveness over a hand-maintained
+enumeration, and the remedy is the one it names. `_attrs_of` derives the
+population, so a node that grows an `attrs` field is covered the day it
+grows one rather than when somebody remembers the list. **The corpus was
+measured clean first** -- zero unknown attributes on any node, checked or
+not -- so the widening refuses nothing anybody wrote.
+
+Five fixtures, all red against the old enumeration and green after, plus a
+count of the attribute-bearing nodes so a fourteenth sends whoever adds it
+to the list.
+
+**What remains is the holder's, and it is why nothing went into
+`edges.situ`.** `[min]`, `[max]` and `[must_eq]` have NO placement rule at
+all. `_attribute_place` is a table of per-attribute rows and the numeric
+bounds have no row, so they are accepted on a pad, a variant, an `opaque`
+region and an `endian_marker` -- every member kind, including those with no
+value to bound.
+
+    members carrying a numeric bound, across the corpus:  Field, 106
+    members carrying one on anything else:                none
+
+So a rule saying a numeric bound belongs on a field would refuse nothing
+anybody has written, and `parameter` is a flag on `ast.Field` rather than
+its own node, so the caller-supplied value stays legal by construction.
+**What makes it a decision rather than a build is which members have a
+value**, and the corpus cannot settle that: `TagField` and `Reserved` are
+the cases with no instance either way, and `_attribute_place`'s own
+docstring is already wrestling with the question -- *a type name that is
+not a width could be an enum, a varint or a struct, and only the last of
+those has no value.* A wrong rule here refuses valid schemas in the
+language's three most-used attributes.
+
+**Until that is settled, `pad_to(4) [min = 1];` stays accepted, so the
+grammar keeps `[ attrs ]` on `pad_to`: it is reachable, and a grammar that
+dropped it would under-describe what the compiler takes.** If the
+placement question is settled the obvious way, that clause becomes
+unreachable and should go -- at which point the checker has nothing to
+prove there, which was the right answer to the original request all along.
+
+**And the widening turned the gate red, which is the find of the entry.**
+Seven tests failed on `coded pn(hp) covers(flags) [tag_order = after]`:
+**`tag_order` is read by `resolve._check_transform_tag_order`, raises three
+diagnostics of its own, and was in no vocabulary at all.** Not in
+`ATTRIBUTE_NAMES`, so not in `PLACED_ATTRS` or `UNPLACED_ATTRS` either.
+
+**`test_every_attribute_is_accounted_for` exists for exactly this and could
+not see it.** It starts from `ATTRIBUTE_NAMES` and asks whether each name
+has a place decided; an attribute the compiler reads and the parser does
+not list has no name to account for, so both tables were silently
+complete. **The missing direction is the one nothing was looking in**, and
+a guard over it is now derived from the source each run: 31 attribute names
+are compared against in `situc/`, 30 were listed, and the sweep names the
+one that is not.
+
+**Why it survived is worth keeping.** 0006 disambiguates a bracket holding
+`=` without consulting the vocabulary, and `tag_order` always carries a
+value -- so the parser read it correctly by a route that never asked. A
+bare `[tag_order]` would not have been read as an attribute at all.
+
+**Nothing noticed it; a fix somewhere else did.** No check on the
+vocabulary, no check on the tables, and seven tests exercising the
+construct happily -- the omission was only expressible once a DIFFERENT
+rule started asking every member what attributes it carried. That is the
+argument for widening a check even where the corpus is clean: the corpus
+was clean, and the suite was not.
+
+**My own measurement before the change was right and too narrow.** I
+checked that no corpus schema carried an unknown attribute -- zero, on any
+node -- and concluded the widening was safe. The corpus is 42 schemas and
+the suite writes hundreds more inline, which is where the construct lived.
+**A population measured over the artifacts is not the population a check
+runs against**, and the full gate is what holds that difference.
+
+**Then a THIRD witness fired, on the same omission from a third
+direction.** With `tag_order` in the vocabulary, 25.-1's check went red:
+*the README names no code for these: attribute: tag_order*. So the
+attribute was read by the compiler, absent from the parser's vocabulary,
+absent from both placement tables, and absent from the README -- four
+places, and **each check was keyed on one of the others**, so no single one
+could speak. It is in the README's placement table now, beside
+`[allow_unverified_read]`.
+
+Not in *Recent additions*, deliberately: that section moves a FEATURE
+between built and not-yet-built, and this one has been built all along. It
+was documentation that was missing, not work.
+
+**Three gate runs for one change, and each red was the gate earning its
+keep** -- seven tests on the construct, then the accounting table, then the
+README. The widening was a four-line change and the omission it uncovered
+took three rounds to finish closing, which is the honest cost and the
+reason the directive is to run the gate rather than to reason about
+whether it would pass.
+
 ### 26.543 The EBNF corpus checker, and nine gaps on its first run
 
 **Built: `test/unit/ebnf.py` recognises `doc/grammar.ebnf` and asks whether
