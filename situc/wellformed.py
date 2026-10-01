@@ -63,6 +63,7 @@ def check(schema: ast.Schema) -> None:
 	check_coded_coverage(schema)
 	check_authenticated_regions_hold_something(schema)
 	check_attribute_places(schema)
+	check_struct_attribute_places(schema)
 	check_attribute_values(schema)
 	check_byte_run_equality(schema)
 	check_byte_enums(schema)
@@ -1839,9 +1840,17 @@ def check_unique_attributes(schema: ast.Schema) -> None:
 
 
 def _check_member_attrs(members: tuple[ast.Member, ...]) -> None:
+	"""26.544's walk had a twin and only one of them was fixed.
+
+	`_check_member_attr_names` carried the same hand-written
+	`isinstance(member, (ast.Field, ast.Reserved, ast.TagField))`, and
+	deriving it there left this one enumerated -- so a DUPLICATE attribute
+	and an UNIMPLEMENTED one went unchecked on the same nine member kinds.
+	Measured: `u8 a [trusted]` is refused as not implemented and
+	`authenticated r [trusted] { ... }` was accepted (26.546).
+	"""
 	for member in members:
-		if isinstance(member, (ast.Field, ast.Reserved, ast.TagField)):
-			_check_attr_list(member.attrs)
+		_check_attr_list(_attrs_of(member))
 		_check_member_attrs(nested(member))
 
 
@@ -2216,6 +2225,25 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 			return None
 		return ("a scalar of more than one byte -- a single byte has no byte "
 		        "order, and a struct-typed member does not pass one inward")
+
+	# `[since = N]` is read by `check_versions` and by the emitters' skip,
+	# both of which walk a field or a reserved run. On every other member it
+	# was accepted and changed nothing: measured per kind with a `[version]`
+	# field present, so the machinery could engage, and the generated code of
+	# all four backends, the capability map, the wire signature and the
+	# documentation are byte-identical with and without it on a pad, a
+	# variant, an `opaque`, an `endian_marker`, a `coded` region, an
+	# `authenticated` one, a `sealed` one and a tag (26.546).
+	#
+	# A versioned REGION is a reasonable thing to want and is not what this
+	# is: the schema said so and every reader ignored it, which 17.0 calls
+	# worse than saying nothing.
+	if attr.name == "since":
+		if isinstance(member, (ast.Field, ast.Reserved)):
+			return None
+		return ("a field or a `reserved` run -- the version machinery reads "
+		        "it on those and on nothing else, so here it would state a "
+		        "version nothing checks")
 
 	# A bound or an equality is a claim about *a value*, and the generated
 	# `validate` compares one. An array has no single value to compare and a
@@ -3301,6 +3329,61 @@ def check_attribute_places(schema: ast.Schema) -> None:
 					         "enforce is worse than one that states nothing "
 					         "(project.md section 14.5)"],
 				)
+
+
+#: What a STRUCT declaration's attributes may be, derived from what reads
+#: `decl.attrs` rather than from a list anybody maintains:
+#:
+#:    depth, limit             `traverse.depth_limit`, `wellformed` (0054)
+#:    endian, bit_order,
+#:    encoding                 `Scope.narrow` -- the three a struct narrows
+#:                             for the members inside it
+#:    allow_straddle           `layout`, where a bit field may cross a byte
+#:    allow_host_dependent     `resolve`, for a host-order field
+#:    version                  `_version_field`, which `[since]` counts against
+#:
+#: Everything else was accepted and read by nothing: 45 of the 53 names in
+#: `ATTRIBUTE_NAMES`, measured per name against the four backends, the
+#: capability map, the wire signature and the documentation (26.546).
+STRUCT_ATTRS = frozenset({
+	"depth", "limit", "endian", "bit_order", "encoding",
+	"allow_straddle", "allow_host_dependent", "version",
+})
+
+
+def check_struct_attribute_places(schema: ast.Schema) -> None:
+	"""A struct declaration carries struct attributes and no others (14.5).
+
+	`struct b [secret] { ... }` parsed, resolved, changed no byte of any
+	artifact this compiler emits, and drew no complaint -- and so did 44
+	other member attributes, because the spelling check accepts any known
+	name and the placement table only ever looked at MEMBERS.
+
+	`[bit_order]` and `[encoding]` are in the allowed set and were nearly not.
+	They are read by `Scope.narrow`, conditionally -- only where a bit-packed
+	or text member is inside -- so a minimal fixture shows no artifact
+	changing and reports them inert. `edges.situ` uses both on a struct,
+	which is what caught it. **A measurement that compares artifacts can only
+	see an attribute whose effect is unconditional**, which is why this set
+	is derived from the readers rather than from that sweep.
+	"""
+	for decl in schema.structs():
+		for attr in decl.attrs:
+			if attr.name in STRUCT_ATTRS:
+				continue
+			raise error(
+				f"`[{attr.name}]` means nothing here",
+				attr.span,
+				label = "belongs on a member, not on the struct",
+				notes = ["nothing reads it on a struct declaration, so the "
+				         "generated code is byte-identical to the schema "
+				         "without it",
+				         "a struct carries what it narrows for the members "
+				         "inside it -- `[endian]`, `[bit_order]`, "
+				         "`[encoding]` -- and what describes the struct "
+				         "itself: `[depth]`, `[limit]`, `[version]`, "
+				         "`[allow_straddle]`, `[allow_host_dependent]`"],
+			)
 
 
 def check_attribute_values(schema: ast.Schema) -> None:

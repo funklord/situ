@@ -3385,3 +3385,94 @@ def test_a_numeric_bound_is_refused_where_there_is_no_value(case: str) -> None:
 	text = rendered(BOUND_PREAMBLE + BOUND_DOES_NOT[case])
 	assert "means nothing here" in text
 	assert "ordinary field" in text or "policy" in text or "scalar field" in text
+
+
+#: What a struct DECLARATION may carry, and nothing else. Derived from the
+#: readers of `decl.attrs` rather than from a list anybody maintains, and
+#: `[bit_order]` and `[encoding]` are in it because `Scope.narrow` reads
+#: them -- conditionally, so an artifact sweep reports them inert and
+#: `edges.situ` is what caught them (26.546).
+#: `limit` is paired with `depth` because a pre-existing rule requires
+#: it -- `[limit]` without `[depth]` is refused on its own terms.
+STRUCT_KEEPS = ("depth = 4", "depth = 4, limit = 2", "endian = little",
+                "bit_order = lsb_first", "encoding = ascii",
+                "allow_straddle", "allow_host_dependent", "version = ver")
+
+#: And a sample of what it may not: member attributes, accepted on a struct
+#: and read by nothing. 45 of the 53 names were in this state.
+STRUCT_REFUSES = ("secret", "max = 3", "rw", "nul_terminated", "minimal",
+                  "self_as = 0", "truncated = 8", "timeout_ms = 10")
+
+
+@pytest.mark.parametrize("group", STRUCT_KEEPS)
+def test_a_struct_keeps_the_attributes_it_narrows_with(group: str) -> None:
+	schema = parse_text(
+		BUFFER + "struct b [%s] { u8 ver; u8 a; }\n" % group, path="s.situ")
+	resolve(schema, solve(schema))
+
+
+@pytest.mark.parametrize("group", STRUCT_REFUSES)
+def test_a_struct_refuses_an_attribute_nothing_reads_on_it(group: str) -> None:
+	"""`struct b [secret] { ... }` parsed, resolved and changed no byte.
+
+	The spelling check accepts any known name and the placement table only
+	ever looked at MEMBERS, so a struct declaration took member attributes
+	and dropped them. Measured per name against the four backends' emitted
+	files, the capability map, the wire signature and the documentation:
+	45 of 53 changed nothing anywhere (26.546).
+	"""
+	assert "means nothing here" in rendered(
+		BUFFER + "struct b [%s] { u8 ver; u8 a; }\n" % group)
+
+
+def test_since_is_read_on_a_field_and_a_reserved_run() -> None:
+	for member in ("u8 late [since = 2];", "reserved u8[2] [since = 2];"):
+		schema = parse_text(
+			BUFFER + "struct b [version = ver] { u8 ver; u8 a; %s }\n" % member,
+			path="s.situ")
+		resolve(schema, solve(schema))
+
+
+@pytest.mark.parametrize("member", [
+	"pad_to(4) [since = 2]; u8 t;",
+	"variant v switch (a) [since = 2] { default: error; }",
+	"opaque o[4] [since = 2];",
+])
+def test_since_is_refused_where_the_version_machinery_does_not_look(
+		member: str) -> None:
+	"""A versioned region is a reasonable thing to want and is not this.
+
+	`check_versions` and the emitters' skip both walk a field or a reserved
+	run. On a pad, a variant, an `opaque`, an `endian_marker`, a `coded`
+	region, an `authenticated` one, a `sealed` one and a tag, `[since = 2]`
+	was accepted and every artifact stayed byte-identical -- measured with a
+	`[version]` field present so the machinery could engage. The schema said
+	the member arrived in version 2 and every reader ignored it.
+	"""
+	text = rendered(
+		BUFFER + "struct b [version = ver] { u8 ver; u8 a; %s }\n" % member)
+	assert "means nothing here" in text
+	assert "version machinery" in text
+
+
+def test_an_unimplemented_attribute_is_refused_on_every_member() -> None:
+	"""`_check_member_attrs` is `_check_member_attr_names`'s twin and 26.544
+	derived only one of them.
+
+	Both carried the same `isinstance(member, (ast.Field, ast.Reserved,
+	ast.TagField))`, so a DUPLICATE attribute and an UNIMPLEMENTED one went
+	unchecked on the same nine member kinds that entry had just fixed for
+	spelling. Measured: `u8 a [trusted]` was refused as not implemented and
+	`authenticated r [trusted] { ... }` was accepted.
+	"""
+	text = rendered(BUFFER + "struct b { authenticated r [trusted] { u8 z; }\n"
+	                         " tag u8 t[16] covers(r); }\n")
+	assert "`trusted` is not implemented" in text
+
+
+def test_a_duplicate_attribute_is_refused_on_every_member() -> None:
+	"""The other half of the same walk: `[max = 1, max = 2]` has no reading."""
+	text = rendered(BUFFER + "struct b { u8 k;\n"
+	                         " variant v switch (k) [equalize, equalize]"
+	                         " { default: error; } }\n")
+	assert "declared twice" in text or "redeclar" in text.lower()
