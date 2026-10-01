@@ -713,6 +713,7 @@ The ones whose placement rule is the interesting part:
 |---|---|
 | `[equalize]` | on a `variant`: pad every arm to the largest, which buys back a static offset for whatever follows |
 | `[allow_unverified_read]` | on a `sealed` region: waive the stage gate |
+| `[tag_order = before]` / `[tag_order = after]` | on a `coded` region a tag covers: whether the transform runs before or after the tag is computed |
 | `[truncated]` | on a `tag` or `checksum`: its width is deliberately less than the one its codec produces |
 | `[self_as = 0]` | on a `tag` or `checksum` inside its own coverage: what its bytes read as while the algorithm runs |
 | `[allow_host_dependent]` | on a struct whose layout the *host* decides -- netlink's, where every field is a plain dereference |

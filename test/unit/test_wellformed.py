@@ -8,6 +8,7 @@ problem rather than a style one.
 from __future__ import annotations
 
 import ast as python_ast
+import re
 from pathlib import Path
 
 import pytest
@@ -851,8 +852,19 @@ def test_every_attribute_is_accounted_for() -> None:
 	#                    position table can give: the attribute is legal on
 	#                    exactly one KIND of member rather than in one place
 	#                    in a declaration (0050).
+	#   tag_order        `resolve._check_transform_tag_order` -- three
+	#                    diagnostics of its own, including "`X` has
+	#                    `tag_order` and no tag covers what it transforms",
+	#                    which needs the resolved coverage this table does
+	#                    not have.
+	#
+	# `tag_order` reached this list late: it was read by `resolve` and absent
+	# from `ATTRIBUTE_NAMES` entirely, so neither table had an opinion and
+	# the accounting above could not notice. Widening the unknown-attribute
+	# walk is what surfaced it, by refusing the construct seven tests
+	# exercise (26.544).
 	elsewhere = {"quoted", "escape", "timeout_ms", "retries",
-	             "bits", "since", "require_aligned", "stream"}
+	             "bits", "since", "require_aligned", "stream", "tag_order"}
 
 	known = (placed | wellformed.UNPLACED_ATTRS | elsewhere
 	         | set(wellformed.UNIMPLEMENTED_ATTRS))
@@ -3179,3 +3191,113 @@ def test_an_empty_sealed_region_is_not_refused() -> None:
 	assert parse_text(
 		PREFIX + REGION_AEAD + "struct s { u8 n; sealed body(region_aead) { } "
 		"tag u8 mac[4] covers(body); }") is not None
+
+
+#: One schema per member kind that carries attributes and was NOT reached by
+#: the unknown-attribute walk. Each is the smallest schema of its kind with a
+#: made-up attribute on it, and each compiled before the walk derived its
+#: population (26.544).
+ESCAPED_THE_ATTRIBUTE_WALK = {
+	"pad_to":         "struct b { u8 lead; pad_to(4) [wibble]; u8 tail; }\n",
+	"variant":        "struct b { u8 lead;\n"
+	                  " variant v switch (lead) [wibble] { default: error; } }\n",
+	"opaque":         "struct b { u8 lead; opaque o[4] [wibble]; }\n",
+	"endian_marker":  "endian_marker em : u16 { little = 0x1234, big = 0x3412 }\n"
+	                  "struct b { endian_marker em [wibble]; u8 tail; }\n",
+	"authenticated":  "struct b { authenticated r [wibble] { u8 z; }\n"
+	                  " tag u8 t[16] covers(r); }\n",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(ESCAPED_THE_ATTRIBUTE_WALK))
+def test_an_unknown_attribute_is_refused_on_every_member_that_carries_one(
+		kind: str) -> None:
+	"""The walk enumerated three member kinds and thirteen nodes carry attrs.
+
+	`check_attribute_names` recursed with
+	`isinstance(member, (ast.Field, ast.Reserved, ast.TagField))`, so nine
+	kinds escaped it. Measured before the fix: `pad_to(4) [wibble];`,
+	`variant v switch (k) [wibble]`, `opaque o[4] [wibble];`,
+	`endian_marker em [wibble];` and `coded c(x) [wibble]` were all accepted
+	by the whole front end -- parse, layout and resolve -- which is the one
+	thing this check exists to refuse.
+
+	`evidence.md` calls it a name claiming exhaustiveness over a
+	hand-maintained enumeration, and `_attrs_of` is the remedy it names:
+	derive the population, so a node that grows an `attrs` field is covered
+	the day it grows one.
+
+	The sibling check `check_attribute_places` already asked
+	`getattr(member, "attrs", ())`, so the two halves of one rule disagreed
+	about which members have attributes -- which is why a `[stream]` on a pad
+	was refused by name while a `[wibble]` beside it was not.
+	"""
+	assert "unknown attribute `wibble`" in rendered(
+		BUFFER + ESCAPED_THE_ATTRIBUTE_WALK[kind])
+
+
+def test_every_ast_node_that_carries_attributes_is_one_the_walk_reaches()\
+		-> None:
+	"""The population, asserted rather than enumerated a second time.
+
+	A behavioural test needs a fixture per kind, and a kind nobody writes a
+	fixture for is a kind nobody notices. This counts the nodes instead, so a
+	fourteenth attribute-bearing node fails here and sends whoever added it
+	to the list above.
+	"""
+	import dataclasses
+
+	from situc import ast as ast_module
+
+	bearing = {name for name, node in vars(ast_module).items()
+	           if dataclasses.is_dataclass(node) and isinstance(node, type)
+	           and "attrs" in {f.name for f in dataclasses.fields(node)}}
+
+	assert bearing == {
+		"Authenticated", "Coded", "Field", "MarkerField", "Opaque", "Pad",
+		"Relation", "Reserved", "Sealed", "StructDecl", "TagField", "Tlv",
+		"Variant",
+	}, f"the attribute-bearing nodes have moved: {sorted(bearing)}"
+
+
+def test_every_attribute_the_compiler_reads_is_one_the_parser_accepts() -> None:
+	"""The direction `test_every_attribute_is_accounted_for` cannot look.
+
+	That test starts from `ATTRIBUTE_NAMES` and asks whether each name has a
+	place. An attribute the compiler READS and the parser does not list is
+	invisible to it: there is no name to account for, so both tables are
+	silently complete.
+
+	`tag_order` was exactly that. `resolve._check_transform_tag_order` reads
+	it and raises three diagnostics of its own, and it appeared in no
+	vocabulary -- for however long, since nothing could have said. It survived
+	because 0006 disambiguates a bracket containing `=` without consulting
+	this set, and `tag_order` always carries a value; a bare `[tag_order]`
+	would not have been read as an attribute at all.
+
+	What found it was widening the unknown-attribute walk, which then refused
+	the construct seven tests exercise (26.544) -- a fix in one place
+	surfacing an omission in another, rather than any check noticing.
+
+	The population is derived from the source each run, so an attribute
+	compared against in a new module is in it the day it is written.
+	"""
+	root = Path(__file__).resolve().parents[2]
+
+	compared: set[str] = set()
+	for path in sorted((root / "situc").rglob("*.py")):
+		for blob in re.findall(
+				r'attr\.name (?:==|in) \(?((?:"[a-z_]+"(?:,\s*)?)+)\)?',
+				path.read_text(encoding="utf-8")):
+			compared |= set(re.findall(r'"([a-z_]+)"', blob))
+
+	# The instrument first: a regex that stopped matching would report a
+	# clean tree, which is the finding this test exists to make impossible.
+	assert len(compared) >= 25, (
+		f"only {len(compared)} attribute names found in situc/; the pattern "
+		"has probably stopped matching")
+
+	missing = sorted(compared - set(ATTRIBUTE_NAMES))
+	assert not missing, (
+		"the compiler reads attributes the parser does not list, so they are "
+		f"in no vocabulary and no table accounts for them: {missing}")

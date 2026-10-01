@@ -1867,16 +1867,35 @@ def check_attribute_names(schema: ast.Schema) -> None:
 	from situc.parser import ATTRIBUTE_NAMES
 
 	for decl in schema.decls:
-		if isinstance(decl, ast.StructDecl):
-			_check_attr_names(decl.attrs, ATTRIBUTE_NAMES)
-			_check_member_attr_names(decl.members, ATTRIBUTE_NAMES)
+		_check_attr_names(_attrs_of(decl), ATTRIBUTE_NAMES)
+		_check_member_attr_names(getattr(decl, "members", ()), ATTRIBUTE_NAMES)
+
+
+def _attrs_of(node: object) -> tuple[ast.Attr, ...]:
+	"""Whatever attributes a node carries, asked rather than enumerated.
+
+	This replaced a hand-written `isinstance(member, (ast.Field,
+	ast.Reserved, ast.TagField))`, and THIRTEEN `ast` nodes carry an `attrs`
+	field. So the check covered three member kinds and nine escaped it:
+	measured, `pad_to(4) [wibble];`, `variant v switch (k) [wibble]`,
+	`opaque o[4] [wibble];`, `endian_marker em [wibble];` and
+	`coded c(x) [wibble]` were all accepted by the whole front end, which is
+	the one thing this check exists to refuse.
+
+	`evidence.md` calls that a name claiming exhaustiveness over a
+	hand-maintained enumeration, and the fix is the one it names: derive the
+	population. A node that grows an `attrs` field is covered the day it
+	grows one, rather than when somebody remembers this list.
+	"""
+	attrs = getattr(node, "attrs", ())
+	assert isinstance(attrs, tuple)
+	return attrs
 
 
 def _check_member_attr_names(members: tuple[ast.Member, ...],
 		known: frozenset[str]) -> None:
 	for member in members:
-		if isinstance(member, (ast.Field, ast.Reserved, ast.TagField)):
-			_check_attr_names(member.attrs, known)
+		_check_attr_names(_attrs_of(member), known)
 		_check_member_attr_names(nested(member), known)
 
 

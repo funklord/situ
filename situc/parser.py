@@ -183,6 +183,15 @@ ATTRIBUTE_NAMES = frozenset({
 	"secret", "nonce", "covers", "allow_unverified_read", "trusted",
 	# section 14.2: a checksum that covers its own bytes, taken as this
 	"self_as",
+	# Whether a `coded` region's transform runs before or after the tag that
+	# covers it. `resolve._check_transform_tag_order` reads it and raises
+	# three diagnostics of its own, and it was MISSING from this set --
+	# found by widening the unknown-attribute walk, which then refused the
+	# construct seven tests exercise (26.544). It survived because 0006
+	# disambiguates a bracket holding `=` without consulting this list, and
+	# `tag_order` always carries a value; a bare `[tag_order]` would not
+	# have been read as an attribute at all.
+	"tag_order",
 	# decision 0038: a tag deliberately narrower than the one its codec
 	# produces, which OSCORE does on constrained links
 	"truncated",
