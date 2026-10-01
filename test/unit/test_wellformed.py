@@ -3301,3 +3301,87 @@ def test_every_attribute_the_compiler_reads_is_one_the_parser_accepts() -> None:
 	assert not missing, (
 		"the compiler reads attributes the parser does not list, so they are "
 		f"in no vocabulary and no table accounts for them: {missing}")
+
+
+#: `[min]`, `[max]` and `[must_eq]` compare a value. These are the members
+#: that have one, and each is an exception the rule earns rather than a
+#: default: a text number's brackets are a width, and a byte run's equality
+#: is one span comparison (0052).
+BOUND_BELONGS = {
+	"a plain scalar":       "struct b { u8 a [max = 3]; }\n",
+	"a text number":        "struct b { decimal u32 n[6] [must_eq = 1]; }\n",
+	"a byte-run equality":  'struct b { u8 s[4] [must_eq = "WOZ2"]; }\n',
+	"a parameter":          "struct b { parameter u8 blk [min = 1]; u8 a; }\n",
+}
+
+#: And the members that have no value. Everything below `a reserved run` was
+#: ACCEPTED before the rule asked whether the member is a field at all
+#: (26.545) -- the branch tests a field's radix, its brackets, its `until`
+#: and its type, so a member with none of those passed every test and fell
+#: out of the function as correctly placed.
+BOUND_DOES_NOT = {
+	"a pad":                "struct b { u8 a; pad_to(4) [max = 3]; u8 t; }\n",
+	"a variant":            "struct b { u8 k;\n"
+	                        " variant v switch (k) [max = 3]"
+	                        " { default: error; } }\n",
+	"an opaque region":     "struct b { u8 a; opaque o[4] [max = 3]; }\n",
+	"an endian marker":     "struct b { endian_marker em [max = 3]; u8 t; }\n",
+	"a coded region":       "struct b { u8 a;\n"
+	                        " coded c(doubling) [max = 3] { u8 z; } }\n",
+	"an authenticated one": "struct b { authenticated r [max = 3] { u8 z; }\n"
+	                        " tag u8 t[16] covers(r); }\n",
+	# The sharp one: a `tag u8 t[16]` was refused by the ARRAY branch, which
+	# is incidental, and a sub-byte checksum has no array to be refused by.
+	"a sub-byte checksum":  "struct b { authenticated r { u8 z; }\n"
+	                        " checksum u5 crc covers(r) [max = 3]; }\n",
+	"a tag with a length":  "struct b { authenticated r { u8 z; }\n"
+	                        " tag u8 t[16] covers(r) [max = 3]; }\n",
+	"a reserved run":       "struct b { u8 a; reserved u8[2] [max = 3]; u8 t; }\n",
+	"a struct-typed one":   "struct inner { u8 z; }\n"
+	                        "struct b { inner i [max = 3]; }\n",
+	"a delimited run":      'struct b { u8 v[] until " " [max = 3]; u8 t; }\n',
+}
+
+BOUND_PREAMBLE = (BUFFER
+	+ "endian_marker em : u16 { little = 0x1234, big = 0x3412 }\n"
+	+ "codec doubling { expansion = ratio_exact(2, 1); invertible; }\n"
+	+ 'impl doubling extern "my_doubling";\n')
+
+
+@pytest.mark.parametrize("case", sorted(BOUND_BELONGS))
+def test_a_numeric_bound_is_kept_where_a_value_is(case: str) -> None:
+	"""The exceptions, first, because they are what the rule costs.
+
+	A rule refusing a bound everywhere but a plain scalar would refuse
+	cpio's constrained magic, which is a six-character text number with one
+	value, and 0052's `[must_eq = "WOZ2"]`, which is one span comparison.
+	Both are read, and a `parameter` is an `ast.Field` carrying a flag, so
+	the caller-supplied value stays bounded by construction.
+	"""
+	schema = parse_text(BOUND_PREAMBLE + BOUND_BELONGS[case], path="s.situ")
+	resolve(schema, solve(schema))
+
+
+@pytest.mark.parametrize("case", sorted(BOUND_DOES_NOT))
+def test_a_numeric_bound_is_refused_where_there_is_no_value(case: str) -> None:
+	"""And refused on every member that has no single value to compare.
+
+	Settled 2026-10-01 on the copyright holder's instruction, and derived
+	rather than chosen: the question was which members a bound is READ on,
+	and three consumers answer it. The solver's `record_interval` takes an
+	`ast.Field | ast.Reserved`, `traverse` returns early unless
+	`placement.kind == "field"`, and `wire` publishes the bound into the
+	signature for anything.
+
+	That last one is why this is a refusal and not a tidying. Measured
+	per member kind, comparing the generated C, the capability map and the
+	wire signature with and against `[max = 3]`: on a pad, a variant, an
+	`opaque` region, an `endian_marker` and a `coded` region the C and the
+	map are byte-identical and **the wire signature changes**. So the bound
+	was not inert -- it was published into the committed contract while
+	nothing enforced it, which is 17.0's failure in the one artifact that
+	exists to be diffed by a peer.
+	"""
+	text = rendered(BOUND_PREAMBLE + BOUND_DOES_NOT[case])
+	assert "means nothing here" in text
+	assert "ordinary field" in text or "policy" in text or "scalar field" in text

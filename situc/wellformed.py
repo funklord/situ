@@ -2237,6 +2237,26 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 			        "content as a policy, one of `[must_be_zero]`, "
 			        "`[must_be_one]`, `[preserve]` or `[unknown]`")
 
+		# And every member that is not a field at all. The tests below are
+		# all about a FIELD's shape -- its radix, its brackets, its `until`,
+		# its type -- so a member with none of those passes every one of them
+		# and falls out of this function as "fine". Measured: a `pad_to`, a
+		# `variant`, an `opaque` region, an `endian_marker` and a `coded`
+		# region each accepted `[max = 3]`, and so did a sub-byte `checksum`,
+		# which is the sharp case -- a `tag u8 t[16]` was refused only
+		# incidentally, by the array branch below, and `checksum u5 crc` has
+		# no array to be refused by.
+		#
+		# It is not inert, which is why this is a refusal rather than a
+		# tidying. The bound reaches `WIRE_ATTRS`, so it is published into
+		# the committed wire signature -- a peer diffing that file reads a
+		# bound on a pad that nothing enforces, which is 17.0's failure in
+		# the artifact that exists to be the contract (26.545).
+		if not isinstance(member, ast.Field):
+			return ("an ordinary field -- a bound compares a value and this "
+			        "member has none, so `validate` has nothing to check and "
+			        "the wire signature would publish a bound nobody enforces")
+
 		# A *text number* is the exception, and it is the whole reason this
 		# rule cannot key on the brackets alone: `decimal u32 magic[6]` is a
 		# six-character number with one value, not six numbers, so the
