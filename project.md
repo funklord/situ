@@ -16053,12 +16053,14 @@ record states.
   2026-08-25, so neither settlement reached it, and comparing its table
   against 11.1 found 7 of 13 rows drifted with two missing lattice
   values. It is checked by a test now.
-- **`_rewrite_member`'s `Tlv` branch rewrites 2 of its 10 fields** (26.549).
-  `known` carries a `type_name` per tag and `tag_decode` and `value_size`
-  carry expressions, so a `tlv` inside a `namespace` that names a type or a
-  `const` declared beside it is the same fault the other five branches had.
-  Not fixed because each field wants its own fixture and a `tlv` fixture is
-  several lines of item grammar; measured rather than guessed.
+- ~~**`_rewrite_member`'s `Tlv` branch rewrites 2 of its 10 fields**~~
+  **Closed 2026-10-02 in 26.550, and one of the eight was wrong rather than
+  three.** `value_size`'s `prefixed(...)` names a `varint_type` declaration
+  and was not qualified. `tag_decode` is refused a `const` at top level too,
+  so a namespace changes nothing; `known`'s `type` already resolves,
+  measured against a struct declared only inside the namespace; and the
+  other five hold no name at all. **A count of unset fields is a list of
+  candidates**, and each cleared by a different route.
 
   The audit that found it is mechanical: parse `_rewrite_member`, take each
   `isinstance(member, ...)` branch and the keywords its `replace()` sets,
@@ -31301,6 +31303,48 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.550 One of the Tlv branch's eight, and seven that needed nothing
+
+**`_rewrite_member`'s `Tlv` branch set 2 of 10 fields, and exactly one of
+the eight was wrong.** `value_size = switch (p) { case 1: prefixed(pb_varint) }`
+inside a `namespace` reported *unknown length type `pb_varint`* for a
+`varint_type` declared beside it. `prefixed(...)` names a declaration and a
+namespace qualifies declarations; the reference was not rewritten.
+
+**26.549 predicted three and measuring found one**, which is the entry's
+point. The three were `tag_decode`, `known` and `value_size`, each
+carrying something that looked like a qualified name:
+
+    value_size   prefixed(pb_varint)       BROKEN inside a namespace
+    tag_decode   { field = tag >> SHIFT }  refused at TOP LEVEL too
+    known        { 1 : { type = ... } }    works, including inside
+
+**`tag_decode` is refused either way**: a decode expression may name the tag
+parts and the raw `tag` and nothing else, so `SHIFT` is *not in scope in a
+tag decode* at top level as well. Symmetric, therefore not this fault --
+and the symmetry is what says so, which no amount of reading the field's
+type would have.
+
+**`known`'s `type` already resolves**, and the check that establishes it is
+the one worth copying: a struct declared ONLY inside the namespace, named
+from a `known` tag. If the lookup were falling back to an unqualified
+global table, an inner-only type would not be found. It is found, so the
+field is handled rather than accidentally working.
+
+The other five need nothing and saying which is the work: `unknown` and
+`duplicates` are enums, `ordered` a bool, `wire_types` a tuple of ints, and
+`identity` names a tag PART. So do the `name`s inside `known` and
+`value_size`'s `selector` -- all of them the region's own vocabulary rather
+than the file's.
+
+**The scoring is the lesson.** 26.549's audit gave `Tlv 2/10`, and the
+honest reading of that number is **one** fault, not eight: two fields set,
+seven correctly unset, one missing. A count of unset fields is a list of
+candidates and nothing more, and the three ways a candidate clears are all
+here -- it holds no name, it is refused identically outside the namespace,
+or something else already handles it. **Each took one fixture, and the
+fixture is the only thing that distinguishes them.**
 
 ### 26.549 Five ways a member changed meaning inside a namespace
 
