@@ -184,6 +184,22 @@ def _rewrite_member(member: ast.Member,
 			return array
 		return replace(array, size = _rewrite_expr(array.size, name_of))
 
+	def until_of(until: ast.Until | None) -> ast.Until | None:
+		"""`until D max N` -- the cap is an expression and may name a
+		`const` the namespace has qualified (26.549)."""
+		if until is None or until.cap is None:
+			return until
+		return replace(until, cap = _rewrite_expr(until.cap, name_of))
+
+	def repeat_of(repeat: ast.While | None) -> ast.While | None:
+		"""`while (cond) max N` -- both halves are expressions."""
+		if repeat is None:
+			return repeat
+		return replace(repeat,
+		               predicate = _rewrite_expr(repeat.predicate, name_of),
+		               cap       = None if repeat.cap is None
+		                           else _rewrite_expr(repeat.cap, name_of))
+
 	def type_of(type_ref: ast.TypeRef) -> ast.TypeRef:
 		if type_ref.is_scalar:
 			return type_ref
@@ -194,20 +210,41 @@ def _rewrite_member(member: ast.Member,
 		               type_ref = type_of(member.type_ref),
 		               array    = array_of(member.array),
 		               pin      = expr_of(member.pin),
+		               located  = expr_of(member.located),
+		               until    = until_of(member.until),
+		               repeat   = repeat_of(member.repeat),
 		               attrs    = _rewrite_attrs(member.attrs, name_of))
 
 	if isinstance(member, ast.Reserved):
 		return replace(member,
 		               type_ref = type_of(member.type_ref),
 		               array    = array_of(member.array),
+		               until    = until_of(member.until),
 		               attrs    = _rewrite_attrs(member.attrs, name_of))
 
 	if isinstance(member, ast.TagField):
-		array = array_of(member.array)
-		assert array is not None
+		# Three of the six name-bearing fields were rewritten, and the other
+		# three are all "works at top level, broken inside a namespace"
+		# (26.549):
+		#
+		#   array   OPTIONAL since 0046 -- a sub-byte checksum IS its scalar,
+		#           so `checksum u5 crc covers(r)` carries no length. The
+		#           `assert` here crashed on it with no diagnostic at all.
+		#   codec   `is crc32` names a `codec` declaration, which a namespace
+		#           qualifies, so an unqualified reference could not see a
+		#           codec declared beside it: "no codec named `crc32`".
+		#   prefix  `prefix(pseudo)` names a STRUCT, qualified the same way.
+		#
+		# `covers` is deliberately left alone: it names REGIONS, which are
+		# local to the struct that declares them, and the `Coded` branch
+		# below skips it for the same reason.
 		return replace(member,
 		               type_ref = type_of(member.type_ref),
-		               array    = array,
+		               array    = array_of(member.array),
+		               codec    = None if member.codec is None
+		                          else name_of(member.codec),
+		               prefix   = None if member.prefix is None
+		                          else name_of(member.prefix),
 		               attrs    = _rewrite_attrs(member.attrs, name_of))
 
 	if isinstance(member, ast.MarkerField):
@@ -234,11 +271,18 @@ def _rewrite_member(member: ast.Member,
 		return replace(member,
 		               codec   = name_of(member.codec),
 		               args    = _rewrite_attrs(member.args, name_of),
+		               until   = until_of(member.until),
 		               members = tuple(_rewrite_member(inner, name_of)
 		                               for inner in member.members),
 		               attrs   = _rewrite_attrs(member.attrs, name_of))
 
-	if isinstance(member, (ast.Authenticated, ast.PositionalBlock)):
+	if isinstance(member, ast.Authenticated):
+		return replace(member,
+		               members = tuple(_rewrite_member(inner, name_of)
+		                               for inner in member.members),
+		               attrs   = _rewrite_attrs(member.attrs, name_of))
+
+	if isinstance(member, ast.PositionalBlock):
 		return replace(member, members = tuple(_rewrite_member(inner, name_of)
 		                                       for inner in member.members))
 

@@ -374,3 +374,61 @@ def test_unqualifying_an_invariant_is_the_same_walk_backwards() -> None:
 	assert isinstance(back, ast.Invariant)
 	assert back.derived == "s.total"
 	assert paths_in(back.expr) == ["s.body"]
+
+
+#: Each works at top level and did not inside a `namespace`, because
+#: `_rewrite_member` descended into some of a member's name-bearing fields
+#: and not the rest (26.549). The control is last: an array size has always
+#: been rewritten, so the namespace machinery itself was never at fault.
+ACROSS_A_NAMESPACE = {
+	"a sub-byte checksum":
+		"struct s { authenticated r { u8 z; }\n"
+		" checksum u5 crc covers(r); }\n",
+	"`is codec`":
+		"codec crc32 { expansion = +4; systematic;\n"
+		"  kernel = polynomial(width = 32, poly = 0x04C11DB7); }\n"
+		"impl crc32 derived;\n"
+		"struct s { authenticated r { u8 z; }\n"
+		"  checksum u8 sum[4] covers(r) is crc32; }\n",
+	"`prefix(struct)`":
+		"struct pseudo { u8 pad; }\n"
+		"struct s { authenticated r { u8 z; }\n"
+		"  checksum u8 sum[2] covers(r) prefix(pseudo); }\n",
+	"`at expr`":
+		"const OFF = 4;\nstruct s { u8 n; u8 x[2] at OFF; }\n",
+	"`until D max CONST`":
+		'const LIM = 8;\nstruct s { u8 v[] until "," max LIM; u8 t; }\n',
+	"an array size, the control":
+		"const N = 4;\nstruct s { u8 x[N]; }\n",
+}
+
+PREAMBLE = "target buffer;\nendian big;\n"
+
+
+@pytest.mark.parametrize("case", sorted(ACROSS_A_NAMESPACE))
+def test_a_member_means_the_same_inside_a_namespace(case: str) -> None:
+	"""A namespace scopes type names and nothing else, so a schema wrapped in
+	one has to mean exactly what it meant outside.
+
+	`_rewrite_member` qualifies the declaration names a member references,
+	branch by branch, and each branch listed the fields somebody thought of.
+	The `TagField` branch rewrote three of six: `codec` is the `is crc32`
+	clause, `prefix` names a struct, and `array` -- optional since 0046,
+	because a sub-byte checksum IS its scalar -- was asserted non-None, so
+	`checksum u5 crc covers(r)` inside a namespace crashed with a bare
+	`AssertionError` and no diagnostic at all.
+
+	`Field` missed `located` and the `until` and `while` caps, which are
+	expressions and may name a `const` the namespace has just qualified.
+
+    Each case is parsed twice, bare and wrapped, and both must agree --
+	which is the assertion that cannot be satisfied by rewriting one field
+	and forgetting its neighbour.
+	"""
+	body = ACROSS_A_NAMESPACE[case]
+	bare = parse_text(PREAMBLE + body, path="s.situ")
+	resolve(bare, solve(bare))
+
+	wrapped = parse_text(PREAMBLE + "namespace n {\n" + body + "}\n",
+	                     path="s.situ")
+	resolve(wrapped, solve(wrapped))
