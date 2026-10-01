@@ -16053,6 +16053,23 @@ record states.
   2026-08-25, so neither settlement reached it, and comparing its table
   against 11.1 found 7 of 13 rows drifted with two missing lattice
   values. It is checked by a test now.
+- **An attribute with no row in the placement table is correctly placed
+  everywhere**, which is the right default for a table built incident by
+  incident and the wrong one for the question *is this read here*.
+  Measured 2026-10-01 after 26.545 closed the numeric-bound row: of the 53
+  names in `ATTRIBUTE_NAMES`, **12 are still accepted on a `pad_to`** --
+  `[bit_order]`, `[bits]`, `[covers]`, `[escape]`, `[non_canonical]`,
+  `[nonce]`, `[quoted]`, `[require_aligned]`, `[secret]`, `[since]`,
+  `[tag_order]`, `[trusted]`. The sweep is every name in both spellings
+  through `parse_text`, `solve` and `resolve`, so the figure is
+  re-derivable rather than quoted.
+
+  The matrix is 53 attributes by 13 member kinds, and the method that
+  settles a cell is 26.545's: the generated C, the capability map and the
+  wire signature, with and against. Each cell is a language judgement and
+  a wrong refusal lands on somebody's schema, which is why it is a
+  deliberate pass rather than something done in passing.
+
 - **`linear_block` knows one code.** `hamming_7_4`, and going further
   needs the generator matrix expressible in a schema, which is a language
   addition rather than a table entry.
@@ -31247,6 +31264,110 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.545 A numeric bound belongs on a field, derived rather than chosen
+
+**Settled on the copyright holder's instruction 2026-10-01: `[min]`,
+`[max]` and `[must_eq]` belong on an ordinary field, and are refused on
+every member that has no single value.** What makes this a settlement
+rather than a preference is that the answer was derived from what READS
+them, which is 14.5's own test.
+
+**Three consumers, and each names its own population:**
+
+    layout.record_interval   `member: ast.Field | ast.Reserved`
+    traverse                 `if placement.kind != "field": return`
+    wire                     publishes the bound for ANY member
+
+**The third is why this is a refusal and not a tidying.** Measured per
+member kind, comparing the generated C, the capability map and the wire
+signature with and against `[max = 3]`:
+
+    Field           C changes, wire changes          read
+    Pad             C and map identical, WIRE CHANGES
+    Variant         C and map identical, WIRE CHANGES
+    Opaque          C and map identical, WIRE CHANGES
+    MarkerField     C and map identical, WIRE CHANGES
+    Coded           C and map identical, WIRE CHANGES
+    Authenticated   nothing changes
+    StructDecl      nothing changes
+
+**So the bound was not inert on five of them -- it was published into the
+committed wire signature while nothing enforced it.** A peer diffing that
+file reads `max=3` on a pad. That is 17.0's failure landing in the one
+artifact whose whole purpose is to be the contract, which is worse than
+the inert case and was invisible to any check comparing generated code.
+
+**And 26.544's diagnosis was wrong, which is the part worth keeping.** It
+said the numeric bounds had no placement rule at all. They have a
+substantial one -- a `reserved` member, a text number whose brackets are a
+width, 0052's byte-run equality, a delimited run, a struct-typed member,
+each with its own message and its own incident behind it. The rule was
+invisible to me because it is spelled `("min", "max", "must_eq")` rather
+than `NUMERIC_BOUNDS`, so a grep for the constant found the three
+consumers and no rule, and I concluded from BEHAVIOUR what reading the
+code would have corrected. **A fixture sweep tells you what happens and a
+rule tells you why; I had the first and reported it as the second.**
+
+**The actual gap is one sentence and it is a better finding than the one I
+reported.** Every test in the row asks about a FIELD's shape -- its
+radix, its brackets, its `until`, its type -- so a member with none of
+those passes all of them and falls out of the function as correctly
+placed. The branch had an unstated precondition that its member is a
+field.
+
+**The sharp case proves the reading.** A `tag u8 t[16] [max = 3]` was
+refused -- by the ARRAY branch, incidentally, for having brackets. A
+**sub-byte `checksum u5 crc covers(r) [max = 3]` has no array and was
+accepted**, which is the same construct one spelling along and the one the
+array branch cannot reach. Predicted from reading the rule and then
+confirmed, rather than found by sweeping.
+
+**Four exceptions kept, and they are what the rule costs.** A rule
+refusing a bound anywhere but a plain scalar would refuse cpio's
+constrained magic -- `decimal u32 magic[6]` is a six-character number with
+ONE value, so the brackets are a width -- and 0052's
+`u8 sig[4] [must_eq = "WOZ2"]`, which is one span comparison rather than
+four. A `parameter` needs no exception: it is an `ast.Field` carrying a
+flag, so the caller-supplied value stays bounded by construction.
+
+Fifteen cases, four kept and eleven refused. **The control separates what
+the new guard does from what was already covered**: removing it turns
+exactly seven red -- a pad, a variant, an `opaque` region, an
+`endian_marker`, a `coded` region, an `authenticated` one and the sub-byte
+checksum -- while the reserved run, the tag with a length, the
+struct-typed member and the delimited run stay refused by the branches
+that were already there.
+
+**And the thread this came from does NOT close, which is worth saying
+plainly.** 26.544 ended by predicting that settling this would make
+`[ attrs ]` on `pad_to` unreachable, so the grammar could drop the clause
+and the EBNF checker would have nothing to prove there. Measured after the
+guard, by trying all 53 names in `ATTRIBUTE_NAMES` on a `pad_to` in both
+spellings:
+
+    attribute names tried                  53
+    still accepted on a `pad_to`           12
+
+`[bit_order]`, `[bits]`, `[covers]`, `[escape]`, `[non_canonical]`,
+`[nonce]`, `[quoted]`, `[require_aligned]`, `[secret]`, `[since]`,
+`[tag_order]`, `[trusted]`. **So the clause stays**, and the prediction was
+wrong because it generalised from the one attribute in front of it.
+
+**Those twelve are the same class one layer wider, and sizing it is a
+deliberate pass rather than this one.** `_attribute_place` is a table of
+per-attribute rows, so an attribute with no row is correctly placed
+everywhere by default -- which is the right default for a table built
+incident by incident and the wrong one for the question *is this read
+here*. The matrix is 53 attributes by 13 member kinds, and the method that
+settles a cell is the one used above: the generated C, the capability map
+and the wire signature, with and against. **Whose decision it is: the
+copyright holder's**, because the answer for most cells is a language
+judgement and the cost of a wrong refusal lands on somebody's schema.
+
+The command, so the number is re-derivable rather than quoted: every name
+in `ATTRIBUTE_NAMES`, as `[name]` and `[name = 1]`, through
+`parse_text` then `solve` then `resolve`.
+
 ### 26.544 The construct that could not be added, and the walk that enumerated three of thirteen
 
 **Asked to add `pad_to(4) [attrs];` to `edges.situ`, so 26.543's checker
@@ -31301,11 +31422,21 @@ count of the attribute-bearing nodes so a fourteenth sends whoever adds it
 to the list.
 
 **What remains is the holder's, and it is why nothing went into
-`edges.situ`.** `[min]`, `[max]` and `[must_eq]` have NO placement rule at
-all. `_attribute_place` is a table of per-attribute rows and the numeric
-bounds have no row, so they are accepted on a pad, a variant, an `opaque`
-region and an `endian_marker` -- every member kind, including those with no
-value to bound.
+`edges.situ`.** `[min]`, `[max]` and `[must_eq]` are accepted on a pad, a
+variant, an `opaque` region and an `endian_marker` -- members with no value
+to bound.
+
+**~~They have NO placement rule at all.~~ They have a substantial one, and
+this entry was wrong about it until 26.545 read the code rather than the
+behaviour.** `_attribute_place` carries a numeric-bound row spelled
+literally as `("min", "max", "must_eq")` rather than through
+`NUMERIC_BOUNDS`, which is why a grep for the constant found three
+consumers and no rule. The row handles a `reserved` member, a text number,
+a byte-run equality, a delimited run and a struct-typed member, each with
+its own message and its own incident. **What it does not handle is a member
+that is not a field at all**, because every test in it asks about a
+FIELD's shape -- its radix, its brackets, its `until`, its type -- and a
+member with none of those passes all of them.
 
     members carrying a numeric bound, across the corpus:  Field, 106
     members carrying one on anything else:                none
