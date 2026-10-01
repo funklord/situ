@@ -31288,6 +31288,60 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.548 A refusal that could not fire, and the lens that found it
+
+**A `coded` or `sealed` region could state several delimiters, and the
+refusal written for exactly that was unreachable.** `coded c(x) until "a" |
+"b" { ... }` compiled; so did the `sealed` form.
+
+**The refusal existed, named the construct, and never saw one.** It lived
+in `_check_one_delimiter`, keyed on
+
+    if getattr(member, "codec", None) is not None:
+            raise error(f"`{name}` is a coded region with several delimiters"
+
+and that function is handed an `ast.Field | ast.Reserved`. **Neither has a
+codec**, so the branch could not fire on any input. It is the vacuous pass
+with the polarity inverted: not a check that inspected nothing, but a
+refusal whose condition no caller can satisfy.
+
+**`until` is carried by four nodes and the walk enumerated two:**
+
+    until    Coded, Field, Reserved, Sealed
+    walked   Field, Reserved
+
+**And `Sealed` gained its `until` in 26.535, three days ago, in this
+session's own work.** The gap was there for `Coded` already; adding the
+construct widened it, and nothing connected the two because the check is
+eleven hundred lines from the parser.
+
+**It matters for the reason its own note gives**: the delimiter frames what
+the codec is given, so which alternative ended the region decides how many
+bytes are decoded. Two alternatives are two extents for one region --
+ambiguity, which 17.0 makes an error rather than a preference.
+
+The field-specific checks stay where they are, because they index
+`member.array` and `member.type_ref`, which a region does not have. Only
+the region refusal moved, to a function the walk hands every non-field
+member. A field keeps its alternatives: `until "\r\n" | "\n"` is what the
+form exists for.
+
+**The lens is the one 26.544 through 26.547 produced**, and this is it
+paying out on a different shape: not an attribute walk but a delimiter
+check, and not a missing refusal but an unreachable one. Grep for
+`isinstance(member, (ast....))`, then derive the population from the AST --
+which nodes carry the FIELD the rule is about -- and compare.
+
+**Two candidates it raised and cleared, which is what an honest sweep looks
+like.** `_check_member_types` enumerates `Field, Reserved, TagField` and
+exactly those three nodes carry a `type_ref`, so the list is the
+population. `pack`'s bytecode builder enumerates `Field, Reserved` where
+`array` is carried by three -- and a tag's length must be a constant, which
+the parser refuses otherwise, so its array size is always a literal and
+needs no bytecode. **Neither is a fault, and both took one command to
+settle**: the cost of the lens is small enough that clearing a candidate is
+worth recording rather than leaving the next reader to re-derive it.
+
 ### 26.547 The last five cells, and the instrument's fifth fault
 
 **Settled: the attribute placement matrix has no open cells.** 26.546 left
