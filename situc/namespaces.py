@@ -200,6 +200,26 @@ def _rewrite_member(member: ast.Member,
 		               cap       = None if repeat.cap is None
 		                           else _rewrite_expr(repeat.cap, name_of))
 
+	def value_size_of(size: ast.ValueSize | None) -> ast.ValueSize | None:
+		"""`value_size = switch (p) { case 2: prefixed(pb_varint) }`.
+
+		`prefixed(...)` names a `varint_type` DECLARATION, which a namespace
+		qualifies, so an unqualified reference could not see one declared
+		beside it: "unknown length type `pb_varint`" (26.550).
+
+		`selector` is left alone: it names a tag PART, which belongs to the
+		`tlv` region rather than to the file. So does `identity`, and so do
+		the `name`s inside `known`.
+		"""
+		if size is None:
+			return size
+		cases = tuple(
+			case if not isinstance(case.rule, ast.PrefixedValue)
+			else replace(case, rule = replace(
+				case.rule, length_type = name_of(case.rule.length_type)))
+			for case in size.cases)
+		return replace(size, cases = cases)
+
 	def type_of(type_ref: ast.TypeRef) -> ast.TypeRef:
 		if type_ref.is_scalar:
 			return type_ref
@@ -293,9 +313,20 @@ def _rewrite_member(member: ast.Member,
 		                               for inner in member.members))
 
 	if isinstance(member, ast.Tlv):
+		# Of the eight fields this branch did not set, seven need nothing and
+		# saying which is the work (26.550). `unknown` and `duplicates` are
+		# enums, `ordered` a bool, `wire_types` a tuple of ints; `identity`
+		# names a tag PART rather than a declaration; a `tag_decode`
+		# expression may name only the parts and the raw `tag`, which is
+		# refused at top level too, so a namespace changes nothing; and
+		# `known`'s `type` already resolves, measured against a struct
+		# declared only inside the namespace.
+		#
+		# `value_size` is the one that was wrong.
 		return replace(member,
-		               args  = _rewrite_attrs(member.args, name_of),
-		               attrs = _rewrite_attrs(member.attrs, name_of))
+		               args       = _rewrite_attrs(member.args, name_of),
+		               value_size = value_size_of(member.value_size),
+		               attrs      = _rewrite_attrs(member.attrs, name_of))
 
 	return member
 

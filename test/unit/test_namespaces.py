@@ -400,6 +400,24 @@ ACROSS_A_NAMESPACE = {
 		'const LIM = 8;\nstruct s { u8 v[] until "," max LIM; u8 t; }\n',
 	"an array size, the control":
 		"const N = 4;\nstruct s { u8 x[N]; }\n",
+	# `prefixed(...)` names a `varint_type` DECLARATION, which a namespace
+	# qualifies (26.550). Seven of the `Tlv` branch's eight unset fields need
+	# nothing and this was the one that did -- `identity` and `known`'s names
+	# are the region's own, a `tag_decode` expression may name only the tag
+	# parts and is refused a `const` at top level too, and `known`'s `type`
+	# already resolves, measured against a struct declared only inside the
+	# namespace.
+	"`prefixed(varint)` in a tlv":
+		"varint_type pb_varint { encoding = leb128; max_bits = 64; }\n"
+		"struct s {\n"
+		"	tlv fields (\n"
+		"		tag_type   = pb_varint,\n"
+		"		tag_decode = { field = tag },\n"
+		"		tag_identity = field,\n"
+		"		value_size = switch (field) { case 1: prefixed(pb_varint),\n"
+		"		                             default: self_delimiting }\n"
+		"	);\n"
+		"}\n",
 }
 
 PREAMBLE = "target buffer;\nendian big;\n"
