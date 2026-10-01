@@ -2014,6 +2014,30 @@ RELATION_ONLY_ATTRS = {
 	"retries":    "a `relation`, which is where an exchange states its timing",
 }
 
+#: Attributes whose own check runs only on the member kind that READS them,
+#: so a member of any other kind escapes every one of them. Each value is the
+#: kinds that can reach the reader, and the sentence naming where it belongs.
+#:
+#: These were the last five cells of the placement matrix (26.547), all on an
+#: `authenticated` region and all the same shape: `Scope.narrow` is called for
+#: a struct declaration and for a field or a reserved run, `_narrow_bcd` needs
+#: a `type_ref`, `check_delimiters` wants a delimiter, and
+#: `_check_transform_tag_order` walks `coded` regions. A region has none of
+#: those, so it collected the attribute and nothing looked.
+#:
+#: The finer rules stay where they are and give the better message on the
+#: right kind: `[bits]` on a `u8` says it is for a packed-decimal field, and
+#: `[quoted]` on a plain field says it needs a delimiter to make inert.
+READ_ONLY_ON = {
+	"bit_order": (("Field", "Reserved"),
+	              "a bit-packed field, or the struct whose scope it narrows"),
+	"bits":      (("Field",), "a packed-decimal field"),
+	"quoted":    (("Field",), "a delimited run, whose delimiter it makes inert"),
+	"escape":    (("Field",), "a delimited run, whose delimiter it makes inert"),
+	"tag_order": (("Coded",), "a `coded` region that a tag covers"),
+}
+
+
 #: Read from `decl.attrs` and never from a member's.
 STRUCT_ONLY_ATTRS = {
 	"allow_straddle":       "a struct, where a bit field may cross a byte",
@@ -2059,6 +2083,11 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 			return None
 		return ("a field of a `register` struct -- outside one a read is not "
 		        "an event that can have an effect")
+
+	# The kind first, for the five whose own checks cannot see a region.
+	reads = READ_ONLY_ON.get(attr.name)
+	if reads is not None and type(member).__name__ not in reads[0]:
+		return reads[1]
 
 	# Bit order decides how a *packed* field's bits sit in its byte. A
 	# whole-byte scalar has `endian` for the question it does have, and

@@ -3476,3 +3476,58 @@ def test_a_duplicate_attribute_is_refused_on_every_member() -> None:
 	                         " variant v switch (k) [equalize, equalize]"
 	                         " { default: error; } }\n")
 	assert "declared twice" in text or "redeclar" in text.lower()
+
+
+#: The last five cells of the placement matrix (26.547), all on an
+#: `authenticated` region and all the same shape: each attribute's own check
+#: runs only on the member kind that reads it, and a region reaches none of
+#: them. `Scope.narrow` is called for a struct declaration and for a field or
+#: a reserved run, `_narrow_bcd` needs a `type_ref`, `check_delimiters` wants
+#: a delimiter, and `_check_transform_tag_order` walks `coded` regions.
+REGION_ESCAPED = ("bit_order = lsb_first", "bits = 4", "quoted = '\"'",
+                  "escape = '\\\\'", "tag_order = after")
+
+REGION_PREAMBLE = (BUFFER
+	+ "codec doubling { expansion = ratio_exact(2, 1); invertible; }\n"
+	+ 'impl doubling extern "my_doubling";\n')
+
+
+@pytest.mark.parametrize("group", REGION_ESCAPED)
+def test_an_attribute_a_region_cannot_read_is_refused_on_one(group: str) -> None:
+	"""Each was accepted on an `authenticated` region and acted on by nothing.
+
+	The sweep that found them called all five READ on most member kinds, and
+	that verdict was worthless: `doc.py` renders every attribute verbatim
+	into the documentation, so any attribute on any member changes an
+	artifact. Re-measured against the artifacts that would have to ACT on one
+	-- the four backends' emitted files and the capability map -- **none of
+	the 40 cells refused here changes either**.
+
+	So the echo is a reason to refuse rather than to allow: the documentation
+	was telling a reader `[bit_order = lsb_first]` on a region where nothing
+	enforces it, which is 17.0's failure in the file somebody implements the
+	format from.
+	"""
+	text = rendered(
+		REGION_PREAMBLE + "struct b { authenticated r [%s] { u8 z; }\n"
+		" tag u8 t[16] covers(r); }\n" % group)
+	assert "means nothing here" in text
+
+
+#: And what each of the five still keeps, on the kind that reads it. These are
+#: what the rule costs, and three of them are refused by a FINER rule whose
+#: message is better than the kind guard's -- `[bits]` on a `u8` says it is
+#: for a packed-decimal field, not that it is on the wrong kind of member.
+REGION_KEEPS = {
+	"a bit-packed field":   "struct b { u3 f [bit_order = lsb_first]; u5 g; }\n",
+	"a packed-decimal one": "struct b { u1 halt; bcd2 seconds [bits = 7]; }\n",
+	"a coded region":       "struct b { u8 a;\n"
+	                        " coded c(doubling) [tag_order = after] { u8 z; } }\n",
+}
+
+
+@pytest.mark.parametrize("case", sorted(REGION_KEEPS))
+def test_the_kind_guard_keeps_what_actually_reads_the_attribute(
+		case: str) -> None:
+	schema = parse_text(REGION_PREAMBLE + REGION_KEEPS[case], path="s.situ")
+	resolve(schema, solve(schema))
