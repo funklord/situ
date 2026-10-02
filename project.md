@@ -31304,6 +31304,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.553 Half the reserved policy reached the wire signature
+
+**`[preserve]` and `[unknown]` decide whether a message is VALID and the
+committed wire signature did not record them**, while `[must_be_zero]` and
+`[must_be_one]` -- the other two of the same four -- were in `WIRE_ATTRS`
+all along. Half an axis, in the one artifact whose purpose is to be the
+byte-level contract.
+
+**Measured in the generated reader, which is what makes it a wire fact
+rather than a preference:**
+
+    [must_be_one]  4 lines   `!= 0u` becomes `!= 0xFFu`      -- was listed
+    [preserve]    24 lines   the validation block DELETED    -- was not
+    [unknown]     24 lines   the validation block DELETED    -- was not
+
+So the default REJECTS a message whose reserved bytes are non-zero and
+those two ACCEPT it. **Two peers a schema revision apart computed an
+identical signature and disagreed about which messages are legal**, which
+is the one thing the file exists to prevent -- and `situc diff` cannot
+stand in, because it compares capability vectors and this changes none.
+
+**The contract gained a fact in three committed signatures**, which is the
+diff doing its job rather than a break:
+
+    register.situc.wire   two reserved runs gain `preserve`
+    lenient.situ.wire     two gain `preserve`
+    edges.situ.wire       a pad and a reserved run gain `unknown`
+
+**The lens is the one of 26.544 onwards, aimed at a list with a stated
+criterion**, which is what made it answerable. `WIRE_ATTRS` says
+*attributes a peer can observe in the bytes*, so the question is not taste:
+does the attribute change the generated reader, and does the signature
+record it. Across all 53 attributes and 13 member kinds, four cells change
+the reader and not the signature:
+
+    secret                 ten kinds   deliberately absent, and says so
+    allow_unverified_read  Sealed      the same class: a local stage gate
+    preserve               Reserved    THE FAULT
+    unknown                Reserved    THE FAULT
+
+`[secret]` is documented as absent -- *it changes the generated API and
+nothing a receiver could detect* -- and `[allow_unverified_read]` is the
+same shape: it waives whether the API hands out an interior before
+verification, and a receiver reads the same bytes either way. **Two of four
+candidates cleared by the criterion already written down**, which is what a
+stated criterion buys over a maintained list.
+
+**And the second test is the one worth copying.** Naming a policy in the
+signature is not enough if two of them RENDER the same: a peer diffing the
+contract would see no change where the accept-or-reject rule had moved. The
+four must give four distinct signatures, and `must_be_zero` being the
+default renders as the bare line -- a fourth distinct answer rather than a
+missing one. Against the unfixed code that test fails, because `preserve`
+and `unknown` were rendering identically to the default.
+
 ### 26.552 The dump prints what it was not taught, and cannot stop
 
 **`situc dump-ast` rendered 5 of a `Field`'s 13 fields, and `until`,
