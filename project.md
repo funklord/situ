@@ -31304,6 +31304,59 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.556 `required` added a length and wrapped to a smaller answer
+
+**Seven bytes claiming four gigabytes read as a complete message.** Reported
+by `raidcfgd` and reproduced exactly:
+
+    have=7  length=0xFFFFFFFF  ->  rc=0 (SITU_OK)  need=6
+
+`7 + 0xFFFFFFFF` is 6 in `uint32_t`. `*need` came back 6, the verdict was
+OK, and a framer with seven bytes had a whole message. **The one function
+whose job is to say how much more is needed answered with less than had
+already arrived.**
+
+**It could not use the saturating add every other sum uses, and the comment
+above its own loop says why.** `situ_advance_u32` clamps to the view, which
+is right wherever the question is which bytes are in the frame -- and
+`required` asks the opposite question. That comment ends *clamping would
+shorten the answer to what has already arrived, which is the one thing
+`required` must never do.* **So it used a plain `+`, which does exactly
+that, by wrapping.** The reasoning for rejecting the clamp was correct and
+the conclusion drawn from it was not.
+
+`situ_need_u32(at, by)` saturates at `UINT32_MAX` instead. The answer
+becomes a need no caller can satisfy, so the verdict is TRUNCATED, which is
+the honest reading of a length nobody can have sent:
+
+    have=7  length=0xFFFFFFFF  ->  rc=7 (TRUNCATED)  need=4294967295
+
+**Five sums, not one.** Once `at` can reach `UINT32_MAX` a following `+` of
+anything wraps, so the element sum of a run, the delimiter width and the pad
+delta all needed it too -- and they are reachable in that state precisely
+because the length sum now saturates rather than wrapping past them. Fixing
+one would have moved the fault rather than removed it.
+
+**Three backends, and Python is exempt and says so.** C and C++ share the
+runtime and the arithmetic; C++ confirmed by running it, `rc=7` and
+`need=4294967295`. Rust uses `saturating_add` on `usize`, where `+=` panics
+in a debug build and wraps in a release one -- a parser that panics is the
+same fault wearing a louder coat. Python's integers do not wrap, and the
+test skips it rather than asserting something that cannot fail.
+
+**`raidcfgd` also asked for the field's `[max]` to be applied before the
+sum** -- *a length the schema already bounds should never reach an addition
+it can overflow* -- and that is not done here. Saturating removes the wrong
+answer; applying `[max]` would turn a 4 GB claim into "malformed" rather
+than "need more than exists", which is better and is a change to what
+`required` reports. Recorded for the holder rather than taken.
+
+**The behavioural test is the probe, and its control failed at check 1** --
+`required` returning OK on five bytes claiming four gigabytes, which is the
+reported bug reproduced inside the suite. The structural test asserts the
+saturating form is present BEFORE asserting the raw one is absent: without
+that, a backend that summed nothing at all would pass.
+
 ### 26.555 An offset chain that re-derived itself, in all four backends
 
 **`raidcfgd` measured 3,000,000 calls and 573 ms for one decode of a
