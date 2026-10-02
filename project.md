@@ -31304,6 +31304,59 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.552 The dump prints what it was not taught, and cannot stop
+
+**`situc dump-ast` rendered 5 of a `Field`'s 13 fields, and `until`,
+`peek`, `radix`, `located`, `skip`, `repeat`, `prefix`, `args` and
+`register` appeared nowhere in `dump.py` at all** (26.551). A reader asking
+the compiler what it made of a schema was shown less than the tree held --
+which is the command's whole purpose, and not something a better branch
+fixes for long.
+
+**The remedy is a generic tail rather than nine more branches.** Each kind
+keeps the curated lines that read well, and `_rest` prints every field
+those lines did not, derived from the dataclass. **So a field added to the
+AST appears in the dump whether or not anybody teaches this file about
+it**, which is the same remedy as every entry since 26.544 and the only one
+that does not decay.
+
+    field k : u8                       field w : u8[]
+            peek yes                           until Until(delimiters=[2c],
+    field n : u16[3]                                 cap=9, consumed=yes)
+            radix 10                   field x : u8[2]
+                                               located 4
+
+**The table is biased towards printing, deliberately.** `RENDERED_BY_HAND`
+names what each kind's own lines already show, and everything absent from
+it is printed. A field wrongly listed is DROPPED; a field wrongly omitted
+is merely printed twice. The audit found this file wrong in the dropping
+direction, so the bias goes the other way -- and `Opaque`'s `attrs`,
+`Variant`'s `attrs` and `Tlv`'s `args` and `attrs` turned out to be
+genuinely unrendered, found by listing conservatively rather than by
+checking each branch again.
+
+**One failure mode survives and has its own test.** Everything outside the
+table is printed generically, so the only way a field can still be lost is
+an entry naming a field the node no longer has -- a rename in the AST would
+leave the stale name listed and the new field suppressed, silently.
+`test_the_hand_rendered_table_names_fields_that_exist` is the assertion
+that cannot happen to.
+
+**The property that constrains the whole fix: a schema and the same schema
+reparsed from unparsed source must dump identically.** That is what six
+tests use `dump` for, so a tail rendering a `Span` would break them all.
+`_flat` walks dataclasses dropping spans, renders an enum by value and an
+expression through `expr_to_source`, and the corpus confirms it: 42 of 42
+still round-trip, and the 28-line `EXPECTED_DUMP` snapshot needed no
+regeneration.
+
+**Using `unparse`'s renderer here is correct and was worth checking.**
+`test_examples` warns that a witness sharing code with `unparse` agrees
+with it wherever both are silent -- but that file already holds the witness
+role with its own generic dataclass walk, and `dump` is the view. The
+module imported `expr_to_source` already; what was missing was the fields,
+not the rendering.
+
 ### 26.551 The lens swept out: four clean, and my own witness was the wrong one
 
 **The lens of 26.548 to 26.550 -- a transform or a guard naming fewer
@@ -31360,10 +31413,10 @@ fields went unseen**. So the sound verdict was already in the suite and
 green; I reached for the instrument that test was written to replace.
 
 **`dump`'s incompleteness is a view rather than a witness**, which is how
-that file treats it -- *dump renders what someone taught it to render* --
-and is recorded here rather than fixed. `situc dump-ast` shows a reader
-less than the tree holds, and whether that matters is a question about the
-command rather than about correctness.
+that file treats it -- *dump renders what someone taught it to render*.
+~~Recorded here rather than fixed.~~ **Fixed on the holder's instruction in
+26.552**: `situc dump-ast` was showing a reader less than the tree holds,
+which is a fault in the command whatever it is not.
 
 ### 26.550 One of the Tlv branch's eight, and seven that needed nothing
 
