@@ -31304,6 +31304,105 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.557 A counted run stopped at the buffer and called it complete
+
+**Ten bytes declaring five elements read as a whole message.** Reported by
+`raidcfgd` and reproduced exactly, with `item items[count]` over a two-byte
+count:
+
+    count=5, two whole items present, have=10  ->  rc=0 (SITU_OK)  need=10
+
+A whole one needs twenty-two bytes. `*need` came back as `have`, so a
+framer reading those ten bytes had nothing left to wait for -- **the
+second time in two entries that `required` has answered with no more than
+had already arrived**, by a different mechanism and with the same
+consequence.
+
+**The mechanism: `required` delegated to the accessors' span.** That walk
+stops on `if (size == 0u || at + size > view.limit) break;` and returns
+`at - start`, which is correct for *how far does this run reach in what I
+have* and is the wrong question. It cannot distinguish the end of the run
+from the end of the buffer, and those are opposite answers.
+
+**The gate was `is_run`, and it is the sweep lens of 26.544-26.551 again --
+a predicate naming fewer members of a population than the data model
+carries.** Its docstring names the two spellings it covers, and names them
+by their stopping rule: *both spellings end somewhere the bytes decide.* A
+count ends where the count says, so it reads as a different question. It is
+the same one. What makes framing a question about the element is that the
+element is a struct with no single size, and the count has nothing to do
+with it.
+
+**Only the variable-element case was wrong, which had to be measured rather
+than assumed.** A counted run of FIXED-size elements emits exact arithmetic
+-- `at = situ_need_u32(at, count * 2u)` -- so `*need` is right and it
+refuses correctly. Walking it would be slower and no more honest. That pair
+is what makes the cross-backend test a measurement: the mark must be
+present for the variable run and absent for the fixed one, so neither a
+mark that matches everything nor one that matches nothing can pass.
+
+**The bound reported is a lower bound, and the honest one.** The true total
+is not knowable from a truncated buffer: the elements that have not arrived
+have not declared their lengths. What is knowable is that each one still
+promised by the count needs at least its own `SIZE_MIN`, so that is what is
+summed -- sixteen here, against a true twenty-two, and sixteen is more than
+the ten that had arrived, which is the whole point.
+
+    rc=7 (TRUNCATED)  need=16     all four backends, each run
+
+**`situ_need_mul_u32` exists because the lower bound is a product.**
+`remaining * SIZE_MIN` is a count the message controls times a compile-time
+constant, which is exactly the multiplication an attacker reaches, and a
+product that wraps is SMALLER than the truth -- the one direction that
+turns a short message back into a complete one. 26.556 saturated the
+sums an hour earlier, and this is the same question asked of a multiply.
+
+**Four backends, four controls, one at a time.** Each backend's gate was
+disabled on its own and its own witness run: C, C++, Python and Rust each
+reported `rc=0 need=10` with the widening off and `TRUNCATED need=16` with
+it on. A single control over all four would have passed while three were
+wrong, which 0059 already records as this tree's most expensive recurring
+defect.
+
+**Two more sites the widening reached, both found by the gate and neither
+guessable from the report.** They are worth recording because both are the
+same shape as the defect itself -- a loop or a lookup naming fewer run
+spellings than the tree now has.
+
+**A literal count has no `_count` accessor in C, and only in C.** `piece
+two[2]` carries no counting field, so C inlines the number; C++, Python and
+Rust emit a `two_count` for it anyway. Asking for `situ_pieces_two_count`
+was an implicit declaration, and `edges.situ` has exactly that member. The
+answer is `_count_expression`, which renders all three spellings -- `2u`, a
+field load, and `(situ_rec_n_get(view) + 1)` for an arithmetic count -- and
+the comment on the recursion probe's own choice points the other way for a
+reason that does not reach here: it answers `0u` for a `while` run, which
+has no counting field.
+
+**And a mutual cycle puts the element's `required` after the function
+calling it.** `_predicate_prototypes` already declares a cycle peer's
+`required` -- it was written for a `while` run and its loop opens `if
+placement.repeat_while is None: continue`, so a counted run crossing the
+same cycle got no declaration. That loop is the lens again, found by the
+lens's own fix. The getter half stays under `repeat_while`, having a
+predicate to search.
+
+**The element's minimum is written as a value rather than as
+`SITU_<element>_SIZE_MIN`, and that is forced rather than chosen.** A macro
+cannot be forward-declared, and in the `expr`/`item` cycle the element's
+`#define` lands forty lines below the function reading it. The emitted
+comment names the macro, so the number is still traceable to where it came
+from.
+
+**Two adjacent plain adds went with it.** `*need = at + part` in the
+`while`-run and delimited walks is the same wrap 26.556 fixed, reachable
+for the same reason -- `part` is an element's own need and may be saturated
+at
+`UINT32_MAX`. The harm there is a bound that is too small rather than a
+wrong verdict, which is why nothing had tripped over it; leaving a wrapping
+add beside a saturating one in the same function is how the next reader
+concludes the wrapping one was deliberate.
+
 ### 26.556 `required` added a length and wrapped to a smaller answer
 
 **Seven bytes claiming four gigabytes read as a complete message.** Reported
