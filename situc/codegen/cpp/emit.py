@@ -2539,7 +2539,10 @@ class Emitter:
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
 				        " table does not say")
-			if is_run(placement, self.structs):
+			# A counted run of variable-size elements is framed the same
+			# way, and was not -- see `_framing_walk` (26.557).
+			if (is_run(placement, self.structs)
+					or is_counted_run(self.resolved.structs, placement)):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
@@ -2617,12 +2620,15 @@ class Emitter:
 			call + "situ_base(raw_) + at,",
 			"\t\t\t\thave - at, part);",
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
-			"\t\t\t\tneed = at + part;",
+			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
 			"\t\t\t}",
 		]
-		cap  = placement.repeat_cap if placement.repeat_while else None
-		body = ["\t\t\tstd::uint32_t part = 0;"]
+		cap     = placement.repeat_cap if placement.repeat_while else None
+		counted = is_counted_run(self.resolved.structs, placement)
+		count   = bare_name(local_name(struct, placement)) + "_count()"
+		minimum = f"::{self.namespace}::{inner}::size_min"
+		body    = ["\t\t\tstd::uint32_t part = 0;"]
 
 		if placement.repeat_while is not None:
 			body.extend([
@@ -2651,6 +2657,37 @@ class Emitter:
 					"\t\t\t}",
 				]),
 			])
+		elif counted:
+			# A counted run of variable-size elements is framed the same way
+			# and was not: `is_run` names the two spellings that end where the
+			# bytes decide, and a count ends where the count says -- which
+			# reads as a different question and is the same one. Each element
+			# still has to be whole, and the accessors' walk stops at the end
+			# of the buffer indistinguishably from the end of the run, so two
+			# of five declared elements came back COMPLETE (26.557).
+			body.extend([
+				"",
+				f"\t\t\tif (n >= {count}) {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				call + "situ_base(raw_) + at,",
+				"\t\t\t\thave - at, part);",
+				"\t\t\tif (e != ::situ::rt::err::ok) {",
+				"\t\t\t\t/* The element is short, so its own lower bound is"
+				" part",
+				"\t\t\t\t * of this run's -- and so is a minimum for each"
+				" element",
+				"\t\t\t\t * the count still promises after it. */",
+				"\t\t\t\tneed = situ_need_u32(at, part);",
+				"\t\t\t\tneed = situ_need_u32(need,",
+				f"\t\t\t\t        situ_need_mul_u32({count} - n - 1u,",
+				f"\t\t\t\t                          {minimum}));",
+				"\t\t\t\treturn ::situ::rt::err::truncated;",
+				"\t\t\t}",
+				"\t\t\tat = situ_need_u32(at, part);",
+				"\t\t\tn += 1;",
+			])
+
 		else:
 			delim = placement.delimiter
 			assert delim is not None
@@ -2677,7 +2714,7 @@ class Emitter:
 			])
 
 		loop = ["\t\tfor (;;) {", *body, "\t\t}"]
-		if cap is not None:
+		if cap is not None or counted:
 			loop = ["\t\t{", "\t\t\tstd::uint32_t n = 0;",
 			        *[f"\t{line}" if line else line for line in loop],
 			        "\t\t}"]

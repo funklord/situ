@@ -5003,7 +5003,10 @@ class Emitter:
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
 				        " table does not say")
-			if is_run(placement, self.structs):
+			# A counted run of variable-size elements is framed the same
+			# way, and was not -- see `_framing_walk` (26.557).
+			if (is_run(placement, self.structs)
+					or is_counted_run(self.resolved.structs, placement)):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
@@ -5087,7 +5090,9 @@ class Emitter:
 			f'\t\t\t\traise TruncatedError("{placement.path}: incomplete",',
 			"\t\t\t\t\tat + short.needed) from None",
 		]
-		cap  = placement.repeat_cap if placement.repeat_while else None
+		cap     = placement.repeat_cap if placement.repeat_while else None
+		counted = is_counted_run(self.resolved.structs, placement)
+		count   = f"probe.{py_name(local_name(struct, placement))}_count"
 		body: list[str] = []
 
 		if placement.repeat_while is not None:
@@ -5113,6 +5118,34 @@ class Emitter:
 					"\t\t\t\tbreak",
 				]),
 			])
+		elif counted:
+			# A counted run of variable-size elements is framed the same way
+			# and was not: `is_run` names the two spellings that end where the
+			# bytes decide, and a count ends where the count says -- which
+			# reads as a different question and is the same one. Each element
+			# still has to be whole, and the accessors' walk stops at the end
+			# of the buffer indistinguishably from the end of the run, so two
+			# of five declared elements came back complete (26.557).
+			body.extend([
+				f"\t\t\tif seen >= {count}:",
+				"\t\t\t\tbreak",
+				"\t\t\ttry:",
+				f"\t\t\t\tpart = {inner}.required(data[at:])",
+				"\t\t\texcept TruncatedError as short:",
+				"\t\t\t\t# The element is short, so its own lower bound is"
+				" part of",
+				"\t\t\t\t# this run's -- and so is a minimum for each"
+				" element the",
+				"\t\t\t\t# count still promises after it.",
+				f'\t\t\t\traise TruncatedError("{placement.path}:'
+				' incomplete",',
+				"\t\t\t\t\tat + short.needed",
+				f"\t\t\t\t\t+ ({count} - seen - 1) * {inner}.SIZE_MIN)"
+				" from None",
+				"\t\t\tat += part",
+				"\t\t\tseen += 1",
+			])
+
 		else:
 			delim = placement.delimiter
 			assert delim is not None
@@ -5135,7 +5168,7 @@ class Emitter:
 			])
 
 		loop = ["\t\twhile True:", *body]
-		if cap is not None:
+		if cap is not None or counted:
 			loop = ["\t\tseen = 0",
 			        *loop]
 

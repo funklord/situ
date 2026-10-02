@@ -145,6 +145,49 @@ fewer elements than `count` declares reads as complete rather than short.
 The caller has to walk to the declared count itself. We do; a consumer who
 believed `_required` would accept a truncated run as a whole message.
 
+> **Answered -- `required` walks a counted run element by element now, in all
+> four backends. `_span` is unchanged and should be.** Reproduced first,
+> exactly as you had it: a two-byte count of 5, two whole items present,
+> `have=10 -> rc=0 need=10`, where a whole one needs twenty-two.
+>
+> `required` was delegating to the accessors' span, and that is the half of
+> your finding that is not a bug. `_span` answers *how far does this run reach
+> in the bytes I have*, and stopping at the limit is the correct answer to it;
+> every accessor after the run depends on that. What was wrong is that
+> `required` asked it, because framing is the opposite question and the two
+> stopping conditions -- the run ended, the bytes ended -- are indistinguishable
+> in the result.
+>
+> The gate was a predicate named `is_run`, covering a `while` run and a
+> delimited one. Its own docstring says why a count fell outside: *both
+> spellings end somewhere the bytes decide.* A count ends where the count
+> says, which reads as a different question and is the same one -- what makes
+> framing a question about the element is that the element has no single size,
+> and the count has nothing to do with it.
+>
+>     rc=7 (TRUNCATED)  need=16     C, C++, Python and Rust, each run
+>
+> **16 rather than 22, and deliberately.** The elements that have not arrived
+> have not declared their lengths, so the true total is not knowable from a
+> truncated buffer. What is knowable is that each one the count still promises
+> needs at least its own `SIZE_MIN`, and that is what is summed. It is a lower
+> bound, it is honest, and it is larger than what had arrived -- which is the
+> property your framer needs.
+>
+> **Only your variable-element case was wrong**, which we measured rather than
+> assumed: a counted run of fixed-size elements already emitted exact
+> arithmetic and already refused correctly, so it keeps it. That pair is what
+> makes the test a measurement rather than a presence check.
+>
+> **The product needed saturating too**, which your 26.556 report is the reason
+> we looked for: `remaining * SIZE_MIN` is a count the message controls times a
+> constant, and a product that wraps is smaller than the truth -- the one
+> direction that turns a short message back into a complete one.
+>
+> Each backend's gate was disabled on its own and its own witness run, because
+> a single control over four would have passed while three were wrong. All four
+> reported `rc=0 need=10` with it off.
+
 ## 4. Smaller things
 
 - Nested `[encoding = utf8]` checks inside a parent's `_check` are emitted
@@ -253,7 +296,9 @@ script.
 >
 > Your README's recipe runs as written against an installed situ from here,
 > so the checkout requirement it names can go whenever you like. The rest of
-> this file -- the exponential accessors, `_required` wrapping on a `u32`,
-> the silent stop over a counted run, the `SIZE_MAX` truncation, the flat
-> `import` colliding at link -- is not answered by this and is not
-> forgotten.
+> this file is answered where it sits: the exponential accessors, `_required`
+> wrapping on a `u32` and the silent stop over a counted run each carry their
+> own note now. **What is still open is `## 4` -- the `SIZE_MAX` truncation,
+> the flat `import` colliding at link, the no-op nested encoding checks, and
+> your question about what the capability map's `access=Sequential` costs.**
+> Not answered by this and not forgotten.

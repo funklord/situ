@@ -4122,7 +4122,14 @@ class Emitter:
 
 		lines: list[str] = []
 		for placement in own_members(struct):
-			if placement.repeat_while is None:
+			# A COUNTED run crosses the cycle for the `required` declaration
+			# below and has no predicate, so it reaches the first half of this
+			# loop and not the second. `expr`'s run of `item` asked
+			# `situ_item_required` two hundred lines above its definition and
+			# the header did not compile -- the same failure the `while` run
+			# had, in the run spelling this loop did not name (26.557).
+			counted = self._is_counted_run(placement)
+			if placement.repeat_while is None and not counted:
 				continue
 			element = self.resolved.structs.get(placement.type_name or "")
 			if element is None or element.name not in cycle:
@@ -4137,6 +4144,8 @@ class Emitter:
 					"static inline situ_err_t "
 					f"{ident(self.prefix, element.name, 'required')}"
 					"(const uint8_t *data, uint32_t have, uint32_t *need);")
+			if placement.repeat_while is None:
+				continue
 			for held in readable_names(element):
 				local = local_name(element, held)
 				if held.scalar is None or "." in local:
@@ -4398,7 +4407,14 @@ class Emitter:
 				"\t\treturn SITU_ERR_TRUNCATED;",
 				"\t}",
 			])
-			if is_run(placement, self.structs):
+			# A counted run of variable-size elements is framed the same way,
+			# and was not. `is_run` names the two spellings that END where the
+			# bytes decide; a count ends where the count says, which reads as
+			# a different question and is the same one -- each element still
+			# has to be whole, and the accessors' walk stops at the end of the
+			# buffer indistinguishably from the end of the run (26.557).
+			if (is_run(placement, self.structs)
+					or self._is_counted_run(placement)):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
@@ -4522,6 +4538,25 @@ class Emitter:
 		local    = c_name(self._local(struct, placement))
 		required = ident(self.prefix, element.name, "required")
 		cap      = placement.repeat_cap if placement.repeat_while else None
+		# `_count_expression`, not the emitted `_count` accessor, and C is the
+		# only backend where the two differ: it inlines a LITERAL count rather
+		# than emitting a function for it, so `piece two[2]` has no
+		# `situ_pieces_two_count` and asking for one was an implicit
+		# declaration. The warning on the recursion probe's own choice points
+		# the other way for a reason that does not reach here -- it answers
+		# `0u` for a `while` run, which has no counting field, and this branch
+		# is taken only for a counted one.
+		count    = self._count_expression(struct, placement)
+		# The VALUE rather than `SITU_<element>_SIZE_MIN`. A macro cannot be
+		# forward-declared, and in a mutual cycle the element's `#define`
+		# lands after the function reading it: `expr`'s run of `item` read
+		# `SITU_ITEM_SIZE_MIN` forty lines above the `#define`. The emitted
+		# comment names the macro so the number is still traceable.
+		minimum  = f"{int(element.layout.size_bytes)}u"
+		min_name = macro(self.prefix, element.name, "SIZE_MIN")
+		# A counted run needs the counter for its own termination rather than
+		# for a cap, so it carries one whether or not `repeat_cap` is set.
+		counted  = self._is_counted_run(placement)
 
 		body = [
 			"\t\tuint32_t   part;",
@@ -4534,7 +4569,7 @@ class Emitter:
 				"",
 				f"\t\te = {required}(data + at, have - at, &part);",
 				"\t\tif (e != SITU_OK) {",
-				"\t\t\t*need = at + part;",
+				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
 				"\t\tif (situ_view_sub(view, at, part, &element) != SITU_OK) {",
@@ -4558,6 +4593,42 @@ class Emitter:
 					"\t\t}",
 				]),
 			])
+		elif self._is_counted_run(placement):
+			# A counted run of variable-size elements. The accessors' walk
+			# stops where an element would run past the view and returns what
+			# it reached, so a buffer holding two of five declared elements
+			# came back COMPLETE with `need` equal to `have` -- reported by
+			# `raidcfgd`, whose decoder walks to the declared count itself
+			# because of it (26.557).
+			#
+			# The count is read through the view, which is sound for the
+			# reason the walk above it already relies on: the bytes holding
+			# it precede this member, so `required` has already checked that
+			# they arrived.
+			body.extend([
+				"",
+				f"\t\tif (n >= {count}) {{",
+				"\t\t\tbreak;",
+				"\t\t}",
+				f"\t\te = {required}(data + at, have - at, &part);",
+				"\t\tif (e != SITU_OK) {",
+				"\t\t\t/* The element is short, so its own lower bound is"
+				" part of",
+				"\t\t\t * this run's -- and so is a minimum for each element"
+				" the",
+				f"\t\t\t * count still promises after it: {min_name}, written",
+				"\t\t\t * out because a mutual cycle would put the `#define`",
+				"\t\t\t * after this function. */",
+				"\t\t\t*need = situ_need_u32(at, part);",
+				f"\t\t\t*need = situ_need_u32(*need,"
+				f" situ_need_mul_u32({count} - n - 1u,"
+				f" {minimum}));",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				"\t\tat = situ_need_u32(at, part);",
+				"\t\tn = n + 1u;",
+			])
+
 		else:
 			assert placement.delimiters
 			delim = placement.delimiter
@@ -4580,7 +4651,7 @@ class Emitter:
 				"",
 				f"\t\te = {required}(data + at, have - at, &part);",
 				"\t\tif (e != SITU_OK) {",
-				"\t\t\t*need = at + part;",
+				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
 				"\t\tat = situ_need_u32(at, part);",
@@ -4590,7 +4661,7 @@ class Emitter:
 		# of its own: it belongs to this member's walk and a second run in the
 		# same struct would otherwise redeclare it.
 		loop = ["\tfor (;;) {", *body, "\t}"]
-		if cap is not None:
+		if cap is not None or counted:
 			loop = ["\t{", "\t\tuint32_t n = 0u;",
 			        *[f"\t{line}" if line else line for line in loop], "\t}"]
 

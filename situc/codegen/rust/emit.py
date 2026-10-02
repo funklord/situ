@@ -5191,7 +5191,10 @@ class Emitter:
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
 				        " table does not say")
-			if is_run(placement, self.structs):
+			# A counted run of variable-size elements is framed the same
+			# way, and was not -- see `_framing_walk` (26.557).
+			if (is_run(placement, self.structs)
+					or is_counted_run(self.resolved.structs, placement)):
 				walk = self._framing_walk(struct, placement)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
@@ -5271,10 +5274,13 @@ class Emitter:
 			f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
 			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
-			"\t\t\t\t\treturn situ_rt::Framing::Need(at + n),",
+			"\t\t\t\t\treturn situ_rt::Framing::Need(at.saturating_add(n)),",
 			"\t\t\t};",
 		]
-		cap  = placement.repeat_cap if placement.repeat_while else None
+		cap     = placement.repeat_cap if placement.repeat_while else None
+		counted = is_counted_run(self.resolved.structs, placement)
+		base    = c_name(local_name(struct, placement))
+		count   = f"probe.{_ident(base + '_count')}()"
 		body: list[str] = []
 
 		if placement.repeat_while is not None:
@@ -5311,6 +5317,36 @@ class Emitter:
 					"\t\t\t}",
 				]),
 			])
+		elif counted:
+			# A counted run of variable-size elements is framed the same way
+			# and was not: `is_run` names the two spellings that end where the
+			# bytes decide, and a count ends where the count says -- which
+			# reads as a different question and is the same one. Each element
+			# still has to be whole, and the accessors' walk stops at the end
+			# of the buffer indistinguishably from the end of the run, so two
+			# of five declared elements came back Complete (26.557).
+			body.extend([
+				f"\t\t\tif seen >= {count} {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
+				"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
+				"\t\t\t\tsitu_rt::Framing::Need(n) => {",
+				"\t\t\t\t\t// The element is short, so its own lower bound"
+				" is part",
+				"\t\t\t\t\t// of this run's -- and so is a minimum for"
+				" each element",
+				"\t\t\t\t\t// the count still promises after it.",
+				"\t\t\t\t\treturn situ_rt::Framing::Need("
+				"at.saturating_add(n)",
+				f"\t\t\t\t\t\t.saturating_add(({count} - seen - 1)",
+				f"\t\t\t\t\t\t\t.saturating_mul({inner}::SIZE_MIN)));",
+				"\t\t\t\t}",
+				"\t\t\t};",
+				"\t\t\tat = at.saturating_add(part);",
+				"\t\t\tseen += 1;",
+			])
+
 		else:
 			delim = placement.delimiter
 			assert delim is not None
@@ -5334,7 +5370,7 @@ class Emitter:
 			])
 
 		loop = ["\t\tloop {", *body, "\t\t}"]
-		if cap is not None:
+		if cap is not None or counted:
 			loop = ["\t\t{", "\t\t\tlet mut seen = 0usize;",
 			        *[f"\t{line}" if line else line for line in loop],
 			        "\t\t}"]

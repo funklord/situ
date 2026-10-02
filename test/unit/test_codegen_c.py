@@ -6712,3 +6712,66 @@ int main(void)
 	assert ran.returncode == 0, (
 		f"the probe failed at check {ran.returncode}: `required` does not "
 		"saturate")
+
+
+def test_a_counted_run_refuses_a_buffer_short_of_its_count(
+		tmp_path: Path) -> None:
+	"""Two of five declared elements are not a complete message.
+
+	`raidcfgd` reported it: over `item items[count]`, `required` delegated to
+	the accessors' span walk, which stops where an element would run past the
+	buffer and returns what it reached. A buffer holding two of five declared
+	elements therefore came back `SITU_OK` with `need` equal to `have` -- so
+	their decoder walks to the declared count itself (26.557).
+
+	`is_run` named the two spellings that END where the bytes decide, a
+	`while` run and a delimited one, and a count ends where the count says.
+	That reads as a different question and is the same one: each element still
+	has to be whole, and the walk cannot tell the end of the run from the end
+	of the buffer either way.
+
+	The bound reported is a genuine lower bound rather than the true total,
+	which is not knowable: each element still to come needs at least its own
+	`SIZE_MIN`, and that is what is summed. Here two whole items occupy eight
+	bytes after the count, a third needs two more, and the two after it need
+	two each -- sixteen, against a true total of twenty-two.
+	"""
+	header, source = emit("struct item { u16 len; u8 v[len]; } "
+	                      "struct rec { u16 count; item items[count]; }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	/* count=5, two whole items present: ten bytes of a twenty-two-byte
+	 * message. */
+	const uint8_t two[10] = { 0,5, 0,2,'a','b', 0,2,'c','d' };
+	/* The same bytes declaring the two that are there. */
+	const uint8_t all[10] = { 0,2, 0,2,'a','b', 0,2,'c','d' };
+	uint32_t need = 0xabcdu;
+
+	if (situ_rec_required(two, sizeof two, &need) == SITU_OK)   return 1;
+	if (need <= sizeof two)                                    return 2;
+	if (need != 16u)                                           return 3;
+
+	/* And a run whose count is satisfied is still complete: a walk that
+	 * refused everything would pass checks 1 to 3 as loudly. */
+	if (situ_rec_required(all, sizeof all, &need) != SITU_OK)   return 4;
+	if (need != 10u)                                           return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(binary)])
+	assert ran.returncode == 0, (
+		f"the probe failed at check {ran.returncode}: a counted run does not "
+		"frame its elements")

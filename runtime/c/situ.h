@@ -719,6 +719,19 @@ static inline uint32_t situ_need_u32(uint32_t at, uint32_t by)
 	return by > UINT32_MAX - at ? UINT32_MAX : at + by;
 }
 
+/* The same question asked of a product. A counted run of variable-size
+ * elements reports, as its lower bound, a minimum for every element the count
+ * still promises -- `remaining * SIZE_MIN`, which is a declared count times a
+ * compile-time constant and so is exactly the multiplication a hostile count
+ * controls. Saturating it keeps the bound a bound: a product that wraps is
+ * SMALLER than the truth, which is the one direction that turns a short
+ * message into a complete one (26.557).
+ */
+static inline uint32_t situ_need_mul_u32(uint32_t count, uint32_t each)
+{
+	return each != 0u && count > UINT32_MAX / each ? UINT32_MAX : count * each;
+}
+
 /* `pad_to(n)` (decision 0043): advance `at` to the next multiple of `n`,
  * clamped to the view. The padding is `align_up(at, n) - at`; a member after
  * a pad starts on an n-byte boundary from the message base. Clamped for the
