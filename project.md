@@ -31304,6 +31304,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.555 An offset chain that re-derived itself, in all four backends
+
+**`raidcfgd` measured 3,000,000 calls and 573 ms for one decode of a
+12,344-byte snapshot**, through generated accessors for a `physical_drive`
+with nine strings and a key-value run. Reproduced here with a struct of k
+variable-length members, timing ONE access to the last:
+
+    members        C          Python
+     8         0.009 ms      8.263 ms
+    12         0.670 ms    625.891 ms
+    14         6.204 ms   5374.432 ms     -- 5.4 SECONDS
+
+**Doubling k from 12 to 14 multiplied the cost by about nine, and nine is
+3^2.** That is the whole diagnosis: `_offset(k)` summed `_extent(i)` for
+every earlier member, and each `_extent(i)` re-derived `_offset(i)` the same
+way -- and did it TWICE, because `base` was written twice into one
+`situ_view_sub(view, base, remaining(limit, base), ...)`.
+
+**After, the same accesses:**
+
+    members        C          Python
+    14         0.001 ms      0.330 ms
+    20         0.001 ms      0.590 ms
+    40         0.001 ms           --
+
+Linear, and the offsets are identical at every k -- 52 for k=14, 76 for
+k=20 -- which is the correctness signal that matters.
+
+**The shape was already in the tree, under another name.** A delimited
+member has had `_span_from` for the same reason, and its comment says *a
+loop over M members costs M^2 scans while reading as one pass*. The nested
+STRUCT case never got it. So the fix is `_extent_from(at)` -- measure at an
+offset the caller already holds -- plus threading the chain's running offset
+into it, which is what `_length_expression(running=...)` was already built
+to carry and the nested-struct branch ignored.
+
+**Four backends, and three distinct ways the first attempt fell short.**
+
+- **C** went linear immediately, because its `base` is a CALL to an
+  accumulating `_offset` function.
+- **Python** went from 3^k to 2^k and stopped, because `_extent` took
+  `_offset_expression` -- and an expression cannot hold a running total, so
+  every term in it re-derived. Fixed by emitting the accumulating
+  `_chain_body` as statements, which that function's own docstring exists
+  for.
+- **Rust and C++** had `_extent_from` emitted and UNUSED for the same
+  reason, each with a second emitter the chain site could also reach. `mqtt`
+  found Rust's by asking for a `_from` the other emitter never wrote;
+  `json.situ` found C's equivalent, where the use site's condition
+  (`depth is None or not recursive`) is wider than the emitter's
+  (`not recursive`) and a recursive type fell through the gap.
+
+**The test is structural, and its first version was vacuous in two of four
+cells.** A wall-clock bound would pin the same property and fail on a loaded
+machine, so the assertion is that every accumulating line reaches an earlier
+member through `_extent_from` and never the plain `_extent`. Each backend's
+line is matched by its own spelling of "advance the running offset" -- and
+**`cpp` and `rust` were spelled wrong, so those two cells matched nothing
+and passed while both backends were still at 2^k.** The population is
+asserted first now. This file's own subject, arriving in its instrument.
+
+**What raidcfgd asked for and what this is.** They suggested memoising
+within a call or emitting a single sequential walker, and said the map
+*says `access=Sequential`; it does not say "exponential in k"*. This is the
+second: the chain IS the sequential walker now. Their own decoder walks the
+tree with a cursor of its own and reached 0.54 ms against the generated
+accessors' 573 ms, and the accessors should not have cost that.
+
 ### 26.554 Three of the four installed programs could not start
 
 **`make install` ships four programs and three of them exited 1 before
