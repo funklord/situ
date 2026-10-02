@@ -453,8 +453,20 @@ def _squash(source: str) -> str:
 #: checksum field is taken as while the sum runs over it is invisible in the
 #: structure, and two peers that disagree about it compute different sums over
 #: byte-identical messages.
+#: `preserve` and `unknown` are the other half of one axis, and were missing
+#: while `must_be_zero` and `must_be_one` were here (26.553). All four decide
+#: whether a message with non-zero reserved bytes is VALID, which is the most
+#: receiver-observable thing an attribute can do: measured, `[must_be_one]`
+#: changes a comparison from `!= 0u` to `!= 0xFFu` -- four lines -- and
+#: `[preserve]` or `[unknown]` deletes the validation block entirely, so the
+#: default rejects such a message and these two accept it.
+#:
+#: Two peers a schema revision apart therefore computed an IDENTICAL signature
+#: and disagreed about which messages are legal, which is the one thing this
+#: file exists to prevent.
 WIRE_ATTRS = (
 	"must_eq", "min", "max", "must_be_zero", "must_be_one",
+	"preserve", "unknown",
 	"encoding", "nul_terminated", "self_as",
 )
 

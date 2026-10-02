@@ -1206,3 +1206,50 @@ def test_the_format_notice_is_not_a_break_and_is_not_tallied() -> None:
 	assert "format" in kinds(both)
 	assert both.breaking, "a real break must survive the format notice"
 	assert "0 breaking" not in wire.render_verdict(both)
+
+
+#: The reserved-bit policy, all four of it. `must_be_zero` is the default and
+#: the other three are written, so a schema states one of four things about
+#: whether a message with non-zero reserved bytes is VALID.
+RESERVED_POLICIES = ("must_be_zero", "must_be_one", "preserve", "unknown")
+
+
+@pytest.mark.parametrize("policy", RESERVED_POLICIES)
+def test_the_signature_carries_the_whole_reserved_policy(policy: str) -> None:
+	"""Two of the four were in `WIRE_ATTRS` and two were not (26.553).
+
+	All four decide whether a receiver ACCEPTS a message whose reserved bytes
+	are non-zero, which is the most observable thing an attribute can do.
+	Measured in the generated C: `[must_be_one]` changes a comparison from
+	`!= 0u` to `!= 0xFFu`, four lines, and `[preserve]` or `[unknown]`
+	deletes the validation block entirely -- so the default rejects such a
+	message and those two accept it.
+
+	With `preserve` and `unknown` absent from the signature, two peers a
+	schema revision apart computed an IDENTICAL contract and disagreed about
+	which messages are legal. That is the one thing this file exists to
+	prevent, and `situc diff` cannot stand in for it: it compares capability
+	vectors, and this changes none.
+	"""
+	shown = signature("struct b { u8 a; reserved u8[2] [%s]; u8 t; }\n" % policy)
+	assert policy in shown, (
+		f"`[{policy}]` decides whether a message is valid and the wire "
+		"signature does not record it")
+
+
+def test_the_four_policies_give_four_different_signatures() -> None:
+	"""And they must not collapse into each other.
+
+	Naming a policy is not enough if two of them render the same: a peer
+	diffing the contract would see no change where the accept/reject rule had
+	moved. `must_be_zero` is the DEFAULT, so it renders as the bare reserved
+	line -- which is a fourth distinct answer rather than a missing one.
+    """
+	rendered = {
+		policy: signature("struct b { u8 a; reserved u8[2] [%s]; u8 t; }\n"
+		                  % policy)
+		for policy in RESERVED_POLICIES
+	}
+	assert len(set(rendered.values())) == len(RESERVED_POLICIES), (
+		"two reserved policies render the same signature: "
+		+ ", ".join(sorted(rendered)))

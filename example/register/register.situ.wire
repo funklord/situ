@@ -25,7 +25,7 @@ struct ctrl_reg size=4
   @0x0000:2 3bit      u3         mode  lsb_first
   @0x0000:5 1bit      bit        busy  lsb_first
   @0x0000:6 1bit      bit        error  lsb_first
-  @0x0000:7 25bit     u25        <reserved0>  little lsb_first
+  @0x0000:7 25bit     u25        <reserved0>  little lsb_first preserve
 
 struct irq_reg size=4
   @0x0000   1bit      bit        pending  lsb_first
@@ -42,4 +42,4 @@ struct status_reg size=4
   @0x0000:1 1bit      bit        fifo_empty  lsb_first
   @0x0000:2 1bit      bit        fifo_full  lsb_first
   @0x0000:3 1         u8         fill_level
-  @0x0001:3 21bit     u21        <reserved0>  little lsb_first
+  @0x0001:3 21bit     u21        <reserved0>  little lsb_first preserve

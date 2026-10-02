@@ -312,7 +312,7 @@ struct packed_driver size=3..63
 struct padded_frame size=1..262
   @0x0000   1         u8         n
   @0x0001   0..255    u8         body  sized-by=n
-  ~         0..6      u8         <pad>  sized-by=remaining pad-random=2..6
+  ~         0..6      u8         <pad>  sized-by=remaining pad-random=2..6 unknown
 
 struct piece size=1..256
   @0x0000   1         u8         len
@@ -491,7 +491,7 @@ struct typed_kind size=3
 
 struct unknown_reserved size=4
   @0x0000   1         u8         version
-  @0x0001   1         u8         <reserved0>
+  @0x0001   1         u8         <reserved0>  unknown
   @0x0002   2         u16        tail  big
 
 struct unverified size=19
