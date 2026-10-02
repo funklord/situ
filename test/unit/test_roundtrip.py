@@ -198,3 +198,57 @@ def test_redundant_parentheses_are_dropped() -> None:
 def test_left_associativity_survives_a_round_trip() -> None:
 	source = unparse(parse_text("const N = a - (b - c);"))
 	assert "a - (b - c)" in source
+
+
+HIDDEN = """target buffer;
+endian big;
+struct b {
+	peek u8 k;
+	variant v switch (k) { default: error; }
+	decimal u16 n[3];
+	u8 w[] until "," max 9;
+	u8 x[2] at 4;
+}
+"""
+
+
+def test_the_dump_shows_the_fields_it_used_to_drop() -> None:
+	"""`situc dump-ast` rendered 5 of a `Field`'s 13 fields (26.551).
+
+	`until`, `peek`, `radix`, `located`, `skip`, `repeat`, `prefix`, `args`
+	and `register` appeared nowhere in `dump.py` at all, so a reader asking
+	the compiler what it made of a schema was shown less than the tree held.
+
+	`_rest` derives the tail from the dataclass, so the gap cannot reopen: a
+	field added to the AST is printed whether or not anybody teaches this
+	file about it.
+	"""
+	dumped = dump(parse_text(HIDDEN))
+	for shown in ("peek yes", "radix 10", "until Until(", "located 4"):
+		assert shown in dumped, f"the dump does not show {shown!r}"
+
+
+def test_the_hand_rendered_table_names_fields_that_exist() -> None:
+	"""The one way `_rest` can still drop a field.
+
+	Everything absent from `RENDERED_BY_HAND` is printed generically, so the
+	only failure left is an entry naming a field the node no longer has --
+	a rename in the AST would leave the stale name listed and the new field
+	suppressed, silently. This is the assertion that cannot happen to.
+	"""
+	import dataclasses
+
+	from situc import ast as ast_module
+	from situc.dump import RENDERED_BY_HAND
+
+	wrong = []
+	for name, shown in sorted(RENDERED_BY_HAND.items()):
+		node = getattr(ast_module, name, None)
+		if node is None or not dataclasses.is_dataclass(node):
+			wrong.append(f"{name}: no such AST node")
+			continue
+		fields = {field.name for field in dataclasses.fields(node)}
+		for missing in sorted(shown - fields):
+			wrong.append(f"{name}.{missing}: listed as hand-rendered and "
+			             "not a field")
+	assert not wrong, "\n  ".join(wrong)

@@ -9,6 +9,9 @@ and diffable rather than nested punctuation.
 
 from __future__ import annotations
 
+import dataclasses
+import enum
+
 from situc import ast
 from situc.unparse import expr_to_source
 
@@ -175,7 +178,117 @@ def _members(members: tuple[ast.Member, ...], depth: int) -> list[str]:
 	return lines
 
 
+#: What each member kind's own lines already render, so the tail below does
+#: not repeat it. Everything NOT listed here is printed generically, which is
+#: what makes the dump complete BY CONSTRUCTION: a field added to the AST
+#: appears without anybody teaching this file to print it.
+#:
+#: Listed conservatively on purpose. A field wrongly listed here is dropped
+#: and a field wrongly omitted is merely printed twice, so the bias is
+#: towards printing -- which is the direction the audit in 26.551 found this
+#: file wrong in. It rendered 5 of `Field`'s 13 fields, and `until`, `peek`,
+#: `radix`, `located`, `skip`, `repeat`, `prefix`, `args` and `register`
+#: appeared nowhere at all.
+RENDERED_BY_HAND: dict[str, frozenset[str]] = {
+	"PositionalBlock": frozenset({"members"}),
+	"Field":           frozenset({"name", "type_ref", "array", "pin", "attrs"}),
+	"MarkerField":     frozenset({"name", "attrs"}),
+	"Opaque":          frozenset({"name", "size"}),
+	"Tlv":             frozenset({"name", "unknown", "duplicates", "ordered",
+	                              "tag_decode", "value_size", "known"}),
+	"Indexed":         frozenset({"name", "base", "base_member", "members"}),
+	"Variant":         frozenset({"name", "discriminant", "arms"}),
+	"Reserved":        frozenset({"type_ref", "array", "attrs"}),
+	"Pad":             frozenset({"to", "attrs"}),
+	"Coded":           frozenset({"name", "codec", "attrs", "members"}),
+	"Sealed":          frozenset({"name", "codec", "attrs", "members"}),
+	"Authenticated":   frozenset({"name", "attrs", "members"}),
+	"TagField":        frozenset({"name", "kind", "type_ref", "array",
+	                              "covers", "attrs"}),
+}
+
+
+def _absent(value: object) -> bool:
+	"""Whether a field holds nothing, so the tail stays quiet about it.
+
+	`False` counts as absent because every boolean here is a flag that is
+	either set or not -- `peek`, `scaled`, `parameter`, `ordered` -- and a
+	dump listing `peek no` on every field would bury what it is for.
+	"""
+	return value is None or value is False or value == ()
+
+
+def _fields(node: object) -> tuple[dataclasses.Field[object], ...]:
+	"""A node's fields, declared over `object` so the narrowing type-checks.
+
+	`ast.Member` is a union, which `dataclasses.fields` does not accept even
+	though every member of it is a dataclass; narrowing from `object` is what
+	satisfies both the checker and the reader.
+	"""
+	assert dataclasses.is_dataclass(node) and not isinstance(node, type)
+	return dataclasses.fields(node)
+
+
+def _flat(value: object) -> str:
+	"""A value as text, with spans dropped so the dump stays comparable.
+
+	The round-trip property is that a schema and the same schema reparsed
+	from unparsed source dump identically, so a renderer that printed a
+	`Span` would break it -- which is why this walks dataclasses rather than
+	using `repr`.
+	"""
+	if isinstance(value, enum.Enum):
+		return str(value.value)
+	# An expression reads as the source it came from. `expr_to_source` is
+	# already this module's, and a dump is a VIEW rather than the witness to
+	# the unparser's faithfulness -- `test_examples` holds that with its own
+	# generic dataclass walk, precisely because a witness sharing code with
+	# `unparse` agrees with it wherever both are silent.
+	if isinstance(value, ast.Expr):
+		return expr_to_source(value)
+	if dataclasses.is_dataclass(value) and not isinstance(value, type):
+		inner = ", ".join(
+			f"{field.name}={_flat(getattr(value, field.name))}"
+			for field in dataclasses.fields(value)
+			if field.name != "span"
+			and not _absent(getattr(value, field.name)))
+		return f"{type(value).__name__}({inner})"
+	if isinstance(value, (tuple, list)):
+		return "[" + ", ".join(_flat(item) for item in value) + "]"
+	if isinstance(value, bytes):
+		return value.hex()
+	if isinstance(value, bool):
+		return "yes" if value else "no"
+	return str(value)
+
+
+def _rest(member: ast.Member, depth: int) -> list[str]:
+	"""Every field the member's own lines do not render.
+
+	This is the whole of the fix in 26.552. The branches below each print
+	what somebody taught them to print, and `situc dump-ast` showed a reader
+	less than the tree held -- 5 of 13 fields on a `Field`. The tail is
+	derived from the dataclass, so the gap cannot reopen.
+	"""
+	shown = RENDERED_BY_HAND.get(type(member).__name__, frozenset())
+	return [_indent(depth, f"{field.name} {_flat(getattr(member, field.name))}")
+	        for field in _fields(member)
+	        if field.name != "span" and field.name not in shown
+	        and not _absent(getattr(member, field.name))]
+
+
 def _member(member: ast.Member, depth: int) -> list[str]:
+	"""A member's own lines, then whatever they left out.
+
+	The tail goes directly after the head line rather than at the end, so a
+	container's own fields are not separated from it by a nested subtree.
+	"""
+	lines = _member_lines(member, depth)
+	lines[1:1] = _rest(member, depth + 1)
+	return lines
+
+
+def _member_lines(member: ast.Member, depth: int) -> list[str]:
 	if isinstance(member, ast.PositionalBlock):
 		lines = [_indent(depth, "positional")]
 		lines.extend(_members(member.members, depth + 1))
