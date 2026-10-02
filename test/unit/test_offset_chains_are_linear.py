@@ -136,3 +136,50 @@ def test_the_chain_does_not_re_derive_what_it_has_already_summed(
 	assert not guilty, (
 		f"the {backend} backend re-derives an offset it has already "
 		"accumulated:\n  " + "\n  ".join(guilty[:4]))
+
+
+#: `required` answers "how many bytes does a whole message need", so it is the
+#: one place whose answer may legitimately exceed what has arrived -- and the
+#: one place that therefore cannot use a view-clamping add. It used a plain
+#: one, which wraps (26.556).
+WRAPS = {
+	"c":      ("at = at +", "situ_need_u32"),
+	"cpp":    ("at = at +", "situ_need_u32"),
+	"rust":   ("at +=", "saturating_add"),
+	"python": (None, None),		# arbitrary-precision ints cannot wrap
+}
+
+LENGTHY = (
+	"target buffer;\nendian big;\n"
+	"struct message { u8 a; u32 length; u8 body[length]; }\n"
+)
+
+
+@pytest.mark.parametrize("backend", sorted(BACKENDS))
+def test_required_does_not_add_without_saturating(backend: str) -> None:
+	"""A `u32` length feeding `required` wrapped to a smaller number.
+
+	`7 + 0xFFFFFFFF` is 6 in `uint32_t`, so seven bytes claiming four
+	gigabytes reported `SITU_OK` and `*need = 6`. Python is exempt and said
+	so: its integers do not wrap, and claiming otherwise would be a test that
+	cannot fail.
+	"""
+	raw, saturating = WRAPS[backend]
+	# Both, so the pair is narrowed: Python's entry is `(None, None)` and
+	# checking one of them leaves the other `str | None`.
+	if raw is None or saturating is None:
+		pytest.skip("this backend's integers are arbitrary-precision")
+
+	schema   = parse_text(LENGTHY, path="need.situ")
+	resolved = resolve(schema, solve(schema))
+	source   = "".join(text for _, text
+	                   in sorted(BACKENDS[backend](schema, resolved,
+	                                              "need").files().items()))
+	# The instrument first: the saturating form has to be there at all, or
+	# the absence of the raw one proves only that nothing sums.
+	assert saturating in source, (
+		f"the {backend} backend's `required` has no saturating add, so the "
+		"check below proves nothing")
+	assert raw not in source, (
+		f"the {backend} backend's `required` adds a length without "
+		f"saturating (`{raw}`), which wraps on a u32 length")

@@ -108,6 +108,35 @@ Suggestion: compute `need` in a wider type or check for overflow, and apply
 the field's `[max]` before the sum -- a length the schema already bounds
 should never reach an addition it can overflow.
 
+> **Answered -- the overflow half is fixed in C, C++ and Rust; the `[max]`
+> half is recorded for the holder rather than taken.** Reproduced first,
+> exactly as you had it: `have=7 length=0xFFFFFFFF -> rc=0 need=6`.
+>
+> `required` saturates at `UINT32_MAX` now, so the answer is a need no caller
+> can satisfy and the verdict is TRUNCATED: `rc=7 need=4294967295`. It cannot
+> use the saturating add everything else uses -- `situ_advance_u32` clamps to
+> the view, and the comment above `required`'s own loop says shortening the
+> answer to what has arrived is the one thing it must never do. **That
+> reasoning was right and the conclusion drawn from it was a plain `+`, which
+> does exactly that by wrapping.**
+>
+> **Five sums rather than one**, which is worth saying because you found the
+> one that matters and the others are only reachable through it: once `at` can
+> be `UINT32_MAX`, the element sum of a run, the delimiter width and the pad
+> delta all wrap too. Fixing the length alone would have moved the fault.
+>
+> C++ shares the runtime and is confirmed by running it. Rust uses
+> `saturating_add` on `usize`, where `+=` panics in a debug build and wraps in
+> a release one -- a parser that panics being the same fault in a louder coat.
+> Python's integers do not wrap and the test skips it rather than asserting
+> something that cannot fail.
+>
+> **Your `[max]` suggestion is the better answer and is a change to what
+> `required` reports**, not an addition to it: a 4 GB claim against
+> `u32 length [max = 1024]` should be *malformed* rather than *need more than
+> exists*, and that is the holder's call. Your framer checking `[max]` from
+> the raw header before asking is the right thing to keep doing meanwhile.
+
 ## 3. `_required` and `_span` over a counted run stop silently at the limit
 
 Over a run of `count` elements, the generated `_required` and `_span` walk

@@ -699,6 +699,26 @@ static inline uint32_t situ_advance_u32(uint32_t at, uint32_t by, uint32_t limit
 	return at + (by < room ? by : room);
 }
 
+/* `at + by`, clamped at UINT32_MAX rather than wrapping. For `required` and
+ * nothing else.
+ *
+ * `situ_advance_u32` clamps to the view, which is right wherever the question
+ * is which bytes are in the frame. `required` asks the opposite question --
+ * how many a whole message needs -- so it must be able to answer with a
+ * number larger than what has arrived, and it used a plain `+`.
+ *
+ * A plain `+` wraps. `raidcfgd` reported seven bytes declaring a `u32`
+ * length of 0xFFFFFFFF: `7 + 0xFFFFFFFF` is 6 in `uint32_t`, so `*need`
+ * came back 6, the function returned `SITU_OK`, and a framer read those
+ * seven bytes as a complete message (26.556). Saturating makes the answer
+ * UINT32_MAX, which no caller can satisfy, so the verdict is TRUNCATED --
+ * the honest reading of a length nobody can have sent.
+ */
+static inline uint32_t situ_need_u32(uint32_t at, uint32_t by)
+{
+	return by > UINT32_MAX - at ? UINT32_MAX : at + by;
+}
+
 /* `pad_to(n)` (decision 0043): advance `at` to the next multiple of `n`,
  * clamped to the view. The padding is `align_up(at, n) - at`; a member after
  * a pad starts on an n-byte boundary from the message base. Clamped for the

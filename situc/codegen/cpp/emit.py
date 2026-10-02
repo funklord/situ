@@ -2572,7 +2572,7 @@ class Emitter:
 					"\t\t\treturn ::situ::rt::err::truncated;",
 					"\t\t}",
 				])
-			steps.append(f"\t\tat = at + ({length});")
+			steps.append(f"\t\tat = situ_need_u32(at, {length});")
 
 		return [
 			*head,
@@ -2634,7 +2634,7 @@ class Emitter:
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
-				"\t\t\tat += part;",
+				"\t\t\tat = situ_need_u32(at, part);",
 				"",
 				"\t\t\t/* The condition is asked about the element just"
 				" read, which",
@@ -2668,12 +2668,12 @@ class Emitter:
 				"\t\t\t * It belongs to this member, as a delimiter does. */",
 				f"\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u, {array},"
 				f" {len(delim)}u) == 0u) {{",
-				f"\t\t\t\tat += {len(delim)}u;",
+				f"\t\t\t\tat = situ_need_u32(at, {len(delim)}u);",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
 				*read,
-				"\t\t\tat += part;",
+				"\t\t\tat = situ_need_u32(at, part);",
 			])
 
 		loop = ["\t\tfor (;;) {", *body, "\t\t}"]

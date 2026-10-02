@@ -4381,7 +4381,8 @@ class Emitter:
 					"\t * `at` is a total rather than an offset, so the"
 					" alignment is",
 					"\t * taken at the pad's own base (0043). */",
-					f"\tat = at + (situ_align_up_u32({base}, {pad}u,"
+					f"\tat = situ_need_u32(at,"
+					f" situ_align_up_u32({base}, {pad}u,"
 					" view.limit)",
 					f"\t           - {base});",
 				])
@@ -4418,7 +4419,13 @@ class Emitter:
 					"\t\treturn SITU_ERR_TRUNCATED;",
 					"\t}",
 				])
-			steps.append("\tat = at + ("
+			# Saturating at UINT32_MAX, not wrapping. A plain `+` here read
+			# seven bytes declaring a `u32` length of 0xFFFFFFFF as a
+			# COMPLETE message: `7 + 0xFFFFFFFF` is 6, so `*need` was 6 and
+			# the verdict was OK (26.556). Not `situ_advance_u32`, whose
+			# clamp is to the view -- the comment above this loop says why
+			# that would be the one thing `required` must never do.
+			steps.append("\tat = situ_need_u32(at, "
 				+ self._length_expression(struct, placement, running="at")
 				+ ");")
 
@@ -4533,7 +4540,7 @@ class Emitter:
 				"\t\tif (situ_view_sub(view, at, part, &element) != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
-				"\t\tat = at + part;",
+				"\t\tat = situ_need_u32(at, part);",
 				"",
 				"\t\t/* The condition is asked about the element just read,"
 				" which is",
@@ -4567,7 +4574,7 @@ class Emitter:
 				"\t\t * It belongs to this member, as a delimiter does. */",
 				f"\t\tif (situ_scan(data + at, {len(delim)}u, {sym},"
 				f" {len(delim)}u) == 0u) {{",
-				f"\t\t\tat = at + {len(delim)}u;",
+				f"\t\t\tat = situ_need_u32(at, {len(delim)}u);",
 				"\t\t\tbreak;",
 				"\t\t}",
 				"",
@@ -4576,7 +4583,7 @@ class Emitter:
 				"\t\t\t*need = at + part;",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				"\t\tat = at + part;",
+				"\t\tat = situ_need_u32(at, part);",
 			])
 
 		# The counter exists only where a cap reads it, and lives in a block

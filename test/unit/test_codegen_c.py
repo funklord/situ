@@ -6659,3 +6659,56 @@ def test_the_same_struct_and_case_twice_is_refused() -> None:
 	"""
 	with pytest.raises(ValueError, match="`a same` is declared twice"):
 		vector_source(TWO_STRUCTS, "a same 01 02\na same 03 04\n")
+
+
+def test_required_saturates_rather_than_wrapping(tmp_path: Path) -> None:
+	"""Seven bytes claiming four gigabytes are not a complete message.
+
+	`raidcfgd` reported `required` computing `7 + length` in `uint32_t` for a
+	`u32` length field: `7 + 0xFFFFFFFF` is **6**, so `*need` came back 6,
+	the function returned `SITU_OK`, and a framer read those seven bytes as
+	whole (26.556). Measured before the fix, exactly that.
+
+	`required` cannot use the accessors' `situ_advance_u32`, whose clamp is to
+	the view -- the comment above its own loop says shortening the answer to
+	what has already arrived is the one thing it must never do. So it
+	saturates at `UINT32_MAX` instead, and the verdict is TRUNCATED: a need no
+	caller can satisfy, which is the honest reading of a length nobody can
+	have sent.
+	"""
+	header, source = emit("struct S { u8 a; u32 length; u8 body[length]; }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+int main(void)
+{
+	/* One byte, then a u32 length of 0xFFFFFFFF: five bytes claiming four
+	 * gigabytes of body. `5 + 0xFFFFFFFF` wraps to 4. */
+	uint8_t raw[5] = { 1, 0xFF, 0xFF, 0xFF, 0xFF };
+	uint32_t need = 0xabcdu;
+
+	if (situ_S_required(raw, sizeof raw, &need) == SITU_OK)   return 1;
+	if (need <= sizeof raw)                                  return 2;
+	if (need != 0xFFFFFFFFu)                                 return 3;
+
+	/* And an honest length still answers honestly. */
+	raw[1] = 0; raw[2] = 0; raw[3] = 0; raw[4] = 3;
+	if (situ_S_required(raw, sizeof raw, &need) == SITU_OK)   return 4;
+	if (need != 8u)                                          return 5;
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(binary)])
+	assert ran.returncode == 0, (
+		f"the probe failed at check {ran.returncode}: `required` does not "
+		"saturate")

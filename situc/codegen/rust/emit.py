@@ -5223,7 +5223,8 @@ class Emitter:
 					"\t\t}",
 				])
 			steps.append(
-				f"\t\tat += {self._unparen(length).replace('self.', 'probe.')};")
+				f"\t\tat = at.saturating_add("
+				f"{self._unparen(length).replace('self.', 'probe.')});")
 
 		return [
 			*head,
@@ -5293,7 +5294,7 @@ class Emitter:
 				*([f"\t\t\tlet element = {inner} {{"
 				   " bytes: &data[at..at + part] };"]
 				  if "element." in cond else []),
-				"\t\t\tat += part;",
+				"\t\t\tat = at.saturating_add(part);",
 				"",
 				"\t\t\t// The condition is asked about the element just"
 				" read, which",
@@ -5324,12 +5325,12 @@ class Emitter:
 				"\t\t\t// start. It belongs to this member, as a delimiter"
 				" does.",
 				f"\t\t\tif &data[at..at + {len(delim)}] == {bytes_} {{",
-				f"\t\t\t\tat += {len(delim)};",
+				f"\t\t\t\tat = at.saturating_add({len(delim)});",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
 				*read,
-				"\t\t\tat += part;",
+				"\t\t\tat = at.saturating_add(part);",
 			])
 
 		loop = ["\t\tloop {", *body, "\t\t}"]
