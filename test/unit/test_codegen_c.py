@@ -6775,3 +6775,34 @@ int main(void)
 	assert ran.returncode == 0, (
 		f"the probe failed at check {ran.returncode}: a counted run does not "
 		"frame its elements")
+
+
+#: A bound a frame length cannot hold: a million leaves of a million bytes.
+#: `[max]` on every count and string gives a tree a computable maximum and
+#: nothing says it is a 32-bit number -- this one is about 10^12, which is 233
+#: times what `view.limit` holds.
+OVERSIZE = (
+	"struct leaf { u32 len [max = 1000000]; u8 v[len]; }\n"
+	"struct capped {\n"
+	"\tu32   n [max = 1000000];\n"
+	"\tleaf  kids[n];\n"
+	"\tu8    tail[remaining] max 470;\n"
+	"}\n")
+
+
+def test_a_bound_wider_than_a_frame_length_still_compiles(
+		tmp_path: Path) -> None:
+	"""And this is the sharpest statement of the defect: it did not.
+
+	`raidcfgd` reported the constant -- `RCS_SNAPSHOT_SIZE_MAX
+	9758327360018u` beside an API whose every length is a `uint32_t`
+	(26.558). The half nobody had looked at is the COMPARISON against it:
+	`if (view.limit > SITU_CAPPED_SIZE_MAX)` is a condition GCC proves
+	false, and it says so under `-Wtype-limits`, which `-Wextra` turns on
+	and `WARNINGS` above makes an error.
+
+	So situc emitted C that situc's own gate would not compile, for a schema
+	nobody in the corpus had written. This compiles it under exactly those
+	flags, which is the one check that would have caught it.
+	"""
+	compile_generated(tmp_path, OVERSIZE)

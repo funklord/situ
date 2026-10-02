@@ -1907,6 +1907,25 @@ VALIDATED = {
 	"a `[remaining]` run that reaches no further than its cap": (
 		"struct hdr { u8 kind; u8 content[remaining] max 4; }",
 		[("11", "0"), ("1100000000", "0"), ("110000000000", "1")]),
+	# And the same cap at an offset the DATA decides, which no schema in
+	# the corpus wrote. The reach is `offset_bits + size_max_bits`, NONE is
+	# a sentinel rather than a number, and nothing checked `offset_bits`
+	# for it: Python added 0xFFFFFFFF to 32 and got a bound nothing
+	# reaches, while the C walk's `uint32_t` wrapped the same sum to 4 and
+	# refused every frame over four bytes -- for a struct whose maximum is
+	# 65,541. One missing condition, two walkers wrong in opposite
+	# directions, and this table is where they would have met (26.558).
+	#
+	# The first two are VALID frames on the far side of where C used to
+	# stop. The third is a frame whose tail exceeds the cap and every one
+	# of the six readers accepts it: where the capped member's offset is
+	# data-decided, the bound available to compare against is the struct's
+	# whole maximum, which an earlier `u16 len` makes 65,541. Pinned as a
+	# limit rather than left to be discovered, and recorded for the holder.
+	"a `[remaining]` cap after a member the data sizes": (
+		"struct hdr { u16 len; u8 v[len]; u8 tail[remaining] max 4; }",
+		[("000000000000", "0"), ("00014100000000", "0"),
+		 ("00000000000000", "0")]),
 }
 
 

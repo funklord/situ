@@ -70,7 +70,8 @@ from situc.traverse import (
 	region_decodes,
 	is_run,
 	local_name,
-	element_bytes, is_counted_run, matched_values, obligation,
+	element_bytes, enforceable_max, is_counted_run, matched_values,
+	obligation,
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
@@ -7561,7 +7562,19 @@ class Emitter:
 		# every day; one ending in `[remaining] max N` is not, because that
 		# run takes the whole remainder (0059).
 		capped = frame_cap(struct)
-		if capped is not None and struct.layout.register is None:
+		if capped is not None and struct.layout.register is None \
+				and enforceable_max(struct) is None:
+			# Bounded above what `raw_.limit` holds, so the comparison is dead
+			# and `-Wtype-limits` proves it -- the same break C had, in a
+			# header this project compiles with `-Wextra -Werror` (26.558).
+			lines.extend([
+				f"\t\t/* No ceiling check: `{capped.path}`'s cap puts this",
+				f"\t\t * struct's maximum at {struct.layout.size_max_bytes}"
+				" bytes, which no",
+				"\t\t * `std::uint32_t` length reaches, so no frame this API",
+				"\t\t * can describe violates it. */",
+			])
+		elif capped is not None and struct.layout.register is None:
 			limit = (struct.layout.size_max_bits or 0) // BITS_PER_BYTE
 			lines.extend([
 				f"\t\tif (raw_.limit > {limit}u) {{",

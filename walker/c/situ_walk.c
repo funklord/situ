@@ -3634,8 +3634,17 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
+		/* `offset_bits` as well, because the reach below is a sum of the
+		 * two and NONE is a sentinel rather than a number. A cap after a
+		 * variable member has a data-decided offset, and
+		 * `0xFFFFFFFF + 3760 + 7` wraps to 3766 here -- so this refused
+		 * every frame over 470 bytes for a struct whose maximum is 66,007,
+		 * while the Python walk's arbitrary-precision sum made the same
+		 * line merely vacuous. One missing condition, two walkers wrong in
+		 * opposite directions (26.558). */
 		if ((capped.text_flags & SITU_WALK_FRAME_CAP) == 0u
-		                || capped.size_max_bits == SITU_WALK_NONE) {
+		                || capped.size_max_bits == SITU_WALK_NONE
+		                || capped.offset_bits == SITU_WALK_NONE) {
 			continue;
 		}
 		if (len > (capped.offset_bits + capped.size_max_bits + 7u) / 8u) {

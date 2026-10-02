@@ -40,6 +40,27 @@ from walker.walk import acquire
 PREAMBLE = "target buffer;\nendian big;\n"
 CAPPED   = "struct b { u8 kind; u8 content[remaining] max 470; }\n"
 
+#: The same construct where the bound does not fit a frame length. `[max]` on
+#: every count and string gives a tree a computable maximum and nothing says
+#: it is a 32-bit number: a million leaves of a megabyte each reaches about
+#: 10^12 bytes, which is 233 times what `view.limit` holds.
+#:
+#: `raidcfgd` reported the constant; the comparison against it was the half
+#: nobody had looked at, and GCC proves it false under `-Wtype-limits` --
+#: which `-Wextra` turns on and this project's own flags make an error, so
+#: situc emitted C its own gate would not compile (26.558).
+OVERSIZE = (
+	"struct leaf { u32 len [max = 1000000]; u8 v[len]; }\n"
+	"struct capped {\n"
+	"\tu32   n [max = 1000000];\n"
+	"\tleaf  kids[n];\n"
+	"\tu8    tail[remaining] max 470;\n"
+	"}\n")
+
+#: What `capped` reaches: 1,000,000 leaves of 1,000,004 bytes, plus the count
+#: and the cap. Stated here so the test's own arithmetic is checkable.
+OVERSIZE_MAX = 4 + 1000000 * 1000004 + 470
+
 
 def _resolved(body: str):  # type: ignore[no-untyped-def]
 	schema = parse_text(PREAMBLE + body)
@@ -119,6 +140,84 @@ def test_every_backend_refuses_a_longer_frame() -> None:
 
 	for lang, text in sources.items():
 		assert wanted[lang] in text, f"{lang} does not refuse a longer frame"
+
+
+def test_the_oversize_bound_is_what_this_test_thinks_it_is() -> None:
+	"""The fixture first, because every assertion below rests on the number.
+
+	A fixture whose maximum turned out to FIT would make all four cases
+	below pass by describing the ordinary schema, which is the vacuous pass
+	wearing a fixture's clothes.
+	"""
+	_, resolved = _resolved(OVERSIZE)
+	assert resolved.structs["capped"].layout.size_max_bytes == OVERSIZE_MAX
+	assert OVERSIZE_MAX > 0xFFFFFFFF
+	# And the schema this file is otherwise about is on the other side of it.
+	_, ordinary = _resolved(CAPPED)
+	assert ordinary.structs["b"].layout.size_max_bytes == 471
+
+
+def test_no_backend_compares_against_a_bound_its_lengths_cannot_hold() -> None:
+	"""The mirror of `test_every_backend_refuses_a_longer_frame`.
+
+	Each of the four marks that test looks for must be ABSENT here, and that
+	test is what makes this one a measurement: a mark matching nothing would
+	pass here and fail there.
+
+	All four rather than the two the compiler complains about. C and C++ are
+	forced -- `-Wtype-limits` is an error under their own flags -- while
+	Python's integers would compare it happily and Rust's `usize` does on a
+	64-bit target and warns uselessly on a 32-bit one. One wire contract
+	refusing the same frames in four languages beats a cap enforced in two
+	of them.
+	"""
+	schema, resolved = _resolved(OVERSIZE)
+	sources = {
+		"c":      generate_c(schema, resolved, "unit").source,
+		"cpp":    generate_cpp(schema, resolved, "unit").header,
+		"rust":   generate_rs(schema, resolved, "unit").module,
+		"python": generate_py(schema, resolved, "unit").module,
+	}
+	unwanted = {
+		"c":      "view.limit > SITU_CAPPED_SIZE_MAX",
+		"cpp":    f"raw_.limit > {OVERSIZE_MAX}u",
+		"rust":   f"self.bytes.len() > {OVERSIZE_MAX}",
+		"python": f"self._len > {OVERSIZE_MAX}",
+	}
+
+	for lang, text in sources.items():
+		assert unwanted[lang] not in text, (
+			f"{lang} compares a frame length against {OVERSIZE_MAX}, which no "
+			"32-bit length reaches")
+		assert "No ceiling check" in text, (
+			f"{lang} drops the check and does not say so, which leaves the "
+			"next reader to work out whether the cap is enforced")
+
+
+def test_c_withholds_a_size_constant_it_cannot_express() -> None:
+	"""No `SITU_CAPPED_SIZE_MAX`, and the bound named in its place.
+
+	This is `raidcfgd`'s own report: the macro was emitted as
+	`9758327360018u` and their consumer assigned it to a `uint32_t`. The
+	macro's ABSENCE turns that line into a compile error, which is the whole
+	improvement -- a loud failure in place of a quiet wrong answer.
+
+	The same shape as the comment emitted where nothing bounds a struct at
+	all, which `test_codegen_c` already pins, so a reader meets one form for
+	"there is no usable maximum here" rather than two.
+	"""
+	schema, resolved = _resolved(OVERSIZE)
+	header = generate_c(schema, resolved, "unit").header
+
+	assert "#define SITU_CAPPED_SIZE_MAX" not in header
+	assert "No SITU_CAPPED_SIZE_MAX" in header
+	assert str(OVERSIZE_MAX) in header, \
+		"the bound is withheld as a macro and should still be readable"
+	# The control: a bound that FITS is still published, so the absence above
+	# is about the width and not about caps.
+	plain_schema, plain_resolved = _resolved(CAPPED)
+	ordinary = generate_c(plain_schema, plain_resolved, "unit").header
+	assert "#define SITU_B_SIZE_MAX   471u" in ordinary
 
 
 def test_the_walker_refuses_a_longer_frame() -> None:

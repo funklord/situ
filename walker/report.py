@@ -812,7 +812,28 @@ def _validate(image: Image, view: View, struct_index: int,
 	# the flag rather than `size_max_bits` is the condition.
 	for index in image.members(shape):
 		capped = image.placements[index]
-		if not capped.text_flags & FRAME_CAP or capped.size_max_bits == NONE:
+		# `offset_bits` as well as `size_max_bits`, because the reach is a sum
+		# of the two and NONE is a sentinel rather than a number. A cap after
+		# a variable member -- `u16 len; u8 v[len]; u8 tail[remaining] max
+		# 470` -- has a data-decided offset, so this added 0xFFFFFFFF to 3760
+		# and called it a bound. Python's integers made that merely vacuous;
+		# the C walker's `uint32_t` wrapped it to 470 and refused valid
+		# 471-byte messages, so the two walkers disagreed in opposite
+		# directions on one missing condition (26.558).
+		#
+		# Skipping is honest and is not the whole answer: where the offset is
+		# data-decided this walk cannot bound the member statically at all,
+		# and the image carries no maximum for the STRUCT to compare against
+		# instead. That is recorded for the holder rather than decided here.
+		#
+		# And THIS half of the condition changes no verdict, measured by
+		# removing it and watching the suite stay green: Python's integers
+		# make the sum vacuous where C's wrap made it wrong. It is here so
+		# the two walkers share one condition rather than agreeing by
+		# accident, which is how they came to differ in the first place.
+		if not capped.text_flags & FRAME_CAP \
+				or capped.size_max_bits == NONE \
+				or capped.offset_bits == NONE:
 			continue
 		reach = capped.offset_bits + capped.size_max_bits
 		if view.limit - view.at > (reach + BITS_PER_BYTE - 1) // BITS_PER_BYTE:

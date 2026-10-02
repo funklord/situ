@@ -92,6 +92,9 @@ costs what. The map already says `access=Sequential`; it does not say
 > `u32` length, `_required` and `_span` stopping silently over a counted run,
 > the `SIZE_MAX` truncation past 32 bits, the no-op nested `[encoding]`
 > checks, and the flat `import` colliding at link.
+>
+> (Each of the first three has its own answer below now. The last two do
+> not.)
 
 ## 2. `_required` wraps on a `u32` length
 
@@ -198,6 +201,48 @@ believed `_required` would accept a truncated run as a whole message.
   `RCS_SNAPSHOT_SIZE_MAX 9758327360018u` compiles with a warning-free
   truncation and is wrong. A tree with `[max]` on every count and string
   has a computable maximum and it is not a 32-bit number.
+
+  > **Answered, and it reached further than the constant.** Reproduced with a
+  > schema of our own -- a million leaves of a megabyte each, maximum
+  > 1,000,004,000,474 bytes, 233 times what `view.limit` holds.
+  >
+  > **The macro is withheld rather than emitted wide.** `#define
+  > SITU_CAPPED_SIZE_MAX` is gone and a comment names the true bound in its
+  > place, in the same shape as the comment you already get where nothing
+  > bounds a struct at all. Nothing can stop `uint32_t cap =
+  > SITU_X_SIZE_MAX;` truncating while the macro exists; not defining it
+  > turns that line into a compile error, which is the improvement. **Your
+  > `RCS_SNAPSHOT_SIZE_MAX` will disappear from the header rather than
+  > change value** -- so if you reference it, that reference is the thing to
+  > look at.
+  >
+  > **The half we had not looked at is the comparison against it, and the
+  > compiler had been telling us.** `if (view.limit > SITU_CAPPED_SIZE_MAX)`
+  > is proved false under `-Wtype-limits`, which `-Wextra` turns on and our
+  > own test flags make an error -- so situc emitted C that situc's own gate
+  > would not compile. All four backends drop that check now and say so in a
+  > comment. Python's integers and 64-bit `usize` would compare it happily;
+  > they drop it too, because one wire contract refusing the same frames in
+  > four languages beats a cap enforced in two of them.
+  >
+  > **And then the walkers, where it stopped being cosmetic.** Both compute a
+  > capped member's reach as `offset_bits + size_max_bits`, and `NONE` is a
+  > sentinel rather than a number. For `u16 len; u8 v[len]; u8 tail[remaining]
+  > max 470` the offset is data-decided, so the C walk wrapped
+  > `0xFFFFFFFF + 3760` in a `uint32_t` and **refused valid 471-byte
+  > messages**, while the Python walk's arbitrary precision made the same line
+  > vacuous and accepted everything. One missing condition, two walkers wrong
+  > in opposite directions. Fixed, and the pair now agree.
+  >
+  > **What we did not fix is the design question underneath it, which is the
+  > holder's.** Comparing a frame length against the struct's whole maximum
+  > is exact only when everything before the capped run is fixed-size. A
+  > 7-byte frame whose 5-byte tail breaks a `max 4` is accepted by all six
+  > readers, and that is now pinned as a limit rather than left to be found.
+  > The sharp check is `frame_length - offset_of(capped_member) > cap`,
+  > enforceable at any size and any shape, and it changes what decision 0059
+  > settled.
+
 - `import` splices flat, so two schemas that both import `common.situ`,
   generated under one prefix, define `situ_str_check` twice at link. We
   generate under `rcs_` and `rcm_`, which means the envelope's copy of `str`
@@ -298,7 +343,7 @@ script.
 > so the checkout requirement it names can go whenever you like. The rest of
 > this file is answered where it sits: the exponential accessors, `_required`
 > wrapping on a `u32` and the silent stop over a counted run each carry their
-> own note now. **What is still open is `## 4` -- the `SIZE_MAX` truncation,
-> the flat `import` colliding at link, the no-op nested encoding checks, and
-> your question about what the capability map's `access=Sequential` costs.**
-> Not answered by this and not forgotten.
+> own note now, and so does the `SIZE_MAX` truncation. **What is still open
+> is the flat `import` colliding at link, the no-op nested encoding checks,
+> and your question about what the capability map's `access=Sequential`
+> costs.** Not answered by this and not forgotten.

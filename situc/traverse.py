@@ -967,6 +967,37 @@ def frame_cap(struct: "ResolvedStruct") -> Placement | None:
 	return None
 
 
+#: The longest frame generated code can describe. Every length in the C and
+#: C++ APIs is a `uint32_t` -- `view.limit`, the `have` a framer passes, the
+#: `*need` it gets back -- so this is not a budget anybody chose but the
+#: ceiling of what those types express.
+FRAME_LENGTH_MAX = 0xFFFFFFFF
+
+
+def enforceable_max(struct: "ResolvedStruct") -> int | None:
+	"""This struct's maximum, where a frame length can hold it.
+
+	`[max]` on every count and string gives a tree a computable maximum, and
+	nothing says it is a 32-bit number: a `u32` count of structs each bounded
+	at a megabyte reaches about 10^12 bytes, which is honest arithmetic and
+	is 233 times what `view.limit` can hold.
+
+	`raidcfgd` reported the constant -- `RCS_SNAPSHOT_SIZE_MAX
+	9758327360018u`, which their consumer assigned to a `uint32_t` and
+	truncated in silence (26.558). The arithmetic was right and emitting it
+	beside a 32-bit API was not.
+
+	Here rather than in each backend for `frame_cap`'s own reason: four of
+	them ask it, and the answer decides both whether a constant may be
+	published and whether a comparison against it can ever fire. GCC and
+	clang refuse the second under `-Wtype-limits`, which `-Wextra` turns on
+	and this project's own flags make an error -- so a schema in this state
+	generated C that situc's own gate would not compile.
+	"""
+	most = struct.layout.size_max_bytes
+	return most if most is not None and most <= FRAME_LENGTH_MAX else None
+
+
 def bit_addressed_tag(placement: Placement) -> bool:
 	"""A `tag` or `checksum` whose value is not a whole number of bytes.
 

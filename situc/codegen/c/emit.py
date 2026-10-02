@@ -65,7 +65,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio,
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes,
-	indexed_elements, is_run, walk_order,
+	indexed_elements, is_run, walk_order, enforceable_max,
 	is_counted_run, matched_values, pad_alignment, preceding_parts,
 	obligation, obligations,
 	own_members,
@@ -1408,9 +1408,32 @@ class Emitter:
 		lines.append(f"#define {macro(self.prefix, name, 'SIZE_MIN')}   "
 		             f"{layout.size_bytes}u")
 
-		if layout.size_max_bytes is not None:
+		if enforceable_max(struct) is not None:
 			lines.append(f"#define {macro(self.prefix, name, 'SIZE_MAX')}   "
 			             f"{layout.size_max_bytes}u")
+		elif layout.size_max_bytes is not None:
+			# Bounded, and bounded above what a frame length holds. The macro
+			# is withheld rather than published wide, because every length in
+			# this API is a `uint32_t` and a consumer's `uint32_t cap =
+			# SITU_X_SIZE_MAX;` truncates in silence -- which is what
+			# `raidcfgd` reported, from a tree whose snapshot bound is about
+			# 10^12 (26.558). Absent, the same line fails to compile, and a
+			# loud failure beats a quiet wrong answer.
+			#
+			# The number is in the comment so it is not lost: it is what the
+			# schema says, and `situc wire` prints it on the `size=` line.
+			lines.extend([
+				f"/* No {macro(self.prefix, name, 'SIZE_MAX')}: this struct is"
+				" bounded, at",
+				f" * {layout.size_max_bytes} bytes, and that does not fit the"
+				" `uint32_t` every",
+				" * length in this API is -- so no view can describe one and no",
+				" * buffer can hold one. A macro here would be a number an",
+				" * assignment truncates without saying so.",
+				" *",
+				" * Lower the `[max]` on whatever drives the length if a",
+				" * statically allocatable bound is what you were after. */",
+			])
 		else:
 			lines.extend([
 				f"/* No {macro(self.prefix, name, 'SIZE_MAX')}: nothing in the "
@@ -8799,7 +8822,26 @@ class Emitter:
 		# longer buffer every day; one ending in `[remaining] max N` is
 		# not, because that run takes the whole remainder and a longer
 		# view means it ran past its own stated bound (0059).
-		if frame_cap(struct) is not None and struct.layout.register is None:
+		capped = frame_cap(struct)
+		if capped is not None and struct.layout.register is None \
+				and enforceable_max(struct) is None:
+			# The cap is bounded above what a frame length holds, so no view
+			# this API can describe exceeds it and the comparison is dead.
+			# `-Wtype-limits` says so in as many words -- *comparison is
+			# always false due to limited range of data type* -- and `-Wextra`
+			# turns it on, so this generated C did not compile under situc's
+			# own flags (26.558). A check that cannot fire is worse than
+			# none, being quoted afterwards as though it had.
+			lines.extend([
+				"",
+				f"\t/* No ceiling check: `{capped.path}`'s cap puts this",
+				f"\t * struct's maximum at {struct.layout.size_max_bytes} bytes,"
+				" which no",
+				"\t * `uint32_t` length reaches -- so no frame this API can",
+				"\t * describe violates it, and the comparison would be one",
+				"\t * the compiler proves false. */",
+			])
+		elif capped is not None and struct.layout.register is None:
 			lines.extend([
 				"",
 				f"\tif (view.limit > {macro(self.prefix, struct.name, 'SIZE_MAX')}) {{",

@@ -63,7 +63,8 @@ from situc.traverse import (
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
 	is_run,
 	local_name,
-	element_bytes, is_counted_run, matched_values, obligation,
+	element_bytes, enforceable_max, is_counted_run, matched_values,
+	obligation,
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
@@ -6008,7 +6009,21 @@ class Emitter:
 		# buffer every day; one ending in `[remaining] max N` is not,
 		# because that run takes the whole remainder (0059).
 		capped = frame_cap(struct)
-		if capped is not None and struct.layout.register is None:
+		if capped is not None and struct.layout.register is None \
+				and enforceable_max(struct) is None:
+			# Python's integers would express this bound and the other three
+			# backends' lengths do not, so the check goes here too: one wire
+			# contract, refusing the same frames in four languages, rather
+			# than a cap enforced in two of them (26.558).
+			lines.extend([
+				f"\t\t# No ceiling check: `{capped.path}`'s cap puts this"
+				" struct's",
+				f"\t\t# maximum at {struct.layout.size_max_bytes} bytes, which"
+				" no 32-bit",
+				"\t\t# frame length reaches. Python could compare it and the",
+				"\t\t# other backends cannot, so none of them does.",
+			])
+		elif capped is not None and struct.layout.register is None:
 			limit = (struct.layout.size_max_bits or 0) // BITS_PER_BYTE
 			lines.extend([
 				f"\t\tif self._len > {limit}:",

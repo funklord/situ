@@ -63,7 +63,8 @@ from situc.traverse import (
 	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
 	is_run,
 	local_name,
-	element_bytes, is_counted_run, matched_values, obligation,
+	element_bytes, enforceable_max, is_counted_run, matched_values,
+	obligation,
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
@@ -7341,13 +7342,28 @@ class Emitter:
 		# struct that merely has a maximum is read out of a longer buffer
 		# every day; one ending in `[remaining] max N` is not, because that
 		# run takes the whole remainder (0059).
-		ceiling = ([f"\t\tif self.bytes.len() > "
-		            f"{(struct.layout.size_max_bits or 0) // BITS_PER_BYTE} {{",
-		            "\t\t\treturn Err(situ_rt::Error::Bounds);",
-		            "\t\t}"]
-		           if frame_cap(struct) is not None
-		           and struct.layout.register is None
-		           else [])
+		capped = frame_cap(struct)
+		if capped is None or struct.layout.register is not None:
+			ceiling: list[str] = []
+		elif enforceable_max(struct) is None:
+			# `usize` is 32 bits on a 32-bit target, where this literal makes
+			# the comparison useless by type limits -- rustc's own words, and
+			# an error under `-D warnings`. The other three backends cannot
+			# express the bound at all, so none of them checks it (26.558).
+			ceiling = [
+				f"\t\t// No ceiling check: `{capped.path}`'s cap puts this"
+				" struct's",
+				f"\t\t// maximum at {struct.layout.size_max_bytes} bytes, which"
+				" no 32-bit",
+				"\t\t// frame length reaches, and `usize` is 32 bits on a"
+				" 32-bit target.",
+			]
+		else:
+			ceiling = [
+				f"\t\tif self.bytes.len() > "
+				f"{(struct.layout.size_max_bits or 0) // BITS_PER_BYTE} {{",
+				"\t\t\treturn Err(situ_rt::Error::Bounds);",
+				"\t\t}"]
 
 		refusals = self._refuse_checks(struct)
 
