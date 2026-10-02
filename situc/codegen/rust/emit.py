@@ -2862,14 +2862,34 @@ class Emitter:
 					"\t}",
 					"",
 				]),
-				f"\tpub fn {_ident(base + '_extent')}(&self) -> usize {{",
-				*([f"\t\tself.{_ident(base + '_extent_at')}(0)"] if deep else [
-					f"\t\tlet at = {self._unparen(start)};",
+				*([] if deep else [
+					f"\t/// How many bytes `{placement.path}` occupies, measured",
+					"\t/// at an offset the caller already has. Summing these",
+					"\t/// forward keeps an offset chain linear; without it",
+					"\t/// `_extent` re-derived its own start and so did every",
+					"\t/// earlier member, which cost 2^k for one access",
+					"\t/// (26.555).",
+					f"\tpub fn {_ident(base + '_extent_from')}(&self, at: usize)"
+					" -> usize {",
 					"\t\tif self.bytes.len() < at {",
 					"\t\t\treturn 0;",
 					"\t\t}",
 					f"\t\t{inner} {{ bytes: &self.bytes[at..] }}.extent()",
+					"\t}",
+					"",
 				]),
+				f"\tpub fn {_ident(base + '_extent')}(&self) -> usize {{",
+				*([f"\t\tself.{_ident(base + '_extent_at')}(0)"] if deep else
+				  # The accumulating chain as statements, for `_chain_body`'s
+				  # own reason: an expression cannot hold a running total, so
+				  # every term in `_offset_expression` re-derives its start.
+				  ((chain[:-1]
+				    + [f"\t\tself.{_ident(base + '_extent_from')}(at)"])
+				   if (chain := self._chain_body(struct, placement)) is not None
+				   else [
+					f"\t\tlet at = {self._unparen(start)};",
+					f"\t\tself.{_ident(base + '_extent_from')}(at)",
+				  ])),
 				"\t}",
 				"",
 				f"\tpub fn {name}(&self) -> Result<{inner}<'_>> {{",
@@ -3271,10 +3291,34 @@ class Emitter:
 						"\t}",
 						"",
 					]),
+					# The `_from` form here too, for the same reason and
+					# because the chain site cannot tell which emitter made a
+					# member: asking the other one for a `_from` nobody wrote
+					# is what `mqtt` found at once (26.555).
+					*([] if deep else [
+						f"\tpub fn {_ident(f'{base}_extent_from')}"
+						"(&self, at: usize) -> usize {",
+						"\t\tif self.bytes.len() < at {",
+						"\t\t\treturn 0;",
+						"\t\t}",
+						f"\t\t{nested} {{ bytes: &self.bytes[at..] }}.extent()",
+						"\t}",
+						"",
+					]),
 					f"\tpub fn {_ident(f'{base}_extent')}(&self) -> usize {{",
-					(f"\t\tself.{_ident(f'{base}_extent_at')}(0)" if deep else
-					 f"\t\t{nested} {{ bytes: &self.bytes[({at})..] }}"
-					 ".extent()"),
+					*([f"\t\tself.{_ident(f'{base}_extent_at')}(0)"] if deep
+					  # The accumulating chain, not `{at}`: that is
+					  # `_offset_expression`, and every term in it re-derives
+					  # its own start. Emitting `_extent_from` and then handing
+					  # it an expression left this at 2^k with the fix present
+					  # and unused (26.555).
+					  else ((chain[:-1]
+					         + [f"\t\tself."
+					            f"{_ident(f'{base}_extent_from')}(at)"])
+					        if (chain := self._chain_body(struct, placement))
+					           is not None
+					        else [f"\t\tself."
+					              f"{_ident(f'{base}_extent_from')}({at})"])),
 					"\t}",
 					"",
 					f"\t/// {placement.path}, sized from its own contents.",
@@ -6204,6 +6248,12 @@ class Emitter:
 			base = c_name(local_name(struct, placement))
 			if depth is None or not is_recursive(self.resolved.structs,
 			                                     placement.type_name or ""):
+				# The offset the caller has accumulated. Gated on
+				# non-recursive because that is when `_extent_from` is
+				# emitted (26.555).
+				if running is not None and not is_recursive(
+						self.resolved.structs, placement.type_name or ""):
+					return f"self.{_ident(base + '_extent_from')}({running})"
 				return f"self.{_ident(base + '_extent')}()"
 			return f"self.{_ident(base + '_extent_at')}({depth})"
 		if placement.kind in ("coded", "sealed"):

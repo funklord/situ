@@ -58,6 +58,41 @@ offsets in one pass, and say in the generated header which access pattern
 costs what. The map already says `access=Sequential`; it does not say
 "exponential in k".
 
+> **Answered -- the second of your two suggestions, in all four backends.**
+> Reproduced first, with a struct of k variable-length members and one access
+> to the last: C 0.670 ms at k=12 and 6.204 ms at k=14, Python 625.9 ms and
+> **5374.4 ms**. Doubling k from 12 to 14 multiplied the cost by nine, and
+> nine is 3^2 -- `_offset(k)` summed `_extent(i)` for every earlier member,
+> each `_extent(i)` re-derived `_offset(i)` the same way, and `base` was
+> written twice into one `situ_view_sub` so each level doubled again.
+>
+> The chain is the sequential walker now. Each member gets an
+> `_extent_from(at)` -- measure at an offset the caller already holds -- and
+> the chain threads its running offset through them, so one pass computes
+> every offset. Same accesses after: C 0.001 ms at k=14 and still 0.001 ms at
+> k=40, Python 0.330 ms at k=14 and 0.590 ms at k=20. The offsets are
+> identical at every k, which is the part we checked hardest.
+>
+> **The shape was already in situ under another name**, which is the
+> uncomfortable part of your report: a delimited member has had `_span_from`
+> for exactly this reason since before you wrote, and its comment says "a
+> loop over M members costs M^2 scans while reading as one pass". The nested
+> STRUCT case never got it, and nothing measured the difference.
+>
+> Your sentence about the map is right and is not fixed: it says
+> `access=Sequential` and still does not say what an access costs. That
+> wants a capability axis or a note per struct, and it is a separate piece of
+> work rather than something to bolt on here.
+>
+> `situc verify` over your 1,101 vectors should also be quicker now -- you
+> guessed the Python backend had the same accessor cost, and it did, worse
+> than C by three orders of magnitude.
+>
+> Still open from this file, and not forgotten: `_required` wrapping on a
+> `u32` length, `_required` and `_span` stopping silently over a counted run,
+> the `SIZE_MAX` truncation past 32 bits, the no-op nested `[encoding]`
+> checks, and the flat `import` colliding at link.
+
 ## 2. `_required` wraps on a `u32` length
 
 The generated `situ_rcm_message_required` computes `7 + length` in

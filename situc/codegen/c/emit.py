@@ -6858,6 +6858,20 @@ class Emitter:
 			# branch -- its recursion is always through a run -- which is
 			# why it went unseen while the direct case worked.
 			if depth is None or not self._recursive(nested.name):
+				# The offset the caller has already accumulated, where it has
+				# one. `{site}(held)` re-derives this member's own offset by
+				# summing every earlier member's extent, and each of those did
+				# the same -- 3^k for one access (26.555). `_from` is emitted
+				# only for the non-recursive case, which is why the condition
+				# is the same one that picks the plain name.
+				# The emitter makes `_from` only for a non-recursive nested
+				# type, so the condition here has to be that one and not the
+				# branch condition above: `depth is None` is true for a
+				# RECURSIVE type too, and asking for a `_from` nobody emitted
+				# is an implicit declaration -- which `json.situ` found at
+				# once, being recursive through a run.
+				if running is not None and not self._recursive(nested.name):
+					return f"{site}_from({held}, {running})"
 				return f"{site}({held})"
 			return f"{site}_at({held}, {depth})"
 
@@ -7590,7 +7604,41 @@ class Emitter:
 			         else "(situ_view_t view)"
 			passed = f"{extent}_at(whole, depth + 1u)" if deep \
 			         else f"{extent}(whole)"
-			return [
+			# `_from` takes the offset its caller already has, which is what
+			# makes an offset chain one forward pass instead of a tree.
+			# Without it `_offset(k)` sums `_extent(i)` for every earlier
+			# member, and each `_extent(i)` re-derived `_offset(i)` -- so the
+			# cost went as 3^k and `raidcfgd` measured 3,000,000 calls and
+			# 573 ms for one decode of a struct with ten variable members
+			# (26.555). The `_from` shape is not new here: a delimited
+			# member's `_span_from` has had it for the same reason, and the
+			# comment there says "a loop over M members costs M^2 scans while
+			# reading as one pass".
+			#
+			# `base` is also hoisted into a local. The expression is a call,
+			# and writing it twice in one `situ_view_sub(view, base,
+			# remaining(limit, base), ...)` doubled the whole subtree beneath
+			# it -- the difference between 3^k and 2^k, before the `_from`
+			# form removes the exponent altogether.
+			plain = [] if deep else [
+				f"/* How many bytes `{placement.name}` occupies, measured at an",
+				" * offset the caller already knows. Summing these forward is",
+				" * what keeps an offset chain linear. */",
+				f"static inline uint32_t {site}_from(situ_view_t view,"
+				" uint32_t base)",
+				"{",
+				"\tsitu_view_t whole;",
+				"",
+				"\tif (situ_view_sub(view, base, "
+				"situ_remaining_u32(view.limit, base), &whole)"
+				" != SITU_OK) {",
+				"\t\treturn 0u;",
+				"\t}",
+				f"\treturn {extent}(whole);",
+				"}",
+				"",
+			]
+			return plain + [
 				f"/* How many bytes `{placement.name}` occupies here. The",
 				" * member after it starts at the end of this, and that was a",
 				f" * constant zero until `{nested}` stopped having one size --",
@@ -7598,16 +7646,21 @@ class Emitter:
 				f"static inline uint32_t {site}"
 				+ ("_at" if deep else "") + taken,
 				"{",
+			] + ([
+				f"\treturn {site}_from(view, {base});",
+				"}",
+			] if not deep else [
+				f"\tconst uint32_t base = {base};",
 				"\tsitu_view_t whole;",
 				"",
-				f"\tif (situ_view_sub(view, {base}, "
-				f"situ_remaining_u32(view.limit, {base}), &whole)"
+				"\tif (situ_view_sub(view, base, "
+				"situ_remaining_u32(view.limit, base), &whole)"
 				" != SITU_OK) {",
 				"\t\treturn 0u;",
 				"\t}",
 				f"\treturn {passed};",
 				"}",
-			] + ([
+			]) + ([
 				"",
 				f"static inline uint32_t {site}(situ_view_t view)",
 				"{",
@@ -7622,15 +7675,16 @@ class Emitter:
 				f"static inline situ_err_t {name}(situ_view_t view, "
 				f"situ_view_t *out{self._member_tail(struct, placement)})",
 				"{",
+				f"\tconst uint32_t base = {base};",
 				"\tsitu_view_t whole;",
 				"\tsitu_err_t  e;",
 				"",
-				f"\te = situ_view_sub(view, {base}, "
-				f"situ_remaining_u32(view.limit, {base}), &whole);",
+				"\te = situ_view_sub(view, base, "
+				"situ_remaining_u32(view.limit, base), &whole);",
 				"\tif (e != SITU_OK) {",
 				"\t\treturn e;",
 				"\t}",
-				f"\treturn situ_view_sub(view, {base}, {extent}(whole), out);",
+				f"\treturn situ_view_sub(view, base, {extent}(whole), out);",
 				"}",
 			]
 

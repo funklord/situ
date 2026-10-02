@@ -3304,6 +3304,11 @@ class Emitter:
 			name = bare_name(local_name(struct, placement))
 			if depth is None or not is_recursive(self.resolved.structs,
 			                                     placement.type_name or ""):
+				# The offset the caller has accumulated. Gated on
+				# non-recursive, which is when `_extent_from` is emitted.
+				if running is not None and not is_recursive(
+						self.resolved.structs, placement.type_name or ""):
+					return f"{name}_extent_from({running})"
 				return f"{name}_extent()"
 			return f"{name}_extent_at({depth})"
 
@@ -5150,18 +5155,32 @@ class Emitter:
 					".extent_at(depth + 1);",
 					"\t}",
 				]),
-				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
-				"\t{",
-				*([f"\t\treturn {name}_extent_at(0);"] if deep else [
+				*([] if deep else [
+					f"\t/// How many bytes `{placement.path}` occupies, measured",
+					"\t/// at an offset the caller already has. Summing these",
+					"\t/// forward keeps an offset chain linear (26.555).",
+					f"\t[[nodiscard]] std::uint32_t {name}_extent_from"
+					"(std::uint32_t at) const noexcept",
+					"\t{",
 					"\t\tsitu_view_t whole;",
 					"",
-					f"\t\tif (situ_view_sub(this->raw(), {start},",
-					f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start}),"
+					"\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\t\t\tsitu_remaining_u32(raw_.limit, at),"
 					" &whole) != SITU_OK) {",
 					"\t\t\treturn 0;",
 					"\t\t}",
 					f"\t\treturn ::{self.namespace}::{inner}(whole).extent();",
+					"\t}",
 				]),
+				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
+				"\t{",
+				*([f"\t\treturn {name}_extent_at(0);"] if deep
+				  # The accumulating chain rather than `{start}`, which is
+				  # `_offset_expression` and re-derives every term (26.555).
+				  else ((chain[:-1] + [f"\t\treturn {name}_extent_from(at);"])
+				        if (chain := self._chain_body(struct, placement))
+				           is not None
+				        else [f"\t\treturn {name}_extent_from({start});"])),
 				"\t}",
 				f"\t[[nodiscard]] ::situ::rt::err {name}"
 				f"(::{self.namespace}::{inner} &out) const noexcept",
@@ -6139,14 +6158,28 @@ class Emitter:
 					".extent_at(depth + 1);",
 					"\t}",
 				]),
+				*([] if deep else [
+					f"\t[[nodiscard]] std::uint32_t {name}_extent_from"
+					"(std::uint32_t at) const noexcept",
+					"\t{",
+					f"\t\treturn {nested}(situ_view_t{{ situ_base(raw_) + at,",
+					# A plain string, so the brace is single: `}}` is an
+					# f-string's escape and this line has nothing to
+					# interpolate. Splitting the original f-string here is
+					# what put a literal `}}` in the header.
+					"\t\t\traw_.limit - at, raw().generation,"
+					" raw().owner }).extent();",
+					"\t}",
+				]),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
 				"\t{",
-				*([f"\t\treturn {name}_extent_at(0);"] if deep else [
-					f"\t\treturn {nested}(situ_view_t{{ situ_base(raw_)"
-					f" + ({start}),",
-					f"\t\t\traw_.limit - ({start}), raw().generation, raw().owner }})"
-					".extent();",
-				]),
+				*([f"\t\treturn {name}_extent_at(0);"] if deep
+				  # The accumulating chain rather than `{start}`, which is
+				  # `_offset_expression` and re-derives every term (26.555).
+				  else ((chain[:-1] + [f"\t\treturn {name}_extent_from(at);"])
+				        if (chain := self._chain_body(struct, placement))
+				           is not None
+				        else [f"\t\treturn {name}_extent_from({start});"])),
 				"\t}",
 				*self._nested_accessor(name, nested, f"({start})",
 				                       f"{name}_extent()"),

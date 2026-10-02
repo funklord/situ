@@ -3908,17 +3908,37 @@ class Emitter:
 					f"\t\treturn {nested}(self._msg, start,",
 					f"\t\t\tself._len - ({start}))._extent_at(depth + 1)",
 				]),
+				*([] if deep else [
+					"",
+					f"\tdef {name}_extent_from(self, start: int) -> int:",
+					f'\t\t"""How many bytes {placement.path} occupies, measured',
+					"\t\tat an offset the caller already has.",
+					"",
+					"\t\tSumming these forward is what keeps an offset chain",
+					"\t\tlinear. Without it `_extent` re-derived its own",
+					"\t\tstart, and each earlier member did the same, so one",
+					'\t\taccess cost 3**k (26.555)."""',
+					f"\t\treturn {nested}(self._msg, self._at + start,",
+					"\t\t\tself._len - start)._extent",
+				]),
 				"", "\t@property",
 				f"\tdef {name}_extent(self) -> int:",
 				f'\t\t"""How many bytes {placement.path} occupies here.',
 				"",
 				"\t\tRead from the bytes: the member has no one size, and",
 				'\t\tneither does the offset of whatever follows it."""',
-				*([f"\t\treturn self.{name}_extent_at(0)"] if deep else [
-					f"\t\tstart = self._at + ({start})",
-					f"\t\treturn {nested}(self._msg, start,",
-					f"\t\t\tself._len - ({start}))._extent",
-				]),
+				*([f"\t\treturn self.{name}_extent_at(0)"] if deep else
+				  # The accumulating chain as STATEMENTS, not
+				  # `_offset_expression`. C reaches its own `_offset`
+				  # FUNCTION here, which accumulates, and that is why C went
+				  # linear while this stayed at 2**k: an expression cannot
+				  # hold a running total, so every term in it re-derived its
+				  # own start (26.555). `_chain_body` is that sum already,
+				  # and now that its terms use `_extent_from` it is one
+				  # forward pass.
+				  ((chain[:-1] + [f"\t\treturn self.{name}_extent_from(at)"])
+				   if (chain := self._chain_body(struct, placement)) is not None
+				   else [f"\t\treturn self.{name}_extent_from({start})"])),
 				"",
 				"\t@property",
 				f"\tdef {name}(self) -> {nested}:",
@@ -5764,6 +5784,15 @@ class Emitter:
 			name = py_name(local_name(struct, placement))
 			if depth is None or not is_recursive(self.resolved.structs,
 			                                     placement.type_name or ""):
+				# The offset the caller has accumulated, where it has one.
+				# `_extent` re-derives this member's own start by summing
+				# every earlier extent, and each of those did the same --
+				# 3**k for one access, measured at 5.4 SECONDS for k=14
+				# before this (26.555). Gated on non-recursive because that
+				# is the condition the `_from` method is emitted under.
+				if running is not None and not is_recursive(
+						self.resolved.structs, placement.type_name or ""):
+					return f"self.{name}_extent_from({running})"
 				return f"self.{name}_extent"
 			return f"self.{name}_extent_at({depth})"
 
