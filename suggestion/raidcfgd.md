@@ -110,3 +110,49 @@ An encoder for variable-length structs. The hand-written one, decoding its
 own output before it returns and verified by `situc verify`, is the honest
 shape for a consumer that owns its model in C++; what it needs from situ is
 a reader it can trust and a verifier it can run, and it has both.
+
+## `/usr/bin/situ-edit` cannot import its own modules, 2026-10-02
+
+**Measured here, reported rather than fixed, and it is a packaging question
+rather than a bug in the editor.** The copy on this machine's `PATH` exits
+before reading anything:
+
+    $ situ-edit wire/message.situ status.bin --struct message
+    ModuleNotFoundError: No module named 'editor'
+
+**Why.** The script computes `HERE = Path(__file__).resolve().parent.parent`
+and puts it on `sys.path`. From `<situ>/bin/situ-edit` that is `<situ>`, where
+`editor/text.py` lives. From `/usr/bin/situ-edit` it is `/usr`, and
+`/usr/editor/` does not exist. So a copy of `bin/situ-edit` placed in a `bin`
+directory is broken by construction, and nothing says so until it runs.
+
+**Run from situ's own checkout it works perfectly**, which is how this was
+diagnosed rather than guessed:
+
+    $ python3 /home/funk/src/situ/bin/situ-edit wire/message.situ \
+        status.bin --struct message
+    message  3088 bytes
+         0 +  1  version                  1
+         1 +  1  kind                     2
+         2 +  1  verb                     2
+         3 +  4  length                   3081
+         7 +3081  body                     03000000006abf07f1...
+
+**Why raidcfgd cares.** Its README documents that pair of lines as the way to
+read a reading's bytes without its own program -- one for the envelope, one
+for the snapshot after `tail -c +8` -- and the recipe is now how a remote
+reading fetched by `raidtray-bridge --ask --raw` is decoded. The README says
+so, and names the checkout requirement, so the recipe is runnable as written.
+
+**Ours is the observation; the remedy is yours**, and there seem to be at
+least three: find the modules by an installed package name rather than by
+path, refuse with a sentence naming the expected layout when the import
+cannot resolve, or state that these are checkout tools and not meant for a
+`bin` directory. raidcfgd has no view on which.
+
+**What this is not.** Not a claim that situ installed it there. How
+`/usr/bin/situ-edit` arrived was not established; what was measured is that
+it is **byte-for-byte your `bin/situ-edit`** -- same md5, `cmp` silent -- and
+is root-owned and dated 2026-08-05. So it is a copy rather than an installed
+entry point, and whoever made the copy may be the finding rather than the
+script.
