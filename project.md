@@ -31304,6 +31304,98 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.558 A size bound wider than the type carrying it, in six places
+
+**`raidcfgd` reported one constant and the class reaches six
+implementations.** Their line:
+
+    #define RCS_SNAPSHOT_SIZE_MAX   9758327360018u
+
+A tree with `[max]` on every count and string has a computable maximum and
+nothing says it is a 32-bit number. Theirs is about 10^13; a million leaves
+of a megabyte each reaches 10^12, which is 233 times what `view.limit`
+holds. **The arithmetic was right and publishing it beside a 32-bit API was
+not** -- their consumer assigned it to a `uint32_t` and truncated in
+silence.
+
+**The macro is withheld now rather than emitted wide**, in the same shape
+as the comment a struct nothing bounds already gets, with the true bound
+named in the comment. A reference then fails to compile, which is the whole
+improvement: a loud failure in place of a quiet wrong answer. Nothing can
+be done about `uint32_t cap = SITU_X_SIZE_MAX;` while the macro exists, and
+the one thing that can is to not define it.
+
+**The half nobody had looked at is the COMPARISON against it, and the
+compiler had been saying so.** `if (view.limit > SITU_CAPPED_SIZE_MAX)` is
+a condition GCC proves false:
+
+    error: comparison is always false due to limited range of data type
+           [-Werror=type-limits]
+
+`-Wextra` turns that on and situ's own test flags make it an error, so
+**situc emitted C that situc's own gate would not compile** -- for a schema
+nobody in the corpus had written. A check that cannot fire is worse than
+none, being quoted afterwards as though it had fired.
+
+**Four backends, and two of them were not forced.** C and C++ had to change
+or stop compiling. Python's integers would compare the bound happily, and
+Rust's `usize` does on a 64-bit target and warns *comparison is useless due
+to type limits* on a 32-bit one -- an error under `-D warnings`. All four
+drop it and all four say so in a comment, because one wire contract
+refusing the same frames in four languages is worth more than a cap
+enforced in two of them.
+
+**And then the walkers, which is where it stopped being cosmetic.** Both
+compute the capped member's reach as `offset_bits + size_max_bits`, and
+`NONE` is a sentinel rather than a number. A cap after a member the data
+sizes -- `u16 len; u8 v[len]; u8 tail[remaining] max 470` -- has a
+data-decided offset, so the sum is `0xFFFFFFFF + 3760`:
+
+    len     valid?   C walker   Python walker
+    100     yes      OK         OK
+    471     yes      BOUNDS     OK
+    472     yes      BOUNDS     OK
+    600     no       BOUNDS     OK
+
+**One missing condition, two walkers wrong in opposite directions.** C's
+`uint32_t` wrapped the sum to 470 and refused valid 471-byte messages;
+Python's arbitrary precision made the same line vacuous and accepted
+everything. Neither had a case in the corpus, because no schema in it caps
+a run that follows a variable member.
+
+**The Python half of that guard changes no verdict, and this is measured
+rather than assumed**: removed, the suite stays green. It is there so the
+two walkers share one condition instead of agreeing by accident, which is
+how they came to differ. Claiming a test for it would be the vacuous pass
+one level up.
+
+**Controls.** The shared predicate neutered fails both new tests through
+their own assertions. Each backend's branch disabled on its own fails
+naming that backend -- four controls, because a single one over four passes
+while three are wrong. The C walker's guard removed fails on the new table
+row's first case, at the assertion comparing the two walkers rather than at
+the one comparing against the expected verdict. And the compile test fails
+with `-Werror=type-limits` on the generated `unit.c`, which is the defect
+in the compiler's own words.
+
+**What is NOT fixed, and it is the design question underneath all of it.**
+Comparing a frame length against the struct's whole maximum is a weak proxy
+for *the capped run is within its cap*: it is exact when everything before
+the run is fixed-size, and it is what makes the bound unreachable once
+anything before it is large. A frame of 7 bytes whose 5-byte tail breaks a
+`max 4` is accepted by all six readers, and that is pinned in the walker
+table rather than left to be discovered. The sharp check is `frame_length -
+offset_of(capped_member) > cap`, which is enforceable at any size and for
+any shape -- and it is a change to what 0059 settled, so it is the
+holder's. The image would need the struct's own maximum for the walkers to
+do even the weak version, and it carries only `size_bits`.
+
+**A second vacuous check met on the way and deliberately not taken.** `u32
+n [max = 4294967295]` emits `if (situ_capped_n_get(view) > 4294967295)`,
+which is the same `-Wtype-limits` error from a different cause: a declared
+bound at the type's own ceiling. The fixture here was rewritten to avoid it
+so the two stay separable, and it wants its own entry.
+
 ### 26.557 A counted run stopped at the buffer and called it complete
 
 **Ten bytes declaring five elements read as a whole message.** Reported by
