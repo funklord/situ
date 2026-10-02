@@ -31304,6 +31304,67 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.551 The lens swept out: four clean, and my own witness was the wrong one
+
+**The lens of 26.548 to 26.550 -- a transform or a guard naming fewer
+members of a population than the AST carries -- is swept out.** It found
+nine faults across those entries and the probes below find nothing, which
+is worth recording because the next reader should not re-run them.
+
+**`unparse`, clean, and the reason is already written down.** The audit
+says `Tlv 3/11` and `Indexed 4/5`, and both are false positives of the same
+mechanism: `unparse` renders a `tlv` as its raw `args`, and the parser
+recomputes `unknown`, `duplicates`, `ordered`, `wire_types`, `tag_decode`,
+`value_size`, `known` and `identity` from them. 26.144's grammar checklist
+states that already -- *a field the parser DERIVES from something the
+unparser prints cannot be dropped* -- and it names the same eight.
+
+**`_rewrite_expr`, clean, and the four it does not name are literals.**
+`CharLiteral`, `IntLiteral`, `StringLiteral` and `Remaining` hold a value
+and no name, so returning them unchanged is correct rather than an
+omission.
+
+**`nested()`, clean, and complete by construction.** All five member
+containers -- `PositionalBlock`, `Authenticated`, `Coded`, `Sealed`,
+`Indexed` -- plus `Variant`. The three nodes it skips carry a `members`
+field and are DECLARATIONS, and `nested` takes a member, so they are
+correctly outside it; an enum's `members` are arms and a different thing
+wearing the same name.
+
+**The backends, MIS-AIMED, and the tell was the uniformity.** Asking which
+`ast` member classes each emitter names returned `NO` for all thirteen
+kinds in all four backends. A verdict uniform across an entire population
+is 26.546's fourth instrument fault again: the emitters work from resolved
+`Placement`s with a `kind` string and never touch the AST classes, so the
+probe could not have answered anything. And the shape does not transfer --
+an emitter is EXPECTED to special-case a kind, so a kind it does not name
+is not evidence of a gap the way an unrewritten field is.
+
+**And the sweep's own instrument was the wrong one, which is the part worth
+keeping.** My first round-trip verdict for `Tlv` and `Indexed` compared
+`dump(first)` against `dump(again)` -- and `dump.py` is not generic:
+
+    Field 5/13    Reserved 3/6    Coded 5/7    Sealed 4/6
+    TagField 7/8  Tlv 8/11        Indexed 4/5  StructDecl 3/4
+
+It never mentions `until`, `args`, `peek`, `radix`, `located`, `skip`,
+`repeat`, `prefix` or `register`. **So a round trip that lost `args` --
+which is exactly where a `tlv`'s item grammar lives -- would have passed my
+check.** The verdict was right and the witness could not have told me.
+
+`test_examples.py` exists for precisely this and says so: its
+`_without_spans` walks the dataclasses generically, *deliberately not
+`dump` and deliberately sharing no code with `unparse`*, because the dump
+comparison *agreed with it wherever both were silent* and **ten dropped
+fields went unseen**. So the sound verdict was already in the suite and
+green; I reached for the instrument that test was written to replace.
+
+**`dump`'s incompleteness is a view rather than a witness**, which is how
+that file treats it -- *dump renders what someone taught it to render* --
+and is recorded here rather than fixed. `situc dump-ast` shows a reader
+less than the tree holds, and whether that matters is a question about the
+command rather than about correctness.
+
 ### 26.550 One of the Tlv branch's eight, and seven that needed nothing
 
 **`_rewrite_member`'s `Tlv` branch set 2 of 10 fields, and exactly one of
