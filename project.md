@@ -31304,6 +31304,65 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.554 Three of the four installed programs could not start
+
+**`make install` ships four programs and three of them exited 1 before
+reading anything.** Reported by `raidcfgd` on 2026-10-02 against
+`/usr/bin/situ-edit`, which its own README documents as the way to read a
+reading's bytes:
+
+    ModuleNotFoundError: No module named 'editor'
+
+**Their caution was right to be cautious and the answer is worse than they
+assumed.** The report said carefully that it was *not a claim that situ
+installed it there*, having measured only that the copy was byte-for-byte
+`bin/situ-edit`. **The Makefile installs it, at line 267** -- so the finding
+is not whoever made a copy, it is this project's own install target. Staged
+into a throwaway prefix and run: `situ-edit`, `situ-edit-tui` and
+**`situ-walk`** all fail, the last of which the report had no reason to try.
+
+**`situc` is the one that works, and it has had the answer all along.** Its
+`package_root()` tries `<parent>` and `<parent>/lib` and accepts a candidate
+only if the module file is really there. The other three took
+`__file__.resolve().parent.parent` and stopped.
+
+    the tree       <tree>/bin/situ-edit    ->  <tree>/editor        found
+    installed      /usr/bin/situ-edit      ->  /usr/editor          absent
+    actually at                                /usr/lib/editor
+
+**The modules were never missing -- the path was off by exactly the `lib`
+component `situc` already handled.** Fixed by giving all three the same
+resolution, which is two of the three remedies the report offered at once:
+try both layouts, and when neither has it refuse with a sentence naming
+where it looked. Their third -- declare these checkout-only -- is the one
+not taken, because the install target ships them and a program on `PATH`
+that cannot run is worse than one that is not there.
+
+**And the fix broke something the report could not have seen.** `situ-edit`
+used that same wrong `HERE` to locate the `situc` BINARY, where it was
+accidentally correct: `/usr` plus `bin/situc` is `/usr/bin/situc`. Removing
+`HERE` for the import left a `NameError` at the one line that used it, and
+**only running the installed copy on a real message found it** -- `--help`
+exits before `main`. It resolves `situc` beside itself now, which is right
+in the tree, installed, and through a symlink in `~/.local/bin`.
+
+**The test's first version could not fail, and the reason is this session's
+own lesson arriving once more.** It asserted the absence of a
+`ModuleNotFoundError` and of a traceback -- and the fix adds a DIAGNOSTIC as
+well as the resolution, so a script that found nothing and said so politely
+passed. Measured: with `parent.parent` restored, all four tests stayed
+green. It asserts a positive marker now, text only reachable after the
+imports succeed, and then three of the four go red on the old code with
+`situc` passing as the control.
+
+**Why no check caught this.** `test_every_installed_path_belongs_to_exactly
+_one_package` reads the Makefile's install lines and agrees they are
+packaged; nothing ran one. The new test builds the installed LAYOUT --
+script in `<tmp>/bin`, packages symlinked under `<tmp>/lib` -- rather than
+invoking `make install`, so it is fast enough to keep and still the only
+shape that fails on the old code. **A test that ran these from the tree
+would pass against the bug**, which is exactly what every existing one did.
+
 ### 26.553 Half the reserved policy reached the wire signature
 
 **`[preserve]` and `[unknown]` decide whether a message is VALID and the
