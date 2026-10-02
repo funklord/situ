@@ -12,12 +12,45 @@ than a matter of opinion (26.33, decision 0026 as amended).
 import sys
 from pathlib import Path
 
-_here = Path(__file__).resolve().parent
-if (_here.parent / "walker" / "__init__.py").exists():
-	sys.path.insert(0, str(_here.parent))
 
-from walker.image import ImageError, load          # noqa: E402
-from walker.report import listing                  # noqa: E402
+def _package_root() -> "Path | None":
+	"""Where `import walker` works from, or None.
+
+	Two candidates, and the same two `bin/situc` has checked all along: in
+	the tree this script is `<tree>/bin/situ-walk` and the package is
+	`<tree>/walker`, while `make install` puts the script in
+	`<prefix>/bin` and the package in `<prefix>/lib/walker`. The earlier
+	version took `parent.parent` and stopped, so from `/usr/bin/situ-walk` it
+	looked in `/usr/walker` and found nothing -- every installed copy
+	broken by construction, reported by `raidcfgd` on 2026-10-02 after its
+	README had documented the command (26.554).
+
+	Symlinks resolve first, so a link in `~/.local/bin` still finds the tree
+	it points into. The candidate is accepted only if the package's
+	`__init__.py` is actually there, which is what separates "not installed"
+	from "installed somewhere else".
+	"""
+	here = Path(__file__).resolve().parent
+	for candidate in (here.parent, here.parent / "lib"):
+		if (candidate / "walker" / "__init__.py").is_file():
+			return candidate
+	return None
+
+
+_root = _package_root()
+if _root is not None and str(_root) not in sys.path:
+	sys.path.insert(0, str(_root))
+
+try:
+	from walker.image import ImageError, load	# noqa: E402
+	from walker.report import listing		# noqa: E402
+except ImportError as _why:			# pragma: no cover - a layout fault
+	sys.stderr.write(
+		f"situ-walk: cannot find the walker package ({_why}).\n"
+		"       Expected it beside this script as <dir>/../walker, or\n"
+		"       installed as <prefix>/lib/walker. Run it from situ's\n"
+		"       source tree, or `make install` and run the installed copy.\n")
+	raise SystemExit(1)
 
 
 def main(argv: list[str]) -> int:

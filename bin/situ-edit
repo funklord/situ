@@ -18,12 +18,53 @@ import argparse
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent
-if str(HERE) not in sys.path:
-	sys.path.insert(0, str(HERE))
+def _package_root() -> Path | None:
+	"""Where `import editor` and `import walker` work from, or None.
 
-from editor.text import as_json, open_from, render	# noqa: E402
-from walker.walk import Refused			# noqa: E402
+	Two candidates, and the same two `bin/situc` has checked all along: in
+	the tree this script is `<tree>/bin/situ-edit` and the packages are
+	`<tree>/editor` and `<tree>/walker`, while `make install` puts the script
+	in `<prefix>/bin` and both packages in `<prefix>/lib`. The earlier version
+	took `parent.parent` and stopped, so from `/usr/bin/situ-edit` it looked in
+	`/usr/editor` and found nothing -- **every installed copy broken by
+	construction**, reported by `raidcfgd` on 2026-10-02 after its README had
+	documented the command (26.554).
+
+	Symlinks resolve first, so a link in `~/.local/bin` still finds the tree
+	it points into. A candidate counts only if the package's `__init__.py` is
+	really there, which separates "not installed" from "installed elsewhere".
+	"""
+	here = Path(__file__).resolve().parent
+	for candidate in (here.parent, here.parent / "lib"):
+		if (candidate / "editor" / "__init__.py").is_file():
+			return candidate
+	return None
+
+
+#: The `situc` binary, which `open_from` runs to pack the schema into an
+#: image. Always beside this script -- `<tree>/bin/situc` in the tree and
+#: `<prefix>/bin/situc` installed -- which is what the old `HERE / "bin" /
+#: "situc"` computed correctly in both layouts and is the one thing it got
+#: right. Resolving the symlink first means a link in `~/.local/bin` finds
+#: the `situc` of the tree it points into rather than one on PATH.
+_SITUC = Path(__file__).resolve().parent / "situc"
+
+
+_root = _package_root()
+if _root is not None and str(_root) not in sys.path:
+	sys.path.insert(0, str(_root))
+
+try:
+	from editor.text import as_json, open_from, render	# noqa: E402
+	from walker.walk import Refused			# noqa: E402
+except ImportError as _why:			# pragma: no cover - a layout fault
+	sys.stderr.write(
+		f"situ-edit: cannot find situ's editor packages ({_why}).\n"
+		"       Expected them beside this script as <dir>/../editor and\n"
+		"       <dir>/../walker, or installed as <prefix>/lib/editor and\n"
+		"       <prefix>/lib/walker. Run it from situ's source tree, or\n"
+		"       `make install` and run the installed copy.\n")
+	raise SystemExit(1)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -97,7 +138,7 @@ def apply_edits(document: object, assignments: list[str],
 def main() -> int:
 	args = build_parser().parse_args()
 	try:
-		document = open_from(args.schema, args.message, HERE / "bin" / "situc",
+		document = open_from(args.schema, args.message, _SITUC,
 		                     args.struct, args.hex)
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)

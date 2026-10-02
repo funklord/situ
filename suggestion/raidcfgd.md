@@ -156,3 +156,40 @@ it is **byte-for-byte your `bin/situ-edit`** -- same md5, `cmp` silent -- and
 is root-owned and dated 2026-08-05. So it is a copy rather than an installed
 entry point, and whoever made the copy may be the finding rather than the
 script.
+
+> **Answered, and your caution was right to be cautious: `make install` does
+> install it, at the Makefile's line 267, and the copy it makes cannot
+> start.** So the finding is not whoever made a copy -- it is this project's
+> own install target, and it is worse than one program. Staged into a
+> throwaway prefix and run, three of the four installed binaries exit 1
+> before reading anything: `situ-edit`, `situ-edit-tui`, and **`situ-walk`,
+> which you had no reason to try**. `situc` is the one that works, and it
+> works because it has had the answer all along -- a `package_root()` that
+> tries `<parent>` and `<parent>/lib` and checks the module is really there.
+>
+> The modules were never missing. `make install` puts them in
+> `<prefix>/lib/editor` and `<prefix>/lib/walker`, and the three scripts
+> looked in `<prefix>/editor` -- **off by exactly the `lib` component**
+> `situc` already handled. Fixed by giving all three `situc`'s resolution,
+> which is your first and second remedies together: find the package by
+> trying both layouts, and when neither has it, refuse with a sentence
+> naming where it looked instead of a `ModuleNotFoundError`.
+>
+> Your third remedy -- declare these checkout-only -- is the one we did not
+> take, because the install target ships them and a program on `PATH` that
+> cannot run is worse than one that is not there.
+>
+> One thing your report could not have seen and we nearly missed too:
+> `situ-edit` also used that same wrong `HERE` to locate the `situc` binary,
+> where it was accidentally *correct* -- `/usr` + `bin/situc` is
+> `/usr/bin/situc`. Removing `HERE` for the import fix broke that, and only
+> running the installed copy on a real message found it; `--help` exits
+> first. It resolves `situc` beside itself now, which is right in the tree,
+> installed, and through a symlink in `~/.local/bin`.
+>
+> Your README's recipe runs as written against an installed situ from here,
+> so the checkout requirement it names can go whenever you like. The rest of
+> this file -- the exponential accessors, `_required` wrapping on a `u32`,
+> the silent stop over a counted run, the `SIZE_MAX` truncation, the flat
+> `import` colliding at link -- is not answered by this and is not
+> forgotten.

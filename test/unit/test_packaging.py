@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -279,3 +282,68 @@ def test_the_package_declares_the_python_floor_the_project_declares() -> None:
 	# version. Nothing checked this while the two floors lived in separate
 	# files.
 	assert f"python3 (>= {found.group(1)})" in source()["Build-Depends"]
+
+
+#: Each installed program, and the packages it needs on `sys.path`. `situc`
+#: is here as the control: it has had the two-candidate resolution all along,
+#: and the other three had `parent.parent` and stopped (26.554).
+#: `started` is text only reachable AFTER the imports succeed, which is what
+#: makes this discriminating. Asserting the absence of a traceback is not
+#: enough: the fix adds a diagnostic as well as the resolution, so a script
+#: that found nothing and said so politely passed that version of this test.
+INSTALLED_PROGRAMS = {
+	"situc":         (("situc",), "usage: situc"),
+	"situ-walk":     (("walker",), "situ-walk: answer questions about bytes"),
+	"situ-edit":     (("editor", "walker"), "usage: situ-edit"),
+	"situ-edit-tui": (("editor", "walker"), "usage: situ-edit-tui"),
+}
+
+
+@pytest.mark.parametrize("program", sorted(INSTALLED_PROGRAMS))
+def test_an_installed_program_finds_its_modules(program: str,
+		tmp_path: Path) -> None:
+	"""`make install` shipped four programs and three could not start.
+
+	The layout it creates is `<prefix>/bin/<program>` with the packages under
+	`<prefix>/lib/`, and `situ-edit`, `situ-edit-tui` and `situ-walk` put
+	`__file__.parent.parent` on `sys.path` -- which is `<prefix>`, where
+	`<prefix>/editor` does not exist. So every installed copy was broken by
+	construction and nothing said so until it ran: `ModuleNotFoundError: No
+	module named 'editor'`, exit 1, before reading anything.
+
+	`raidcfgd` reported it on 2026-10-02 against `/usr/bin/situ-edit`, having
+	documented the command in its own README, and was careful to say it was
+	not claiming situ installed it there. `make install` does, at line 267,
+	and it ships `situ-walk` too -- which that report had no reason to try.
+
+	This builds the installed layout rather than running `make install`: the
+	script copied to `<tmp>/bin` and the packages symlinked under `<tmp>/lib`,
+	which is the shape the Makefile creates and the one that was broken. A
+	test that ran it from the tree would pass against the old code.
+	"""
+	prefix = tmp_path / "prefix"
+	(prefix / "bin").mkdir(parents=True)
+	(prefix / "lib").mkdir()
+	shutil.copy2(ROOT / "bin" / program, prefix / "bin" / program)
+	# `situ-edit` runs `situc` to pack the schema, and finds it beside itself.
+	shutil.copy2(ROOT / "bin" / "situc", prefix / "bin" / "situc")
+	packages, started = INSTALLED_PROGRAMS[program]
+	for package in packages:
+		(prefix / "lib" / package).symlink_to(ROOT / package)
+
+	ran = subprocess.run([sys.executable, str(prefix / "bin" / program),
+	                      "--help"],
+	                     capture_output=True, text=True, timeout=120)
+	# Not the exit status: `situ-walk` answers `--help` with its own usage and
+	# exit 2, which is its business. What must not happen is failing to find
+	# its own modules.
+	output = ran.stdout + ran.stderr
+	# The positive condition first, because it is the one that discriminates.
+	assert started in output, (
+		f"{program} did not get past its imports from an installed prefix; "
+		f"expected {started!r} in:\n" + output[:400])
+	assert "ModuleNotFoundError" not in output, (
+		f"{program} cannot import its modules from an installed prefix:\n"
+		+ output[:400])
+	assert "Traceback" not in output, (
+		f"{program} crashed from an installed prefix:\n" + output[:400])
