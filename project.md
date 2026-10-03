@@ -31304,6 +31304,95 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.562 A generated name the runtime already had, and a wrong fix
+
+**`struct bounds` emits a header that does not compile**, and the module
+whose job is to prevent exactly this describes the symptom in its opening
+paragraph:
+
+    error: conflicting types for `situ_bounds_check';
+           have situ_err_t(situ_view_t, uint32_t *)
+    note: previous definition with type
+           situ_err_t(situ_view_t, uint32_t, uint32_t)
+
+`situ/codegen/c/names.py` opens *the first sign of it is the C compiler
+rejecting generated code, with a diagnostic that names a function nobody
+wrote and no source location in the schema at all* -- which is word for
+word what this produces. Its check covers two CONSTRUCTS flattening to one
+identifier. A construct colliding with the RUNTIME is the same hazard with
+the same symptom, and nothing looked. **Third time in this session that a
+check named part of its population** (26.559, 26.560).
+
+**Two struct names, measured by compiling rather than derived and
+believed:** `bounds` and `view`. `base` and `scan` are clean.
+
+**And the obvious fix is wrong, which is the part worth keeping.** That
+check compares STEMS and deliberately keeps no list of suffixes -- its own
+comment says so, *checking stems needs no list of the suffixes in use,
+which is what keeps this from going stale when a phase adds another one*.
+So the natural widening is "a stem that prefixes a runtime symbol".
+Measured:
+
+    struct msg     situ_msg_init, situ_msg_touch, ...     compiles
+    struct bits    situ_bits_get_lsb, situ_bits_set_ne    compiles
+    struct digits  situ_digits_canonical, _minimal        compiles
+    struct leaf    situ_leaf_i64, situ_leaf_u64           compiles
+    struct ascii   situ_ascii_valid, situ_ascii_fold      compiles
+    struct utf8    situ_utf8_valid                        compiles
+    struct bcd     situ_bcd_decode, _encode, _valid       compiles
+
+**Seven working schemas refused to catch two broken ones.** A gate with
+that ratio acquires an ignore list and stops being a gate, which
+`evidence.md` names. The stem check cannot answer this question at all:
+`situ_bounds` collides with nothing and `situ_bounds_check` collides with
+the runtime.
+
+**So the check reads the emitted text**, and that is not belt-and-braces
+either. `ident()` is not a chokepoint for final names -- `_extent_from` and
+`_span_from` are built by appending to its result, so a membership test
+inside `ident()` cannot see them. Reading what was produced cannot miss a
+name however it was assembled, which is `evidence.md`'s *check the
+artifact, not a fresh measurement of where it came from* applied to a
+generator's own output.
+
+**One reader for two jobs.** `defined_symbols` scans generated text for the
+check and scans `runtime/c/situ.h` for the drift test, so the carried list
+and the header cannot disagree about what counts as a definition -- two
+regexes over two files is how a list and the thing it mirrors stop
+matching. The list is carried rather than read at generation time because
+the header installs to `<prefix>/include/situ.h`, which situc would have to
+guess, and a generator that needs its own runtime on disk fails wherever
+the two are packaged apart.
+
+**Run against the corpus before being added: 5035 distinct generated
+symbols across 84 files, no collision.** So it refuses nothing anybody has
+written, and the extractor was exercised on a real population rather than
+on two fixtures. All 42 schemas still generate through the real code path.
+
+**Refused rather than mangled, and the alternative had a precedent to
+answer.** `bare_name` mangles a keyword with a trailing underscore, and
+0025 argues for mangling because the schema keeps its name. Here the schema
+would keep its name and every caller would pay: `situ_bounds_check_` is a
+public symbol differing from every other struct's for a reason a reader
+cannot see. The diagnostic names the construct, the symbol, where the
+runtime's lives, and two remedies -- and the `--prefix` remedy was compiled
+before being advised, because advice in a diagnostic is a claim.
+
+**C only, checked rather than assumed**: the same schema generates C++ that
+compiles, class scope keeping `situ::bounds::check` apart from
+`situ_bounds_check`.
+
+**Three controls, and the second one did not land the first time.** The
+check disabled: both colliding cases report DID NOT RAISE. The list's entry
+removed: the same, plus the drift test's frozensets differ. The reader made
+vacuous: the non-vacuity test fails on *a static inline*, which is there
+because two empty sets are equal and the drift test alone cannot say the
+reader read anything. The middle one's first attempt asserted on
+`"situ_bounds_check", ` with a trailing space, the literal wraps at a line
+end, the assertion fired, and **the suite passed with no sabotage applied**
+-- the fourth time this session that a sabotage has had to be read rather
+than counted.
+
 ### 26.561 `access=Sequential` names a class and reads like a constant
 
 **Settled as 0060, and `raidcfgd` had pointed at the right axis.** Their
