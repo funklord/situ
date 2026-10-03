@@ -8,6 +8,8 @@ refusing a cycle.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -542,3 +544,171 @@ def test_the_image_carries_the_trim_set_per_member(tmp_path: Path) -> None:
 
 	view = acquire(image, b" hi ,X", shape)
 	assert report._trim_span(view, index, 4) == (0, 4)
+
+
+#: A shared type, and two schemas that each import it. The shape `raidcfgd`
+#: reported: `common.situ` holds `str`, their envelope and their snapshot both
+#: import it, and a program holding both would not link (26.559).
+COMMON   = BUFFER + "struct str {\n\tu16 len [max = 255];\n\tu8 v[len];\n}\n"
+IMPORTER = (BUFFER + 'import "common.situ";\n\n'
+            "struct %s {\n\tu8 kind;\n\tstr name;\n}\n")
+
+#: The same flags the generated-code suites compile with. A header that needs
+#: a relaxed warning set is one nobody can put in a build.
+LINK_WARNINGS = ("-std=c11", "-O1", "-Wall", "-Wextra", "-Werror")
+
+
+def _emit_c(tmp_path: Path, stem: str) -> tuple[str, str]:
+	"""Generate one of the importing schemas, reading it off disk.
+
+	Off disk rather than from a string, because `import` is resolved relative
+	to the importing file's directory and a schema parsed from a string has
+	none -- which is 17.0a's own rule meeting this test.
+	"""
+	from situc.codegen.c import generate as generate_c
+
+	schema   = load(tmp_path / f"{stem}.situ")
+	resolved = resolve(schema, solve(schema))
+	built    = generate_c(schema, resolved, stem)
+	return built.header, built.source
+
+
+def _two_importers(tmp_path: Path) -> None:
+	write(tmp_path, "common.situ", COMMON)
+	write(tmp_path, "snapshot.situ", IMPORTER % "snapshot")
+	write(tmp_path, "message.situ", IMPORTER % "message")
+
+
+def test_an_imported_struct_is_checked_without_an_external_symbol(
+		tmp_path: Path) -> None:
+	"""Its `check` and `validate` are `static inline` in the header.
+
+	Two schemas importing one file emit the same names for the type they
+	share, so external linkage makes a program holding both fail to link --
+	`multiple definition of situ_str_check`, which is what `raidcfgd`
+	reported. One copy per translation unit is what the rest of this header
+	already does for every accessor.
+
+	The struct the schema OWNS is the control, and it is the half that says
+	this is about provenance rather than about turning the linkage off: its
+	pair stays external, in the `.c`, where this translation unit is its
+	definition.
+	"""
+	_two_importers(tmp_path)
+	header, source = _emit_c(tmp_path, "snapshot")
+
+	assert "static inline situ_err_t situ_str_check" in header
+	assert "static inline situ_err_t situ_str_validate" in header
+	assert "situ_str_check" not in source, \
+		"the imported struct is still defined with external linkage"
+
+	# The owning schema's own struct, unchanged: declared in the header,
+	# defined in the source.
+	assert "situ_err_t situ_snapshot_check(situ_view_t view, uint32_t *which);" \
+		in header
+	assert "static inline situ_err_t situ_snapshot_check" not in header
+	assert "situ_err_t situ_snapshot_check(situ_view_t view, uint32_t *which)" \
+		in source
+
+
+@pytest.mark.skipif(shutil.which("cc") is None and shutil.which("gcc") is None,
+                    reason="no C compiler")
+def test_two_schemas_importing_one_file_link_together(tmp_path: Path) -> None:
+	"""The reported failure, reproduced and then not reproducing.
+
+	A structural assertion cannot see this: the names could be right and the
+	linkage wrong in some way nobody predicted, and what a consumer meets is
+	the linker. So both pairs are compiled and linked into one program, with
+	a consumer translation unit per header that CALLS the shared type's check
+	-- because a program that merely holds both objects would link even if
+	the imported API had been made unreachable, which is the way a fix for
+	this could be wrong.
+	"""
+	compiler = shutil.which("gcc") or shutil.which("cc")
+	assert compiler is not None
+
+	_two_importers(tmp_path)
+	runtime = Path(__file__).resolve().parents[2] / "runtime" / "c"
+	sources = [str(runtime / "situ.c")]
+
+	for stem in ("snapshot", "message"):
+		header, source = _emit_c(tmp_path, stem)
+		(tmp_path / f"{stem}.h").write_text(header, encoding="ascii")
+		(tmp_path / f"{stem}.c").write_text(source, encoding="ascii")
+		(tmp_path / f"use_{stem}.c").write_text(f"""
+#include "{stem}.h"
+
+int use_{stem}(uint8_t *data, uint32_t len)
+{{
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    which = 0u;
+
+	situ_msg_init(&msg, data, len);
+	if (situ_str_view(&msg, 0, len, &view) != SITU_OK) return -1;
+	return situ_str_check(view, &which) == SITU_OK ? 0 : 1;
+}}
+""", encoding="ascii")
+		sources += [str(tmp_path / f"{stem}.c"),
+		            str(tmp_path / f"use_{stem}.c")]
+
+	(tmp_path / "main.c").write_text("""
+#include <stdint.h>
+int use_snapshot(uint8_t *, uint32_t);
+int use_message(uint8_t *, uint32_t);
+
+int main(void)
+{
+	uint8_t raw[4] = { 0 };
+	return use_snapshot(raw, sizeof raw) + use_message(raw, sizeof raw);
+}
+""", encoding="ascii")
+
+	built = subprocess.run(
+		[compiler, *LINK_WARNINGS, f"-I{runtime}", f"-I{tmp_path}",
+		 str(tmp_path / "main.c"), *sources, "-o", str(tmp_path / "prog")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(tmp_path / "prog")])
+	assert ran.returncode == 0, "the linked program does not run"
+
+
+def test_a_define_on_an_imported_const_is_refused(tmp_path: Path) -> None:
+	"""Rather than editing this file at the other file's offsets.
+
+	`apply_defines` splices at the const value's own span, and `parse`
+	expands imports -- so an imported const's span carries offsets into the
+	imported file and the splice applied them here. `--define CAP=16` on a
+	schema importing `sized.situ` rewrote `import "sized.situ"` into
+	`import "size16.situ"`, the value's offset there having landed on the
+	`d`. It errored only because the damage happened to hit a path; anywhere
+	the offsets land on something that still parses, it is silent.
+
+	Refused rather than made to work: an imported file is re-read from disk
+	on every parse, so there is no single source for a splice to edit, and
+	setting an imported const has no spelling yet.
+	"""
+	from situc.cli import apply_defines
+
+	write(tmp_path, "sized.situ", BUFFER + "const CAP = 8;\n"
+	      "struct str {\n\tu8 v[CAP];\n}\n")
+	root = write(tmp_path, "use.situ",
+	             BUFFER + 'import "sized.situ";\n\n'
+	             "struct use {\n\tu8 kind;\n\tstr name;\n}\n")
+	source = Source(str(root), root.read_text(encoding="ascii"))
+
+	with pytest.raises(SystemExit, match="declared in"):
+		apply_defines(source, ["CAP=16"])
+
+	# The control, and it is what says the refusal is about provenance: the
+	# same const in the file being compiled is still set.
+	own = write(tmp_path, "own.situ", BUFFER + "const CAP = 8;\n"
+	            "struct own {\n\tu8 v[CAP];\n}\n")
+	rewritten = apply_defines(
+		Source(str(own), own.read_text(encoding="ascii")), ["CAP=16"])
+	assert "const CAP = 16;" in rewritten.text
+	# And nothing else moved, which is the property a span-exact splice has
+	# and a textual substitution does not.
+	assert rewritten.text == own.read_text(encoding="ascii").replace(
+		"const CAP = 8;", "const CAP = 16;")

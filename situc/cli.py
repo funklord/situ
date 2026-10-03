@@ -440,13 +440,39 @@ def apply_defines(source: Source, defines: Sequence[str] | None) -> Source:
 	if not defines:
 		return source
 
-	named = {decl.name: decl for decl in parse(source).consts()}
+	# `parse` EXPANDS IMPORTS, so a const declared in an imported file is in
+	# this mapping with a span whose offsets are into THAT file -- and the
+	# splice below applies them to this one. `--define CAP=16` on a schema
+	# importing `sized.situ` rewrote `import "sized.situ"` into
+	# `import "size16.situ"`, because the value's offset in the imported file
+	# happened to land on the `d`. A silent corruption wherever the offsets
+	# land somewhere that still parses (26.559).
+	#
+	# Split rather than filtered, so the refusal can name the file: a define
+	# that silently did nothing would be "a deployment that thinks it
+	# configured something", which is what the refusal below already exists
+	# to prevent.
+	root     = parse(source)
+	declared = {decl.name: decl for decl in root.consts()}
+	named    = {name: decl for name, decl in declared.items()
+	            if decl.span.source.path == root.root}
+	elsewhere = {name: decl.span.source.path
+	             for name, decl in declared.items() if name not in named}
+
 	edits: list[tuple[int, int, str]] = []
 	for entry in defines:
 		name, sep, text = entry.partition("=")
 		if not sep or not name:
 			raise SystemExit(
 				f"situc: --define wants `name=value`, found `{entry}`")
+		if name in elsewhere:
+			raise SystemExit(
+				f"situc: --define {name}: `{name}` is declared in "
+				f"`{elsewhere[name]}`, not in the file being compiled. A "
+				"define edits the source it is given, and an imported file "
+				"is re-read from disk on every parse -- so setting one there "
+				"has no spelling yet. Set it in that file, or move the "
+				"`const` into this one.")
 		if name not in named:
 			known = ", ".join(sorted(named)) or "none"
 			raise SystemExit(

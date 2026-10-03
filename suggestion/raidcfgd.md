@@ -93,7 +93,7 @@ costs what. The map already says `access=Sequential`; it does not say
 > the `SIZE_MAX` truncation past 32 bits, the no-op nested `[encoding]`
 > checks, and the flat `import` colliding at link.
 >
-> (Each of the first three has its own answer below now. The last two do
+> (Each of the first four has its own answer below now. The last does
 > not.)
 
 ## 2. `_required` wraps on a `u32` length
@@ -250,6 +250,70 @@ believed `_required` would accept a truncated run as a whole message.
   or emitting imported types once under the import's own prefix, would let
   a consumer share `common.situ` the way fuzznet's fourteen layouts and
   ours already spell it.
+
+  > **Answered, and the shape you suggested is not the one it took -- for a
+  > reason worth having.** Reproduced first, exactly as you had it:
+  > `multiple definition of situ_str_check` and `situ_str_validate`, from
+  > two schemas importing one `common.situ`.
+  >
+  > **An imported struct's `check` and `validate` are `static inline` in the
+  > header now.** Those two are the only functions in the generated C with
+  > external linkage; every accessor already lives in the header. A struct
+  > the schema OWNS keeps its pair external in the `.c`, and the line
+  > between them is provenance rather than a switch: **this translation unit
+  > is the definition of what the schema owns, and a struct it merely
+  > imported may be defined by another compilation whose copy need not
+  > agree.**
+  >
+  > So you can drop the `rcs_`/`rcm_` split if it was only there for this.
+  > Generate both under one prefix, compile both `.c` files into one
+  > program, and call the shared type's API from either header -- that case
+  > is a test now, four translation units, compiled and run rather than
+  > inspected.
+  >
+  > **Neither of your two suggestions was taken, and they are both better
+  > answers to a question this is not.** A per-import prefix, or emitting
+  > imported types once under the import's own prefix, gives you ONE copy;
+  > `static inline` gives you one per translation unit. One copy is the
+  > better artifact and it needs the consumer to compile the imported schema
+  > separately -- which means `situc build x.situ` stops producing a
+  > complete object, and that is a change to what the command promises
+  > rather than a bug fix. It is worth doing and it is the holder's. What is
+  > fixed here is that the default links at all.
+  >
+  > **It is C only.** C++ class member functions are implicitly inline and
+  > Rust and Python have module namespaces; we linked and ran two importers
+  > in all three to check rather than reasoning about it.
+  >
+  > **And while building the fixture we found something worse in the same
+  > feature.** `--define` on a `const` declared in an imported file edits
+  > the IMPORTING file at the imported file's offsets:
+  >
+  >     const CAP = 8;              in sized.situ, the `8` at offset 39
+  >     import "sized.situ";        in a.situ, offset 39 is the `d`
+  >
+  >     $ situc build --define CAP=16 a.situ
+  >     error: cannot read `size16.situ`
+  >
+  > `apply_defines` splices at the const value's own span and `parse`
+  > expands imports, so the span belongs to another file. It errored only
+  > because the damage landed on a path; anywhere the offsets hit something
+  > that still parses, you get a silently different schema. **If you have
+  > ever passed `--define` for a const declared in an imported file, that
+  > build was not the schema you wrote.** It is refused now, naming the file
+  > -- and refused rather than made to work, because an imported file is
+  > re-read on every parse and setting a const there has no spelling yet.
+  >
+  > **Why none of it was caught is the part we owe you**: no schema in this
+  > repository uses `import` at all, so the compile sweep, the differential,
+  > the four-way agreement and the walker comparison have never read an
+  > imported type. We wrote a corpus pair to close that and backed it out
+  > again: it fails 22 tests across 10 files, because 29 sites in 13 of them
+  > parse a schema from a string and throw the path away, and four more
+  > gates key on list membership. That is its own piece of work and it is
+  > written down with those numbers. What guards this fix meanwhile is a
+  > test that compiles, links and runs four translation units, with a
+  > control that reproduces your `multiple definition` inside the suite.
 - A struct member named `kind` beside an enum named `<struct>_kind` flattens
   to one C identifier and situc refuses by name. We renamed the enums; a
   message would have been kinder than a collision.
@@ -343,7 +407,7 @@ script.
 > so the checkout requirement it names can go whenever you like. The rest of
 > this file is answered where it sits: the exponential accessors, `_required`
 > wrapping on a `u32` and the silent stop over a counted run each carry their
-> own note now, and so does the `SIZE_MAX` truncation. **What is still open
-> is the flat `import` colliding at link, the no-op nested encoding checks,
-> and your question about what the capability map's `access=Sequential`
-> costs.** Not answered by this and not forgotten.
+> own note now, and so do the `SIZE_MAX` truncation and the flat `import`.
+> **What is still open is the no-op nested encoding checks and your question
+> about what the capability map's `access=Sequential` costs.** Not answered
+> by this and not forgotten.

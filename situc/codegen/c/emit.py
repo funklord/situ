@@ -164,6 +164,10 @@ class Emitter:
 		#: holds the order is
 		#: `test_a_versioned_constraint_is_actually_checked`.
 		self._emitted: set[str] = set()
+		#: Which structs arrived by `import`, keyed by name and computed once.
+		#: Filled on first use rather than here, because it needs
+		#: `schema.root` and reads every declaration's span (26.559).
+		self._from_import: dict[str, bool] | None = None
 		#: Structs whose extent is being rendered right now. A variant arm
 		#: that is the recursion asks for its own struct's extent while that
 		#: extent is being built, and every such caller is asking a yes/no
@@ -8598,8 +8602,53 @@ class Emitter:
 		])
 		return lines
 
+	def _imported(self, name: str) -> bool:
+		"""Whether this struct was spliced in by an `import` (26.559).
+
+		`Schema.root` has said since 17.0a that position no longer tells you
+		whose claim a declaration is and `decl.span.source.path` does. It was
+		built so a whole-compilation directive could be compared against the
+		file that wrote it, and nothing downstream had ever asked -- so two
+		schemas importing one file each emitted its `check` and `validate`
+		with external linkage, and a program holding both would not link.
+		`raidcfgd` reported it on `situ_str_check`.
+		"""
+		if self._from_import is None:
+			root = self.schema.root
+			self._from_import = {decl.name: decl.span.source.path != root
+			                     for decl in self.schema.structs()}
+		return self._from_import.get(name, False)
+
 	def _validate_decl(self, struct: ResolvedStruct) -> list[str]:
 		ids = [member for member, _ in self._check_groups(struct) if member]
+		if self._imported(struct.name):
+			# Defined here as `static inline` rather than declared here and
+			# defined in the `.c`. Another compilation that imports the same
+			# file emits the same names, so external linkage makes a program
+			# holding both fail to link -- and the two definitions need not
+			# even agree, since `--define` can give an imported `const` a
+			# different value in each. One copy per translation unit is what
+			# the rest of this header already does, and it is the only form
+			# that is right when the copies differ (26.559).
+			return [
+				"",
+				f"/* `{struct.name}` arrives by `import`, so its checks are",
+				" * `static inline` here rather than external in the `.c`:",
+				" * another schema importing the same file defines the same",
+				" * names, and those definitions need not agree. */",
+				# The ids FIRST: these are definitions rather than
+				# prototypes, so the bodies below read the macros and a
+				# `#define` after them is a `#define` the compiler has not
+				# seen. The external form declares and defines in different
+				# files, which hid the order.
+				*(f"#define {macro(self.prefix, struct.name, member, 'CHECK')}"
+				  f" {at}u" for at, member in enumerate(ids)),
+				*(f"#define {macro(self.prefix, struct.name, when.name, 'MSG')}"
+				  f" {at}u" for at, when
+				  in enumerate(traverse.messages(self.schema, struct.name))),
+				*self._validate_body(struct, linkage="static inline "),
+				*self._messages_body(struct, linkage="static inline "),
+			]
 		lines = [
 			"",
 			"/* Check every constraint this schema states: [must_eq], [max],",
@@ -8677,7 +8726,8 @@ class Emitter:
 			])
 		return lines
 
-	def _messages_body(self, struct: ResolvedStruct) -> list[str]:
+	def _messages_body(self, struct: ResolvedStruct,
+			linkage: str = "") -> list[str]:
 		"""`messages`, and its text table where one was asked for."""
 		held = traverse.messages(self.schema, struct.name)
 		if not held:
@@ -8686,7 +8736,8 @@ class Emitter:
 		named = ident(self.prefix, struct.name, "messages")
 		lines = [
 			"",
-			f"void {named}(situ_view_t view, uint32_t *ids, size_t cap,",
+			f"{linkage}void {named}(situ_view_t view, uint32_t *ids,"
+			" size_t cap,",
 			"\t\tsize_t *count)",
 			"{",
 			"	size_t held = 0;",
@@ -8732,7 +8783,11 @@ class Emitter:
 		]
 
 		for struct in self.resolved.structs.values():
-			if struct.layout.is_byte_sized:
+			# An imported struct's pair is `static inline` in the header, for
+			# the reason `_imported` gives: another compilation importing the
+			# same file would define the same external names (26.559).
+			if struct.layout.is_byte_sized \
+					and not self._imported(struct.name):
 				lines.extend(self._validate_body(struct))
 				lines.extend(self._messages_body(struct))
 
@@ -8767,10 +8822,11 @@ class Emitter:
 			groups.append((c_name(self._local(struct, entry.placement)), lines))
 		return groups
 
-	def _validate_body(self, struct: ResolvedStruct) -> list[str]:
+	def _validate_body(self, struct: ResolvedStruct,
+			linkage: str = "") -> list[str]:
 		named  = ident(self.prefix, struct.name, "check")
 		lines  = [
-			f"situ_err_t {named}(situ_view_t view, uint32_t *which"
+			f"{linkage}situ_err_t {named}(situ_view_t view, uint32_t *which"
 			f"{self._argument_tail(struct)})",
 			"{",
 			"\t/* One place rather than a guard at every refusal: a caller",
@@ -8882,7 +8938,8 @@ class Emitter:
 
 		lines.extend([
 			"\treturn SITU_OK;", "}", "",
-			f"situ_err_t {ident(self.prefix, struct.name, 'validate')}"
+			f"{linkage}situ_err_t "
+			f"{ident(self.prefix, struct.name, 'validate')}"
 			f"(situ_view_t view{self._argument_tail(struct)})",
 			"{",
 			f"\treturn {named}(view, NULL{self._argument_args(struct)});",
