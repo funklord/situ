@@ -31304,6 +31304,96 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.561 `access=Sequential` names a class and reads like a constant
+
+**Settled as 0060, and `raidcfgd` had pointed at the right axis.** Their
+ask was *say in the generated header which access pattern costs what. The
+map already says `access=Sequential`; it does not say "exponential in k".*
+The exponential half was 26.555; what was left turned out to be a real
+understatement rather than a wording preference.
+
+**Measured, C at `-O2`, a counted run of four-byte elements, calling
+`_at(i)` for every `i` against a cursor the consumer holds:**
+
+    n       _at(i) for every i      a cursor      ratio
+    16            0.0022 ms        0.0001 ms        18
+    64            0.0256 ms        0.0003 ms        73
+    256           0.4017 ms        0.0014 ms       288
+    1024          6.5589 ms        0.0056 ms      1177
+
+**6.56 ms to read a four-kilobyte message.** `_at(index)` walks from the
+start every time, so reaching element N is O(N) and a loop over every
+element is O(N^2). The axis says *cannot reach element N directly*, which
+is true, and a reader takes it for a constant factor.
+
+**The member chain is a DIFFERENT axis with the same shape, and separating
+them is half the answer.** Reaching member k past variable-length members
+is `offset=Dynamic`, not `access=Sequential`. Measured on a struct of k
+`str` members, every member once:
+
+    k      every member via _offset    one pass via _extent_from    ratio
+    8             0.00036 ms                  0.00005 ms              7
+    64            0.02415 ms                  0.00037 ms             65
+
+Identical totals at every k, which is how the two routes were shown to
+agree rather than merely to differ in speed. So the chain has a public
+one-pass route and a run has none -- which is why `raidcfgd` found the
+chain's cost and wrote the run's cursor by hand.
+
+**What the map can say and what it cannot.** `Sequential` is a property of
+the FORMAT: element N is not directly reachable. That a loop over all N is
+quadratic is a property of the loop the CONSUMER writes, and a capability
+vector does not describe the caller. So the number goes in the generated
+header beside the accessor that has the property, and the class stays in
+the map. A walked element accessor now carries `O(index)`, the `O(n^2)`
+consequence, and the cursor to write instead, in all four backends; an
+indexed one says nothing, because for a fixed-size element the sentence is
+noise.
+
+**Two things recorded for the holder rather than taken, both with their
+cost measured.** `offset=Dynamic(k)` would put the chain's length in the
+map, which is where 18.1 promises a performance change shows up as a
+reviewable diff -- today inserting a variable member lengthens every later
+chain with no diff at all. It is about 120 committed map lines, a
+numeric-strength rule whose direction is inverted from `Aligned(n)`, and
+the normative table in two places. And a run wants an element CURSOR, which
+is a new public API in four backends rather than a correction.
+
+**And no capability says whether the generated code achieves the bound,
+which is the conclusion this whole question invites.** 26.555's 3^k chain
+and today's linear one carry the same vector on every axis. That half is a
+gate -- `test_offset_chains_are_linear.py` -- and 0060 says so in as many
+words, because a reader who takes a green map for a fast decoder has been
+misled by a document that was accurate.
+
+**The controls cost two rounds and the second one is the lesson.** Each
+backend's mark sabotaged on its own fails naming that backend; the indexed
+case's guard sabotaged makes the note unconditional and fails the vacuity
+test. Rust passed both times until the sabotage was looked at: its emitter
+carried `O(n^2)` twice, once in a Python comment explaining the note and
+once in the emitted line, and `replace(..., 1)` hit the comment. **The
+count said the edit landed and the edit established nothing.** The comment
+is reworded so the literal mark appears once, which removes the ambiguity
+for the next instrument rather than for this one.
+
+**And the note itself failed a gate, which is worth recording because the
+change is documentation and the gate is a documentation tool.** The C++
+wording named the element class as `::situ::item(raw).extent()`, and
+Doxygen reads a backticked qualified call as an explicit link request:
+*explicit link request to 'situ::adv_report(raw)' could not be resolved*,
+on `ble`, `mqtt` and `edges`. The bare `::situ::item` is an automatic link
+with the same problem, so the class is not named at all now -- a reader
+needs `extent()` and the accessor's signature already says what it hands
+back. **A prose change has a compiler too**, and in this tree it runs over
+every schema in the corpus.
+
+**Nothing else moves**: 42 committed maps and 42 wires regenerate
+byte-identical, and the four generated outputs still compile -- C and C++
+under `-Wall -Wextra -Werror`, Rust under `-D warnings`, Python imported.
+The first attempt at that check captured `2>&1` and reported 21 maps
+differing; the difference was a `situc map` warning on stderr, in the
+instrument rather than the tree.
+
 ### 26.560 Six branches stated the rule and two did not
 
 **`raidcfgd` reported a dead line and the fault underneath renumbers a
