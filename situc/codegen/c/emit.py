@@ -9123,6 +9123,54 @@ class Emitter:
 			"\t}",
 		]
 
+	def _delegates(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether this struct's `check` validates a member through its type.
+
+		The condition the struct-typed branch below already decides, asked
+		once so that `_checked_by_its_own_type` can lean on the SAME answer.
+		Where the delegation is declined -- no sub-view was emitted, or the
+		nested type has no extent to measure one with -- the nested
+		validator is never called, and a member's own check is then the only
+		coverage there is.
+		"""
+		if placement.scalar is not None \
+				or placement.type_name not in self.structs:
+			return False
+		if self._offset_blocker(struct, placement) is not None:
+			return False
+		nested = self.resolved.structs.get(placement.type_name)
+		if nested is not None and not nested.layout.is_fixed_size \
+				and not self._struct_extent(nested):
+			return False
+		return True
+
+	def _checked_by_its_own_type(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether a dotted member belongs to a type we delegate to (26.560).
+
+		*An element's own members are checked under the element's struct, not
+		here* is stated by six of the eight branches in `_member_checks`. Two
+		did not have it -- the span attributes and a varint's value bounds --
+		so `outer { inner i; u8 kind [max = 3]; }` emitted
+		`SITU_OUTER_I_NAME_CHECK` and `SITU_OUTER_I_V_CHECK` beside the
+		delegation that already covers them, and `SITU_OUTER_KIND_CHECK` came
+		out 3 where the other three backends and the walkers say 1. `0051`
+		calls the id the contract.
+
+		**Not the bare dotted test those six use**, and that is the whole of
+		why this is a method. A member of a `sealed` region is dotted too and
+		has no nested validator to delegate to: its own check is the only one
+		there is, and a dotted test would delete it. What makes a nested
+		struct's member different is that something else checks it.
+		"""
+		rest = placement.path[len(struct.name) + 1:]
+		head, sep, _ = rest.partition(".")
+		if not sep:
+			return False
+		owner = self.resolved.find(f"{struct.name}.{head}")
+		return owner is not None and self._delegates(struct, owner.placement)
+
 	def _member_checks(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -9209,12 +9257,11 @@ class Emitter:
 		# `Packet` whose `hdr.version` was wrong parsed clean -- which is the
 		# bug `gen-checks` found on its first run.
 		if scalar is None and placement.type_name in self.structs:
-			if self._offset_blocker(struct, placement) is not None:
+			# The same question `_checked_by_its_own_type` asks of a member of
+			# this one, so the two cannot drift: what it skips is exactly what
+			# this emits.
+			if not self._delegates(struct, placement):
 				return []		# no sub-view was emitted to validate through
-			nested = self.resolved.structs.get(placement.type_name)
-			if (nested is not None and not nested.layout.is_fixed_size
-					and not self._struct_extent(nested)):
-				return []
 			return self._nested_validation(struct, placement)
 
 		# A reserved array is still a constraint. Skipping it left `reserved
@@ -9342,6 +9389,15 @@ class Emitter:
 				or (data_sized(placement)
 				    and _has_attr(placement.attrs, "encoding")
 				    and placement.offset_bits is not None)):
+			# Checked under the type that owns it (26.560). This is the
+			# branch `raidcfgd` reported: a nested `[encoding = utf8]` came
+			# out at the parent's `base + 2u` with a length of 0, because the
+			# member's length reads a field of the NESTED struct and the
+			# parent cannot resolve it -- so the check could not fire. With a
+			# fixed length it fires and is merely redundant, which is the
+			# same fault wearing a working costume.
+			if self._checked_by_its_own_type(struct, placement):
+				return []
 			attributed = [
 				*(self._nul_check(struct, placement, scalar)
 				  if _has_attr(placement.attrs, "nul_terminated")
@@ -9404,6 +9460,9 @@ class Emitter:
 		# value nobody could read is nothing to check rather than something
 		# that failed.
 		if placement.varint is not None:
+			# Checked under the type that owns it (26.560).
+			if self._checked_by_its_own_type(struct, placement):
+				return []
 			local  = c_name(self._local(struct, placement))
 			getter = ident(self.prefix, struct.name, local, "get")
 			inner  = self._attr_checks(struct, placement, "value",

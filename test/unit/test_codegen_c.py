@@ -6806,3 +6806,82 @@ def test_a_bound_wider_than_a_frame_length_still_compiles(
 	flags, which is the one check that would have caught it.
 	"""
 	compile_generated(tmp_path, OVERSIZE)
+
+
+def test_a_nested_constraint_still_refuses_through_the_delegation(
+		tmp_path: Path) -> None:
+	"""The risk of 26.560, asked of the bytes rather than of the source.
+
+	A nested member's `[encoding]` is no longer checked in the parent's own
+	`check` -- it was emitted there with a length of 0 and could not fire,
+	which is what `raidcfgd` reported. Removing a check is the kind of fix
+	that removes coverage, so this asks whether a frame the schema refuses is
+	still refused, and whether `*which` still names the member.
+
+	Both sides of it. A valid frame must come back OK with `*which` at the
+	sentinel, because a parent that refused everything would pass the
+	refusal half on its own.
+	"""
+	header, source = emit("struct str { u16 len; u8 v[len] "
+	                      "[encoding = utf8]; } "
+	                      "struct rec { u8 kind; str name; }")
+	(tmp_path / "unit.h").write_text(header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(source, encoding="ascii")
+	(tmp_path / "probe.c").write_text("""
+#include "unit.h"
+
+static int verdict(const uint8_t *raw, uint32_t len, uint32_t *which)
+{
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	situ_msg_init(&msg, (uint8_t *)(uintptr_t)raw, len);
+	if (situ_rec_view(&msg, 0, len, &view) != SITU_OK) return -1;
+	return (int)situ_rec_check(view, which);
+}
+
+int main(void)
+{
+	/* kind, then str { len = 2, v = "hi" }: valid UTF-8. */
+	const uint8_t good[5] = { 1, 0, 2, 'h', 'i' };
+	/* The same with two lone continuation bytes: not UTF-8. */
+	const uint8_t bad[5]  = { 1, 0, 2, 0x80, 0x80 };
+	uint32_t which = 0u;
+	int      rc;
+
+	/* The call, then the read. Argument evaluation order is unspecified, so
+	 * reading `which` inside the same call read it before it was written. */
+	rc = verdict(good, sizeof good, &which);
+	if (rc != SITU_OK)                        return 1;
+	if (which != 0xFFFFFFFFu)                 return 2;
+
+	rc = verdict(bad, sizeof bad, &which);
+	if (rc != SITU_ERR_CONSTRAINT)            return 3;
+	if (which != SITU_REC_NAME_CHECK)         return 4;
+
+	/* And the nested type's own `check` still names its own member, in its
+	 * own id space -- which is what the parent delegates to. */
+	{
+		situ_msg_t  msg;
+		situ_view_t view;
+
+		situ_msg_init(&msg, (uint8_t *)(uintptr_t)(bad + 1), 4u);
+		if (situ_str_view(&msg, 0, 4u, &view) != SITU_OK)      return 5;
+		if (situ_str_check(view, &which) != SITU_ERR_CONSTRAINT) return 6;
+		if (which != SITU_STR_V_CHECK)                        return 7;
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	ran = subprocess.run([str(binary)])
+	assert ran.returncode == 0, (
+		f"the probe failed at check {ran.returncode}: a nested constraint no "
+		"longer reaches the parent's verdict")

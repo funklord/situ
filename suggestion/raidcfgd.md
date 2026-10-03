@@ -93,8 +93,7 @@ costs what. The map already says `access=Sequential`; it does not say
 > the `SIZE_MAX` truncation past 32 bits, the no-op nested `[encoding]`
 > checks, and the flat `import` colliding at link.
 >
-> (Each of the first four has its own answer below now. The last does
-> not.)
+> (Every one of these has its own answer below now.)
 
 ## 2. `_required` wraps on a `u32` length
 
@@ -197,6 +196,58 @@ believed `_required` would accept a truncated run as a whole message.
   at `base + 2u` with length 0, which are no-ops; the real check happens in
   the nested `str_validate`. Harmless as long as the nested one runs, and
   misleading to read.
+
+  > **Answered, and you found more than you reported.** Reproduced exactly:
+  > a nested `[encoding = utf8]` in the parent's `check`, at the parent's
+  > base with a length of `0u`, because the member's extent reads a field of
+  > the nested struct and the parent cannot resolve it. And you were right
+  > that it is covered -- the parent delegates to `str_validate`, which we
+  > checked before touching anything.
+  >
+  > **What the one schema does not show is that the ids move.** C's
+  > `_member_checks` states *an element's own members are checked under the
+  > element's struct* in six of its eight branches. The span attributes and
+  > a varint's value bounds did not, so for `outer { inner i; u8 kind [max =
+  > 3]; }`:
+  >
+  >     C       OUTER_I=0  OUTER_I_V=1  OUTER_I_NAME=2  OUTER_KIND=3
+  >     C++     check_i=0                               check_kind=1
+  >     Python  CHECK_I=0                               CHECK_KIND=1
+  >     Rust    CHECK_I=0                               CHECK_KIND=1
+  >     walker  outer has 2 members, not 4
+  >
+  > **So `SITU_OUTER_KIND_CHECK` was 3 in C and 1 in everything else.**
+  > Decision 0051 makes the id the contract and the name the convenience, so
+  > if you key a consumer on a `_CHECK` id and that consumer ever reads a
+  > message validated by a different backend -- or by either walker -- the
+  > number named a different member. **Worth a look at your side if you
+  > store or transmit those ids**: C's are the ones that change, and they
+  > change for any struct with a nested member carrying `[encoding]`,
+  > `[nul_terminated]` or a varint bound.
+  >
+  > With a fixed-length nested member the same branch fires and is merely
+  > redundant rather than dead, which is the same fault with a working
+  > costume. Both are gone.
+  >
+  > **The gate is not a dotted-path test, and that is deliberate.** A
+  > `sealed` region's member is dotted too and has nothing to delegate to --
+  > its own check is the only one it has -- so the question asked is whether
+  > the member's owner is a struct-typed member this `check` delegates to. A
+  > control degrades the gate to the dotted test and watches the region case
+  > lose its only check, because that is the fix we would otherwise have
+  > shipped.
+  >
+  > **Nothing of yours changes except those ids.** Every corpus schema's
+  > generated C is byte-identical before and after, 84 files from 42 schemas
+  > -- which is also why this was never caught: a four-way id comparison has
+  > existed for a while and no schema in the corpus has the shape.
+  >
+  > **One thing met and left alone**, in case you hit it: inside a `sealed`
+  > region C checks a member's `[encoding]` and `[nul_terminated]` and does
+  > NOT check its `[max]`, and the other three backends emit no check ids
+  > for a region at all. That is older than this and is a question about
+  > what a gate's interior owes a validator, so it is recorded rather than
+  > changed in passing.
 - The `SIZE_MAX` constants overflow `uint32_t` for a bounded tree:
   `RCS_SNAPSHOT_SIZE_MAX 9758327360018u` compiles with a warning-free
   truncation and is wrong. A tree with `[max]` on every count and string
@@ -407,7 +458,7 @@ script.
 > so the checkout requirement it names can go whenever you like. The rest of
 > this file is answered where it sits: the exponential accessors, `_required`
 > wrapping on a `u32` and the silent stop over a counted run each carry their
-> own note now, and so do the `SIZE_MAX` truncation and the flat `import`.
-> **What is still open is the no-op nested encoding checks and your question
+> own note now, and so do the `SIZE_MAX` truncation, the flat `import` and
+> the no-op nested encoding checks. **What is still open is your question
 > about what the capability map's `access=Sequential` costs.** Not answered
 > by this and not forgotten.

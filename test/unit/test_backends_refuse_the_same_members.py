@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from situc import ast
 from situc.codegen.c import generate as generate_c
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.names import class_name
@@ -36,7 +37,7 @@ from situc.codegen.rust import generate as generate_rs
 from situc.diagnostics import Source
 from situc.layout import solve
 from situc.parser import parse, parse_text
-from situc.resolve import resolve
+from situc.resolve import ResolvedSchema, resolve
 
 from every_schema import ROOT, SCHEMAS, ids
 
@@ -995,7 +996,19 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	source   = Source(str(path), path.read_text(encoding="ascii"))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
+	assert_the_four_number_alike(schema, resolved, path.stem, path.name)
 
+
+def assert_the_four_number_alike(schema: ast.Schema, resolved: ResolvedSchema,
+		stem: str, label: str) -> None:
+	"""The comparison above, over a schema from anywhere.
+
+	Factored out for `test_a_nested_member_is_numbered_by_its_own_type`, which
+	needs the same four-way reading of a schema the corpus does not carry --
+	and a second copy of these regexes would be a second thing to be wrong.
+	The corpus test is the population; that one is a case the population has
+	not got.
+	"""
 	# The struct's own name is stripped by NAMING it rather than by splitting
 	# the macro on underscores. Both halves carry them -- `udp_header` has a
 	# member `length`, and `SITU_UDP_HEADER_LENGTH_CHECK` splits four ways --
@@ -1006,11 +1019,11 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	in_c: dict[str, list[tuple[str, str]]] = {}
 	for spelled, at in re.findall(
 			r"#define (SITU_\w+_CHECK) (\d+)u",
-			generate_c(schema, resolved, path.stem).header):
+			generate_c(schema, resolved, stem).header):
 		prefix, owner = max(
 			((one, name) for one, name in held if spelled.startswith(one)),
 			key=lambda pair: len(pair[0]), default=("", ""))
-		assert prefix, f"{path.name}: {spelled} names no struct"
+		assert prefix, f"{label}: {spelled} names no struct"
 		in_c.setdefault(owner, []).append(
 			(spelled[len(prefix):-len("_CHECK")].lower(), at))
 
@@ -1023,7 +1036,7 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	renamed_back = {class_name(struct): c_name(name)
 	                for name, struct in resolved.structs.items()}
 	owner = ""
-	for line in generate_cpp(schema, resolved, path.stem).header.splitlines():
+	for line in generate_cpp(schema, resolved, stem).header.splitlines():
 		opened = re.match(r"class (\w+)", line)
 		if opened:
 			owner = opened.group(1)
@@ -1050,7 +1063,7 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	# agree about as one only Rust has.
 	rust_back = {_pascal(name): c_name(name) for name in resolved.structs}
 	owner = ""
-	for line in generate_rs(schema, resolved, path.stem).module.splitlines():
+	for line in generate_rs(schema, resolved, stem).module.splitlines():
 		opened = re.match(r"impl<'a> (\w+?)(?:Mut)?<'a> \{", line)
 		if opened:
 			owner = rust_back.get(opened.group(1), opened.group(1))
@@ -1064,7 +1077,7 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 	# sit in, and its name is the schema's already.
 	in_py: dict[str, list[tuple[str, str]]] = {}
 	owner = ""
-	for line in generate_py(schema, resolved, path.stem).module.splitlines():
+	for line in generate_py(schema, resolved, stem).module.splitlines():
 		opened = re.match(r"class (\w+)\(View\):", line)
 		if opened:
 			owner = opened.group(1)
@@ -1099,9 +1112,9 @@ def test_the_backends_name_the_same_members_in_the_same_order(
 		in_rs.pop(name, None)
 		in_py.pop(name, None)
 
-	assert in_c == in_cpp, f"{path.name}: c and cpp"
-	assert in_c == in_rs, f"{path.name}: c and rust"
-	assert in_c == in_py, f"{path.name}: c and python"
+	assert in_c == in_cpp, f"{label}: c and cpp"
+	assert in_c == in_rs, f"{label}: c and rust"
+	assert in_c == in_py, f"{label}: c and python"
 
 
 # -- Python objects reaching shipped source (26.485) ------------------------
@@ -1196,3 +1209,105 @@ def _every_mode(path: Path) -> dict[str, dict[str, str]]:
 		}
 		for mode, held in (("plain", False), ("materialize", True))
 	}
+
+
+#: A nested struct whose member carries a SPAN attribute and a varint bound,
+#: with a constrained member after it so a shifted id is visible. No corpus
+#: schema has this shape, which is why the four-way comparison above was green
+#: while C numbered two checks the other three do not have (26.560).
+NESTED = """target buffer;
+endian big;
+
+varint_type vlen {
+	encoding  = leb128;
+	max_bits  = 28;
+	max_bytes = 4;
+}
+
+struct inner {
+	u16   n [max = 500];
+	vlen  v [max = 900];
+	u8    name[4] [nul_terminated, encoding = utf8];
+}
+
+struct outer {
+	inner  i;
+	u8     kind [max = 3];
+}
+"""
+
+#: The same shape with the interior in a `sealed` REGION rather than a nested
+#: struct. A region's member is dotted too and has no validator to delegate
+#: to, so its own check is the only one there is -- which is why the gate asks
+#: whether something else checks the member rather than whether its path has a
+#: dot in it. This is the control for that distinction.
+REGIONED = """target buffer;
+endian big;
+
+codec aead {
+	granularity = byte;
+	length_preserving;
+	seekable;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+impl aead extern "x";
+
+struct withregion {
+	u8  kind;
+	sealed body(aead) {
+		u8  label[4] [nul_terminated, encoding = utf8];
+	}
+	tag u8[16];
+}
+"""
+
+
+def _resolved_text(text: str, name: str):  # type: ignore[no-untyped-def]
+	schema = parse(Source(f"{name}.situ", text))
+	return schema, resolve(schema, solve(schema))
+
+
+def test_a_nested_member_is_numbered_by_its_own_type() -> None:
+	"""`outer` numbers two checks, not four.
+
+	`raidcfgd` reported the symptom: a nested `[encoding = utf8]` emitted in
+	the parent's `check` at `base + 2u` with a length of 0, which cannot fire
+	-- the member's length reads a field of the NESTED struct and the parent
+	cannot resolve it.
+
+	The fault underneath is bigger than a dead line. *An element's own members
+	are checked under the element's struct, not here* is stated by six of the
+	eight branches of C's `_member_checks`; the span attributes and a varint's
+	value bounds did not have it. So C emitted `SITU_OUTER_I_NAME_CHECK` and
+	`SITU_OUTER_I_V_CHECK` beside the delegation that already covers them, and
+	`SITU_OUTER_KIND_CHECK` came out **3** where the other three backends and
+	the walkers' member indexing all say **1**. 0051 calls the id the
+	contract.
+	"""
+	schema, resolved = _resolved_text(NESTED, "nested")
+	assert_the_four_number_alike(schema, resolved, "nested", "nested.situ")
+
+
+def test_a_region_member_keeps_the_check_nothing_else_makes() -> None:
+	"""And the gate is about delegation rather than about a dot.
+
+	A `sealed` region's member has a dotted path and no nested validator, so
+	its own check is the only coverage there is. A gate keyed on the dot --
+	which is what the six branches above use, and what this one deliberately
+	does not -- would have deleted it silently.
+
+	Asserted as a presence rather than through the four-way comparison,
+	because the other three emit no ids at all for a region: that divergence
+	is older than this fix and is not what this test is about.
+	"""
+	schema, resolved = _resolved_text(REGIONED, "regioned")
+	header = generate_c(schema, resolved, "regioned").header
+	source = generate_c(schema, resolved, "regioned").source
+
+	assert "#define SITU_WITHREGION_BODY_LABEL_CHECK 0u" in header
+	assert "situ_utf8_valid" in source, \
+		"the region member's encoding check is the only one it has"
+	assert "situ_nul_terminated" in source
