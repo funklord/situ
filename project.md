@@ -31304,6 +31304,81 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.563 A bound the type guaranteed, and the corpus case that decided it
+
+**Settled as 0061.** 26.558 met this on its way past and set it aside for
+its own entry: `u8 a [max = 255]` generates `if (value > 255)`, which GCC
+proves false under `-Wtype-limits`, which `-Wextra` turns on and this
+project's own flags make an error. **situc emitted C that situc's own gate
+would not compile**, in six spellings -- `[max]` at an unsigned ceiling,
+`[min = 0]` on an unsigned, and either limit of a signed type.
+
+**All four backends emitted it and all four agreed on the ids**, which is
+what ruled out fixing the one backend that complains: C alone would have
+renumbered against the other three, which is 26.560's defect committed
+deliberately. So the comparison is omitted in all four, and the bound stays
+true, stays in the map, and stays enforced -- by the type rather than by a
+comparison, which is what separates this from 26.558's complaint about a
+bound nothing enforces.
+
+**Not a refusal, and the measurement is the argument.** 0059 refuses a
+`max` on a run something already bounds, so the parallel was there to take
+-- and a bound may be a `const`:
+
+    situc build --define CAP=100    the bound bites
+    situc build --define CAP=255    the bound is the type's own ceiling
+
+Refusing the second refuses a schema correct for every other value of its
+own constant. One command settled a question two precedents pointed
+opposite ways on.
+
+**And no warning, which the corpus decided against me.** I had a warning
+planned on the grounds that 14.5 says an attribute must sit where something
+reads it, with `check_collisions`' own precedent for warning on the
+legal-but-redundant. Then the corpus produced its one instance:
+
+    u7  address   [max = 127];     // usb.h:1980, and devmap is 128 wide
+
+**That bound is deliberate and cited** -- `example/usb`'s header names
+`usb.h:1980` for the seven bits and `usb.h:471` for the 128-wide device
+map. It records what the format's own source says, and a warning calling it
+redundant would have been wrong about the only real case there is. 14.5 is
+answered by the type being what reads it.
+
+**The corpus is also where the measurement nearly went wrong.** A grep for
+literal ceiling values across the schemas returned **zero candidate
+lines**, which read as "no corpus schema has one" and was false: USB's is
+`[max = 127]` on a `u7`, and no pattern keyed on 255 or 65535 can see a
+seven-bit ceiling. What found it was diffing every corpus schema's
+generated C before and after -- and the first such diff was against a
+baseline four commits stale, reporting five schemas changed when the true
+answer is one. A `git worktree` at HEAD gave the baseline that answered.
+
+**Conservative outside the plain integers**: a BCD bound is compared
+against the decoded value rather than the packed nibbles, and a fixed-point
+one is in units this does not establish, so both keep their checks. All six
+broken spellings are `uint` or `sint`.
+
+**What it costs, stated rather than left in a diff.** `usb.h` loses
+`SITU_TOKEN_ADDRESS_CHECK` and `usb.c` the five dead lines behind it. It
+was the last of `token`'s two ids, so nothing renumbers; the committed map
+and wire are unchanged, the bound being a schema fact rather than a
+generated one; and no test referenced it. **A generated API loses a
+symbol**, and a caller keying on it will not compile -- it named a refusal
+that could not happen.
+
+**Four controls, one per backend, each reverted on its own**: every one
+reports 8 numbered checks where 1 is right, naming its own backend. C's
+also fails the compile test and the behavioural one, which is correct -- C
+is the backend whose build the defect broke.
+
+**And the instrument needed fixing before it could measure.** The first id
+marks counted the id's USES as well as its definition -- `check_` matches
+both `static constexpr std::uint32_t check_h` and the `*which_ = check_h`
+that reports it -- so C++ counted two and Python three. A mark that counts
+the wrong thing is this entry's own subject arriving in its instrument, and
+the marks are definition-shaped now.
+
 ### 26.562 A generated name the runtime already had, and a wrong fix
 
 **`struct bounds` emits a header that does not compile**, and the module
