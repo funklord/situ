@@ -30,7 +30,8 @@ from situc import ast
 from situc.capability import Axis, Value
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
-	c_name, check_collisions, ident, macro)
+	c_name, check_collisions, check_runtime_collisions, entities, ident,
+	macro)
 from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
 from situc.layout import (
@@ -129,9 +130,21 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 	emitter = Emitter(schema, resolved, basename, prefix, materialize,
 	                  messages)
+	header = emitter.header()
+	source = emitter.source()
+
+	# And after emitting, because a generated name is not always `ident()`'s
+	# result -- `_extent_from` is built by appending to one. Nothing has been
+	# written to disk at this point: `generate` hands back text and the caller
+	# writes it, so refusing here refuses before any file exists (26.562).
+	check_runtime_collisions(header + source, entities(resolved, prefix, [
+		*(("struct", decl.name, decl.span) for decl in schema.structs()),
+		*(("enum", decl.name, decl.span) for decl in schema.enums()),
+	]))
+
 	return Generated(
-		header   = emitter.header(),
-		source   = emitter.source(),
+		header   = header,
+		source   = source,
 		basename = basename,
 		warnings = warnings,
 	)

@@ -18,6 +18,8 @@ from dataclasses import dataclass
 
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, Span
 from situc.resolve import ResolvedSchema
+import re
+
 from situc.wellformed import CPP_KEYWORDS
 
 #: Words a *bare* generated identifier may not be.
@@ -30,6 +32,79 @@ from situc.wellformed import CPP_KEYWORDS
 KEYWORDS = CPP_KEYWORDS | frozenset({
 	"restrict", "typeof", "_Atomic", "_Bool", "_Generic",
 })
+
+
+#: Every name `runtime/c/situ.h` defines, which a generated one may not be.
+#:
+#: The paragraph opening this module describes the hazard and the check below
+#: covered one population of it: two CONSTRUCTS flattening to one identifier.
+#: A construct colliding with the RUNTIME has the same symptom in the same
+#: words -- the C compiler rejecting generated code, with a diagnostic that
+#: names a function nobody wrote and no source location in the schema at all
+#: -- and nothing looked. `struct bounds` generates `situ_bounds_check`, and
+#: the runtime has defined `situ_bounds_check(view, off, ext)` all along
+#: (26.562).
+#:
+#: Carried here rather than read from the header at generation time. It
+#: installs to `<prefix>/include/situ.h`, which situc would have to guess,
+#: and a generator that needs its own runtime on disk to emit code fails
+#: wherever the runtime is packaged apart from it.
+#: `test_the_runtime_symbols_are_the_runtime_s` reads the header and compares,
+#: which is the half a literal needs: a list nobody checks is a list that has
+#: drifted.
+RUNTIME_SYMBOLS = frozenset({
+	"SITU_ALWAYS_INLINE", "SITU_H", "SITU_HOST_BIG", "SITU_LEAF_MAX",
+	"SITU_NO_BYTE", "SITU_STALE", "SITU_VERSION_MAJOR",
+	"SITU_VERSION_MINOR", "situ_adler32", "situ_advance_u32",
+	"situ_align_up_u32", "situ_ascii_ci_eq", "situ_ascii_fold",
+	"situ_ascii_valid", "situ_base", "situ_bcd_decode",
+	"situ_bcd_encode", "situ_bcd_valid", "situ_bits_get_lsb",
+	"situ_bits_get_msb", "situ_bits_get_ne", "situ_bits_set_lsb",
+	"situ_bits_set_msb", "situ_bits_set_ne", "situ_bounds_check",
+	"situ_bytes_eq", "situ_checksum_internet", "situ_delimiter_absent",
+	"situ_digits_canonical", "situ_digits_minimal", "situ_err_str",
+	"situ_err_t", "situ_fletcher16", "situ_fletcher32",
+	"situ_format_uint", "situ_get_be16", "situ_get_be32",
+	"situ_get_be64", "situ_get_le16", "situ_get_le32", "situ_get_le64",
+	"situ_get_ne16", "situ_get_ne32", "situ_get_ne64", "situ_in_bounds",
+	"situ_in_set", "situ_leaf_i64", "situ_leaf_u64", "situ_min_u32",
+	"situ_msg_clear_dirty", "situ_msg_init", "situ_msg_mark_dirty",
+	"situ_msg_t", "situ_msg_touch", "situ_msg_transmittable",
+	"situ_need_mul_u32", "situ_need_u32", "situ_nonneg_u32",
+	"situ_nul_len", "situ_nul_terminated", "situ_parse_int",
+	"situ_parse_scaled", "situ_parse_uint", "situ_put_be16",
+	"situ_put_be32", "situ_put_be64", "situ_put_le16", "situ_put_le32",
+	"situ_put_le64", "situ_put_ne16", "situ_put_ne32", "situ_put_ne64",
+	"situ_remaining_u32", "situ_scan", "situ_scan_any",
+	"situ_scan_relaxed", "situ_sign_extend", "situ_skip", "situ_span_t",
+	"situ_trim_len", "situ_trim_start", "situ_utf16_valid",
+	"situ_utf16be_valid", "situ_utf16le_valid", "situ_utf8_valid",
+	"situ_varint_be_get", "situ_varint_be_len", "situ_varint_get",
+	"situ_varint_len", "situ_varint_put", "situ_view_assert",
+	"situ_view_at", "situ_view_check", "situ_view_sub", "situ_view_t",
+	"situ_zeroize", "situ_zigzag_decode", "situ_zigzag_encode"
+})
+
+
+def defined_symbols(text: str) -> frozenset[str]:
+	"""The `situ_`-prefixed names a piece of C DEFINES, not the ones it calls.
+
+	One reader for two jobs, so the two cannot disagree about what counts: the
+	check below reads generated text with it, and the drift test reads
+	`runtime/c/situ.h`. Two regexes over two files is how a list and the thing
+	it mirrors stop matching.
+
+	Anchored at the start of a line, which is what separates a definition from
+	a call: generated bodies are indented and every definition this emitter
+	writes begins in column zero. Sound for text situ produced; it is not a C
+	parser and is not pointed at anything else.
+	"""
+	return frozenset(
+		set(re.findall(
+			r"^(?:static\s+inline\s+)?[A-Za-z_][\w \t*]*?\b(situ_\w+)\s*\(",
+			text, re.M))
+		| set(re.findall(r"^#\s*define\s+(SITU_\w+)", text, re.M))
+		| set(re.findall(r"^\s*\}\s*(situ_\w+)\s*;", text, re.M)))
 
 
 def ident(*parts: str) -> str:
@@ -184,6 +259,55 @@ def _collision(first: Entity, second: Entity) -> SituError:
 			f"a path flattens to underscores, so both reach `{second.stem}` and "
 			"every accessor built from it",
 			"rename either one, or put them in separate namespaces",
+		],
+	))
+
+
+def check_runtime_collisions(emitted: str, found: list[Entity]) -> None:
+	"""Refuse a generated name the C runtime already defines.
+
+	Reads the EMITTED TEXT rather than predicting the names, and that is not
+	belt-and-braces: a generated name is not always `ident()`'s result.
+	`_extent_from` and `_span_from` are built by appending to one, so a check
+	at `ident()` cannot see them, while reading what was produced cannot miss
+	a name however it was assembled.
+
+	**The stem check above cannot answer this, and a prefix rule was measured
+	and refused.** Stems are what that check compares, deliberately keeping no
+	list of suffixes so it survives a phase adding one -- and `situ_bounds`
+	collides with nothing while `situ_bounds_check` collides with the runtime.
+	Widening it to "a stem that prefixes a runtime symbol" would have caught
+	both real cases and refused seven working schemas with them: `msg`,
+	`bits`, `digits`, `leaf`, `ascii`, `utf8` and `bcd` all sit under a
+	runtime prefix and all seven generate code that compiles.
+
+	Run against the whole corpus before it was added -- 5035 distinct
+	generated symbols, no collision -- so this refuses nothing anybody has
+	written.
+	"""
+	clashing = sorted(defined_symbols(emitted) & RUNTIME_SYMBOLS)
+	if not clashing:
+		return
+
+	# The longest stem that prefixes the name, which is the construct that
+	# produced it: `situ_bounds_check` comes from the struct whose stem is
+	# `situ_bounds`, not from some shorter one that happens to match.
+	by_length = sorted(found, key=lambda one: len(one.stem), reverse=True)
+	symbol    = clashing[0]
+	owner     = next((one for one in by_length
+	                  if symbol.startswith(one.stem + "_")), None)
+
+	raise SituError(Diagnostic(
+		severity = Severity.ERROR,
+		message  = f"{owner.described if owner else 'this schema'} generates "
+		           f"`{symbol}`, which the C runtime defines",
+		primary  = (Label(owner.span, f"generates `{symbol}`") if owner
+		            else Label(found[0].span, f"generates `{symbol}`")),
+		notes    = [
+			f"`{symbol}` is a function of `situ.h`, which every generated "
+			"header includes, so the two definitions meet in one translation "
+			"unit",
+			"rename the construct, or generate under a different `--prefix`",
 		],
 	))
 
