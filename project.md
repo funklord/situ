@@ -31304,6 +31304,111 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.559 `import` resolved names and nothing downstream was told
+
+**Two schemas importing one file would not link.** `raidcfgd` reported it
+and it reproduces in one command:
+
+    /usr/bin/ld: multiple definition of `situ_str_check';
+                 snapshot.c: first defined here
+    /usr/bin/ld: multiple definition of `situ_str_validate'
+
+`common.situ` holds `str`, their envelope and their snapshot each import
+it, and each generated `.c` defines its pair with external linkage. They
+work around it by generating under `rcs_` and `rcm_`, which makes the
+shared type two types rather than one.
+
+**C only, measured rather than assumed.** C++ puts everything in class
+member functions, which are implicitly inline; Rust and Python have module
+namespaces. Two generated pairs plus two consumer translation units link
+and run in all three. In C exactly two functions per struct have external
+linkage -- `check` and `validate` -- and everything else in the header is
+already `static inline`.
+
+**So an imported struct's pair is `static inline` in the header now, and an
+owned struct's is unchanged.** The line is provenance, and it states
+something rather than merely turning the linkage off: **this translation
+unit is the definition of what the schema owns, and a struct it merely
+imported may be defined by another compilation whose copy need not agree.**
+One copy per translation unit is what the rest of the header already does.
+
+**`Schema.root` already existed, with a docstring saying exactly this.** It
+reads *`import` splices another file's declarations into `decls`, ahead of
+this file's own, so position no longer says whose claim a declaration is --
+`decl.span.source.path` does.* It was built so a whole-compilation
+directive could be compared against the file that wrote it (26.295), and
+**nothing downstream had ever asked.** The emitter needed one predicate and
+no new data.
+
+**The `#define`s of the check ids had to move above the bodies**, which the
+external form hid: it declares in the header and defines in the `.c`, so
+the macros could sit after the prototypes and still precede the
+definitions. Put both in one file and the order is load-bearing.
+
+**And a second fault, found while building the fixture, which is worse than
+the one reported.** `--define` on a const declared in an imported file
+edits the importing file at the imported file's offsets:
+
+    const CAP = 8;              in sized.situ, the `8` at offset 39
+    import "sized.situ";        in a.situ, offset 39 is the `d`
+
+    $ situc build --define CAP=16 a.situ
+    error: cannot read `size16.situ`
+
+`apply_defines` splices at the const value's own span, and `parse`
+**expands imports** -- so the mapping it builds contains imported consts
+whose spans belong to another file. Its docstring argues for the method in
+as many words: *the span comes from the parse, so this is exact rather than
+a substitution over text that looks like a declaration.* The method is
+exact about a file; the parse it came from was the merged schema.
+
+**It errored only because the damage landed on a path.** Anywhere the
+offsets land on something that still parses, it is a silently different
+schema. Refused now, naming the file the const is declared in -- and
+refused rather than made to work, because an imported file is re-read from
+disk on every parse, so there is no single source for a splice to edit and
+setting an imported const has no spelling yet. That gap is recorded rather
+than closed.
+
+**Why none of this was caught: no schema in this tree uses `import` at
+all.** Zero corpus coverage, so the compile sweep, the differential oracle,
+the four-way agreement and the walker comparison have never read an
+imported type -- the feature is held up entirely by unit tests over strings
+and temp files. **A construct with no corpus schema is a construct whose
+sweeps have not been asked whether they can read it.**
+
+**And they cannot, which is measured rather than guessed.** A pair of
+corpus schemas was written, generated, and backed out again:
+`importer.situ` fails **22 tests across 10 files** with `import` needs a
+schema that came from a file -- 17.0a's own designed refusal, arriving
+because the sweeps read `parse_text(path.read_text())` and throw the path
+away. **29 sites in 13 files** discard it, and four more gates fail on list
+membership rather than parsing: the generated build's schema list, the
+oracle's excuse list, the walker's corpus subset, and the
+expression-coverage sweep.
+
+So corpus coverage for `import` is a second piece of work with its own
+mechanical proof -- the invariant being that for a schema with no import
+the two parses agree -- and it is not this entry's. What protects the fix
+meanwhile is the link test: four translation units compiled, linked and
+run, with a control that reproduces the reported `multiple definition`
+inside the suite. That is narrower than corpus coverage and sharper for
+this fault.
+
+**Controls, and the first one proved the wrong thing.** Reverting only the
+header branch made the link fail with *undefined reference* -- neither file
+defining the pair -- which is a linkage fault and not the one reported.
+Reverting both sites gives `multiple definition of situ_str_check`, the
+reported failure reproduced inside the suite. The define guard has the same
+shape: its two halves overlap, and disabling the refusal alone leaves the
+filter, which already prevents the corruption by refusing with a vaguer
+message. Both reverted, the test reports `DID NOT RAISE` and the corruption
+comes back.
+
+**A schema with no imports generates byte-identical output**, checked
+against the previous commit's emitter on `edges.situ` rather than argued
+from the diff.
+
 ### 26.558 A size bound wider than the type carrying it, in six places
 
 **`raidcfgd` reported one constant and the class reaches six
