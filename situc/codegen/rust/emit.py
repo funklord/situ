@@ -6528,9 +6528,26 @@ class Emitter:
 				f"\t\t{count}",
 				"\t}"]),
 			"",
-			f"\t/// Element `index`. Bounded by the count as well as the",
-			"\t/// extent: bytes after the array are inside the view and are",
-			"\t/// not elements.",
+			# WHAT IT COSTS, where it costs anything -- see the Python
+			# emitter's note and 0060. A fixed-size element is indexed; a
+			# walked one costs its index, so a loop over all of them is
+			# quadratic. Spelled out rather than written with the same
+			# characters the emitted line uses: a comment carrying the
+			# literal mark made two sabotages land on the comment and
+			# establish nothing.
+			*([f"\t/// Element `index`. Bounded by the count as well as the",
+			   "\t/// extent: bytes after the array are inside the view and are",
+			   "\t/// not elements."]
+			  if nested.layout.is_fixed_size else [
+				f"\t/// Element `index`. Bounded by the count as well as the",
+				"\t/// extent. Walked: these have no single size, so there is",
+				"\t/// no stride to index by.",
+				"\t///",
+				"\t/// O(index). A loop calling this for every element is",
+				"\t/// O(n^2), and there is no cursor here to replace it with",
+				f"\t/// -- hold `at` yourself, build each {inner} over",
+				"\t/// `&self.bytes[at..]`, and advance by its `extent()`.",
+			  ]),
 			f"\tpub fn {name}(&self, index: usize) -> Result<{inner}<'_>> {{",
 			*([] if count is None else [
 				f"\t\tif index >= self.{_ident(base + '_count')}() {{",

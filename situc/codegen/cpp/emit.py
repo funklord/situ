@@ -3622,8 +3622,27 @@ class Emitter:
 				]
 			return lines + [
 				"",
-				f"\t/* Element `index` of a run whose elements have no single",
-				"\t * size: walked, because there is no stride to index by. */",
+				# WHAT IT COSTS, because the capability map does not say.
+				# `access=Sequential` is honest about the class and reads
+				# like a constant: reaching element `index` walks `index`
+				# elements, so a loop over all of them is quadratic. Measured
+				# in C on 1024 four-byte elements, 6.56 ms against 0.0056 ms
+				# for a cursor -- 1177 times (0060).
+				f"\t/** Element `index` of a run whose elements have no single",
+				"\t * size: walked, because there is no stride to index by.",
+				"\t *",
+				"\t * O(index). A loop calling this for every element is",
+				"\t * O(n^2), and there is no cursor here to replace it with",
+				"\t * -- hold `at` yourself, take each element with",
+				"\t * `situ_view_sub(raw(), at, raw().limit - at, &raw)` and",
+				# The element class is deliberately NOT named here.
+				# `{inner}(raw).extent()` backticked is an explicit link
+				# request Doxygen cannot resolve, and the bare `::situ::name`
+				# is an automatic one -- the first failed the doc gate on
+				# three schemas. What a reader needs is `extent()`, and the
+				# accessor's own signature already says what it hands back.
+				"\t * advance by the element's own `extent()`.",
+				"\t */",
 				f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,",
 				f"\t\t\t{inner} &out) const noexcept",
 				"\t{",

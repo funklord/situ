@@ -7576,6 +7576,27 @@ class Emitter:
 					" walked. */",
 				]
 			lines.extend([
+				# WHAT THIS COSTS, because the capability map does not say.
+				# `access=Sequential` is honest about the class and a reader
+				# takes it for a constant: it means reaching element `index`
+				# walks `index` elements, so a loop over every element is
+				# quadratic. Measured on a run of 1024 four-byte elements,
+				# 6.56 ms against 0.0056 ms for a cursor -- 1177 times, on a
+				# four-kilobyte message (0060).
+				#
+				# `raidcfgd` reported the symptom from a tree of these and
+				# wrote the cursor by hand, which is the right answer and is
+				# the one thing this header does not offer.
+				f"/** Element `index`, walked: these have no single size, so",
+				" * there is no stride to index by.",
+				" *",
+				f" * O(index). A loop calling this for every element is",
+				" * O(n^2), and there is no cursor here to replace it with --",
+				" * hold `at` yourself, take each element with",
+				" * `situ_view_sub(view, at, view.limit - at, &element)` and",
+				f" * advance by `{ident(self.prefix, nested or '', 'extent')}"
+				"(element)`.",
+				" */",
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'at')}"
 				"(situ_view_t view, uint32_t index, situ_view_t *out)",

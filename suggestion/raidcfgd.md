@@ -94,6 +94,64 @@ costs what. The map already says `access=Sequential`; it does not say
 > checks, and the flat `import` colliding at link.
 >
 > (Every one of these has its own answer below now.)
+>
+> **Settled as decision 0060, and you were pointing at the right axis.**
+> We assumed at first that the cost you hit lived on `offset` rather than
+> `access`, measured both, and you were right about the one you named.
+>
+> **`access=Sequential` understates it by a factor that grows with your
+> data.** C at `-O2`, a counted run of four-byte elements, `_at(i)` for
+> every `i` against a cursor:
+>
+>     n       _at(i) for every i      a cursor      ratio
+>     16            0.0022 ms        0.0001 ms        18
+>     256           0.4017 ms        0.0014 ms       288
+>     1024          6.5589 ms        0.0056 ms      1177
+>
+> 6.56 ms for a four-kilobyte message. `_at(index)` walks from the start
+> every call, so reaching element N is O(N) and your loop is O(N^2). The
+> axis says *cannot reach element N directly*, which is true and reads
+> like a constant.
+>
+> **The member chain is a different axis and it has the route you
+> wanted.** `offset=Dynamic` is the chain; `_extent_from(at)` is public,
+> documented per function, and makes a full read linear -- 65 times at
+> k=64, with identical offsets at every k. That is why you found the
+> chain's cost and had to write the run's cursor yourself: the chain has a
+> one-pass route and **a run has none.**
+>
+> **What the generated header says now**, which is your suggestion taken:
+> a walked element accessor carries `O(index)`, the `O(n^2)` consequence
+> of looping over it, and the cursor to write instead -- hold `at`, take
+> each element with a sub-view, advance by the element's own `extent`.
+> Four backends. An indexed accessor says nothing, because for a
+> fixed-size element it would be noise.
+>
+> **What the map will not say, and why.** `Sequential` is a property of
+> the format: element N is not directly reachable. That a loop over all N
+> is quadratic is a property of the loop YOU write, and a capability
+> vector does not describe the caller. So the class stays in the map and
+> the number goes beside the accessor, which is where you were standing
+> when nobody told you.
+>
+> **Two things recorded for the holder rather than done, with their cost
+> measured.** `offset=Dynamic(k)` would put the chain length in the map --
+> about 120 committed lines and an inverted numeric-strength rule -- and
+> it is worth taking, because inserting a variable member today lengthens
+> every later chain with no map diff at all, which is the one thing 18.1
+> promises a map is for. And a run wants an element cursor, `next(view,
+> at, &element, &next_at)` or similar: a new public API in four backends
+> rather than a correction, which is not ours to add.
+>
+> **One thing worth saying plainly, since the question invites the
+> opposite conclusion.** No capability says whether the generated code
+> achieves the bound the format allows. 26.555's 3^k chain and today's
+> linear one carry the same vector on every axis. That half is a gate, not
+> a map, and 0060 names it -- so a green map is not evidence of a fast
+> decoder, and your own benchmark remains the only thing that is.
+>
+> Nothing of yours moves: 42 committed maps and 42 wires regenerate
+> byte-identical.
 
 ## 2. `_required` wraps on a `u32` length
 
@@ -459,6 +517,7 @@ script.
 > this file is answered where it sits: the exponential accessors, `_required`
 > wrapping on a `u32` and the silent stop over a counted run each carry their
 > own note now, and so do the `SIZE_MAX` truncation, the flat `import` and
-> the no-op nested encoding checks. **What is still open is your question
-> about what the capability map's `access=Sequential` costs.** Not answered
-> by this and not forgotten.
+> the no-op nested encoding checks. **Your `access=Sequential` question is
+> settled as decision 0060**, with two larger pieces recorded for the
+> holder: `offset=Dynamic(k)` in the map, and an element cursor for a run.
+> **Nothing in this file is unanswered now.**

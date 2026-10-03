@@ -4197,7 +4197,23 @@ class Emitter:
 			"", "\t@property", f"\tdef {name}_count(self) -> int:",
 			f"\t\treturn {count}",
 			"", f"\tdef {name}(self, index: int) -> {inner}:",
-			f'\t\t"""Element `index`, bounded by the count as well as the extent."""',
+			# WHAT IT COSTS, where it costs anything. A fixed-size element is
+			# indexed and the sentence would be noise; a walked one is
+			# O(index), so a loop over every element is quadratic, and
+			# `access=Sequential` says the class without saying that (0060).
+			*([f'\t\t"""Element `index`, bounded by the count as well as'
+			   ' the extent."""']
+			  if nested.layout.is_fixed_size else [
+				f'\t\t"""Element `index`, bounded by the count as well as',
+				"\t\tthe extent. Walked: these have no single size, so there",
+				"\t\tis no stride to index by.",
+				"",
+				"\t\tO(index). A loop calling this for every element is",
+				"\t\tO(n^2), and there is no cursor here to replace it with",
+				f"\t\t-- hold `at` yourself, build each {inner} over",
+				"\t\t`self._msg` at `self._at + at`, and advance by its",
+				'\t\t`_extent`."""',
+			  ]),
 			f"\t\tif not 0 <= index < self.{name}_count:",
 			f"\t\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
 			*([f"\t\treturn {inner}(self._msg,",
