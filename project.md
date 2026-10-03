@@ -31304,6 +31304,96 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.560 Six branches stated the rule and two did not
+
+**`raidcfgd` reported a dead line and the fault underneath renumbers a
+contract.** Their observation, reproduced exactly: a nested `[encoding =
+utf8]` emitted in the PARENT's `check`, at the parent's base with a length
+of `0u`.
+
+    /* rec.name.v [encoding = utf8] */
+    if (!situ_utf8_valid((situ_base(view)) + 3u, (uint32_t)0u)) {
+
+The length is zero because the member's extent reads a field of the NESTED
+struct, which the parent cannot resolve. So the check cannot fire, and they
+are right that the real one runs in `str_validate` -- the parent does
+delegate, which we checked before anything else.
+
+**What they could not see from one schema is that the id space moves.**
+`_member_checks` states *an element's own members are checked under the
+element's struct, not here* in six of its eight branches, each with the
+dotted-path test that implements it. The span attributes and a varint's
+value bounds did not have it. Measured on `outer { inner i; u8 kind [max =
+3]; }`:
+
+    C       OUTER_I=0  OUTER_I_V=1  OUTER_I_NAME=2  OUTER_KIND=3
+    C++     check_i=0                               check_kind=1
+    Python  CHECK_I=0                               CHECK_KIND=1
+    Rust    CHECK_I=0                               CHECK_KIND=1
+    walker  outer has 2 members, not 4
+
+**Five-to-one, and `SITU_OUTER_KIND_CHECK` is 3 where everything else says
+1.** 0051 calls the id the contract and the name a convenience -- *a
+consumer keys on the first and a person reads the second* -- so a consumer
+keying on the id reads a different member depending on which backend
+generated the code it links against.
+
+**With a fixed-length member the same branch fires and is merely
+redundant**, which is the same fault wearing a working costume:
+`outer.i.name [nul_terminated]` at length 4 is a real check of bytes the
+delegation has already checked. Dead where the length is data-decided,
+redundant where it is not, and wrong about the ids either way.
+
+**The gate is not the dotted test the other six use, and that distinction
+is the whole of the fix.** A member of a `sealed` region is dotted too and
+has no nested validator to delegate to: its own check is the only one there
+is. `_checked_by_its_own_type` asks whether the member's owner is a
+struct-typed member this `check` DELEGATES to, and `_delegates` is the
+condition the struct-typed branch was already deciding inline -- now asked
+once, so what one skips is exactly what the other emits. Where the
+delegation is declined, because no sub-view was emitted or the nested type
+has no extent, the member keeps its own check, which is then the only
+coverage.
+
+**The population was enumerated rather than patched at the reported
+instance.** A schema carrying `[max]`, a text number, a varint bound,
+`[nul_terminated, encoding]`, `[must_eq]` on a run and `reserved
+[must_be_zero]` inside a nested struct says which branches re-emit: **two
+of eight**. The other six decline, which is what makes this a missing rule
+rather than a design.
+
+**Controls, four of them, each reverted.** The two gates separately: each
+alone fails the four-way comparison naming `c and cpp`. The gate's
+PRECISION: degraded to the bare dotted test the other six use, the region
+case fails on its only check being gone -- which is the test that says a
+naive fix would have deleted real coverage silently. And the behavioural
+one, because removing a check is the kind of fix that removes coverage:
+with the delegation's refusal discarded, the probe fails at check 3, the
+check asserting a bad frame is still refused.
+
+    good  rc=0  which=0xFFFFFFFF      nothing refused
+    bad   rc=2  which=0               SITU_REC_NAME_CHECK
+
+**A gate for exactly this already existed and was green.**
+`test_the_backends_name_the_same_members_in_the_same_order` compares all
+four backends' ids per corpus schema, and its docstring records three
+earlier finds of this class. **No corpus schema has a nested struct whose
+member carries a span attribute or a varint bound**, so the gate was
+correct and its population never contained the case. Its reading is
+factored out now and the new case calls it directly, which is one witness
+over two populations rather than a second copy of four regexes.
+
+**Every corpus schema's generated C is byte-identical before and after** --
+84 files from 42 schemas -- which is the same fact from the other side, and
+is how the change was shown surgical rather than argued to be.
+
+**One divergence met and left alone.** For a `sealed` region C emits the
+member's span checks and the other three emit no ids at all, and within C a
+region member's `[max]` is declined by the foot's bare dotted test while
+its `[encoding]` was not. That is older than this fix, it is about what a
+gate's interior owes a validator, and it wants its own entry rather than a
+change made while passing.
+
 ### 26.559 `import` resolved names and nothing downstream was told
 
 **Two schemas importing one file would not link.** `raidcfgd` reported it
