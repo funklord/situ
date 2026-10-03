@@ -70,8 +70,8 @@ from situc.traverse import (
 	region_decodes,
 	is_run,
 	local_name,
-	element_bytes, enforceable_max, is_counted_run, matched_values,
-	obligation,
+	bound_cannot_fail, element_bytes, enforceable_max, is_counted_run,
+	matched_values, obligation,
 	pad_alignment,
 	preceding_parts,
 	obligations, own_entries, own_members, recursion_cycle,
@@ -7993,6 +7993,21 @@ class Emitter:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+			# A bound the member's own type already guarantees generates a
+			# comparison nothing can make true. C's compiler proves it and
+			# refuses the build under this project's flags; the other three
+			# emit it in silence. Omitted in all four, because a check that
+			# cannot fire is worse than none wherever it sits, and because
+			# omitting it in one would renumber that backend's check ids
+			# against the other three (0061).
+			try:
+				folded = evaluate(attr.value, self.resolved.layout.env)
+			except SituError:
+				folded = None
+			if folded is not None \
+					and bound_cannot_fail(placement, attr.name, folded):
+				continue
+
 			try:
 				expected = str(evaluate(attr.value, self.resolved.layout.env))
 				read_as  = read

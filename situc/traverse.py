@@ -2151,6 +2151,51 @@ def declared_value_bounds(placement: Placement,
 	return (found.get("min"), found.get("max"))
 
 
+def bound_cannot_fail(placement: Placement, attr: str, folded: int) -> bool:
+	"""Whether the member's own type already guarantees this `[min]`/`[max]`.
+
+	`u8 a [max = 255]` states something true that nothing can violate, so the
+	comparison generated for it is one the compiler proves false:
+
+	    error: comparison is always false due to limited range of data type
+	           [-Werror=type-limits]
+
+	`-Wextra` turns that on and this project's own flags make it an error, so
+	six spellings -- `[max]` at an unsigned ceiling, `[min = 0]` on an
+	unsigned, and either limit of a signed type -- generated C that situc's
+	own gate would not compile (0061).
+
+	**Not a refusal, and that was measured rather than argued.** A bound may
+	be a `const`: `u8 x [max = CAP]` with `--define CAP=100` is a bound that
+	bites, and the same schema at `CAP=255` is this case. Refusing the
+	schema would refuse one that is correct for every other value of its own
+	constant.
+
+	**Conservative outside the plain integers.** A BCD field's bound is
+	compared against the decoded value rather than the packed nibbles, and a
+	fixed-point one is in units this does not establish -- so neither is
+	answered here and both keep their checks. The six spellings that broke
+	the build are all `uint`/`sint`, so nothing is lost by declining to guess.
+	"""
+	from situc.expr import scalar_interval
+	from situc.types import ScalarKind
+
+	scalar = placement.scalar
+	if scalar is None or scalar.kind not in (ScalarKind.UINT, ScalarKind.SINT):
+		return False
+	# `must_eq` is a point, which a type cannot guarantee short of a type with
+	# one value: `u1 [must_eq = 0]` fails on a 1.
+	if attr not in ("min", "max"):
+		return False
+
+	domain = scalar_interval(scalar.bits, scalar.signed)
+	if attr == "max":
+		# `hi` is an int for every width this reaches; the guard is for the
+		# type, which admits None for an expression nothing bounds above.
+		return domain.hi is not None and folded >= domain.hi
+	return folded <= domain.lo
+
+
 def pinned_runs(placement: Placement) -> tuple[bytes, ...] | None:
 	"""The byte runs this member may hold, or None where it holds none.
 

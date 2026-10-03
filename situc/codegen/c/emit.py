@@ -66,7 +66,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio,
 	extent_parts, extern_symbol, frameable,
 	element_bytes, has_computable_extent, index_entry_bytes,
-	indexed_elements, is_run, walk_order, enforceable_max,
+	indexed_elements, is_run, walk_order, enforceable_max, bound_cannot_fail,
 	is_counted_run, matched_values, pad_alignment, preceding_parts,
 	obligation, obligations,
 	own_members,
@@ -9755,6 +9755,20 @@ class Emitter:
 			if attr.name not in ("must_eq", "max", "min") or attr.value is None:
 				continue
 			operator = {"must_eq": "!=", "max": ">", "min": "<"}[attr.name]
+
+			# A bound the member's own type already guarantees generates a
+			# comparison nothing can make true, and `-Wtype-limits` proves
+			# it: `u8 a [max = 255]` broke the C build under this project's
+			# own flags. Omitted in all four backends rather than in the one
+			# that complains, because all four were emitting it and a check
+			# that cannot fire is worse than none wherever it sits (0061).
+			try:
+				folded = evaluate(attr.value, env)
+			except SituError:
+				folded = None
+			if folded is not None \
+					and bound_cannot_fail(placement, attr.name, folded):
+				continue
 
 			try:
 				expected: str = str(evaluate(attr.value, env))
