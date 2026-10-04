@@ -1236,11 +1236,21 @@ struct outer {
 }
 """
 
-#: The same shape with the interior in a `sealed` REGION rather than a nested
-#: struct. A region's member is dotted too and has no validator to delegate
-#: to, so its own check is the only one there is -- which is why the gate asks
-#: whether something else checks the member rather than whether its path has a
-#: dot in it. This is the control for that distinction.
+#: The same shape with the interior in a REGION rather than a nested struct.
+#: A region's member is dotted too and has no validator to delegate to, so its
+#: own check is the only one there is -- which is why the gate asks whether
+#: something else checks the member rather than whether its path has a dot in
+#: it. This is the control for that distinction.
+#:
+#: **`authenticated` rather than `sealed`, and the difference is not
+#: cosmetic.** This fixture was `sealed` when it was written for 26.560, and
+#: 26.564 established that no reader may validate a `sealed` region's
+#: interior at all: its accessors take a gate that `open()` will not hand out
+#: until the tag has verified, so `validate` reading those bytes is parsing
+#: ciphertext. The test asserted that read as correct for four days. An
+#: `authenticated` region is plaintext under a tag, its accessors take a
+#: view, and its member's check really is the only coverage there is -- which
+#: is what this control needs and what `sealed` only appeared to give it.
 REGIONED = """target buffer;
 endian big;
 
@@ -1257,7 +1267,7 @@ impl aead extern "x";
 
 struct withregion {
 	u8  kind;
-	sealed body(aead) {
+	authenticated body {
 		u8  label[4] [nul_terminated, encoding = utf8];
 	}
 	tag u8[16];
@@ -1294,20 +1304,29 @@ def test_a_nested_member_is_numbered_by_its_own_type() -> None:
 def test_a_region_member_keeps_the_check_nothing_else_makes() -> None:
 	"""And the gate is about delegation rather than about a dot.
 
-	A `sealed` region's member has a dotted path and no nested validator, so
-	its own check is the only coverage there is. A gate keyed on the dot --
-	which is what the six branches above use, and what this one deliberately
-	does not -- would have deleted it silently.
+	An `authenticated` region's member has a dotted path and no nested
+	validator, so its own check is the only coverage there is. A gate keyed on
+	the dot -- which is what the six branches above use, and what this one
+	deliberately does not -- would have deleted it silently.
 
-	Asserted as a presence rather than through the four-way comparison,
-	because the other three emit no ids at all for a region: that divergence
-	is older than this fix and is not what this test is about.
+	Through the four-way comparison as well as by presence, which the `sealed`
+	version of this fixture could not do: 26.564 took the interior checks of a
+	`sealed` region away from C because reading those bytes is parsing
+	unauthenticated ciphertext, and before that C was the only backend
+	emitting them. An `authenticated` region is readable, all four check it,
+	and the comparison is available.
 	"""
 	schema, resolved = _resolved_text(REGIONED, "regioned")
 	header = generate_c(schema, resolved, "regioned").header
 	source = generate_c(schema, resolved, "regioned").source
 
-	assert "#define SITU_WITHREGION_BODY_LABEL_CHECK 0u" in header
+	# `..._LABEL_CHECK`, not `..._BODY_LABEL_CHECK`: an `authenticated`
+	# region is transparent for naming where a `sealed` one is a scope, so
+	# the member's identifier does not carry the region. Noted because the
+	# two spellings are what makes swapping this fixture more than a word.
+	assert "#define SITU_WITHREGION_LABEL_CHECK 0u" in header
 	assert "situ_utf8_valid" in source, \
 		"the region member's encoding check is the only one it has"
 	assert "situ_nul_terminated" in source
+	assert_the_four_number_alike(schema, resolved, "regioned",
+	                             "regioned.situ")

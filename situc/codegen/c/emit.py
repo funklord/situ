@@ -9432,6 +9432,28 @@ class Emitter:
 			# same fault wearing a working costume.
 			if self._checked_by_its_own_type(struct, placement):
 				return []
+
+			# AND NOT THROUGH A GATE. `validate` holds a `situ_view_t` and
+			# the interior of a `sealed` region is reachable only through the
+			# gated type, whose own doc comment says *the only thing that
+			# produces one is `<region>_open()`, which will not hand one out
+			# until the tag has verified -- parsing attacker-controlled
+			# plaintext before authenticating it is therefore not discouraged
+			# here; it does not compile.* This branch read
+			# `situ_base(view) + 3u` and did exactly that, by the one route
+			# the design says is impossible.
+			#
+			# Measured: a `held` whose sealed six bytes carry 0x80 0x81 0x82
+			# 0x83 -- which is what an encrypted field looks like -- was
+			# REFUSED by C for not being UTF-8 and accepted by the other
+			# three, so `validate` was judging ciphertext and the four
+			# disagreed about a real message (26.564).
+			#
+			# `unverified_ok` is the schema saying a member may be read
+			# before verification, and `_gate_type` already answers for both
+			# -- so a member the author exempted keeps its checks.
+			if self._gate_type(struct, placement) is not None:
+				return []
 			attributed = [
 				*(self._nul_check(struct, placement, scalar)
 				  if _has_attr(placement.attrs, "nul_terminated")
