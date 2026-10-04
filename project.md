@@ -31304,6 +31304,121 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.564 `validate` read the inside of a sealed region
+
+**The generated gate type states the rule this broke, in its own doc
+comment:**
+
+    Every accessor for the interior takes this type, and the only thing
+    that produces one is situ_<region>_open(), which will not hand one
+    out until <tag> has verified. Parsing attacker-controlled plaintext
+    before authenticating it is therefore not discouraged here; it does
+    not compile.
+
+**C's `validate` read `situ_base(view) + 3u` and did exactly that**, by the
+one route the design says is impossible. `validate` holds a plain view and
+is documented as *the first thing a parser runs and the last thing an
+attacker controls*, so every byte it reads is unauthenticated -- and for a
+`sealed` region those bytes are ciphertext.
+
+**Measured on a `held` whose sealed six bytes carry `80 81 82 83`**, which
+is what an encrypted field looks like from outside the gate:
+
+    C        SITU_ERR_CONSTRAINT -- not valid UTF-8
+    Python   accepted
+    C++      accepted
+    Rust     accepted
+
+**So C refused a legitimate message on the strength of ciphertext, and the
+four disagreed about a real input.** Both halves are faults and the second
+is the one that would have been noticed: a format whose sealed field
+happens to encrypt to invalid UTF-8 is rejected by the C reader and
+accepted by the other three.
+
+**Only the span attributes leaked.** A `[max]` inside a region was already
+declined by the dotted-path dispatch at the foot of `_member_checks`, which
+is why this surfaced as `[encoding]` and `[nul_terminated]`. It is the same
+branch 26.560 gated for a nested struct's members, one condition short
+again -- the fourth time this session that the branch population was named
+incompletely.
+
+**`_gate_type` is the discriminator and it already existed**, answering for
+`sealed_by` and for `unverified_ok` together. So a member the author
+declared readable before verification keeps its checks, and an
+`authenticated` region -- plaintext with a tag over it, accessors taking a
+view rather than a gate -- is untouched. `example/usb` is that shape, and
+all four backends still check its interior.
+
+**No corpus schema changes**, measured against a worktree at HEAD rather
+than against a baseline four commits old, which is the mistake 26.563
+recorded and this nearly repeated: the first diff reported `usb` and `usb`
+was 26.563's own change.
+
+**What is now enforced by nobody, and it is the holder's.** The interior's
+`[encoding]`, `[nul_terminated]` and `[max]` are declared and checked by no
+reader. The right place is after the gate opens -- either `<region>_open()`
+validating as it hands the gate out, or a `<region>_validate(gate)` a
+caller runs once it has one. The first cannot be forgotten and changes what
+`open` costs; the second is additive and can be. **Not invented here**,
+because it is a new public API in four backends and the choice is about
+what `open` promises.
+
+**The gate found this change by failing, and what it was asserting is the
+uncomfortable part.**
+`test_a_region_member_keeps_the_check_nothing_else_makes` is 26.560's own
+control -- written four days ago to prove that gate was about delegation
+rather than about a dotted path -- and its fixture was a `sealed` region.
+So it asserted, as the correct answer, the very read this entry establishes
+nothing may do. The test was right about its subject and wrong about its
+example, which is a combination nothing in the suite can see: a control
+that passes is a control nobody re-reads.
+
+Its fixture is `authenticated` now, which is what the control actually
+needed: a region whose bytes are readable, whose member's check really is
+the only coverage there is, and which a dotted-path gate would therefore
+have deleted. It is stronger than before as well, because all four backends
+check an `authenticated` interior and the four-way comparison is available
+where the `sealed` version could only assert a presence. One word of the
+fixture also moved an identifier -- `SITU_WITHREGION_LABEL_CHECK` rather
+than `..._BODY_LABEL_CHECK`, an `authenticated` region being transparent
+for naming where a `sealed` one is a scope.
+
+**And a second finding, met on the way and not fixed, because the four
+backends give it three different answers.** A text number at a dynamic
+offset *inside a gated region*:
+
+    struct m2 {
+        u8  kind;
+        sealed body(aead) {
+            vlen         v;          // makes what follows dynamic
+            decimal u16  d[3];
+        }
+        tag u8[16];
+    }
+
+    C        AssertionError: offset is dynamic  (situc crashes)
+    C++      declines the member
+    Python   emits `d_count` and `d(index)`
+    Rust     emits accessors
+
+**Three answers and a crash**, where the tree's own standard is one. The
+same schema outside a region builds in all four, so the region is part of
+the trigger; replacing the varint with a `u8` builds. C's is an assertion
+out of `layout.offset_bytes` reached from `_text_value_helper` rather than
+a diagnostic, which is the shape `_member_checks`' own comments complain
+about elsewhere. Recorded with the reproduction rather than guessed at:
+which of the three answers is right is a question about what a gate's
+offsets are, and `test_backends_refuse_the_same_members` did not see it
+because no corpus schema has the shape.
+
+**A third, pre-existing and harmless today.** A struct with nothing
+`validate` can check still has `check` DEFINED in the `.c` and not declared
+in the header, so `-Wmissing-prototypes` objects. It predates this change
+-- a struct with no constraints at all already does it -- and the project's
+own flags do not include that warning, so nothing is broken. Measured
+rather than assumed, because this change makes one more schema reach the
+state.
+
 ### 26.563 A bound the type guaranteed, and the corpus case that decided it
 
 **Settled as 0061.** 26.558 met this on its way past and set it aside for
