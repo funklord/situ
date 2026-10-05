@@ -5729,10 +5729,23 @@ class Emitter:
 			f" * start of the member and its delimiter, in the range of"
 			f" {scalar.name}.",
 			" *",
+			# This sentence used to claim no OTHER scalar getter in the
+			# header could fail, and `edges.h` carried it five times --
+			# five getters each claiming to be the only one -- while
+			# holding 23 getters that take an out-parameter and return an
+			# error, a `[since]` member's and a varint's among them
+			# (26.565). What is true is the contrast with a fixed-width
+			# read, which is what the sentence was reaching for.
+			#
+			# The retired wording is deliberately NOT quoted here: a
+			# comment carrying the same literal as an emitted line is how
+			# two sabotages in this session landed on the comment and
+			# established nothing.
 			" * This one takes an out-parameter because the conversion can"
-			" fail, which",
-			" * no other scalar getter here can. Empty digits, a byte that is"
-			" not one,",
+			" fail,",
+			" * which reading a fixed-width field cannot. Empty digits, a"
+			" byte",
+			" * that is not one,",
 			f" * and anything {said} are all SITU_ERR_CONSTRAINT. */",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'get')}"
