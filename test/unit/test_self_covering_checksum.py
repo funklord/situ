@@ -27,7 +27,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-from every_schema import ROOT
+from every_schema import ROOT, load_schema
 
 PREAMBLE = "target buffer;\nendian big;\n"
 
@@ -195,7 +195,7 @@ def test_python_computes_the_checksum_the_kernel_did(tmp_path: Path) -> None:
 	two of the four are executed and the other two are asserted to emit the
 	names, which is a weaker thing and is said here rather than assumed.
 	"""
-	schema   = parse_text(ROOT.joinpath("example/icmp/icmp.situ").read_text())
+	schema   = load_schema(ROOT / "example" / "icmp" / "icmp.situ")
 	resolved = resolve(schema, solve(schema))
 	(tmp_path / "unit.py").write_text(
 		generate_py(schema, resolved, "unit").module, encoding="ascii")

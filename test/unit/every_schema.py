@@ -52,3 +52,29 @@ def ids(paths: list[Path]) -> list[str]:
 	"""Parametrize ids that name the directory too: three of these are
 	`codecs.situ` or `edges.situ` to a reader of the file name alone."""
 	return [path.parent.name + "/" + path.name for path in paths]
+
+
+def load_schema(path: Path):  # type: ignore[no-untyped-def]
+	"""Parse a corpus schema, keeping the path an `import` resolves against.
+
+	`parse_text` discards it, and a schema parsed from a string has no
+	directory to resolve against -- so a corpus schema that imports is
+	refused with *`import` needs a schema that came from a file*, which is
+	17.0a's designed answer arriving in a sweep that meant no harm. Thirty
+	sites across fourteen files read a corpus schema that way, and the
+	feature therefore had no corpus schema at all: a pair written for it
+	failed 22 tests across 10 files on the first run (26.568).
+
+	Here rather than in each file, for the reason this module exists: the
+	question "which schemas does this repository build?" is answered once,
+	and so is "how is one read".
+
+	`utf-8` for every schema, where the sites it replaces said `ascii`,
+	`utf-8` or nothing. The read is strictly more permissive and situc is
+	what enforces a schema's declared `encoding`; a file the parser should
+	refuse is refused by the parser rather than by the open.
+	"""
+	from situc.diagnostics import Source
+	from situc.parser import parse
+
+	return parse(Source(str(path), path.read_text(encoding="utf-8")))

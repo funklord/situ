@@ -38,7 +38,7 @@ from situc.parser import parse_text
 from situc.resolve import resolve
 from situc.traverse import own_entries
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 
 from walker import image as image_reader
 
@@ -51,7 +51,7 @@ NESTED = "outer_body.nested"
 
 @pytest.fixture(scope="module")
 def edges() -> tuple[object, object]:
-	schema = parse_text(EDGES.read_text())
+	schema = load_schema(EDGES)
 	return schema, resolve(schema, solve(schema))
 
 
@@ -164,7 +164,7 @@ def test_the_two_derivations_of_coverage_agree(path: Path) -> None:
 	expected values were read off the schema rather than out of the
 	code.
 	"""
-	schema = parse_text(path.read_text())
+	schema = load_schema(path)
 	resolved = resolve(schema, solve(schema))
 
 	for name, held in resolved.structs.items():

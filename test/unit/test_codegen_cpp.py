@@ -26,7 +26,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 
 RUNTIME  = ROOT / "runtime"
 HOST_CXX = shutil.which("g++") or shutil.which("clang++")
@@ -1851,7 +1851,7 @@ def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 	will not let them share. The schema written to hold the awkward shapes is
 	the one a check globbing `example/` skips (26.31).
 	"""
-	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	built    = generate_cpp(parsed, resolved, schema.stem)
 

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from every_schema import ROOT
+from every_schema import ROOT, load_schema
 from situc import ast, capmap
 from situc.diagnostics import SituError
 from situc.layout import solve
@@ -543,7 +543,7 @@ def test_the_standard_library_declines_every_suite() -> None:
 	from situc.codegen.c import codectests
 
 	path   = Path(__file__).resolve().parents[2] / "std" / "codecs.situ"
-	schema = parse_text(path.read_text(encoding="ascii"))
+	schema = load_schema(path)
 	text   = codectests.generate(schema, "codecs")
 
 	assert "static void test_" not in text
@@ -558,7 +558,7 @@ def test_the_standard_library_generates_a_full_suite() -> None:
 
 	path   = Path(__file__).resolve().parents[2] / "std" / "codecs.situ"
 	source = path.read_text(encoding="ascii")
-	schema = parse_text(source)
+	schema = load_schema(path)
 	bound  = "\n".join(f'impl {decl.name} extern "my_{decl.name}";'
 	                    for decl in schema.codecs())
 	text   = codectests.generate(parse_text(source + "\n" + bound), "codecs")

@@ -1335,6 +1335,11 @@ UNORACLED = {
 	"keystore":  "a private record; its own header says every other example "
 	             "directory is a public format and this one is not",
 	"edges":     "carries the constructs no worked example has (26.27)",
+	# As edges, and for a construct rather than a format: `import` had no
+	# corpus schema at all, so the sweeps had never read an imported type
+	# (26.568). The pair describes nothing anybody else has implemented.
+	"shared":    "as edges: a type library for `importer` to import",
+	"importer":  "as edges: the only corpus schema that imports",
 	"header":    "as edges: a schema written to exercise this compiler",
 	"lenient":   "as edges",
 	"padded":    "as edges",

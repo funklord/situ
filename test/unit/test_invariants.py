@@ -19,7 +19,7 @@ from typing import Callable, Protocol
 
 import pytest
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 from situc.codegen.c.emit import generate as generate_c
 from situc.codegen.cpp.emit import generate as generate_cpp
 from situc.codegen.python.emit import generate as generate_py
@@ -85,7 +85,7 @@ def from_disk(relative: str) -> dict[str, str]:
 	what those protocols actually declare.
 	"""
 	path     = ROOT / relative
-	schema   = parse_text(path.read_text(encoding="ascii"))
+	schema   = load_schema(path)
 	resolved = resolve(schema, solve(schema))
 	return {name: "\n".join(emit(schema, resolved, "unit").files().values())
 	        for name, (emit, _) in BACKENDS.items()}

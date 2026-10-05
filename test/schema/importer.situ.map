@@ -1,0 +1,29 @@
+# situ capability map v1
+# schema: importer.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct record size=9..264 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  record.kind                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  record.taken                           offset=AbsoluteStatic(0x01) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.taken.seconds                   offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.taken.millis                    offset=AbsoluteStatic(0x05) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.name                            offset=AbsoluteStatic(0x07) size=Bounded(2, 257) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
+  record.name.len                        offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  record.name.v                          offset=AbsoluteStatic(0x09) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct stamp size=6 repr=ValueConverted
+  stamp.seconds                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  stamp.millis                           offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+
+struct str size=2..257 mutate=Shifting repr=ValueConverted
+  str.len                                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  str.v                                  offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

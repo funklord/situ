@@ -21,7 +21,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 
 RUNTIME = ROOT / "runtime" / "rust" / "situ_rt.rs"
 RUSTC   = shutil.which("rustc")
@@ -991,7 +991,7 @@ def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 		encoding="ascii")
 
-	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	module   = generate_rs(parsed, resolved, schema.stem).module
 
@@ -1011,7 +1011,7 @@ def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 def test_every_schema_generates(schema: Path) -> None:
 	"""The half that runs without rustc: generating is not compiling, but a
 	generator that raises does not get as far as either."""
-	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 
 	assert generate_rs(parsed, resolved, schema.stem).module

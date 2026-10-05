@@ -1,0 +1,20 @@
+// A schema that imports its types (17.0a), which nothing else here does.
+//
+// Flat, transitive and once per compilation are tested over temp files in
+// `test_imports.py`. What this adds is the other half: every sweep that
+// walks the corpus now walks a schema whose types arrived from another file.
+
+target buffer;
+endian big;
+
+import "shared.situ";
+
+struct record {
+	u8     kind [max = 7];
+	// `taken` rather than `at`: a member named `at` collides with the Python
+	// backend's own acquisition classmethod and breaks that module outright,
+	// which this fixture found and which is not what it is here to carry.
+	// Reproduced without any `import` and recorded separately (26.569).
+	stamp  taken;
+	str    name;
+}

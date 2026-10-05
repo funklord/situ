@@ -27,7 +27,7 @@ from situc.parser import parse_text
 from situc.resolve import resolve
 
 import python_floor
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 
 RUNTIME = ROOT / "runtime"
 HOST_CC = shutil.which("gcc") or shutil.which("cc")
@@ -1237,7 +1237,7 @@ def test_every_generated_module_parses_at_the_declared_floor(schema: Path) -> No
 	if python_floor.floor_version() >= (3, 12):
 		pytest.skip("the floor is 3.12 or later")
 
-	parsed   = parse_text(schema.read_text(encoding="utf-8"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	module   = generate_py(parsed, resolved, schema.stem).module
 
@@ -1260,7 +1260,7 @@ def test_every_schema_imports(schema: Path, tmp_path: Path) -> None:
 	runtime()
 	sys.path.insert(0, str(tmp_path))
 	try:
-		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		parsed   = load_schema(schema)
 		resolved = resolve(parsed, solve(parsed))
 		module   = generate_py(parsed, resolved, schema.stem).module
 
@@ -2043,7 +2043,7 @@ def test_every_generated_module_type_checks(tmp_path: Path) -> None:
 	            tmp_path / "situ_runtime.py")
 
 	for schema in SCHEMAS:
-		parsed   = parse_text(schema.read_text(encoding="utf-8"))
+		parsed   = load_schema(schema)
 		resolved = resolve(parsed, solve(parsed))
 		(tmp_path / f"{schema.stem}.py").write_text(
 			generate_py(parsed, resolved, schema.stem).module, encoding="ascii")

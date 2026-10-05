@@ -241,11 +241,11 @@ def test_every_struct_line_naming_a_tag_is_covered_by_it_throughout() -> None:
 	from situc.capability import Axis
 	from situc.resolve import resolve
 
-	from every_schema import SCHEMAS
+	from every_schema import SCHEMAS, load_schema
 
 	named = 0
 	for path in SCHEMAS:
-		parsed   = parse_text(path.read_text(encoding="ascii"))
+		parsed   = load_schema(path)
 		resolved = resolve(parsed, solve(parsed))
 		for name, struct in resolved.structs.items():
 			held = dict(struct.vector.values)[Axis.AUTH]

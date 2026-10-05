@@ -28,7 +28,7 @@ from situc.parser import parse, parse_text
 from situc.resolve import resolve
 from situc.traverse import obligations
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 
 RUNTIME  = ROOT / "runtime" / "c"
 
@@ -2749,7 +2749,7 @@ def test_the_smoke_input_clears_every_size_floor() -> None:
 
 	worst = 0
 	for path in SCHEMAS:
-		schema   = parse_text(path.read_text(encoding="utf-8"))
+		schema   = load_schema(path)
 		resolved = resolve(schema, solve(schema))
 		for struct in resolved.structs.values():
 			floor = struct.layout.size_bytes
@@ -2779,8 +2779,7 @@ def test_no_schema_has_an_interior_shape_the_harness_cannot_reach() -> None:
 
 	unreached = []
 	for path in SCHEMAS:
-		source   = path.read_text(encoding="utf-8")
-		schema   = parse_text(source)
+		schema   = load_schema(path)
 		resolved = resolve(schema, solve(schema))
 		text     = fuzz_module.generate(schema, resolved, path.stem)
 		if fuzz_module.UNREACHED in text:

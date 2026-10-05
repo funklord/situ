@@ -1,0 +1,24 @@
+// A type library for `importer.situ` to import.
+//
+// `import` had no schema in this corpus at all, so the compile sweep, the
+// differential, the four-way agreement and the walker comparison had never
+// read an imported type -- which is how 26.559's link collision reached a
+// consumer. This file and its importer are here so those sweeps read the
+// construct (26.568).
+//
+// It carries constraints on purpose: `check` and `validate` are the two
+// generated functions with external linkage, so a shared type with nothing
+// to check would be a fixture that cannot show that fault.
+
+target buffer;
+endian big;
+
+struct str {
+	u16  len [max = 255];
+	u8   v[len];
+}
+
+struct stamp {
+	u32  seconds [min = 1];
+	u16  millis [max = 999];
+}

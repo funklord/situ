@@ -39,7 +39,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import ResolvedSchema, resolve
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 
 sys.path.insert(0, str(ROOT))
 from walker import image as image_reader                # noqa: E402
@@ -49,6 +49,19 @@ IMAGE_SCHEMA = ROOT / "std" / "image.situ"
 
 def _resolved(text: str) -> tuple[ast.Schema, ResolvedSchema]:
 	schema = parse_text(text)
+	return schema, resolve(schema, solve(schema))
+
+
+def _resolved_file(path: Path) -> tuple[ast.Schema, ResolvedSchema]:
+	"""The same, for a schema on disk, keeping the path `import` needs.
+
+	Two helpers rather than one because both callers exist: nine of the
+	callers below hand over inline text, which has no path, and ten read a
+	file. The text form cannot resolve an `import` and says so, which is
+	17.0a working -- so the file form is what a corpus schema goes through
+	(26.568).
+	"""
+	schema = load_schema(path)
 	return schema, resolve(schema, solve(schema))
 
 
@@ -62,7 +75,7 @@ def image_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 	from situc.codegen.python import generate as generate_py
 
 	tmp = tmp_path_factory.mktemp("image")
-	schema, resolved = _resolved(IMAGE_SCHEMA.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(IMAGE_SCHEMA)
 	(tmp / "image.py").write_text(
 		generate_py(schema, resolved, "image").module, encoding="ascii")
 
@@ -178,7 +191,7 @@ def test_the_image_schema_packs_and_reads_back(image_module: ModuleType) -> None
 	If `std/image.situ` cannot be packed and read through its own generated
 	accessors, nothing downstream is worth checking.
 	"""
-	schema, resolved = _resolved(IMAGE_SCHEMA.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(IMAGE_SCHEMA)
 	blob, coverage   = packer.pack(schema, resolved)
 	seen = read_back(image_module, blob)
 
@@ -211,7 +224,7 @@ def test_the_format_version_is_one_number_in_four_places() -> None:
 	That is the point rather than a shortcut: a constant in a file no test
 	loads is exactly where the fourth statement of a number goes unchecked.
 	"""
-	schema = parse_text(IMAGE_SCHEMA.read_text(encoding="ascii"))
+	schema = load_schema(IMAGE_SCHEMA)
 	declared: list[int] = []
 	for decl in schema.decls:
 		if not isinstance(decl, ast.StructDecl) or decl.name != "image_header":
@@ -243,7 +256,7 @@ def test_every_schema_packs_and_reads_back(path: Path,
 	purpose: a golden image would pin whatever the packer did on the day it
 	was written, including its mistakes.
 	"""
-	schema, resolved = _resolved(path.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(path)
 	blob, coverage   = packer.pack(schema, resolved)
 	seen = read_back(image_module, blob)
 
@@ -296,7 +309,7 @@ def test_the_constraint_table_is_written_in_placement_order(
 	accessors, not out of the packer's blob, so this is a claim about the
 	artifact.
 	"""
-	schema, resolved = _resolved(path.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(path)
 	blob, _          = packer.pack(schema, resolved, metadata=True)
 	image            = image_reader.load(blob)
 
@@ -322,7 +335,7 @@ def test_packing_is_deterministic(path: Path) -> None:
 	An image somebody commits beside a schema is only diffable if this holds,
 	and a dict iteration order or a set would break it silently.
 	"""
-	schema, resolved = _resolved(path.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(path)
 	first, _  = packer.pack(schema, resolved)
 	second, _ = packer.pack(schema, resolved)
 	assert first == second
@@ -456,7 +469,7 @@ def test_the_whole_tree_encodes_every_expression_it_carries() -> None:
 	"""
 	total, dropped = 0, {}
 	for path in SCHEMAS:
-		schema, resolved = _resolved(path.read_text(encoding="ascii"))
+		schema, resolved = _resolved_file(path)
 		_, coverage = packer.pack(schema, resolved)
 		total += coverage.expressions
 		for where, why in coverage.unencodable.items():
@@ -566,7 +579,7 @@ def test_the_metadata_tail_is_optional_and_additive(
 	a list is what left `strings` out of it, and a section added later would
 	be left out the same way.
 	"""
-	schema, resolved = _resolved(source.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(source)
 	bare, _ = packer.pack(schema, resolved, metadata=False)
 	full, _ = packer.pack(schema, resolved, metadata=True)
 
@@ -628,7 +641,7 @@ def test_the_image_carries_one_string_pool_and_the_tail_shares_it(
 	look at the entries the packer wrote.
 	"""
 	for source, _ in POOLED:
-		schema, resolved = _resolved(source.read_text(encoding="ascii"))
+		schema, resolved = _resolved_file(source)
 		for metadata in (False, True):
 			blob, _ = packer.pack(schema, resolved, metadata=metadata)
 			kinds = [kind for kind, _o, _c, _s
@@ -672,7 +685,7 @@ def test_the_metadata_tail_carries_the_names_and_the_vectors(
 	It checked the names and not the vectors, which is half of what it is
 	named for -- and the vectors were the half that was wrong.
 	"""
-	schema, resolved = _resolved(IMAGE_SCHEMA.read_text(encoding="ascii"))
+	schema, resolved = _resolved_file(IMAGE_SCHEMA)
 	full, _ = packer.pack(schema, resolved, metadata=True)
 
 	assert b"image_header\0" in full
@@ -747,7 +760,7 @@ def test_every_construct_the_tree_uses_is_encoded() -> None:
 	carried: dict[str, int] = {}
 	dropped: dict[str, dict[str, int]] = {}
 	for path in SCHEMAS:
-		schema, resolved = _resolved(path.read_text(encoding="ascii"))
+		schema, resolved = _resolved_file(path)
 		_, coverage = packer.pack(schema, resolved)
 		for family, count in coverage.carried.items():
 			carried[family] = carried.get(family, 0) + count

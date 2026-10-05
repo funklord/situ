@@ -28,6 +28,8 @@ from typing import Any, Callable, cast
 
 import pytest
 
+from every_schema import load_schema
+
 from situc import ast, kernels, traverse
 from situc.codegen.c import derived, generate
 from situc.codegen.python import derived as py_derived
@@ -2589,7 +2591,7 @@ def test_a_bounded_ratio_does_not_size_a_decode_buffer() -> None:
 	The population is derived rather than listed: a family named by hand is a
 	family that stops naming itself the day somebody adds to it.
 	"""
-	schema  = parse_text((ROOT / "std" / "kernels.situ").read_text())
+	schema  = load_schema(ROOT / "std" / "kernels.situ")
 	bounded = [codec for codec in schema.codecs()
 	           if getattr(codec, "expansion", None)
 	           is ast.Expansion.RATIO_BOUNDED]
@@ -2612,7 +2614,7 @@ def test_no_codec_demands_less_capacity_than_its_decode_produces() -> None:
 	after it, which is the difference between a test that documents a fix and
 	one that defends it.
 	"""
-	schema    = parse_text((ROOT / "std" / "kernels.situ").read_text())
+	schema    = load_schema(ROOT / "std" / "kernels.situ")
 	namespace: dict[str, Any] = {}
 	exec(compile(py_derived.generate(schema, "kern"), "<kernels>", "exec"),
 	     namespace)
@@ -2715,7 +2717,7 @@ def test_the_whole_derived_module_compiles_under_denied_warnings(
 	codecs, so one compile covers every family this backend renders.
 	"""
 	module = rs_derived.generate(
-		parse_text((ROOT / "std" / "kernels.situ").read_text()), "unit")
+		load_schema(ROOT / "std" / "kernels.situ"), "unit")
 	(tmp_path / "unit.rs").write_text(module, encoding="ascii")
 	(tmp_path / "lib.rs").write_text(
 		"#[path = \"unit.rs\"]\nmod unit;\n", encoding="ascii")

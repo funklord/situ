@@ -31,7 +31,7 @@ from typing import NamedTuple
 
 import pytest
 
-from every_schema import SCHEMAS, ids
+from every_schema import SCHEMAS, ids, load_schema
 from situc import pack as packer
 from situc.cli import analyse
 from situc.diagnostics import SituError
@@ -1434,7 +1434,7 @@ def test_a_located_member_is_read_where_the_data_says() -> None:
 	the case the construct does not exist for. A file with a colour table or
 	a gap between the headers and the pixels is the one it does.
 	"""
-	schema = parse_text((ROOT / "example/bmp/bmp.situ").read_text(encoding="ascii"))
+	schema = load_schema(ROOT / "example/bmp/bmp.situ")
 	lua    = generate(schema, resolve(schema, solve(schema)), "bmp")
 
 	# `file.pixel_offset` is at 0x0A, four bytes, little endian.

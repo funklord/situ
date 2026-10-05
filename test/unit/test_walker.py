@@ -28,7 +28,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-from every_schema import ROOT, SCHEMAS, ids
+from every_schema import ROOT, SCHEMAS, ids, load_schema
 from fourway import COMPLETE, answers, build, draw
 
 sys.path.insert(0, str(ROOT))
@@ -287,8 +287,7 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
-	text     = schema.read_text(encoding="ascii")
-	parsed   = parse_text(text)
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -386,7 +385,7 @@ def test_a_text_number_is_validated_in_all_five(tmp_path: Path) -> None:
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -432,7 +431,7 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -512,7 +511,7 @@ def test_the_walker_names_the_check_that_refused(tmp_path: Path) -> None:
 	that made them disagree about *which* is the failure worth catching.
 	"""
 	schema   = ROOT / "example" / "udp" / "udp.situ"
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -711,7 +710,7 @@ def test_packed_decimal_survives_a_write_and_reads_back(tmp_path: Path) -> None:
 	the rule is stated once rather than twice.
 	"""
 	schema   = ROOT / "example" / "rtc" / "rtc.situ"
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -769,7 +768,7 @@ def test_a_minimal_text_number_is_refused_in_all_five(tmp_path: Path) -> None:
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -856,7 +855,7 @@ def test_the_subset_reaches_most_of_the_corpus() -> None:
 	"""
 	reached, scalars, answerable = 0, 0, 0
 	for path in SCHEMAS:
-		parsed   = parse_text(path.read_text(encoding="ascii"))
+		parsed   = load_schema(path)
 		resolved = resolve(parsed, solve(parsed))
 		blob, _  = packer.pack(parsed, resolved, metadata=True)
 		image    = load(blob)
@@ -1015,7 +1014,7 @@ def compared_members() -> tuple[int, int, int]:
 
 	asked_total = walked_total = both_total = 0
 	for path in SCHEMAS:
-		parsed   = parse_text(path.read_text(encoding="ascii"))
+		parsed   = load_schema(path)
 		resolved = resolve(parsed, solve(parsed))
 		names    = {held.name for held in resolved.structs.values()}
 		asked    = {(held.name, ask.local)
@@ -1418,7 +1417,7 @@ def test_every_count_the_differ_asks_is_one_the_walk_answers() -> None:
 	missing = []
 
 	for schema in SCHEMAS:
-		parsed   = parse_text(schema.read_text(encoding="ascii"))
+		parsed   = load_schema(schema)
 		resolved = resolve(parsed, solve(parsed))
 		blob, _  = packer.pack(parsed, resolved, metadata=True)
 		image    = load(blob)
@@ -1507,7 +1506,7 @@ def test_a_tlv_region_is_counted_the_same_in_all_five(tmp_path: Path) -> None:
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	blob, _  = packer.pack(parsed, resolved, metadata=True)
 	image    = load(blob)
@@ -1764,7 +1763,7 @@ def test_the_walker_names_every_run_shaped_arm_the_differ_asks_about() -> None:
 	declined: list[tuple[str, str, str, bool]] = []
 
 	for schema in SCHEMAS:
-		parsed   = parse_text(schema.read_text(encoding="ascii"))
+		parsed   = load_schema(schema)
 		resolved = resolve(parsed, solve(parsed))
 		names    = set(resolved.structs)
 
@@ -1868,7 +1867,7 @@ def test_a_delimited_arm_agrees_with_the_compiled_backend(
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
-	parsed   = parse_text(schema.read_text(encoding="ascii"))
+	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
 	image    = load(packer.pack(parsed, resolved, metadata=True)[0])
 

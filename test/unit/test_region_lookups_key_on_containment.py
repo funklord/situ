@@ -29,7 +29,7 @@ from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
 
-from every_schema import SCHEMAS, ids
+from every_schema import SCHEMAS, ids, load_schema
 
 from walker import image as image_reader
 from walker.report import _gated
@@ -288,7 +288,7 @@ def test_every_member_inside_a_region_names_the_region(path: Path) -> None:
 	was invisible in both directions from inside one schema: a wrong
 	owner is a real index, and a missing one was the sentinel.
 	"""
-	schema = parse_text(path.read_text())
+	schema = load_schema(path)
 	blob, _ = packer.pack(schema, resolve(schema, solve(schema)),
 	                      metadata=True)
 	image = image_reader.load(blob)
