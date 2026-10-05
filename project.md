@@ -31304,6 +31304,93 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.569 a member named `at` made the Python module unusable
+
+**`struct record { u8 at; }` generates a module that imports and cannot be
+used.** A Python class scope is one namespace, and this backend puts its
+own names in it beside every member's accessor, so the member's property
+is a second binding of the acquisition classmethod:
+
+    >>> record.at
+    <property object at 0x...>
+    >>> record.at(msg, 0, 9)
+    TypeError: 'property' object is not callable
+
+`at` is the only way to get a view. Which of the two bindings survives is
+emission order rather than anything the schema says -- `validate` loses the
+member and `at` loses the acquisition -- and nothing in the output says a
+word either way.
+
+**The scope in 26.568's own entry was wrong, one level wider than its
+evidence.** It recorded Rust, C and C++ as unaffected. That is true of the
+ACQUISITION name alone, which is what had been measured: Rust takes `new`,
+C takes `situ_record_view`, C++ takes a constructor. Measured properly, by
+generating a one-member struct per candidate name and compiling it:
+
+    C       situ_record_at_get beside situ_record_view      unaffected
+    C++     validate, size_bytes                   g++ refuses the header
+    Rust    validate, required                     rustc E0592, duplicate
+    Python  at, validate, required                    silent, and broken
+
+Three of four, not one. **A claim scoped one level wider than its
+evidence**, which is 26.566's shape -- a sweep that read one backend and
+reported on four -- and 26.567's, a test whose name quantified over 23
+and named 22. Now pointed at an entry written two commits ago, and what
+caught it was measuring the sibling backends rather than re-reading the
+sentence.
+
+**C is unaffected because every member accessor carries a suffix**, which
+is the one thing in this family that was not luck: `situ_record_validate_get`
+cannot reach `situ_record_validate`. And **`size_bytes` separates two
+backends on one name**: C++ spells the constant lowercase and a member takes
+it, this backend spells it `SIZE_BYTES` and no member can, so a reserved
+list copied from C++'s `STRUCTURAL` would have refused a schema that works.
+
+**Decision 0062: the Python backend refuses a class that binds one name
+twice, and the guard asks the finished module rather than a list.** A list
+is a second copy of the emitter and goes short by one the next time a class
+learns a method -- which is exactly how this arrived, since `nesting`,
+`nesting_at`, `messages`, `message_text` and `resolve_offsets` are all names
+a class acquires for some shape and no list written before them could have
+carried them. Section 25's rule against re-reading output is not reached,
+for the reason `_unshadow` already records beside it: both passes read what
+this emitter has just written, with complete knowledge of the first.
+
+**`@x.setter` is recognised rather than counted, and that is the whole of
+the false-positive question.** 1992 duplicate class-scope bindings over the
+corpus in all four flag combinations, every one of them a property setter,
+and **zero** once they are excluded. A guard that refuses nothing which
+works today is a guard; one measured only against the fixture it was written
+for is a new refusal wearing a guard's clothes.
+
+**The control had to go through the guard's own seam**, because a refusal
+test alone cannot tell a real collision from a word list: the guard is
+replaced with one that does nothing, the module is generated, and the
+duplicate binding is read out of the text. That control is also what fails
+if the mangling answer is ever taken instead, which makes it the record of
+0062 rather than only its proof. It paid immediately -- it refused
+`size_bytes`, which the first draft of the colliding set had carried on the
+strength of the C++ measurement.
+
+**Left undone, and recorded rather than attempted: C++ and Rust keep their
+compile-time refusals.** A guard of this shape needs a parser for the
+language it reads and situc has one only for Python. The front-end
+alternative was weighed and rejected in 0062: reserving the union of every
+backend's structural names would outlaw `read`, `write`, `word`, `check` and
+`framed`, every one of which generates cleanly for the struct shapes that do
+not produce the method, and a refusal whose false positives cost `u8 read;`
+is worse than a g++ diagnostic that names the member. **Whether situc should
+reserve them anyway is the holder's**, since it makes words reserved in the
+language rather than in one backend.
+
+**And the measurement has a stated limit.** The table above is one shape --
+a fixed-size struct with one scalar member and a `u16` tail. `framed`,
+`extent`, `word`, `read`, `write`, `address`, `width`, `nesting`,
+`dirty_mask` and `check` are names a class acquires only for shapes that
+fixture does not have, so for those the table says nothing in either
+direction. That is why the Python guard is exact and the C++/Rust finding is
+a pair of names rather than a set.
+
 ### 26.568 `import` had no corpus schema, and three shapes were why
 
 **The feature's corpus coverage was zero**, which is how 26.559's link
