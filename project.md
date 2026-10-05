@@ -31304,6 +31304,79 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.567 A test named `every declaration keyword` named 22 of 23
+
+**26.566's shape was a claim scoped one level wider than its evidence, and
+`evidence.md` already names where that lives in a suite:** *when a check's
+name quantifies -- every, all, any -- the thing to verify is the
+quantifier, not the assertion under it.* Pointed at this tree's own tests,
+because the last two entries were both my own quantifying test reading less
+than it claimed.
+
+**The detector: a test whose NAME quantifies and whose population is a
+literal written in the same file.** 175 tests quantify; 85 walk an in-file
+literal. Most of those are `BACKENDS(4)` or a set of compiler flags --
+populations that cannot drift -- so the list is read rather than counted,
+which is what a one-off sweep is for.
+
+**One was short.** `test_parser.py` carried:
+
+    DECLARATION_KEYWORDS = (
+        "namespace", "register", "register_block", ... "relation",
+    )     # 22 entries
+
+and `parse_decl` dispatches **23**. The missing one is `when`.
+
+**The parser had already learned this exact lesson, one layer down.** The
+comment under its dispatch table reads *spelled from the table rather than
+written out beside it. The hand-written list had gone nine declarations
+stale -- it named neither `codec` nor `impl` nor `register`, so an author
+asking the compiler what it takes was told a subset of it* (26.215). The
+diagnostic was fixed then. **The test that quantifies over the same
+keywords kept its own copy**, and that copy drifted by one.
+
+**Closing the gap found no defect behind it, which is worth saying rather
+than leaving implied.** `when` with nothing after it is refused for
+*expected an expression*, not as an unknown declaration, so the parser's
+dispatch was uniform all along. The quantifier was false and the behaviour
+it would have checked was correct. The test runs 23 cases now instead of
+22.
+
+**The fix is a named population and a proof, not a 23rd entry.**
+`situc.parser.DECLARATION_KEYWORDS` is the set, the diagnostic spells
+itself from it, the test parametrises over it, and
+`test_the_keyword_set_is_the_dispatch_table` reads `parse_decl`'s dict out
+of the parser's own source and asserts the two agree. That is the
+`RUNTIME_SYMBOLS` shape from 26.562: a literal is allowed, and a literal
+nobody checks is a literal that has drifted. Both directions are controlled
+-- dropping `when` from the set reports *only in the table ['when']*, and
+adding a table entry the set does not name reports it the other way round.
+
+**Three other literals were checked and are already right**, which is the
+half of a sweep that usually goes unrecorded. `EXPANSION_FORMS` is held to
+the `Expansion` enum by the test beside it. `REFUSING` and `SHAPES` are
+held by
+`test_every_generator_is_either_taking_an_argument_or_refusing_one`, which
+derives its population from the source and whose docstring argues the
+empty-cell case this entry is an instance of. `DERIVED_EMITTERS` names the
+three backends that have a derived emitter and is keyed to imported
+functions, so adding a fourth means importing it; not held, and not a gap I
+would claim.
+
+**Not mechanised, deliberately.** A standing gate over "a quantifying test
+walking an unheld literal" would report `BACKENDS(4)` in twenty files and
+acquire an ignore list, which `evidence.md` calls being switched off by
+instalments. The detector is recorded here instead: it is a sweep read once
+by whoever runs it.
+
+**And the detector's first form over-counted.** It asked whether a test was
+`parametrize`d over a named list and reported 111 of 175 as carrying their
+population -- most of which iterate a derived collection in the body. The
+number that mattered came from asking the narrower question with `ast`:
+which tests reference a module-level literal collection. **A detector built
+from the first shape that comes to mind inherits that shape**, and the fix
+was to ask about the literal rather than about the decorator.
+
 ### 26.566 The same sweep, three backends it had not read
 
 **26.565's test was C-only, and that is the gap this went through.**
