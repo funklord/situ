@@ -31304,6 +31304,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.565 Five getters each claiming to be the only one
+
+**26.564 was found by reading a generated doc comment and noticing the
+emitter broke the rule it stated. This is that lens pointed deliberately**,
+at the mechanically checkable form: a claim of the shape *the only thing
+that*, *nothing else*, *no other*, which the file it sits in can falsify.
+
+**Six distinct exclusivity claims across the corpus's C headers. Five
+hold.** They are the gate's -- *the only thing that produces one is
+`<region>_open()`, which will not hand one out until `<tag>` has verified*
+-- and every `situ_<region>_t` in the five schemas with a sealed region is
+produced by its own `open` and by nothing else, checked by reading every
+function that returns one or takes an out-pointer to one.
+
+**The sixth was false, and false five times in one file.** A text number's
+getter said:
+
+    This one takes an out-parameter because the conversion can fail,
+    which no other scalar getter here can.
+
+`edges.h` carries that sentence **five times**, each copy claiming to be
+the only one. A claim that recurs is false of all but one of them, and no
+reading of the subject is needed to see it.
+
+**And it is false even once.** `edges.h` holds **23** scalar getters that
+take an out-parameter and return an error -- a `[since]` member's, because
+a field that is not there has no value to return, and a varint's, because
+one can be truncated or overlong. Absence and overlong are failures too;
+the sentence had noticed only conversion.
+
+**The replacement says what the sentence was reaching for**: the contrast
+is with a fixed-width read, which cannot fail, and that is true however
+many fallible getters the header has.
+
+**The general test is the one that cannot go vacuous.** Three were added:
+the retired wording must not come back; a gate must be produced by its own
+`open` and nothing else, which pins the five claims that hold; and **an
+exclusivity claim must not appear twice in one header**, which is the form
+that needs no knowledge of the subject at all. A schema with no sealed
+region passes the gate test by having nothing to check, so the repetition
+test is what carries the file.
+
+**Three controls, each through its own check.** The old wording restored
+fails the retired-claim test naming `http.situ` and the repetition test
+naming `edges.situ` with the count 5. A second emitted producer of the gate
+type fails the gate test naming `dtls.situ` and both producers.
+
+**And the instrument carried the hazard it was built to find.** The comment
+explaining the fix quoted the retired sentence, so `grep` on the emitter
+counted two -- the same ambiguity that made two sabotages land on a comment
+earlier in this session. The retired wording is deliberately not quoted in
+the emitter now, and the reason is written where the next person will edit.
+
+**Three headers change and nothing else**: `edges.h`, `http.h` and
+`json.h`, in their comments only. No `.c` moves, no committed `.map` or
+`.wire` moves, and generated C is no wider than before -- 1243 lines over
+79 columns at HEAD and 1243 after, which is worth measuring rather than
+assuming because the replacement is longer prose.
+
+**Two sweeps came up empty first, and the method is recorded so the next
+person does not repeat them.** The walkers: a `sealed` region's interior
+placements are not members of the struct, so neither walker reaches them,
+and both agree with the backends -- while an `authenticated` region's
+interior *is* a member and the Python walk refuses `placement[2],
+nul_terminated` exactly as all four backends do. The dissector: it does not
+mention a sealed interior's members at all. Neither reads what the gate
+protects, so 26.564's fault is C's alone.
+
 ### 26.564 `validate` read the inside of a sealed region
 
 **The generated gate type states the rule this broke, in its own doc
