@@ -31304,6 +31304,70 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.566 The same sweep, three backends it had not read
+
+**26.565's test was C-only, and that is the gap this went through.**
+Running its own sweep against the other three backends' output: C++ and
+Python carry no exclusivity claim at all, and Rust carries one.
+
+    /// Whether the delimiter is there. It is not when the frame was
+    /// cut short, which is the only thing parse can catch here.
+
+**It is false wherever the delimited member carries anything else**, and
+`example/http` is that member exactly:
+
+    request_method  method  until " "  max 16  [encoding = ascii];
+
+A token set, a cap on the scan and an encoding -- three further faults
+parse catches about that member -- and `http.rs` checks `method`'s encoding
+in the same module, 400 lines below the comment saying nothing else can be
+caught.
+
+**Forty occurrences across six schemas:**
+
+    edges.rs   22      sexpr.rs    2
+    http.rs     8      slip.rs     1
+    json.rs     3      smtp.rs     4
+
+**And `slip.rs` is the one that mattered to the test.** A claim made ONCE
+is not repeated, so 26.565's general test -- *an exclusivity claim must not
+appear twice in one header* -- is blind to it there. It would have caught
+five of the six and reported the sixth as clean. A retired wording
+therefore wants naming as a literal and not only counting, which is now
+what both checks do, across all four backends.
+
+**The source carried the same claim twice more, in C and C++.** C's
+`_member_checks` said *that is the one thing parse can check about it* and
+returned the delimiter check and the token check from the next three lines
+-- a comment contradicted by its own function body. C++'s
+`_delimited_checks` docstring said *is the only thing parse can catch*.
+Neither is emitted, so neither reaches a user, and both are now what they
+were reaching for: a statement about the DELIMITER, which is what needs no
+check because the scan stops at the first one.
+
+**What all three had in common is the slip, not the subject.** Each
+sentence was true of the thing it was about -- the content cannot contain
+the delimiter, and nothing need look -- and each was written as a claim
+about parse. **A claim scoped one level wider than its evidence is the
+shape here**, and it survives review because the narrow reading is correct.
+
+**My own count was wrong first, and the detector is why.** The sweep
+printed `[40]` beside the claim and I read it as forty schemas; it was
+forty occurrences, the list being appended once per hit. The true figure is
+six schemas, and the difference matters to what the entry claims. **A count
+inherits its detector** -- `evidence.md`'s words -- and this one inherited
+a list that was never a set.
+
+**Six Rust modules change, in their comments. No C, C++ or Python output
+moves**, the other two corrections being source comments; no committed map
+or wire moves. The test goes from 126 cases to 378, being three more
+backends over the same corpus.
+
+**Controls.** The Rust claim restored fails the literal check naming
+`slip.situ (rust)` -- the single-occurrence case, chosen deliberately
+because the repetition test cannot see it -- and fails the repetition check
+on `http.situ (rust)` with the count 8. 26.565's two C controls still fire.
+
 ### 26.565 Five getters each claiming to be the only one
 
 **26.564 was found by reading a generated doc comment and noticing the
