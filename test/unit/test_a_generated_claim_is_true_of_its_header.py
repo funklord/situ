@@ -22,15 +22,20 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 
 from every_schema import SCHEMAS, ids
+from situc import ast
 from situc.codegen.c import generate as generate_c
+from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.python import generate as generate_python
+from situc.codegen.rust import generate as generate_rust
 from situc.diagnostics import Source
 from situc.layout import solve
 from situc.parser import parse
-from situc.resolve import resolve
+from situc.resolve import ResolvedSchema, resolve
 
 #: Claim shapes worth checking, because each is falsifiable by reading the
 #: same file. Prose that merely explains is not a claim: what makes these
@@ -40,36 +45,96 @@ EXCLUSIVE = re.compile(
 	r"nothing (?:else|but|other than)[^.]{0,120}\.|"
 	r"no other[^.]{0,120}\.)", re.I)
 
-#: The one claim this file is named for, kept as a literal so the test fails
-#: if it comes back by any route rather than only through the emitter line
-#: that wrote it.
-RETIRED = "no other scalar getter here can"
+#: Claims retired because they were false, kept as literals so each fails if
+#: it comes back by any route rather than only through the emitter line that
+#: wrote it.
+#:
+#: **Both are needed and the repetition test does not replace them.** The
+#: Rust claim appeared 40 times across 6 schemas -- 22 in `edges.rs`, 8 in
+#: `http.rs`, and exactly ONE in `slip.rs`. A claim made once is not repeated,
+#: so the general test is blind to it there, and `slip` is the case that says
+#: a retired wording wants naming rather than only counting (26.566).
+RETIRED = (
+	"no other scalar getter here can",
+	"the only thing parse can catch here",
+)
 
 
-def _comments(text: str) -> list[str]:
-	return [" ".join(one.replace("*", " ").split())
-	        for one in re.findall(r"/\*\*?(.*?)\*/", text, re.S)]
+class Emitted(Protocol):
+	def files(self) -> dict[str, str]: ...
 
 
-def _header(path: Path) -> str:
+class Backend(Protocol):
+	"""What the four generators have in common for this file's purpose.
+
+	Named rather than widened to `Any`, because a dict over the four
+	collapses the callable to `object` and `.files()` is then unreachable
+	through it -- which mypy says and three sibling test files already
+	answer this way.
+	"""
+
+	def __call__(self, schema: ast.Schema, resolved: ResolvedSchema,
+	             basename: str) -> Emitted: ...
+
+
+#: One entry per backend: how to generate it, and how its comments are
+#: spelled. All four rather than C alone, which is the gap 26.566 went
+#: through: Rust emitted *which is the only thing parse can catch here* into
+#: 40 schemas, eight times in `http.rs` alone, and this file could not see it
+#: because it read C headers.
+BACKENDS: dict[str, tuple[Backend, str]] = {
+	"c":      (generate_c,      r"/\*\*?(.*?)\*/"),
+	"cpp":    (generate_cpp,    r"/\*\*?(.*?)\*/"),
+	"python": (generate_python, r'"""(.*?)"""'),
+	# Rust has no block comment for docs: a run of `///` lines is one.
+	"rust":   (generate_rust,   r"((?:^[ \t]*///.*\n)+)"),
+}
+
+
+def _comments(text: str, pattern: str) -> list[str]:
+	return [" ".join(one.replace("*", " ").replace("///", " ").split())
+	        for one in re.findall(pattern, text, re.S | re.M)]
+
+
+def _emitted(path: Path, backend: str) -> tuple[str, str]:
+	"""Everything the backend writes, and the comment shape to read it with.
+
+	Every file rather than the header, because Rust and Python emit one
+	module and C++ one header -- asking for `.header` would have read nothing
+	for two of the four.
+	"""
+	generate, pattern = BACKENDS[backend]
 	source   = Source(str(path), path.read_text(encoding="utf-8"))
 	schema   = parse(source)
 	resolved = resolve(schema, solve(schema))
-	return generate_c(schema, resolved, path.stem).header
+	built    = generate(schema, resolved, path.stem)
+	return "".join(one for _, one in sorted(built.files().items())), pattern
 
 
+def _header(path: Path) -> str:
+	return _emitted(path, "c")[0]
+
+
+@pytest.mark.parametrize("backend", sorted(BACKENDS))
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
-def test_no_header_claims_a_getter_is_the_only_fallible_one(
-		path: Path) -> None:
-	"""The retired claim, which was false five times in one file."""
-	assert RETIRED not in _header(path), (
-		f"{path.name}: a getter claims no other scalar getter can fail, in a "
-		"header that may have a text number, a `[since]` member and a varint")
+def test_no_retired_claim_comes_back(path: Path, backend: str) -> None:
+	"""Each was false, and each is false by a different route.
+
+	One said no other scalar getter in the header could fail, in headers with
+	up to 23 that can. The other said a missing delimiter is the only thing
+	parse can catch about a delimited member, in modules that also check its
+	`[encoding]`, its token set and the cap on its scan.
+	"""
+	emitted, _ = _emitted(path, backend)
+	for claim in RETIRED:
+		assert claim not in emitted, (
+			f"{path.name} ({backend}): the retired claim `{claim}` is back")
 
 
+@pytest.mark.parametrize("backend", sorted(BACKENDS))
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_an_exclusivity_claim_is_not_made_twice_in_one_header(
-		path: Path) -> None:
+		path: Path, backend: str) -> None:
 	"""Whatever else a header asserts uniquely, it asserts once.
 
 	This is the general form and the reason this file is not a single
@@ -79,15 +144,16 @@ def test_an_exclusivity_claim_is_not_made_twice_in_one_header(
 	in which case it names them and the texts differ -- or it is the same
 	claim made of several, which cannot be true of more than one.
 	"""
+	emitted, pattern = _emitted(path, backend)
 	seen: dict[str, int] = {}
-	for comment in _comments(_header(path)):
+	for comment in _comments(emitted, pattern):
 		for claim in EXCLUSIVE.findall(comment):
 			seen[claim] = seen.get(claim, 0) + 1
 
 	repeated = {claim: count for claim, count in seen.items() if count > 1}
 	assert not repeated, (
-		f"{path.name}: an exclusivity claim appears more than once, so it is "
-		f"false of all but one of them: {repeated}")
+		f"{path.name} ({backend}): an exclusivity claim appears more than "
+		f"once, so it is false of all but one of them: {repeated}")
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))

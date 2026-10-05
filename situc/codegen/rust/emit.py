@@ -4213,8 +4213,15 @@ class Emitter:
 			 f" {{ {len(delim)} }} else {{ 0 }}"),
 			"\t}",
 			"",
+			# The claim is about what THIS predicate answers, not about what
+			# parse can catch. It said the latter and was false wherever the
+			# member also carries `[encoding]`, a token set (0055) or a `max`
+			# on the scan: `http.rs` repeated it eight times while checking
+			# `method`'s encoding in the same module (26.566).
 			"\t/// Whether the delimiter is there. It is not when the frame was",
-			"\t/// cut short, which is the only thing parse can catch here.",
+			"\t/// cut short, and the content cannot contain the delimiter --",
+			"\t/// the scan stops at the first one -- so this is all there is",
+			"\t/// for it to answer.",
 			f"\tpub fn {_ident(f'{base}_terminated')}(&self) -> bool {{",
 			f"\t\tself.{_ident(f'{base}_terminated_from')}"
 			f"(self.{_ident(f'{base}_offset')}())",

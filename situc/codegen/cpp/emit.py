@@ -7746,7 +7746,13 @@ class Emitter:
 
 		That the content excludes the delimiter needs no check: the scan stops
 		at the first one, so it holds by construction. A missing delimiter is
-		the truncated-frame case, and is the only thing parse can catch.
+		the truncated-frame case.
+
+		**Not "the only thing parse can catch"**, which this said until
+		26.566. A delimited member may also carry `[encoding]`, a token set
+		(0055) or a `max` on the scan, and all three are checked -- the first
+		two by this very function, three lines down. The claim was about the
+		delimiter and had been written about parse.
 		"""
 		# `for_arm`: an ARM's delimited member is not a dotted path this
 		# should drop (26.423). The line below means "an element's members

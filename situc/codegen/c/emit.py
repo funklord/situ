@@ -9233,11 +9233,17 @@ class Emitter:
 				return []
 			return self._discriminant_check(struct, placement)
 
-		# A delimited member's delimiter has to be there. That is the one thing
-		# parse can check about it: the content cannot contain the delimiter,
-		# but not because anything looks -- the scan stops at the first one, so
-		# it holds by construction. A missing delimiter is different, and is
-		# the truncated-frame case.
+		# A delimited member's delimiter has to be there. What needs no check
+		# is that the content EXCLUDES the delimiter: the scan stops at the
+		# first one, so it holds by construction rather than because anything
+		# looks. A missing delimiter is different, and is the truncated-frame
+		# case.
+		#
+		# This said "that is the one thing parse can check about it" until
+		# 26.566, and the token check three lines down is one of the things
+		# that contradicted it -- as does `[encoding]`, and a `max` on the
+		# scan. The claim was about the delimiter and had been written about
+		# parse.
 		#
 		# An element's own members are checked under the element's struct, not
 		# here. They appear in this struct's entries under a dotted path
