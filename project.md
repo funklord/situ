@@ -31304,6 +31304,70 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.568 `import` had no corpus schema, and three shapes were why
+
+**The feature's corpus coverage was zero**, which is how 26.559's link
+collision reached a consumer before this tree saw it: the compile sweep,
+the differential, the four-way agreement and the walker comparison had
+never read an imported type. 26.559 costed the gap at 29 sites and left it;
+this closes it.
+
+**A corpus schema that imports is refused by any sweep that drops its
+path.** `import` resolves relative to the importing file's directory
+(17.0a) and a schema parsed from a string has none, so the refusal is
+correct and the sweeps were wrong. Three shapes dropped it:
+
+    parse_text(path.read_text(...))              30 sites, 14 files
+    _resolved(path.read_text(...))               10 sites, a local helper
+                                                 taking text
+    source = path.read_text(...)                  3 sites, the same thing
+    parse_text(source)                            over two statements
+
+**The second and third are the measurement going short, twice.** 26.559's
+count came from grepping the first shape, so it read 29 where the answer is
+43 -- a local helper that takes text and a two-statement form are invisible
+to a pattern keyed on one expression. **A count inherits its detector**,
+and this detector was built from the first site anybody looked at.
+
+**One reader, in the module that already answers "which schemas does this
+repository build?"** `every_schema.load_schema(path)` parses with the path.
+`test_pack` keeps a text-taking helper beside a new file-taking one,
+because nine of its callers hand over inline schemas that have no path and
+ten read a file -- two helpers because both callers exist, rather than one
+helper lying to half of them.
+
+**The bulk edit carries its proof**, which is `evidence.md`'s rule and was
+the first thing written: for a schema with no `import` the path is unused,
+so the two readings must produce identical generated C.
+`test_a_corpus_schema_is_read_with_its_path` asserts that over the corpus,
+skips a schema that imports -- the old reading raises there, which is the
+point -- and **counts what it compared**, because a parametrized test that
+skips every case reports success as loudly as one that checked everything.
+
+**Then the pair: `test/schema/shared.situ` and
+`test/schema/importer.situ`**, with their committed `.wire` and `.map`.
+Four registries name the corpus by hand and each wanted an entry: the
+generated build's schema list, the oracle's excuse list, and two in
+`test_pack`. All four are honest designs -- the oracle refuses silence and
+demands a reason per schema -- so each got one.
+
+**Four tests failed on the first full run and two of them were not about
+`import` at all.** One was a fourth shape of the same slip, in
+`test_codegen_c`. The other was a defect the pair found by accident and
+which has nothing to do with importing: a member named `at` collides with
+the Python backend's own acquisition classmethod, `record.at` becomes a
+`property`, and `record.at(msg, 0, n)` raises *'property' object is not
+callable* -- so the generated module cannot be used at all. Reproduced with
+no `import` anywhere, measured across the other three backends (Rust names
+its acquisition `new`, C `situ_X_view`, C++ a constructor, so none
+collides), and the colliding set is exactly `at`, `validate` and
+`required`. **Recorded as 26.569 and not fixed here**: the fixture's member
+is renamed so this entry lands on its own subject.
+
+**What the coverage now buys**, stated as the thing to check if it ever
+regresses: 23 sweeps parametrize over the corpus, and one member of it has
+types that arrived from another file.
+
 ### 26.567 A test named `every declaration keyword` named 22 of 23
 
 **26.566's shape was a claim scoped one level wider than its evidence, and
