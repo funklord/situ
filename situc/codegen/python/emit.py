@@ -428,7 +428,8 @@ class Emitter:
 		for name in self._order():
 			lines.extend(self._struct(self.resolved.structs[name]))
 
-		return self._unshadow("\n".join(lines) + "\n")
+		return self._refuse_collisions(
+			self._unshadow("\n".join(lines) + "\n"))
 
 	def _tlv_items(self) -> list[tuple[ResolvedStruct, Placement]]:
 		"""Every walkable tlv region, with the struct that holds it."""
@@ -663,6 +664,97 @@ class Emitter:
 		for name in shadowed:
 			text = _re.sub(rf"(:|->) {name}\b", rf"\1 _situ_{name}", text)
 		return text
+
+	def _refuse_collisions(self, module: str) -> str:
+		"""Refuse a class that binds one name twice (0062).
+
+		A class scope is one namespace, and this backend puts its own
+		names in it beside every member's: `at` acquires a view,
+		`validate` checks the constraints, `required` answers the framing
+		question. A member of one of those names is a second binding of
+		it, the later one wins, and which that is depends on emission
+		order rather than on anything the schema says -- so `record.at`
+		becomes a property and `record.at(msg, 0, 9)` raises *'property'
+		object is not callable*. The module imports; it cannot be used.
+
+		Asked of the FINISHED module, which is the only complete way to
+		ask it: a list of the names this backend reserves would be a
+		second copy of the emitter, going stale the next time a class
+		learns a method. Section 25 forbids a pass that re-reads its own
+		output, and `_unshadow` beside this one records why that is not
+		this: both are a second pass over what this emitter has just
+		written, with complete knowledge of the first.
+
+		Zero over the corpus in all four flag combinations, which is what
+		makes it a guard rather than a new refusal: `@x.setter` binds `x`
+		a second time legitimately and is the only such shape, so it is
+		recognised rather than counted.
+		"""
+		for node in pyast.parse(module).body:
+			if not isinstance(node, pyast.ClassDef):
+				continue
+			seen: set[str] = set()
+			for item in node.body:
+				for name in self._bound_by(item):
+					if name not in seen:
+						seen.add(name)
+						continue
+					raise self._collision(node.name, name)
+		return module
+
+	@staticmethod
+	def _bound_by(item: pyast.stmt) -> list[str]:
+		"""The class-scope names one statement binds.
+
+		`@x.setter` is excluded: it binds `x` again on purpose, and is the
+		one shape in this backend's output that does.
+		"""
+		if isinstance(item, (pyast.FunctionDef, pyast.AsyncFunctionDef)):
+			decorated = {pyast.unparse(one) for one in item.decorator_list}
+			if {f"{item.name}.setter", f"{item.name}.getter",
+			    f"{item.name}.deleter"} & decorated:
+				return []
+			return [item.name]
+		if isinstance(item, pyast.Assign):
+			return [one.id for one in item.targets
+			        if isinstance(one, pyast.Name)]
+		if isinstance(item, pyast.AnnAssign) and isinstance(
+				item.target, pyast.Name):
+			return [item.target.id]
+		return []
+
+	def _collision(self, held: str, name: str) -> Exception:
+		"""The diagnostic, pointed at the member rather than the class.
+
+		The member is what a reader can change, so the span is the
+		member's. Where no member is responsible the duplicate is this
+		backend emitting one of its own names twice, which is a defect
+		here rather than in the schema, and an assertion says so instead
+		of a diagnostic blaming the author.
+		"""
+		for struct in self.resolved.structs.values():
+			if py_name(struct.name) != held:
+				continue
+			for entry in struct.entries:
+				if py_name(local_name(struct, entry.placement)) == name:
+					return error(
+						f"`{struct.name}.{entry.placement.name}` and this "
+						f"backend's own `{name}` are one name in "
+						f"`class {held}`",
+						entry.placement.span,
+						"rename the member",
+						notes = [
+							"a Python class scope is one namespace, and the "
+							"later binding wins silently (decision 0062)",
+							"C suffixes every accessor and keeps the "
+							"name; C++ and Rust refuse some of these at "
+							"compile time rather than silently (26.569)",
+						])
+			break
+		raise AssertionError(
+			f"`class {held}` binds `{name}` twice and no member of a struct "
+			f"is responsible, so this backend has emitted one of its own "
+			f"names twice")
 
 	def _shadowed_enums(self) -> set[str]:
 		"""Enum names some struct also uses as a member name."""
