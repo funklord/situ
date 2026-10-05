@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
 from situc import ast
 from situc.diagnostics import Source, SituError
-from situc.parser import parse_decls, parse_text
+from situc.parser import (
+	DECLARATION_KEYWORDS as parser_keywords, parse_decls, parse_text)
 
 
 def only_struct(source: str) -> ast.StructDecl:
@@ -548,12 +550,13 @@ def test_positional_block_is_accepted() -> None:
 # against this rather than against a frozen string, and the list is checked
 # against the parser by the probe beside it -- so a declaration the parser
 # takes and the message does not name fails here.
-DECLARATION_KEYWORDS = (
-	"namespace", "register", "register_block", "target", "endian",
-	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
-	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
-	"impl", "require", "assert", "invariant", "relation",
-)
+#: From the parser rather than written out here. This list was hand-written
+#: and had 22 of the 23 -- `when` was missing -- so a keyword could be added
+#: and a test named `every declaration keyword` would pass without it. The
+#: parser's own "unknown declaration" diagnostic had learned exactly this in
+#: 26.215, nine declarations stale at the time, and the lesson had not
+#: reached the test that quantifies over them (26.567).
+DECLARATION_KEYWORDS = tuple(sorted(parser_keywords))
 
 
 @pytest.mark.parametrize("keyword", DECLARATION_KEYWORDS)
@@ -874,3 +877,39 @@ def test_a_field_named_like_a_sizing_word_is_fine() -> None:
 	name: `u8 count;` and a run driven by it stay legal."""
 	parse_text("target buffer;\nendian big;\n\n"
 	           "struct s { u8 count; u8 data[count]; }\n", path="s.situ")
+
+
+def test_the_keyword_set_is_the_dispatch_table() -> None:
+	"""`DECLARATION_KEYWORDS` names what `parse_decl` actually dispatches.
+
+	The set is the population and the table is the implementation, so the two
+	can drift -- which is the whole fault of 26.567 moved one step rather than
+	removed. This reads the table out of the parser's own source and compares,
+	the way the runtime symbol list is held to `situ.h`: a literal nobody
+	checks is a literal that has drifted.
+
+	`register_block` is in the set and not in the table because it is
+	dispatched above it, a block contributing several declarations at once.
+	"""
+	import ast as pyast
+	import situc.parser as parser_module
+
+	tree = pyast.parse(Path(parser_module.__file__).read_text(encoding="utf-8"))
+	found: set[str] = set()
+	for node in pyast.walk(tree):
+		if not (isinstance(node, pyast.FunctionDef)
+		        and node.name == "parse_decl"):
+			continue
+		for inner in pyast.walk(node):
+			if isinstance(inner, pyast.Dict) and inner.keys:
+				keys = [one.value for one in inner.keys
+				        if isinstance(one, pyast.Constant)
+				        and isinstance(one.value, str)]
+				if len(keys) > 5:		# the dispatch table, not a small map
+					found |= set(keys)
+
+	assert found, "no dispatch table found in `parse_decl`"
+	assert found | {"register_block"} == set(parser_keywords), (
+		"`DECLARATION_KEYWORDS` and `parse_decl`'s table disagree: "
+		f"only in the set {sorted(set(parser_keywords) - found - {'register_block'})}, "
+		f"only in the table {sorted(found - set(parser_keywords))}")

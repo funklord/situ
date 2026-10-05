@@ -118,6 +118,27 @@ def evaluate_literal(expr: ast.Expr) -> int | None:
 # them (project.md section 26). Keyed by the keyword that introduces one.
 FUTURE_CONSTRUCTS: dict[str, tuple[int, str]] = {}
 
+#: Every word that opens a declaration. `parse_decl`'s own dispatch table is
+#: the implementation and this is the name of the population, so a reader --
+#: or a test that quantifies over the keywords -- has something to ask.
+#:
+#: 26.215 made the "unknown declaration" diagnostic spell its list from the
+#: table rather than beside it, after the hand-written version went nine
+#: declarations stale. The lesson had not reached the test that quantifies
+#: over them: it carried 22 of the 23 and was missing `when`, so a keyword
+#: could be added and the test named `every declaration keyword` would pass
+#: without it (26.567).
+#:
+#: `register_block` is here and not in the table because it is dispatched
+#: above it: a block contributes several declarations and the parser holds the
+#: rest pending.
+DECLARATION_KEYWORDS = frozenset({
+	"namespace", "register", "register_block", "target", "endian",
+	"bit_order", "encoding", "whitespace", "strictness", "import", "const",
+	"enum", "tokens", "struct", "endian_marker", "varint_type", "codec",
+	"impl", "require", "assert", "invariant", "when", "relation",
+})
+
 # The settings a register or a register block may declare, from section 15.2.
 REGISTER_SETTINGS = frozenset({"width", "access_width", "volatile", "no_rmw"})
 
@@ -408,9 +429,12 @@ class Parser:
 			# neither `codec` nor `impl` nor `register`, so an author asking
 			# the compiler what it takes was told a subset of it, which is
 			# what an unproduced diagnostic loses (26.215).
-			spelled = ", ".join(
-				f"`{name}`"
-				for name in sorted({*handlers, "register_block"}))
+			# From the named population rather than from the table, which
+			# `test_the_keyword_set_is_the_dispatch_table` holds to it. The
+			# two were one expression here and the set now has a name a test
+			# can quantify over (26.567).
+			spelled = ", ".join(f"`{name}`"
+			                    for name in sorted(DECLARATION_KEYWORDS))
 			raise error(
 				f"unknown declaration `{token.text}`",
 				token.span,
