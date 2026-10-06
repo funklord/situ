@@ -31304,6 +31304,104 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.572 A `_ptr` that returned an offset, and the proxy that hid it
+
+**situc emitted C its own build refuses.** A fixed-digit text number's
+pointer accessor is declared `const uint8_t *` and returned a `uint32_t`:
+
+    static inline const uint8_t *situ_m2_d_ptr(situ_view_t view)
+    {
+    	return situ_m2_d_offset(view);
+    }
+
+    error: returning 'uint32_t' from a function with return type
+    'const uint8_t *' makes pointer from integer without a cast
+    [-Wint-conversion]
+
+Compiled under this project's own `WARNFLAGS`, where `-Werror` turns it
+from a warning nobody reads into a build that stops. 26.563's class by a
+different route, and found while reading the output of an unrelated
+fixture rather than by looking for it.
+
+**The cause is one line, and it is a proxy standing in for the question
+next to it.**
+
+    base = self._base_expression(struct, placement)
+    base = f"situ_base(view) + {base}" if base.isdigit() \
+           or base.endswith("u") else base
+
+That tests *is this a constant* where the question is *is this an offset
+needing a base*. `_base_expression` has three return paths --
+`{offset_bytes}u`, `view.limit`, and `<field>_offset(view)` -- and **all
+three are byte counts and none is a pointer**, so the answer is always
+yes and the condition had nothing to decide. It is gone.
+
+**Why it survived is the measurement, not a guess: every case anybody has
+takes the branch that works.** All **28** fixed-digit text numbers across
+the 44 corpus schemas sit at STATIC offsets -- 26 in `cpio`, `smtp`'s
+`reply_line.code`, and `edges.situ`'s `text_driver.n`. A dynamic one had
+no coverage at all, so the proxy was right everywhere it was ever asked.
+
+**And the first version of this entry claimed one shape too many.** It said
+an empty `authenticated` region reached it as well, on the strength of
+`view.limit` being one of the three paths. It cannot: that path wants
+`kind` in `NOT_A_MEMBER`, which is `element` or `authenticated`, and this
+emitter runs only for a `field` carrying a `radix`. Checked against the
+code rather than carried, which is the same lens as 26.569 and 26.570 --
+**a claim one level wider than its evidence** -- met for the third time in
+three entries and this time inside a comment being written as the fix.
+
+**Scope re-derived a second way rather than assumed.** Swept for the same
+proxy across the four backends: one other `.isdigit()`, in Rust's bounds
+guard, and it is a legitimate optimisation -- `self.bytes.len() < 0` is a
+useless comparison that `-D warnings` refuses, so a constant offset folds
+to one comparison and both branches are correct. One instance, not a
+family.
+
+**The control is the static case and it is load-bearing.** A member at a
+constant offset produced `situ_base(view) + 1u` before this and still
+does, so a test asserting the ABSENCE of `_offset(view)` would have passed
+for it by accident. The assertion is that the return adds `situ_base`,
+which is true of both shapes and false of the defect. Sabotaging the fix
+fails exactly the two dynamic cells -- the text assertion and the compile
+independently -- and leaves the static control green.
+
+**Corpus coverage, because a fixture alone leaves the next proxy free.**
+`edges.situ` gains `text_driver_moved`: a varint, then the digits, which
+is the cheapest thing that makes the offset the message's. Its committed
+`.wire` and `.map` diffs are purely additive -- the new struct's lines and
+nothing else moved -- which is what adding a struct should look like and
+is worth reading rather than assuming, since those two files are the
+contract a deployed peer sees.
+
+**And the struct earned its keep in one gate run: it turned the gate red on
+a second backend pair, in the same shape.** C++ and Rust emit `check()`
+calling `<field>_value()` for a fixed-digit text number and define that
+helper only where the offset is a CONSTANT, so the dynamic case named a
+method nobody writes -- g++ *was not declared in this scope*, rustc
+E0599. Eight tests failed and all eight were one cause: each compiles
+`edges.situ` as part of its setup, so four of them read as failures about
+delimiters and arms and were nothing of the kind.
+
+**The comment above each of those two guards is the fix that half-covered
+it.** Both say `decimal u32 n[4]; u16 d[n]` named a helper nothing defined
+and that every text driver in `example/` is delimited or nested -- which
+is true, and is why the case that existed got covered and the case that
+did not was left. **C had already been fixed and the siblings were not
+checked**, which is 26.566's shape: a fix that reads one backend and
+reports on four. Python is the one that is right by a different route --
+it reads the property and catches the raise, so it never names a helper at
+all.
+
+**Not corpus-neutral, and that is reported rather than rounded to zero.**
+The C++ fix moves one line of existing output and the Rust fix three --
+`situ_base(raw_) + 0` became `+ (0)`, and Rust's two repeats of the offset
+became a named local. Semantically identical, and the local is a real
+improvement rather than only tidiness: the old form inlined the offset
+expression three times, which for a dynamic offset is the chain walked
+three times, in a backend that already pays 3**k for a chain that
+re-derives itself (26.555).
+
 ### 26.571 A sealed interior reachable without the gate, in three member kinds
 
 **Section 14.3's stage gate is a type, and for three member kinds C did not
