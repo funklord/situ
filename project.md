@@ -31304,6 +31304,107 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.571 A sealed interior reachable without the gate, in three member kinds
+
+**Section 14.3's stage gate is a type, and for three member kinds C did not
+ask for it.** `situ_<region>_t` has no public constructor but
+`situ_<region>_open(view, verified, &out)`, so an accessor taking one cannot
+be called before the tag has verified. An accessor taking `situ_view_t` can
+be called with the view directly:
+
+    situ_m_sealed_v_get(situ_view_t view, uint64_t *out)      a varint
+    situ_n_sealed_line_ptr(situ_view_t view)                  a scanned run
+    situ_o_sealed_d_value(situ_view_t view)                   a text number
+
+    situ_m_sealed_plain_scalar_get(situ_m_sealed_t gate)      every other kind
+
+**`line_ptr` is the sharp one: a pointer into the sealed plaintext with no
+token at all.** Not a weakened gate -- an absent one, for the whole payload
+of a region whose entire purpose is that nothing reads it before the tag
+verifies.
+
+**Found by 26.570 adding a corpus schema and withdrawing it, and verified
+against the tree before that change**, so it is older than the work that
+found it. **Latent, and counted rather than assumed: the corpus holds zero
+self-delimiting members inside a coded region**, which is why no header ever
+carried the bypass and why nothing noticed.
+
+**C alone, and the reason is structural rather than an accident of who was
+swept.** C's interior accessors are free functions, so the gate can only be
+a parameter and omitting it is expressible. C++ puts them in a nested class
+with a private constructor, Python on a `Gate` subclass, Rust on a struct
+whose field is private to the module -- there is no form of those in which
+the member is reachable and the gate is not held.
+
+**The varint family takes the gate now; the two scanned families are
+declined.** The asymmetry is implementation cost and is stated rather than
+dressed up: a varint's three functions name the view twice, and a scanned
+member's eight or nine thread it through `_scan_limit` and the trim
+helpers. An ungated pointer into plaintext is not a thing to leave standing
+while that is rewritten, and C++ already emits nothing for such a member, so
+declining agrees with it.
+
+**The guard is a population assertion over the emitted header, not a list of
+the three names.** Eleven interiors -- every member kind this backend puts
+inside a sealed region -- and the sweep fails on any definition whose first
+parameter is `situ_view_t` except `_open`, which is the factory and is named
+as the one exception. A kind that arrives later and reaches for the plain
+view fails without anybody adding it to anything. Its control asserts the
+pattern matches `_open` and an ordinary getter, because a regex that matched
+nothing would pass the sweep forever.
+
+**Sabotaged both halves at once and read which cells failed**: three of
+eleven, each naming the functions it leaked, and the eight that were always
+gated stayed green. 220 corpus artifacts, 0 differ.
+
+**A fourth finding, and the attempt at it was withdrawn by the gate.** The
+decline note names the bare member, and
+`test_the_backends_refuse_the_same_members` can only match a path -- so a
+note that correctly declines a member is invisible to the comparison that
+exists to catch a member one backend declines and another emits. Changing it
+to the path looked free and was not, and the gate said so in three steps:
+
+  - **It broke the test that pins the note's wording.** That test is right to
+    exist -- `evidence.md` asks for the message pinned rather than the fact
+    that it raised -- so catching this is it working.
+  - **"No accessor for" is written at six sites and the other five name the
+    bare member**, so moving two put one phrase in two shapes.
+  - **And it turned a NEGATIVE assertion into a vacuous one.**
+    `assert "No accessor for \`tail\`" not in source` guards against a
+    member being declined; after the change it looks for a spelling nothing
+    would emit, so it passes whatever happens. **A check whose pass includes
+    the failure, created by a drive-by improvement** -- which is the one
+    thing the change was least likely to be read for.
+
+So the note is unchanged and the blind spot is recorded as a finding about
+the detector. Moving all six is its own change and is not free either: the
+`parameter` one fires in the corpus.
+
+**Withdrawn a second time, and what it is waiting on is now specific.** The
+corpus struct carrying a varint inside a sealed region is still the right
+coverage and still does not land, because with the bypass closed it leaves
+two disagreements that are not this entry's subject:
+
+  - **`body.n`: C emits it through the gate, Python declines with a note,
+    C++ and Rust emit nothing and say nothing.** A note in two backends, and
+    then a capability question -- whether a varint inside a gate is reachable
+    at all -- which is new public API in two or three backends and the
+    holder's.
+  - **`self_mac`: all four write "cannot resolve where the tag sits" and the
+    comparison sees only C's.** Its `required` exclusion drops a hit whose
+    window mentions `required`, and in three backends the "No `required`"
+    note sits next to the tag note, so a correct refusal is swallowed. **A
+    blind spot in the detector rather than in any backend**, and the inverse
+    of the one its own docstring describes: that one guards a note that
+    lies, this one discards a note that tells the truth.
+
+**The other items from 26.570's list are untouched and stay open**: Python
+emits no varint accessor on a gate at all, and `<field>_ptr` for a
+fixed-digit text-number array at a dynamic offset returns the offset rather
+than a pointer -- `-Wint-conversion`, which this project's own flags make an
+error, so situc emits C its own gate would refuse. Measured against the
+previous tree, so pre-existing, and in no corpus schema.
+
 ### 26.570 A length only a transform can produce, and the three branches 26.440 did not reach
 
 **26.564 recorded this as "three answers and a crash" and left which answer
