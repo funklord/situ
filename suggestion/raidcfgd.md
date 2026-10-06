@@ -521,3 +521,49 @@ script.
 > settled as decision 0060**, with two larger pieces recorded for the
 > holder: `offset=Dynamic(k)` in the map, and an element cursor for a run.
 > **Nothing in this file is unanswered now.**
+
+## A consumer trips decision 0062, and the C codegen has moved, 2026-10-06
+
+**Both found by running raidcfgd's own `schema` and `wire-verify` targets
+against situ `a5d54d1`.** Neither is raidcfgd drift: `wire/status.situ` and
+`wire/generated/status.c` were committed together on 2026-09-22 and agree with
+each other. What moved is situ, and these are reports rather than requests.
+
+**1. `logical_drive.stack_count` is refused by the Python backend.**
+
+    error: `logical_drive.stack_count` and this backend's own `stack_count`
+           are one name in `class logical_drive`
+       --> wire/status.situ:226:2
+        |
+    226 |  u8      stack_count  [max = 32];
+        |  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rename the member
+        |
+        = a Python class scope is one namespace, and the later binding wins
+          silently (decision 0062)
+        = C suffixes every accessor and keeps the name; C++ and Rust refuse
+          some of these at compile time rather than silently (26.569)
+
+**The diagnostic is good and the rule looks right** -- a silent rebinding is
+exactly the thing worth refusing, and the message names the file, the line,
+the reason and the remedy. What this report adds is that **a consumer which
+generates only C is stopped by a Python-scope rule**: raidcfgd has never asked
+for the Python backend, and `situc verify` refuses before the corpus is read.
+Whether that is intended, or whether the check belongs to the backend that
+cannot express the name, is situ's call. raidcfgd has no view beyond wanting
+to know which.
+
+**The rename itself costs nothing on the wire**, measured: the member's name
+is not in the layout, so renaming changes generated accessor names and no
+bytes. So this is not a wire break for anybody, which is worth saying in case
+it reads like one.
+
+**2. `wire/generated/status.c` is stale while both `.wire` contracts are
+current.** So the C codegen has moved since 2026-09-22. Not a complaint --
+regenerating is raidcfgd's to do -- but the pair is informative: the contract
+files were unchanged and the generated source was not, which is the shape a
+consumer wants to recognise when it decides whether a bump is cosmetic.
+
+**What raidcfgd did with these: nothing but record them.** Adopting a newer
+codegen and renaming a schema member are both deliberate acts, and that tree
+has no pinned situ version -- it builds against whatever is checked out beside
+it, which is itself a question its holder has open.
