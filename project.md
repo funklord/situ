@@ -31304,6 +31304,104 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.570 A length only a transform can produce, and the three branches 26.440 did not reach
+
+**26.564 recorded this as "three answers and a crash" and left which answer
+is right as a question. Measured, all four were broken** -- so there was no
+answer to pick between:
+
+    sealed(aead, nonce = nonce) { vlen v; u16 w; }
+
+    C       situ_m_sealed_v_len(view) EMITTED, reading the varint out of
+            ciphertext, so the tag was located from a number no sender wrote
+    C++     calls sealed_v_len(), defines it nowhere: g++ refuses the header
+    Rust    the same, rustc E0599
+    Python  the same, AttributeError on the first accessor a caller touches
+
+**The crash 26.564 named was downstream of this and is gone with it.** C's
+`AssertionError: offset is dynamic` needed a text number *after* the varint:
+with `v`'s length unreadable, `d`'s offset is unresolvable, C declines it,
+and `_text_value_helper` is never reached. One fix, not two.
+
+**26.440 is the same fault and its predicate could not see this.** That
+entry asked whether every NAME a length depends on is readable from this
+view -- `u8 body[len]` inside a sealed region reads `len` through the gate,
+and the arithmetic placing what follows the region runs on the plain view.
+It asks the renderer and catches `UnknownName`, which is exact for a name.
+**A self-delimiting member has no name to ask about**: a varint's length is
+in its own continuation bits, a delimited run's is where the scan stopped, a
+`while` run's is where the condition failed. So the three sibling branches
+of each backend's length builder inherited the fault the name branch had
+fixed -- the lens again, a guard covering fewer members of a population than
+the data model carries.
+
+**`codec`, not `sealed_by`, and that is the half a narrower fix would have
+missed.** A plain `coded` region has the same bytes and no gate at all, and
+breaks identically: `cr.body_v_len` referenced and nowhere defined in C++,
+Rust and Python. A predicate keyed on the seal would have found half of it.
+`codec` is stamped on the region's own placement and its interior and not on
+what follows the region, which is what makes it the field to ask.
+
+**Asked of `traverse`, once** -- `length_is_transform_output` -- because this
+is four backends answering one question, and 26.440's own argument is that
+two copies of such a question become two answers. C asks it through
+`_length_is_readable`, which is where the REGION length consults it, and
+through `_has_length`, which is where the offset blocker does.
+
+**Two further faults on the way, both pre-existing and both reached for the
+first time by this.**
+
+  - **C emitted a tag-dirtying setter calling an `_offset` the decline path
+    no longer writes.** `_covered_setters` never asked `_offset_blocker`,
+    because until now every covered scalar had an offset. One filter.
+  - **Python dropped an unplaceable interior member in silence**, so
+    `test_the_backends_refuse_the_same_members` -- which reads a NOTE to
+    know a member was declined -- counted it as emitted. It writes the note
+    now, from `_interior`, which returns the dropped paths rather than
+    letting the gate recompute the filter.
+
+**The corpus is byte-identical: 220 generated artifacts over 44 schemas and
+four backends, 0 differ.** That is 26.440's instrument, where two wrong
+fixes for this exact class built cleanly in all four backends and were
+caught by nothing else. It can only say the change declines nothing that
+worked; it cannot say the fix works, because no corpus schema has the shape
+-- which is 26.564's own diagnosis of why nothing saw this, re-measured here
+as **exactly one self-delimiting member inside a coded region across the
+whole corpus, and it is the one this entry added and then withdrew.**
+
+**So the fixture table carries both halves, and it is a 14-cell before-and-
+after rather than a pass.** Three shapes by two region kinds by four
+backends, plus four readable interiors as controls:
+
+    moved:  varint-sealed, varint-body, text_number-sealed,
+            delimited_run-sealed            -- the four that were broken
+    same:   the other ten, byte for byte    -- including delimited_run-body
+                                               and text_number-body, which
+                                               already declined elsewhere
+
+**Two of the six self-delimiting cells needed no fix**, and that is worth
+stating rather than rounding away: the predicate fires on six and four were
+broken. The other two were already declined by another route, so the guard
+is redundant there and -- measured, not assumed -- changes not one byte.
+
+**The sabotage reports which check caught it**, which is the half that makes
+a control a control. With the predicate returning False: 19 failures, and
+the C compile fails in exactly one cell of six, because C's output compiled
+before and was wrong. Five green C cells under a sabotage is the shape of
+26.440's silent half, visible in the control rather than inferred.
+
+**Withdrawn from this entry and recorded as 26.571, because adding the
+corpus schema makes a pre-existing fault live.** A varint inside a sealed
+region gets a C accessor taking `situ_view_t` rather than the gate type --
+`situ_sealed_self_sized_body_n_get(situ_view_t view, ...)` beside
+`situ_sealed_run_body_vals_get(situ_sealed_run_body_t gate, ...)` -- so
+section 14.3's stage gate is bypassed for that member. Verified against the
+tree before this change, so it is not this change's. Latent today: the
+corpus has no such schema, which is why a struct carrying one is 26.571's
+first move rather than this entry's last. The other two halves of 26.571 are
+C's missing decline note and Python emitting no varint accessor on a gate at
+all.
+
 ### 26.569 a member named `at` made the Python module unusable
 
 **`struct record { u8 at; }` generates a module that imports and cannot be
