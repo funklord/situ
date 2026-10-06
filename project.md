@@ -31304,6 +31304,79 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.573 A consumer's name, attributed to the wrong owner
+
+**raidcfgd ran its own targets against `a5d54d1` and reported two things,
+both of which held.** The first is a defect in 26.569's diagnostic rather
+than in its rule, and the second is a cost of `verify`'s mechanism that was
+never written down.
+
+**1. `stack_count` is not a name this backend reserves, and the message
+said it was.**
+
+    u8   stack_count [max = 32];
+    u16  stack[stack_count];
+
+binds `stack_count` twice: the driver's own property, and the run's count
+accessor. The refusal was correct -- one of the two is shadowed and which
+depends on emission order -- and it said *and this backend's own
+`stack_count`*, which is **the wrong reason for a right remedy**. A reader
+is told to rename the member and left believing the word is reserved, when
+renaming the RUN resolves it equally and is the option they would not have
+considered.
+
+It names the other member now and says the word is not reserved. **Only
+where there is one**: `at` and `validate` really are this backend's, and
+the control asserts the message still says so, because a fix here could
+replace one wrong attribution with another.
+
+**Attribution is diagnostic text, so the affix sets may over-approximate**
+-- a miss costs specificity and a false hit names a member the reader can
+see is unrelated. What decides whether to REFUSE is still the exact guard,
+which reads the emitted class and carries no list. C++'s `PREFIXES` and
+`SUFFIXES` rather than a third copy, since
+`test_the_affixes_match_the_emitter` derives them from that backend's
+emitter.
+
+**Reproduced from the shape rather than from the line they quoted**, which
+mattered: the obvious reading of `u8 stack_count` beside a `stack` is a
+fixed array, and `u8 stack[4]` generates no `_count` at all and all four
+backends build it. The collision needs the run to be DRIVEN by the member,
+which is the natural way anybody writes it.
+
+**2. A C-only consumer is stopped by a Python rule, and that is `verify`'s
+mechanism rather than the rule's placement.** The check is in the backend
+that cannot express the name -- C suffixes every accessor and builds this
+schema, measured. What raidcfgd met is that **`situc verify` uses the
+Python backend as its interpreter**: it generates a module in memory and
+executes it against the caller's vectors, exactly so that checking a corpus
+needs no code generator in their build.
+
+So `verify` cannot run on a schema whose module binds one name twice, and
+**the alternative is worse than the refusal**: one accessor is shadowed,
+and `verify` would read the other and report a verdict about it. The
+refusal is right for `verify` for the same reason it is right for a Python
+caller.
+
+**What was missing is that nobody had said so.** A project generating only
+C still meets the Python backend's naming rules the moment it uses
+`verify`, and the remedy is the rename rather than a flag. Recorded here
+and answered in their file.
+
+**3. Their second report needs nothing.** `wire/generated/status.c` stale
+while both `.wire` contracts are current is situ's C codegen having moved,
+which it has three times in a day -- 26.570, 26.571, 26.572 -- and none of
+the three changes a layout or touches `.wire` or `.map`. That is exactly
+the pair they measured, and it is the shape a consumer wants for deciding
+whether a bump is cosmetic.
+
+**The report is the instrument this tree does not have.** No corpus schema
+had a run driven by a member named after its own count, and nothing here
+would have produced one: the shape is ordinary in a real format and absent
+from a corpus built to carry awkward constructs. **A consumer running the
+compiler against their own schema is a lens no sweep replaces**, and this
+is the second time that file has corrected something here.
+
 ### 26.572 A `_ptr` that returned an offset, and the proxy that hid it
 
 **situc emitted C its own build refuses.** A fixed-digit text number's
