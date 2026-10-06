@@ -2065,6 +2065,8 @@ class Emitter:
 		# A text number with a width rather than a delimiter (8.6.2): three
 		# digits, padded, and no scan at all.
 		if placement.radix is not None and not placement.delimiters:
+			if self._gate_type(struct, placement) is not None:
+				return lines + self._ungated_scan_note(placement)
 			lines.extend(self._fixed_text_number(struct, placement))
 			# And the non-failing read, which the delimited form beside it has
 			# always emitted. An expression over a text driver names
@@ -2088,6 +2090,8 @@ class Emitter:
 			return lines
 
 		if placement.delimiters:
+			if self._gate_type(struct, placement) is not None:
+				return lines + self._ungated_scan_note(placement)
 			return lines + self._delimited_tail(struct, placement)
 
 		# A coded region with no delimiter. It fell through every branch
@@ -3325,7 +3329,18 @@ class Emitter:
 		local  = c_name(self._local(struct, placement))
 		get    = ident(self.prefix, struct.name, local, "get")
 		length = ident(self.prefix, struct.name, local, "len")
-		base   = self._base_expression(struct, placement, gated=False)
+		# Through the gate where there is one (26.571). This passed
+		# `gated=False` and took `situ_view_t`, so a varint inside a sealed
+		# region had its decoder, its `_value` and its `_len` reachable
+		# WITHOUT the verification token section 14.3 exists to demand --
+		# while every other member kind in this backend takes the gate. C++
+		# emits nothing for such a member and Python and Rust put it on the
+		# gate, so the bypass was this backend's alone.
+		gate   = self._gate_type(struct, placement)
+		taken  = f"{gate} gate" if gate else "situ_view_t view"
+		held   = "gate.view" if gate else "view"
+		base   = self._base_expression(struct, placement,
+		                               gated=gate is not None)
 		width  = declared.max_bytes
 		signed = declared.transform is ast.VarintTransform.ZIGZAG
 		ctype  = "int64_t" if signed else "uint64_t"
@@ -3336,9 +3351,10 @@ class Emitter:
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries -- eight bits
 		# and no continuation flag where there is no spare bit for one.
-		read = (f"situ_varint_be_get(situ_base(view) + at, view.limit - at,"
+		read = (f"situ_varint_be_get(situ_base({held}) + at,"
+		        f" {held}.limit - at,"
 		        f" {width}u, {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(situ_base(view) + at, view.limit - at,"
+		        f"situ_varint_get(situ_base({held}) + at, {held}.limit - at,"
 		        f" {width}u, &raw)")
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
@@ -3367,13 +3383,13 @@ class Emitter:
 			*([" * SITU_ERR_CONSTRAINT a non-minimal encoding, which `minimal`"
 			   " refuses"] if declared.minimal else []),
 			" */",
-			f"static inline situ_err_t {get}(situ_view_t view, {ctype} *out)",
+			f"static inline situ_err_t {get}({taken}, {ctype} *out)",
 			"{",
 			f"	uint32_t at = {base};",
 			"	uint64_t raw = 0;",
 			"	uint32_t used;",
 			"",
-			"	if (at >= view.limit) {",
+			f"	if (at >= {held}.limit) {{",
 			"		return SITU_ERR_BOUNDS;",
 			"	}",
 			"",
@@ -3397,11 +3413,11 @@ class Emitter:
 			" * zero, which is the bargain every other accessor makes with the",
 			" * bounds check it did not do. */",
 			f"static inline {ctype} "
-			f"{ident(self.prefix, struct.name, local, 'value')}(situ_view_t view)",
+			f"{ident(self.prefix, struct.name, local, 'value')}({taken})",
 			"{",
 			f"\t{ctype} value = 0;",
 			"",
-			f"\t(void){get}(view, &value);",
+			f"\t(void){get}({'gate' if gate else 'view'}, &value);",
 			"\treturn value;",
 			"}",
 			"",
@@ -3412,12 +3428,12 @@ class Emitter:
 			" * frame -- a width guessed at the maximum would push them past"
 			" the end.",
 			" * A caller who needs to tell the two apart asks `_get`. */",
-			f"static inline uint32_t {length}(situ_view_t view)",
+			f"static inline uint32_t {length}({taken})",
 			"{",
 			f"	uint32_t at = {base};",
 			"	uint64_t raw = 0;",
 			"",
-			"	if (at >= view.limit) {",
+			f"	if (at >= {held}.limit) {{",
 			"		return 0u;",
 			"	}",
 			f"	return {read};",
@@ -6638,6 +6654,22 @@ class Emitter:
 		A counted run of variable-length elements is the other reason, and
 		this said the codec sentence about it: `e recs[c]` has no codec, and a
 		note naming one for a struct is a diagnostic that is simply false.
+
+		THE BARE MEMBER NAME, AND NOT THE PATH, WHICH WAS TRIED AND
+		WITHDRAWN (26.571). The path reads better and
+		`test_the_backends_refuse_the_same_members` can only see a path, so
+		this note is invisible to the comparison that exists to catch a
+		member one backend declines and another emits. It is still the bare
+		name, because "No accessor for" is written at six sites here and the
+		other five name the bare member: changing two of them put one phrase
+		in two shapes, broke the test that pins this note's wording, and --
+		the part that decided it -- turned a NEGATIVE assertion elsewhere
+		into one that passes whatever happens, since it looks for a spelling
+		nothing would emit any more.
+
+		So the detector's blind spot is a finding about the detector and is
+		recorded as such. Moving all six is its own change, and it is not
+		free: the `parameter` one fires in the corpus.
 		"""
 		if self._is_counted_run(blocker):
 			return [
@@ -7142,6 +7174,40 @@ class Emitter:
 		# Whole groups only, so a partial one still costs a full group.
 		return (f"((({inner}) + {rule.group_in - 1}u)"
 		        f" / {rule.group_in}u) * {rule.group_out}u")
+
+	def _ungated_scan_note(self, placement: Placement) -> list[str]:
+		"""No accessor for a scanned member inside a gated region (26.571).
+
+		This backend's accessors for a delimited run and for a text number
+		take `situ_view_t` and scan from it, and the whole family did so
+		inside a sealed region too -- so `<region>_<member>_ptr` handed out
+		a pointer into the sealed plaintext with no verification token at
+		all, which is section 14.3's stage gate not merely weakened but
+		absent. Measured against the tree before the fix, so it is older
+		than this change; latent only because no schema here had the shape.
+
+		Declined rather than routed through the gate, which is what the
+		varint family above does. The difference is the scan: a varint's
+		three functions name the view twice and a scanned member's eight or
+		nine thread it through `_scan_limit` and the trim helpers, and an
+		ungated pointer into plaintext is not a thing to leave standing
+		while that is rewritten. C++ emits nothing for such a member either,
+		so this agrees with it.
+
+		What it does NOT settle: Python and Rust put a (one-byte, scalar)
+		accessor for one of these on the gate, so the four backends still
+		disagree about whether a scanned member is reachable through a gate
+		at all. That is a capability question rather than a bypass, it is a
+		new public API in two backends, and it is recorded for the holder.
+		"""
+		return [
+			f"/* No accessor for `{placement.name}`: it is scanned, and this",
+			" * backend's scan takes the plain view rather than the gate -- so",
+			" * emitting one would reach the sealed interior without the token",
+			" * section 14.3 requires. Reach these bytes through the region's",
+			" * own accessors after the tag verifies.",
+			" */",
+		]
 
 	def _length_is_readable(self, struct: ResolvedStruct,
 			placement: Placement) -> bool:
