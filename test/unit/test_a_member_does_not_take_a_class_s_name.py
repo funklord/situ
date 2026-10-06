@@ -56,7 +56,7 @@ COLLIDING = ("at", "validate", "required")
 #: class a plain struct produces. A list long enough to be safe would
 #: refuse all four.
 INNOCENT = ("framed", "extent", "word", "read", "write", "nesting",
-            "messages", "payload", "check", "size_bytes", "size_min")
+	        "messages", "payload", "check", "size_bytes", "size_min")
 
 
 def _schema(name: str) -> str:
@@ -172,3 +172,52 @@ def test_no_schema_in_this_repository_collides(path: Path) -> None:
 		for messages in (False, True):
 			generate_py(schema, resolved, path.stem,
 			            materialize=materialize, messages=messages)
+
+
+# -- whose name it is -------------------------------------------------------
+
+
+#: A run whose count accessor is spelled the same as its own driver. The
+#: shape raidcfgd met in a real schema (26.573), and the one the first
+#: diagnostic described wrongly.
+DRIVEN = (PREAMBLE + "struct logical_drive {\n"
+	      "\tu8  stack_count [max = 32];\n"
+	      "\tu16 stack[stack_count];\n"
+	      "\tu16 tail;\n}\n")
+
+
+def test_the_diagnostic_names_the_other_member() -> None:
+	"""Not "this backend's own", which is the wrong reason for a right fix.
+
+	`stack_count` is bound twice: the driver's own property, and the run's
+	count. Calling the second a name this backend owns tells a reader to
+	rename the member and leaves them believing `stack_count` is reserved
+	-- when renaming EITHER member resolves it, and the remedy they would
+	not have considered is renaming the run.
+	"""
+	schema   = parse_text(DRIVEN, path="m.situ")
+	resolved = resolve(schema, solve(schema))
+
+	with pytest.raises(SituError) as why:
+		generate_py(schema, resolved, "m")
+
+	said = why.value.diagnostic
+	assert "`logical_drive.stack`'s generated `stack_count`" in said.message
+	assert any("is not reserved" in one for one in said.notes), said.notes
+	assert not any("backend's own" in one for one in
+	                [said.message, *said.notes]), said.message
+
+
+def test_a_backend_owned_name_is_still_said_to_be_one() -> None:
+	"""The control, and the reason the clause is conditional.
+
+	`at` is this backend's own, no member is behind it, and the message has
+	to keep saying so -- otherwise the fix above would have replaced one
+	wrong attribution with another.
+	"""
+	with pytest.raises(SituError) as why:
+		_generate("at")
+
+	said = why.value.diagnostic
+	assert "this backend's own `at`" in said.message, said.message
+	assert not any("is not reserved" in one for one in said.notes), said.notes

@@ -567,3 +567,42 @@ consumer wants to recognise when it decides whether a bump is cosmetic.
 codegen and renaming a schema member are both deliberate acts, and that tree
 has no pinned situ version -- it builds against whatever is checked out beside
 it, which is itself a question its holder has open.
+
+> **Answered 2026-10-06. Both reports held; one was a defect in the
+> diagnostic rather than in the rule.**
+>
+> **1. The refusal is right and its wording was wrong.** `stack_count` is
+> not a name this backend reserves: it is what the backend calls
+> `logical_drive.stack`'s count accessor, so the two bindings are the
+> driver's own property and the run's count. The message said "this
+> backend's own `stack_count`", which is the wrong reason for a right
+> remedy -- it sends a reader to rename the member believing the word is
+> reserved, and hides that renaming the RUN resolves it equally. It now
+> names the other member and says the word is not reserved. Reproduced
+> from the shape in your report, not from the line, and the schema is a
+> test here now.
+>
+> **2. A C-only consumer being stopped by a Python rule is intended, and
+> the reason is `verify` itself rather than the rule's placement.** The
+> check is in the Python backend, which is the one that cannot express the
+> name -- C suffixes every accessor and is unaffected, measured. What you
+> met is that `situc verify` USES the Python backend as its interpreter: it
+> generates a module in memory and executes it against your vectors,
+> precisely so that checking a corpus needs no code generator in your
+> build. So `verify` cannot run on a schema whose generated module binds
+> one name twice, and the alternative is worse than a refusal -- one of the
+> two accessors is shadowed, and `verify` would read the wrong one and
+> report a verdict about it.
+>
+> That is a real cost of `verify`'s mechanism and it was not written down
+> before this. It is now, in 26.573: a project that generates only C still
+> meets the Python backend's naming rules if it uses `verify`, and the
+> remedy is the rename rather than a flag.
+>
+> **3. The stale generated C is situ moving, as you say, and three changes
+> in one day are why.** 26.570 declined a length only a transform can
+> produce, 26.571 routed a sealed region's varint accessors through the
+> gate type, and 26.572 fixed a `_ptr` that returned an offset. None
+> changes a layout and none touches `.wire` or `.map`, which is consistent
+> with what you measured -- contracts unchanged, generated source not.
+> Nothing there needs a rename on your side.

@@ -724,6 +724,39 @@ class Emitter:
 			return [item.target.id]
 		return []
 
+	def _affixed_from(self, struct: ResolvedStruct, name: str) -> str | None:
+		"""The other member whose accessor is spelled `name`, where there is
+		one.
+
+		`u8 stack_count; u16 stack[stack_count]` binds `stack_count` twice:
+		once as the driver's own property and once as the run's count. The
+		first version of the diagnostic called the second "this backend's
+		own", which is wrong in the way that misleads -- a reader is told to
+		rename the member and left believing `stack_count` is a reserved
+		word, when renaming EITHER member resolves it. Reported by raidcfgd
+		from a real schema (26.573).
+
+		Diagnostic text only, which is why the affix sets are allowed to be
+		an over-approximation: a miss costs a less specific message and a
+		false hit names a member the reader can see is unrelated. The gate
+		that decides whether to refuse is `_refuse_collisions`, and it reads
+		the emitted class rather than any list.
+
+		C++'s sets rather than a third copy -- `test_the_affixes_match_the_
+		emitter` derives them from that backend's emitter and fails when an
+		accessor shape arrives they do not know.
+		"""
+		from situc.codegen.cpp.names import PREFIXES, SUFFIXES
+
+		for entry in struct.entries:
+			local = py_name(local_name(struct, entry.placement))
+			if local == name:
+				continue
+			if any(name == f"{local}_{one}" for one in SUFFIXES) \
+					or any(name == f"{one}_{local}" for one in PREFIXES):
+				return f"{struct.name}.{entry.placement.name}"
+		return None
+
 	def _collision(self, held: str, name: str) -> Exception:
 		"""The diagnostic, pointed at the member rather than the class.
 
@@ -737,20 +770,27 @@ class Emitter:
 			if py_name(struct.name) != held:
 				continue
 			for entry in struct.entries:
-				if py_name(local_name(struct, entry.placement)) == name:
-					return error(
-						f"`{struct.name}.{entry.placement.name}` and this "
-						f"backend's own `{name}` are one name in "
-						f"`class {held}`",
-						entry.placement.span,
-						"rename the member",
-						notes = [
-							"a Python class scope is one namespace, and the "
-							"later binding wins silently (decision 0062)",
-							"C suffixes every accessor and keeps the "
-							"name; C++ and Rust refuse some of these at "
-							"compile time rather than silently (26.569)",
-						])
+				if py_name(local_name(struct, entry.placement)) != name:
+					continue
+				other = self._affixed_from(struct, name)
+				return error(
+					f"`{struct.name}.{entry.placement.name}` and "
+					+ (f"`{other}`'s generated `{name}`"
+					   if other else f"this backend's own `{name}`")
+					+ f" are one name in `class {held}`",
+					entry.placement.span,
+					"rename the member",
+					notes = [
+						"a Python class scope is one namespace, and the "
+						"later binding wins silently (decision 0062)",
+						*([f"`{name}` is not reserved: it is what this "
+						   f"backend calls one of `{other}`'s accessors, "
+						   f"so renaming either member resolves it"]
+						  if other else []),
+						"C suffixes every accessor and keeps the "
+						"name; C++ and Rust refuse some of these at "
+						"compile time rather than silently (26.569)",
+					])
 			break
 		raise AssertionError(
 			f"`class {held}` binds `{name}` twice and no member of a struct "
