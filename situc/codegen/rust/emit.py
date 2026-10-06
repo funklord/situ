@@ -4387,7 +4387,7 @@ class Emitter:
 		for entry in struct.entries:
 			placement = entry.placement
 			scalar    = placement.scalar
-			if placement.radix is None or placement.offset_bits is None:
+			if placement.radix is None:
 				continue
 			# Nested *or* the struct's own. Restricting this to nested
 			# members assumed the fixed-width form beside it emitted its own
@@ -4397,10 +4397,21 @@ class Emitter:
 			if scalar is None or placement.array_count is None:
 				continue
 
+			# AND AT A DYNAMIC OFFSET TOO (26.572), which this read
+			# `offset_bits is not None` for and the body below could only
+			# express a constant. The same half-fix as C++'s beside it, for
+			# the same reason: no schema here had the shape, so the case that
+			# existed was the case that got covered. `check()` names
+			# `self.<field>_value()` whichever offset the field has, and
+			# rustc answered E0599 for a method nobody defines.
+			held_at = self._offset_expression(struct, placement)
+			if held_at is None:
+				continue
+
 			name  = _ident(c_name(local_name(struct, placement)))
 			rtype = self._field_type(placement, writing=True)
 			limit = (1 << scalar.bits) - 1
-			at    = placement.offset_bits // BITS_PER_BYTE
+			at    = held_at
 			lines.extend([
 				"",
 				f"\t/// `{placement.path}`, where an error cannot be returned:",
@@ -4412,10 +4423,11 @@ class Emitter:
 				# function builds a struct over whatever bytes are left, so
 				# this ran with an empty slice behind it and panicked --
 				# an abort in `no_std`, over a message somebody else chose.
-				f"\t\tif self.bytes.len() < {at + placement.array_count} {{",
+				f"\t\tlet at = {at};",
+				f"\t\tif self.bytes.len() < at + {placement.array_count} {{",
 				"\t\t\treturn 0;",
 				"\t\t}",
-				f"\t\tlet raw = &self.bytes[{at}..{at + placement.array_count}];",
+				f"\t\tlet raw = &self.bytes[at..at + {placement.array_count}];",
 				"",
 				f"\t\tmatch situ_rt::parse_uint(raw, {placement.radix},"
 				f" {limit}) {{",

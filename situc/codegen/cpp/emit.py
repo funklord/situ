@@ -2993,7 +2993,7 @@ class Emitter:
 		for entry in struct.entries:
 			placement = entry.placement
 			scalar    = placement.scalar
-			if placement.radix is None or placement.offset_bits is None:
+			if placement.radix is None:
 				continue
 			# Nested *or* the struct's own. Restricting this to nested
 			# members assumed the fixed-width form beside it emitted its own
@@ -3003,10 +3003,21 @@ class Emitter:
 			if scalar is None or placement.array_count is None:
 				continue
 
+			# AND AT A DYNAMIC OFFSET TOO (26.572). This read
+			# `offset_bits is not None` above and the body below could only
+			# express a constant, so the fix that added this covered the
+			# static case and left the other -- for the same reason it was
+			# needed at all, that no schema here had the shape. `check()`
+			# names `<field>_value()` whichever offset the field has, so
+			# `vlen lead; decimal u32 n[4] [max = 4]` put a call to a method
+			# nobody defines in the header, and g++ refused it.
+			at = self._offset_expression(struct, placement)
+			if at is None:
+				continue
+
 			name  = bare_name(local_name(struct, placement))
 			ctype = self._field_ctype(placement)
 			limit = (1 << scalar.bits) - 1
-			at    = placement.offset_bits // BITS_PER_BYTE
 			lines.extend([
 				"",
 				f"\t/* {placement.path}, where an error cannot be returned:",
@@ -3017,7 +3028,7 @@ class Emitter:
 				"\t{",
 				"\t\tstd::uint64_t value = 0;",
 				"",
-				f"\t\t(void)situ_parse_uint(situ_base(raw_) + {at},"
+				f"\t\t(void)situ_parse_uint(situ_base(raw_) + ({at}),"
 				f" {placement.array_count}, {placement.radix}, {limit},"
 				" &value);",
 				f"\t\treturn static_cast<{ctype}>(value);",

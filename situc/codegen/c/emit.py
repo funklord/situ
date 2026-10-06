@@ -5662,9 +5662,28 @@ class Emitter:
 
 		local = c_name(self._local(struct, placement))
 		ctype = self._field_ctype(placement)
-		base  = self._base_expression(struct, placement)
-		base  = f"situ_base(view) + {base}" if base.isdigit() or base.endswith("u") \
-			else base
+		# ALWAYS from the base, which this asked a proxy about (26.572). The
+		# condition was `base.isdigit() or base.endswith("u")` -- a test for
+		# "is this a constant" standing in for "is this an offset needing a
+		# base", and `_base_expression` has three return paths, all three of
+		# them byte counts and none a pointer. So the answer was always yes,
+		# and the two shapes that are not constants returned a `uint32_t`
+		# from a function declared `const uint8_t *`:
+		#
+		#     static inline const uint8_t *situ_m2_d_ptr(situ_view_t view)
+		#     { return situ_m2_d_offset(view); }
+		#
+		# `-Wint-conversion`, which this project's own `-Werror` makes an
+		# error, so situc emitted C its own build refuses.
+		#
+		# A DYNAMIC OFFSET IS THE ONLY SHAPE THAT REACHES IT from here, and
+		# the first version of this comment said an empty `authenticated`
+		# region did too. It cannot: that path wants `kind` in
+		# `NOT_A_MEMBER`, which is `element` or `authenticated`, and this
+		# function is only ever called for a `field` carrying a `radix`. The
+		# other two paths are still worth removing the proxy from, because
+		# the proxy was never answering the question either way.
+		base  = f"situ_base(view) + {self._base_expression(struct, placement)}"
 
 		return [
 			"",

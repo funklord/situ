@@ -459,6 +459,11 @@ struct text_driver size=6..14
   @0x0004   0..8      u16        d  sized-by=n
   ~         2         u16        tail  big
 
+struct text_driver_moved size=7..15
+  @0x0000   1..9      edge_varint lead  varint=edge_varint
+  ~         4         u32        n  big radix=10 max=4
+  ~         2         u16        tail  big
+
 struct texty size=2..65543
   @0x0000   until:0d0a u16        count  big radix=10 cap=8
   ~         0..65535  u8         body  sized-by=count

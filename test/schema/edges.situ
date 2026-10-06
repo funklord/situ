@@ -874,6 +874,24 @@ struct text_driver {
 	u16          tail;
 }
 
+// The same field at an offset the message decides (26.572).
+//
+// `text_driver` above has its digits at a constant offset, which is where
+// every fixed-digit text number in this repository sits -- 28 of them, and
+// not one dynamic. So the pointer accessor's `situ_base(view) +` was added
+// on a test for whether the base was a CONSTANT, the condition was true for
+// every case anybody had, and the shape below returned a `uint32_t` from a
+// function declared `const uint8_t *`: `-Wint-conversion`, which this
+// project's own `-Werror` makes an error.
+//
+// A varint in front is what makes the offset dynamic, and is the cheapest
+// thing that does.
+struct text_driver_moved {
+	edge_varint   lead;
+	decimal u32   n[4]  [max = 4];
+	u16           tail;
+}
+
 // A varint driving a size written as arithmetic.
 //
 // `readable_names` is the one list of what an expression may name and it
