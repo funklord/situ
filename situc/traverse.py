@@ -2294,6 +2294,41 @@ def declares_its_own_length(placement: Placement) -> bool:
 	        and placement.located is None)
 
 
+def length_is_transform_output(placement: Placement) -> bool:
+	"""Whether this member's own length can only be read after a transform.
+
+	26.440 asked the same question of a length that NAMES a field: `u8
+	body[len]` inside a sealed region reads `len` through the gate, and the
+	arithmetic placing whatever follows the region runs on the plain view,
+	where there is none. The predicate there calls the renderer and catches
+	`UnknownName`, which is exact for a name.
+
+	A self-delimiting member has no name to ask about. A varint's length is
+	in its own continuation bits, a delimited run's is wherever the scan
+	stopped, and a `while` run's is where the condition failed -- and inside
+	a coded region every one of those bytes is the codec's output. So the
+	three sibling branches of each backend's length builder inherited the
+	fault the name branch had fixed: they returned `<region>_<member>_len`
+	or `_span`, which no backend defines on the plain view (26.570).
+
+	`codec` rather than `sealed_by`, because a plain `coded` region has the
+	same bytes and no gate at all -- so the fault is wider than the seal
+	and a predicate keyed on the seal would have found half of it. It is
+	set on the region's own placement and on its interior, and not on what
+	follows the region, which is what makes it the right field to ask.
+
+	A counted run is deliberately NOT here. Its length is `count` elements
+	wide, and `count` is a name -- so where it sits inside the region
+	26.440's predicate already answers, and where it sits outside the
+	length is genuinely readable.
+	"""
+	if placement.codec is None or placement.kind != "field":
+		return False
+	return (placement.varint is not None
+	        or bool(placement.delimiters)
+	        or placement.repeat_while is not None)
+
+
 def enclosing_arm(struct: ResolvedStruct,
 		placement: Placement) -> tuple[Placement, Arm] | None:
 	"""The arm this member is *inside*, which is not the same question.

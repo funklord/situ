@@ -59,6 +59,7 @@ from situc.traverse import (
 	covered_run,
 	data_sized,
 	dynamic_frame_owner,
+	length_is_transform_output,
 	readable_names,
 	decode_bound, decode_ratio, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
@@ -3257,6 +3258,15 @@ class Emitter:
 			placement: Placement, running: str | None = None,
 			depth: str | None = None) -> str | None:
 		"""How many bytes a variable-length member occupies, at run time."""
+		# A length only a transform can produce is not a length (26.570).
+		# The sibling of 26.440's name branch below: a varint, a delimited
+		# run and a `while` run have no name to ask the renderer about --
+		# their length is in their own bytes, which inside a coded region
+		# are the codec's output. Asked of `traverse` so the four backends
+		# cannot answer it three ways.
+		if length_is_transform_output(placement):
+			return None
+
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement, depth)
 

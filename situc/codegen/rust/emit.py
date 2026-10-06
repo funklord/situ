@@ -53,6 +53,7 @@ from situc.traverse import (
 	data_sized,
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
+	length_is_transform_output,
 	readable_names,
 	frame_cap,
 	region_decodes,
@@ -6225,6 +6226,15 @@ class Emitter:
 	def _content_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
 			depth: str | None = None) -> str | None:
+		# A length only a transform can produce is not a length (26.570).
+		# The sibling of 26.440's name branch below: a varint, a delimited
+		# run and a `while` run have no name to ask the renderer about --
+		# their length is in their own bytes, which inside a coded region
+		# are the codec's output. Asked of `traverse` so the four backends
+		# cannot answer it three ways.
+		if length_is_transform_output(placement):
+			return None
+
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement, depth)
 

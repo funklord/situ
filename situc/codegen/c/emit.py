@@ -59,6 +59,7 @@ from situc.traverse import (
 	is_recursive,
 	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
+	length_is_transform_output,
 	readable_names,
 	region_extent,
 	decode_counts_bits, decodes_here,
@@ -1229,7 +1230,18 @@ class Emitter:
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None
 		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
-		                                                      "InPlaceSlack")]
+		                                                      "InPlaceSlack")
+		           # And an offset there is a function for. A member behind
+		           # something whose extent cannot be measured gets no
+		           # `_offset` emitted, and this setter calls one: a
+		           # pre-existing gap, reached for the first time by 26.570
+		           # making a varint inside a sealed region unmeasurable.
+		           # The ordinary accessor path asks `_offset_blocker` before
+		           # emitting anything; this one never did, because until now
+		           # every covered scalar had an offset.
+		           and (entry.placement.offset_bits is not None
+		                or self._offset_blocker(struct,
+		                                        entry.placement) is None)]
 		if not covered:
 			return []
 
@@ -7139,10 +7151,16 @@ class Emitter:
 		two cannot drift: `_over_fields` raises `UnknownName` for exactly
 		the names it would fail to emit, which is the question.
 
-		A bare count and a constant need nothing looked up, and a driver
-		that resolves is the ordinary case -- this says no only where the
-		schema names something the view has no accessor for.
+		A SELF-DELIMITING member names nothing at all, which is why the
+		checks below could not see one: a varint's length is in its own
+		continuation bits and a delimited run's is wherever the scan
+		stopped. Inside a coded region those bytes are the codec's output,
+		so the length is no more readable than a driver behind the gate --
+		the same sentence by a third route (26.570).
 		"""
+		if length_is_transform_output(placement):
+			return False
+
 		if placement.size_expr is not None:
 			try:
 				self._over_fields(struct, placement.size_expr, "view")
@@ -7167,6 +7185,17 @@ class Emitter:
 
 	def _has_length(self, struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether a member's runtime extent has a closed form."""
+		# A length only a transform can produce is not a length (26.570).
+		# `_length_is_readable` says the same thing and is what the REGION
+		# length asks; this is what the offset blocker asks, and a member
+		# whose length cannot be read has no closed form either. C was the
+		# one backend that EMITTED the accessor -- `situ_m_sealed_v_len`
+		# reading the varint out of ciphertext -- so the three that named a
+		# function nobody defines at least failed loudly. The silent half
+		# again (26.440), in the same subsystem.
+		if length_is_transform_output(placement):
+			return False
+
 		# A run inside a variant arm has no length here, because the arm
 		# emitter has no walk: the ordinary member path emits `_span`, `_at`
 		# and `_count` for a run, and an arm's parallel family emits none of

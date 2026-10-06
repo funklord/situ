@@ -54,6 +54,7 @@ from situc.traverse import (
 	Check, Member, arm_members, coded_spans, containment_order, covered_run,
 	data_sized,
 	dynamic_frame_owner,
+	length_is_transform_output,
 	readable_names,
 	decode_bound, decode_ratio, frame_cap, region_extent, offset_plan,
 	decodes_here, classify,
@@ -5866,6 +5867,15 @@ class Emitter:
 	def _content_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
 			depth: str | None = None) -> str | None:
+		# A length only a transform can produce is not a length (26.570).
+		# The sibling of 26.440's branch below: that one asks the renderer
+		# about a NAME, and a varint, a delimited run and a `while` run
+		# have none -- their length is in their own bytes, which inside a
+		# coded region are the codec's output. Asked of `traverse` so the
+		# four backends cannot answer it three ways.
+		if length_is_transform_output(placement):
+			return None
+
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement, depth)
 
@@ -7128,10 +7138,11 @@ class Emitter:
 			lines.extend(self._gate(struct, region))
 		return lines
 
-	def _interior(self, struct: ResolvedStruct,
-			region: Placement) -> tuple[list[Resolved], list[str]]:
-		"""A sealed region's members: those with an accessor, and the paths
-		of those that deliberately have none.
+	def _interior(self, struct: ResolvedStruct, region: Placement
+			) -> tuple[list[Resolved], list[str], list[str]]:
+		"""A sealed region's members: those with an accessor, the paths of
+		those that deliberately have none, and the paths of those this
+		backend cannot place.
 
 		Asked once, because the gate below and the waived spelling above it
 		differ only in *where* the interior hangs. Which members are
@@ -7161,11 +7172,21 @@ class Emitter:
 		secret = [placement.path for placement in sealed
 		          if any(attr.name == "secret" for attr in placement.attrs)
 		          and _is_run(placement)]
+		# And the ones with no offset to read from, which this used to drop
+		# in silence (26.570). `test_the_backends_refuse_the_same_members`
+		# compares which members each backend declines and reads a NOTE to
+		# know one was declined, so a member dropped without a word counts as
+		# emitted -- C++ and Rust wrote the note, this backend and C did not,
+		# and the test called the schema four different things.
+		held      = {entry.placement.path for entry in inside}
+		unplaced  = [placement.path for placement in sealed
+		             if placement.path not in held
+		             and placement.path not in secret]
 		# A `[secret]` run is answered once, by `secret` below. It reaches
 		# `inside` now that a byte run does, and the loop over `inside` writes
 		# the same note -- so without this the member would decline twice.
-		return [entry for entry in inside
-		        if entry.placement.path not in secret], secret
+		return ([entry for entry in inside
+		         if entry.placement.path not in secret], secret, unplaced)
 
 	def _waived_interior(self, struct: ResolvedStruct,
 			region: Placement) -> list[str]:
@@ -7181,7 +7202,7 @@ class Emitter:
 		meets the region before they meet anything that reports on it.
 		"""
 		name = py_name(local_name(struct, region))
-		inside, secret = self._interior(struct, region)
+		inside, secret, unplaced = self._interior(struct, region)
 
 		lines = [
 			"",
@@ -7202,12 +7223,20 @@ class Emitter:
 			lines.extend(["",
 			              f"\t# {path} is [secret]: no accessor is generated",
 			              "\t# for it at all (section 14.6)."])
+		# And the same note the gate writes, for the same reason: a waived
+		# interior hangs off the ordinary view and is otherwise the same
+		# members, so a member dropped in silence here is the same fault
+		# in the same backend (26.570).
+		for path in unplaced:
+			lines.extend(["",
+			              f"\t# {path}: this backend cannot resolve where it",
+			              "\t# sits, so it has no accessor here."])
 		return lines
 
 	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
 		name   = py_name(local_name(struct, region))
 		holder = f"_{name}_gate"
-		inside, secret = self._interior(struct, region)
+		inside, secret, unplaced = self._interior(struct, region)
 
 		lines = [
 			"",
@@ -7320,7 +7349,15 @@ class Emitter:
 			              f"\t\t# {path} is [secret]: no accessor is generated",
 			              "\t\t# for it at all (section 14.6)."])
 
-		if not inside and not secret:
+		# A member this backend cannot place, with the reason, because a
+		# member dropped in silence is indistinguishable from one the
+		# schema does not have (26.570).
+		for path in unplaced:
+			lines.extend(["",
+			              f"\t\t# {path}: this backend cannot resolve where it",
+			              "\t\t# sits, so it has no accessor here."])
+
+		if not inside and not secret and not unplaced:
 			lines.append("\t\tpass")
 
 		lines.extend([
