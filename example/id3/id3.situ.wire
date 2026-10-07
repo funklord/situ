@@ -1,0 +1,108 @@
+# situ wire signature v2
+# schema: id3.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+
+enum id3_encoding : u8 unknown=error
+  iso_8859_1=0 utf_16=1 utf_16_be=2 utf_8=3
+
+struct id3_crc size=5
+  @0x0000   1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0000:1 7bit      u7         crc_0  msb_first
+  @0x0001   1bit      u1         <reserved1>  msb_first must_be_zero
+  @0x0001:1 7bit      u7         crc_1  msb_first
+  @0x0002   1bit      u1         <reserved2>  msb_first must_be_zero
+  @0x0002:1 7bit      u7         crc_2  msb_first
+  @0x0003   1bit      u1         <reserved3>  msb_first must_be_zero
+  @0x0003:1 7bit      u7         crc_3  msb_first
+  @0x0004   1bit      u1         <reserved4>  msb_first must_be_zero
+  @0x0004:1 7bit      u7         crc_4  msb_first
+
+struct id3_extended_header size=6..15
+  @0x0000   1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0000:1 7bit      u7         size_0  msb_first must_eq=0
+  @0x0001   1bit      u1         <reserved1>  msb_first must_be_zero
+  @0x0001:1 7bit      u7         size_1  msb_first must_eq=0
+  @0x0002   1bit      u1         <reserved2>  msb_first must_be_zero
+  @0x0002:1 7bit      u7         size_2  msb_first must_eq=0
+  @0x0003   1bit      u1         <reserved3>  msb_first must_be_zero
+  @0x0003:1 7bit      u7         size_3  msb_first min=6 max=15
+  @0x0004   1         u8         flag_bytes  must_eq=1
+  @0x0005   1bit      u1         <reserved4>  msb_first must_be_zero
+  @0x0005:1 1bit      bool       update  msb_first
+  @0x0005:2 1bit      bool       crc_present  msb_first
+  @0x0005:3 1bit      bool       restrictions  msb_first
+  @0x0005:4 4bit      u4         <reserved5>  msb_first must_be_zero
+  @0x0006   0..9      u8         data  sized-by=size_3-6
+
+struct id3_frame size=10..268435465
+  @0x0000   1         u8         identifier_0  min=48 max=90
+  @0x0001   1         u8         identifier_1  min=48 max=90
+  @0x0002   1         u8         identifier_2  min=48 max=90
+  @0x0003   1         u8         identifier_3  min=48 max=90
+  @0x0004   1bit      u1         <reserved0>  msb_first must_be_zero
+  @0x0004:1 7bit      u7         size_0  msb_first
+  @0x0005   1bit      u1         <reserved1>  msb_first must_be_zero
+  @0x0005:1 7bit      u7         size_1  msb_first
+  @0x0006   1bit      u1         <reserved2>  msb_first must_be_zero
+  @0x0006:1 7bit      u7         size_2  msb_first
+  @0x0007   1bit      u1         <reserved3>  msb_first must_be_zero
+  @0x0007:1 7bit      u7         size_3  msb_first
+  @0x0008   1bit      u1         <reserved4>  msb_first must_be_zero
+  @0x0008:1 1bit      bool       tag_alter_preservation  msb_first
+  @0x0008:2 1bit      bool       file_alter_preservation  msb_first
+  @0x0008:3 1bit      bool       read_only  msb_first
+  @0x0008:4 4bit      u4         <reserved5>  msb_first must_be_zero
+  @0x0009   1bit      u1         <reserved6>  msb_first must_be_zero
+  @0x0009:1 1bit      bool       grouping_identity  msb_first
+  @0x0009:2 2bit      u2         <reserved7>  msb_first must_be_zero
+  @0x0009:4 1bit      bool       compression  msb_first
+  @0x0009:5 1bit      bool       encryption  msb_first
+  @0x0009:6 1bit      bool       unsynchronisation  msb_first
+  @0x0009:7 1bit      bool       data_length_indicator  msb_first
+  @0x000a   0..268435455 u8         content  sized-by=size_0<<21|size_1<<14|size_2<<7|size_3
+
+struct id3_tag size=20..
+  @0x0000   3         u8         magic  big must_eq="ID3"
+  @0x0003   1         u8         major  must_eq=4
+  @0x0004   1         u8         revision
+  @0x0005   1bit      bool       unsynchronisation  msb_first
+  @0x0005:1 1bit      bool       extended_header  msb_first
+  @0x0005:2 1bit      bool       experimental  msb_first
+  @0x0005:3 1bit      bool       footer  msb_first
+  @0x0005:4 4bit      u4         <reserved0>  msb_first must_be_zero
+  @0x0006   1bit      u1         <reserved1>  msb_first must_be_zero
+  @0x0006:1 7bit      u7         size_0  msb_first
+  @0x0007   1bit      u1         <reserved2>  msb_first must_be_zero
+  @0x0007:1 7bit      u7         size_1  msb_first
+  @0x0008   1bit      u1         <reserved3>  msb_first must_be_zero
+  @0x0008:1 7bit      u7         size_2  msb_first
+  @0x0009   1bit      u1         <reserved4>  msb_first must_be_zero
+  @0x0009:1 7bit      u7         size_3  msb_first
+  @0x000a   0..15     variant    extended
+  ~         10..      id3_frame  frames  big while=identifier_0!=0
+  extended switch: extended_header
+  extended case 0: absent nothing
+  extended case 1: present id3_extended_header
+  extended case default: error
+
+struct id3_text_frame size=1..
+  @0x0000   1         id3_encoding encoding
+  @0x0001   0..       u8         text  sized-by=remaining
+
+struct nothing size=0

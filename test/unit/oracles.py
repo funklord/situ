@@ -207,6 +207,137 @@ PROTO_TEXT = (
 )
 
 
+# -- id3 ----------------------------------------------------------------------
+#
+# THREE PARTIES, which is what makes this pairing worth having: ffmpeg writes
+# the tag, mutagen reads it, and situ reads it. Neither reader has seen the
+# other's code and neither wrote the bytes, so a disagreement is a
+# disagreement rather than one project's opinion of itself.
+#
+# What is on trial is the SYNCHSAFE INTEGER. Every size in the format is
+# seven bits to a byte, so one group read in the wrong place shifts every
+# frame after it -- there is no way to agree about the sixth frame's text by
+# accident. The tag's own size, the per-frame sizes and the encoding byte all
+# have to be right for the lists to match.
+
+
+def id3_corpus(tmp: Path) -> bytes:
+	"""An MP3 ffmpeg wrote, tagged v2.4.
+
+	`-id3v2_version 4` rather than the default 3, because v2.3 sizes are
+	plain `u32` and this schema pins `major` to 4. A third of a second of a
+	sine wave: what is under test is the tag, and the audio only has to be
+	long enough for ffmpeg to write a file.
+
+	Six frames, in three of the shapes the catalogue defines -- a title, an
+	artist, an album, a genre, a track number and the encoder's own `TSSE`,
+	which ffmpeg adds unasked and is kept rather than suppressed: a frame the
+	oracle did not choose is the one most likely to catch a reader that
+	assumes what it will find.
+	"""
+	made = tmp / "oracle.mp3"
+	_run(["ffmpeg", "-loglevel", "error",
+	      "-f", "lavfi", "-i", "sine=frequency=440:duration=0.3",
+	      "-id3v2_version", "4", "-write_xing", "0",
+	      # A TITLE LONG ENOUGH TO NEED THE SECOND GROUP of the synchsafe
+	      # size, which is the difference between this oracle checking the
+	      # decode and only appearing to. Every short frame's whole size
+	      # lives in the lowest seven bits, so `size_2` is zero and a third
+	      # group shifted by 8 rather than 7 produces identical output.
+	      # Measured: that sabotage left this oracle green until the title
+	      # grew. The tag's own size was already over 127, so the header's
+	      # decode was covered and no frame's was.
+	      #
+	      # A TITLE rather than a comment, which was tried first: ffmpeg
+	      # writes a comment as `TXXX`, whose content is a description and
+	      # a value either side of a NUL, which is ID3v2.4's 4.2.6 -- a
+	      # different shape from
+	      # a plain `T???` frame, and one this schema says it does not
+	      # describe. Comparing it would have been comparing something the
+	      # schema makes no claim about.
+	      "-metadata", "title=miau sat " + "pudinha " * 24,
+	      "-metadata", "artist=pudinha",
+	      "-metadata", "album=emscripten",
+	      "-metadata", "genre=sat",
+	      "-metadata", "track=7",
+	      "-y", str(made)])
+	return made.read_bytes()
+
+
+def id3_says(audio: bytes, tmp: Path) -> object:
+	"""mutagen's reading: the tag's total length, and every frame's text.
+
+	`tag.size` counts the ten header bytes and any padding, which is the
+	number situ derives from four seven-bit groups -- so it checks the
+	header's synchsafe decode on its own, before any frame is looked at.
+	"""
+	from mutagen.id3 import ID3
+
+	# mutagen ships no type information, so both calls are untyped in a
+	# strict file. Ignored at the call sites rather than by an override on
+	# this module: an override would turn the check off for every third-party
+	# call in the file, including the typed ones.
+	path = tmp / "mutagen.mp3"
+	path.write_bytes(audio)
+	tag = ID3(path)				# type: ignore[no-untyped-call]
+	return (tag.size,
+	        sorted((frame.FrameID, str(frame))
+	               for frame in tag.values()))	# type: ignore[no-untyped-call]
+
+
+def id3_situ(module: object, audio: bytes) -> object:
+	"""The same, through the generated accessors.
+
+	The run stops at the padding rather than before it, which is what the
+	schema's own comment says and netlink's caveat before that: situ's run
+	ends AFTER the element failing its test. So the last element is the first
+	ten bytes of the padding, and this asserts it is refused -- which turns
+	that comment into a checked claim. ffmpeg leaves padding, so the case is
+	reached on every run.
+	"""
+	from situ_runtime import Message
+
+	size = (audio[6] << 21) | (audio[7] << 14) | (audio[8] << 7) | audio[9]
+	tag  = module.id3_tag.at(		# type: ignore[attr-defined]
+		Message(bytearray(audio)), 0, 10 + size)
+	tag.validate()
+
+	held = ((int(tag.size_0) << 21) | (int(tag.size_1) << 14)
+	        | (int(tag.size_2) << 7) | int(tag.size_3))
+
+	found: list[tuple[str, str]] = []
+	padding = 0
+	for index in range(tag.frames_count):
+		frame = tag.frames(index)
+		ident = bytes(int(getattr(frame, f"identifier_{n}"))
+		              for n in range(4))
+		if ident[0] == 0:
+			# The padding element. It must be REFUSED rather than merely
+			# skipped here: a frame identifier is `A-Z0-9` by 4, so a
+			# reader that accepted this one would be accepting a frame
+			# whose length and flags are whatever the padding holds.
+			try:
+				frame.validate()
+			except Exception:
+				padding += 1
+				continue
+			raise AssertionError(
+				"id3: the padding was accepted as a frame, so the run's "
+				"stopping rule is not being checked by anything")
+		body = bytes(frame.content)
+		# The encoding byte, then the text. 0 is ISO-8859-1 and 3 is UTF-8;
+		# ffmpeg writes 3 for everything, so the other three encodings are
+		# not reached here and the schema's enum is what refuses a fifth.
+		text = body[1:].rstrip(b"\x00").decode(
+			"utf-8" if body[:1] == b"\x03" else "latin-1")
+		found.append((ident.decode("latin-1"), text))
+
+	assert padding == 1, (
+		f"id3: expected one padding element at the end of the run, "
+		f"found {padding}")
+	return (10 + held, sorted(found))
+
+
 def tiff_corpus_little(tmp: Path) -> bytes:
 	"""A TIFF ImageMagick laid out, little-endian.
 
@@ -1146,6 +1277,17 @@ ORACLES: tuple[Oracle, ...] = (
 		          "rather than a command, as `pymodbus` is."),
 	),
 	Oracle(
+		name   = "id3",
+		schema = ROOT / "example" / "id3" / "id3.situ",
+		tool   = "ffmpeg",
+		why    = ("ffmpeg writes the tag and mutagen reads it, so neither "
+		          "side of the comparison is situ and neither reader wrote "
+		          "the bytes. What is on trial is the synchsafe integer: "
+		          "every size in the format is seven bits to a byte, so a "
+		          "group read in the wrong place shifts every frame after "
+		          "it and no later frame can match by accident."),
+	),
+	Oracle(
 		name   = "cpio",
 		schema = ROOT / "example" / "cpio" / "cpio.situ",
 		tool   = "cpio",
@@ -1349,6 +1491,7 @@ LIES = {
 #: dataclass stays data.
 DRIVERS = {
 	"json": (json_corpus, json_says, json_situ),
+	"id3":  (id3_corpus, id3_says, id3_situ),
 	"cpio": (cpio_corpus, cpio_says, cpio_situ),
 	"bmp":  (bmp_corpus, bmp_says, bmp_situ),
 	"protobuf": (proto_corpus, proto_says, proto_situ),

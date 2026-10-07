@@ -162,6 +162,14 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: behind its argument -- one struct arm and one scalar arm, which is why
 #: two cells moved by exactly one each and no cell appeared.
 #:
+#: And the two struct cells moved by one each on 2026-10-07, when
+#: `example/id3` arrived: ID3's extended header is present only when a flag
+#: says so, which is mqtt's idiom -- a variant over one bit whose arms are
+#: `id3_extended_header`, a struct of 6..15 bytes, and `nothing`, which is
+#: fixed at zero. One arm into each struct cell, no cell appearing, which
+#: is this guard reporting a schema addition to whoever made it rather than
+#: absorbing it.
+#:
 #: A byte-run enum arm will land in the first cell when one arrives, and so
 #: will a constrained scalar arm: the cell asks whether the PLACEMENT
 #: carries a scalar, and a byte-run enum's does -- it is `u8` with a count.
@@ -176,8 +184,8 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
 	("scalar", "not-struct", ""):                27,
-	("no-scalar", "struct", "fixed"):            48,
-	("no-scalar", "struct", "unmeasurable"):     23,
+	("no-scalar", "struct", "fixed"):            49,
+	("no-scalar", "struct", "unmeasurable"):     24,
 	("no-scalar", "not-struct", ""):              1,
 }
 
@@ -295,18 +303,19 @@ def test_the_arm_shapes_are_the_ones_the_condition_was_written_for() -> None:
 	`_arm_member` declines an arm with `if structs.get(type_name) is None`,
 	and 26.209 restricted the offset accessor to a *struct* arm on the
 	strength of that reading. The condition's text names **28** of the
-	corpus's 99 arm members -- every one whose type is not a struct. What it
-	means is the last cell alone, and it behaves correctly on the other 27
-	only because three scalar branches return before control reaches it.
+	corpus's 101 arm members -- every one whose type is not a struct. What
+	it means is the last cell alone, and it behaves correctly on the other
+	27 only because three scalar branches return before control reaches it.
 
-	Those counts are the kind that rot, and they have NINE times across
-	three days -- 12 of 70, 13 of 81, 15 of 83, 17 of 85, 20 of 88, 22 of
-	90, 24 of 95, 26 of 97, now 28 of 99 -- as `edges` gained a
+	Those counts are the kind that rot, and they have TEN times across
+	five weeks -- 12 of 70, 13 of 81, 15 of 83, 17 of 85, 20 of 88, 22 of
+	90, 24 of 95, 26 of 97, 28 of 99, now 28 of 101 -- as `edges` gained a
 	parameterised variant, `signed_kind`'s constrained arms, `typed_kind`'s
 	enum-typed one, `spanned_arm`'s three span-constrained ones,
 	`versioned_arm`'s two, `delimited_arm`'s two, `wide_delim_arm`'s two and
-	`separated_arm`'s two, and `example/sexpr` arrived with three
-	unmeasurable struct arms. Nine rots is the whole
+	`separated_arm`'s two, `example/sexpr` arrived with three unmeasurable
+	struct arms, and `example/id3` with one of those and one fixed. Ten
+	rots is the whole
 	argument for asserting the census rather than for writing better prose:
 	the numbers are re-derivable from `_arm_shapes()` in one call, which is
 	why the assertion below is on the census rather than on the prose --

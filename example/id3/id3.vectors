@@ -1,0 +1,32 @@
+# Golden vectors for the ID3v2.4 worked example.
+#
+# Not transcribed from `id3v2.4.0-structure.txt`. These are bytes out of
+# `/usr/share/emscripten/test/sounds/pudinha.mp3`, a 125,621-byte MP3 whose
+# tag is 209 bytes of v2.4 with an extended header, a CRC and nine frames.
+# Reading them off a file some other encoder wrote rather than off the
+# document is the point: a description that agrees only with the document it
+# was written from has not been held to anything that ships.
+#
+# The document is then the check rather than the source, and it agreed on
+# every field. One of them was worth confirming arithmetically: the extended
+# header's CRC reads 0x497FF95E once the five stuffing bits are removed, and
+# that is `zlib.crc32` of the bytes from the end of the extended header to
+# the end of the tag, which is the coverage 3.2 states.
+#
+# WHAT IS HERE AND WHAT IS NOT. `verify` reads a struct's own constraints
+# and leaves an array's elements to whoever walks them, so the whole tag is
+# one vector and the frames inside it are their own. Three of the nine are
+# below, chosen for what they differ in rather than for being typical:
+# a COMM with an empty language, a COMM with one, and a TCON whose text is
+# UTF-16 with a byte-order mark -- which is the case where the encoding byte
+# stops being decoration and decides whether the bytes are characters.
+#
+# The tag has NO PADDING: its last frame ends at byte 209 and the audio
+# begins at 210. That is the arrangement that matters for the frame run's
+# stopping rule, because there is no zero byte to stop it -- what stops it
+# is the frame, and this vector is the case that shows it does.
+id3_tag tag 49 44 33 04 00 40 00 00 01 47 00 00 00 0C 01 20 05 04 4B 7F 72 5E 43 4F 4D 4D 00 00 00 18 00 00 00 00 00 00 00 73 6B 79 6C 69 74 74 6C 65 73 79 73 74 65 6D 2E 6F 72 67 43 4F 4D 4D 00 00 00 18 00 00 00 58 58 58 00 73 6B 79 6C 69 74 74 6C 65 73 79 73 74 65 6D 2E 6F 72 67 54 49 54 32 00 00 00 05 00 00 00 6D 69 61 75 54 41 4C 42 00 00 00 0B 00 00 00 65 6D 73 63 72 69 70 74 65 6E 54 43 4F 4E 00 00 00 0B 00 00 01 FE FF 00 73 00 61 00 74 00 E3 54 50 45 31 00 00 00 08 00 00 00 70 75 64 69 6E 68 61 54 59 45 52 00 00 00 05 00 00 00 32 30 32 30 54 44 52 43 00 00 00 05 00 00 00 32 30 32 30 54 52 43 4B 00 00 00 04 00 00 00 36 36 36
+id3_frame comm_no_language 43 4F 4D 4D 00 00 00 18 00 00 00 00 00 00 00 73 6B 79 6C 69 74 74 6C 65 73 79 73 74 65 6D 2E 6F 72 67
+id3_frame comm_with_language 43 4F 4D 4D 00 00 00 18 00 00 00 58 58 58 00 73 6B 79 6C 69 74 74 6C 65 73 79 73 74 65 6D 2E 6F 72 67
+id3_frame tcon_utf_16 54 43 4F 4E 00 00 00 0B 00 00 01 FE FF 00 73 00 61 00 74 00 E3
+id3_text_frame tit2_text 00 6D 69 61 75

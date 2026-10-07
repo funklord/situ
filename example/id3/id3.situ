@@ -1,0 +1,297 @@
+// ID3v2.4, the tag an MP3 carries before its audio.
+//
+// SOURCE. `id3v2.4.0-structure.txt` and `id3v2.4.0-frames.txt`, checked
+// against a real tag rather than transcribed from them: the vectors beside
+// this file are the first 209 bytes of
+// `/usr/share/emscripten/test/sounds/pudinha.mp3`, which carries a v2.4 tag
+// with an extended header, a CRC, and six frames in three encodings. Where
+// the document and the file disagree the file wins, and nothing here was
+// written from memory of the format.
+//
+// WHAT IT DEMONSTRATES, and why it is worth a schema of its own:
+//
+//   - A SYNCHSAFE INTEGER, which is the format's defining oddity: 28 bits
+//     of length carried in four bytes, seven bits to a byte, so that no
+//     length can contain a byte an MPEG decoder would mistake for a frame
+//     sync. It needs no construct situ does not have -- see below, because
+//     that was not the first answer.
+//   - A member present only when a flag says so, as a variant over one bit
+//     with `nothing` as its other arm. mqtt shows this first; here it is an
+//     eleven-byte extended header rather than a string.
+//   - A run of self-sized records with a stopping rule, which is netlink's
+//     shape and carries netlink's caveat.
+//   - And an honest boundary: the extended header's CRC is a value situ
+//     describes the bytes of and does not compute, for a reason the format
+//     chose and this file states.
+//
+// THE SYNCHSAFE INTEGER, FIRST ANSWER WRONG. The first reading of this
+// format concluded situ could not express one and that a scalar kind --
+// `synchsafe4` beside `bcd2` -- had to be added, about thirty-eight sites
+// across fourteen files. It is a `u1` and a `u7` per byte, four times over,
+// with the length an arithmetic expression over the four:
+//
+//     reserved u1 [must_be_zero];
+//     u7       size_0;
+//     ...
+//     u8  body[(size_0 << 21) | (size_1 << 14) | (size_2 << 7) | size_3];
+//
+// Every field lands at a static offset, the solver derives the bound
+// 0..268435455 from the expression on its own, and the stuffing bits become
+// a claim `validate` checks rather than a comment. That is strictly better
+// than a type would have been: a `synchsafe4` scalar would have carried the
+// zero bits silently, and nothing would have refused a tag that set one.
+//
+// It cost one `situc map` to find out. mqtt's header records the same
+// mistake made the same way -- a limitation written down that was not there
+// (26.56) -- so this is the second time, and the two together are the
+// argument for probing the language before extending it.
+
+endian big;
+bit_order msb_first;
+
+// 3.1. Ten bytes, then `size` bytes of everything else.
+struct id3_tag {
+	u8  magic[3]  [must_eq = "ID3"];
+
+	// The major version this schema describes. v2.3 differs in ways a
+	// reader cannot paper over -- its sizes are plain `u32` rather than
+	// synchsafe, which is the one field every parse depends on -- so
+	// pinning it here is the honest answer: a v2.3 tag is a different
+	// format and `validate` says so, rather than reading its lengths
+	// eight times too large.
+	u8  major     [must_eq = 4];
+	u8  revision;
+
+	// 3.1's flag byte. `%abcd0000`, and the four low bits are the ones
+	// the document reserves.
+	bool  unsynchronisation;
+	bool  extended_header;
+	bool  experimental;
+	bool  footer;
+	reserved u4  [must_be_zero];
+
+	// 6.2. The synchsafe size: the tag's length, not counting these ten
+	// bytes, as four seven-bit groups most significant first. The high
+	// bit of each byte is zero *so that* the length cannot be mistaken
+	// for an MPEG frame sync -- an unsynchronised tag may contain no
+	// `%11111111 111` anywhere, and a plain `u32` length could.
+	//
+	// `[must_be_zero]` on each stuffing bit is that rule as a check. A
+	// tag that sets one is malformed by 6.2 and every byte after it means
+	// something else, so refusing is right and quietly masking is not.
+	reserved u1  [must_be_zero];
+	u7       size_0;
+	reserved u1  [must_be_zero];
+	u7       size_1;
+	reserved u1  [must_be_zero];
+	u7       size_2;
+	reserved u1  [must_be_zero];
+	u7       size_3;
+
+	// 3.2. Present when the flag says so, absent otherwise, which is a
+	// variant over one bit with an empty arm. `default: error` is required
+	// because the discriminant is a bare `u1` rather than an enum, and is
+	// unreachable: a bit has no third value.
+	variant extended switch (extended_header) {
+		case 1:  id3_extended_header  present;
+		case 0:  nothing              absent;
+		default: error;
+	}
+
+	// 4. The frames, each sized by its own synchsafe header, running until
+	// one begins with a zero byte -- which is 3.1's padding, a frame
+	// identifier being four characters from `A-Z0-9`.
+	//
+	// THE CAVEAT IS NETLINK'S, and it is the same one for the same reason:
+	// situ's run ends *after* the element that fails the test, so this
+	// walks the first ten bytes of the padding as a frame and `validate`
+	// refuses it. The element is malformed either way, and a run with no
+	// stopping rule at all would not terminate.
+	//
+	// What bounds it is the frame: the tag is `10 + size` bytes and the
+	// caller acquires a view of exactly that, so the run cannot reach the
+	// audio even in a tag with no padding at all. That is 3.1's own rule
+	// rather than a restatement of how situ works -- a reader that reads
+	// past the tag size has left the tag.
+	id3_frame  frames[] while (identifier_0 != 0);
+}
+
+struct nothing {
+}
+
+require size(nothing) == 0;
+
+// 3.2. The extended header, which is itself synchsafe-sized -- and note
+// that its size counts the whole extended header including those four
+// bytes, where the tag's size above does not count its ten. The document
+// says so in both places and the real file agrees: twelve for an extended
+// header holding a five-byte CRC.
+struct id3_extended_header {
+	// PINNED, and the pins are 3.2's arithmetic rather than a convenience.
+	// An extended header is six bytes plus one length byte and its data
+	// per flag set, and 3.2 fixes all three data lengths: update carries
+	// none, the CRC five, the restrictions one. So the largest extended
+	// header the format can describe is fifteen bytes and the smallest is
+	// six, which puts the whole length in the lowest group and zero in
+	// the other three.
+	//
+	// It began as `size_3 - 6` with no bound, which the solver refused --
+	// an array length it cannot show is non-negative. The pins are the
+	// answer rather than a `[min]` on one group, and they say more: a tag
+	// claiming a 128-byte extended header is refused here instead of
+	// being read as a 122-byte run of flag data that 3.2 cannot fill.
+	reserved u1  [must_be_zero];
+	u7       size_0  [must_eq = 0];
+	reserved u1  [must_be_zero];
+	u7       size_1  [must_eq = 0];
+	reserved u1  [must_be_zero];
+	u7       size_2  [must_eq = 0];
+	reserved u1  [must_be_zero];
+	u7       size_3  [min = 6, max = 15];
+
+	// 3.2: "the extended flags field, with the first byte defining the
+	// number of bytes used". One, in every version of the format so far,
+	// and pinning it is what makes the rest of this struct a layout: with
+	// a variable count the flags below would be at a dynamic offset and
+	// each flag's data would have to be found by walking.
+	u8  flag_bytes  [must_eq = 1];
+
+	reserved u1  [must_be_zero];
+	bool  update;
+	bool  crc_present;
+	bool  restrictions;
+	reserved u4  [must_be_zero];
+
+	// 3.2's flag data. Each set flag contributes a length byte and that
+	// many bytes, in flag order, so what follows is decided by the bits
+	// above and is a walk rather than a layout. The CRC is the one that
+	// matters and the only one the real file carries, so it is described
+	// and the rest is the remainder.
+	//
+	// `u8 data[...]` rather than three variants: the three are
+	// independent, and a variant per flag would describe a layout where
+	// the format has a sequence. Saying so is better than describing the
+	// easy third of it as though it were the whole.
+	u8  data[size_3 - 6];
+}
+
+// 3.2's CRC-32, over the frames and the padding. Described rather than
+// computed, and the reason is the format's own choice:
+//
+// The value is a plain CRC-32 -- `crc32` as png declares it -- but it is
+// STORED as a 35-bit synchsafe integer, five bytes of seven bits each. So
+// the thirty-two bits the codec produces do not sit in any contiguous span
+// of this message; they are interleaved with five zero bits. situ's
+// `checksum` binds a codec to the bytes a tag occupies, and there is no
+// byte range here whose contents are the codec's output.
+//
+// That is a real limit and it is narrow: a checksum whose output is stored
+// bit-stuffed cannot be bound. It is written here rather than filed as a
+// gap because the layout is still exact -- every bit is accounted for and
+// the five stuffing bits are checked -- and because the alternative, a
+// `checksum` over a span the codec does not fill, would be a false claim
+// that four backends would generate a wrong `_compute` from.
+//
+// MEASURED, so that neither half of that is a guess. The real tag stores
+// `04 4b 7f 72 5e`, which is 0x497FF95E once the five stuffing bits come
+// out, and that is exactly `zlib.crc32` of the tag's bytes from the end of
+// the extended header to the end of the tag -- 3.2's coverage, confirmed
+// rather than read off the document. So the value is an ordinary CRC-32
+// over a span situ can name; what situ cannot do is put the answer where
+// this format puts it.
+//
+// A caller reads these five bytes as this struct, given `crc_present`
+// above -- the same arrangement as `id3_text_frame` below, and dns's
+// boundary rather than a gap.
+struct id3_crc {
+	reserved u1  [must_be_zero];
+	u7       crc_0;
+	reserved u1  [must_be_zero];
+	u7       crc_1;
+	reserved u1  [must_be_zero];
+	u7       crc_2;
+	reserved u1  [must_be_zero];
+	u7       crc_3;
+	reserved u1  [must_be_zero];
+	u7       crc_4;
+}
+
+// 4. One frame: four characters of identifier, a synchsafe size, two flag
+// bytes, then that many bytes of content.
+struct id3_frame {
+	// Four `u8` rather than `u8 identifier[4]`, because the stopping rule
+	// above tests the first byte and a run's element has no member to name
+	// otherwise.
+	//
+	// 4 says the characters are `A-Z` and `0-9`, and a bound is as close as
+	// this gets: `0x30..0x5A` also admits the seven punctuation characters
+	// between `9` and `A`, which no identifier in the catalogue uses and
+	// nothing here refuses. Saying so rather than claiming the set -- the
+	// check is real and it is a range, which is a weaker claim than the
+	// document makes.
+	u8  identifier_0  [min = 0x30, max = 0x5A];
+	u8  identifier_1  [min = 0x30, max = 0x5A];
+	u8  identifier_2  [min = 0x30, max = 0x5A];
+	u8  identifier_3  [min = 0x30, max = 0x5A];
+
+	reserved u1  [must_be_zero];
+	u7       size_0;
+	reserved u1  [must_be_zero];
+	u7       size_1;
+	reserved u1  [must_be_zero];
+	u7       size_2;
+	reserved u1  [must_be_zero];
+	u7       size_3;
+
+	// 4.1's two flag bytes. `%0abc0000 %0h00kmnp`, and the reserved bits
+	// are the document's.
+	reserved u1  [must_be_zero];
+	bool  tag_alter_preservation;
+	bool  file_alter_preservation;
+	bool  read_only;
+	reserved u4  [must_be_zero];
+
+	reserved u1  [must_be_zero];
+	bool  grouping_identity;
+	reserved u2  [must_be_zero];
+	bool  compression;
+	bool  encryption;
+	bool  unsynchronisation;
+	bool  data_length_indicator;
+
+	// The content. Bytes, because what they mean is decided by the
+	// identifier -- 4.2 gives one shape for a text frame, 4.10 another for
+	// a comment, 4.14 another for a picture -- and a variant over a
+	// four-byte identifier would be an enumeration of the frame
+	// catalogue rather than a description of a frame.
+	//
+	// `id3_text_frame` below describes the one shape that covers most of
+	// what a tag holds, for a caller that has read the identifier.
+	u8  content[(size_0 << 21) | (size_1 << 14) | (size_2 << 7) | size_3];
+}
+
+// 4.2. Every `T???` frame: one byte of encoding, then the text in it.
+//
+// This is where a file editor's job gets interesting and why id3 is in
+// this corpus at all. The text is the whole remainder, so changing it to
+// something longer or shorter moves the frame's own size, the tag's size,
+// and every frame after it -- `mutate=Shifting` on three members at once.
+// A tool that can rewrite a PNG chunk in place cannot rewrite a title
+// without re-laying out the tag, which is exactly the distinction 0034
+// draws between its first and second rows.
+struct id3_text_frame {
+	id3_encoding  encoding;
+	u8            text[remaining];
+}
+
+// 4's encoding byte. The four the document defines, and `default = error`
+// because a fifth is not a value a reader may guess at: the difference
+// between `iso_8859_1` and `utf_16` is whether the bytes are characters or
+// half of them are.
+enum id3_encoding : u8 {
+	iso_8859_1 = 0,
+	utf_16     = 1,
+	utf_16_be  = 2,
+	utf_8      = 3,
+	default    = error,
+}
