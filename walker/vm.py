@@ -102,7 +102,8 @@ BINARY: dict[int, Callable[[int, int], int]] = {
 
 def run(code: bytes, at: int, load_field: Callable[[int], int],
         size_of: Callable[[int], int], offset_of: Callable[[int], int],
-        count_of: Callable[[int], int], remaining: int,
+        count_of: Callable[[int], int],
+        remaining: int | Callable[[], int],
         load_arg: Callable[[int, int], int] | None = None,
         load_field_in: Callable[[int, int], int] | None = None,
         tag: int | None = None) -> int:
@@ -113,6 +114,13 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 	the section 10 builtins. They are passed rather than reached for so that
 	this module knows nothing about buffers, which is what makes it testable
 	against hand-written programs.
+
+	`remaining` may be a value or a thunk, and the thunk is why: it is
+	measured from the member's own offset, so the caller had to compute that
+	offset before running a program that mostly does not ask for it --
+	which recursed where the member was interior to a region whose own size
+	the sum then needed (26.585). Lazy, it is computed by the one op that
+	wants it, like every other input here.
 	"""
 	stack: list[int] = []
 	pc = at
@@ -153,7 +161,8 @@ def run(code: bytes, at: int, load_field: Callable[[int], int],
 			stack.append(load_arg(arg, index))
 			continue
 		if op == REMAINING:
-			stack.append(remaining)
+			stack.append(remaining() if callable(remaining)
+			             else remaining)
 			continue
 		if op == TAG:
 			if tag is None:

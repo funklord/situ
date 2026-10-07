@@ -16,7 +16,7 @@ being the shape of the interface and becomes data a caller may consult.
 from __future__ import annotations
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -401,8 +401,9 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		width = content + (took if terminated and consumed else 0)
 		return width * BITS_PER_BYTE
 	if placement.size_code != NONE:
-		count = _evaluate(view, placement.size_code,
-		                  offset_bits(view, index) // BITS_PER_BYTE)
+		count = _evaluate(
+			view, placement.size_code,
+			lambda: offset_bits(view, index) // BITS_PER_BYTE)
 		# Negative reads as zero and an overflow saturates high (14.2b).
 		# The walker evaluates in Python, which does not overflow, so the
 		# bound is here to *agree* with the three backends that do rather
@@ -690,7 +691,8 @@ def _value_of(view: View, index: int) -> int:
 	return read_scalar(view, index)
 
 
-def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
+def _evaluate(view: View, code_at: int,
+		from_byte: int | Callable[[], int] = 0) -> int:
 	"""Run one program, with `remaining` measured from `from_byte`.
 
 	`remaining` is "to the end of the enclosing frame" *from here*, not the
@@ -707,7 +709,18 @@ def _evaluate(view: View, code_at: int, from_byte: int = 0) -> int:
 		size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
 		offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
 		count_of   = lambda i: _count(view, i),
-		remaining  = max(0, view.limit - view.at - from_byte),
+		# A THUNK, so the offset it is measured from is computed only by a
+		# program that asks for it (26.585). Every caller passed
+		# `offset_bits(...)` eagerly, and for a member interior to a region
+		# that offset is not answerable against the parent view: the sum
+		# walked the parent's members, reached the region, needed the
+		# region's size, needed this member again. keystore's sealed
+		# `plaintext` is the case -- `situ-edit` and `report.listing` both
+		# died with a RecursionError on any keystore whose version selects
+		# an arm, and its own size program never uses `remaining` at all.
+		remaining  = lambda: max(			# noqa: E731
+			0, view.limit - view.at
+			- (from_byte() if callable(from_byte) else from_byte)),
 	)
 
 
@@ -716,8 +729,9 @@ def _count(view: View, index: int) -> int:
 	if placement.array_count != NONE:
 		return placement.array_count
 	if placement.size_code != NONE:
-		return _evaluate(view, placement.size_code,
-		                 offset_bits(view, index) // BITS_PER_BYTE)
+		return _evaluate(
+			view, placement.size_code,
+			lambda: offset_bits(view, index) // BITS_PER_BYTE)
 	raise Refused(f"placement {index} has no count this image carries")
 
 
