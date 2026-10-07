@@ -31304,6 +31304,92 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.574 The four-way comparison was vacuous, and a test said so
+
+**`test_the_backends_refuse_the_same_members` examined 1101 member paths
+across the corpus and attributed ZERO refusals to any of them.** Its own
+liveness test asserted that -- `assert seen == 0` -- with the reason in a
+comment: *what they refuse, they refuse in words this scoring cannot
+attribute to a member, the limit 26.190 recorded and did not close.* The
+assertion ended *a refusal appearing here is a real finding and should be
+looked at, not silently absorbed.* It attributes 11 now.
+
+**One cause, two blind spots.** The detector flattened the whole output and
+scored a character window around each phrase, so a phrase and a path from
+two DIFFERENT notes could share a window:
+
+  - **A `required` note next door swallowed a correct refusal.** `required`
+    declines to frame the struct and names no member, so an exclusion drops
+    any hit whose window mentions it -- and in three backends the "No
+    `required`" note sits beside the tag note. Measured: all four wrote
+    "cannot resolve where the tag sits" for one member and the comparison
+    saw **none** of them.
+  - **C's "No accessor for" names the bare member** where the path pattern
+    needs a dotted one, so six notes' worth of correct refusals were
+    invisible. 26.571 tried naming the path and withdrew it: it broke the
+    test pinning that note's wording, split one phrase into two shapes, and
+    turned a negative assertion vacuous.
+
+**Grouping consecutive comment lines into notes removes the cause rather
+than either symptom.** Within a note there is no window to bleed across,
+and `NAMES_ITS_MEMBER` -- which existed to say whether the path precedes
+the phrase or follows it -- is gone with it.
+
+**Verdict-identical on the corpus before it had anything to find, which is
+how a detector change is shown to be safe.** 44 schemas, four backends: 0
+splits with the old scoring and 0 with the new. And **agreement is only
+evidence with a case that would disagree**, so the case was the struct
+26.571 withheld: splits 2 -> 1 there, the two that vanished being
+`self_mac` (all four refuse, the old scoring saw nobody) and `body.after`
+(all four refuse, the old scoring missed C).
+
+**`#` is a comment in Python and a preprocessor directive in C, and the
+first version of the probe conflated them** -- `#define
+SITU_PIECES_TWO_COUNT 2u` read as a comment, joined a field header to the
+note below it, and reported `pieces.two` as refused by C alone. One split
+over the whole corpus and it was the instrument. The openers are per
+backend now, and both halves are pinned by a test.
+
+**The control had to be rebuilt once, for the reason `evidence.md` gives.**
+The cross-note fixture used the `required` note -- the pair the blind spot
+was measured on -- and `required` is skipped by the exclusion whatever the
+grouping does, so **the control passed with the grouping sabotaged.**
+Failing, but through something other than the check it was for. With a
+phrase that has no exclusion in front of it, sabotaging the grouping fails
+three things, each through its own: the cross-note control, the
+preprocessor control, and `ble.situ` reporting a false split.
+
+**Two backends stopped dropping an interior member in silence.** C++ filters
+its gate interior into `inside` and `rest`, and a varint has no `scalar` and
+is not a run, so it fell between them and the gate said nothing; Rust's
+`_gated` answers with an empty list for one. Both name it now, which is
+26.570's Python fix arriving where it was always needed.
+
+**The count did not move, and the reason it did not is the finding this
+entry nearly lost.** 26.190 read `seen == 0` as the scoring's limit. With
+the limit closed it is still 0, because the remaining reason is simpler:
+**no schema here has a member any backend declines.** Two states, one
+number, and the comment on that assertion says which it is now -- a
+refusal appearing there will be SEEN rather than scored as nothing.
+
+**The struct is withheld a third time, and this time the blocker is
+measured rather than argued.** Adding it turned the gate red with **ten
+failures, all one cause**: two test harnesses generate a read for every
+interior member, and a member with NO accessor is a case neither can
+express. `fuzz` marks it `UNREACHED`, which
+`test_no_schema_has_an_interior_shape_the_harness_cannot_reach` fails on
+deliberately -- its docstring says a member silently ceasing to be fuzzed
+is how the erasers went missing -- and the four-way driver emits
+`situ_sealed_self_sized_self_mac_ptr` and two more the header does not
+declare. **Seven of the ten read as failures about delimiters and arms**,
+because each builds `edges.situ` in its setup.
+
+So the floor stays `seen == 0` and the exemption goes with the schema it
+was about. Teaching those two harnesses is what lets the struct land, and
+the divergence it would expose -- C reaching a gated varint where the other
+three emit nothing, which 26.571 made sound rather than merely present --
+waits there with it.
+
 ### 26.573 A consumer's name, attributed to the wrong owner
 
 **raidcfgd ran its own targets against `a5d54d1` and reported two things,
