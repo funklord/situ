@@ -151,9 +151,28 @@ def _write_marker(field: Field) -> str:
 	if field.mutate is None:
 		return ""
 
+	# FIVE VALUES ON THIS AXIS AND THIS NAMED THREE (26.584). `mutate` is
+	# `InPlaceFixed > InPlaceSlack > Shifting > RewriteRequired > Immutable`,
+	# and `InPlaceSlack` fell through to the empty marker -- which is
+	# `InPlaceFixed`'s answer and means "an ordinary store". Measured over
+	# the corpus: 9 placements are `InPlaceSlack`, `mqtt.packet.length`
+	# among them, and they showed exactly what the 857 free ones showed.
+	#
+	# The cost it hides depends on the VALUE rather than on the member: a
+	# varint that re-encodes to the same length moves nothing and a longer
+	# one moves everything after it, and a block-granularity codec
+	# re-transforms the containing block. So the marker is weaker than
+	# `moves` on purpose, and `write_cost` carries the sentence for a
+	# reader who wants it.
+	#
+	# `InPlaceFixed` is still unmarked, and deliberately: it is the
+	# ordinary case, and a marker on 857 of 1129 placements would be noise
+	# that makes the other four mean less.
 	held = []
 	if field.mutate == "Immutable":
 		held.append("read-only")
+	elif field.mutate == "InPlaceSlack":
+		held.append("needs slack")
 	elif field.mutate == "Shifting":
 		held.append("moves")
 	elif field.mutate == "RewriteRequired":

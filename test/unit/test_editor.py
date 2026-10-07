@@ -334,6 +334,78 @@ def test_render_keeps_a_row_for_a_field_it_could_not_read() -> None:
 	assert len(lines) == 1 + len(document.fields()) + noted
 
 
+def test_every_mutate_value_but_the_free_one_is_marked() -> None:
+	"""The POPULATION, not the value, because a sixth would be silent.
+
+	`_write_marker` named three of the mutate axis's five, and
+	`InPlaceSlack` fell through to the empty marker -- which is
+	`InPlaceFixed`'s answer and reads as an ordinary store. Measured over
+	the corpus when this was found: 9 placements are `InPlaceSlack`,
+	`mqtt.packet.length` among them, against 857 that really are free.
+
+	So this asserts the partition rather than the cell. `InPlaceFixed` is
+	the one documented exception -- marking 857 of 1129 placements would be
+	noise that makes the other four mean less -- and anything else arriving
+	on the axis fails here, addressed to whoever added it.
+	"""
+	from editor.text import _write_marker
+	from walker.image import DOMAINS
+
+	free = "InPlaceFixed"
+	assert free in DOMAINS["mutate"], "the exception is no longer on the axis"
+
+	for value in DOMAINS["mutate"]:
+		marker = _write_marker(Field("x", 0, 1, 0, "", mutate = value))
+		if value == free:
+			assert marker == "", (
+				f"`{free}` is the ordinary store and carries no marker")
+		else:
+			assert marker, (
+				f"`{value}` is on the mutate axis and shows nothing, so it "
+				f"is indistinguishable from `{free}` -- an editor reading "
+				f"this would take a costly write for a free one")
+
+	# And the axis is read from the lattice rather than listed here, so the
+	# count is the lattice's to change.
+	assert len(DOMAINS["mutate"]) == 5, (
+		f"the mutate axis now has {len(DOMAINS['mutate'])} values; the "
+		f"loop above covers them, but the marker wording is a judgement "
+		f"somebody has to make for a new one")
+
+
+#: mqtt, because its remaining length is the corpus's clearest
+#: `InPlaceSlack`: a varint whose encoded width follows the value.
+def mqtt_image() -> bytes:
+	from every_schema import load_schema
+	schema   = load_schema(ROOT / "example" / "mqtt" / "mqtt.situ")
+	resolved = resolve(schema, solve(schema))
+	return pack(schema, resolved, metadata=True)[0]
+
+
+def test_a_varint_length_is_not_shown_as_a_free_store() -> None:
+	"""The concrete case, through the tool a person runs.
+
+	mqtt's remaining length is a varint: a value that re-encodes to the
+	same number of bytes moves nothing and a longer one moves everything
+	after it, so the cost depends on the value rather than on the member.
+	It showed what `kind` and `flags` beside it showed, which is nothing.
+	"""
+	document = open_document(mqtt_image(), bytes.fromhex("3005") + b"hello",
+	                         "packet")
+	rows     = {field.name: field for field in document.fields()}
+
+	assert rows["length"].mutate == "InPlaceSlack", rows["length"].mutate
+	line = next(line for line in render(document) if " length " in line)
+	assert "needs slack" in line, line
+
+	# The free stores beside it stay unmarked, which is what makes the
+	# marker mean anything.
+	for name in ("kind", "flags"):
+		plain = next(line for line in render(document)
+		             if f" {name} " in line)
+		assert "[" not in plain, plain
+
+
 def test_a_note_on_a_readable_field_reaches_the_text_frontend() -> None:
 	"""The refusal channel had one consumer of two (26.583).
 
