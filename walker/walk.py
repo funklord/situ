@@ -847,7 +847,7 @@ def _write_at(buffer: bytearray, view: View, index: int, start: int,
 	if start % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
 		first = view.at + start // BITS_PER_BYTE
 		size  = width // BITS_PER_BYTE
-		buffer[first:first + size] = raw.to_bytes(size, _order(placement))
+		buffer[first:first + size] = raw.to_bytes(size, _order(view, index))
 		return
 
 	# Bit-packed: read the bytes the value touches, clear its bits, put it
@@ -894,7 +894,7 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	if start % BITS_PER_BYTE == 0 and width % BITS_PER_BYTE == 0:
 		first = view.at + start // BITS_PER_BYTE
 		raw   = view.buffer[first:first + width // BITS_PER_BYTE]
-		return _decoded(_signed(int.from_bytes(raw, _order(placement)), width,
+		return _decoded(_signed(int.from_bytes(raw, _order(view, index)), width,
 		                        placement.signed), placement)
 
 	# Bit-packed: gather the bytes the value touches and shift it out. The
@@ -919,7 +919,48 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	return _decoded(_signed(bits, width, placement.signed), placement)
 
 
-def _order(placement: Placement) -> Literal["little", "big"]:
+def _marker_order(view: View) -> Literal["little", "big"]:
+	"""The byte order a marker in this struct states (26.576).
+
+	`endian_marker` resolves byte order from a value in the data, which is
+	the whole of section 8.3's argument for the construct: TIFF's first two
+	bytes say which order the rest of the file uses. The generated C reads
+	it and branches --
+	`is_little(view) ? situ_get_le16(...) : situ_get_be16(...)` -- and this
+	walker did not, so every field of a little-endian TIFF came back
+	byte-swapped. `magic [must_eq = 42]` read 10752 and `ifd_offset` read
+	335544320 where the file says 20.
+
+	The marker is read BIG-ENDIAN whatever it turns out to say, because it
+	is what decides byte order and so cannot be read in the order it is
+	about. `walker/report.py` already did exactly this for its own
+	`little=` line; what it did not do was tell the scalar reader.
+
+	The marker among this struct's own members, which is where both
+	schemas that have one put it -- measured, and the only two in the
+	corpus. A governed member with no marker in scope REFUSES rather than
+	falling back to big: a wrong order is silently wrong data, which is the
+	failure this whole entry is about.
+	"""
+	image = view.image
+	members = image.members(image.structs[view.struct])
+	found = [index for index in members if index in image.markers]
+	if not found:
+		raise Refused(
+			"this member's byte order comes from a marker and no marker is "
+			"among its struct's members")
+
+	index = found[0]
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	width = size_bits(view, index) // BITS_PER_BYTE
+	if start + width > view.limit:
+		raise Refused("the frame does not reach the byte-order marker")
+
+	held = int.from_bytes(view.buffer[start:start + width], "big")
+	return "little" if held == image.markers[index] else "big"
+
+
+def _order(view: View, index: int) -> Literal["little", "big"]:
 	"""Which end this member's bytes start at.
 
 	`endian native` is the *host's* order and not a synonym for big: netlink
@@ -928,7 +969,15 @@ def _order(placement: Placement) -> Literal["little", "big"]:
 	`nlmsg_len`. A walk on a machine of the other endianness would have seen
 	the mirror of that bug, which is the argument for the marker construct
 	rather than for `native` (26.81).
+
+	The marker case is asked FIRST, because a governed placement carries
+	whatever endianness the struct was written with as well -- so a check
+	on `placement.endian` answers before the marker is consulted and the
+	marker never gets a say.
 	"""
+	placement = view.image.placements[index]
+	if placement.marker_governed:
+		return _marker_order(view)
 	if placement.endian == LITTLE:
 		return "little"
 	if placement.endian == NATIVE:
