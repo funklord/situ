@@ -31304,6 +31304,82 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.576 The walker ignored a byte-order marker, and every real TIFF read swapped
+
+**Found by pointing `situ-edit` at a file off this machine**, which is the
+first thing done with it in this tree. A real little-endian TIFF:
+
+    magic         10752        the file says 42    (0x2A00)
+    ifd_offset    335544320    the file says 20    (0x14000000)
+
+Both are the right value read from the wrong end. `tiff.situ` declares **no
+file-level `endian` at all** -- the order comes only from
+`[endian = from(byte_order)]` -- and `walker/walk.py`'s `_order` answered
+`big` for every member whose endianness a marker decides.
+
+**The generated C has always been right**, which is what places the fault:
+
+    situ_tiff_header_magic_get(view) =
+        is_little(view) ? situ_get_le16(base + 2) : situ_get_be16(base + 2)
+
+So the compiler, the lattice and the C backend honour section 8.3's
+construct and the walker did not -- and `situ-edit`, `situ-edit-tui` and the
+Qt window are all built on that walker. **Every field of every real TIFF was
+byte-swapped in all three**, silently: `magic [must_eq = 42]` read 10752 and
+said nothing.
+
+**`walker/report.py` already resolved the marker for its own `little=` line
+and never told the scalar reader.** That is the shape worth keeping: the
+knowledge was in the package, one function away from the code that needed
+it, which is why nobody looked for it as missing.
+
+**The image format carried everything required.** A `MARKERS` section, a
+`MARKER_GOVERNED` flag per placement, and `Placement.marker_governed`
+reading it -- the packer has recorded all of it all along and `_order` asked
+none of it. So this is a read that was never wired rather than a feature.
+
+**A governed member with no marker in scope REFUSES rather than falling back
+to big.** A wrong order is silently wrong data, which is the whole of this
+entry; abstaining is hydra's rule met from the other side. Measured first,
+because a refusal that fires on a corpus schema is a regression and not a
+guard: exactly two schemas have markers -- `tiff` and `edges` -- and in both
+the marker and its governed members are **members of the same struct**, so
+resolving within the view's own struct covers every case that exists.
+
+**And the four-way comparison passed throughout, which is its own finding.**
+`test_the_walker_agrees_with_the_compiled_backends[tiff/tiff.situ]` is
+collected, runs, and compares the walker against all four backends on twelve
+drawn buffers. A drawn buffer essentially never begins with `II` or `MM`:
+**zero of 2400 over 200 seeds**, counted. So the walker and the backends had
+only ever been compared on the big-endian branch, and **agreed there by
+accident** -- `evidence.md`'s rule about agreement needing a case that would
+disagree, with the case never run.
+
+**The general form, which is worth more than the instance: a branch selected
+by a magic value in the data is unreachable by random bytes.** A `must_eq`
+magic, a four-character chunk type, PNG's eight-byte signature, a byte-order
+marker. 66 such sites across the corpus -- 56 `must_eq`, 6 pinned runs, 4
+markers, all at static offsets -- and the comparison cannot get behind any of
+them.
+
+**The test here is a PAIR and that is the point.** The same header in both
+encodings, because a reader ignoring the marker gets exactly one of them
+right: before the fix the little row read 10752 and the big row read 42, so a
+test on either order alone passes whatever the walker does. Sabotaging the
+fix fails the little row and leaves the big row green, which is that argument
+measured rather than asserted.
+
+**A magic-planting draw is 26.577, with the three disagreements it finds.**
+Written and measured here: it plants every static magic a schema states,
+drawing a marker between its two literals so both branches are reached --
+`II` seven times and `MM` five in twelve for tiff, `BM` twelve for bmp,
+PNG's signature ten. Wiring it in immediately found **three walker-versus-C
+`validate` disagreements** that nothing had reached: `dnsname.question` and
+`sexpr.sexpr` where the walker refuses and C accepts, and
+`padded.byte_run` where the two refuse with **different ids**. Those are
+three separate defects, so they land with the instrument that found them
+rather than being disabled to keep a gate green.
+
 ### 26.575 Three harnesses enumerated the emitter's branches, and it grew one that emits nothing
 
 **`gen-checks`, `gen-fuzz` and `gen-tamper` emit C that is compiled against
