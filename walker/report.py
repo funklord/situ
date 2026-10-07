@@ -989,8 +989,41 @@ def _validate(image: Image, view: View, struct_index: int,
 				and placement.size_code == NONE \
 				and placement.repeat_code == NONE \
 				and index not in image.delimiters:
+			# The MEMBER'S OWN EXTENT as the inner limit, not the rest
+			# of the parent's frame (26.577). C acquires it that way --
+			#
+			#     situ_view_sub(view, base, situ_name_extent(whole), out)
+			#
+			# so a nested struct that measures SHORTER THAN ITS OWN
+			# MINIMUM is refused by the sub-view, and this handed the
+			# inner walk nineteen bytes where the member occupies none.
+			# `dnsname.question` is the case: its `qname` is a `while`
+			# run of labels whose first label claims 43 bytes in a
+			# 19-byte message, so the run holds no element, `name`
+			# measures 0, and `name`'s minimum is 1. C answers BOUNDS and
+			# this answered OK -- a validator accepting a truncated name,
+			# which is the permissive direction and the dangerous one.
+			inner_at = view.at + offset_bits(view, index) // 8
+			try:
+				reach = size_bits(view, index) // BITS_PER_BYTE
+			except Unplaceable:
+				break
+			except Refused:
+				return fail(ERR_BOUNDS, index)
 			inner = View(image, view.buffer, placement.type_struct,
-			             view.at + offset_bits(view, index) // 8, view.limit)
+			             inner_at, min(view.limit, inner_at + reach))
+
+			# The nested struct's own MINIMUM against the extent it
+			# measures, which is the check every backend makes and this
+			# could not until the image carried the number (26.577).
+			# `_validate` below tests `size_bits`, which is `NONE` for a
+			# variable struct -- so a variable nested struct went
+			# unchecked by both and `dnsname.question` read OK over a
+			# name that holds nothing.
+			floor = image.structs[placement.type_struct].size_min_bits
+			if floor != NONE and reach * BITS_PER_BYTE < floor:
+				return fail(ERR_BOUNDS, index)
+
 			verdict = _validate(image, inner, placement.type_struct)
 			if verdict:
 				return verdict

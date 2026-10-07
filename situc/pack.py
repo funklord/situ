@@ -46,7 +46,7 @@ FORMAT_VERSION	= 5
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
-STRUCT_BYTES	= 16
+STRUCT_BYTES	= 20
 PLACEMENT_BYTES	= 50
 ARM_BYTES	= 24
 DELIMITER_BYTES	= 36
@@ -2238,8 +2238,20 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		flags = 1 if validatable.get(name) and whole else 0
 		if _measurable(resolved, rstruct) and whole:
 			flags |= 2
-		structs_blob += _struct.pack("<IIII", first, count, _u32(size),
-		                             flags)
+		# AND THE MINIMUM, which this computed and threw away (26.577).
+		# `layout.size_bits` is the static minimum for a variable struct,
+		# which is what the generated headers carry as `SIZE_MIN` -- and
+		# every backend checks a nested view against it while the walker
+		# could not, because the image said nothing. `dnsname.question`
+		# is the case: its `qname` measures 0 bytes, `name`'s minimum is
+		# 1, C answers BOUNDS and the walker answered OK.
+		#
+		# Appended rather than folded into `size`, so a reader that takes
+		# the first sixteen bytes of a row and steps by the section's own
+		# stride is unaffected -- which is how `walker/image.py` reads
+		# every section.
+		structs_blob += _struct.pack("<IIIII", first, count, _u32(size),
+		                             flags, _u32(rstruct.layout.size_bits))
 
 	# The codec table is built first: a region record points into it.
 	codec_index: dict[str, int] = {}

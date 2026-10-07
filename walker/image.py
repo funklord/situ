@@ -171,7 +171,11 @@ class Struct:
 	first_placement: int
 	placement_count: int
 	size_bits: int
-	struct_flags: int = 0
+	struct_flags: int
+	#: The struct's static minimum in bits, which every backend's header
+	#: carries as `SIZE_MIN` and this image did not (26.577). `NONE` only
+	#: for an image packed before the row grew the field.
+	size_min_bits: int = NONE
 
 	@property
 	def validatable(self) -> bool:
@@ -428,8 +432,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	image = Image()
 	for at, records, stride in [found.get(STRUCTS, (0, 0, 0))]:
 		for i in range(records):
+			# The minimum where the row carries one. Read by stride, so
+			# an image packed before the field existed gives `NONE` and
+			# the checks that want it decline rather than reading a
+			# neighbouring row's bytes (26.577).
+			struct_row = "<IIIII" if stride >= 20 else "<IIII"
 			image.structs.append(Struct(*_struct.unpack_from(
-				"<IIII", blob, at + i * stride)))
+				struct_row, blob, at + i * stride)))
 	for at, records, stride in [found.get(PLACEMENTS, (0, 0, 0))]:
 		for i in range(records):
 			base = at + i * stride
