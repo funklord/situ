@@ -31304,6 +31304,78 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.578 The draw plants the magics, and the three defects that cost
+
+**A branch selected by a magic value in the data is unreachable by random
+bytes.** 26.576 measured it: **zero of 2400 drawn buffers over 200 seeds**
+begin with a TIFF byte-order marker, so the walker and four backends had
+only ever been compared on the big-endian branch and agreed there by
+accident. 66 such sites across the corpus -- 56 `must_eq`, 6 pinned runs, 4
+markers, all at static offsets -- and the comparison could get behind none
+of them.
+
+**`planted` writes each one in, and draws a marker BETWEEN its two
+literals.** Fixing it at `II` would swap one blind spot for another, which
+is why the test asserts both are seen: `II` and `MM` for tiff, `BM` for
+bmp, PNG's signature. Additional to the twelve unplanted draws rather than
+instead of them, so every verdict they had is untouched and this can only
+reach what nothing reached.
+
+**It found three walker-versus-C `validate` disagreements immediately.** One
+is 26.577. The other two are here, and **both of my first attempts at the
+arm check were wrong, each for a reason worth more than the fix.**
+
+**1. The walker never descended into a variant's selected arm.**
+`report._validate` had no arm handling at all. `sexpr.sexpr` is `peek u8
+kind` and a switch over `list`, `text` and `symbol`, and the walker read a
+61-byte buffer every backend refuses.
+
+**The first attempt asked `offset_bits` for the ARM** and got `Refused:
+placement 52 is not a member of this struct` -- a bookkeeping answer, not a
+bounds one -- which it turned into BOUNDS and **refused three schemas C
+accepts.** `_arm_bits`' own docstring says it: *the arm starts where the
+variant does ... asking `offset_bits` for the arm would walk the variant
+whose extent is this.* A variant's extent IS its selected arm's, so the
+member this struct owns is the one to ask.
+
+**The second attempt still over-refused, and only a compiled probe settled
+it: there is no `situ_packet_body_publish_view` in mqtt's header at all.**
+C emits no `_view` for an arm whose struct it cannot measure, so
+`packet_check` has no block for one and says nothing about it. The
+condition is `measurable`, which `_arm_bits` already used -- so the answer
+was beside the question both times and I reached it by reasoning from the
+plain nested-field case instead of **reading what C emits.**
+
+**2. A pad running past the end is short bytes, not a short frame.** Every
+backend clamps: `situ_align_up_u32(at, 4u, view.limit) - at`, then a loop
+over however many bytes that is. The walker's offset chain clamped it and
+`content_bits` did not, so **two halves of one reader disagreed** -- a
+member's own span exceeded what the chain had spent on it. `validate`
+called `padded.byte_run` BOUNDS where C answers CONSTRAINT over a nonzero
+byte it could see and the walker could not.
+
+**That one is not a disagreement about whether a message is malformed but
+about which refusal it earns**, and `_validate`'s own docstring says the
+first failure is the answer -- so the order decides the code a caller
+reads, and a caller branching on BOUNDS versus CONSTRAINT got a different
+answer from the walker than from every generated reader.
+
+**Each fix is pinned by a test that fails only its own sabotage**, which is
+what says the three are independent rather than one fault wearing three
+faces. The over-refusal half has a control of its own:
+`test_the_unmeasurable_arm_is_still_the_one_selected` asserts that mqtt's
+discriminant still selects `publish` AND that `publish_body` is still
+unmeasurable -- without it, the acceptance passes once the arm stops being
+selected, which is a green test over a case that no longer exists.
+
+**Four commits to land one instrument, and the count is the point.** The
+planting was written for 26.576 and held back three times -- each hold a
+measured blocker rather than a doubt, each intervening commit closing one
+defect it had found, with the gate green in between. An instrument that
+finds three real defects on its first run is worth four commits; one
+disabled to keep a gate green is worth nothing, and that is the trade the
+holds were about.
+
 ### 26.577 A nested struct validated against the parent's frame, not its own extent
 
 **The walker accepted a truncated DNS name.** Every backend acquires a
