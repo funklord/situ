@@ -31304,6 +31304,72 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.577 A nested struct validated against the parent's frame, not its own extent
+
+**The walker accepted a truncated DNS name.** Every backend acquires a
+nested member's view at the extent the member measures and propagates what
+that refuses:
+
+    e = situ_view_sub(view, base, situ_remaining_u32(view.limit, base),
+                      &whole);
+    return situ_view_sub(view, base, situ_name_extent(whole), out);
+
+`walker/report.py` handed the inner walk **the rest of the parent's frame**,
+so a nested struct measuring shorter than its own minimum was never caught:
+
+    2b 34 0d 39 0a 20 2b 0a 45 20 34 32 45 20 31 65 36 3a 2d
+
+`0x2b` is form 0, rest 43 -- a length-43 label in a 19-byte message. The
+`while` run holds no element, `name` measures 0, `name`'s minimum is 1. C
+answers BOUNDS; the walker answered OK. **A validator accepting a truncated
+name is the permissive direction**, and `situ-edit`, the TUI and the Qt
+window all read through it.
+
+**The check needed a number the image did not carry, and the packer had
+computed it and thrown it away.** `Struct.size_bits` is `NONE` for a
+variable struct -- which is exactly why neither reader tested it, and the
+walker's own `_validate` says so in a comment -- while every generated
+header carries `SIZE_MIN` for one. `layout.size_bits` IS that minimum and
+the packer dropped it on the floor.
+
+**Appended to the struct row rather than folded into `size`.** The reader
+takes a fixed prefix and steps by the section's own stride, which is how
+`walker/image.py` reads every section, so a row that grows a trailing field
+leaves an older reader unaffected. Overloading `size` with a flag to say
+which number it held would have been one field meaning two things.
+
+**Two of my own renames shadowed existing locals and mypy caught both** --
+`span` in `report.py` and then `shape` in `image.py`, the second introduced
+by the fix for the first. A short generic name in a long function is how
+that happens; the third attempt used `struct_row`, which could not collide.
+Worth the line because the slip was mechanical and the type checker was the
+only thing between it and a wrong row layout.
+
+**Found by the magic-planting draw written for 26.576**, and the honest
+account of how is better than the tidy one: the shape needs **no magic at
+all**. `0x2b` is an ordinary byte. What it needed was a buffer short enough
+to truncate the first label, which the planted draws happened to produce
+because planting changes the byte distribution. So the instrument found it
+sideways, which is still the instrument working.
+
+**Still open, with the draw that found them.** Wiring the planting in turns
+up two more walker-versus-C `validate` disagreements and they are separate
+defects:
+
+  - **`sexpr.sexpr`: the walker never validates a variant's selected arm.**
+    `_validate` has no arm handling at all, so a recursive variant whose arm
+    is a nested struct is unchecked. The arm selection is inline in
+    `_variant_bits` and wants extracting before `_validate` can reuse it.
+  - **`padded.byte_run`: the walker answers BOUNDS where C answers
+    CONSTRAINT.** Not permissiveness but ORDER -- which check is reached
+    first -- and `_validate`'s own docstring says the first failure is the
+    answer and that order decides it.
+
+So the planting lands with those two, which is the third time it has been
+held back and the third time for a measured reason rather than a doubt.
+Each commit between has closed one defect it found with the gate green,
+which is sequencing rather than scope.
+
 ### 26.576 The walker ignored a byte-order marker, and every real TIFF read swapped
 
 **Found by pointing `situ-edit` at a file off this machine**, which is the
