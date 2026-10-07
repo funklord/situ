@@ -1179,6 +1179,20 @@ class Emitter:
 		           if any(attr.name == "secret" for attr in placement.attrs)]
 		skipped = [placement.path for placement in rest
 		           if placement.path not in secret]
+		# And whatever reached neither list, which this dropped in silence
+		# (26.574). A varint has no `scalar` and is not a run, so it fell
+		# between `inside` and `rest` and the gate said nothing about it --
+		# and `test_the_backends_refuse_the_same_members` reads a NOTE to
+		# know a member was declined, so a silent drop counts as an accessor
+		# this backend emitted. Python had the same fault and lost it in
+		# 26.570; this is that fix arriving here.
+		placed  = ({entry.placement.path for entry in inside}
+		           | {placement.path for placement in rest})
+		unnamed = [entry.placement.path for entry in struct.entries
+		           if entry.placement.sealed_by == region.name
+		           and entry.placement.kind == "field"
+		           and "[]" not in entry.placement.path
+		           and entry.placement.path not in placed]
 
 		lines = [
 			"",
@@ -1200,6 +1214,10 @@ class Emitter:
 
 		if not inside:
 			lines.append("\t\t/* Nothing in this region has a scalar accessor. */")
+		for path in unnamed:
+			lines.extend(["",
+			              f"\t\t/* {path}: not emitted by this backend inside",
+			              "\t\t * a gate, so it has no accessor here. */"])
 		for path in secret:
 			lines.extend(["",
 			              f"\t\t/* {path} is [secret]: no debug accessor is",

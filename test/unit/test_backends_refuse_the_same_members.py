@@ -111,34 +111,82 @@ EXEMPT = {
 }
 
 
-def refused(text: str, paths: set[str]) -> set[str]:
+#: What opens a comment, per backend. `#` is a comment in Python and a
+#: PREPROCESSOR DIRECTIVE in C, and conflating them cost a false finding
+#: while this was being written: `#define SITU_PIECES_TWO_COUNT 2u` read as
+#: a comment, joined a field header to the note under it, and reported
+#: `pieces.two` as refused by C alone. One split over the whole corpus, and
+#: it was the instrument.
+OPENERS = {
+	"c":      ("/*", "*", "//"),
+	"cpp":    ("/*", "*", "//"),
+	"rust":   ("//",),
+	"python": ("#",),
+}
+
+#: One comment line, stripped of whatever opens and closes it.
+COMMENT = re.compile(r"^\s*(?:/\*+|\*+/?|//+|#+)\s?(.*?)\s*(?:\*/)?\s*$")
+
+
+def notes(text: str, opens: tuple[str, ...]) -> list[str]:
+	"""Consecutive comment lines, joined into one note each.
+
+	A note is the unit, and that is the whole of 26.574. Comments wrap, so a
+	phrase and the path it names sit on different lines and the text has to
+	be joined -- but joining the WHOLE output and scoring a window around
+	each phrase lets a phrase and a path from two different notes share one
+	window, and both of this detector's blind spots came from that:
+
+	  - A `required` note sitting next to a tag refusal put "`required`" in
+	    the tag note's window, so the exclusion below dropped a correct
+	    refusal. Measured: all four backends wrote "cannot resolve where the
+	    tag sits" for one member and this saw none of them.
+	  - C's "No accessor for" names the BARE member where `PATH` needs a
+	    dotted one, so six notes' worth of correct refusals were invisible.
+	    Changing C to name the path was tried and withdrawn -- it broke the
+	    test that pins that note's wording and turned a negative assertion
+	    vacuous (26.571).
+
+	Grouped by note, a window is not needed at all and neither blind spot is
+	expressible.
+	"""
+	out: list[str] = []
+	held: list[str] = []
+	for line in text.splitlines():
+		if not line.lstrip().startswith(opens):
+			if held:
+				out.append(" ".join(held))
+				held = []
+			continue
+		found = COMMENT.match(line)
+		held.append(found.group(1) if found else line.strip())
+	if held:
+		out.append(" ".join(held))
+	return out
+
+
+def refused(text: str, paths: set[str], backend: str = "c") -> set[str]:
 	"""Members this output declines to give an accessor to.
 
-	Comments wrap, so a note's phrase and the path it names often sit on
-	different lines. The text is flattened first -- which is why this reads a
-	joined blob rather than looping over lines, and why the first version of
-	this missed every multi-line note it was written to find.
+	One note at a time, so a phrase can only name a path written beside it.
+	`NAMES_ITS_MEMBER` is gone with the window it described: within a note
+	it makes no difference whether the path precedes the phrase or follows
+	it.
 	"""
-	flat  = re.sub(r"\s*\n\s*[/*#]*\s*", " ", text)
 	found: set[str] = set()
 
-	for phrase in REFUSALS:
-		for match in re.finditer(re.escape(phrase), flat):
-			window = (flat[match.end():match.end() + 80]
-			          if phrase in NAMES_ITS_MEMBER
-			          else flat[max(0, match.start() - 120):match.end() + 40])
+	for note in notes(text, OPENERS[backend]):
+		if not any(phrase in note for phrase in REFUSALS):
+			continue
 
-			# `required` declines to *frame the struct*, naming no member --
-			# "one of its members has no length this can compute" (20.3). The
-			# window before it catches whatever accessor happens to precede
-			# it, which in Python is the run this note is about and in the
-			# other three is not: the same schema then looked like a
-			# disagreement about `reports` (26.36).
-			if "`required`" in window or "_required`" in window:
-				continue
+		# `required` declines to *frame the struct*, naming no member --
+		# "one of its members has no length this can compute" (20.3). Its
+		# own note is what has to be skipped, and asking whether THIS note
+		# mentions it is exact where a character window was not.
+		if "`required`" in note or "_required`" in note:
+			continue
 
-			found.update(name for name in PATH.findall(window)
-			             if name in paths)
+		found.update(name for name in PATH.findall(note) if name in paths)
 
 	return found
 
@@ -299,7 +347,8 @@ def emitted(path: Path) -> tuple[dict[str, str], set[str]]:
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_the_backends_refuse_the_same_members(path: Path) -> None:
 	texts, paths = emitted(path)
-	sets  = {backend: refused(text, paths) for backend, text in texts.items()}
+	sets  = {backend: refused(text, paths, backend)
+	         for backend, text in texts.items()}
 	known = {member for backend, member in EXEMPT}
 
 	split: list[str] = []
@@ -550,7 +599,7 @@ def test_the_exemptions_are_still_divergences() -> None:
 
 	for path in SCHEMAS:
 		texts, paths = emitted(path)
-		sets = {backend: refused(text, paths)
+		sets = {backend: refused(text, paths, backend)
 		        for backend, text in texts.items()}
 		for (backend, member), why in EXEMPT.items():
 			if member in set().union(*sets.values()):
@@ -588,6 +637,62 @@ def test_no_backend_declines_a_member_in_silence() -> None:
 				f"not the note saying why")
 
 
+def test_a_phrase_does_not_reach_a_path_in_another_note() -> None:
+	"""The property that closed both blind spots, with the pair that shows it.
+
+	A refusal phrase and a member path in SEPARATE notes must not combine --
+	that combination is what let a `required` note swallow a tag refusal all
+	four backends wrote. The same two lines in ONE note must still be found,
+	because a detector that found nothing would pass the first half of this
+	for the wrong reason.
+	"""
+	paths = {"m.one", "m.two"}
+
+	# Deliberately NOT the `required` note, though that is the pair the
+	# blind spot was measured on: `required` is skipped by the exclusion
+	# below whatever the grouping does, so a fixture using it passes this
+	# with the grouping sabotaged -- a control that fails through something
+	# other than the check it is for. `has no extent` is a phrase with no
+	# exclusion in front of it.
+	apart = ("/* m.two : u8  at AbsoluteStatic(0x00) */\n"
+	         "static inline uint8_t situ_m_two_get(situ_view_t v) { return 0; }\n"
+	         "/* One `piece` has no extent this backend can compute. */\n")
+	assert refused(apart, paths, "c") == set(), (
+		"a phrase in one note reached a path in another")
+
+	together = ("/* No accessor for `m.two`: it starts after `one`, whose\n"
+	            " * length this cannot compute. */\n")
+	assert refused(together, paths, "c") == {"m.two"}, (
+		"a phrase and a path in one note were not matched")
+
+
+def test_a_c_preprocessor_line_is_not_a_comment() -> None:
+	"""`#` opens a comment in Python and a directive in C.
+
+	Conflating them cost a false finding while this was written: `#define
+	SITU_PIECES_TWO_COUNT 2u` read as a comment, joined a field header to
+	the note below it, and reported `pieces.two` as refused by C alone --
+	one split across the whole corpus, and the instrument's.
+	"""
+	text = ("/* m.one : piece  at AbsoluteStatic(0x00) */\n"
+	        "#define SITU_M_ONE_COUNT 2u\n"
+	        "/* Element `index`, walked: these have no single size. */\n")
+
+	assert refused(text, {"m.one"}, "c") == set(), (
+		"a #define joined two notes in C")
+
+	# And the other half of the pair, built for Python rather than the same
+	# bytes read twice: the first version of this asserted that the C text
+	# above WOULD join under Python's opener, and it does not -- `/* */` is
+	# not a Python comment either, so the `#define` stands alone and nothing
+	# joins. The assertion passed for a reason that had nothing to do with
+	# what it claimed.
+	same = ("# m.one : piece  at AbsoluteStatic(0x00)\n"
+	        "# Element `index`, walked: these have no single size.\n")
+	assert refused(same, {"m.one"}, "python") == {"m.one"}, (
+		"adjacent `#` lines are one note in Python")
+
+
 def test_the_comparison_sees_refusals_at_all() -> None:
 	"""The floor that stops this file passing over an empty list.
 
@@ -602,7 +707,8 @@ def test_the_comparison_sees_refusals_at_all() -> None:
 	for path in SCHEMAS:
 		texts, paths = emitted(path)
 		examined += len(paths)
-		seen     += sum(len(refused(text, paths)) for text in texts.values())
+		seen     += sum(len(refused(text, paths, backend))
+		                for backend, text in texts.items())
 
 	# The floor is on what the comparison *examines*, not on what it finds,
 	# and the difference is the whole point.
@@ -622,16 +728,31 @@ def test_the_comparison_sees_refusals_at_all() -> None:
 		f"the comparison examines {examined} member paths across the corpus, "
 		f"down from 1101; a schema has left SCHEMAS or `emitted` is failing")
 
-	# And the corpus currently holds no scored refusal at all, which is worth
-	# asserting rather than leaving as an absence somebody rediscovers. It is
-	# not "the backends refuse nothing": it is that what they refuse, they
-	# refuse in words this scoring cannot attribute to a member -- the limit
-	# 26.190 recorded and did not close. A refusal appearing here is a real
-	# finding and should be looked at, not silently absorbed.
+	# And the corpus still holds no scored refusal, which is worth asserting
+	# rather than leaving as an absence somebody rediscovers.
+	#
+	# 26.190 read this as the scoring's limit: what the backends refused,
+	# they refused in words it could not attribute. 26.574 closed that --
+	# two blind spots, both from scoring a character window over the whole
+	# flattened output instead of one note at a time -- and the number did
+	# not move, because the remaining reason is simpler: **no schema here
+	# has a member any backend declines.** The two are not the same state
+	# and the distinction is the point of this comment.
+	#
+	# Measured: a schema with a varint inside a sealed region makes it 11,
+	# of which 9 are refusals the four agree on. That schema is not in the
+	# corpus because two test harnesses cannot express a member with NO
+	# accessor -- `fuzz` marks it UNREACHED, which
+	# `test_no_schema_has_an_interior_shape_the_harness_cannot_reach`
+	# deliberately fails on, and the four-way driver emits calls the header
+	# does not declare. Teaching them is the piece that lets it land.
+	#
+	# So a refusal appearing here is still a real finding, and now it will
+	# be SEEN rather than scored as nothing.
 	assert seen == 0, (
 		f"the scoring now finds {seen} refusals where it found none. That is "
-		f"new information: either a backend has stopped emitting an accessor, "
-		f"or a note has been worded into REFUSALS' reach.")
+		f"new information: a backend has stopped emitting an accessor, or a "
+		f"note has been worded into REFUSALS' reach.")
 
 
 def test_every_backend_checks_a_bcd_field_nibble_by_nibble() -> None:

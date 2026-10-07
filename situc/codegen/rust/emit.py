@@ -3870,8 +3870,22 @@ class Emitter:
 			interior = {_ident(self._gate_name(struct, entry.placement))
 			            for entry in inside}
 			for entry in inside:
-				lines.extend(self._in_gate(struct, interior,
-				                           self._gated(struct, entry)))
+				got = self._gated(struct, entry)
+				# A member this backend emits nothing for, named rather than
+				# dropped in silence (26.574). `_gated` answers with an empty
+				# list for a varint, and the four-way refusal comparison reads
+				# a NOTE to know a member was declined -- so saying nothing
+				# counted as an accessor this backend had emitted. Python lost
+				# the same fault in 26.570.
+				if not got:
+					lines.extend([
+						"",
+						f"	// {entry.placement.path}: not emitted by this"
+						" backend",
+						"	// inside a gate, so it has no accessor here.",
+					])
+					continue
+				lines.extend(self._in_gate(struct, interior, got))
 
 			if not inside:
 				lines.append("	// Nothing in this region has an accessor.")
