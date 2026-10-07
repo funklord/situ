@@ -205,3 +205,104 @@ def test_a_window_outside_the_file_is_refused(
 	"""
 	with pytest.raises(Refused):
 		open_document(png, PNG, "chunk", at, length)
+
+
+#: The ID3 tag `example/id3/id3.vectors` carries: 209 bytes of v2.4 out of
+#: a real MP3, with nine frames and no padding. Read from the committed
+#: vector rather than restated here, so the two cannot drift -- and it is a
+#: fixture some other encoder wrote, which is what makes the chain below
+#: evidence rather than this project's arithmetic about itself.
+def _tag() -> bytes:
+	for line in (ROOT / "example" / "id3" / "id3.vectors").read_text(
+			encoding="ascii").splitlines():
+		if line.startswith("id3_tag tag "):
+			return bytes.fromhex(line.split(" ", 2)[2].replace(" ", ""))
+	raise AssertionError("id3.vectors no longer carries an `id3_tag` vector")
+
+
+def test_a_struct_reports_what_it_measures(png: bytes) -> None:
+	"""The window is what the caller gave; the extent is what the struct is.
+
+	A chunk opened at an offset with no length gets the rest of the file, so
+	the two differ and both are worth having: 12 bytes of frame plus the
+	length it declares is the record, and the rest is whatever follows it.
+	"""
+	held = open_document(png, PNG, "chunk", 8)
+
+	assert held.extent == len(PNG) - 8, "the window is not the rest of the file"
+	assert held.measured == len(IHDR), (
+		f"the chunk measures {held.measured} where its own length field "
+		f"makes it {len(IHDR)}")
+	assert held.measured < held.extent
+
+
+def test_the_header_names_both_only_when_they_differ(png: bytes) -> None:
+	"""`M of N` where the window is bigger, `N` where it is not.
+
+	The common case -- a document opened whole, or framed at exactly the
+	length it occupies -- reads as it always did, so the second number
+	appears when it says something and not otherwise.
+	"""
+	loose = render(open_document(png, PNG, "chunk", 8))[0]
+	tight = render(open_document(png, PNG, "chunk", 8, len(IHDR)))[0]
+
+	assert f"{len(IHDR)} of {len(PNG) - 8} bytes at 8" in loose, loose
+	assert f"{len(IHDR)} bytes at 8" in tight, tight
+	assert " of " not in tight, tight
+
+
+def test_the_measured_extent_walks_a_run_of_records() -> None:
+	"""Offset plus extent is the next record, nine times, landing exactly.
+
+	The strong form of this feature, and the reason it is worth having: a
+	reader stepping through a container needs the record's own length, and
+	deriving it by hand means reimplementing the format's sizes -- which for
+	ID3 is the synchsafe decode this corpus exists to describe.
+
+	Nine frames, each offset taken ONLY from the previous frame's reported
+	extent, arriving at the tag's own declared end. A wrong extent anywhere
+	in the chain lands somewhere that is not 209, and the identifiers say
+	which link broke rather than only that one did.
+	"""
+	image = _image(ROOT / "example" / "id3" / "id3.situ")
+	tag   = _tag()
+
+	# The tag's own size, which is the independent end-point: ten header
+	# bytes plus four seven-bit groups.
+	size = (tag[6] << 21) | (tag[7] << 14) | (tag[8] << 7) | tag[9]
+	end  = 10 + size
+
+	at    = 22				# past the header and the extended header
+	found: list[tuple[int, str]] = []
+	while at < end:
+		held = open_document(image, tag, "id3_frame", at)
+		reach = held.measured
+		assert reach is not None, f"frame at {at} could not be measured"
+		assert reach > 0, f"frame at {at} measures zero, so the walk cannot step"
+
+		ident = bytes(int(field.value) for field in held.fields()
+		              if field.name.startswith("identifier_")
+		              and isinstance(field.value, int))
+		found.append((at, ident.decode("latin-1")))
+		at += reach
+
+	assert at == end, (
+		f"the chain of nine extents ends at {at}, where the tag's own size "
+		f"makes it {end}: {found}")
+	assert [name for _, name in found] == [
+		"COMM", "COMM", "TIT2", "TALB", "TCON", "TPE1", "TYER", "TDRC",
+		"TRCK"], found
+
+
+def test_an_unmeasurable_struct_is_not_reported_as_zero(png: bytes) -> None:
+	"""`None` and 0 are different answers and the header keeps them apart.
+
+	Zero is real -- a DNS name whose first label does not fit holds no
+	labels -- so a struct the walk cannot measure must not collapse into
+	it. A two-byte window on a chunk cannot place the length field, which
+	is the cheapest way to reach the branch.
+	"""
+	held = open_document(png, PNG, "chunk", 8, 2)
+
+	assert held.measured is None, held.measured
+	assert "extent unknown" in render(held)[0], render(held)[0]

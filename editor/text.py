@@ -77,8 +77,23 @@ def render(document: Document) -> list[str]:
 	# The WINDOW's length, not the file's (26.581). A chunk read at an
 	# offset otherwise announced the size of the image it sits in, above a
 	# list of offsets that were all about the chunk.
+	#
+	# And what the struct MEASURES where that is less, because the window
+	# is whatever the caller gave and a reader stepping through a run needs
+	# the record's own length (26.582). `M of N` only when they differ, so
+	# a document opened whole or framed exactly reads as it always did --
+	# and a measurement the walk cannot make says so rather than being
+	# left out, since a missing number and an unmeasurable struct are
+	# different findings.
 	where_from = "" if document.at == 0 else f" at {document.at}"
-	lines = [f"{document.name}  {document.extent} bytes{where_from}"]
+	held = document.measured
+	if held is None:
+		how_long = f"{document.extent} bytes, extent unknown"
+	elif held < document.extent:
+		how_long = f"{held} of {document.extent} bytes"
+	else:
+		how_long = f"{document.extent} bytes"
+	lines = [f"{document.name}  {how_long}{where_from}"]
 	for field in document.fields():
 		where = "--" if field.offset is None else f"{field.offset:>4}"
 		wide  = "--" if field.size is None else f"{field.size:>3}"
@@ -151,6 +166,11 @@ def as_json(document: Document) -> str:
 		# that wants the file's length can add the two.
 		"bytes":  document.extent,
 		"at":     document.at,
+		# What the struct itself occupies, where the walk can say. `null`
+		# rather than absent, and never conflated with 0, which is a real
+		# answer (26.582). Both frontends get it: wiring one and not the
+		# other is the mistake 26.581 recorded.
+		"measured": document.measured,
 		"fields": [
 			{
 				"name":   field.name,

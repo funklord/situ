@@ -22,8 +22,8 @@ from walker.owned import decode
 from walker import report
 from walker.report import FIELD, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
-                         is_run, offset_bits, size_bits, write_bytes,
-                         write_scalar)
+                         is_run, offset_bits, size_bits, struct_extent,
+                         write_bytes, write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -108,6 +108,27 @@ class Document:
 	@property
 	def name(self) -> str:
 		return self.image.struct_name(self.struct)
+
+	@property
+	def measured(self) -> int | None:
+		"""How many bytes this struct's own members account for, here.
+
+		Distinct from `extent`, which is the WINDOW. A chunk opened at
+		offset 8 with no length is given the rest of the file, and what it
+		occupies is the twelve bytes of frame plus the length it declares:
+		knowing both is what lets a reader step to the next record instead
+		of working the arithmetic out by hand (26.582).
+
+		`None` where the walk cannot say, and that is not the same as zero.
+		Zero is an answer -- a DNS name whose first label does not fit holds
+		no labels and is zero bytes long -- so the two are kept apart here
+		for the reason `fields()` keeps "cannot be placed" apart from
+		"cannot be read".
+		"""
+		try:
+			return struct_extent(self.view())
+		except Refused:
+			return None
 
 	@property
 	def extent(self) -> int:
