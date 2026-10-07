@@ -31304,6 +31304,108 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.580 ID3v2.4, and the scalar kind it did not need
+
+`example/id3` describes the tag an MP3 carries: the header, the extended
+header, the frames, and the three encodings the real file uses. 85 tests in
+the corpus sweeps exercise it, the four-backend differential among them.
+
+**THE FINDING IS WHAT DID NOT GET BUILT.** ID3's defining oddity is the
+synchsafe integer -- 28 bits of length in four bytes, seven to a byte, so
+that no length can contain a run an MPEG decoder would read as a frame
+sync. The first reading of the format concluded situ could not express one
+and that a scalar kind had to be added beside `bcd`: `ScalarKind.SYNCHSAFE`
+with a groups count, a decode and an encode in the walker, the four
+backends, the capability map, the differ, the dissector. **Thirty-eight
+sites across fourteen files, scoped from `bcd`'s own footprint before
+anything was written.**
+
+It is four `u1`/`u7` pairs with the length an expression across them:
+
+	reserved u1  [must_be_zero];
+	u7       size_0;
+	...
+	u8  body[(size_0 << 21) | (size_1 << 14) | (size_2 << 7) | size_3];
+
+Every field lands at a static offset, the solver derives `Bounded(0,
+268435455)` from the expression unaided, and **the stuffing bits become a
+claim `validate` checks rather than a comment.** That last part is why this
+is better than the type would have been and not merely cheaper: a
+`synchsafe4` scalar would have masked the high bits silently, and nothing
+would refuse a tag that set one -- which 6.2 says is malformed and after
+which every byte means something else.
+
+**One `situc map` found that out.** The measurement cost a command and the
+feature would have cost a day, which is *Measure the feared cost before
+deliberating* pointed the other way: usually it dissolves a question about
+breakage, and here it dissolved a question about absence.
+
+**And it is the second time in this corpus.** mqtt's header records the
+same mistake made the same way -- a limitation written down that was not
+there, 26.56 -- for a member whose presence depends on a flag, which is a
+`variant` over one bit with `nothing` as its other arm. id3 uses that
+construct for the extended header. So the pair is now the argument:
+**probe the language before extending it, because a schema that records an
+absent limitation is worse than one that records nothing -- a reader
+designs around it.**
+
+**What the format did cost, honestly.** Three things the schema states
+rather than works around:
+
+- **The extended header's CRC cannot be a `checksum`.** It is an ordinary
+  CRC-32 stored as a 35-bit synchsafe integer, so the 32 bits the codec
+  produces sit in no contiguous span of the message. `checksum` binds a
+  codec to the bytes a tag occupies and there are none. Measured rather
+  than asserted: the real tag's `04 4b 7f 72 5e` is 0x497FF95E destuffed,
+  which is exactly `zlib.crc32` of the bytes from the end of the extended
+  header to the end of the tag -- 3.2's coverage, confirmed. So the limit
+  is narrow and stated: a checksum whose output is stored bit-stuffed.
+- **The frame identifier is a bound, not a set.** 4 says `A-Z0-9`;
+  `[min = 0x30, max = 0x5A]` also admits the seven punctuation characters
+  between `9` and `A`. The schema says so rather than claiming the set.
+- **The frame run carries netlink's caveat**, that situ's run ends after
+  the element failing its test. What bounds it is the frame, and the real
+  tag is the case that proves it: **it has no padding at all**, its last
+  frame ending at byte 209 with the audio at 210, so there is no zero byte
+  to stop the run and it stops anyway.
+
+Five positive controls, each refused through its own check: a stuffing bit
+set, a v2.3 major version, an extended header claiming 128 bytes, a frame
+identifier out of range, and a reserved frame flag set.
+
+**THE ORACLE WAS A CONSTANT, AND THE SABOTAGE IS WHAT SAID SO.** Excusing
+id3 in `UNORACLED` would have been false -- two independent readers are
+installed -- so it is oracled three-party: ffmpeg writes the tag, mutagen
+reads it, situ reads it, and situ is compared against mutagen. Its `why`
+claimed the synchsafe decode was on trial, because a group read in the
+wrong place shifts every frame after it.
+
+Shifting a frame size's third group by 8 rather than 7 **left the oracle
+green.** Every frame ffmpeg wrote was under 128 bytes, so each whole size
+sat in the lowest seven bits and `size_2` was always zero: the corpus could
+not reach the bits the claim was about. The tag's own size was over 127 and
+so the header's decode *was* covered, which is what made the gap
+invisible -- one of the two decodes was genuinely checked.
+
+A title long enough to need two groups fixes it, and the sabotage fails
+now. **Not a better assertion -- a corpus that reaches the hazard**, which
+is the distinction between a control that can fire and one that is
+reached.
+
+The first attempt at that used a long COMMENT and found something else:
+ffmpeg writes a comment as `TXXX`, whose content is a description and a
+value either side of a NUL, which ID3v2.4 gives in its 4.2.6 and is
+not the shape this schema
+describes. The oracle disagreed -- correctly -- about a frame the schema
+makes no claim about, so the corpus uses a title instead. Both readings
+had agreed about every boundary including the 200-byte frame, which is how
+it was clear the disagreement was the oracle's text decode and not the
+decode under test.
+
+And the padding is a checked claim rather than a comment: the run's last
+element is the first ten bytes of ffmpeg's padding, and the oracle asserts
+`validate` refuses it. netlink's caveat, held to.
+
 ### 26.579 situ-edit recomputed no checksum, and said so as though that were 14.1
 
 `situ-edit` rewrote a PNG chunk's data and left the CRC stale, reporting:
