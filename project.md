@@ -31304,6 +31304,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.582 The window is what the caller gave; the extent is what the struct is
+
+26.581 let a document start part-way into a file, and immediately showed
+what was still missing. A PNG chunk opened at offset 8 with no length
+reported
+
+	chunk  1219 bytes at 8
+
+because 1219 is the window -- the rest of the file -- while the chunk is
+twelve bytes of frame plus the thirteen its own length field declares. So
+a reader could reach one record and had no way to find the next without
+reimplementing the format's sizes by hand, which for ID3 means
+reimplementing the synchsafe decode that corpus exists to describe.
+
+`struct_extent` has answered this all along: *how many bytes one instance
+of a struct occupies, from its own bytes*. The document reports it beside
+the window, and `M of N` only where they differ -- so a document opened
+whole, or framed at exactly the length it occupies, reads as it always
+did and the second number appears when it says something.
+
+	chunk      25 of 1219 bytes at 8
+	chunk      25 bytes at 8            --length 25
+	id3_frame  34 of 187 bytes at 22
+
+**`None` is not zero, and this is the one place the distinction is
+load-bearing.** Zero is a real answer -- a DNS name whose first label does
+not fit holds no labels and is zero bytes long -- so a struct the walk
+cannot measure says *extent unknown* rather than collapsing into it. Of
+three sabotages, that is the one caught by exactly one test, which is
+what earns that test its place: reporting `0` for an unmeasurable struct
+leaves the other ten green.
+
+**The demonstration is a chain rather than a value.** Nine ID3 frames,
+each offset taken only from the previous frame's reported extent, arriving
+at 209 -- which is the tag's own declared end, read from the synchsafe
+size and not from the chain. COMM, COMM, TIT2, TALB, TCON, TPE1, TYER,
+TDRC, TRCK, and the last reads `14 bytes at 195` with no second number
+because the record ends exactly where the tag does. A wrong extent
+anywhere lands somewhere that is not 209, and the identifiers say which
+link broke rather than only that one did.
+
+The fixture is read from `example/id3/id3.vectors` rather than restated,
+so the two cannot drift -- and those bytes were written by another
+encoder, which is what makes the chain evidence rather than this
+project's arithmetic about itself.
+
+Both frontends again, the JSON carrying `measured` as `null` where the
+walk cannot say. Wiring one and not the other is the mistake 26.581
+recorded, and it was one commit old.
+
 ### 26.581 The tool told the reader to do something it did not support
 
 `situ-edit` read every message from byte zero. So a chunked container --
