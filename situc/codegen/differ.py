@@ -111,8 +111,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	bit_addressed_tag, covered_run, invalidating_members,
 	Member, arm_members, classify, containment_order, data_sized,
-	has_computable_extent, indexed_elements, local_name, own_entries,
-	own_members, unmeasurable_inside,
+	has_computable_extent, indexed_elements, length_is_transform_output,
+	local_name, own_entries, own_members, unmeasurable_inside,
 )
 
 
@@ -502,13 +502,32 @@ def _nested_is_measurable(placement: Placement,
 
 def _region_walks(struct: ResolvedStruct, region: Placement,
 		structs_by_name: dict[str, ResolvedStruct]) -> bool:
-	"""Whether this region's interior has to be walked to be measured."""
+	"""Whether this region's interior puts the members after it out of reach.
+
+	A walk is one way -- `unmeasurable_inside` -- and a SELF-DELIMITING
+	interior member is the other (26.575). A varint inside the region
+	occupies 1..9 bytes decided by its own bytes, which from outside the
+	region are the codec's output, so the exact extent is unknowable and no
+	backend places what follows: all four decline the tag and the member
+	after it.
+
+	`unmeasurable_inside` is deliberately NOT where this goes, though its
+	docstring gives the same reason. That predicate is shared with
+	`region_extent`, which answers a different question and answers it
+	correctly: the extent IS computable as a BOUND -- `Bounded(3, 11)` for a
+	varint plus a `u16` -- and that bound is honest and in the map. What is
+	not computable is the exact number, which is why everything after the
+	region is `offset=Dynamic`. Widening the shared predicate would have
+	turned a true bound into a refusal.
+	"""
 	prefix = region.path + "."
-	return any(unmeasurable_inside(structs_by_name, entry.placement)
-	           for entry in struct.entries
-	           if entry.placement.path.startswith(prefix)
-	           and "." not in entry.placement.path[len(prefix):]
-	           and entry.placement.kind != "element")
+	inside = [entry.placement for entry in struct.entries
+	          if entry.placement.path.startswith(prefix)
+	          and "." not in entry.placement.path[len(prefix):]
+	          and entry.placement.kind != "element"]
+	return any(unmeasurable_inside(structs_by_name, placement)
+	           or length_is_transform_output(placement)
+	           for placement in inside)
 
 
 def _tag_accessors(struct: ResolvedStruct) -> dict[str, str]:
@@ -792,9 +811,23 @@ def _interior_scalars(struct: ResolvedStruct,
 	"""
 	found: list[Placement] = []
 
+	# Nothing after a SELF-DELIMITING interior member (26.575). A varint
+	# inside the region occupies 1..9 bytes its own bytes decide, so every
+	# member after it sits at an offset no backend resolves and all four
+	# decline it -- asking anyway named `situ_<s>_<region>_<member>_get`,
+	# which the headers do not declare, and the four-way driver is
+	# compiled. `asks` stops at the region for the same reason one level
+	# out; this is that stop inside it.
+	stop = False
+
 	for entry in struct.entries:
 		placement = entry.placement
 		if placement.sealed_by != region.name or placement.kind != "field":
+			continue
+		if stop:
+			continue
+		if length_is_transform_output(placement):
+			stop = True
 			continue
 		# Not a field of an *element* of a run: that belongs to the element
 		# type, and the accessor three backends emitted for it on the gate

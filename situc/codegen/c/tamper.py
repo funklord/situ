@@ -42,9 +42,27 @@ from situc import __version__
 __all__ = ["generate"]
 
 
-def _tags(resolved_struct: ResolvedStruct) -> list[Placement]:
-	return [entry.placement for entry in resolved_struct.entries
-	        if entry.placement.kind == "tag"]
+def _tags(resolved_struct: ResolvedStruct, prefix: str = "situ",
+		declared: frozenset[str] = frozenset()) -> list[Placement]:
+	"""The tags this harness can reach, which is not every tag (26.575).
+
+	A tag behind a member whose extent the emitter cannot measure gets no
+	`_covered` and no `_ptr`, so naming them is a call the headers do not
+	declare -- and this harness is compiled. The emitter learned to decline
+	in 26.570 and 26.571 and this went on listing every `kind == "tag"`.
+
+	Asked of the headers rather than re-deriving why: the reason is the
+	emitter's and it has three of them.
+	"""
+	found = [entry.placement for entry in resolved_struct.entries
+	         if entry.placement.kind == "tag"]
+	if not declared:
+		return found
+	return [tag for tag in found
+	        if {ident(prefix, c_name(resolved_struct.name), c_name(tag.name),
+	                  "covered"),
+	            ident(prefix, c_name(resolved_struct.name), c_name(tag.name),
+	                  "ptr")} <= declared]
 
 
 def _is_fixed(resolved_struct: ResolvedStruct) -> bool:
@@ -67,10 +85,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	# `test_cli.py::test_every_subcommand_runs_on_every_schema` runs every
 	# subcommand over every schema, `gen-tamper` included, and the corpus
 	# now carries one.
+	from situc.codegen.c.declared import declared as _declared
+	named = _declared(schema, resolved, basename)
+
 	argued = [name for name, struct in sorted(resolved.structs.items())
-	          if _tags(struct) and takes_arguments(struct)]
+	          if _tags(struct, prefix, named) and takes_arguments(struct)]
 	ready  = [(name, struct) for name, struct in sorted(resolved.structs.items())
-	          if _tags(struct) and not takes_arguments(struct)]
+	          if _tags(struct, prefix, named)
+	          and not takes_arguments(struct)]
 
 	# An empty `ready` is the ordinary answer for a schema with no tags at
 	# all, so emptiness alone cannot be loud here. Emptied BY the skip is
@@ -114,7 +136,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	]
 
 	for name, struct in ready:
-		lines.extend(_harness(name, struct, prefix))
+		lines.extend(_harness(name, struct, prefix, named))
 
 	lines += [
 		"#ifdef __cplusplus",
@@ -127,8 +149,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	return {f"{basename}_tamper.h": "\n".join(lines) + "\n"}
 
 
-def _harness(name: str, struct: ResolvedStruct, prefix: str) -> list[str]:
-	tags  = _tags(struct)
+def _harness(name: str, struct: ResolvedStruct, prefix: str,
+		declared: frozenset[str] = frozenset()) -> list[str]:
+	tags  = _tags(struct, prefix, declared)
 	fixed = _is_fixed(struct)
 	fn    = ident(prefix, c_name(name), "tamper")
 	view_fn = ident(prefix, c_name(name), "view")

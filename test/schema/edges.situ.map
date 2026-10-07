@@ -379,6 +379,13 @@ struct sealed_run size=19..27 mutate=Immutable address=Unstable repr=ValueConver
   sealed_run.body.trailer                offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable stage=VerifyGated auth=Covered(seal_mac)
   sealed_run.seal_mac                    offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
 
+struct sealed_self_sized size=20..28 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical stage=VerifyGated
+  sealed_self_sized.kind                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  sealed_self_sized.body                 offset=AbsoluteStatic(0x01) size=Bounded(3, 11) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(self_mac)
+  sealed_self_sized.body.n               offset=AbsoluteStatic(0x01) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical stage=VerifyGated auth=Covered(self_mac)
+  sealed_self_sized.body.after           offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable stage=VerifyGated auth=Covered(self_mac)
+  sealed_self_sized.self_mac             offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
+
 struct secret_run size=3..258 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic secrecy=Secret
   secret_run.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   secret_run.key                         offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting secrecy=Secret

@@ -1171,6 +1171,34 @@ struct sealed_run {
 	tag u8  seal_mac[16] covers(body);
 }
 
+// A member inside a region whose length is in its own bytes (26.570).
+//
+// `n` is a varint, so how many bytes it occupies is in its own continuation
+// bits -- and inside a sealed region those bytes are the codec's output. So
+// the region's extent, the tag's offset and everything after `n` are
+// unreadable from the plain view, and all four backends have to decline
+// them.
+//
+// Three of them named `<region>_n_len` and defined it nowhere: a C++ header
+// and a Rust module that do not compile, and a Python `AttributeError` on
+// the first accessor a caller touches. C emitted the accessor instead and
+// read the varint out of ciphertext, so the tag was located from a number
+// no sender wrote -- 26.440's silent half, in the same subsystem and by a
+// route its own predicate could not see, because a self-delimiting member
+// names nothing for the renderer to fail on.
+//
+// Here because `test_the_backends_refuse_the_same_members` reads this
+// directory and no schema in it had the shape (26.564 recorded that as the
+// reason it saw nothing).
+struct sealed_self_sized {
+	u8  kind;
+	sealed body(sealing_aead) {
+		edge_varint  n;
+		u16          after;
+	}
+	tag u8  self_mac[16] covers(body);
+}
+
 // Members named what the generated code needs (26.80). `base`, `limit` and
 // `raw` are methods on the C++ view; `bytes` is a property on the Python one
 // and the builtin its annotations use. Each produced code that would not

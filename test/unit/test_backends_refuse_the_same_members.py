@@ -100,6 +100,22 @@ EXEMPT = {
 	# have to invent. The note names the symbol and the size instead.
 	("python", "data_block.body"): "no decode: the codec is C's (0017)",
 
+	# C exposes a varint inside a sealed region through the gate type and
+	# the other three emit nothing for one (26.575). The key names C
+	# because C is the odd one out, where the entry above names the backend
+	# that refuses -- the backend in the key is documentation either way,
+	# since only the member decides what the comparison skips.
+	#
+	# Not a defect in any of the four. C's accessors take
+	# `situ_<region>_t gate`, so they cannot be reached before the tag
+	# verifies (26.571), and nothing about them is unsound. Whether the
+	# other three should have the same capability is a new public API in
+	# two or three backends, which is why it is recorded rather than
+	# decided: Python's gate admits a member with a `scalar` and a varint
+	# has none, and C++ and Rust emit nothing and say so (26.574).
+	("c", "sealed_self_sized.body.n"):
+		"C reaches a gated varint, the other three emit nothing (26.575)",
+
 	# The five arms whose type has no computable extent used to sit here:
 	# C emitted an offset accessor and the other three emitted nothing, and
 	# 26.190 left it exempt because "either C's offset accessor is a
@@ -728,31 +744,26 @@ def test_the_comparison_sees_refusals_at_all() -> None:
 		f"the comparison examines {examined} member paths across the corpus, "
 		f"down from 1101; a schema has left SCHEMAS or `emitted` is failing")
 
-	# And the corpus still holds no scored refusal, which is worth asserting
-	# rather than leaving as an absence somebody rediscovers.
+	# And the count it attributes, which was ZERO for two separate reasons
+	# and is 11 now.
 	#
-	# 26.190 read this as the scoring's limit: what the backends refused,
-	# they refused in words it could not attribute. 26.574 closed that --
-	# two blind spots, both from scoring a character window over the whole
-	# flattened output instead of one note at a time -- and the number did
-	# not move, because the remaining reason is simpler: **no schema here
-	# has a member any backend declines.** The two are not the same state
-	# and the distinction is the point of this comment.
+	# 26.190 read the zero as the scoring's limit: what the backends
+	# refused, they refused in words it could not attribute. 26.574 closed
+	# that -- two blind spots, both from scoring a character window over
+	# the whole flattened output instead of one note at a time -- and the
+	# number did not move, because the second reason was simpler: no schema
+	# here had a member any backend declined. 26.575 supplied one.
 	#
-	# Measured: a schema with a varint inside a sealed region makes it 11,
-	# of which 9 are refusals the four agree on. That schema is not in the
-	# corpus because two test harnesses cannot express a member with NO
-	# accessor -- `fuzz` marks it UNREACHED, which
-	# `test_no_schema_has_an_interior_shape_the_harness_cannot_reach`
-	# deliberately fails on, and the four-way driver emits calls the header
-	# does not declare. Teaching them is the piece that lets it land.
-	#
-	# So a refusal appearing here is still a real finding, and now it will
-	# be SEEN rather than scored as nothing.
-	assert seen == 0, (
-		f"the scoring now finds {seen} refusals where it found none. That is "
-		f"new information: a backend has stopped emitting an accessor, or a "
-		f"note has been worded into REFUSALS' reach.")
+	# `sealed_self_sized` is it: 9 refusals the four agree on, and 2 that
+	# are the exempted divergence. A floor rather than an equality, because
+	# a backend gaining an accessor should not fail this -- but a fall to
+	# zero means the attribution has broken again, which is the thing that
+	# hid for as long as it did.
+	assert seen >= 11, (
+		f"the scoring attributes {seen} refusals, down from 11. Either a "
+		f"backend has stopped writing its note, a phrase has fallen out of "
+		f"REFUSALS, or `notes` has stopped grouping -- and a zero here is "
+		f"the vacuous state 26.574 closed, not a clean tree.")
 
 
 def test_every_backend_checks_a_bcd_field_nibble_by_nibble() -> None:

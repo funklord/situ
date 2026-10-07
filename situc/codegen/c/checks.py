@@ -75,6 +75,13 @@ class Suite:
 	#: view-level suite has no reason to include and must not include when
 	#: the schema declares no relation -- the file is not emitted then.
 	includes: list[str]   = field(default_factory=list)
+	#: Every `situ_` name the headers this suite compiles against declare
+	#: (26.575). Carried here rather than threaded through three
+	#: signatures: a check family deep in the tree is where the question
+	#: arises, and `Suite` is already in scope everywhere one is written.
+	#: Empty means "do not ask", which is what every caller but `generate`
+	#: wants in a unit test.
+	declared: frozenset[str] = frozenset()
 
 	def add(self, name: str, body: list[str], doc: list[str]) -> None:
 		self.lines.extend(["", *doc,
@@ -88,7 +95,9 @@ class Suite:
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		prefix: str = "situ") -> str:
-	suite = Suite()
+	from situc.codegen.c.declared import declared as _declared
+
+	suite = Suite(declared=_declared(schema, resolved, basename))
 
 	# A struct that takes an argument is skipped and says so, rather than
 	# the whole schema being declined as it was until now. The corpus is
@@ -2797,6 +2806,15 @@ def _coverage_checks(suite: Suite, schema: ast.Schema,
 			# through its path, so `signed_whole`'s inner obligation is
 			# `situ_signed_whole_piece_part_sig_covered`. The leaf is the
 			# MACRO's spelling and this named a function with it (26.464).
+			#
+			# And only where the header declares the helper (26.575): a tag
+			# behind a member whose extent the emitter cannot measure gets
+			# no `_covered`, and this suite is compiled.
+			helper = ident(prefix, struct.name, c_name(one.local), "covered")
+			if suite.declared and helper not in suite.declared:
+				suite.skip(f"{struct.name}.{one.local}",
+				           "no _covered: this build declares none")
+				continue
 			_span_check(suite, resolved, struct, prefix, extent, one.local)
 
 	_dirty_mask_check(suite, struct, held, prefix, extent)
