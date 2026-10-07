@@ -318,11 +318,51 @@ def test_the_cli_takes_hex(tmp_path: Path) -> None:
 
 
 def test_render_keeps_a_row_for_a_field_it_could_not_read() -> None:
-	"""Dropping it would show a message missing something it has."""
+	"""Dropping it would show a message missing something it has.
+
+	One row per field and a header, PLUS a continuation line for each note
+	on a readable field (26.583). The count was written as `1 + fields` and
+	stayed true only because nothing in this fixture carries both a value
+	and a note -- which is a narrower claim than the name makes, so the
+	arithmetic says which lines it expects rather than happening to add up.
+	"""
 	document = open_document(image(), MESSAGE)
 	lines    = render(document)
+	noted    = sum(1 for field in document.fields()
+	               if field.note and field.value is not None)
 
-	assert len(lines) == 1 + len(document.fields())
+	assert len(lines) == 1 + len(document.fields()) + noted
+
+
+def test_a_note_on_a_readable_field_reaches_the_text_frontend() -> None:
+	"""The refusal channel had one consumer of two (26.583).
+
+	`report.failed_check` names the member a schema refuses the message
+	over, and for `u8 seconds [max = 59]` holding 70 that member is
+	READABLE -- so the renderer, which showed a note only in place of a
+	missing value, printed `70` and dropped it. `--format json` carried
+	`refused: max` for the same document, which is how a frontend reading
+	the model saw what the default tool did not.
+	"""
+	from situc import pack as packer
+	from situc.diagnostics import Source
+	from situc.layout import solve
+	from situc.parser import parse
+	from situc.resolve import resolve
+
+	text = "endian big;\n\nstruct reading {\n\tu8  seconds  [max = 59];\n}\n"
+	parsed   = parse(Source("t.situ", text))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+
+	document = open_document(blob, bytes([70]))
+	held     = document.fields()[0]
+
+	assert held.value == 70, "the field is readable, which is the point"
+	assert "refused" in held.note, held.note
+	assert any("refused" in line for line in render(document)), (
+		"the text frontend shows a value the schema refuses with no sign "
+		"that it does")
 
 
 def test_the_readme_editor_sample_is_what_situ_edit_prints(tmp_path: Path) -> None:

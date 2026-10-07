@@ -193,6 +193,29 @@ class Document:
 
 			value = held.get(local)
 			note  = "" if value is not None else "cannot be read"
+
+			# A LOCATED MEMBER IN A WINDOW IS READING THE CONTAINER
+			# (26.583). `at expr` is measured from the buffer and not from
+			# the view -- `out->base = msg->base + at` in every generated
+			# backend, and the walker subtracts the base to match. That is
+			# right, and for a document opened at an offset it is useless:
+			# a BMP embedded at byte 8 has `bfOffBits = 54`, which is 54
+			# bytes into the CONTAINER, ten bytes short of its own pixels.
+			#
+			# Measured on a 2x2 BMP at offset 8: the run shown is
+			# `0000...ff0000ff0000` where the image's own pixels are
+			# `0000ff0000ff...`. Both readers agree and both are right
+			# about the format; what is wrong is the question.
+			#
+			# Said here rather than refused, because the schema and the
+			# window are both legitimate and only the reader knows whether
+			# the offset is a container's or a file's.
+			if placement.located_code != NONE and self.at:
+				located = (f"its offset is measured from the start of the "
+				           f"buffer (9.8) and not from this window, so it "
+				           f"lands {self.at} byte(s) before this struct's "
+				           f"own base")
+				note = f"{note}; {located}" if note else located
 			if placement.type_struct != NONE:
 				# NAMING THE STRUCT AND THE OFFSET, because the note asks
 				# the reader to do something and both are what it takes to

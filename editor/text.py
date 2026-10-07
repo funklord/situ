@@ -109,6 +109,26 @@ def render(document: Document) -> list[str]:
 		marker = _write_marker(field)
 		lines.append(f"{row.ljust(50)}{marker}".rstrip() if marker else row)
 
+		# A NOTE ON A READABLE FIELD WAS DISCARDED (26.583). The branches
+		# above render `field.note` only in place of a MISSING value, so a
+		# field that reads fine and carries a note showed the value and
+		# nothing else -- and the note that matters most is exactly that
+		# shape: `report.failed_check` names the member a schema refuses
+		# the message over, which for `u8 seconds [max = 59]` holding 70
+		# is a readable value.
+		#
+		# Measured: this frontend printed `seconds 70` while `--format
+		# json` carried `refused: max` for the same document. So the text
+		# tool -- the default one -- showed a message the schema rejects
+		# as though it were fine, and the channel 0051 built and 26.231
+		# wired had one consumer of two.
+		#
+		# A continuation line rather than a wider marker column, because a
+		# note is prose and can run past any column that keeps the table
+		# aligned.
+		if field.note and field.value is not None:
+			lines.append(f"{' ' * 14}{field.note}")
+
 	# What the schema says about the message as a whole (0051), after the
 	# fields rather than among them: a `when` is a predicate over the struct,
 	# so there is no row it belongs on. The name is printed beside the text
