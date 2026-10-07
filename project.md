@@ -31304,6 +31304,43 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.584 Five values on the mutate axis, and the marker named three
+
+The lens from 26.583 -- a channel with more producers than consumers --
+pointed at the next function along. `_write_marker` is what puts
+`[read-only]`, `[moves]` and `[tag]` beside a field in `situ-edit`, and
+`mutate` is a five-value axis:
+
+	InPlaceFixed > InPlaceSlack > Shifting > RewriteRequired > Immutable
+
+It named three. `InPlaceFixed` is correctly unmarked -- it is the ordinary
+store -- and `InPlaceSlack` fell through to the same empty answer, so it
+read as free. Measured over the corpus: **9 placements are `InPlaceSlack`
+and 857 are `InPlaceFixed`**, and the nine showed what the eight hundred
+showed. `mqtt.packet.length` is the clearest of them.
+
+The cost it hid depends on the VALUE rather than on the member, which is
+why it is a weaker claim than `moves` and not the same one: a varint that
+re-encodes to the same width moves nothing and a longer one moves
+everything after it, and a block-granularity codec re-transforms the
+containing block. `[needs slack]` now, which is `write_cost`'s own word
+for it.
+
+**The test asserts the partition, not the cell**, because a sixth value
+would be as silent as the fifth: every value on the axis must produce a
+marker except the one documented exception, with the axis read from
+`DOMAINS` rather than listed in the test. Anything arriving on it fails
+there, addressed to whoever added it.
+
+Two sabotages, one in each direction, and the second is the one worth
+having: marking `InPlaceFixed` as well fails the population test AND
+**the README sample test**, because the README pastes real `situ-edit`
+output. A marker on 857 of 1129 placements is noise that makes the other
+four mean less, and a third witness said so without being asked.
+
+The `auth` axis in the same function was checked and is complete: two
+values, and `== "Covered"` covers it.
+
 ### 26.583 `at expr` is the buffer's zero, and the note that could not be read
 
 A located member -- bmp's `pixels at file.pixel_offset`, section 9.8 --
