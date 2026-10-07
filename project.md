@@ -31304,6 +31304,110 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.581 The tool told the reader to do something it did not support
+
+`situ-edit` read every message from byte zero. So a chunked container --
+a PNG, an ID3 tag, a TIFF directory -- had to be cut up with `dd` before
+any of it could be read, which is what every PNG check in 26.579 did.
+
+**And the tool said so itself.** A nested member's note read:
+
+	a nested struct; open it as its own document
+
+It names neither the struct nor an offset, and there was no `--offset` to
+pass. **The one instruction this tool gives a reader was for a thing it
+did not support**, and nothing noticed because the note reads like a
+limitation rather than a request.
+
+`View` has carried a base and a limit since the beginning. What was
+missing was a way to ask for them -- so `acquire` learns `at` and
+`limit` rather than callers building their own views, because it is *the
+one bounds check which everything after it trusts* and a reader starting
+part-way into a file would have skipped it. A fixed struct's size is now
+checked against the window: 25 bytes of chunk at offset 8 is a frame of
+25, not of the whole image.
+
+**THE HAZARD, AND IT IS 26.579'S OWN CODE.** `offset_bits` answers from
+the view's base and a buffer is indexed absolutely, and the checksum
+recompute mixes the two. A chunk opened at offset 8 summed from the
+file's byte 4 -- inside the PNG signature -- and stopped eight bytes
+short of the chunk: a well-formed CRC-32 of the wrong seventeen bytes,
+which nothing downstream could tell from a right one. Measured on the
+fixture, reverting the one line that converts takes `b3b35cad` to
+`4e957ab4`.
+
+So the test that matters is end to end: a real PNG, opened at 8, one
+byte of `data` changed, and the stored CRC checked against `zlib` --
+with the signature and the rest of the file asserted untouched, since an
+edit at an offset must not be a rewrite of everything around it. Five
+sabotages, each failing through its own check, and the three window
+refusals shown live rather than one of three.
+
+**Two consumers were left unwired, which is the lens again.** The text
+front end got the window and `as_json` went on reporting
+`len(buffer)` -- the file's length, as the only member of an object
+whose every offset is view-relative -- and `situ-edit-tui` got no
+`--offset` at all. The interactive editor is exactly where somebody
+follows a nested member's note, so wiring one front end and not the
+other would have left the gap in the place it was most likely to be
+met. *An interface is only as wired as its least-used method*, and the
+least-used one here was the one that mattered.
+
+The note now names both: ``a nested `id3_frame`; open it with --offset
+22``. **Absolute, where the offset column is view-relative** -- the
+column describes where the member sits in this struct, and that number
+goes on a command line. A document opened at 8 whose note said
+`--offset 8` for a member eight bytes in would send the reader back to
+the signature.
+
+What is written out is the whole buffer and not the window. An edit of
+one PNG chunk is an edit of a PNG; writing the window would have
+produced a file holding nothing but the chunk.
+
+**AND THE LENS, SWEPT, WITH NOTHING FOUND.** The defect's shape is *a
+user-facing message that instructs the reader*, so the family is every
+message naming a flag or subcommand the tool must then provide. Swept
+mechanically -- backticked `--flag` and `situc <sub>` tokens pulled out
+of string literals in `editor/`, `walker/`, `situc/` and the three
+`bin/` programs by `ast`, each checked against what the tool answers to
+rather than against a list:
+
+	56 instructions inspected, 15 distinct flags and 15 subcommands
+	against 19 subcommands and 28 distinct flags, asked of --help
+	0 findings
+
+**With a positive control, because a sweep that matched nothing reports
+zero exactly as loudly as a clean tree.** Respelling `--metadata` as
+`--with-metadata` in the two notes that name it is caught at both
+sites, and the probe refuses outright if it inspected nothing. The two
+real instructions in the tree -- `pack it with --metadata` and *run
+`situc gen-codec-tests` to falsify a lying one* -- both resolve.
+
+So the family has one member and it is fixed. What makes the empty
+result worth writing down is the lens: this class is invisible to every
+other check, because a message asking for something impossible reads
+exactly like a message describing a limitation.
+
+**A SECOND LENS, ALSO SWEPT CLEAN, AND IT IS THE SHARPER ONE.** The
+defect under the defect is *a view-relative number used as an absolute
+buffer index*, and this change made that class reachable where it had
+not been: before it, every `acquire` produced a view based at zero, so
+the two readings agreed everywhere by accident.
+
+Swept: eight sites outside `walk.py` index a buffer with an offset.
+Seven are in `report.py` and every one writes `view.at + offset_bits(...)`
+-- and they had to, because 26.577 already builds a nested member's view
+at an absolute base, so a non-zero base was live there. Twenty uses of
+`view.at` in that file are the handling. The eighth was the checksum
+recompute, and it is the one that had never needed to be right.
+
+Nothing outside `walk.py` builds a `View` with a base of its own; the
+sub-views that do are internal to the walk and inside a frame already
+checked. Which is why `at` and `limit` went into `acquire` rather than
+into its callers: a reader that built its own view to start part-way
+into a file would have skipped the one bounds check, and this entry
+would have been about that instead.
+
 ### 26.580 ID3v2.4, and the scalar kind it did not need
 
 `example/id3` describes the tag an MP3 carries: the header, the extended
