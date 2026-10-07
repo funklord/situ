@@ -31304,6 +31304,113 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.575 Three harnesses enumerated the emitter's branches, and it grew one that emits nothing
+
+**`gen-checks`, `gen-fuzz` and `gen-tamper` emit C that is compiled against
+the generated headers, and all three decided which accessor a member has by
+enumerating the emitter's branches.** `test_generated_c_calls_only_
+accessors_the_headers_declare` exists because that had already failed twice
+-- a delimited arm gained `_ptr`/`_len` where the harness still called a
+one-byte `_get` (26.423), a nested obligation is named for its path where
+the harness used its leaf (26.464) -- and its docstring names the shape: *a
+name that claims exhaustiveness over a hand-written enumeration, and the
+enumeration was short by one.*
+
+**It failed a third time, from the other direction, and that is the new
+part.** The earlier two were the emitter growing a branch the harnesses had
+not met. This is the emitter growing a branch that emits **nothing**:
+26.570 declined a length only a transform can produce, 26.571 declined a
+scanned member inside a gate. An enumeration of somebody else's branches can
+be taught a new shape; it cannot be taught an absence.
+
+**And the population was FIVE, not three, which this entry got wrong once
+before the gate said so.** The three above are what
+`test_generated_c_calls_only_accessors_the_headers_declare` parametrises
+over -- so taking them as the population was reading a test's list where
+the question is *what generates C that calls accessors*. The differ
+generates the four-way driver and that test does not reach it, so six tests
+stayed red after the first three were fixed. **A count inherited from a
+test's parametrisation**, which is 26.565's lens pointed at this entry's own
+scope claim.
+
+**And within the differ it was two places, which the first fix also got
+wrong.** `asks()` stops at a region whose interior cannot be measured, and
+extending that stop left `_interior_scalars` still probing a member INSIDE
+the region, so the driver went on calling
+`situ_sealed_self_sized_body_after_get`. One stop outside the region and one
+in, for the same reason.
+
+**The shared predicate was deliberately left alone, and that is the
+judgement worth recording.** `unmeasurable_inside` gives exactly the
+reasoning a varint interior needs -- its bytes are the codec's output -- and
+it is shared with `region_extent`, which answers a different question
+*correctly*: the extent IS computable as a BOUND, `Bounded(3, 11)` for a
+varint plus a `u16`, and that bound is honest and sits in the committed map.
+What is not computable is the exact number, which is why everything after
+the region is `offset=Dynamic`. **Widening the shared predicate would have
+turned a true bound into a refusal**, so the condition went into the
+differ's own `_region_walks` with the reasoning beside it.
+
+**So they ask the headers.** `situc/codegen/c/declared.py` assembles every
+rung the build writes -- the view header plus `edit`, `relate`, `frame` and
+`converse` -- and returns `defined_symbols` of the lot, which is 26.562's
+reader doing its third job. **One assembly, because the test asked the same
+question** and a second copy is how the two stop agreeing: a checks suite
+reaches `situ_msg_*` through `<name>_frame.h`, so reading `<name>.h` alone
+reports the others' accessors as undeclared -- an instrument manufacturing
+the finding it went looking for.
+
+**The predicate is ANY accessor, not a particular one.** Which accessor a
+member gets is the emitter's business and each harness's branches already
+know it; the only question here is whether the emitter wrote anything at
+all. Over the name prefix, so a shape spelled in a way a harness has not
+met still answers yes and reaches the branches -- **the direction that
+fails safely**, since a false yes is caught by the branch naming something
+the header lacks, and reported by the very test this serves.
+
+**Carried on `Suite` in `checks`, threaded in the other two**, and the
+difference is where the question arises: a check family three levels down is
+where a tag's `_covered` gets named, and `Suite` is already in scope
+wherever a check is written. Threading it would have been three signatures
+for one call site.
+
+**And `fuzz` gained the fifth shape rather than being let off it.** A varint
+has no `scalar` -- its width is in its own continuation bits -- so it fell
+to the `UNREACHED` note, and
+`test_no_schema_has_an_interior_shape_the_harness_cannot_reach` fails on
+that marker deliberately: its docstring says a member silently ceasing to be
+fuzzed is how the erasers went missing. **It is the shape most worth fuzzing
+of the five**: the bytes decide how far the decode reads, and `_get` is the
+only accessor on that type that can fail. The harness reads the width and
+the fallible decode through the gate now.
+
+**So the struct lands, on the fourth attempt, and the three before it were
+not wasted.** `edges.situ` gains `sealed_self_sized`: a varint inside a
+sealed region, which no corpus schema had -- counted, and it was zero. Each
+withdrawal was a measured blocker rather than a doubt. 26.571 withheld it
+because a pre-existing C gate bypass would have gone live. 26.572 found
+C++ and Rust calling an undefined `_value` helper, eight tests red and four
+of them reading as failures about delimiters. 26.574 found these three
+harnesses, ten tests red and seven reading the same way. **A schema that
+breaks seven tests whose names mention delimiters, three times over, is the
+shape of a corpus gap rather than three unrelated accidents.**
+
+**Verified by compiling, not by the name check alone.** All three harnesses
+for `edges.situ` compile clean under the project's own `WARNFLAGS` --
+`-Werror` included -- which is the half the cheap test cannot do and which
+`make test` otherwise reaches three quarters of an hour later. The committed
+`.wire` and `.map` gain the struct's lines and nothing moves: 0 removed, 6
+and 7 added.
+
+**One divergence is exempted rather than closed.**
+`sealed_self_sized.body.n`: C reaches a gated varint through
+`situ_<region>_t` and the other three emit nothing. Nothing about C's is
+unsound -- 26.571 made those take the gate -- so it is a capability the
+others lack rather than a fault, and giving it to them is new public API in
+two or three backends. **The comparison's floor is 11 now rather than 0**,
+and the comment on it records that the zero had two separate causes and
+which one each fix removed.
+
 ### 26.574 The four-way comparison was vacuous, and a test said so
 
 **`test_the_backends_refuse_the_same_members` examined 1101 member paths
