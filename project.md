@@ -31304,6 +31304,97 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.579 situ-edit recomputed no checksum, and said so as though that were 14.1
+
+`situ-edit` rewrote a PNG chunk's data and left the CRC stale, reporting:
+
+	`data` is covered by `chunk.crc`, which is now stale: situ does not
+	compute it (14.1)
+
+The sentence is true of an AEAD tag and false of a CRC32, and **the tool
+could not tell the two apart because the image did not carry the
+difference.** Every backend generates a `_compute` for a checksum whose
+schema names the codec that computes it (0053); the walker's image said
+`auth=Covered` and nothing about what covers it. So the honest-sounding
+note was a corrupt file with a citation.
+
+**Four facts, three of them missing.** The kernel -- family, width, init,
+xorout, table, shift, reflect -- went into a widened codec row and a new
+`image_kernel_table` section, built by `situc.codegen.kernel_math`, which
+is the one derivation all four backends already share: no polynomial is
+re-derived in the walker, because a second implementation is a second
+answer to what a message's checksum is. The coverage went into a new
+`image_tag` section, as the first and last covered MEMBER rather than a
+span, since `covers(summed)` names regions and an `authenticated` region
+has no placement of its own to measure. Then two more, each of which
+decides a real case in the corpus:
+
+	`[self_as]`     what the tag's own bytes read as while it runs
+	`prefix(...)`   bytes it covers that the message does not contain
+
+Measured over the 44-schema corpus, by packing each and counting the tag
+rows -- and re-derived a second way, by globbing the schemas rather than
+asking the test corpus, which agreed:
+
+	26 tag placements   15 name no codec     the 14.1 refusal, and it stays
+	                     4 polynomial        png, usb, and two in test/schema
+	                     7 ones' complement  icmp, ipv4, tcp, udp, and three
+	 4 carry `[self_as]`        of which 2 also carry `prefix(...)`
+
+**The two new fields decide exactly those four.** ICMP and IPv4 cover the
+two bytes they are written into, computable with a hole. TCP and UDP also
+cover a pseudo-header carrying the IP addresses, which a reader holding
+one datagram does not have -- so they DECLINE, naming the pseudo-header,
+where without that field they would have summed the single span they do
+have and answered confidently.
+
+An earlier draft of this entry said 30 placements, 18 of them without a
+codec. Both were wrong, in the direction that makes the work look bigger,
+and nothing downstream would have caught either.
+
+**THE DEFECT THE TESTS DID NOT SEE, which is the part worth keeping.**
+The span is the first and last covered member; `last` meant the
+highest-numbered one. All six of ICMP's variant arms sit after `rest` in
+the placement table and before it in the message -- four bytes at offset
+4, where `rest` is thirteen at offset 8 -- so the span came out **8 bytes
+where RFC 792 sums 21**, and the checksum `e5ca` where the generated C
+says `3b5a`. Excluding arms is right rather than convenient: exactly one
+is present, they all start where the variant starts, and the variant's
+own placement is already in the list.
+
+What makes it the lesson is that **four tests covered the loop and the
+hole and every one of them stayed green with the exclusion removed** --
+because each hands `compute` the bytes itself and so cannot see a wrong
+coverage. *A test that calls the helper it is verifying cannot see a
+wrong caller*, and the fix was a tenth test going through
+`open_document`, which is what a user does.
+
+**And a claim one level wider than its evidence, caught by reading the
+compiler.** `_store` was written to put a byte-run checksum down
+most-significant-byte first, with a docstring saying that is what every
+format storing a CRC as bytes means by it. The schema has carried
+`tag_codec_endian` separately all along, deliberately -- a `u8 crc[4]`
+has no byte order, the NUMBER the codec produces does, and WOZ2 stores
+its little-endian where PNG stores its big. Every checksum in this
+repository is big, so the assumption was right by luck in all 30 cases
+and the test for it had to be a schema written for the purpose.
+
+Three witnesses, each of which separated a wrong answer from a right one
+while this was written: `zlib.crc32` for PNG, which is nothing of situ's;
+RFC 1071's own property for ICMP -- the sum INCLUDING the checksum field
+is 0xFFFF -- computed by a different loop from the one under test; and
+the generated C, compiled and run, which is what said `3b5a` while the
+walker said `e5ca`.
+
+Five sabotages, each failing through its own check -- and the one that
+mattered is the arm exclusion, which landed and left nine tests green
+until the tenth existed.
+
+**One de-duplication rode along because it was in the way.** The reader
+for `[self_as]` existed four times, byte-identical, once per backend, and
+the packer was about to be a fifth. It is `traverse.self_as` now. Four
+copies of a predicate agree until one of them learns something.
+
 ### 26.578 The draw plants the magics, and the three defects that cost
 
 **A branch selected by a magic value in the data is unreachable by random
