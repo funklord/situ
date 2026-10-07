@@ -31304,6 +31304,73 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.585 A RecursionError on every valid keystore, and the draw that cannot reach it
+
+`situ-edit` and `report.listing` both died with a traceback -- not a
+refusal -- on any keystore whose `version` selects an arm. Found by asking
+a different question entirely: whether the editor displays a member marked
+`[secret]`. It does not, and on the way to establishing that, the tool
+crashed.
+
+	chain_bits(sealed.plaintext)        sums the PARENT's members
+	  -> size_bits(keystore.sealed)     reaches the region
+	    -> 32 + SIZE(sealed.plaintext)  the region's size program
+	      -> content_bits(plaintext)
+	        -> offset_bits(plaintext)   for `remaining`, eagerly
+	          -> chain_bits(plaintext)  and round again
+
+`content_bits` computed the member's own offset before running its size
+program, because `remaining` is measured from there -- and passed it as a
+VALUE where every other input to that program is a thunk. For a member
+interior to a region the offset is not answerable against the parent view:
+the sum walks the parent's members, reaches the region, needs the region's
+size, needs this member.
+
+**And `plaintext`'s size program never uses `remaining` at all.** Its
+program is a field load and an arithmetic op; the offset was computed for
+nothing, and the recursion was the whole of what it bought. So `remaining`
+is a thunk now, called by the one op that wants it.
+
+The two cases the eager form existed for are what hold it: sqlite's 44
+against C's 37 and ipv6ext's 38 against 46, both still passing, because
+this changes WHEN the offset is taken and not from where. The laziness
+itself is pinned rather than the symptom -- a program with no `remaining`
+op must not call the thunk -- with a control that one containing the op
+still does, since a `remaining` nobody reads would make every such run
+measure zero and the first test would not notice.
+
+**A RecursionError is not a refusal anybody handles.** `Refused` is how
+this walker says a buffer does not support a question and every caller is
+written against it; a traceback means `situ-edit` did not report a bad
+keystore, it died on a good one.
+
+**WHY NOTHING CAUGHT IT, AND THE FIRST ANSWER WAS WRONG.** Walking past
+`params` needs `magic` to equal "KSTR" and `version` to be a declared
+revision, and 26.576's planted draw writes the magics a schema states --
+a discriminant being a value the schema enumerates rather than one it
+pins. So `planted` now plants a variant's discriminant too, one declared
+case at random, the way it already chooses between a marker's two
+literals. Measured: 6 of 6 planted keystore draws carry both where none
+did, and **16 of the corpus's 29 variants with a discriminant are
+plantable**, the other 13 being sub-byte.
+
+**It still does not reach this bug, and the extension is worth keeping
+anyway.** The condition is conjunctive three ways: the drawn `length`
+fields are 3544 to 43311 against buffers of 40 to 1187 bytes, so the
+sealed region never fits and the walk refuses before the cycle. The
+widening unblocks the members after a `default: error` variant for every
+schema that has one, which is worth having on its own -- and claiming it
+caught this would be a mechanism attached to the wrong finding.
+
+**And the extension's first version was wrong, in the way the apparatus
+usually is.** It planted whole bytes at the discriminant's offset, and a
+discriminant may be sub-byte: id3 switches on `extended_header`, one bit,
+and dnsname on a two-bit `form`, so `size_bits // 8` was zero and
+`to_bytes(0, ...)` raised OverflowError on both. Writing a whole byte
+there would clobber the neighbours sharing it, which is worse than not
+planting -- the draw would stop being a draw of the schema. Byte-aligned
+and whole-byte only, with the 13 skipped by name.
+
 ### 26.584 Five values on the mutate axis, and the marker named three
 
 The lens from 26.583 -- a channel with more producers than consumers --
