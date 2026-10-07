@@ -117,6 +117,12 @@ def magics(parsed: object, resolved: object,
 	planted: list[tuple[int, bytes]] = []
 	chosen: dict[str, str] = {}
 
+	# A variant names its discriminant by the member's own name, so the
+	# placement has to be looked up rather than carried.
+	by_name = {entry.placement.name: entry.placement
+	           for struct in resolved.structs.values()	# type: ignore[attr-defined]
+	           for entry in struct.entries}
+
 	for struct in resolved.structs.values():            # type: ignore[attr-defined]
 		for entry in struct.entries:
 			placement = entry.placement
@@ -148,6 +154,56 @@ def magics(parsed: object, resolved: object,
 
 			if placement.pinned_runs:
 				planted.append((at, placement.pinned_runs[0]))
+				continue
+
+			# A VARIANT'S DISCRIMINANT, which is not a magic and gates a
+			# branch exactly as one does (26.585). keystore is the case: its
+			# `params` switches on `version` with `default: error`, so every
+			# drawn buffer refuses at the variant and the walk stops -- and
+			# the members after it, including everything that places the
+			# sealed region and the tag, were compared by nobody. A
+			# RecursionError lived behind it.
+			#
+			# Needing BOTH a magic and a declared discriminant is why
+			# 26.576's planted draw did not reach it either: it writes the
+			# magics and a discriminant is a value the schema enumerates
+			# rather than one it pins.
+			#
+			# One case at random, like the marker above, so the arms share
+			# the draws and `default: error` keeps its own coverage from the
+			# twelve unplanted buffers.
+			# WHOLE BYTES ONLY, and this is the half the first version got
+			# wrong. A discriminant may be sub-byte -- id3 switches on
+			# `extended_header`, one bit, and dnsname on a two-bit `form` --
+			# and planting means writing bytes, so `size_bits // 8` is zero
+			# and `to_bytes(0, ...)` raised OverflowError on both. Writing a
+			# whole byte there would clobber the neighbours sharing it,
+			# which is worse than not planting: the draw would stop being a
+			# draw of the schema.
+			#
+			# Read-modify-write on the byte is possible and needs the bit
+			# order and the bit offset, which is the walk this harness
+			# exists to test. Skipped by name instead, so a bit-wide
+			# discriminant keeps the coverage the twelve unplanted buffers
+			# give it.
+			if placement.arm_cases and placement.discriminant:
+				cases = [arm.value for arm in placement.arm_cases
+				         if arm.value is not None]
+				chose = by_name.get(placement.discriminant)
+				if cases and chose is not None \
+						and chose.offset_bits is not None \
+						and chose.size_bits \
+						and chose.size_bits % 8 == 0 \
+						and chose.offset_bits % 8 == 0:
+					order = (chose.endian.value
+					         if chose.endian is not None else "big")
+					if order == "native":
+						order = sys.byteorder
+					planted.append((
+						chose.offset_bits // 8,
+						int(rng.choice(cases)).to_bytes(
+							chose.size_bits // 8,
+							"little" if order == "little" else "big")))
 				continue
 
 			for attr in placement.attrs:
