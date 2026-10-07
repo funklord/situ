@@ -136,13 +136,26 @@ def parameters_of(image: Image, struct: int) -> list[int]:
 
 
 def acquire(image: Image, buffer: Bytes, struct: int,
-            args: Sequence[int] = ()) -> View:
+            args: Sequence[int] = (), *,
+            at: int = 0, limit: int | None = None) -> View:
 	"""The one bounds check, which everything after it trusts.
 
 	A fixed struct needs its whole size present; a frame takes what there is.
 	Section 20.2 makes this the check every constant-offset access below it
 	depends on, and it is where two backends once disagreed with the other
 	two (26.27).
+
+	`at` and `limit` are the WINDOW, and they are here rather than in the
+	caller because this is the one bounds check: a reader that built its own
+	`View` to start part-way into a file would have skipped it. `View` has
+	carried both since the beginning -- what was missing was a way to ask
+	for them, so every caller opened at byte zero and a chunked container
+	had to be cut up with `dd` before `situ-edit` could read a chunk
+	(26.581).
+
+	A fixed struct's size is then checked against the WINDOW rather than
+	against the file, which is the point: 25 bytes of chunk at offset 8 of a
+	PNG is a frame of 25, not of the whole image.
 
 	`args` are the schema's `parameter` members (0050), positionally and in
 	declaration order. A caller that supplies too few is REFUSED here rather
@@ -157,12 +170,17 @@ def acquire(image: Image, buffer: Bytes, struct: int,
 			f"struct {struct} takes {len(held)} argument(s) and "
 			f"{len(args)} were supplied")
 
+	end = len(buffer) if limit is None else limit
+	if at < 0 or end > len(buffer) or end < at:
+		raise Refused(f"a window of [{at}, {end}) is not inside "
+		              f"{len(buffer)} bytes")
+
 	shape = image.structs[struct]
 	if shape.fixed:
 		need = (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
-		if len(buffer) < need:
-			raise Refused(f"frame of {len(buffer)} does not reach {need}")
-	return View(image, buffer, struct, 0, len(buffer),
+		if end - at < need:
+			raise Refused(f"frame of {end - at} does not reach {need}")
+	return View(image, buffer, struct, at, end,
 	            dict(zip(held, args)))
 
 

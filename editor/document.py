@@ -94,13 +94,36 @@ class Document:
 	image: Image
 	buffer: bytearray
 	struct: int
+	#: Where this struct starts in the buffer, and where its frame ends.
+	#:
+	#: A chunked container is the reason: a PNG is a signature and a run of
+	#: chunks, so reading one chunk meant cutting the file up first, and a
+	#: nested member's note said "open it as its own document" with no way
+	#: to do that (26.581). `limit` is the frame -- a struct ending in
+	#: `[remaining]` reads to it, so handing one the rest of the file is a
+	#: different question from handing it the 25 bytes a chunk declares.
+	at: int = 0
+	limit: int | None = None
 
 	@property
 	def name(self) -> str:
 		return self.image.struct_name(self.struct)
 
+	@property
+	def extent(self) -> int:
+		"""How many bytes this document's WINDOW holds.
+
+		Not `len(buffer)`, which is the file: a chunk opened at offset 8 of
+		a 4 KiB PNG is 25 bytes, and a header line saying 4096 would be
+		describing the file while every offset below it described the
+		chunk.
+		"""
+		end = len(self.buffer) if self.limit is None else self.limit
+		return end - self.at
+
 	def view(self) -> View:
-		return acquire(self.image, self.buffer, self.struct)
+		return acquire(self.image, self.buffer, self.struct,
+		               at = self.at, limit = self.limit)
 
 	def fields(self) -> list[Field]:
 		"""Every member, in declaration order, placed and read.
@@ -150,7 +173,22 @@ class Document:
 			value = held.get(local)
 			note  = "" if value is not None else "cannot be read"
 			if placement.type_struct != NONE:
-				note = "a nested struct; open it as its own document"
+				# NAMING THE STRUCT AND THE OFFSET, because the note asks
+				# the reader to do something and both are what it takes to
+				# do it. It said "a nested struct; open it as its own
+				# document" and named neither -- and until 26.581 there
+				# was no `--offset` to pass, so the one instruction this
+				# tool gives a reader was for something it did not
+				# support.
+				#
+				# ABSOLUTE, where the offset column is view-relative. The
+				# column describes where the member sits in this struct;
+				# this number goes on a command line, so it is the one
+				# the command takes. A document opened at 8 reporting a
+				# chunk's `data` at 8 would send the reader to the
+				# signature.
+				note = (f"a nested `{image.struct_name(placement.type_struct)}"
+				        f"`; open it with --offset {self.at + at}")
 			if local == blamed:
 				# Appended rather than replacing: a field can be unreadable
 				# AND be the one the schema refuses over, and a note that
@@ -256,7 +294,8 @@ class Document:
 		# catches the case whatever caused it, including the ones nobody
 		# enumerated, and it is the walk itself answering rather than a
 		# second model of what drives what.
-		candidate = Document(self.image, bytearray(self.buffer), self.struct)
+		candidate = Document(self.image, bytearray(self.buffer), self.struct,
+		                     self.at, self.limit)
 		if isinstance(value, bytes):
 			write_bytes(candidate.view(), index, value)
 		else:
@@ -313,8 +352,16 @@ class Document:
 
 			try:
 				at, span = self._covered_span(held)
+				# `at` is view-relative, because `offset_bits` is, and
+				# the buffer is not: a document opened at offset 8 would
+				# otherwise sum the eight bytes of a PNG signature and
+				# stop eight short of the chunk's end. Converted once,
+				# here, rather than in `_covered_span` -- which stays in
+				# the units `_hole` compares against.
+				base = self.at
 				value = derived.compute(
-					self.image, tag, bytes(self.buffer[at:at + span]),
+					self.image, tag,
+					bytes(self.buffer[base + at:base + at + span]),
 					self._hole(tag, at, span))
 				self._store(tag, value)
 			except (Refused, derived.Uncomputable) as why:
@@ -425,12 +472,18 @@ class Document:
 
 
 def open_document(image_bytes: bytes, message: Bytes,
-		struct: str | None = None) -> Document:
+		struct: str | None = None, at: int = 0,
+		length: int | None = None) -> Document:
 	"""Open a message against a packed image.
 
 	`struct` names which layout to read it as; without one the first is
 	taken, which is what a single-struct schema wants and what a reader of
 	a larger one will immediately want to override.
+
+	`at` and `length` are the window, for a struct that does not begin at
+	byte zero of the file -- a PNG chunk, an ID3 frame, a TIFF directory.
+	Without them a chunked container had to be cut up with `dd` before this
+	tool could read any of it, which is the gap 26.581 closes.
 	"""
 	image = load(image_bytes)
 	if not image.structs:
@@ -449,4 +502,17 @@ def open_document(image_bytes: bytes, message: Bytes,
 	# reach the caller's buffer or the file behind it: persisting is a
 	# separate and explicit step, so an edit that is never saved changes
 	# nothing anywhere.
-	return Document(image, bytearray(message), chosen)
+	held = bytearray(message)
+	# Refused HERE rather than at the first read, because a window outside
+	# the file is a caller's mistake and every answer below it would be
+	# about bytes nobody has. `acquire` checks it too -- it is the one
+	# bounds check -- and this says which argument was wrong.
+	end = len(held) if length is None else at + length
+	if at < 0 or at > len(held):
+		raise Refused(f"offset {at} is outside a {len(held)}-byte message")
+	if end > len(held):
+		raise Refused(f"offset {at} plus length {length} reaches {end}, "
+		              f"past a {len(held)}-byte message")
+
+	return Document(image, held, chosen, at,
+	                None if length is None else end)

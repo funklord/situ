@@ -62,9 +62,10 @@ def read_message(path: Path, as_hex: bool) -> bytes:
 
 
 def open_from(schema: Path, message: Path, situc: Path,
-		struct: str | None = None, as_hex: bool = False) -> Document:
+		struct: str | None = None, as_hex: bool = False,
+		at: int = 0, length: int | None = None) -> Document:
 	return open_document(image_bytes(schema, situc),
-	                     read_message(message, as_hex), struct)
+	                     read_message(message, as_hex), struct, at, length)
 
 
 def render(document: Document) -> list[str]:
@@ -73,7 +74,11 @@ def render(document: Document) -> list[str]:
 	A field the walk could not read keeps its row and carries its reason. An
 	editor that dropped it would show a message missing something it has.
 	"""
-	lines = [f"{document.name}  {len(document.buffer)} bytes"]
+	# The WINDOW's length, not the file's (26.581). A chunk read at an
+	# offset otherwise announced the size of the image it sits in, above a
+	# list of offsets that were all about the chunk.
+	where_from = "" if document.at == 0 else f" at {document.at}"
+	lines = [f"{document.name}  {document.extent} bytes{where_from}"]
 	for field in document.fields():
 		where = "--" if field.offset is None else f"{field.offset:>4}"
 		wide  = "--" if field.size is None else f"{field.size:>3}"
@@ -139,7 +144,13 @@ def as_json(document: Document) -> str:
 	"""
 	return json.dumps({
 		"struct": document.name,
-		"bytes":  len(document.buffer),
+		# THE WINDOW, in both numbers, because every offset in this object
+		# is view-relative and a `bytes` describing the file would be the
+		# only member of it that was not (26.581). `at` is here so the
+		# change is visible to a frontend rather than silent: a reader
+		# that wants the file's length can add the two.
+		"bytes":  document.extent,
+		"at":     document.at,
 		"fields": [
 			{
 				"name":   field.name,
