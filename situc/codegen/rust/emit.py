@@ -181,12 +181,9 @@ KEYWORDS = frozenset({
 UNESCAPABLE = frozenset({"crate", "self", "Self", "super"})
 
 
-def _self_as(attrs: tuple[ast.Attr, ...]) -> int | None:
-	"""What a self-covering tag's own bytes read as, or None (14.2)."""
-	for attr in attrs:
-		if attr.name == "self_as" and isinstance(attr.value, ast.IntLiteral):
-			return int(attr.value.value)
-	return None
+#: One definition, in `traverse`, because this file held one of four
+#: byte-identical copies (26.579).
+_self_as = traverse.self_as
 
 
 def _reader(endian: ast.Endian | None) -> str:

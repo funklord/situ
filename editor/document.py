@@ -15,13 +15,15 @@ having, and what an editor is mostly doing anyway.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
-from walker.image import NONE, Image, load
+from walker.image import LITTLE, NONE, Image, load
 from walker.owned import decode
 from walker import report
 from walker.report import FIELD, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
-                         offset_bits, size_bits, write_bytes, write_scalar)
+                         is_run, offset_bits, size_bits, write_bytes,
+                         write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -204,13 +206,20 @@ class Document:
 		  byte run is held to its exact length, since a run written shorter
 		  or longer moves what follows it.
 
-		The warning is coverage. A write to a member a tag authenticates
-		leaves that tag stale, and **situ does not recompute it** -- 14.1
-		puts computing a checksum with the caller, and this tool is not the
-		exception. So the write happens and the staleness is reported, which
-		is the honest half: refusing would make the field uneditable, and
-		silently recomputing would be this tool inventing a value the schema
-		says is somebody else's.
+		The last part is coverage, and a write to a covered member goes
+		through `_recompute`. **Which tag situ recomputes is the image's to
+		say and not this tool's** (26.579): a checksum whose schema names
+		the codec that computes it is brought up to date, and an AEAD tag
+		is reported stale, because 14.1 puts a cryptographic tag with the
+		caller and situ owns no AES-GCM. The write happens either way --
+		refusing would make the field uneditable -- and the note says
+		which of the two happened, naming the span it summed where it
+		computed one.
+
+		This said *situ does not recompute it* for as long as the image
+		could not tell the two apart, and the result was a PNG written
+		with a stale CRC under a note claiming the arithmetic was
+		somebody else's.
 		"""
 		index = self._members().get(name)
 		if index is None:
@@ -265,9 +274,122 @@ class Document:
 		self.buffer[:] = candidate.buffer
 
 		if self.image.capability_of(index, "auth") == "Covered":
-			return [f"`{name}` is covered by a tag, which is now stale: "
-			        f"situ does not compute it (14.1)"]
+			return self._recompute(name, index)
 		return []
+
+	def _recompute(self, name: str, index: int) -> list[str]:
+		"""Bring every tag covering `index` up to date, where situ can.
+
+		14.1 puts computing a checksum with the caller, and for an AEAD tag
+		that is the whole story: situ owns no AES-GCM. **It was never the
+		whole story for a checksum whose schema names the codec that
+		computes it** -- `is crc32`, decision 0053 -- and this tool said it
+		was, wrote a PNG chunk with a stale CRC, and reported *situ does not
+		compute it*. The write was corrupt and the reason was false
+		(26.579).
+
+		So the two cases are separated by asking the image rather than by
+		one sentence about both: a tag whose kernel it carries is
+		recomputed, and one it does not is reported exactly as before.
+		"""
+		from walker import derived
+
+		notes: list[str] = []
+		for tag, held in self.image.tags.items():
+			if held.first == NONE or held.last == NONE:
+				continue
+			if not held.first <= index <= held.last:
+				continue
+
+			label = self.image.placement_names[tag] \
+				if tag < len(self.image.placement_names) else f"#{tag}"
+
+			if not derived.computes(self.image, tag):
+				notes.append(
+					f"`{name}` is covered by `{label}`, which is now "
+					f"stale: its schema names no codec situ computes, so "
+					f"recomputing it is the caller's (14.1)")
+				continue
+
+			try:
+				at, span = self._covered_span(held)
+				value = derived.compute(
+					self.image, tag, bytes(self.buffer[at:at + span]),
+					self._hole(tag, at, span))
+				self._store(tag, value)
+			except (Refused, derived.Uncomputable) as why:
+				# NAMING THE STALENESS FIRST, in the same shape as the
+				# note above it. The reason a tag could not be recomputed
+				# is worth having, and it is not the fact the caller has
+				# to act on: the message is invalid until somebody fixes
+				# the tag. Two tests pin the word, and they were right to
+				# -- the first draft of this said only "could not be
+				# recomputed", which a caller can read as "no change".
+				notes.append(
+					f"`{name}` is covered by `{label}`, which is now "
+					f"stale: it could not be recomputed, because {why}")
+				continue
+
+			notes.append(f"`{label}` recomputed over {span} bytes at {at}")
+		return notes
+
+	def _hole(self, tag: int, at: int, span: int) -> tuple[int, int] | None:
+		"""Where the tag's own bytes sit inside the span it covers (14.2).
+
+		`None` when it sits outside, which is PNG's case: its CRC follows
+		the bytes it covers. Every internet checksum is the other case,
+		and `derived.compute` needs the offset RELATIVE to the covered
+		span rather than to the message, since only this caller knows
+		where that span began.
+		"""
+		view  = self.view()
+		start = offset_bits(view, tag) // BITS_PER_BYTE
+		wide  = size_bits(view, tag) // BITS_PER_BYTE
+		if start < at or start + wide > at + span:
+			return None
+		return start - at, wide
+
+	def _store(self, tag: int, value: int) -> None:
+		"""Put a computed checksum where the tag's bytes are.
+
+		A scalar goes through `write_scalar`, which knows the placement's
+		byte order. A BYTE RUN -- PNG's `u8 crc[4]` -- has none of its own,
+		and the schema says so deliberately: what has an order is the
+		NUMBER the codec produces, which the image carries separately
+		because WOZ2 stores its CRC little-endian where PNG stores its
+		big. Every checksum in this repository is big, so an assumption
+		here would be right by luck and wrong on the first schema that is
+		not.
+
+		The width is the kernel's rather than the run's, since a tag may
+		be written wider or narrower than its code is: `[truncated]` is
+		the schema's word for the second.
+		"""
+		if not is_run(self.image, tag):
+			write_scalar(self.view(), tag, value)
+			return
+
+		held   = self.image.tags[tag]
+		kernel = self.image.kernels[held.codec]
+		wide   = (kernel.width + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+		order: Literal["little", "big"] = \
+			"little" if held.endian == LITTLE else "big"
+		write_bytes(self.view(), tag, value.to_bytes(wide, order))
+
+	def _covered_span(self, held: object) -> tuple[int, int]:
+		"""The bytes a tag covers, as `(offset, length)`.
+
+		From the first covered MEMBER to the end of the last, which is what
+		the image carries and why: `covers(summed)` names regions, and an
+		`authenticated` region has no placement of its own to measure.
+		"""
+		view  = self.view()
+		first = offset_bits(view, held.first) // 8	# type: ignore[attr-defined]
+		last  = held.last				# type: ignore[attr-defined]
+		end   = offset_bits(view, last) // 8 + size_bits(view, last) // 8
+		if end < first:
+			raise Refused("a tag's coverage ends before it begins")
+		return first, end - first
 
 	def _extents(self) -> dict[str, tuple[int, int] | None]:
 		"""Where every member starts and how long it is, or `None` where the

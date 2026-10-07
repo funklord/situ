@@ -2294,6 +2294,24 @@ def declares_its_own_length(placement: Placement) -> bool:
 	        and placement.located is None)
 
 
+def self_as(attrs: tuple[ast.Attr, ...]) -> int | None:
+	"""What a self-covering tag's own bytes read as, or None (14.2).
+
+	A checksum defined over its own field runs the algorithm with those
+	bytes taken as a constant -- zero for the four internet checksums here,
+	a space for tar's header sum, which is why it carries a value rather
+	than being a flag.
+
+	One definition because there were four, byte-identical, one per
+	backend, and the packer was about to be a fifth (26.579). Four copies
+	of a predicate agree until one of them learns something.
+	"""
+	for attr in attrs:
+		if attr.name == "self_as" and isinstance(attr.value, ast.IntLiteral):
+			return int(attr.value.value)
+	return None
+
+
 def length_is_transform_output(placement: Placement) -> bool:
 	"""Whether this member's own length can only be read after a transform.
 

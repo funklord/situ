@@ -720,6 +720,22 @@ def argument(view: View, index: int) -> int:
 	return view.args[index]
 
 
+def is_run(image: Image, index: int) -> bool:
+	"""Whether a placement holds several values rather than one.
+
+	Three spellings reach the same shape -- a sized run, a fixed array, a
+	repeated record -- and the question is asked in three places: both
+	scalar accessors refuse one, and `document._store` has to choose a
+	writer for a checksum tag that is spelled `u8 crc[4]` (26.579). It is
+	named once because a second copy of the condition is a second thing to
+	be wrong, and the editor's branch going one way while `write_scalar`
+	refuses the other is the drift that would cost most.
+	"""
+	placement = image.placements[index]
+	return (placement.size_code != NONE or placement.array_count != NONE
+	        or placement.repeat_code != NONE)
+
+
 def read_scalar(view: View, index: int) -> int:
 	"""One member's value, bounds-checked against the frame.
 
@@ -749,8 +765,7 @@ def read_scalar(view: View, index: int) -> int:
 	# the differential between the two is what surfaced the disagreement;
 	# `read_bytes` is the reader for these, and every probe that wants one
 	# already calls it.
-	if (placement.size_code != NONE or placement.array_count != NONE
-			or placement.repeat_code != NONE):
+	if is_run(view.image, index):
 		raise Refused(f"placement {index} is a run, not a scalar; its bytes "
 		              f"are `read_bytes`")
 
@@ -818,8 +833,7 @@ def write_scalar(view: View, index: int, value: int) -> None:
 	if placement.radix:
 		raise Refused(f"placement {index} is a text number; writing one is an "
 		              f"encoding rather than a store")
-	if (placement.size_code != NONE or placement.array_count != NONE
-			or placement.repeat_code != NONE):
+	if is_run(view.image, index):
 		raise Refused(f"placement {index} is a run, not a scalar")
 	if index in view.image.varints:
 		raise Refused(f"placement {index} is a varint; its width depends on "

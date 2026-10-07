@@ -27,6 +27,7 @@ SECTION_BYTES	= 16
 #: refused, which is the property the directory exists for.
 STRUCTS, PLACEMENTS, CODE, STRINGS = 1, 2, 3, 4
 ARMS, DELIMITERS, REGIONS, CODECS  = 5, 6, 7, 8
+TAGS, KERNEL_TABLES                = 26, 27
 SKIPS                             = 22
 WHITESPACE                        = 23
 TLV_RULES                         = 24
@@ -164,6 +165,65 @@ class Placement:
 	@property
 	def parameter(self) -> bool:
 		return bool(self.text_flags & PARAMETER)
+
+
+#: Kernel families, matching `pack.KERNEL_*`. A reader seeing NONE is told
+#: situ cannot compute that checksum, which is the honest answer for an
+#: `extern` codec -- somebody's C function -- and for a kernel this build
+#: does not know.
+KERNEL_NONE, KERNEL_POLYNOMIAL, KERNEL_ONES_COMPLEMENT = 0, 1, 2
+
+
+@dataclass(frozen=True)
+class Kernel:
+	"""What computing one derived checksum takes (26.579).
+
+	Derived by `situc.codegen.kernel_math` at pack time and carried as
+	numbers, so no reader re-derives a polynomial: a second implementation
+	of one is a second answer to what a message's checksum is. `table` is
+	an index into the kernel-table section, `NONE` for a family with no
+	table, and `shift` is signed -- the register moves the other way for a
+	reflected code.
+	"""
+
+	family: int
+	width: int
+	start: int
+	xorout: int
+	table: int
+	shift: int
+	reflect: int
+
+
+@dataclass(frozen=True)
+class Tag:
+	"""A tag, what computes it, and the bytes it covers (26.579).
+
+	`first` and `last` are MEMBER placement indices rather than regions: an
+	`authenticated` region has no placement of its own, so what a reader can
+	locate is the members inside it. Both are `NONE` where the coverage is
+	not one contiguous run, and a reader then declines rather than
+	checksumming across a gap.
+	"""
+
+	codec: int
+	first: int
+	last: int
+	#: What the tag's OWN bytes read as while the algorithm runs over them
+	#: (`[self_as]`, 14.2). `NONE` where the tag sits outside its coverage,
+	#: which is PNG's case and every AEAD tag's; 0 for the four internet
+	#: checksums here, which cover the two bytes they are written into.
+	fill: int = NONE
+	#: Whether the sum also runs over bytes the message does not contain --
+	#: TCP's and UDP's pseudo-header, whose addresses belong to a layer the
+	#: schema does not describe (`prefix(...)`, 14.2a). A reader holding
+	#: only the message must DECLINE: summing the one span it has would
+	#: produce a confident wrong answer rather than no answer.
+	prefix: int = 0
+	#: The byte order the codec's OUTPUT is stored in. Not the member's --
+	#: a `u8 crc[4]` has none, which is why the schema carries this
+	#: separately (`tag_codec_endian`). 0 unstated, 1 big, 2 little.
+	endian: int = 0
 
 
 @dataclass
@@ -309,6 +369,12 @@ class Image:
 	varint_rules: dict[int, tuple[int, int, bool]] = field(default_factory=dict)
 	#: placement index -> the value that means little-endian.
 	markers: dict[int, int]			= field(default_factory=dict)
+	#: Codec index -> what computing it takes, for a derived kernel (26.579).
+	kernels: dict[int, Kernel]		= field(default_factory=dict)
+	#: One table per polynomial codec, indexed by `Kernel.table`.
+	kernel_tables: list[tuple[int, ...]]	= field(default_factory=list)
+	#: Tag placement -> its codec and the span it covers.
+	tags: dict[int, Tag]			= field(default_factory=dict)
 	#: placement index -> [(check, value)], in declaration order. The order
 	#: is the answer: the first failure is what `validate` returns.
 	constraints: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
@@ -589,6 +655,43 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 		for i in range(records):
 			shape, where = _struct.unpack_from("<II", blob, at + i * stride)
 			image.versions[shape] = where
+
+	if CODECS in found:
+		at, records, stride = found[CODECS]
+		for i in range(records):
+			# By stride and only where the row carries the kernel
+			# fields, so an image packed before they existed simply has
+			# no kernel to offer.
+			#
+			# The leading `u32` is the codec's interned NAME and is read
+			# past: nothing here needs it, and a note that wants to say
+			# which codec would have to take the string table with it.
+			# This comment said the names were read "exactly as before",
+			# which was never true of any version of this loop.
+			if stride >= 32:
+				_, family, width, start, xorout, table, shift, reflect = \
+					_struct.unpack_from("<IIIIIIii", blob, at + i * stride)
+				image.kernels[i] = Kernel(family, width, start, xorout,
+				                          table, shift, reflect)
+
+	if KERNEL_TABLES in found:
+		at, records, stride = found[KERNEL_TABLES]
+		for i in range(records):
+			image.kernel_tables.append(_struct.unpack_from(
+				"<256I", blob, at + i * stride))
+
+	if TAGS in found:
+		at, records, stride = found[TAGS]
+		for i in range(records):
+			if stride >= 28:
+				(where, codec, first, last, fill, prefix,
+				 endian) = _struct.unpack_from("<IIIIIII", blob,
+				                               at + i * stride)
+			else:
+				where, codec, first, last = _struct.unpack_from(
+					"<IIII", blob, at + i * stride)
+				fill, prefix, endian = NONE, 0, 0
+			image.tags[where] = Tag(codec, first, last, fill, prefix, endian)
 
 	if MARKERS in found:
 		at, records, stride = found[MARKERS]

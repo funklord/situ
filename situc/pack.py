@@ -53,7 +53,9 @@ DELIMITER_BYTES	= 36
 SKIP_BYTES	= 8
 WHITESPACE_BYTES = 8
 REGION_BYTES	= 16
-CODEC_BYTES	= 4
+CODEC_BYTES	= 32
+TAG_BYTES	= 28
+KERNEL_TABLE_BYTES	= 1024
 VARINT_BYTES	= 12
 TLV_BYTES	= 16
 TLV_RULE_BYTES	= 24
@@ -130,6 +132,11 @@ SECTION_RELATION_MUSTS	= 19
 SECTION_PINNED_RUNS	= 20
 SECTION_NAMES		= 12
 SECTION_VECTORS		= 13
+#: A tag and what computes it (26.579), and the kernel tables a polynomial
+#: codec needs. Both are additive: a reader that does not know them reads
+#: every other section exactly as before.
+SECTION_TAGS		= 26
+SECTION_KERNEL_TABLES	= 27
 
 #: `image_placement.flags`
 OFFSET_KNOWN		= 1 << 0
@@ -929,6 +936,66 @@ def _assemble(sections: list[tuple[int, bytes, int]], metadata: bool) -> bytes:
 	out += directory
 	out += bodies
 	return bytes(out)
+
+
+#: What a reader needs to compute a derived checksum, and nothing about how.
+#:
+#: `kernel_math` is the one derivation every backend already shares, so the
+#: table is computed here rather than carried from a schema or re-derived by
+#: a reader: a second implementation of a polynomial is a second answer to
+#: what a message's checksum is, and the walker is meant to be an
+#: independent reader of situ's own description rather than of its
+#: arithmetic (26.579).
+KERNEL_NONE, KERNEL_POLYNOMIAL, KERNEL_ONES_COMPLEMENT = 0, 1, 2
+
+
+def _kernel_row(schema: "ast.Schema", named: str,
+		tables: list[list[int]]) -> bytes:
+	"""`(family, width, start, xorout, shift, table_at)` for one codec.
+
+	`table_at` indexes the kernel-table section, which holds 256 `u32`
+	entries per polynomial codec. A family with no table -- the ones'
+	complement sum -- carries `NONE` there and the reader loops without one.
+
+	Everything else answers `KERNEL_NONE`: an `extern` codec is somebody's
+	C function and a kernel this does not know is not one to guess at. A
+	reader seeing `KERNEL_NONE` is told situ cannot compute that checksum,
+	which is the honest half `situ-edit` was already saying -- it was just
+	saying it about every tag.
+	"""
+	from situc.codegen.kernel_math import (crc_shift, crc_start, crc_table,
+	                                       crc_width, number)
+
+	decl = next((one for one in schema.codecs() if one.name == named), None)
+	kernel = getattr(decl, "kernel", None) if decl is not None else None
+	if decl is None or kernel is None:
+		return _struct.pack("<IIIII", KERNEL_NONE, 0, 0, 0, _u32(None)) \
+			+ _struct.pack("<ii", 0, 0)
+
+	family = kernel.family.name
+	if family == "POLYNOMIAL":
+		width = crc_width(decl)
+		poly = number(decl, "poly")
+		if width is None or not poly:
+			return _struct.pack(
+				"<IIIII", KERNEL_NONE, 0, 0, 0, _u32(None)) \
+				+ _struct.pack("<ii", 0, 0)
+		reflect = bool(kernel.flag("reflect"))
+		table = crc_table(width, poly, reflect)
+		at = len(tables)
+		tables.append(table)
+		return _struct.pack(
+			"<IIIII", KERNEL_POLYNOMIAL, width,
+			crc_start(number(decl, "init"), width, reflect),
+			number(decl, "xorout"), at) \
+			+ _struct.pack("<ii", crc_shift(width, reflect),
+			               1 if reflect else 0)
+	if family == "ONES_COMPLEMENT":
+		width = crc_width(decl) or 16
+		return _struct.pack("<IIIII", KERNEL_ONES_COMPLEMENT, width,
+		                    0, 0, _u32(None)) + _struct.pack("<ii", 0, 0)
+	return _struct.pack("<IIIII", KERNEL_NONE, 0, 0, 0, _u32(None)) \
+		+ _struct.pack("<ii", 0, 0)
 
 
 def pack(schema: ast.Schema, resolved: ResolvedSchema,
@@ -2253,14 +2320,27 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		structs_blob += _struct.pack("<IIIII", first, count, _u32(size),
 		                             flags, _u32(rstruct.layout.size_bits))
 
+	#
+	# A TAG'S OWN CODEC JOINS IT TOO (26.579). `checksum u8 crc[4]
+	# covers(summed) is crc32` names the codec that computes the checksum,
+	# and the table held only a REGION's codec -- so an image said a member
+	# was `auth=Covered` and nothing about what covers it. `situ-edit` could
+	# not tell an AEAD tag situ cannot compute from a CRC it generates a
+	# `_compute` for, wrote a PNG chunk with a stale CRC, and said "situ
+	# does not compute it (14.1)" -- true of the first and false of the
+	# second.
 	# The codec table is built first: a region record points into it.
+	kernel_tables: list[list[int]] = []
+	tags_blob    = bytearray()
 	codec_index: dict[str, int] = {}
 	codecs_blob = bytearray()
 	for _, placement in rows:
-		for named in (placement.codec, *placement.tag_covers[:0]):
+		for named in (placement.codec, placement.tag_codec):
 			if named and named not in codec_index:
 				codec_index[named] = len(codec_index)
-				codecs_blob += _struct.pack("<I", strings.intern(named))
+				codecs_blob += _struct.pack(
+					"<I", strings.intern(named)) \
+					+ _kernel_row(schema, named, kernel_tables)
 
 	varint_index: dict[str, int] = {}
 	varints_blob = bytearray()
@@ -2286,6 +2366,43 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	                if isinstance(decl, ast.EndianMarkerDecl)}
 
 	region_owners = _region_owners(rows)
+
+	# THE MEMBERS A TAG'S SPAN MUST NOT END ON: a variant's arms.
+	#
+	# The span is carried as the first and last covered member, and `last`
+	# is the last in BYTE ORDER -- which is the row order for everything
+	# except an arm. All six of ICMP's arms sit at the variant's own
+	# offset, after `rest` in the table and before it in the message, so
+	# taking the highest index gave a span of 8 bytes where RFC 792 sums
+	# 21: the arms are four bytes at offset 4, and `rest` is thirteen at
+	# offset 8. The checksum came out `e5ca` against a correct `c4e4`.
+	#
+	# Excluding them is right rather than convenient: exactly one arm is
+	# present in any message, they all start where the variant starts, and
+	# the variant's own placement is in the list and spans whichever is
+	# chosen. So the arm members add no bytes the span does not already
+	# have, and only their position in the table was ever misleading.
+	#
+	# A member INSIDE an arm -- `body.echo.identifier` -- is excluded by
+	# the same rule, since its path is under the arm's.
+	#
+	# `arm.member` and not `arm.path`: the field is spelled `member` on
+	# `Arm`, and `getattr(arm, "path", None)` -- which `_arm_fields` above
+	# tries first -- returns None for every arm in the corpus. Written
+	# that way once here, it excluded nothing and the span stayed wrong
+	# while the code read as though it were fixed.
+	armed: dict[str, frozenset[str]] = {}
+
+	def in_arm(of: str) -> frozenset[str]:
+		if of not in armed:
+			heads = [arm.member for who, held in rows if who == of
+			         for arm in held.arm_cases
+			         if isinstance(arm.member, str)]
+			armed[of] = frozenset(
+				held.path for who, held in rows if who == of
+				for head in heads
+				if held.path == head or held.path.startswith(head + "."))
+		return armed[of]
 
 	for at, (owner, placement) in enumerate(rows):
 		if placement.kind == "marker":
@@ -2374,6 +2491,49 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			regions_blob += _struct.pack(
 				"<IIIB3x", at, _u32(region_at),
 				_u32(codec_index.get(placement.codec or "")), flags)
+		# A TAG, WHAT COMPUTES IT, AND THE BYTES IT COVERS (26.579).
+		# `covers(summed)` names regions and an `authenticated` region has
+		# no placement of its own, so the span is carried as the first and
+		# last MEMBER inside the covered regions -- which is what a reader
+		# can locate, having every member's offset and size already. A tag
+		# whose coverage is not one contiguous run carries `NONE` for both
+		# and a reader declines rather than checksumming a gap.
+		if placement.tag_covers:
+			# `covered_rows` and not `inside`: this function already
+			# binds `inside` to a `Placement` eleven hundred lines up, and
+			# mypy caught the collision before anything ran. A long
+			# function wants names that cannot be two things.
+			covered_rows = [i for i, (held_owner, held) in enumerate(rows)
+			                if held_owner == owner
+			                and set(held.regions) & set(placement.tag_covers)
+			                and held.kind == "field"
+			                and held.path not in in_arm(owner)]
+			tags_blob += _struct.pack(
+				"<IIIIIII", at,
+				_u32(codec_index.get(placement.tag_codec or "")),
+				_u32(covered_rows[0] if covered_rows else None),
+				_u32(covered_rows[-1] if covered_rows else None),
+				# `[self_as]`: what the tag's OWN bytes read as while the
+				# algorithm runs over them, which the four internet
+				# checksums here need and a PNG CRC outside its coverage
+				# does not. A value rather than a flag because tar's
+				# header sum uses spaces (14.2).
+				_u32(traverse.self_as(placement.attrs)),
+				# `prefix(...)`: bytes the sum runs over that the message
+				# does not contain -- TCP's and UDP's pseudo-header, whose
+				# addresses come from a layer this schema does not
+				# describe (14.2a). A reader without them must DECLINE,
+				# and without this field it would instead sum one span and
+				# report a confident wrong answer.
+				1 if placement.tag_prefix else 0,
+				# The order the codec's OUTPUT is stored in. Not
+				# `placement.endian`, which is deliberately None on a
+				# `u8 crc[4]` because the member's own bytes have no
+				# order; what has one is the number. WOZ2 stores its CRC
+				# little-endian where PNG stores its big, so a reader
+				# assuming either is right by luck in this corpus.
+				ENDIAN.get(placement.tag_codec_endian, 0))
+
 		if placement.tlv_grammar is not None:
 			regions = (1 if placement.tlv_ordered else 0)
 			tag_bytes, tag_terminal, tag_flags = _varint_params(
@@ -2530,6 +2690,11 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_WHITESPACE, ws_blob, WHITESPACE_BYTES),
 			(SECTION_REGIONS, regions_blob, REGION_BYTES),
 			(SECTION_CODECS, codecs_blob, CODEC_BYTES),
+			(SECTION_TAGS, tags_blob, TAG_BYTES),
+			(SECTION_KERNEL_TABLES,
+			 b"".join(_struct.pack(f"<{len(one)}I", *one)
+			          for one in kernel_tables),
+			 KERNEL_TABLE_BYTES),
 			(SECTION_VARINTS, varints_blob, VARINT_BYTES),
 			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
 			(SECTION_TLV_RULES, tlv_rules_blob, TLV_RULE_BYTES),
