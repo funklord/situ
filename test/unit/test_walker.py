@@ -29,7 +29,7 @@ from situc.parser import parse_text
 from situc.resolve import resolve
 
 from every_schema import ROOT, SCHEMAS, ids, load_schema
-from fourway import COMPLETE, answers, build, draw
+from fourway import COMPLETE, answers, build, draw, planted
 
 sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
@@ -306,7 +306,18 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	versioned = [bytes([which]) + draw(rng)
 	             for which in (1, 2, 3) for _ in range(2)]
 
-	for packet in [draw(rng) for _ in range(12)] + versioned:
+	# And six with every magic the schema states written in (26.576). A
+	# drawn buffer essentially never carries one -- measured, zero of 2400
+	# over 200 seeds carry a TIFF byte-order marker -- so the branch behind
+	# a magic was compared by nobody, and the walker read every field of a
+	# little-endian TIFF byte-swapped while this test passed. `planted`
+	# draws a marker between its two literals, so both branches are reached.
+	#
+	# ADDITIONAL rather than instead: the twelve above are untouched and keep
+	# every verdict they had, so this can only reach what nothing reached.
+	stamped = [planted(rng, parsed, resolved, draw(rng)) for _ in range(6)]
+
+	for packet in [draw(rng) for _ in range(12)] + versioned + stamped:
 		compiled = _by_member(answers(command["c"], packet, tmp_path))
 		walked   = _by_member(report.listing(image, packet))
 

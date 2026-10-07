@@ -305,9 +305,20 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 	if placement.pad_to:
 		# `align_up(offset, n) - offset` (0043), in bits. The offset is the
 		# sum of what precedes this pad, which `offset_bits` already knows.
+		#
+		# CLAMPED TO THE FRAME, which the offset chain above already does
+		# and this did not (26.578). Every backend's pad check is
+		# `situ_align_up_u32(at, n, view.limit) - at` and then a loop over
+		# however many bytes that is, so a pad running past the end is as
+		# many zero bytes as are there -- not a short frame. Unclamped,
+		# `validate` called `padded.byte_run` BOUNDS where C answers
+		# CONSTRAINT over a nonzero byte it could see and this could not,
+		# and the two readers disagreed about which refusal a message
+		# earns rather than about whether it is malformed.
 		unit = placement.pad_to * BITS_PER_BYTE
 		off  = offset_bits(view, index)
-		return ((off + unit - 1) // unit) * unit - off
+		room = (view.limit - view.at) * BITS_PER_BYTE
+		return min(((off + unit - 1) // unit) * unit, room) - off
 	if placement.repeat_code != NONE and placement.type_struct != NONE:
 		# A `while` run's extent is however far the walk got. Falling
 		# through to the record's `size_bits` gave the *minimum* -- one
@@ -489,6 +500,49 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 	return placement.size_bits
 
 
+def chosen_arm(view: View, index: int) -> int | None:
+	"""Which arm this variant's discriminant selects, or None for no arm.
+
+	Extracted from `_variant_bits` so `report._validate` can ask the same
+	question (26.578). It had no arm handling at all, so a variant's
+	selected arm was never validated -- `sexpr.sexpr` is a recursive
+	variant whose arm is a nested struct, and the walker read a message C
+	refuses. Two copies of this loop would be two answers to which arm a
+	message selects, which is the one thing a differential oracle cannot
+	afford.
+
+	`NONE` is an arm that selects nothing to read -- `case 0:` with no
+	member -- and is distinct from None, which is no matching arm and no
+	usable default. The extent is zero for both and `validate` is what
+	separates them: a discriminant naming no arm is a malformed message.
+	"""
+	selects, arms = view.image.arms[index]
+	if selects == NONE:
+		raise Refused(f"variant {index} has no discriminant in this image")
+
+	# A discriminant the frame does not reach reads as ZERO, which is what
+	# the four backends do rather than a choice made here.
+	start = offset_bits(view, selects)
+	width = content_bits(view, selects)
+	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
+		value = 0
+	else:
+		value = read_scalar(view, selects)
+
+	fallback = None
+	for case, arm, flags in arms:
+		if flags & 2:				# `default: error` selects nothing
+			continue
+		if flags & 1:				# the default arm
+			fallback = arm
+			continue
+		if case == value:
+			return arm
+	if fallback is not None and fallback != NONE:
+		return fallback
+	return None
+
+
 def _variant_bits(view: View, index: int, depth: int = 0) -> int:
 	"""A variant's extent: the arm the discriminant selects, not the worst
 	case and not the minimum.
@@ -517,24 +571,9 @@ def _variant_bits(view: View, index: int, depth: int = 0) -> int:
 	# back `ok=0` against four backends' `ok=1 extent=0`. The bound is
 	# restated here rather than caught from `read_scalar`, which refuses for
 	# half a dozen other reasons that are all real.
-	start = offset_bits(view, selects)
-	width = content_bits(view, selects)
-	if view.at * BITS_PER_BYTE + start + width > view.limit * BITS_PER_BYTE:
-		value = 0
-	else:
-		value = read_scalar(view, selects)
-	fallback = None
-	for case, chosen, flags in arms:
-		if flags & 2:				# `default: error` selects nothing
-			continue
-		if flags & 1:				# the default arm
-			fallback = chosen
-			continue
-		if case == value:
-			return 0 if chosen == NONE else _arm_bits(view, index, chosen,
-			                                          depth)
-	if fallback is not None and fallback != NONE:
-		return _arm_bits(view, index, fallback, depth)
+	chosen = chosen_arm(view, index)
+	if chosen is not None:
+		return 0 if chosen == NONE else _arm_bits(view, index, chosen, depth)
 	# No arm matches and the default selects nothing. The extent is zero
 	# rather than a refusal: a discriminant naming no arm is a malformed
 	# message, and saying so is `validate`'s job, not the extent's. C's

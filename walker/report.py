@@ -30,7 +30,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
                          _evaluate, _read_at, offset_bits, record_run_count,
-                         scan, size_bits,
+                         chosen_arm, scan, size_bits,
                          struct_extent, tlv_count, varint, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
@@ -1027,6 +1027,63 @@ def _validate(image: Image, view: View, struct_index: int,
 			verdict = _validate(image, inner, placement.type_struct)
 			if verdict:
 				return verdict
+
+		# A VARIANT'S SELECTED ARM, which this never looked at (26.578).
+		# `_validate` had no arm handling at all, so a variant whose arm is
+		# a nested struct went unchecked: `sexpr.sexpr` is `peek u8 kind`
+		# and a switch whose arms are `list`, `text` and `symbol`, and a
+		# 61-byte buffer opening with `)` selects `symbol` -- which C
+		# refuses and this read as OK.
+		#
+		# The arm is asked of `walk.chosen_arm`, extracted from
+		# `_variant_bits` for this, because two copies of "which arm does
+		# this discriminant select" would be two answers to the question a
+		# differential oracle exists to compare.
+		if index in image.arms:
+			try:
+				arm = chosen_arm(view, index)
+			except Refused:
+				return fail(ERR_BOUNDS, index)
+			if arm is not None and arm != NONE:
+				arm_placement = image.placements[arm]
+				# AND ONLY AN ARM THE BACKENDS CAN ACQUIRE. C emits no
+				# `_view` for an arm whose struct it cannot measure --
+				# there is no `situ_packet_body_publish_view` in mqtt's
+				# header at all -- so `packet_check` has no block for one
+				# and says nothing about it. Validating it here refused
+				# three schemas C accepts, which is the second thing this
+				# check got wrong by reasoning from the field case instead
+				# of reading what C emits.
+				if arm_placement.type_struct != NONE \
+						and image.structs[
+							arm_placement.type_struct].measurable:
+					# THE VARIANT'S offset and span, not the arm's, which
+					# is `_arm_bits`' own rule: "the arm starts where the
+					# variant does ... and asking `offset_bits` for the
+					# arm would walk the variant whose extent is this".
+					# The first version of this check asked for the arm's,
+					# got `Refused: placement 52 is not a member of this
+					# struct` -- a bookkeeping answer, not a bounds one --
+					# and turned it into BOUNDS, refusing three schemas C
+					# accepts. A variant's extent IS its selected arm's,
+					# so the member this struct owns is the one to ask.
+					try:
+						at = view.at + offset_bits(view, index) // 8
+						wide = size_bits(view, index) // BITS_PER_BYTE
+					except Unplaceable:
+						break
+					except Refused:
+						return fail(ERR_BOUNDS, index)
+					inner_struct = arm_placement.type_struct
+					floor = image.structs[inner_struct].size_min_bits
+					if floor != NONE and wide * BITS_PER_BYTE < floor:
+						return fail(ERR_BOUNDS, arm)
+					verdict = _validate(
+						image, View(image, view.buffer, inner_struct,
+						            at, min(view.limit, at + wide)),
+						inner_struct)
+					if verdict:
+						return verdict
 
 		held = image.constraints.get(index)
 		if not held:

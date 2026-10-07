@@ -86,6 +86,104 @@ def draw(rng: random.Random) -> bytes:
 	             for _ in range(length))
 
 
+#: Where a schema states a value the data must carry, and what it must be.
+#:
+#: A drawn buffer essentially never satisfies one. Measured over 2400
+#: buffers from 200 seeds: **zero** begin with a TIFF byte-order marker, so
+#: `test_the_walker_agrees_with_the_compiled_backends[tiff]` compared the
+#: walker and the four backends on the big-endian branch only -- and agreed
+#: there by accident while the walker read every little-endian field
+#: byte-swapped (26.576). The branch behind a magic is unreachable by
+#: random bytes, which is `evidence.md`'s rule about agreement needing a
+#: case that would disagree, with the case never run.
+#:
+#: 66 such sites across the corpus, counted: 56 `must_eq`, 6 pinned runs
+#: and 4 markers, every one at a static offset.
+def magics(parsed: object, resolved: object,
+		rng: random.Random) -> list[tuple[int, bytes]]:
+	"""Each `(offset, bytes)` a schema says the data must carry.
+
+	Static offsets only. A member the data places is where a *drawn* value
+	says, so planting at a computed offset would need the walk this is here
+	to test -- and a magic at a dynamic offset is a shape no schema here
+	has.
+
+	A marker is drawn BETWEEN its two literals rather than fixed at one, so
+	the branch a format exists for is reached about half the time and the
+	other branch keeps its coverage. That is what makes this a widening of
+	the draw rather than a swap of one blind spot for another.
+	"""
+	orders = {decl.name: decl for decl in parsed.markers()}  # type: ignore[attr-defined]
+	planted: list[tuple[int, bytes]] = []
+	chosen: dict[str, str] = {}
+
+	for struct in resolved.structs.values():            # type: ignore[attr-defined]
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.offset_bits is None:
+				continue
+			at = placement.offset_bits // 8
+			width = (placement.size_bits or 0) // 8
+
+			# The marker first, and in declaration order, because an
+			# integer magic governed by one is written in the order the
+			# marker states. The marker MEMBER carries `kind == "marker"`
+			# and `marker is None` -- it is what governs rather than what
+			# is governed -- which the first version of this keyed the
+			# wrong way round and planted nothing for TIFF.
+			if placement.kind == "marker":
+				decl = orders.get(placement.name)
+				if decl is None:
+					continue
+				side = chosen.setdefault(
+					decl.name, "little" if rng.randrange(2) else "big")
+				held = decl.little if side == "little" else decl.big
+				# The literals are AST nodes, not numbers.
+				value = getattr(held, "value", held)
+				# Big-endian whatever it says: a marker cannot be written
+				# in the order it is about, which is the same reason the
+				# walker and the generated C both read it `be`.
+				planted.append((at, int(value).to_bytes(width or 2, "big")))
+				continue
+
+			if placement.pinned_runs:
+				planted.append((at, placement.pinned_runs[0]))
+				continue
+
+			for attr in placement.attrs:
+				if attr.name != "must_eq" or attr.value is None:
+					continue
+				held = getattr(attr.value, "value", None)
+				if isinstance(held, str):
+					planted.append((at, held.encode("latin-1")))
+				elif isinstance(held, int) and width:
+					order = (placement.endian.value
+					         if placement.endian is not None
+					         else chosen.get(placement.marker or "", "big"))
+					if order == "native":
+						order = sys.byteorder
+					little = order == "little"
+					planted.append((at, held.to_bytes(
+						width, "little" if little else "big")))
+				break
+
+	return planted
+
+
+def planted(rng: random.Random, parsed: object, resolved: object,
+		buffer: bytes) -> bytes:
+	"""`buffer` with every static magic the schema states written into it.
+
+	Additive: the unplanted draws are untouched and keep every verdict they
+	had, so this can only reach cases nothing reached before.
+	"""
+	held = bytearray(buffer)
+	for at, value in magics(parsed, resolved, rng):
+		if at + len(value) <= len(held):
+			held[at:at + len(value)] = value
+	return bytes(held)
+
+
 class BuildFailed(Exception):
 	"""A backend emitted something its own compiler will not take.
 
