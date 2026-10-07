@@ -31304,6 +31304,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.583 `at expr` is the buffer's zero, and the note that could not be read
+
+A located member -- bmp's `pixels at file.pixel_offset`, section 9.8 --
+carries an offset the data states, and what it is measured FROM has a
+right answer and a wrong one. Until a document could be opened part-way
+into a file (26.581) the two were the same byte for every reader here:
+`bitmap_file` was always acquired at zero, so buffer-relative and
+view-relative agreed by construction.
+
+The generated C is unambiguous -- `out->base = msg->base + at`, with its
+own comment saying *the view reads the offset field, the message says
+where zero is* -- so the walker subtracts the view's base to match, which
+26.228 established for a NESTED struct after the walker read two bytes
+past the generated code. What 26.228 could not test is a TOP-LEVEL struct
+at a non-zero base, because nothing could open one.
+
+Measured, both readers asked about a 70-byte BMP embedded at offset 8 of
+a 78-byte container:
+
+	C       pixels at absolute 54, 16 bytes
+	walker  view-relative 46, absolute 54, 16 bytes
+
+They agree, and removing the walker's `- view.at` makes it say 62 against
+C's 54, so the agreement is checked rather than assumed. **That axis is
+one the four-backend differential has never compared**: it acquires every
+buffer at offset zero for all forty-five schemas, because the fifth
+reader could not be asked anything else. Extending the differ's generated
+drivers to a non-zero base is its own piece of work and not one to do in
+passing -- recorded here as an observation, with this construct pinned
+because it is the one where the base question has a wrong answer.
+
+**THE AGREEMENT IS A LIMITATION, NOT A REASSURANCE.** Absolute 54 is
+inside the eight bytes of container preceding the BMP: `bfOffBits` is
+defined from the start of the file and a window is not a file. Measured,
+the run the tool shows is `00000000000000000000ff0000ff0000` where the
+image's own pixels are `0000ff0000ff00000000ff0000ff0000` -- ten bytes of
+header read as pixels. Both readers are right about the format and the
+answer is useless. So `--offset` composes with everything except a
+located member, and the tool now says so on the member affected, at a
+non-zero base and not otherwise.
+
+**AND SAYING SO IS WHAT FOUND THE REAL DEFECT.** The note did not
+appear. `render` showed `field.note` only in place of a MISSING value, so
+every note on a READABLE field was discarded -- and the note that matters
+most has exactly that shape. `report.failed_check` names the member a
+schema refuses the message over, and for `u8 seconds [max = 59]` holding
+70 that member reads fine:
+
+	text      seconds  70
+	json      seconds  'refused: max'
+
+**The default tool showed a message the schema rejects as though it were
+fine**, while `--format json` carried the refusal for the same document.
+The channel 0051 designed and 26.231 wired had one consumer of two, for
+as long as both have existed. A continuation line carries it now, because
+a note is prose and outgrows any column that keeps the table aligned.
+
+Three sabotages, each failing through its own check, including the
+over-firing direction: a located warning that fires at offset zero too is
+noise, and a gate carrying noise is one somebody switches off.
+
+**And a neighbouring test was passing for a narrower reason than its
+name.** `test_render_keeps_a_row_for_a_field_it_could_not_read` asserted
+`len(lines) == 1 + len(fields)`, which stayed true only because nothing in
+its fixture carried both a value and a note. It counts the continuations
+now, so the arithmetic states what it expects rather than happening to
+add up.
+
 ### 26.582 The window is what the caller gave; the extent is what the struct is
 
 26.581 let a document start part-way into a file, and immediately showed
