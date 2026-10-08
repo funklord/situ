@@ -737,7 +737,17 @@ static inline uint32_t situ_need_mul_u32(uint32_t count, uint32_t each)
  * a pad starts on an n-byte boundary from the message base. Clamped for the
  * same reason `situ_advance_u32` is: `at` is a sum of lengths the message
  * chose, so the aligned offset may sit past a short frame, and `validate`
- * reports that rather than the accessor running off the end. */
+ * reports that rather than the accessor running off the end.
+ *
+ * PRECONDITION: `n` is positive. `at % 0` is undefined, and the guarantee
+ * comes from the front end rather than from here -- `pad_to(n)` is a
+ * statement and the parser refuses a non-positive literal, so generated code
+ * cannot produce the case. Measured across the corpus, every call passes
+ * `4u`.
+ *
+ * Stated because this header ships and a hand-written caller has nothing
+ * else to read: a precondition that is true and unwritten is
+ * indistinguishable from one nobody thought of (26.592). */
 static inline uint32_t situ_align_up_u32(uint32_t at, uint32_t n, uint32_t limit)
 {
 	const uint32_t pad = (n - (at % n)) % n;
@@ -1588,7 +1598,15 @@ static inline uint32_t situ_adler32(const uint8_t *data, uint32_t len)
  * validator asks it.
  * ------------------------------------------------------------------------ */
 
-/* Whether every nibble of `packed` below `digits` is a decimal digit. */
+/* Whether every nibble of `packed` below `digits` is a decimal digit.
+ *
+ * PRECONDITION: `digits` is at most 16, which the scalar table enforces --
+ * `bcd<digits>` is `digits * 4` bits wide and widths run to 64, so 16 is the
+ * largest the language can name. Above it this shifts a `uint64_t` by 64 or
+ * more, which is undefined. Measured: every generated call passes 1 or 2.
+ *
+ * The same bound applies to `situ_bcd_decode` below, for the same shift and
+ * from the same place (26.592). */
 static inline int situ_bcd_valid(uint64_t packed, uint32_t digits)
 {
 	uint32_t i;

@@ -532,7 +532,14 @@ def advance(at: int, by: int, limit: int) -> int:
 def align_up(at: int, n: int, limit: int) -> int:
 	"""`pad_to(n)` (decision 0043): the next multiple of n, clamped to the
 	view the way `advance` is -- the aligned offset may sit past a short
-	message, and `validate` reports that rather than a short slice hiding it."""
+	message, and `validate` reports that rather than a short slice hiding it.
+
+	`n` is positive, which `pad_to(n)`'s parser enforces by refusing a
+	non-positive literal. Here that is a `ZeroDivisionError` rather than the
+	undefined behaviour C's `at % 0` would be, so this states the
+	precondition for agreement with `situ.h` rather than for safety
+	(26.592).
+	"""
 	pad = (n - at % n) % n
 	return advance(at, pad, limit)
 
