@@ -922,5 +922,23 @@ def open_document(image_bytes: bytes, message: Bytes,
 			f"{len(wanted)} argument(s) and {len(args)} were given"
 			+ (f": {named}, in that order" if wanted else ""))
 
-	return Document(image, held, chosen, at,
-	                None if length is None else end, tuple(args))
+	document = Document(image, held, chosen, at,
+	                    None if length is None else end, tuple(args))
+
+	# AND ACQUIRE IT HERE, which is the half 26.598 left undone. That entry
+	# fixed `needs-arguments` by checking the argument list above, and the
+	# OTHER verdict `report.listing` prints in place of every row --
+	# `no-view`, a frame too short for the struct -- went on reaching
+	# `acquire` from `Document.view()`, lazily, with nothing in between. So
+	# a zero-byte message still printed a traceback out of `render`: one
+	# symptom fixed and its cause left in place (26.600).
+	#
+	# Naming the struct, because `acquire` cannot. "frame of 0 does not
+	# reach 28" is true and says nothing about which layout wanted 28, and
+	# a reader passing `--struct` has just chosen between several.
+	try:
+		document.view()
+	except Refused as why:
+		raise Refused(f"struct `{image.struct_name(chosen)}`: {why}") from None
+
+	return document
