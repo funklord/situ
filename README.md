@@ -1718,9 +1718,16 @@ today and which is a written-down design.
   the parameter itself. The packed image and both walkers take it as well,
   the per-layer generators take it or say why they cannot, and
   `test/schema/edges.situ` carries one, so every gate now covers the
-  construct. What remains: a struct that takes an argument cannot be a
-  member of another yet, and `situc gen-tamper` declines a schema carrying
-  one -- nothing sweeps the corpus through it, so that costs nothing.
+  construct. What remains is one thing and it needs a decision rather than
+  code: a struct that takes an argument cannot be a member of another,
+  because nothing says how a parent's arguments compose with a child's, and
+  the refusal names 0050 and says to acquire it yourself. The sentence here
+  used to add that `situc gen-tamper` declines such a schema and that
+  nothing sweeps the corpus through it -- both halves were overtaken on
+  2026-09-17, and that generator's own comment says so: it skips the argued
+  struct and refuses loudly only where the skip emptied the list, and
+  `test_every_subcommand_runs_on_every_schema` runs every subcommand over
+  every schema.
 
 **Proposed.**
 
