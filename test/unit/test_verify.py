@@ -590,3 +590,40 @@ def test_an_argument_that_is_not_a_number_is_refused(tmp_path: Path) -> None:
 	with pytest.raises(SystemExit) as refused:
 		main(["verify", str(schema), str(vectors), "--arg", "n=wide"])
 	assert "not a number" in str(refused.value)
+
+
+def test_a_delimited_run_of_structs_qualifies_the_verdict(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""A run ended by a delimiter is as unwalked as a counted one (26.606).
+
+	`_unwalked` exists so that this command cannot print an unqualified "N
+	vectors conform" while inheriting a gap it knows the name of, and its
+	docstring has said "and so is a run walked to a terminator" since it was
+	written. The predicate under it named a count, a data-derived size and a
+	`while`, and stopped -- so `example/sexpr`'s `items[] until ")"` was
+	none of the three.
+
+	hull reported the consequence on 2026-10-09, adopting situ for exactly
+	that schema: five vectors, four of them unterminated or mis-framed,
+	reported as conforming with no qualification. `http`'s two header-field
+	runs were in the same state, so this was never one example's problem.
+
+	The vectors here are hull's own, and the point is NOT that they are
+	refused -- they are not, and `validate` descending into a run is a
+	different decision (traverse.Check). The point is that the sentence says
+	so.
+	"""
+	schema = ROOT / "example" / "sexpr" / "sexpr.situ"
+	vectors = tmp_path / "sexpr.vectors"
+	vectors.write_text(
+		"# Unterminated and mis-framed s-expressions.\n"
+		"list unterminated     28 61 20 62\n"
+		"list nested_unterm    28 61 20 28 62 29\n"
+		"list escaped_quote    28 61 20 22 78 5C 22 79 22 29\n",
+		encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors)]) == 0
+	said = capsys.readouterr().out
+	assert "except inside arrays" in said, said
+	assert "`list.items`" in said, said
+	assert "none was read" in said, said

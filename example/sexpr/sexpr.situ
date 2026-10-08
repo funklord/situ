@@ -92,9 +92,17 @@ struct list [depth = 64] {
 // The quote opens the arm, so `chars` is the content and the closing quote
 // is the delimiter. Escapes are framed and not decoded: `\n` is two bytes
 // here and one character to a reader.
+//
+// `[escape = "\\"]` is what makes that true, and this schema claimed it
+// for a while without carrying it -- so `(a "x\"y")` framed as THREE items,
+// the escaped quote ending the scan and the rest of the string reading as a
+// symbol. `example/json` paid for the attribute and its header explains the
+// rule: the byte after the escape is content whatever it is, itself
+// included, so `"back\\slash"` ends at its own closing quote. Reported by
+// hull 2026-10-09, which met it adopting this schema (26.606).
 struct text {
 	u8  open   skip;
-	u8  chars[]  until "\"";
+	u8  chars[]  until "\"" [escape = "\\"];
 }
 
 // Anything up to whitespace or a paren. `before` rather than `until`,

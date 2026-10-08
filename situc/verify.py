@@ -504,9 +504,18 @@ def _gather(resolved: ResolvedSchema, struct: ResolvedStruct, found: list[str],
 			continue
 
 		inner    = resolved.structs.get(placement.type_name or "")
+		# A RUN ENDED BY A DELIMITER IS REPEATED TOO, and it was the one
+		# shape missing here -- this docstring has claimed "and so is a run
+		# walked to a terminator" since it was written, while the predicate
+		# named a count, a data-derived size and a `while` and stopped.
+		# `example/sexpr`'s `items[] until ")"` is none of those three, so
+		# `situc verify` printed an unqualified "5 vectors conform" over
+		# four vectors that are unterminated or mis-framed -- reported by
+		# hull 2026-10-09, adopting situ for exactly this schema (26.606).
 		repeated = (placement.array_count is not None
 		            or data_sized(placement)
-		            or placement.repeat_while is not None)
+		            or placement.repeat_while is not None
+		            or bool(placement.delimiters))
 
 		if repeated:
 			if inner is not None and _has_checks(resolved, inner, set()):

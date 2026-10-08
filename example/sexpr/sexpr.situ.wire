@@ -35,4 +35,4 @@ struct symbol size=1..
 
 struct text size=2..
   ~         1         u8         open  skip=20090d0a
-  ~         until:22  u8         chars
+  ~         until:22  u8         chars  escape=0x5c
