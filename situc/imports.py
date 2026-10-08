@@ -53,17 +53,31 @@ __all__ = ["expand"]
 
 
 def expand(schema: ast.Schema, source: Source,
-		seen: set[str] | None = None) -> None:
+		seen: set[str] | None = None) -> set[str]:
 	"""Replace every `import` in `schema` with the named file's declarations.
 
 	`seen` carries the files already spliced into this compilation, so a
 	diamond costs nothing and a cycle is caught. It holds resolved absolute
 	paths, because two spellings of one file are one file.
+
+	**And it is returned, because it is also the list of files this
+	compilation read.** That is what a build system needs to know when a
+	generated header has to be rebuilt, and fmake asked for it on
+	2026-10-08 having in its absence grown its own copy of the three rules
+	above -- relative resolution, `std`, transitivity (26.596).
+
+	Seeded before the early return, so a schema that imports nothing
+	answers with itself rather than with nothing. "Read one file" and "was
+	never asked" are different facts, and a caller writing a dependency
+	list cannot tell them apart from an empty set.
 	"""
+	if seen is None:
+		seen = {_key(Path(source.path))}
+
 	directives = [decl for decl in schema.decls
 	              if isinstance(decl, ast.ImportDirective)]
 	if not directives:
-		return
+		return seen
 
 	# The importing file's directory is needed only by a relative import, and
 	# asking for it unconditionally would refuse a schema parsed from a string
@@ -71,8 +85,6 @@ def expand(schema: ast.Schema, source: Source,
 	# language server are in.
 	here = (_directory(source, next(d for d in directives if not d.library))
 	        if any(not d.library for d in directives) else None)
-	if seen is None:
-		seen = {_key(Path(source.path))}
 
 	arrived: list[ast.Decl] = []
 	for directive in directives:
@@ -102,6 +114,7 @@ def expand(schema: ast.Schema, source: Source,
 	schema.decls[:] = [*arrived,
 	                   *(decl for decl in schema.decls
 	                     if not isinstance(decl, ast.ImportDirective))]
+	return seen
 
 
 def library_root() -> Path | None:

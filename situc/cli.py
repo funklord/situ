@@ -169,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
 		     "(decision 0050)")
 	build_cmd.add_argument("--out", type=Path, default=Path("."),
 	                       help="output directory (default: the current one)")
+	build_cmd.add_argument("--deps", type=Path, default=None, metavar="FILE",
+	                       help="write a make-style dependency list here: "
+	                            "what was generated as the targets, and every "
+	                            "schema this compilation read -- imports, "
+	                            "transitively, `std` ones included -- as "
+	                            "their prerequisites. A build system needs it "
+	                            "to rebuild a generated header when an "
+	                            "imported schema changed (26.596)")
 	build_cmd.add_argument("--target", choices=("c", "cpp", "python", "rust"),
 	                       default="c",
 	                       help="backend for the generated accessors")
@@ -494,12 +502,18 @@ def apply_defines(source: Source, defines: Sequence[str] | None) -> Source:
 	return Source(source.path, rewritten)
 
 
-def analyse(path: Path, defines: Sequence[str] | None = None
+def analyse(path: Path, defines: Sequence[str] | None = None,
+		read: set[str] | None = None
 		) -> tuple[Source, ResolvedSchema, list[requirements.Outcome]]:
 	"""Parse, solve, resolve and discharge. The common front half of every
-	command that needs more than an AST."""
+	command that needs more than an AST.
+
+	`read` gains every file the parse read, for `--deps` (26.596). One
+	collection is enough even in a command that parses again later: the
+	second parse is of the same source and reads the same imports.
+	"""
 	source   = apply_defines(read_source(path), defines)
-	schema   = parse(source)
+	schema   = parse(source, read)
 	resolved = resolve(schema, solve(schema))
 	outcomes = requirements.discharge(schema, resolved)
 	return source, resolved, outcomes
@@ -790,6 +804,54 @@ def _resolve_for_diff(path: Path) -> ResolvedSchema:
 	return resolve(schema, solve(schema))
 
 
+def _make_path(path: Path) -> str:
+	"""One path as a make rule spells it.
+
+	Relative where it is below the working directory and absolute
+	otherwise: a depfile is read by make in the directory the build runs
+	in, so a path inside the tree reads better relative, and one outside it
+	-- situ's own `std`, which `import std` reaches -- has no relative
+	spelling worth writing. A consumer that cares only about its own tree
+	drops the absolute ones, which is what fmake says it does with
+	`/usr/include`.
+
+	Make splits a rule on whitespace and expands `$`, so both are escaped,
+	as gcc escapes them. A `#` or a `:` in a path cannot be escaped in a
+	make rule at all; it is left alone rather than mangled into something
+	that silently names a different file.
+	"""
+	try:
+		text = str(path.relative_to(Path.cwd()))
+	except ValueError:
+		text = str(path)
+	return text.replace("$", "$$").replace(" ", "\\ ")
+
+
+def _depfile(targets: Sequence[Path], schema: Path, read: set[str]) -> str:
+	"""A make-style dependency list, for `--deps` (26.596).
+
+	The schema comes first among the prerequisites and the rest are sorted,
+	so that two runs over one tree produce one byte-identical file and a
+	build system can compare them.
+
+	**Every prerequisite but the schema also gets an empty rule**, which is
+	what `gcc -MP` emits and for the same reason. Without one, deleting an
+	imported schema makes `make` stop at *No rule to make target* --
+	naming a file the user may never have heard of, from a rule they did
+	not write. With one, make runs situc instead, and situc says which
+	`import` cannot be read at the line that holds it. The compiler's
+	diagnostic is the better one, so the job here is to let it be reached.
+	"""
+	root  = schema.resolve()
+	rest  = sorted(Path(name) for name in read if Path(name) != root)
+	lines = [" ".join(_make_path(target) for target in targets) + ": "
+	         + " ".join([_make_path(root),
+	                     *(_make_path(one) for one in rest)]),
+	         ""]
+	lines += [f"{_make_path(one)}:" for one in rest]
+	return "\n".join(lines) + "\n"
+
+
 def cmd_build(args: argparse.Namespace) -> int:
 	"""`situc build schema.situ [--target=c|cpp]` -- generate accessors.
 
@@ -800,7 +862,9 @@ def cmd_build(args: argparse.Namespace) -> int:
 	from situc.codegen.c import generate
 	from situc.codegen.cpp import generate as generate_cpp
 
-	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
+	read: set[str] = set()
+	source, resolved, outcomes = analyse(args.schema,
+	                                     getattr(args, "define", None), read)
 
 	# A recursive type generated for every target since 0054's second half:
 	# the extent carries a depth and the run's span passes it on, so the
@@ -1060,6 +1124,15 @@ def cmd_build(args: argparse.Namespace) -> int:
 	for name, text in files.items():
 		(args.out / name).write_text(text, encoding="ascii")
 		print(f"situc: wrote {args.out / name}", file=sys.stderr)
+
+	if args.deps is not None:
+		# AFTER the outputs, never before: a depfile naming a target that
+		# was not written would tell make the build had succeeded.
+		args.deps.parent.mkdir(parents=True, exist_ok=True)
+		args.deps.write_text(
+			_depfile([args.out / name for name in sorted(files)],
+			         args.schema, read), encoding="utf-8")
+		print(f"situc: wrote {args.deps}", file=sys.stderr)
 
 	_report(args, warnings + requirements.warnings(outcomes)
 	        + requirements.deferrals(outcomes))

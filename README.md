@@ -189,7 +189,7 @@ does not take it.
 
 | Command | Artifact |
 |---|---|
-| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), the shape they take (`--owned`, `--materialize`, `--single-file`), what pumps the rung-6 state machine (`--driver`), and whether a declaration reaching no code fails the build (`--refuse-ungenerated`) |
+| `situc build` | accessors: C, C++, Rust or Python (`--target`), how much of the schema becomes code (`--layer`, defaulting to `view`), the shape they take (`--owned`, `--materialize`, `--single-file`), what pumps the rung-6 state machine (`--driver`), whether a declaration reaching no code fails the build (`--refuse-ungenerated`), and a make-style list of the schemas the compilation read for a build system that must rebuild when an imported one changes (`--deps`) |
 | `situc map` | the capability map; `--check` compares against a committed one and fails on a diff |
 | `situc explain` | one field's capability vector and the blame chain behind every weakening |
 | `situc advise` | ranked, costed schema changes that would restore what was lost |

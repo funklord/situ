@@ -37,6 +37,11 @@ selects
 .IR c ", " cpp ", " rust " or " python ;
 .B \-\-out
 names the output directory.
+.B \-\-deps
+writes a make-style dependency list: what was generated as the targets,
+and every schema this compilation read -- imports, transitively, \fBstd\fR
+ones included -- as their prerequisites, so that a build system rebuilds a
+generated header when an imported schema changed.
 .B \-\-layer
 chooses how much of the schema becomes code, each rung emitting everything
 below it:

@@ -3136,12 +3136,23 @@ def parse_decls(source: Source) -> ast.Schema:
 	return Parser(source).parse()
 
 
-def parse(source: Source) -> ast.Schema:
+def parse(source: Source, read: set[str] | None = None) -> ast.Schema:
+	"""Parse, expand the imports, and run the whole-schema checks.
+
+	`read`, where a caller passes a set, gains every file this compilation
+	read: the schema itself and each import, transitively, as resolved
+	absolute paths. An out-parameter rather than a second return value
+	because `parse` has callers all over this tree and one of them wants
+	this -- `situc build --deps`, for a build system that must know when a
+	generated header has gone stale behind an import (26.596).
+	"""
 	from situc import imports
 
 	parser = Parser(source)
 	schema = parser.parse()
-	imports.expand(schema, source)
+	files  = imports.expand(schema, source)
+	if read is not None:
+		read.update(files)
 	return parser.finish(schema)
 
 
