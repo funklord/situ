@@ -283,6 +283,12 @@ none can grey out a setter that does not exist, say that the field you just
 looked at cannot be written in place, or show the blame chain for why
 (decision 0034).
 
+A struct with a `parameter` member cannot be read without one. `--arg N`,
+repeated once per argument in declaration order, is how a negotiated block
+size reaches the layout that depends on it; without it the tool names the
+arguments it wants rather than defaulting one, because a view built on a
+guessed block size reads the wrong bytes confidently.
+
 `--set name=value` writes a number and `--set-bytes name=hex` writes a run,
 where the schema permits it. What that means
 is decided by the capability vectors and not by the editor: a member the

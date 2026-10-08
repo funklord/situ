@@ -14,6 +14,7 @@ having, and what an editor is mostly doing anyway.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -21,10 +22,11 @@ from walker.image import LITTLE, NONE, Image, load
 from walker.owned import decode
 from walker import report
 from walker.report import FIELD, MARKER, RESERVED
-from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
+from walker.walk import (BITS_PER_BYTE, Bytes, Refused, Unsupplied, View,
+                         acquire,
                          chosen_arm, is_run, marker_order, offset_bits,
-                         read_bytes, read_scalar, size_bits, struct_extent,
-                         write_bytes, write_scalar)
+                         argument, parameters_of, read_bytes, read_scalar,
+                         size_bits, struct_extent, write_bytes, write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -138,6 +140,13 @@ class Document:
 	#: different question from handing it the 25 bytes a chunk declares.
 	at: int = 0
 	limit: int | None = None
+	#: The struct's `parameter` members (0050), positionally and in
+	#: declaration order. `report.SUPPORTED` names `needs-arguments` as one
+	#: of its seventeen probes, and this frontend could neither report it
+	#: nor satisfy it: there was no channel for an argument, so a struct
+	#: that takes one crashed with a traceback out of `render` -- the view
+	#: being lazy, the document opened and then exploded (26.598).
+	args: tuple[int, ...] = ()
 
 	@property
 	def name(self) -> str:
@@ -208,8 +217,22 @@ class Document:
 		return end - self.at
 
 	def view(self) -> View:
-		return acquire(self.image, self.buffer, self.struct,
+		return acquire(self.image, self.buffer, self.struct, self.args,
 		               at = self.at, limit = self.limit)
+
+	def parameters(self) -> list[str]:
+		"""What this struct's arguments are called, in the order to pass
+		them.
+
+		`walk.parameters_of` answers with placements because a device omits
+		the image's tail, so keying an argument by name would make it a
+		thing only a tooling walker could take. This IS a tooling walker and
+		has the tail, so it can say `version` where the walker says 1 --
+		which is the difference between a usable message and a count.
+		"""
+		return [self.image.name_of(index).rpartition(".")[2]
+		        or self.image.name_of(index)
+		        for index in parameters_of(self.image, self.struct)]
 
 	def fields(self) -> list[Field]:
 		"""Every member, in declaration order, placed and read.
@@ -291,6 +314,17 @@ class Document:
 				continue
 
 			value = held.get(local)
+			if value is None and placement.parameter:
+				# A PARAMETER'S VALUE IS THE ONE THING IN ITS ROW NOBODY
+				# HAS TO READ: the caller supplied it, and `view.args`
+				# holds it. `owned.decode` reads the message, so it
+				# answers nothing here -- and the row said *cannot be
+				# read* about the number the caller had just typed on the
+				# command line (26.598).
+				try:
+					value = argument(view, index)
+				except Unsupplied:
+					value = None
 			if value is None:
 				value = self._read_kind(view, index, placement)
 			note  = "" if value is not None else "cannot be read"
@@ -803,12 +837,20 @@ class Document:
 
 def open_document(image_bytes: bytes, message: Bytes,
 		struct: str | None = None, at: int = 0,
-		length: int | None = None) -> Document:
+		length: int | None = None,
+		args: Sequence[int] = ()) -> Document:
 	"""Open a message against a packed image.
 
 	`struct` names which layout to read it as; without one the first is
 	taken, which is what a single-struct schema wants and what a reader of
 	a larger one will immediately want to override.
+
+	`args` are the struct's `parameter` members, positionally. Checked here
+	rather than at the first read for the same reason the window is: a
+	caller who has not said which block size the stream negotiated has not
+	chosen a layout, and every answer below would be about bytes nobody
+	read. It was checked nowhere, so `acquire` raised `Unsupplied` out of
+	`render` and the tool printed a traceback (26.598).
 
 	`at` and `length` are the window, for a struct that does not begin at
 	byte zero of the file -- a PNG chunk, an ID3 frame, a TIFF directory.
@@ -844,5 +886,20 @@ def open_document(image_bytes: bytes, message: Bytes,
 		raise Refused(f"offset {at} plus length {length} reaches {end}, "
 		              f"past a {len(held)}-byte message")
 
+	# NAMING THEM, where `acquire` can only count them. Its own docstring
+	# says why it counts -- a device omits the image's tail, so an argument
+	# keyed by name would be one only a tooling walker could take -- and
+	# this is the tooling walker. "takes 1 argument(s) and 0 were supplied"
+	# does not say which, and a person holding a capture cannot act on it.
+	wanted = parameters_of(image, chosen)
+	if len(args) != len(wanted):
+		named = ", ".join(
+			f"`{image.name_of(one).rpartition('.')[2] or image.name_of(one)}`"
+			for one in wanted)
+		raise Unsupplied(
+			f"struct `{image.struct_name(chosen)}` takes "
+			f"{len(wanted)} argument(s) and {len(args)} were given"
+			+ (f": {named}, in that order" if wanted else ""))
+
 	return Document(image, held, chosen, at,
-	                None if length is None else end)
+	                None if length is None else end, tuple(args))

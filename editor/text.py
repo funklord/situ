@@ -16,6 +16,7 @@ does not call this.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import json
@@ -63,9 +64,11 @@ def read_message(path: Path, as_hex: bool) -> bytes:
 
 def open_from(schema: Path, message: Path, situc: Path,
 		struct: str | None = None, as_hex: bool = False,
-		at: int = 0, length: int | None = None) -> Document:
+		at: int = 0, length: int | None = None,
+		args: Sequence[int] = ()) -> Document:
 	return open_document(image_bytes(schema, situc),
-	                     read_message(message, as_hex), struct, at, length)
+	                     read_message(message, as_hex), struct, at, length,
+	                     args)
 
 
 def render(document: Document) -> list[str]:

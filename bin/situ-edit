@@ -57,7 +57,7 @@ if _root is not None and str(_root) not in sys.path:
 try:
 	from editor.document import Document		# noqa: E402
 	from editor.text import as_json, open_from, render	# noqa: E402
-	from walker.walk import Refused			# noqa: E402
+	from walker.walk import Refused, Unsupplied	# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
 	sys.stderr.write(
 		f"situ-edit: cannot find situ's editor packages ({_why}).\n"
@@ -101,6 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--against", type=Path, metavar="FILE",
 	                    help="the second message a --relate check reads, "
 	                         "opened as the struct the relation names")
+	# AN ARGUMENT IS PER STREAM AND POSITIONAL (26.394, 0050). Repeatable
+	# rather than comma-separated, so a shell quotes nothing and the order
+	# is the declaration order `walk.parameters_of` reads off the placement
+	# table. `report.SUPPORTED` has named `needs-arguments` since 26.394 and
+	# this tool had no channel for one at all: a struct that takes an
+	# argument printed a traceback out of `render` (26.598).
+	parser.add_argument("--arg", action="append", default=[], type=int,
+	                    metavar="N", dest="arguments",
+	                    help="a value for one of the struct's `parameter` "
+	                         "members, in declaration order. Repeat it once "
+	                         "per argument; the refusal names them when the "
+	                         "count is wrong")
 	parser.add_argument("--hex", action="store_true",
 	                    help="the message file holds hex rather than bytes")
 	parser.add_argument("--format", choices=("text", "json"), default="text",
@@ -179,7 +191,17 @@ def main() -> int:
 	try:
 		document = open_from(args.schema, args.message, _SITUC,
 		                     args.struct, args.hex,
-		                     args.offset, args.length)
+		                     args.offset, args.length, args.arguments)
+	except Unsupplied as why:
+		# ITS OWN BRANCH, not folded into `Refused`. The walker keeps the
+		# two apart deliberately -- `no-view` is a frame too short for the
+		# struct, and this is a caller who has not said which layout the
+		# bytes are in -- and reporting the second as the first is a verdict
+		# on bytes nobody read.
+		print(f"situ-edit: {why}", file=sys.stderr)
+		print("situ-edit: pass --arg once per argument, in that order",
+		      file=sys.stderr)
+		return 1
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
@@ -204,7 +226,11 @@ def main() -> int:
 			                   _response_struct(document, args.relate),
 			                   args.hex)
 			held, why = document.relate(args.relate, second)
-		except Refused as why_not:
+		except (Refused, Unsupplied) as why_not:
+			# A relation's response struct may take arguments of its own,
+			# and `--arg` names this message's. Saying so beats a
+			# traceback; which message a second `--arg` would belong to is
+			# a question for whoever needs one.
 			print(f"situ-edit: {why_not}", file=sys.stderr)
 			return 1
 		print(f"{why}: {'holds' if held else 'does not hold'}")
