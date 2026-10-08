@@ -1073,12 +1073,27 @@ def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
 	"""
 	asked, walked, both = compared_members()
 
-	assert both >= 610, (
-		f"the differential compares {both} members, down from 617; "
+	# RE-PINNED 2026-10-08, and the reason is the finding rather than the
+	# numbers. This was measured at 617 and floored at 610 -- about 1% of
+	# slack. Eight schemas joined the corpus since and nobody re-measured,
+	# because nothing failed: the true figure reached 760 while the floor
+	# stayed at 610, so a guard against the overlap shrinking permitted a
+	# loss of 150 members. A floor decays by exactly as much as the corpus
+	# grows (26.588).
+	#
+	# The schema count is asserted with it, so that a new schema fails here
+	# and the failure says to re-measure. That is the only moment anybody
+	# does.
+	assert len(SCHEMAS) == 45, (
+		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
+		f"measured over 45; re-measure and re-pin both")
+
+	assert both >= 750, (
+		f"the differential compares {both} members, down from 760; "
 		f"C asks about {asked} and the walker renders {walked}")
-	assert both * 100 >= asked * 89, (
+	assert both * 100 >= asked * 91, (
 		f"only {100 * both // asked}% of what C asks is compared, "
-		f"down from 90%")
+		f"down from 92%")
 
 
 def test_the_walk_checks_a_pinned_byte_run() -> None:

@@ -1256,9 +1256,23 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	what the dissector shows, so adding schemas the walker says nothing about
 	cannot dilute it.
 
-	Measured over the 37 committed schemas: 3278 rows shown, 3940 member
-	lines walked, 2305 member-answers compared -- 70% of what the dissector
-	shows and 58% of what the walker renders.
+	Measured 2026-10-08 over the 45 committed schemas: 4795 rows shown,
+	5810 member lines walked, 3837 member-answers compared -- 80% of what
+	the dissector shows and 66% of what the walker renders.
+
+	**AND THE FLOOR HAD GONE SLACK, which is what this check exists to
+	stop.** It was measured over 37 schemas and pinned at 2285, about 1%
+	under the 2305 then compared. Eight schemas arrived -- id3 among them --
+	and nobody re-pinned: the true figure reached 3837 while the floor
+	stayed at 2285, so *the guard against coverage quietly shrinking
+	permitted a loss of 1552 answers, 40% of the total.* A price has two
+	halves and both age; the numerator was re-measured by nobody because
+	nothing failed.
+
+	So the schema COUNT is asserted below as well. A new schema moves all
+	three numbers, and failing here is the point: it is the only moment
+	anybody re-measures, and a floor nobody re-pins is a floor that decays
+	by exactly as much as the corpus grows.
 
 	It was 2361 until `rtc`'s seven packed-decimal members were held out.
 	That is coverage *withdrawn* rather than lost, and the distinction is
@@ -1286,15 +1300,24 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 		walked   += result.walked
 		compared += result.compared
 
-	assert compared >= 2285, (
+	# THE POPULATION, so the floors cannot decay as the corpus grows. A
+	# new schema fails here, and the message says to re-measure -- which is
+	# the only moment anybody does.
+	assert len(SCHEMAS) == 45, (
+		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
+		f"measured over 45. Re-measure and re-pin all three: a floor left "
+		f"at an older total goes slack by exactly what the new schemas "
+		f"contribute, which is how this one came to permit a 40% loss")
+
+	assert compared >= 3800, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 2305; the dissector shows {shown} rows and the walker "
+		f"down from 3837; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
-	assert compared * 100 >= shown * 69, (
+	assert compared * 100 >= shown * 79, (
 		f"{compared} of the dissector's {shown} rows are compared against "
-		f"the walker, down from 70%")
-	assert walked >= 3940, (
-		f"the walker renders {walked} member lines, down from 3940; the "
+		f"the walker, down from 80%")
+	assert walked >= 5750, (
+		f"the walker renders {walked} member lines, down from 5810; the "
 		"share above can be met by the dissector showing less")
 
 

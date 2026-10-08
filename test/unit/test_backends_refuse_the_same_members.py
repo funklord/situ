@@ -737,12 +737,21 @@ def test_the_comparison_sees_refusals_at_all() -> None:
 	# possible reason, and raising or lowering it would have been noise
 	# either way.
 	#
-	# 1101 member paths is what four backends are compared over. That number
-	# cannot fall without a schema leaving the corpus or `emitted` breaking,
-	# and it is what stops this file passing because it read nothing.
-	assert examined >= 1100, (
+	# 1572 member paths is what four backends are compared over, measured
+	# 2026-10-08 across 45 schemas. That number cannot fall without a schema
+	# leaving the corpus or `emitted` breaking, and it is what stops this
+	# file passing because it read nothing.
+	#
+	# RE-PINNED, because the claim in the sentence above is tighter than the
+	# floor was enforcing. It read 1100 against 1101 when written -- a
+	# schema leaving would have fired it -- and the corpus grew to 45 while
+	# the floor stayed, so by 26.588 there were 472 paths of slack and eight
+	# schemas could have left without this noticing. A floor decays by
+	# exactly as much as the corpus grows, and the sentence stating the
+	# invariant is what makes the decay a defect rather than a margin.
+	assert examined >= 1560, (
 		f"the comparison examines {examined} member paths across the corpus, "
-		f"down from 1101; a schema has left SCHEMAS or `emitted` is failing")
+		f"down from 1572; a schema has left SCHEMAS or `emitted` is failing")
 
 	# And the count it attributes, which was ZERO for two separate reasons
 	# and is 11 now.
