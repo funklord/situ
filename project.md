@@ -31304,6 +31304,72 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.598 The argument nobody could supply, and a test that passed for decode's reason
+
+26.597's sweep compared every line `report.listing` prints against the rows
+the editor renders, which is a detector for probes that ARE rows. Two of the
+seventeen are not. `no-view` and `needs-arguments` replace every row, and
+the second was the one no row could reveal.
+
+**It was a traceback.** `situ-edit` on a struct with a `parameter` member
+(0050) printed a Python stack trace and exited 1. Nothing above `acquire`
+checked the argument list, and the view is lazy -- so the document OPENED,
+and `render` asking for the extent was the first thing to touch it:
+
+	File "editor/text.py", line 89, in render
+	    held = document.measured
+	walker.walk.Unsupplied: struct 84 takes 1 argument(s) and 0 were supplied
+
+A reader holding a capture of a negotiated stream got that where the answer
+is *you have not said what the block size was*. And there was no way to say
+it: no `--arg`, no `args` on `Document`, nothing threaded to `acquire`. The
+probe could neither be reported nor satisfied.
+
+**Checked at the door, for the window's reason.** `open_document` already
+refuses an offset outside the file rather than letting the first read do it,
+because every answer below would be about bytes nobody has. An argument is
+the same: the layout after a `[stream]` parameter is a function of it, so a
+value nobody supplied is a layout nobody chose.
+
+**And NAMED, where `acquire` can only count.** `acquire`'s own docstring
+says why it counts -- a device omits the image's tail, so an argument keyed
+by name would be one only a tooling walker could take. This is the tooling
+walker and has the tail, so it says which:
+
+	situ-edit: struct `negotiated` takes 1 argument(s) and 0 were given:
+	           `block`, in that order
+
+**`Unsupplied` keeps its own branch in the frontend**, because the walker
+keeps the two apart on purpose and `report.listing` says why in as many
+words: reporting a caller who has not chosen a layout as a frame too short
+is a verdict on bytes nobody read. A test pins that `Unsupplied` is not a
+`Refused`, so a later tidy cannot let one handler absorb the other.
+
+**The finding about method, and it is the third of these in a day.** A
+parameter's value is the one thing in its row that nobody has to read -- the
+caller typed it -- and the row said *cannot be read* about it. So a branch
+asks `walk.argument`. The test for that branch passed, and **went on passing
+with the branch disabled.**
+
+`owned.decode` answers `block` itself, out of the view's args, whenever it
+answers at all. The fixture was a message `decode` could read, so the value
+came from `decode` and the assertion never touched the branch. It is only
+when `decode` REFUSES -- whole-or-nothing, so one unreadable member empties
+every row -- that a parameter is the one member whose value is still known,
+and that is exactly the state the row was wrong in.
+
+	block      4         <- only the branch can produce this
+	payload    None      cannot be read; refused: fits_frame
+	checksum   None      cannot be read
+
+Three sentences describe the same failure now -- 26.595's probe that was not
+on any list, 26.597's control that deleted the write loop, and this fixture
+that took the safe path -- and in all three the sabotage is what found it
+while the test looked right. Which is the argument for the harness rather
+than for care: none of the three was caught by anybody deciding to be
+rigorous, and all three were caught because breaking the thing and reading
+WHICH check failed is a step that already has to happen.
+
 ### 26.597 Four of eight kinds, and the allow-list that followed from a short table
 
 26.595 found two of `report.SUPPORTED`'s probes missing from this frontend by
