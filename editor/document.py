@@ -48,7 +48,7 @@ class Field:
 	#: which is a different answer from any value the lattice has.
 	mutate: str | None = None
 	auth: str | None = None
-	#: `[secret]` (12.6). A frontend must not render the VALUE of one: the
+	#: `[secret]` (14.6). A frontend must not render the VALUE of one: the
 	#: schema says these bytes are a key, and `situ-edit` printed them in
 	#: full -- a `u8 key[8] [secret]` came out as its hex (26.586). Carried
 	#: beside the value rather than instead of it, so `readable` stays a
