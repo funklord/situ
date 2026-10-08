@@ -40,8 +40,28 @@ SUPPORTED = ("no-view", "needs-arguments", "scalar", "bytes", "element",
              "varint", "while_count", "nested", "tag", "marker", "validate",
              "relation")
 
-#: `image_kind`: which placements are plain scalars a walk can read.
+#: `image_kind`, all eight of it, from the enum `std/image.situ` declares.
+#: It named the first four for as long as those were the ones a reader here
+#: branched on -- and a consumer then wrote the allow-list that follows from
+#: a short table, dropping every member of the other four (26.597). The enum
+#: says `default = error`, so a ninth kind is a refusal rather than a guess;
+#: this list is the reader's copy of it and gains a name when it does.
 FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3
+VARIANT, TLV, INDEXED, OPAQUE = 4, 5, 6, 7
+
+#: What each kind is, for a frontend that has to say so to a person. Not a
+#: rendering of the names above: `field` and `reserved` need no sentence,
+#: and a kind whose sentence is absent is one nothing has had to explain.
+KIND_SAYS = {
+	MARKER:  "a byte-order marker: what it holds decides how the rest of "
+	         "this struct is read",
+	REGION:  "a region, whose interior is placed against the region rather "
+	         "than against this struct",
+	VARIANT: "a variant: one of its arms is present and the others are not",
+	TLV:     "a tag-length-value run",
+	INDEXED: "a run located through an index table",
+	OPAQUE:  "opaque: the schema places it and describes no interior",
+}
 
 #: `image_region.region_flags`
 SEALED, UNVERIFIED_OK = 1, 2

@@ -20,10 +20,11 @@ from typing import Literal
 from walker.image import LITTLE, NONE, Image, load
 from walker.owned import decode
 from walker import report
-from walker.report import FIELD, RESERVED
+from walker.report import FIELD, MARKER, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
-                         chosen_arm, is_run, offset_bits, size_bits,
-                         struct_extent, write_bytes, write_scalar)
+                         chosen_arm, is_run, marker_order, offset_bits,
+                         read_bytes, read_scalar, size_bits, struct_extent,
+                         write_bytes, write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -259,9 +260,19 @@ class Document:
 				rows.append(self._arm_row(view, index))
 				continue
 
-			if placement.kind not in (FIELD, RESERVED):
-				continue
-
+			# EVERY KIND GETS A ROW (26.597). This was an allow-list --
+			# `kind not in (FIELD, RESERVED)` and skip -- over a table
+			# whose eight members `walker/report.py` named four of, so
+			# four kinds rendered as nothing at all. Swept over the
+			# corpus: 18 members across 12 structs, and for `slip` and
+			# `protobuf` the dropped member IS the whole message, so this
+			# tool printed a header and no rows whatever.
+			#
+			# A sentence per kind rather than a branch per kind, because
+			# what failed was the allow-list and not which kinds were on
+			# it: a kind nothing here has a sentence for now renders with
+			# its number instead of vanishing, which is the one behaviour
+			# that cannot go stale as the enum grows.
 			name  = image.name_of(index)
 			local = name.rpartition(".")[2] or name
 
@@ -280,7 +291,27 @@ class Document:
 				continue
 
 			value = held.get(local)
+			if value is None:
+				value = self._read_kind(view, index, placement)
 			note  = "" if value is not None else "cannot be read"
+
+			says = report.KIND_SAYS.get(placement.kind)
+			if says is None and placement.kind not in (FIELD, RESERVED):
+				says = (f"a placement of kind {placement.kind}, which this "
+				        f"frontend has no sentence for")
+			if placement.kind == MARKER:
+				# `walk.marker_order` and not a second comparison of the
+				# held value against `image.markers`: it is the function
+				# the walk itself branches on, made public for this
+				# caller (26.597). Two answers to "which order did this
+				# marker state" is the fault `chosen_arm` was extracted
+				# to stop.
+				try:
+					says = f"{says}, and it states {marker_order(view)}"
+				except Refused as why:
+					says = f"{says}, and {why}"
+			if says is not None:
+				note = f"{note}; {says}" if note else says
 
 			# A LOCATED MEMBER IN A WINDOW IS READING THE CONTAINER
 			# (26.583). `at expr` is measured from the buffer and not from
@@ -319,8 +350,16 @@ class Document:
 				# the command takes. A document opened at 8 reporting a
 				# chunk's `data` at 8 would send the reader to the
 				# signature.
-				note = (f"a nested `{image.struct_name(placement.type_struct)}"
-				        f"`; open it with --offset {self.at + at}")
+				nested = (f"a nested "
+				          f"`{image.struct_name(placement.type_struct)}`; "
+				          f"open it with --offset {self.at + at}")
+				# APPENDED, like every other note on this row. It assigned,
+				# so it dropped `cannot be read` from a nested struct the
+				# frame does not hold -- and, once the other kinds started
+				# rendering, the sentence saying what an indexed run IS
+				# (26.597). The `blamed` branch below already argues this
+				# in as many words and this branch did the opposite.
+				note = f"{note}; {nested}" if note else nested
 			if local == blamed:
 				# Appended rather than replacing: a field can be unreadable
 				# AND be the one the schema refuses over, and a note that
@@ -349,8 +388,43 @@ class Document:
 		"""
 		return report.messages(self.image, self.view(), self.struct)
 
+	def _read_kind(self, view: View, index: int,
+			placement: object) -> int | bytes | None:
+		"""One of the kinds `owned.decode` does not answer for.
+
+		`decode` is rung 2 and reads fields, so a marker, a region, a tlv
+		run or an indexed run was absent from its answer -- and the row
+		for one then said *cannot be read* about bytes this walker reads
+		happily. Measured on `slip`, whose whole message is one region:
+		82 bytes read, and a listing claiming none of them (26.597).
+
+		The walker's own readers, chosen by kind rather than tried in
+		turn. A marker is a scalar and is read big-endian whatever it
+		says, which `read_scalar` already does by consulting
+		`marker_order`; the span kinds are runs and `read_scalar` refuses
+		them by name. `None` where the frame does not reach it, which is
+		the one case `cannot be read` is the truth.
+		"""
+		kind = getattr(placement, "kind", FIELD)
+		if kind in (FIELD, RESERVED):
+			return None
+		try:
+			if kind == MARKER:
+				return read_scalar(view, index)
+			return read_bytes(view, index)
+		except Refused:
+			return None
+
 	def _members(self) -> dict[str, int]:
-		"""Local name -> placement index, for the members `fields` shows."""
+		"""Local name -> placement index, for the members a write can name.
+
+		Narrower than `fields` since 26.597, which stopped dropping the
+		other six kinds from the listing. Whether any of them should be
+		WRITABLE is a separate question and not one to settle while fixing
+		a listing: a marker is a byte-order flag, so storing one changes
+		how every other member of its struct reads, and that is 0034's
+		write path to decide rather than this map's.
+		"""
 		image = self.image
 		found: dict[str, int] = {}
 		for index in image.members(image.structs[self.struct]):

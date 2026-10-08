@@ -1004,7 +1004,7 @@ def _read_at(view: View, index: int, start: int, width: int) -> int:
 	return _decoded(_signed(bits, width, placement.signed), placement)
 
 
-def _marker_order(view: View) -> Literal["little", "big"]:
+def marker_order(view: View) -> Literal["little", "big"]:
 	"""The byte order a marker in this struct states (26.576).
 
 	`endian_marker` resolves byte order from a value in the data, which is
@@ -1020,6 +1020,11 @@ def _marker_order(view: View) -> Literal["little", "big"]:
 	is what decides byte order and so cannot be read in the order it is
 	about. `walker/report.py` already did exactly this for its own
 	`little=` line; what it did not do was tell the scalar reader.
+
+	Public since 26.597, when a second caller arrived: the editor has to
+	tell a reader what a marker row holds, and the alternative was a
+	second comparison of the held value against `image.markers` -- which
+	is the shape `chosen_arm` was extracted to stop (26.578).
 
 	The marker among this struct's own members, which is where both
 	schemas that have one put it -- measured, and the only two in the
@@ -1062,7 +1067,7 @@ def _order(view: View, index: int) -> Literal["little", "big"]:
 	"""
 	placement = view.image.placements[index]
 	if placement.marker_governed:
-		return _marker_order(view)
+		return marker_order(view)
 	if placement.endian == LITTLE:
 		return "little"
 	if placement.endian == NATIVE:

@@ -103,17 +103,17 @@ def test_a_governed_member_refuses_rather_than_guessing() -> None:
 	its marker among its own struct's members, measured, so the refusal is
 	unreachable from any corpus schema and this pins the intent.
 	"""
-	from walker.walk import _marker_order
+	from walker.walk import marker_order
 
 	image = _image()
 	index, _ = _members(image, "tiff_header")
 	buffer = bytearray(HEADERS["little"])
 
 	# A view whose struct has the marker: resolves.
-	assert _marker_order(View(image, buffer, index, 0, len(buffer))) \
+	assert marker_order(View(image, buffer, index, 0, len(buffer))) \
 		== "little"
 
 	# And one truncated before the marker: refuses rather than answering.
 	from walker.walk import Refused
 	with pytest.raises(Refused):
-		_marker_order(View(image, buffer, index, 0, 1))
+		marker_order(View(image, buffer, index, 0, 1))
