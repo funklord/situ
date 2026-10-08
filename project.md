@@ -31304,6 +31304,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.604 Coverage by arithmetic with one term in it
+
+`test_codegen_c.py` sweeps every corpus schema at `view` and again at
+`frame`. Nothing sweeps `edit`, `relate`, `converse` or `drive` over the
+corpus, and the obvious reading is a gap in four of six rungs.
+
+It is not, and `layers.reach` is why. Measured over the 45 schemas:
+
+	floor=view reach=view     44
+	floor=view reach=drive     1    example/dns/dns.situ
+
+**Forty-four schemas have no content above the bottom rung**, so at any
+higher rung they emit what `view` emits -- a sweep would be diffing a file
+against itself. The one that does is dns, and the nine driver tests build
+exactly that schema at exactly `--layer drive`; a rung emits everything
+below it, so that compiles its `relate`, `frame` and `converse` output too.
+
+**So the four absent sweeps cost nothing, and the reason is a count that
+happens to be one.** The day a second schema declares a relation it reaches
+above `view`, nothing compiles its upper rungs, and no existing test says
+so: the frame sweep still passes, because `frame` is swept for every schema
+regardless of reach. That is the shape of 26.601 again -- a silence correct
+for a measurable reason, with nothing recording the reason -- so the remedy
+is the same one and not another sweep.
+
+Both sides of the claim are derived. `reach_above_view()` asks
+`layers.reach` per corpus schema; `compiled_by_a_driver_test()` reads the
+`SCHEMA = ROOT / ...` assignment out of every `test_*driver*.py`, which
+deliberately does not match `test_tokio_driver.py`'s inline schema string --
+an inline schema is not a corpus schema and cannot cover one. The assertion
+is containment, and its message says what the consequence would be rather
+than that a set differs.
+
+**And both derived sets are asserted non-empty**, because each is matched
+out of text and each can go quietly empty in a way that breaks the real
+check differently: an empty left side makes it vacuous, an empty right side
+makes it fail for the wrong reason. The second arm fired in sabotage when
+the `SCHEMA` spelling was moved.
+
+**My sabotage was wrong first, for the fourth time today.** Appending a
+relation to `udp.situ` to make a second schema reach above `view` gave
+`echo_of states half a retransmission policy` -- `timeout_ms` with no
+`retries` -- so the schema never validated, the guard raised rather than
+reporting, and both tests went red for a reason unrelated to the property.
+With `retries` added it fails on the one check, naming
+`example/udp/udp.situ` and saying what would be uncompiled. **A sabotage
+that makes the suite red is not thereby a demonstration**; the four this
+session were each caught by reading which assertion failed, which is a step
+that costs one line of output.
+
 ### 26.603 The frontend the fix did not reach, warned about in that file's own comment
 
 26.598 gave `situ-edit` a channel for a struct's arguments and a refusal
