@@ -22,8 +22,8 @@ from walker.owned import decode
 from walker import report
 from walker.report import FIELD, RESERVED
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, View, acquire,
-                         is_run, offset_bits, size_bits, struct_extent,
-                         write_bytes, write_scalar)
+                         chosen_arm, is_run, offset_bits, size_bits,
+                         struct_extent, write_bytes, write_scalar)
 
 __all__ = ["Document", "Field", "open_document"]
 
@@ -143,6 +143,37 @@ class Document:
 		return self.image.struct_name(self.struct)
 
 	@property
+	def verdict(self) -> tuple[str, str] | None:
+		"""What `validate` says about the whole message (26.595).
+
+		`(word, why)`, or `None` where the image cannot say -- packed
+		without its metadata tail, or a struct this walker declines.
+
+		One of `report.SUPPORTED`'s seventeen probes, and 0034 asks this
+		frontend for every one. Nothing surfaced it: a refusal reached a
+		row as `refused: <check>` on the member it blamed, which is the
+		identity 0051 built and says nothing when the failure is BOUNDS
+		and blames no member.
+
+		It is what makes the arm row safe to read. On an empty message
+		every reader answers that the discriminant is zero -- "a
+		discriminant the frame does not reach reads as ZERO, which is what
+		the four backends do" -- so the arm row names the arm zero
+		selects, truthfully, about a message that has none of it. Without
+		a verdict beside it that reads as a fact about the bytes.
+		"""
+		held = report._validate(self.image, self.view(), self.struct)
+		if held is None:
+			return None
+		if held == report.OK:
+			return ("ok", "every check this image carries holds")
+		if held == report.ERR_BOUNDS:
+			return ("bounds", "the frame does not reach what the layout "
+			                  "needs, so the rest of this is what the "
+			                  "schema says and not what the bytes hold")
+		return ("constraint", "a check the schema states does not hold")
+
+	@property
 	def measured(self) -> int | None:
 		"""How many bytes this struct's own members account for, here.
 
@@ -208,6 +239,26 @@ class Document:
 
 		for index in image.members(image.structs[self.struct]):
 			placement = image.placements[index]
+
+			# A VARIANT, WHICH THE EDITOR SHOWED NOTHING OF (26.595). The
+			# filter below keeps FIELD and RESERVED, so a variant was
+			# dropped and its arms are not members of the struct at all --
+			# so for icmp, mqtt, dns and json, whose meaning IS the
+			# variant, the tool printed a message with a hole in it. The
+			# walker's own listing says `body_echo ok=1` for the same
+			# bytes; 0034 asks this frontend for every probe
+			# `report.SUPPORTED` names, and `arm_value` was one nothing
+			# surfaced.
+			#
+			# `walk.chosen_arm` and not a second reading of the
+			# discriminant: it was extracted from `_variant_bits` for
+			# exactly this reason, because two copies of "which arm does
+			# this discriminant select" would be two answers to the
+			# question the differential oracle exists to compare.
+			if index in image.arms:
+				rows.append(self._arm_row(view, index))
+				continue
+
 			if placement.kind not in (FIELD, RESERVED):
 				continue
 
@@ -505,6 +556,50 @@ class Document:
 		order: Literal["little", "big"] = \
 			"little" if held.endian == LITTLE else "big"
 		write_bytes(self.view(), tag, value.to_bytes(wide, order))
+
+	def _arm_row(self, view: View, index: int) -> Field:
+		"""A variant, as the arm the discriminant selected.
+
+		The value is the arm's own name, because that is what a reader of a
+		variant wants to know and what every other row here carries is a
+		value. Where no arm is selected the row says so rather than
+		vanishing: `default: error` is a real state and a message in it is
+		one the schema refuses, which is worth seeing next to the
+		discriminant that chose it.
+		"""
+		image = self.image
+		local = image.name_of(index).rpartition(".")[2] or image.name_of(index)
+
+		try:
+			at   = offset_bits(view, index) // BITS_PER_BYTE
+			wide = size_bits(view, index) // BITS_PER_BYTE
+		except Refused as why:
+			at, wide = None, None
+			note = f"cannot be placed: {why}"
+		else:
+			note = ""
+
+		try:
+			arm = chosen_arm(view, index)
+		except Refused as why:
+			return Field(local, at, wide, None,
+			             note or f"the arm cannot be read: {why}")
+
+		if arm is None or arm == NONE:
+			return Field(local, at, wide, None,
+			             "no arm: the discriminant matches no case, which "
+			             "`default: error` makes a refusal")
+
+		# THE NAME IN THE NOTE AND NOT IN THE VALUE. A `Field.value` is an
+		# int or bytes, so an arm name put there renders as its own hex --
+		# `6563686f` for `echo`, which is the information encoded as
+		# noise. A variant holds no scalar, so `None` is the honest value
+		# and the note carries the answer, which is what a nested struct's
+		# row already does.
+		chose = image.name_of(arm).rpartition(".")[2] or image.name_of(arm)
+		return Field(local, at, wide, None,
+		             f"the arm `{chose}` is the one present"
+		             + (f"; {note}" if note else ""))
 
 	def relations(self) -> list[tuple[str, str, str]]:
 		"""Which cross-message relations this document could be half of.

@@ -93,7 +93,20 @@ def render(document: Document) -> list[str]:
 		how_long = f"{held} of {document.extent} bytes"
 	else:
 		how_long = f"{document.extent} bytes"
-	lines = [f"{document.name}  {how_long}{where_from}"]
+	# THE VERDICT, on the header line, because it qualifies every row under
+	# it (26.595). `validate` is one of `report.SUPPORTED`'s probes and
+	# nothing surfaced it: a refusal reached a row only where it blamed a
+	# member, so a BOUNDS failure -- which blames none -- was invisible
+	# while every field said "cannot be read" and the variant row named an
+	# arm confidently.
+	# `said` and not `held`, which this function already binds to the
+	# measured extent twenty lines up. A short generic name in a long
+	# function is how a shadow gets written, and mypy is what said so.
+	said   = document.verdict
+	spoken = "" if said is None else f"  [{said[0]}]"
+	lines  = [f"{document.name}  {how_long}{where_from}{spoken}"]
+	if said is not None and said[0] != "ok":
+		lines.append(f"{' ' * 14}validate: {said[1]}")
 	for field in document.fields():
 		where = "--" if field.offset is None else f"{field.offset:>4}"
 		wide  = "--" if field.size is None else f"{field.size:>3}"

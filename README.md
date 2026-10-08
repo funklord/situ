@@ -240,7 +240,7 @@ which is how 0026's separation survives the convenience.
 
 ```
 $ situ-edit example/udp/udp.situ capture.bin
-udp_header  8 bytes
+udp_header  8 bytes  [ok]
      0 +  2  source_port              4660        [tag]
      2 +  2  destination_port         53          [tag]
      4 +  2  length                   8           [tag]
@@ -248,8 +248,14 @@ udp_header  8 bytes
      8 +  0  payload                              [moves, tag]
 ```
 
-The bracket is what a write would cost, read out of the image's capability
-vectors: `read-only` where the schema lets nobody write, `moves` where the
+`[ok]` on the header line is `validate`: what every check the schema
+states says about these bytes, taken as a whole. A message the frame does
+not reach reads `[bounds]` and one a check refuses reads `[constraint]`,
+each with a line saying what that means -- because the rows under it then
+describe what the schema says rather than what the bytes hold.
+
+The bracket on a row is what a write would cost, read out of the image's
+capability vectors: `read-only` where the schema lets nobody write, `moves` where the
 bytes after it shift, `rewrites` where the field cannot be stored into on its
 own and the whole word or region goes back, `tag` where a write invalidates a
 checksum or an authentication tag. Nothing is the ordinary case -- an in-place store that
