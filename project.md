@@ -31304,6 +31304,116 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.607 Three reproduced codegen faults, a rung nothing compiles, and 26.604 qualified
+
+hull sent a reduced reproduction for their finding 6 and two more findings,
+sections 10 and 11 of `suggestion/hull.md`. Chasing them found a third
+fault they had not seen, in situ's own corpus, and made an entry written
+earlier today wrong.
+
+**Finding 6, diagnosed from the generated source rather than guessed.**
+Their guess was right and here is the reading. For their `b1.situ` the
+Python module holds `class bytes(View)` at module level, and `class list`'s
+run-walker calls what it believes is the builtin:
+
+	if bytes(self._msg.buffer[self._at + at:self._at + at + 1]) == b')':
+
+`bytes` is the struct, `View.__init__` wants `(msg, at, length)`, and it
+gets one argument -- hence their TypeError.
+
+**The mechanism already exists for the other half and its population is
+annotations.** `emit.py`'s `_unshadow` emits `_situ_list = list` and
+rewrites annotations, and its comment explains why it is done at the point
+of writing: *a bare `list` in a user annotation means the STRUCT and the
+same word in a generated one means the builtin, and nothing in the text
+tells them apart.* A CALL is the same sentence and the pass does not reach
+it.
+
+**I tried a post-pass and the file's own comment is why it failed.** Having
+the AST looked like a discriminator the regex lacked, so the first attempt
+rewrote every `Call(Name(n))` where `n` is both a module-level class and a
+builtin. It broke immediately: `bytes(self._msg, self._at + start, size)`
+is a legitimate construction OF THE STRUCT, and in the AST it is the same
+node shape as `bytes(slice)`. **A parse does not know what the emitter
+meant any more than a regex does**, so the fix belongs at each emission
+point, spelled `_situ_bytes(...)` as `_situ_list` already is. Reverted
+rather than half-landed.
+
+**And the exposure is wider than one name.** Measured over the corpus by
+generating every schema's Python and reading the AST: this emitter calls
+**fifteen** builtins -- `len` 305, `max` 222, `min` 105, `bytes` 97,
+`bytearray` 93, then `IndexError`, `bool`, `type`, `range`, `any`,
+`object`, `list`, `frozenset`, `str`, `sum`. Three corpus schemas already
+shadow one:
+
+	json.situ       struct object   builtin called 4 times
+	sexpr.situ      struct list     builtin called 4 times
+	importer.situ   struct str      builtin called 2 times
+
+All three latent, because no vector reaches the colliding call -- hull's
+`bytes` had one. **Which settles the fix hull offered as an alternative:
+refusing the name is wrong.** `object` in a JSON schema and `list` in an
+s-expression schema are the names those formats have, and 26.562's C
+precedent does not transfer: there the colliding names were situ's own
+runtime vocabulary, `bounds` and `view`.
+
+**Finding 10, reproduced, and it is in `example/http`.** `--layer edit
+--target c` emits a decode that assigns every scalar from its `_get`:
+
+	out->code = zz_status_line_code_get(view);
+
+A text-converted member's getter is `situ_err_t _get(view, uint32_t *out)`,
+because a decimal parse can fail. `http_edit.h` therefore does not compile,
+and neither does hull's canonical atom. Whether the decode should read the
+`_value` accessor beside it or propagate `_get`'s status is a convention
+question -- the decode returns `situ_err_t` and could do either, and
+discarding a parse failure into an owned copy is the half worth deciding
+deliberately.
+
+**A third fault, which nobody reported: `example/cpio`'s edit header emits
+a placeholder as an identifier.**
+
+	uint8_t <reserved0>;
+	out-><reserved0> = zz_cpio_entry_reserved0_get(view);
+
+Four errors. The ordinary header compiles, so the C backend has a spelling
+for a reserved member and the edit emitter is not using it.
+
+**Nothing compiles that rung, which is why both survived.**
+`test_codegen_c.py` sweeps every schema at `view` and again at `frame`.
+There is no edit-layer sweep, so two corpus schemas have been emitting C
+that does not compile.
+
+**And that makes 26.604 wrong where it was most confident.** That entry
+argued the four absent per-rung sweeps cost nothing, because `layers.reach`
+says 44 of 45 schemas reach only `view` and the one that reaches further is
+the schema nine driver tests compile at the top rung. The reasoning covers
+what a rung emits BEYOND `view` **where the schema has content for that
+rung** -- and `--layer edit` does not work that way: it emits a header for
+any struct needing backing, whatever the schema's reach. `http` and `cpio`
+both have `reach=view` and both emit a broken `_edit.h`.
+
+So the partition I asserted is true and answers a narrower question than
+the sentence around it claimed. The guard added there still holds and is
+still worth having; what was wrong is the paragraph saying the absent
+sweeps cost nothing. They cost two broken headers.
+
+**The gate is deliberately not added yet.** An edit-layer compile sweep is
+the obvious remedy and it would go red on `http` and `cpio` the moment it
+landed -- and `harmonization.md` is explicit that a red gate is when
+somebody reaches for an ignore rule, so the fix comes first and the sweep
+with it. Recorded here so the next pass has the population: build every
+corpus schema at `--layer edit --target c` and compile the header.
+
+**Finding 11 is hull's and is the holder's.** They asked for a canonical
+writer from the edit layer and found that no rung builds a message: C's
+`edit` emits 0031's owned decode, `edit.py` refuses a variant as *a shape
+rather than a length*, and nothing in `situc/codegen` builds, appends or
+resizes. README and 0032 both describe `edit` as *build or resize a message
+whose extent is not fixed*. Whether a builder belongs at that rung or the
+ladder's description should change is not something to settle while fixing
+a decode, and hull said so too.
+
 ### 26.606 hull adopted situ and found four faults in situ's own example
 
 `suggestion/hull.md`, written 2026-10-09 by a session adopting situ for

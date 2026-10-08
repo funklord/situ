@@ -115,3 +115,36 @@ they are a layout question.
 `/usr/bin/situc` is the Debian package of 2026-08-05 and `bin/situc` is
 HEAD; `--version` gives the same line for both, and `VERSION` reads `1.0`.
 An adopter who has run the wrong one cannot find out from the tool.
+
+## 10. `--layer edit` emits a C decode that does not compile for a `decimal` member
+
+Added 2026-10-09, measured at `f2fbba3` and again at `ab2d760` with identical
+output. hull's `sexpr/canonical.situ` -- Rivest's atom, `decimal u32 length
+until ":" max 10 [minimal]` then `u8 bytes[length]` -- built with `situc
+build --target c --layer edit --prefix hull_sexpr_c` writes
+`canonical_edit.h`, and including it fails:
+
+    canonical_edit.h:75:23: error: too few arguments to function
+      'hull_sexpr_c_atom_length_get'
+       out->length = hull_sexpr_c_atom_length_get(view);
+
+The ordinary header's getter for a TextConverted member is
+`situ_err_t _get(situ_view_t, uint32_t *out)`, since a decimal parse can
+fail; `edit.py`'s decode calls it as if it returned the value, as it would
+for a binary scalar. `_length_value(view)` exists beside it and is what the
+decode reads elsewhere. Reproduce: build the schema above with those flags
+and compile any file that includes the edit header.
+
+## 11. No rung builds a message, though `edit` is described as building one
+
+README's ladder and decision 0032 give `edit` as "build or resize a message
+whose extent is not fixed". What `--layer edit` emits in C is the owned
+decode of 0031's cases C and D, and `edit.py` refuses a variant as "a shape
+rather than a length". For canonical s-expressions that leaves nothing to
+write with: the view layer says "No setter: mutate is Shifting" for both the
+atom's length and its bytes, and the remedies it offers -- `[must_eq]`,
+`[max]` -- would change the format rather than describe it. `grep` over
+`situc/codegen` finds no builder, appender or resize in any backend. hull
+asked for its canonical writer to come from the edit layer and it cannot
+yet; whether a builder belongs at `edit`, or the ladder's sentence is the
+thing to change, is situ's to decide, and I have not assumed either.
