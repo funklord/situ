@@ -197,6 +197,92 @@ def test_a_span_the_frame_does_not_hold_says_cannot_be_read() -> None:
 	assert "region" in (field.note or "")
 
 
+def test_a_sealed_region_says_there_is_a_gate() -> None:
+	"""`report`'s gate probe answers `refused=1 opened=1` -- the gate's
+	claim, not a measurement -- and the fact a reader needs from it is that
+	a gate exists at all."""
+	image_bytes = packed(ROOT / "example" / "dtls" / "dtls.situ")
+	note = note_of(image_bytes, "record", "sealed")
+	assert "sealed region" in note
+	assert "14.3" in note
+
+
+def test_a_waived_seal_says_the_guarantee_is_given_up() -> None:
+	"""`[allow_unverified_read]` is the construct whose purpose is to give
+	the guarantee up, so there is no gate to open -- and a row that read
+	the same as a real seal would hide the one difference that changes what
+	the bytes are worth."""
+	image_bytes = packed(ROOT / "test" / "schema" / "edges.situ")
+	note = note_of(image_bytes, "unverified", "body")
+	assert "allow_unverified_read" in note
+	assert "no gate" in note
+
+
+def test_a_region_that_is_not_sealed_claims_no_seal() -> None:
+	"""`coded` and `authenticated` are regions too. Calling one sealed
+	would be the error in the direction that matters."""
+	image_bytes = packed(ROOT / "example" / "slip" / "slip.situ")
+	note = note_of(image_bytes, "frame", "datagram")
+	assert "region" in note
+	assert "sealed" not in note
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_region_falls_in_exactly_one_of_the_three(path: Path) -> None:
+	"""The partition rather than the counts.
+
+	Pinning *seven sealed, one waived, seven other* would go stale the day
+	a schema is added, and the thing worth holding is that a region arriving
+	in none of the three fails as a message addressed to whoever added it --
+	rather than being absorbed by a sentence that would have covered it for
+	the wrong reason.
+	"""
+	from walker.image import load
+	image_bytes = packed(path)
+	image = load(image_bytes)
+	for index in range(len(image.structs)):
+		name = image.struct_name(index)
+		try:
+			acquire(image, BUF, index)
+		except (Refused, Unsupplied):
+			continue
+		held = rows(image_bytes, name)
+		for member in image.members(image.structs[index]):
+			if image.placements[member].kind != report.REGION:
+				continue
+			local = (image.name_of(member).rpartition(".")[2]
+			         or image.name_of(member))
+			note = held[local].note or ""
+			flags = image.region_flags.get(member, 0)
+			if flags & report.SEALED and flags & report.UNVERIFIED_OK:
+				assert "allow_unverified_read" in note, f"{path.name}:{local}"
+			elif flags & report.SEALED:
+				assert "sealed region" in note, f"{path.name}:{local}"
+				assert "allow_unverified_read" not in note
+			else:
+				assert "region" in note, f"{path.name}:{local}"
+				assert "sealed" not in note, f"{path.name}:{local}"
+
+
+def test_all_three_region_sentences_are_reached_by_the_corpus() -> None:
+	"""A partition over an empty cell is a claim rather than a guarantee,
+	so each of the three is asserted to be occupied. If a cell empties, this
+	fails and says which -- which is the message the next reader needs."""
+	from walker.image import load
+	seen = set()
+	for path in SCHEMAS:
+		image = load(packed(path))
+		for index in range(len(image.structs)):
+			for member in image.members(image.structs[index]):
+				if image.placements[member].kind != report.REGION:
+					continue
+				flags = image.region_flags.get(member, 0)
+				seen.add("waived" if flags & report.UNVERIFIED_OK
+				         else "sealed" if flags & report.SEALED
+				         else "plain")
+	assert seen == {"waived", "sealed", "plain"}, sorted(seen)
+
+
 def test_a_kind_with_no_sentence_still_reaches_a_row(
 		monkeypatch: pytest.MonkeyPatch) -> None:
 	"""The behaviour that cannot go stale as the enum grows. A ninth kind

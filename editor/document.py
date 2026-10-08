@@ -21,7 +21,8 @@ from typing import Literal
 from walker.image import LITTLE, NONE, Image, load
 from walker.owned import decode
 from walker import report
-from walker.report import FIELD, MARKER, RESERVED
+from walker.report import FIELD, MARKER, REGION, RESERVED, SEALED
+from walker.report import UNVERIFIED_OK
 from walker.walk import (BITS_PER_BYTE, Bytes, Refused, Unsupplied, View,
                          acquire,
                          chosen_arm, is_run, marker_order, offset_bits,
@@ -333,6 +334,26 @@ class Document:
 			if says is None and placement.kind not in (FIELD, RESERVED):
 				says = (f"a placement of kind {placement.kind}, which this "
 				        f"frontend has no sentence for")
+			if placement.kind == REGION:
+				# WHICH region, because the three are not one thing to a
+				# reader. `report`'s gate probe answers `refused=1
+				# opened=1` -- the gate's CLAIM rather than a measurement,
+				# which is why it needs no cipher run to be comparable --
+				# and the fact a person needs from it is whether there is
+				# a gate at all. `[allow_unverified_read]` is the
+				# construct whose whole purpose is to give the guarantee
+				# up (14.3), and a row that read the same either way would
+				# hide the one difference that changes what the bytes are
+				# worth (26.599).
+				flags = image.region_flags.get(index, 0)
+				if flags & SEALED and flags & UNVERIFIED_OK:
+					says = ("a sealed region whose schema waives the "
+					        "guarantee with `[allow_unverified_read]`, so "
+					        "there is no gate to open")
+				elif flags & SEALED:
+					says = ("a sealed region: its interior reads only "
+					        "through a gate that a failed verification "
+					        "refuses (14.3)")
 			if placement.kind == MARKER:
 				# `walk.marker_order` and not a second comparison of the
 				# held value against `image.markers`: it is the function
