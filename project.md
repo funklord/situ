@@ -31304,6 +31304,98 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.597 Four of eight kinds, and the allow-list that followed from a short table
+
+26.595 found two of `report.SUPPORTED`'s probes missing from this frontend by
+reading one schema's listing beside one rendered document. Made mechanical --
+every line `report.listing` prints for every struct of all 45 corpus schemas,
+against the rows the editor renders for the same bytes -- it is not two
+probes. It is four of the eight kinds a placement can have.
+
+**The count, which is the honest form of the finding.** Over every member of
+every struct in the corpus:
+
+	FIELD      888    rendered
+	RESERVED    58    rendered
+	variant     24    rendered since 26.595
+	REGION      14    dropped
+	MARKER       2    dropped
+	TLV          1    dropped
+	INDEXED      1    dropped
+
+**And the detector over-counted first, in the direction that costs reading
+time rather than the one that hands you an answer.** It reported 90 names
+over 905 lines, of which 69 were arms: the walker prints a line per arm
+because every reader must agree about every arm, while the editor shows the
+one that is present and names it in the note -- so `body_echo` is absent
+from a row whose note says ``the arm `echo` is the one present``, and the
+check was on spelling. Classifying by the emitter rather than by the line's
+shape took 90 to 18.
+
+**Why an allow-list was ever written.** `fields()` read
+`kind not in (FIELD, RESERVED)` and skipped -- and `walker/report.py` named
+exactly `FIELD, RESERVED, MARKER, REGION = 0, 1, 2, 3`, where
+`std/image.situ` declares eight and refuses a ninth. So the allow-list was
+complete against the reader's own table and the table was short by four.
+Nothing trips over that: the four kinds it omits are simply never mentioned,
+and the consumer that reads it inherits the gap as a silence.
+
+**The two worst cases are whole formats.** `slip`'s frame is one region and
+`protobuf`'s message is one tlv run, so for both the dropped member IS the
+message: the tool printed a header and no rows whatever, which is
+indistinguishable from a tool that failed.
+
+	frame  82 of 512 bytes  [ok]
+	     0 + 82  datagram   0b30557a9fc4e90e33587da2c7ec1136...
+
+**A row per kind and a sentence, rather than a branch per kind**, because
+what failed was the allow-list and not which kinds were on it. A kind
+nothing here has a sentence for renders with its number and says so, which
+is the one behaviour that cannot go stale as the enum grows.
+
+**Then the rows were wrong a second way, and the first version shipped it
+for about ten minutes.** `owned.decode` is rung 2 and reads fields, so none
+of these four is in its answer -- and every new row said *cannot be read*
+about bytes the walker reads happily: 82 of them, in the one message
+`slip` has. `_read_kind` asks the walker's own readers, chosen by kind
+rather than tried in turn, since `read_scalar` refuses a run by name and a
+marker is a scalar read big-endian whatever it says. `None` now means the
+frame does not reach it, which is the one case the sentence was true of.
+
+**`walk.marker_order` is public now rather than copied.** A marker's row
+has to say which order it states, and the alternative was a second
+comparison of the held value against `image.markers` -- which is exactly
+what `chosen_arm` was extracted to stop in 26.578. A second caller arriving
+is when a private helper becomes public, not when it becomes a pattern.
+
+**One pre-existing fault fell out.** The nested-struct branch ASSIGNED the
+note where every other branch appends, so it dropped *cannot be read* from
+a nested struct the frame does not hold -- and, once the other kinds
+rendered, the sentence saying what an indexed run is. The branch directly
+below it argues for appending in as many words: *a note that dropped either
+half would answer a question nobody asked.*
+
+**What stops it recurring is not the fix.** The reader's table is compared
+against the enum `std/image.situ` declares, and the corpus sweep is a
+parametrized assertion rather than a script in a scratch directory. Five
+sabotages, each failing through its own check: the allow-list restored fails
+the sweep on exactly the nine schemas that have such a member.
+
+**An apparatus error worth the line.** The first sweep packed with
+`metadata=False`, which is `pack`'s default, so every name came back as
+`placement[57]` and `struct[11]` -- a comparison between two sets of
+placeholders. It was obvious only because the placeholders are ugly; a
+sweep comparing names that merely LOOKED plausible would have reported the
+same zero and been believed.
+
+**Two things are deliberately not done.** The walker reports `count=` for a
+tlv and an indexed run and the editor's row does not carry it; a reader who
+wants the count opens the run at the offset the note gives. And the write
+map is left narrow on purpose -- a marker is a scalar a write could store,
+and storing one changes how every other member of its struct reads, which
+is 0034's write path to decide rather than a listing fix's. Both are the
+holder's.
+
 ### 26.596 Every schema a compilation read, and the copy of our grammar it retires
 
 **fmake asked, on 2026-10-08, through the inbox under `.git`.** `situc
