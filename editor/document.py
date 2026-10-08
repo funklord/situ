@@ -4,12 +4,27 @@ A document is an image, a buffer, and the fields the two produce between
 them. It renders nothing and displays nothing -- the CLI, the TUI and the GUI
 each ask it the same questions and answer them their own way.
 
-READ-ONLY, DELIBERATELY. 0034 blocks the write path on 26.99, which has
-landed, but a walk that writes is its own piece of work: writing a field that
-shifts the layout drags in the invalidation model, a tag-covered field goes
-stale, and an invariant must be *maintained* rather than checked. None of
-that is here. What is here is the half that makes the other half worth
-having, and what an editor is mostly doing anyway.
+WHAT IT WRITES AND WHAT IT REFUSES. This said READ-ONLY, DELIBERATELY and
+that none of 0034's write table was here, which stopped being true in three
+places and was the first thing a reader of this module saw (26.605). Three
+of that table's four rows are answered now:
+
+  - **a fixed scalar in place** is `set()`, since 26.179;
+  - **a tag-covered field** is recomputed where the schema names a kernel
+    and refused where it does not, since 26.579;
+  - **a write that shifts the layout** is refused by MEASURING -- the write
+    goes into a copy, the copy is walked, and every member's offset and
+    size compared -- because 12.3's invalidation model is not built here.
+    26.99 finished rung 2 in the four backends and the walk, which is a
+    different thing and is what this docstring used to cite.
+
+**AND AN INVARIANT CANNOT GO STALE**, which is the fourth row and wants no
+maintenance. The field an invariant derives is `mutate = Immutable` and
+refused by name; anything that would move a size it reads is refused as a
+shifting write. Both halves carry weight, and
+`test_no_permitted_write_leaves_an_invariant_stale.py` breaks each to show
+it -- with the first off a write leaves `total` at 1 against three payload
+bytes, with the second off at 3 against one.
 """
 
 from __future__ import annotations
