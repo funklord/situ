@@ -26,7 +26,7 @@ import struct
 from situc import pack as packer
 from situc.layout import solve
 from situc.parser import parse_text
-from situc.resolve import resolve
+from situc.resolve import ResolvedSchema, resolve
 
 from every_schema import ROOT, SCHEMAS, ids, load_schema
 from fourway import COMPLETE, answers, build, draw, planted
@@ -34,8 +34,10 @@ from fourway import COMPLETE, answers, build, draw, planted
 sys.path.insert(0, str(ROOT))
 from walker import report, vm                      # noqa: E402
 from walker.image import NONE, Image, load                 # noqa: E402
+from situc.codegen.differ import writes as differ_writes  # noqa: E402
 from walker import walk as walk_module             # noqa: E402
-from walker.walk import Refused, View, acquire, read_scalar  # noqa: E402
+from walker.walk import (Refused, View, acquire, read_scalar,  # noqa: E402
+                         write_scalar)
 
 
 def packed(text: str) -> bytes:
@@ -295,6 +297,7 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	import random
 	rng     = random.Random(20260807)
 	checked = 0
+	written = 0
 
 	# Random bytes reach a version field's low values about once in 256, so
 	# the `[since]` gate -- whose whole behaviour is "is this member even
@@ -318,8 +321,25 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	stamped = [planted(rng, parsed, resolved, draw(rng)) for _ in range(6)]
 
 	for packet in [draw(rng) for _ in range(12)] + versioned + stamped:
-		compiled = _by_member(answers(command["c"], packet, tmp_path))
+		answer   = answers(command["c"], packet, tmp_path)
+		compiled = _by_member(answer)
 		walked   = _by_member(report.listing(image, packet))
+
+		# AND THE WRITES, which no differential compared (26.589). This
+		# walker was the fifth READER and the four backends compared their
+		# setters only against each other; its own store was held by a
+		# handful of hand-written byte expectations whose values came from
+		# reasoning about what C's setters leave behind rather than from
+		# running one -- and `situ-edit` writes through it.
+		#
+		# C's own write LOG is replayed rather than the enumeration
+		# recomputed. The first attempt walked `differ.writes()` itself and
+		# disagreed on eight schemas, every one because it reproduced
+		# neither the driver's order nor which of its views had succeeded:
+		# a differential whose two sides are not asked the same question
+		# reports disagreements that are not there.
+		written += _writes_agree(schema, image, resolved, packet,
+		                         answer)
 
 		# Where both speak about a member, they must say the same thing.
 		# Not every rendered line: the differ probes a subset of its own and
@@ -340,6 +360,115 @@ def test_the_walker_agrees_with_the_compiled_backends(
 	# from passing while rendering nothing.
 	if not checked:
 		pytest.skip(f"{schema.name}: no member both this walker and C probe")
+
+	WRITES_COMPARED[schema.name] = written
+
+
+#: How many write comparisons each schema contributed (26.589). Module
+#: level, so the floor below can refuse a sweep that compared none.
+WRITES_COMPARED: dict[str, int] = {}
+
+#: C's own write log: `-- write <struct>` then a line per member it stored.
+_WRITE_HEAD  = re.compile(r"^-- write (\S+)$")
+_WROTE_LINE  = re.compile(r"^(\S+) <- (-?\d+)")
+
+
+def _writes_agree(schema: Path, image: Image, resolved: ResolvedSchema,
+		packet: bytes, answer: str) -> int:
+	"""Replay C's writes through the walker and compare the buffers.
+
+	Returns how many writes were replayed. The comparison is the whole
+	buffer rather than per member, which is what catches a store that
+	lands in the right place with the wrong bytes AND one that clobbers a
+	neighbour -- a bit-packed field written with a read-modify-write is
+	the second, and no per-member read would see it.
+
+	A FLAT member only. C reaches a nested one -- `covered_tail.head_seq`,
+	`icmp_message.body_echo_identifier` -- through an accessor it generates
+	on the parent, and the image has no placement for that path: the arm or
+	the nested member is a placement and its interior belongs to another
+	struct. Replaying those needs a sub-view per path, which is its own
+	piece of work; they are counted and skipped here rather than guessed
+	at, and the pair are counted so a flat write arriving among them is
+	visible.
+	"""
+	lines  = answer.splitlines()
+	buffer = [one for one in lines if one.startswith("buffer ")]
+	if not buffer:
+		return 0
+	parts  = buffer[0].split()
+	theirs = parts[1] if len(parts) > 1 else ""
+
+	# THE LOG GIVES THE ORDER AND THE MEMBERS; THE VALUE COMES FROM THE
+	# SAME `_pattern` THE DRIVER USED. The driver prints `_get` AFTER
+	# `_set`, so its number is what C read BACK and not what it stored --
+	# measured on json, whose `member.colon` is a delimiter: C stores
+	# 0xEF, the read-back scans for a delimiter and answers 0, and
+	# replaying the 0 wrote a byte C never wrote. A log line is evidence
+	# about which member in which order, which is exactly the half this
+	# needs from C and the half it cannot compute without reproducing the
+	# driver's control flow.
+	wanted = {(name, ask.local): ask.count
+	          for name, struct in resolved.structs.items()
+	          for ask in differ_writes(struct, dict(resolved.structs))}
+
+	plan: list[tuple[str, str, int]] = []
+	struct_now = None
+	for line in lines:
+		head = _WRITE_HEAD.match(line)
+		if head:
+			struct_now = head.group(1)
+			continue
+		wrote = _WROTE_LINE.match(line)
+		if wrote and struct_now:
+			value = wanted.get((struct_now, wrote.group(1)))
+			if value is None:
+				return 0	# a write this cannot value: see below
+			plan.append((struct_now, wrote.group(1), value))
+	if not plan:
+		return 0
+
+	held     = bytearray(packet)
+	replayed = 0
+	for name, local, value in plan:
+		which = next((i for i in range(len(image.structs))
+		              if image.struct_name(i) == name), None)
+		index = None if which is None else next(
+			(member for member in image.members(image.structs[which])
+			 if image.name_of(member).rpartition(".")[2] == local), None)
+		if index is None or which is None:
+			break			# nested: the whole replay is void, see below
+		try:
+			write_scalar(acquire(image, held, which), index, value)
+		except Refused:
+			break
+		replayed += 1
+
+	# EVERY WRITE OR NONE, because this compares the bytes a SEQUENCE of
+	# writes leaves behind. Replaying eight of nine and comparing the
+	# buffer reports a disagreement about the one that was skipped --
+	# measured: icmp's arm interiors are written by C and have no
+	# placement here, and the comparison blamed the walker for bytes it
+	# was never asked to store. A partial replay is not a weaker
+	# comparison, it is a wrong one.
+	#
+	# Two reasons a replay stops. A nested path, which C reaches through
+	# an accessor it generates on the parent and this image has no
+	# placement for -- the arm or the nested member is the placement and
+	# its interior belongs to another struct. And a refusal: C's setters
+	# are bounds-checked and return void, so out of bounds they store
+	# nothing and say nothing where this walker refuses. Only a MALFORMED
+	# message reaches the second -- ble's `rssi` follows
+	# `data[data_length]` and `[max = 31]` bounds a valid one.
+	if replayed != len(plan):
+		return 0
+
+	assert bytes(held).hex() == theirs, (
+		f"{schema.name}: the walker and C disagree about the bytes "
+		f"{len(plan)} write(s) leave behind:\n"
+		f"  walker: {bytes(held).hex()}\n  C:      {theirs}\n"
+		f"  buffer: {packet.hex()}")
+	return replayed
 
 
 def _by_member(text: str) -> dict[tuple[str, str], str]:
@@ -1048,6 +1177,38 @@ def compared_members() -> tuple[int, int, int]:
 		walked_total += len(walked)
 		both_total   += len(asked & walked)
 	return asked_total, walked_total, both_total
+
+
+def test_the_writes_are_compared_at_all() -> None:
+	"""The population behind the write replay, because nothing else counts it.
+
+	The comparison above is a gate over "every logged write replayed", and
+	it contributes NOTHING when a replay stops -- which is correct, since a
+	partial replay compares an end state the walker was not asked to
+	produce, but it means the whole thing could go quiet without failing.
+	Measured here so it cannot.
+	"""
+	assert WRITES_COMPARED, "the parametrised cases did not run"
+
+	total = sum(WRITES_COMPARED.values())
+	live  = [name for name, held in WRITES_COMPARED.items() if held]
+
+	# Measured 2026-10-08: 5787 writes over 30 of the 42 schemas that
+	# reach this comparison at all. Two floors, for 26.588's reason --
+	# either alone can be met while the other rots -- and the second is
+	# this floor's own denominator rather than the corpus size, because a
+	# schema that writes nothing cannot move the first.
+	#
+	# A new WRITING schema raises both, and failing here is the point: a
+	# floor left at an older total goes slack by exactly what the new
+	# schemas contribute, which is how three of them came to permit a 40%
+	# loss (26.588).
+	assert total >= 5720, (
+		f"{total} writes replayed and compared, down from 5787, across "
+		f"{len(live)} of {len(WRITES_COMPARED)} schemas reached")
+	assert len(live) >= 30, (
+		f"only {len(live)} schemas contribute a write comparison, down "
+		f"from 30; the total above can be met by one schema writing more")
 
 
 def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
