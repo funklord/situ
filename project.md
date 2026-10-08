@@ -31304,6 +31304,81 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.602 Two status documents telling a reader that built features do not exist
+
+The lens 26.601 handed over was documents written as STATUS rather than as
+HISTORY -- `evidence.md` draws that line and says the sweep is worth running
+on the first and close to worthless on the second, because a `project.md`
+entry that opens with a gap and closes it has kept the phrase and the remedy
+together while a status claim stands alone and rots.
+
+situ has exactly two status documents, and both were wrong.
+
+**`man situc` told a reader that four of the six rungs do not exist.** The
+`--layer` paragraph said the remaining rungs *are decided and not built, and
+asking for one says which phase adds it* -- while `cli.FUTURE_LAYERS`, the
+dict whose entire purpose is to name a rung the parser accepts and the
+compiler then refuses, **is empty**, and all six build:
+
+	view      udp.c udp.h
+	edit      udp.c udp.h
+	relate    udp.c udp.h
+	frame     udp.c udp_frame.h udp.h
+	converse  udp.c udp_frame.h udp.h
+	drive     udp.c udp_frame.h udp.h
+
+**And the first conclusion drawn from that table was wrong**, which is the
+part worth keeping. *The upper three emit a framing header* went into the
+man page, measured on udp -- a schema that declares no request and reply, so
+converse and drive have nothing to add and emit frame's output verbatim, byte
+for byte. On dns the ladder is visible:
+
+	relate    + dns_relate.c dns_relate.h
+	frame     + dns_frame.h
+	converse  + dns_converse.h
+	drive     + dns_drive.h
+
+One artifact per rung, which is the title of 0032's own section -- *a rung
+adds files and changes none* -- and it adds them only where the schema has
+content for that rung, which is `layers.py`'s *reach*. `edit` is
+byte-identical to `view` for dns, because dns needs no allocation. **A
+one-schema measurement of a per-schema property is the population error in
+miniature**, and it was already in a file users read before dns contradicted
+it.
+
+**The README had the same fault structurally.** Under
+*Designed and accepted, not yet built* sat four items, of which the first
+said *built end to end* in its own first line. The heading had gone stale as
+the items beneath it were finished, so a reader scanning headings concluded
+four accepted features were absent. All four constructs appear in corpus
+schemas that `make check` compiles -- `when` in edges, `must_eq = "..."` and
+`enum : u8[6]` in bmp, json and id3, `tokens` in smtp, http and edges, and
+`peek` in json, sexpr and std/image itself -- which is what proves the
+compiler accepts them, rather than the prose saying so.
+
+The four moved into **Built**, the empty heading is gone, and the move
+carried a proof: 28 list items before and after, byte-identical, four
+relocated. *Designed and accepted, half built* keeps its one item,
+because 0050 names what remains -- a struct taking an argument cannot be
+a member of another, and `gen-tamper` declines a schema carrying one.
+
+**What stops it recurring is one assertion, and not a periodic sweep.** The
+man page's claim is checked against `FUTURE_LAYERS` itself, which answers
+both directions: empty means no rung may be called unbuilt, non-empty means
+each named rung must be. Striking through as you close is otherwise the only
+defence, and nobody connects the commit that closes a gap to the sentence
+elsewhere that still describes it.
+
+**The guard's first version passed with its target deleted.** It asserted
+`rung in about` over the paragraph -- and the paragraph says `dns_converse`
+and *its converse and drive output*, so removing converse's description left
+the word in place. It requires the `.I <rung>` introduction now, which is
+how the page marks a described term, and the sabotage then fails naming
+`converse` against the set of rungs that are introduced. **My own control
+was misaimed first as well**: it edited the description and left the `.I`
+line, so it demonstrated nothing until it removed the introduction instead.
+Third time today that a control had to be re-aimed before it meant anything.
+
 ### 26.601 The other six enums, and a silence that was right for an unwritten reason
 
 26.597's defect was a reader's copy of `image_kind` naming four of the
