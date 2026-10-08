@@ -31304,6 +31304,69 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.599 Three kinds of region read as one, and the interior that is the holder's
+
+26.597 gave every placement kind a row, and a region's said one thing for
+all of them: *a region, whose interior is placed against the region rather
+than against this struct*. True of three different situations.
+
+**What the probe actually carries.** `report`'s gate probe answers
+`refused=1 opened=1`, and its comment says why that is comparable without
+running anybody's cipher -- it is the gate's CLAIM rather than a
+measurement. So there is nothing here for a frontend to compute; what a
+reader needs is whether a gate exists at all. Measured over the corpus:
+
+	14 regions
+	 7 sealed, of which 1 WAIVED by `[allow_unverified_read]`
+	 7 coded or authenticated, with no gate
+	 6 interior scalars, which `report` renders and this does not
+
+**`[allow_unverified_read]` is the difference that changes what the bytes
+are worth**, and a row reading the same either way hid it. The construct's
+whole purpose is to give up 14.3's guarantee, so there is no gate to open
+and the schema says so in as many words. A reader told "sealed" about that
+region has been told the opposite of what the schema states.
+
+	record      sealed    a sealed region: its interior reads only through
+	                      a gate that a failed verification refuses (14.3)
+	unverified  body      a sealed region whose schema waives the guarantee
+	                      with `[allow_unverified_read]`, so there is no
+	                      gate to open
+	frame       datagram  a region, whose interior is placed against the
+	                      region rather than against this struct
+
+**The partition is asserted and the counts are not.** Seven, one and seven
+would go stale the day a schema is added, and what is worth holding is that
+a region landing in none of the three fails as a message addressed to
+whoever added it -- rather than being absorbed by a sentence that would
+have covered it for the wrong reason. A second test asserts all three cells
+are occupied, because a partition over an empty cell is a claim and not a
+guarantee.
+
+**The interior is not mine to decide, and this is the whole of why.** The
+walker renders six interior scalars; this frontend renders none, because a
+region's interior is not a member of its struct and nothing here reaches
+past the region row. Three things about that, and only the first is settled:
+
+- **For the six genuinely sealed regions**, showing the interior is giving
+  up the guarantee 14.3 exists for, in a tool whose own decision record
+  (0034) calls it read-only. The walker does it to compare five readers,
+  which is a different purpose from showing a person a message, and 14.6
+  already says a `[secret]` member has no debug accessor at all by design.
+- **For the waived one it is the opposite**, and that is the sharp case:
+  the schema has already answered. Withholding an interior the schema
+  explicitly permits reading is this tool declining something its input
+  authorises -- which is a defensible default and is still a choice nobody
+  wrote down.
+- **The cost of either is small and the asymmetry is not.** Six scalars in
+  the corpus; a wrong *withhold* is an incomplete listing, and a wrong
+  *show* is a seal opened by a tool that promised not to.
+
+So the option, its cost and whose it is: show a waived region's interior
+and not a sealed one's, at the price of a frontend that reads a flag to
+decide what it will display -- the copyright holder's, as 14.3's guarantee
+and 0034's read-only scope are both theirs.
+
 ### 26.598 The argument nobody could supply, and a test that passed for decode's reason
 
 26.597's sweep compared every line `report.listing` prints against the rows
