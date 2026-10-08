@@ -31304,6 +31304,53 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.590 The write differential's ceiling, and a mechanism that bought 0.3%
+
+26.589 deferred one thing by name -- replaying a write to a nested path --
+and the measurement taken before building it said to build something
+else, then said that was not worth building either. Both numbers are here
+so the next reader does not take them again.
+
+Of 132 declined replays:
+
+	 28 draws, 344 writes   a nested path, which has no placement here
+	104 draws, 2750 writes  "the frame does not reach this member"
+
+**The nested prize is 344, not the 3094 the raw total suggests.** The
+all-or-nothing rule voids a whole draw for one unresolvable write, so the
+plan sizes overstate what resolution would recover by nine times. A count
+inheriting the shape of its query, caught by splitting the causes before
+quoting either.
+
+**The 2750 looked like the real prize and bought 16.** All six members
+behind that refusal give the same one, so none is a defect: C's setters
+are bounds-checked and `void`, discarding the write silently where this
+walker refuses, and only a malformed message reaches either. The cause
+being uniform, the SHAPES are not -- and that is what the prediction
+missed. `ble:rssi` sits after a plain `data[data_length]`; `json:colon`
+is a delimiter, `padded:trailer` follows a pad, and
+`mqtt:requested_qos`, `edges:tail` and `edges:trailer` are inside payload
+runs. `sized_by` names only the first shape.
+
+So planting a short length -- the third rung of 26.576's and 26.585's
+ladder, and principled enough that it looked certain -- was written,
+measured at **5787 to 5803**, and reverted. 0.3%, for a new concept in
+the draw and forty lines. Planting also reaches 6 of the 24 draws per
+schema, which bounds any version of it.
+
+**The ceiling is the draw's validity, not the replay's resolution**, and
+that is the transferable part: a differential over random bytes is
+limited by how rarely random bytes make a valid message, which 26.576
+found for magics and 26.585 for discriminants. The remaining shapes --
+delimiters, pads, payload runs -- each need their own planting, and none
+is a length.
+
+Neither prize was taken. 344 writes for sub-view resolution and 16 for a
+planted length are both below what their complexity costs, and saying so
+with the numbers is the result: *measure the feared cost before
+deliberating* works the same way on a hoped-for one, and here it stopped
+two builds rather than informing them.
+
 ### 26.589 Five readers were compared and four writers, and eight probes were wrong
 
 The walker is the fifth description in a differential spanning 45 schemas
