@@ -31304,6 +31304,47 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.592 Two preconditions the compiler keeps and the shipped runtime did not state
+
+`runtime/c/situ.h` ships, and a hand-written caller has nothing to read but
+it. Two of its helpers are safe only because of a bound the FRONT END
+enforces, and neither said so:
+
+	situ_align_up_u32(at, n, limit)    `(n - at % n) % n` -- `n == 0` is UB
+	situ_bcd_valid(packed, digits)     shifts 4*i -- digits > 16 is UB
+
+Both bounds are real and both hold. `pad_to(n)` is a statement whose parser
+refuses a non-positive literal, and `bcd<digits>` is `digits * 4` bits wide
+against a 64-bit ceiling, so 16 is the largest the language can name.
+
+**Measured rather than reasoned, which is the part that took a correction.**
+Every `situ_align_up_u32` call in the generated C passes `4u`; every
+`situ_bcd_valid` and `situ_bcd_decode` call passes 1 or 2. The first
+measurement said otherwise -- 18, 29, 34, 43 -- because it split the call
+text on the wrong comma and read the bit offsets inside
+`situ_bits_get_msb` as digit counts. A surprising number from a parse
+rather than from the data, which is this session's commonest fault by a
+wide margin.
+
+So nothing is broken and nothing is reachable from a schema. What was
+missing is the sentence: *a precondition that is true and unwritten is
+indistinguishable from one nobody thought of*, and from outside a shipped
+header the two look identical. Stated now, each naming what enforces it,
+so a caller who is not the generator can see the contract.
+
+**The C one is the one that mattered.** Python's `align_up` has the same
+`at % n` and raises `ZeroDivisionError` -- loud, bounded, and nothing to
+guard against. C's is undefined behaviour. The Python docstring carries
+the precondition anyway, for agreement between the two descriptions rather
+than for safety, which is the same argument its `advance` already makes
+about clamping.
+
+Not guarded, deliberately. A runtime check costs every call to buy
+nothing a schema can reach, and this file's style throughout is to explain
+rather than to defend -- `situ_bcd_decode` already says that decoding
+invalid input is "unspecified but bounded" and names the function to ask
+first.
+
 ### 26.591 A nested write, and two sabotages that proved nothing
 
 26.590 measured two prizes and took neither, on the ground that 344
