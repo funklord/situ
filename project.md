@@ -31304,6 +31304,57 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.595 Which arm is present, and the verdict that makes the answer safe
+
+0034 asks this frontend for *every probe `report.SUPPORTED` names*, and
+seventeen are named. Two were missing, and they are one finding rather
+than two.
+
+**`arm_value`.** `fields()` keeps FIELD and RESERVED, so a variant was
+dropped -- and a variant's arms are not members of the struct at all, so
+nothing reached a row by any route. For icmp, mqtt, dns and json, whose
+meaning IS the variant, the tool printed a message with a hole in it while
+the walker's own listing says `body_echo ok=1` about the same bytes.
+
+	4 +  4  body    (the arm `echo` is the one present)
+
+`walk.chosen_arm` answers it, not a second reading of the discriminant:
+that function was extracted from `_variant_bits` in 26.578 precisely
+because two copies of "which arm does this discriminant select" would be
+two answers to the question the differential oracle exists to compare.
+
+**`validate`, and it is why the first one is safe.** Probing the branch
+the corpus does not reach -- an empty message -- the row read *the arm
+`reply` is the one present*. That looked like a defect and is not:
+`chosen_arm`'s own docstring says a discriminant the frame does not reach
+*reads as ZERO, which is what the four backends do rather than a choice
+made here*. All five readers agree, and the row is truthful about a
+message holding none of it.
+
+`report.listing` never showed that, because its arm probe sits behind a
+validate that has already failed. This frontend had **no verdict at all**:
+a refusal reached a row as `refused: <check>` on the member it blamed,
+which is 0051's identity and says nothing when the failure is BOUNDS and
+blames none. So every field said "cannot be read" while the variant row
+named an arm confidently, and nothing said why.
+
+	icmp_message  0 bytes  [bounds]
+	              validate: the frame does not reach what the layout needs
+
+On the header line, because it qualifies every row beneath it. An `ok`
+message gets the word and no sentence -- a verdict explaining itself on
+every message is noise.
+
+**The README broke, correctly.** It pastes real `situ-edit` output and its
+test holds the block whole, so a changed header line is a failed test
+rather than a stale sample. Updated with the prose that explains the
+brackets.
+
+And `render` had `held` bound to the measured extent twenty lines above
+where I bound it to the verdict. Third time this session in that function:
+a short generic name in a long one is how a shadow gets written, and mypy
+is what says so every time.
+
 ### 26.594 A predicate built, tested, and called by nothing
 
 `walker.report.relate` has existed since 26.95: *whether a pair satisfies
