@@ -31304,6 +31304,76 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.596 Every schema a compilation read, and the copy of our grammar it retires
+
+**fmake asked, on 2026-10-08, through the inbox under `.git`.** `situc
+build` had no option reporting the files a compilation read, and in its
+absence fmake had grown a regex for `import` and a resolver for the three
+rules `situc/imports.py` documents: relative to the importing file's own
+directory, `import std` against what `situc --print-std-dir` prints, and
+transitive expansion. Their words for what that is -- *a copy of your
+language's semantics living in another project, and it will be wrong the
+first time any of them changes.*
+
+**Their reproduction, which is the half worth keeping.** A consumer held a
+constant from a schema that no longer said it:
+
+	shared.situ   struct str { u16 len [max = 255]; u8 v[len]; }
+	record.situ   import "shared.situ";
+
+	first build        SITU_STR_LEN_VALUE_MAX 255u
+	edit the import    max = 255  ->  max = 7
+	second build       * up to date
+	the header still   SITU_STR_LEN_VALUE_MAX 255u
+
+Their freshness key held the schema's own content and not what the schema
+imported, because nothing here would tell it. That is their bug and they
+have fixed it; the request was to stop them having to know our grammar in
+order to.
+
+**`--deps FILE` on `build`.** The set `imports.expand` already keeps is the
+answer -- resolved absolute paths, one per file, which is how a diamond
+costs nothing and a cycle is caught. It is returned now rather than
+discarded, `parse` takes a set to fill, and `analyse` threads it. No second
+traversal and no second reading of the rules, which is fmake's own argument
+for a depfile: the thing that did the reading is the only thing that knows.
+
+	gen/record.c gen/record.h: record.situ sub/shared.situ
+
+	sub/shared.situ:
+
+**Seeded before the early return**, so a schema importing nothing answers
+with itself. *Read one file* and *was never asked* are different facts, and
+an empty set says neither.
+
+**The empty rule is what `gcc -MP` emits, and it is not decoration.** Delete
+an imported schema and make stops at *No rule to make target*, naming a file
+from a rule nobody wrote. With it, make runs situc instead -- and situc says
+which `import` cannot be read, at the line holding it, with where it looked.
+Both arms were run and they separate.
+
+**The control that was wrong, which is this entry's finding about method.**
+Four sabotages, each aimed at one check, three of them landing. The fourth
+claimed to test *the list is written after the outputs* and had deleted the
+write loop instead, so what failed was every test needing a header to exist:
+a control firing for a reason unrelated to the property, which from the
+output is indistinguishable from one that worked.
+
+Reordered properly, with both blocks kept, **nothing failed at all.** The
+ordering is invisible to a test that looks once the command has returned,
+because by then the outputs exist either way -- so the claim was untested
+and the comment asserting it was the whole of its support. Two arms can see
+it: a build that refuses writes no list, and a build with one output
+unwritable -- a directory standing where a header goes -- writes none
+either. The second fails under the reordering, and alone.
+
+**Only `build` carries the option, and that is a question rather than an
+omission.** Every `gen-*` command reads the same imports through the same
+`analyse`, so each has the same staleness exposure and the thread is already
+in place; a consumer generating tests or a fuzz harness from an imported
+schema has fmake's bug with none of fmake's fix. Twelve options is a
+different change from one, and whether to make it is the holder's.
+
 ### 26.595 Which arm is present, and the verdict that makes the answer safe
 
 0034 asks this frontend for *every probe `report.SUPPORTED` names*, and
