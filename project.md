@@ -31304,6 +31304,58 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.588 A floor decays by exactly as much as the corpus grows
+
+Three guards whose stated job is that coverage cannot shrink had gone
+slack, and **removing a whole schema from the corpus left all three
+green.** Measured 2026-10-08, and the floors were right when they were
+written:
+
+	guard                      written   floor   true   slack
+	dissector <-> walker         2305     2285   3837   1552  40%
+	walker <-> C                  617      610    760    150  19%
+	four backends examined       1101     1100   1572    472  30%
+
+Each was pinned about one percent under its measurement, which is tight.
+Eight schemas joined the corpus -- 37 to 45, id3 among them -- and nobody
+re-measured, because nothing failed. The numerator was re-taken by
+nobody; the denominator grew on its own. *A price has two halves and both
+age*, and this is the half that ages silently: a floor is a remembered
+high-water mark, and it decays by exactly as much as the corpus grows.
+
+**The sentences are what make the decay a defect rather than a margin.**
+Each guard states an invariant tighter than its floor was enforcing:
+
+	"the count, so the overlap cannot quietly shrink"
+	"that number cannot fall without a schema leaving the corpus"
+
+The second is falsifiable in one command, and it was false: eight
+schemas could have left before it fired.
+
+**Not every floor is this, and treating them alike would have been the
+mistake.** Six others were measured in the same sweep and left alone --
+`walker_c`'s two, `kernels`, the dissector's own read count, the
+walker's rendered-scalar count. Those are LIVENESS floors: their
+docstrings say *an empty sweep cannot pass as a clean one*, and one is
+explicit that it guards against "both walkers reporting clean for every
+draw, the C driver failing to build". A liveness floor set well under
+its measurement is doing its job, and tightening it would fail on every
+corpus change for nothing. **The tell is the message: a floor that says
+"down from N" is a high-water mark, and one that says "or it read
+nothing" is not.**
+
+**The mechanism fix is the schema count, asserted beside each floor.**
+A new schema fails there now, and the failure says to re-measure --
+which is the only moment anybody does. It is the shape `ARM_SHAPES`
+already uses, and that census has survived ten revisions without
+rotting because adding a schema cannot be silent.
+
+**The proof is a disproof rather than an argument.** With the old floors,
+dropping id3 from `SCHEMAS` leaves all three tests passing. With the
+re-pinned ones, all three fail. Run both ways, the second in a worktree
+still holding the old numbers -- which is what a scratch checkout is
+for, since the experiment needs the code as it was.
+
 ### 26.587 The one declaration keyword no schema exercised
 
 `register_block` was in `DECLARATION_KEYWORDS` and in no corpus schema.
