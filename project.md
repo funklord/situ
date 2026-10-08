@@ -31304,6 +31304,63 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.603 The frontend the fix did not reach, warned about in that file's own comment
+
+26.598 gave `situ-edit` a channel for a struct's arguments and a refusal
+that names them. It left `situ-edit-tui` printing a Python stack trace for
+the same schema, because `Unsupplied` is not a `Refused` -- pinned by a
+test, on purpose, so one handler cannot absorb the other -- and that
+frontend caught only the second.
+
+**The argument against doing that is a comment in the function I edited.**
+Twenty lines above where `--arg` should have gone, `--offset` carries:
+
+	As `situ-edit`, because the interactive frontend is where somebody
+	follows a nested member's note (26.581). Wiring one and not the other
+	would leave the tool that tells you to open a struct at an offset
+	unable to, which is how this gap existed in the first place.
+
+So the file states the rule, names the entry that paid for it, and I
+reproduced it in the same function five entries later. Reading a comment is
+not the remedy, because the comment was read -- it was read while adding
+`--offset`, which is why `--offset` is in both frontends.
+
+**What covers it is a population, derived rather than listed.** Every
+script in `bin/` that imports `open_from` is a frontend that opens a
+document -- `situ-edit` and `situ-edit-tui`, where `situc` and `situ-walk`
+are not -- and each must refuse both of `report.listing`'s non-row verdicts
+without a traceback AND be able to comply. The last clause matters: a
+frontend that declines helpfully and offers no way to supply the argument
+has moved the traceback into prose.
+
+`HOW_TO_RUN` holds the flags each needs to run without a terminal, and the
+set of its keys is asserted equal to the derived set -- so a third frontend
+fails this module the day it is written rather than being skipped, and a
+skip reads exactly like a pass.
+
+**And 0034's own structure is why this keeps happening.** That decision
+makes the CLI the reference *because* an interactive frontend is hard to
+test, so the CLI is where a fix lands and the others are where it goes
+missing. The remedy is not more care at the CLI; it is that the set of
+frontends is something a test can enumerate.
+
+**One stale sentence fell out of the same investigation.** The README's
+0050 item said `situc gen-tamper` *declines a schema carrying one -- nothing
+sweeps the corpus through it, so that costs nothing*. Both halves were
+overtaken on 2026-09-17, and `situc/codegen/c/tamper.py` says so in as many
+words -- *that was wrong twice over* -- then skips the argued struct and
+refuses loudly only where the skip emptied the list, because an empty
+result is the ordinary answer for a schema with no tags and emptiness alone
+cannot be loud. `test_every_subcommand_runs_on_every_schema` does sweep
+`gen-tamper` over every schema.
+
+What remains of 0050 is one thing and it is not code: a struct that takes
+an argument cannot be a member of another, because nothing says how a
+parent's arguments compose with a child's. The refusal says so, names the
+decision, and tells the caller to acquire it themselves -- which is a
+decision to be taken rather than a gap to close, and 0050's own *Still to
+do* says the same.
+
 ### 26.602 Two status documents telling a reader that built features do not exist
 
 The lens 26.601 handed over was documents written as STATUS rather than as
