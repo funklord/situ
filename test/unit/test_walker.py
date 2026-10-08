@@ -1187,6 +1187,28 @@ def test_the_writes_are_compared_at_all() -> None:
 	partial replay compares an end state the walker was not asked to
 	produce, but it means the whole thing could go quiet without failing.
 	Measured here so it cannot.
+
+	**AND THE CEILING IS MEASURED, so that raising it is a decision rather
+	than a guess** (26.590). Of 132 declined replays:
+
+		 28 draws, 344 writes   a nested path, which has no placement
+		104 draws, 2750 writes  "the frame does not reach this member"
+
+	The second looks like the prize and is not. All six members behind it
+	give that one refusal, so none is a defect -- C's setters are
+	bounds-checked and void, discarding the write where this walker
+	refuses, and only a malformed message reaches either. But only ONE of
+	the six sits after a plain `data[length]`: the rest are a delimiter, a
+	pad, and members inside payload runs, and `sized_by` names none of
+	those. Planting a short length was built and measured at **+16 writes,
+	0.3%**, and reverted: the draws that decline are mostly not the shape a
+	length can fix, and planting reaches 6 of the 24 draws in any case.
+
+	So the honest ceiling is the DRAW's validity rather than the replay's
+	resolution, and the 344 nested writes are the larger of the two
+	tractable prizes at 6%. Both were left: neither earns its complexity
+	at those numbers, and recording them is what stops the next reader
+	rebuilding the measurement to find out.
 	"""
 	assert WRITES_COMPARED, "the parametrised cases did not run"
 
