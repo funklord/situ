@@ -36,7 +36,8 @@ from walker import report, vm                      # noqa: E402
 from walker.image import NONE, Image, load                 # noqa: E402
 from situc.codegen.differ import writes as differ_writes  # noqa: E402
 from walker import walk as walk_module             # noqa: E402
-from walker.walk import (Refused, View, acquire, read_scalar,  # noqa: E402
+from walker.walk import (BITS_PER_BYTE, Refused, View,  # noqa: E402
+                         acquire, offset_bits, read_scalar,
                          write_scalar)
 
 
@@ -373,6 +374,67 @@ _WRITE_HEAD  = re.compile(r"^-- write (\S+)$")
 _WROTE_LINE  = re.compile(r"^(\S+) <- (-?\d+)")
 
 
+def _resolve(image: Image, held: bytearray, which: int,
+		local: str) -> tuple[View, int] | None:
+	"""C's flattened member name, as a view and a placement to write to.
+
+	A flat member resolves in one step. A NESTED one does not: C reaches
+	`covered_tail.head_seq` and `icmp_message.body_echo_identifier` through
+	an accessor it generates on the parent, and this image has no placement
+	for either path -- `head` and `body.echo` are placements and their
+	interiors belong to other structs. So the name is walked: the longest
+	flattened prefix that names a placement here, then into its struct at
+	its offset, and again (26.591).
+
+	`acquire`'s `at` is what makes the descent possible, and it exists
+	because a document had to be able to start part-way into a file
+	(26.581) -- the same mechanism, two uses apart.
+
+	BY NAME AND NOT BY `chosen_arm`, because the driver writes through
+	EVERY arm's setter whatever the discriminant says: all five of icmp's
+	appeared in one log. An arm's setter writes at the variant's offset
+	under that arm's layout, which is what the caller asked for, so the
+	resolution has to follow the name it was given.
+
+	`None` where the walk cannot get there, and the caller then voids the
+	whole replay: a partial one compares an end state nobody asked for.
+	"""
+	view = acquire(image, held, which)
+	name = local
+
+	for _ in range(8):		# a bound, since the descent reads the data
+		here = {}
+		for index in range(len(image.placements)):
+			whole = image.name_of(index)
+			head  = image.struct_name(view.struct) + "."
+			if not whole.startswith(head):
+				continue
+			here[whole[len(head):].replace(".", "_")] = index
+
+		if name in here:
+			return view, here[name]
+
+		# The longest prefix that names something, so `body_echo` wins over
+		# `body` for `body_echo_identifier` and the descent lands on the arm
+		# rather than on the variant.
+		prefix = max((one for one in here
+		              if name.startswith(one + "_")), key=len, default=None)
+		if prefix is None:
+			return None
+
+		inner = image.placements[here[prefix]].type_struct
+		if inner == NONE:
+			return None
+		try:
+			at = view.at + offset_bits(view, here[prefix]) // BITS_PER_BYTE
+			view = acquire(image, held, inner, at=at)
+		except Refused:
+			return None
+		name = name[len(prefix) + 1:]
+
+	return None
+
+
 def _writes_agree(schema: Path, image: Image, resolved: ResolvedSchema,
 		packet: bytes, answer: str) -> int:
 	"""Replay C's writes through the walker and compare the buffers.
@@ -433,13 +495,14 @@ def _writes_agree(schema: Path, image: Image, resolved: ResolvedSchema,
 	for name, local, value in plan:
 		which = next((i for i in range(len(image.structs))
 		              if image.struct_name(i) == name), None)
-		index = None if which is None else next(
-			(member for member in image.members(image.structs[which])
-			 if image.name_of(member).rpartition(".")[2] == local), None)
-		if index is None or which is None:
-			break			# nested: the whole replay is void, see below
+		if which is None:
+			break
+		found = _resolve(image, held, which, local)
+		if found is None:
+			break			# unresolvable: the whole replay is void
+		view, index = found
 		try:
-			write_scalar(acquire(image, held, which), index, value)
+			write_scalar(view, index, value)
 		except Refused:
 			break
 		replayed += 1
@@ -1225,12 +1288,12 @@ def test_the_writes_are_compared_at_all() -> None:
 	# floor left at an older total goes slack by exactly what the new
 	# schemas contribute, which is how three of them came to permit a 40%
 	# loss (26.588).
-	assert total >= 5720, (
-		f"{total} writes replayed and compared, down from 5787, across "
+	assert total >= 5960, (
+		f"{total} writes replayed and compared, down from 6022, across "
 		f"{len(live)} of {len(WRITES_COMPARED)} schemas reached")
-	assert len(live) >= 30, (
+	assert len(live) >= 31, (
 		f"only {len(live)} schemas contribute a write comparison, down "
-		f"from 30; the total above can be met by one schema writing more")
+		f"from 31; the total above can be met by one schema writing more")
 
 
 def test_the_two_descriptions_overlap_enough_to_be_a_differential() -> None:
