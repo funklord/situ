@@ -31304,6 +31304,66 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.600 The other verdict crashed too, and the question asked once instead of four times
+
+**26.598 fixed one symptom and left its cause.** `report.listing` prints
+two things in place of every row -- `no-view` for a frame too short for the
+struct, `needs-arguments` for a caller who has not said which layout the
+bytes are in -- and BOTH reached `acquire` through `Document.view()`,
+lazily, with nothing above it. That entry checked the argument list at open
+and stopped there. A zero-byte message still did this:
+
+	$ situ-edit example/arp/arp.situ empty.bin
+	  File "editor/text.py", line 89, in render
+	      held = document.measured
+	walker.walk.Refused: frame of 0 does not reach 28
+
+Same traceback, same line of `render`, same cause -- and I had read that
+traceback once already, fixed the branch it arrived on, and not asked what
+else came down it. **A fix aimed at a symptom tells you nothing about how
+many symptoms there are**, and the second one was two commits away from the
+first the whole time.
+
+**The view is acquired at open now**, which is where the window and the
+arguments are already checked and for their reason: every answer below
+would be about bytes nobody read. In `open_document` rather than in the
+CLI, because the TUI, the Qt window and the JSON all reach the view the
+same way -- fixing it in the frontend would have fixed one of four.
+
+	situ-edit: struct `arp_packet`: frame of 0 does not reach 28
+
+**Naming the struct, which `acquire` cannot.** *frame of 0 does not reach
+28* is true and says nothing about which layout wanted 28, and a reader who
+passed `--struct` has just chosen between several.
+
+**And the sweep is over.** Four probes were closed in four entries by four
+different lenses -- a variant and a verdict read off one listing, four
+placement kinds found by a corpus sweep, an argument channel found by a
+traceback, this by asking what else used the same path. Each lens worked
+and **not one of them could say whether any probes were left.**
+`SUPPORTED`'s own comment says it is *named rather than counted so that a
+kind quietly dropping out cannot look like agreement* -- and nothing
+compared that list against the frontend. A tuple that claims to enumerate
+is not a check that anybody answers it.
+
+So the question is asked once, against the tuple itself: a witness per
+probe, `set(WITNESS) == set(report.SUPPORTED)`, and the failure lands on
+whoever adds the eighteenth rather than on whoever next goes looking.
+
+	no-view      arp      needs-arguments  edges     scalar     arp
+	bytes        arp      element          sqlite    run_element  http
+	arm_value    dnsname  sealed           dtls      gated      dtls
+	delimited    http     varint           mqtt      while_count  dnsname
+	nested       bmp      tag              dtls      marker     tiff
+	validate     arp      relation         dns
+
+**The witnesses are derived rather than picked.** Each is the first hit of
+`report`'s own emitter over the corpus, because a witness chosen by the
+author of the test is a witness chosen to pass. And a second test opens
+every one of them, since a table of witnesses nothing can open would pass
+the rest by skipping -- the two that must NOT open being named explicitly,
+which is the partition rather than the cell.
+
 ### 26.599 Three kinds of region read as one, and the interior that is the holder's
 
 26.597 gave every placement kind a row, and a region's said one thing for
