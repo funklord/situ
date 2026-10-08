@@ -31304,6 +31304,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.587 The one declaration keyword no schema exercised
+
+`register_block` was in `DECLARATION_KEYWORDS` and in no corpus schema.
+Exercised by parser fixtures only -- three of them, all in `NEVER_PRODUCED`,
+testing what it refuses -- so it had never reached `solve`, `resolve`,
+`pack`, the four backends, the capability map, the wire signature or the
+walker. Twenty-two of twenty-three keywords had a schema and this did not.
+
+**And it works, which was not the expected answer.** Taken through the
+whole pipeline by hand first: map, wire, pack, and a build in all four
+targets, each clean, and the walker reads a word of it. The block's
+`width` and `access_width` reach both registers it holds and the
+addresses stay the registers' own -- the block scopes the settings, not
+the map.
+
+The first attempt looked like a defect and was not: *register `control`
+declares no `access_width`*, which is 15.1 making it mandatory under
+`target mmio`, correctly refusing a schema that had set it nowhere.
+Putting it on the block satisfied both registers, which is the construct
+working.
+
+So the gap is coverage rather than correctness, and `example/register`
+gains a block. It is the natural home: the three registers there each
+repeat `width`, `access_width` and `volatile`, so the file demonstrated
+the repetition a block removes without demonstrating the block. Added
+BESIDE them rather than swallowing them, so one file shows both
+spellings -- that example's thesis is the access modes and what they
+cost, and the block is a second thing it happens to be the right place
+for.
+
+`dma_descriptor.address` is a full-width `rw`, which makes it the one
+mutable field in the file: every narrow field there is `RewriteRequired`
+or `Immutable` because a one-bit write needs a read-modify-write that
+`no_rmw` forbids. The contrast arrived for free and is the clearest thing
+in the new rows.
+
+**IT DOES NOT REACH THE DIFFERENTIAL, AND THAT IS STRUCTURAL.** A
+register is a bus transaction rather than a message, so no driver
+acquires one and `register.situ` is one of the three schemas the
+four-backend comparison skips by name. Checked rather than assumed: the
+skip says *no struct a driver can acquire*. What the new rows do get is
+every corpus sweep that does not need a driver -- the map and wire
+snapshots, the style gate, the construct invariants, the backend-refusal
+comparison.
+
+**A pinned list went stale the moment the example grew**, which is the
+finding worth more than the schema. `test_registers_are_not_dissected`
+asserted the literal string `Not dissected: ctrl_reg, irq_reg,
+status_reg`, and a dissector must decline EVERY register -- a missing one
+is the failure. The list is derived from the schema now, by the
+`register` on each `StructDecl`, and deliberately not from the
+dissector's own predicate: asking the thing under test which registers
+it should have declined is agreement rather than evidence. Sabotaged by
+dropping the two new ones from the expected list, and it fails.
+
 ### 26.586 The editor printed a `[secret]`, and carried no effect axis at all
 
 Two axes the lattice has and no frontend read. Found by continuing 26.584's
