@@ -48,6 +48,39 @@ class Field:
 	#: which is a different answer from any value the lattice has.
 	mutate: str | None = None
 	auth: str | None = None
+	#: `[secret]` (12.6). A frontend must not render the VALUE of one: the
+	#: schema says these bytes are a key, and `situ-edit` printed them in
+	#: full -- a `u8 key[8] [secret]` came out as its hex (26.586). Carried
+	#: beside the value rather than instead of it, so `readable` stays a
+	#: fact about the walk and the withholding is the display's decision.
+	secrecy: str | None = None
+	#: Whether an access is a pure load or store. `EffectOnRead` is the
+	#: register whose read pops a FIFO or clears an interrupt, and no
+	#: frontend carried this axis in any form -- `Field` had no member for
+	#: it at all, so neither renderer could have shown it (26.586).
+	effect: str | None = None
+
+	@property
+	def withheld(self) -> bool:
+		"""Whether a frontend must not show this field's VALUE (26.586).
+
+		`[secret]` says the bytes are a key or a password, and both
+		frontends printed them: a `u8 key[8] [secret]` came out as its hex
+		in the table and as the same hex in `--format json`. The corpus's
+		three secrets all sit inside sealed regions and so are never
+		reached, which is why nothing noticed -- the hole was waiting for
+		the first schema to mark a top-level field.
+
+		The row stays, because dropping it would hide that the message has
+		the field at all, which is the reasoning `fields()` already applies
+		to a member it cannot read. What is withheld is the value.
+
+		There is deliberately NO option to print it. Adding one is a
+		decision about what this tool is for and belongs to the holder, and
+		a flag invented here would be the kind of thing somebody finds in
+		a shell history.
+		"""
+		return self.secrecy == "Secret"
 
 	@property
 	def readable(self) -> bool:
@@ -187,8 +220,12 @@ class Document:
 			except Refused as why:
 				rows.append(Field(local, None, None, None,
 				                  f"cannot be placed: {why}",
-				                  mutate = image.capability_of(index, "mutate"),
-				                  auth   = image.capability_of(index, "auth")))
+				                  mutate  = image.capability_of(index, "mutate"),
+				                  auth    = image.capability_of(index, "auth"),
+				                  secrecy = image.capability_of(index,
+				                                               "secrecy"),
+				                  effect  = image.capability_of(index,
+				                                                "effect")))
 				continue
 
 			value = held.get(local)
@@ -241,8 +278,10 @@ class Document:
 				       else f"refused: {because}"
 
 			rows.append(Field(local, at, wide, value, note,
-			                  mutate = image.capability_of(index, "mutate"),
-			                  auth   = image.capability_of(index, "auth")))
+			                  mutate  = image.capability_of(index, "mutate"),
+			                  auth    = image.capability_of(index, "auth"),
+			                  secrecy = image.capability_of(index, "secrecy"),
+			                  effect  = image.capability_of(index, "effect")))
 
 		return rows
 

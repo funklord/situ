@@ -97,7 +97,14 @@ def render(document: Document) -> list[str]:
 	for field in document.fields():
 		where = "--" if field.offset is None else f"{field.offset:>4}"
 		wide  = "--" if field.size is None else f"{field.size:>3}"
-		if isinstance(field.value, bytes):
+		if field.withheld:
+			# `[secret]`, so the LENGTH and not the bytes (26.586). A
+			# reader still learns the field is there and how long it is,
+			# which is what the row is for; the schema said the contents
+			# are a key.
+			shown = (f"<withheld: {field.size} secret byte(s)>"
+			         if field.size is not None else "<withheld: secret>")
+		elif isinstance(field.value, bytes):
 			shown = field.value.hex()
 			if len(shown) > 32:
 				shown = shown[:32] + "..."
@@ -180,6 +187,24 @@ def _write_marker(field: Field) -> str:
 	if field.auth == "Covered":
 		held.append("tag")
 
+	# THE EFFECT AXIS, which no frontend carried in any form (26.586):
+	# `Field` had no member for it, so neither renderer could have shown it.
+	# register.situ's `fifo` is `[ro, on_read = pop]` -- reading pops a
+	# FIFO, which its own comment calls the strongest effect there is -- and
+	# the marker said `[read-only]`, which is the mutate axis answering a
+	# different question.
+	#
+	# The axis value in prose rather than a verb, because the verb is the
+	# schema's and the image does not carry it: `on_read = pop` and
+	# `on_read = clear` reach this as the same `EffectOnRead`. Saying which
+	# would be inventing it.
+	if field.effect == "EffectOnRead":
+		held.append("effect on read")
+	elif field.effect == "EffectOnWrite":
+		held.append("effect on write")
+	elif field.effect == "EffectBoth":
+		held.append("effect on read and write")
+
 	return f"[{', '.join(held)}]" if held else ""
 
 
@@ -215,7 +240,13 @@ def as_json(document: Document) -> str:
 				"name":   field.name,
 				"offset": field.offset,
 				"size":   field.size,
-				"value":  (field.value.hex() if isinstance(field.value, bytes)
+				# WITHHELD HERE TOO, because a frontend reading the model
+				# is a frontend showing it to somebody (26.586). The text
+				# table and this carried the same hex for a `[secret]`
+				# field, and fixing one would have left the other.
+				"value":  (None if field.withheld
+				           else field.value.hex()
+				           if isinstance(field.value, bytes)
 				           else field.value),
 				"kind":   ("bytes" if isinstance(field.value, bytes)
 				           else "int" if field.value is not None else "none"),
@@ -229,6 +260,12 @@ def as_json(document: Document) -> str:
 				"writable":   field.writable,
 				"mutate":     field.mutate,
 				"auth":       field.auth,
+				# The two axes no frontend carried (26.586). `withheld`
+				# beside `secrecy` so a consumer does not have to know
+				# which value of the axis means it.
+				"secrecy":    field.secrecy,
+				"withheld":   field.withheld,
+				"effect":     field.effect,
 				"write_cost": field.write_cost,
 			}
 			for field in document.fields()

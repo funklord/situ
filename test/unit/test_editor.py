@@ -334,8 +334,13 @@ def test_render_keeps_a_row_for_a_field_it_could_not_read() -> None:
 	assert len(lines) == 1 + len(document.fields()) + noted
 
 
-def test_every_mutate_value_but_the_free_one_is_marked() -> None:
+def test_every_axis_value_but_the_ordinary_one_is_marked() -> None:
 	"""The POPULATION, not the value, because a sixth would be silent.
+
+	Named for the axes rather than for `mutate`: it covered one when it was
+	written and covers three since 26.586, and a name that claims less than
+	the test checks is the half of this file's own lesson about quantifiers
+	pointed the other way.
 
 	`_write_marker` named three of the mutate axis's five, and
 	`InPlaceSlack` fell through to the empty marker -- which is
@@ -351,26 +356,39 @@ def test_every_mutate_value_but_the_free_one_is_marked() -> None:
 	from editor.text import _write_marker
 	from walker.image import DOMAINS
 
-	free = "InPlaceFixed"
-	assert free in DOMAINS["mutate"], "the exception is no longer on the axis"
+	# Every axis the marker reads, and the one value of each that means
+	# "ordinary" and is deliberately silent. `effect` joined on 26.586,
+	# having reached no frontend in any form before that.
+	ordinary = {"mutate": "InPlaceFixed", "auth": "Uncovered",
+	            "effect": "Pure"}
 
-	for value in DOMAINS["mutate"]:
-		marker = _write_marker(Field("x", 0, 1, 0, "", mutate = value))
-		if value == free:
-			assert marker == "", (
-				f"`{free}` is the ordinary store and carries no marker")
-		else:
-			assert marker, (
-				f"`{value}` is on the mutate axis and shows nothing, so it "
-				f"is indistinguishable from `{free}` -- an editor reading "
-				f"this would take a costly write for a free one")
+	for axis, free in ordinary.items():
+		assert free in DOMAINS[axis], (
+			f"`{free}` is no longer on the {axis} axis")
+		for value in DOMAINS[axis]:
+			# A BASELINE MUTATE, because the marker returns nothing at all
+			# when `mutate is None` -- which means the image carries no
+			# capabilities, and saying nothing is right there. Without one
+			# the auth and effect branches are unreachable and this loop
+			# would report them unmarked for the wrong reason.
+			held = {"mutate": ordinary["mutate"]} | {axis: value}
+			marker = _write_marker(Field("x", 0, 1, 0, "", **held))
+			if value == free:
+				assert marker == "", (
+					f"{axis}=`{free}` is the ordinary case and carries no "
+					f"marker")
+			else:
+				assert marker, (
+					f"{axis}=`{value}` shows nothing, so it is "
+					f"indistinguishable from `{free}` -- a reader would "
+					f"take a costly access for a free one")
 
-	# And the axis is read from the lattice rather than listed here, so the
-	# count is the lattice's to change.
-	assert len(DOMAINS["mutate"]) == 5, (
-		f"the mutate axis now has {len(DOMAINS['mutate'])} values; the "
-		f"loop above covers them, but the marker wording is a judgement "
-		f"somebody has to make for a new one")
+	# The axes are read from the lattice rather than listed here, so a value
+	# added there arrives as a failure above. The counts are asserted so
+	# that a new one is a judgement somebody makes about wording rather
+	# than a silent pass.
+	assert [len(DOMAINS[axis]) for axis in ordinary] == [5, 2, 4], (
+		{axis: DOMAINS[axis] for axis in ordinary})
 
 
 #: mqtt, because its remaining length is the corpus's clearest
@@ -380,6 +398,56 @@ def mqtt_image() -> bytes:
 	schema   = load_schema(ROOT / "example" / "mqtt" / "mqtt.situ")
 	resolved = resolve(schema, solve(schema))
 	return pack(schema, resolved, metadata=True)[0]
+
+
+def test_a_secret_field_s_value_is_withheld_by_both_frontends() -> None:
+	"""`[secret]` said the bytes are a key and the tool printed them.
+
+	Measured: a `u8 key[8] [secret]` holding "SECRETKY" came out as
+	`5345435245544b59` in the table and as the same hex in `--format json`.
+	The corpus's three secrets all sit inside sealed regions, so they are
+	never reached by `fields()` -- which is why nothing noticed, and why
+	this test builds the schema the corpus does not have.
+
+	The ROW stays and the VALUE goes, which is the reasoning `fields()`
+	already applies to a member it cannot read: dropping it would hide that
+	the message has the field.
+	"""
+	import json as _json
+
+	from situc.diagnostics import Source
+	from situc.parser import parse
+
+	text = ("endian big;\n\nstruct token {\n\tu8   kind;\n"
+	        "\tu8   key[8]  [secret];\n}\n")
+	parsed   = parse(Source("t.situ", text))
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = pack(parsed, resolved, metadata=True)
+
+	raw      = bytes([1]) + b"SECRETKY"
+	document = open_document(blob, raw)
+	rows     = {field.name: field for field in document.fields()}
+
+	assert rows["key"].secrecy == "Secret", rows["key"].secrecy
+	assert rows["key"].withheld
+	assert not rows["kind"].withheld, "an ordinary field is not withheld"
+
+	# The row is kept and names its length, so a reader still learns the
+	# field is there.
+	line = next(line for line in render(document) if " key " in line)
+	assert "withheld" in line and "8" in line, line
+
+	# And the bytes appear in NEITHER frontend, in neither spelling.
+	shown = "\n".join(render(document)) + as_json(document)
+	for leak in ("5345435245544b59", "SECRETKY"):
+		assert leak not in shown, f"`{leak}` reached a frontend"
+
+	# `readable` stays a fact about the walk rather than about the display:
+	# the walk read it, and what changed is who is shown it.
+	assert rows["key"].readable, (
+		"withholding turned a readable field into an unreadable one, which "
+		"is a different claim about the message")
+	assert _json.loads(as_json(document))["fields"][1]["value"] is None
 
 
 def test_a_varint_length_is_not_shown_as_a_free_store() -> None:
@@ -764,7 +832,10 @@ def test_the_json_document_carries_everything_the_model_has() -> None:
 	rows = json.loads(as_json(document))["fields"]
 	assert rows, "the document has no fields"
 
-	derived = {"readable", "writable", "write_cost"}
+	# `withheld` is a property rather than a dataclass field, as these
+	# three are -- it answers "may a frontend show this value" from the
+	# secrecy axis (26.586).
+	derived = {"readable", "writable", "write_cost", "withheld"}
 	wanted  = {held.name for held in dataclasses.fields(Field)} | derived
 	for row in rows:
 		assert wanted <= set(row), (
