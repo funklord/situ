@@ -31304,6 +31304,115 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.606 hull adopted situ and found four faults in situ's own example
+
+`suggestion/hull.md`, written 2026-10-09 by a session adopting situ for
+hull's s-expression reader. Nine findings, measured with `bin/situc` at
+871b90e rather than read about, and four reproduce on `example/sexpr` with
+no hull schema involved. Their verdict was yes -- canonical Rivest
+s-expressions came out cleanly, `decimal u32 length until ":" [minimal]`
+then `u8 bytes[length]`, with `verify` refusing a leading zero, a short
+atom and a missing colon.
+
+**Reproduced here independently before anything was changed.** They
+measured generated C; this is the Python walker over the same schema, which
+is a second implementation rather than a second run:
+
+	(a b)          items=2   validate=OK
+	(a )           items=2   validate=OK    <- a phantom element
+	(a "x\"y")     items=3   validate=OK    <- the escape not framed
+	(a b           items=2   validate=OK    <- unterminated
+	(a (b)         items=2   validate=OK    <- unterminated
+
+**Finding 5, which they called the costliest, and they were right.**
+`situc verify` printed *5 vectors conform to example/sexpr/sexpr.situ* over
+those five, four of which are unterminated or mis-framed. `verify` is what
+the README's *Adopting it* section tells a reader to trust.
+
+The mechanism is not that `verify` overclaims by design -- it already
+qualifies itself. `_unwalked` exists so the command *must not print an
+unqualified "N vectors conform" while inheriting a gap it knows the name
+of*, and its docstring has said **"and so is a run walked to a
+terminator"** since it was written. The predicate under it did not:
+
+	repeated = (placement.array_count is not None
+	            or data_sized(placement)
+	            or placement.repeat_while is not None)
+
+A count, a data-derived size, a `while` -- and a delimiter-terminated run
+is none of the three, so `items[] until ")"` fell through to the
+nested-struct recursion and `seen` closed the cycle without appending
+anything. **The qualification existed and its population was short by one
+shape**, which is 26.597's allow-list exactly.
+
+With `bool(placement.delimiters)` added, the verdict reads *except inside
+arrays* and names `list.items`. Measured over the corpus: 36 notes before,
+42 after, all six new ones real -- `edges.kv_block.entries`, **http's
+`request_head.fields` and `response_head.fields`**, and sexpr's three. So
+this was never one example's problem; an HTTP header list was in the same
+state.
+
+**Finding 2, and the schema's own comment was the accusation.**
+`example/sexpr`'s `text` says *escapes are framed and not decoded* and
+carried `u8 chars[] until "\""` with no `[escape = "\\"]`, which
+`example/json` has and whose header explains the rule. So `(a "x\"y")`
+framed as three items: the escaped quote ended the scan and the remainder
+read as a symbol. Added, and it frames as two.
+
+**That is a wire-breaking change and the contracts said so**, which is the
+machinery working rather than an obstacle: `wire --check` reported *chars:
+nothing -> escape=0x5c; the same bytes now mean something else -- 1
+breaking*, and `map --check` showed `text.chars` gaining
+`canonical=NonCanonical`, which is the second cost json's header names --
+two spellings of one string. Both regenerated. The break is the point: the
+old framing was wrong about the format.
+
+**Finding 1 is a language gap and is recorded rather than worked around.**
+`(a )` gains a zero-length symbol: the space is not `)`, so an element is
+attempted, the lead eats the space, and `name[] before ' ' | '(' | ')'`
+ends at once -- an element of extent 1 holding nothing, which the
+zero-extent guard does not stop. The grammar in that file's own header says
+`symbol := anything up to whitespace or a paren`, and "anything" means at
+least one byte.
+
+situ cannot say that. `min` is a VALUE bound -- every use in the corpus is
+`u16 length [min = 24]` on a scalar -- so `[min = 1]` on a byte run would
+ask that no byte is NUL, which is a different claim and not the one. The
+available workaround is splitting the member into a mandatory first byte
+and a delimited rest, which changes the member shape and the wire contract
+to paper over a construct the language lacks. **Whether a delimited run can
+be required non-empty -- or whether a run element that consumed only its
+lead is an element at all -- is a decision about what a run means in all
+five readers, and it is the holder's.** Every multi-line hand-written form
+hits this, which is why hull reported it first.
+
+**What is recorded and not acted on**, with what I did and did not verify:
+
+- **3, a struct run's terminator is never reported.** `(a b` validates OK.
+  Their reading of the generated comment is right -- termination is
+  `items_span`'s answer -- and what they ask for is a `_items_terminated`
+  beside it, as `_chars_terminated` exists for a run of bytes. A new
+  accessor in four backends and the walk.
+- **4, `items_count` cannot tell malformed from finished.** Read from the
+  generated code by them, not measured; a list whose third element is
+  broken reads as two elements. They walk elements themselves for this.
+- **6, a struct named `bytes` breaks the Python backend.** Not reproduced
+  here: `situc build --target python` and `--target c` both emit cleanly
+  for `struct bytes { u8 n; u8 payload[n]; }`, so the crash is at CHECK
+  time, which is where their message puts it -- *while checking form
+  `list`*. The fault stands; what I have not got is the reproduction.
+- **7**, `hex` as a struct name gives a diagnostic that does not say the
+  word is reserved. **8**, a line comment cannot end at end-of-buffer,
+  which wants an `until "\n" | end` or a documented pattern. **9**, the
+  packaged situc and HEAD both print `1.0`, so an adopter who ran the
+  wrong one cannot tell.
+
+**The shape worth keeping: an adopter reads the documents and runs the
+tool, and finds what the corpus cannot.** situ's own sweeps compile every
+schema and the differential oracle compares five readers over hostile
+bytes, and none of them asks *does `verify` claim more than it checked* or
+*does this schema describe its own format*. hull asked by trying to use it.
+
 ### 26.605 0034's fourth row is answered by two refusals meeting, and nothing said so
 
 0034 tabulates what writing a field drags in. Row 1 is built (`--set`,
