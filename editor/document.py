@@ -506,6 +506,84 @@ class Document:
 			"little" if held.endian == LITTLE else "big"
 		write_bytes(self.view(), tag, value.to_bytes(wide, order))
 
+	def relations(self) -> list[tuple[str, str, str]]:
+		"""Which cross-message relations this document could be half of.
+
+		`(name, role, struct)` per relation whose request or response is the
+		struct this document was opened as. A document is one message, and a
+		relation is a predicate over two -- so what a single document can
+		say is which pairings it is eligible for, and `relate` below is what
+		answers the predicate once the second message is in hand.
+		"""
+		found: list[tuple[str, str, str]] = []
+		for index, held in enumerate(self.image.relations):
+			for role, struct in (("request", held.request),
+			                     ("response", held.response)):
+				if struct == self.struct:
+					found.append((self.image.relation_name(index), role,
+					              self.image.struct_name(struct)))
+		return found
+
+	def relate(self, which: str, other: Document) -> tuple[bool, str]:
+		"""Whether this document and `other` satisfy a named relation.
+
+		THIS ONE IS THE REQUEST and `other` the response, because the order
+		is temporal and a predicate over an unordered pair is a different
+		claim: dns's `reply_to` holds for (query, reply) and not for
+		(reply, query), which `test_relations` pins in both directions.
+
+		`(held, why)` rather than a bare bool. The predicate itself is
+		deliberately no richer than OK or CONSTRAINT -- a walker that said
+		WHICH `must` failed would answer a question the four compiled
+		backends cannot (26.95) -- so `why` names the relation and the two
+		structs rather than inventing a reason.
+
+		Built because nothing called `report.relate` outside its own tests,
+		and 0034 names this tool as what a read-only editor is worth
+		shipping with: *follow a relation between two messages* (26.594).
+		"""
+		wanted = [i for i in range(len(self.image.relations))
+		          if self.image.relation_name(i) == which]
+		if not wanted:
+			known = [self.image.relation_name(i)
+			         for i in range(len(self.image.relations))]
+			raise Refused(
+				f"no relation `{which}` in this image; it has "
+				f"{', '.join(known) if known else 'none'}")
+
+		index = wanted[0]
+		held  = self.image.relations[index]
+
+		# BY NAME AND NOT BY INDEX. A struct index means nothing across two
+		# images: `tick` is index 0 in its own image exactly as
+		# `dns_header` is in dns's, so comparing indices let a document
+		# from another SCHEMA through and would have returned a verdict
+		# about neither message. Caught by the test that passes two images
+		# on purpose.
+		#
+		# Identity on the image was the first fix and was worse: every
+		# `open_document` loads its own, so two documents over the same
+		# bytes are different objects and the check refused the ordinary
+		# case. A name comparison is what both cases actually turn on.
+		#
+		# The residual is two schemas that share a struct name, which this
+		# cannot tell apart. Naming it rather than reaching for a
+		# fingerprint: the relation is still evaluated against THIS
+		# document's image, so the worst case is a predicate run over a
+		# message laid out by a different schema of the same shape.
+		if self.name != self.image.struct_name(held.request):
+			raise Refused(
+				f"`{which}` takes a {self.image.struct_name(held.request)} "
+				f"first and this document is a {self.name}")
+		if other.name != self.image.struct_name(held.response):
+			raise Refused(
+				f"`{which}` takes a {self.image.struct_name(held.response)} "
+				f"second and that document is a {other.name}")
+
+		verdict = report.relate(self.image, index, self.view(), other.view())
+		return verdict == report.OK, (
+			f"`{which}`: {self.name} then {other.name}")
+
 	def _covered_span(self, held: object) -> tuple[int, int]:
 		"""The bytes a tag covers, as `(offset, length)`.
 

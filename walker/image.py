@@ -459,6 +459,17 @@ class Image:
 			return self.struct_names[index]
 		return f"struct[{index}]"
 
+	def relation_name(self, index: int) -> str:
+		"""A relation's declared name, decoded from the string pool.
+
+		`Relation.name` is an offset into it, and nothing decoded one: the
+		predicate had no consumer outside its own tests, so nothing ever
+		needed to say which relation it had checked (26.594).
+		"""
+		if index >= len(self.relations):
+			return f"relation[{index}]"
+		return _string_at(self.strings, self.relations[index].name)
+
 	def members(self, struct: Struct) -> list[int]:
 		first = struct.first_placement
 		return list(range(first, first + struct.placement_count))

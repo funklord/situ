@@ -55,6 +55,7 @@ if _root is not None and str(_root) not in sys.path:
 	sys.path.insert(0, str(_root))
 
 try:
+	from editor.document import Document		# noqa: E402
 	from editor.text import as_json, open_from, render	# noqa: E402
 	from walker.walk import Refused			# noqa: E402
 except ImportError as _why:			# pragma: no cover - a layout fault
@@ -88,6 +89,18 @@ def build_parser() -> argparse.ArgumentParser:
 	                         "of the frame stops, so a self-sizing struct "
 	                         "needs no length and one framed by its caller "
 	                         "does")
+	# A RELATION IS OVER TWO MESSAGES (26.95), so it takes a second file.
+	# `walker.report.relate` has existed since 26.95 with no caller outside
+	# its own tests, and 0034 names this tool as what a read-only editor is
+	# worth shipping with -- *follow a relation between two messages* being
+	# one of the five things it lists (26.594).
+	parser.add_argument("--relate", metavar="NAME",
+	                    help="check a cross-message relation by name; needs "
+	                         "--against for the second message, which is the "
+	                         "LATER of the two since the order is temporal")
+	parser.add_argument("--against", type=Path, metavar="FILE",
+	                    help="the second message a --relate check reads, "
+	                         "opened as the struct the relation names")
 	parser.add_argument("--hex", action="store_true",
 	                    help="the message file holds hex rather than bytes")
 	parser.add_argument("--format", choices=("text", "json"), default="text",
@@ -147,6 +160,20 @@ def apply_edits(document: object, assignments: list[str],
 	return notes
 
 
+def _response_struct(document: Document, which: str) -> str | None:
+	"""Which struct the named relation takes SECOND.
+
+	Opened for the caller rather than asked of them: the relation already
+	says what its response is, and making somebody pass `--struct` for the
+	second message would be asking them to repeat the schema back.
+	"""
+	image = document.image
+	for index in range(len(image.relations)):
+		if image.relation_name(index) == which:
+			return image.struct_name(image.relations[index].response)
+	return None
+
+
 def main() -> int:
 	args = build_parser().parse_args()
 	try:
@@ -163,6 +190,24 @@ def main() -> int:
 	except Refused as why:
 		print(f"situ-edit: {why}", file=sys.stderr)
 		return 1
+
+	# THE RELATION, before the listing, because it is the question the
+	# caller asked and the tree is context for it (26.594).
+	if args.relate is not None:
+		if args.against is None:
+			print("situ-edit: --relate needs --against FILE, since a "
+			      "relation is a predicate over two messages",
+			      file=sys.stderr)
+			return 1
+		try:
+			second = open_from(args.schema, args.against, _SITUC,
+			                   _response_struct(document, args.relate),
+			                   args.hex)
+			held, why = document.relate(args.relate, second)
+		except Refused as why_not:
+			print(f"situ-edit: {why_not}", file=sys.stderr)
+			return 1
+		print(f"{why}: {'holds' if held else 'does not hold'}")
 
 	print(as_json(document) if args.format == "json"
 	      else "\n".join(render(document)))
