@@ -107,6 +107,50 @@ require immutable(irq_reg.armed);
 // its diagnostic are pinned in test/unit/test_registers.py.
 assert in_place(ctrl_reg.enable);
 
+// SCOPED DEFAULTS, which is the one declaration keyword no schema here
+// exercised. The three registers above each repeat `width = 32`,
+// `access_width = 32` and `volatile`, because a register that omits them
+// under `target mmio` is refused -- section 15.1 makes `access_width`
+// mandatory, since it decides whether a narrow field can be written
+// without touching its neighbours.
+//
+// A `register_block` says them once for everything it holds. That is the
+// whole of what it buys, and it is worth a schema rather than a sentence:
+// a real peripheral is a dozen registers sharing one bus width, and
+// repeating the settings is a dozen chances to disagree with the bus.
+//
+// Left BESIDE the three above rather than swallowing them, so one file
+// shows both spellings. The thesis of this example is the access modes
+// and what they cost; the block is a second thing it happens to be the
+// natural home for.
+//
+// Addresses are the register's own, as they are outside a block -- the
+// block scopes the SETTINGS and not the map. 0x10 and 0x14 rather than
+// 0x00, because two registers declared at one address would read as an
+// overlap this file does not mean.
+register_block dma {
+	width        = 32;
+	access_width = 32;
+	volatile;
+
+	// A descriptor address the engine reads and the driver writes. Plain
+	// `rw` at the full width, which is what makes it the uninteresting
+	// case the block exists to make short.
+	register dma_descriptor @ 0x10 {
+		u32  address  [rw];
+	}
+
+	// And a status word, read-only, whose reads do NOT pop anything --
+	// the contrast with `irq_reg.fifo` above being the point. Same block,
+	// same settings, and the effect axis still comes from the field.
+	register dma_status @ 0x14 {
+		bit   active     [ro];
+		bit   error      [w1c];
+		u6    channel    [ro];
+		u24   remaining  [ro];
+	}
+}
+
 // What the field can do instead: it is composed into a word and written once.
 require immutable(status_reg.ready);
 require immutable(status_reg.fill_level);

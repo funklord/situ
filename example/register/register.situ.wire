@@ -27,6 +27,15 @@ struct ctrl_reg size=4
   @0x0000:6 1bit      bit        error  lsb_first
   @0x0000:7 25bit     u25        <reserved0>  little lsb_first preserve
 
+struct dma_descriptor size=4
+  @0x0000   4         u32        address  little
+
+struct dma_status size=4
+  @0x0000   1bit      bit        active  lsb_first
+  @0x0000:1 1bit      bit        error  lsb_first
+  @0x0000:2 6bit      u6         channel  lsb_first
+  @0x0001   3         u24        remaining  little
+
 struct irq_reg size=4
   @0x0000   1bit      bit        pending  lsb_first
   @0x0000:1 1bit      bit        armed  lsb_first

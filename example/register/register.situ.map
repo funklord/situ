@@ -19,6 +19,15 @@ register ctrl_reg @ 0x00 access_width=32 no_rmw size=4 mutate=Immutable repr=Val
   ctrl_reg.error                         offset=AbsoluteStatic(0x00:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=RewriteRequired
   ctrl_reg.<reserved0>                   offset=AbsoluteStatic(0x00:7) size=Fixed(25bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
 
+register dma_descriptor @ 0x10 access_width=32 size=4 repr=ValueConverted
+  dma_descriptor.address                 offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+register dma_status @ 0x14 access_width=32 size=4 mutate=Immutable repr=ValueConverted atomic=NonAtomic
+  dma_status.active                      offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  dma_status.error                       offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  dma_status.channel                     offset=AbsoluteStatic(0x00:2) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable
+  dma_status.remaining                   offset=AbsoluteStatic(0x01) size=Fixed(3) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Immutable
+
 register irq_reg @ 0x08 access_width=32 size=4 mutate=Immutable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
   irq_reg.pending                        offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable effect=EffectOnRead
   irq_reg.armed                          offset=AbsoluteStatic(0x00:1) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable effect=EffectOnRead

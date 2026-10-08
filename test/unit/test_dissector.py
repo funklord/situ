@@ -32,6 +32,7 @@ from typing import NamedTuple
 import pytest
 
 from every_schema import SCHEMAS, ids, load_schema
+from situc import ast
 from situc import pack as packer
 from situc.cli import analyse
 from situc.diagnostics import SituError
@@ -380,11 +381,31 @@ def test_a_reserved_field_loses_its_synthetic_brackets() -> None:
 
 def test_registers_are_not_dissected() -> None:
 	"""A register is a bus transaction. It does not appear on a wire, so a
-	dissector for one would be describing something that never arrives."""
-	source, resolved, _ = analyse(ROOT / "example" / "register" / "register.situ")
-	text = generate(parse(source), resolved, "registers")
+	dissector for one would be describing something that never arrives.
 
-	assert "Not dissected: ctrl_reg, irq_reg, status_reg" in text
+	EVERY register the schema declares, derived from the schema rather than
+	pinned: the list read `ctrl_reg, irq_reg, status_reg` and went stale the
+	first time one was added -- a `register_block` arriving with two more
+	(26.587). A declined register missing from the note is the failure worth
+	catching, and a count that has to be edited whenever the example grows
+	catches an edit instead.
+	"""
+	source, resolved, _ = analyse(ROOT / "example" / "register" / "register.situ")
+	parsed = parse(source)
+	text   = generate(parsed, resolved, "registers")
+
+	# A register lowers to a `StructDecl` carrying a `register` -- there is
+	# no declaration class of its own -- and that is the SCHEMA's fact.
+	# Asking the dissector's own predicate instead would compare it against
+	# itself, which is agreement rather than evidence.
+	declared = sorted(decl.name for decl in parsed.decls
+	                  if isinstance(decl, ast.StructDecl)
+	                  and decl.register is not None)
+	assert declared, "the example declares no registers at all"
+
+	assert f"Not dissected: {', '.join(declared)}." in text, (
+		f"the note does not name every declined register; the schema "
+		f"declares {declared}")
 	assert "Proto(" not in text
 
 
