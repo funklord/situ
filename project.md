@@ -31304,6 +31304,86 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.589 Five readers were compared and four writers, and eight probes were wrong
+
+The walker is the fifth description in a differential spanning 45 schemas
+and 760 member-answers. Its WRITER was in no differential at all: the four
+backends compare their setters against each other -- writing
+`0x0123456789ABCDEF` truncated, chosen so a reversed byte order is
+visible, and dumping the final buffer -- and this walker's store was held
+by a handful of expectations like `assert buffer[0] == 0xAB`, whose values
+came from reasoning about what C's setters leave behind rather than from
+running one. `situ-edit` writes through that path, into real files.
+
+It is compared now: **5787 writes replayed and compared across 30 of the
+42 schemas that reach the comparison**, inside the differential that
+already builds C per schema, so it costs no new compile.
+
+**THE CONSTRUCTION IS THE FINDING, because getting it wrong is easy in
+three distinct ways and each one produced a confident wrong answer.**
+
+*Replaying C's log rather than recomputing the plan.* The first attempt
+walked `differ.writes()` itself and disagreed on eight schemas -- every
+one because it reproduced neither the driver's order nor which of its
+views had succeeded. For `arp`, two structs describe the same bytes and C
+wrote where this did not. A differential whose two sides are not asked
+the same question reports disagreements that are not there, which is the
+failure the differ's own docstring warns about, met from the other side.
+
+*Every write or none.* The second attempt replayed eight of nine --
+skipping icmp's arm interiors, which have no placement here -- and then
+compared the final buffer, blaming the walker for bytes it was never
+asked to store. **A partial replay is not a weaker comparison, it is a
+wrong one**, because what is compared is the end state of a SEQUENCE.
+
+*The log's number is a read-back, not a write.* The driver prints `_get`
+after `_set`. json's `member.colon` is a delimiter: C stores 0xEF, the
+read-back scans for a delimiter and answers 0, and replaying the 0 wrote
+a byte C never wrote. So the log is authoritative for WHICH member in
+WHICH order -- the half that cannot be computed without reproducing the
+driver's control flow -- and the value comes from the same `_pattern` the
+driver used.
+
+**Eight probes were wrong in this one piece and nothing measured was.**
+The others: `Ask` is built positionally, so the value to write lands in a
+field whose docstring calls it a byte count; a one-draw measurement
+reported `nested=0` for a population only some draws reach; a name lookup
+took the last dotted component where C flattens the whole path; a floor
+measurement was cut by a `tail`; and a sabotage that did not apply left
+three green results that proved nothing -- caught only because confirming
+the sabotage landed is a step this tree already requires.
+
+Every one of them surfaced as a surprising number that could have been
+reported, and every one dissolved on asking what the instrument did
+rather than what it was meant to do. *When a result surprises you, the
+apparatus is where the error usually is* -- and the measured rate here,
+eight to nothing, is the strongest instance this repository has.
+
+**The one candidate that looked real, and is not.** `ble.adv_report.rssi`
+sits after `data[data_length]`, and the walker refused *the frame does
+not reach this member* on a write C performed. C's setter is
+bounds-checked and returns `void`: out of bounds it stores nothing and
+says nothing, where this walker refuses. Only a MALFORMED message
+reaches it -- `[max = 31]` bounds a valid report -- so the two agree
+about every message the schema admits. Recorded rather than fixed,
+because whether a `void` setter should be able to report a discarded
+write is a design question and not this walker's to answer.
+
+**What it does not cover, named rather than implied.** A nested path --
+`covered_tail.head_seq`, `icmp_message.body_echo_identifier` -- is
+reached by an accessor C generates on the parent, and this image has no
+placement for it: the arm or the nested member is the placement and its
+interior belongs to another struct. Replaying those needs a sub-view per
+path, which `acquire`'s new `at` (26.581) makes possible and which is its
+own piece of work. Such a replay stops and contributes nothing.
+
+Sabotaged by flipping the byte order of a whole-byte store: four schemas
+fail, through the write assertion and not the read one, and `arp` reports
+`efcdab89` against C's `89abcdef` -- the pattern earning its keep. Two
+floors, 26.588's lesson applied the same day: the total, and the number
+of schemas contributing, since one schema writing more could meet the
+first alone.
+
 ### 26.588 A floor decays by exactly as much as the corpus grows
 
 Three guards whose stated job is that coverage cannot shrink had gone
