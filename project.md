@@ -31304,6 +31304,59 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.591 A nested write, and two sabotages that proved nothing
+
+26.590 measured two prizes and took neither, on the ground that 344
+writes and 16 were both below their complexity. **One of those numbers
+was a comparison rather than a threshold**, and the comparison changed:
+the 16 was the measured value of the cheaper mechanism, so 344 stopped
+being the worse of two options and became the only one. Taken now, and
+it is worth saying that a deferral outlives the evidence under it unless
+somebody goes back -- the reasoning travels with the deferral and reads
+as settled.
+
+Measured: **5787 to 6022 writes, and 30 schemas to 31.** Not the 344
+predicted: some of those 28 nested draws also carry a bounds refusal, and
+all-or-nothing voids a draw for either reason.
+
+C reaches `covered_tail.head_seq` and `icmp_message.body_echo_identifier`
+through an accessor it generates on the parent, and this image has no
+placement for either path -- `head` and `body.echo` are placements and
+their interiors belong to other structs. So the name is walked: the
+longest flattened prefix that names a placement here, then into its
+struct at its offset, and again. `acquire`'s `at` is what makes the
+descent possible, and it exists because a document had to start part-way
+into a file (26.581) -- the same mechanism, two unrelated uses apart,
+which is the argument for having put the window in the one bounds check
+rather than in its callers.
+
+**BY NAME AND NOT BY `chosen_arm`**, which 26.589 had already taught: the
+driver writes through every arm's setter whatever the discriminant says,
+all five of icmp's in one log, because an arm's setter writes at the
+variant's offset under that arm's layout. Resolving by what is PRESENT
+would have written through the wrong arm and produced a byte
+disagreement to diagnose.
+
+**AND TWO SABOTAGES PASSED, which is the part worth keeping.**
+
+Dropping `view.at` from the descent changed nothing: the driver acquires
+every parent at offset zero, so the term is a no-op across the whole
+corpus. **It is correct and unexercised**, and recording that is the
+honest form -- a control that cannot fail is a constant, and claiming it
+validated the resolver would have been false.
+
+Breaking the longest-prefix rule also passed, for a better reason. A
+wrong prefix makes the descent FAIL rather than write wrong bytes: a
+variant has no `type_struct`, so the resolution returns `None`, the
+replay voids, and **coverage drops silently**. No byte comparison can see
+that, and no per-schema assertion is positioned to.
+
+What sees it is the floor: 6022 falls to 5815 and 31 schemas to 30, and
+the assertion fails naming both. **The control for a coverage-adding
+change is a coverage floor and not a correctness check** -- 26.588's
+lesson arriving from the other direction, three entries after it was
+written.
+
 ### 26.590 The write differential's ceiling, and a mechanism that bought 0.3%
 
 26.589 deferred one thing by name -- replaying a write to a nested path --
