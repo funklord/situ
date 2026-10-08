@@ -72,7 +72,39 @@ SIGNED, MARKER_GOVERNED, IS_TAG = 16, 32, 64
 #: `[size = N]`: `size_max_bits` is a pin rather than a reachable bound.
 PINNED = 128
 
-BIG, LITTLE, NATIVE = 1, 2, 3
+#: `image_endian`, all four of it, from the enum `std/image.situ` declares.
+#: `UNSET` was the one value this reader did not name -- the same shape as
+#: `image_kind`, which named four of eight and let a consumer write a
+#: correct allow-list over the wrong set (26.597).
+#:
+#: **It is load-bearing by absence, and that is why it is named here.**
+#: `walk._order` falls through to big for anything that is not `LITTLE` or
+#: `NATIVE`, so a placement carrying `UNSET` reads big-endian -- and the
+#: packer writes `UNSET` 76 times across the corpus, including in
+#: `keystore`, whose own `endian` is little. Measured 2026-10-08, and the
+#: first count of this was wrong in the flattering direction, so the
+#: breakdown is here rather than a total:
+#:
+#:      6   `marker_governed`     `_order` asks the marker first
+#:      2   the markers THEMSELVES  read big because they decide the order
+#:      3   sub-byte scalars      5, 7 and 5 bits: bit_order governs
+#:     33   byte runs             read as bytes either way
+#:     29   regions, variants, a tlv run -- spans, not values
+#:      3   pads                  RESERVED, never read
+#:
+#: So not one of them has a byte-order question to answer, which
+#: `test_an_unset_byte_order_has_nothing_to_order.py` asserts as a
+#: partition rather than leaving to be re-derived.
+#:
+#: **The C walker had reasoned this out already, in the other direction.**
+#: `walker/c/situ_walk.c` returns `SITU_WALK_UNSUPPORTED` for a multi-byte
+#: read whose order is unstated, saying *an unstated order is the marker
+#: construct, whose whole point is that the message decides -- and this
+#: build does not resolve a marker, so it declines rather than picking an
+#: end.* It declines where this walker answers, which is a capability
+#: difference it states by name; what it shows is that the reason existed
+#: in the tree all along, in the reader that could not act on it.
+UNSET, BIG, LITTLE, NATIVE = 0, 1, 2, 3
 
 #: The capability vocabulary, in the order the packer writes it: one byte per
 #: axis per placement, holding that axis's index into the tuple below, or
