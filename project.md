@@ -31304,6 +31304,53 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.593 Two generators of checks, and three sabotages that found my tests
+
+`gen-fuzz` and `gen-tamper` emit CHECKS rather than accessors, which makes
+one question matter more than their text: which schemas get one. Measured:
+
+	fuzz     45 of 45
+	tamper    4 of 45 -- dtls, keystore, packet, edges
+
+Both correct, and **neither population was asserted anywhere**.
+`test_tamper.py` compiles a harness and runs it against two deliberate
+liars, which proves the harness WORKS; nothing asked who gets one. A
+schema that gained a tag and quietly got no harness would lose the only
+check that its `authenticated` coverage is what it claims, and nothing
+would say so.
+
+The owed set is computed from `resolved` -- asked of the SCHEMA and not of
+the generator -- so a generator that stops emitting fails rather than
+agreeing with itself about what it should have emitted. And a `checksum`
+is pinned as not a tag for this purpose: udp and icmp get no harness,
+which is right, because anyone who can flip a byte under a CRC can
+recompute it.
+
+**THREE SABOTAGES, AND ALL THREE FOUND SOMETHING IN THE TEST RATHER THAN
+IN THE CODE.**
+
+The first was inert. An early return inserted after the signature landed
+INSIDE the docstring, so `grep` found the text, the sabotage looked
+applied, and nothing ran. *Confirming a sabotage landed has to mean
+confirming it is EFFECTIVE, not present* -- the sharper form of a rule
+this tree already had, and the check that answers it is reading the
+source past the docstring rather than searching the file.
+
+The second worked and failed the right test, which is the only one of the
+three that behaved.
+
+The third was effective and still passed. The assertion read
+`"LLVMFuzzerTestOneInput" in text`, and the sabotage renamed the entry
+point to `LLVMFuzzerTestOneInputX` -- which contains it. **A check whose
+pass includes the failure it was written for**, in a test written minutes
+earlier, and the fix is one character: the paren is what distinguishes an
+entry point from a prefix. With it, the same sabotage fails 45 of 47.
+
+That third one is worth the entry on its own. The rule it broke is one
+this repository has recorded twice and paid for both times, and it still
+arrived in new code the same afternoon -- which says the rule is not
+something a writer applies but something a sabotage has to find.
+
 ### 26.592 Two preconditions the compiler keeps and the shipped runtime did not state
 
 `runtime/c/situ.h` ships, and a hand-written caller has nothing to read but
