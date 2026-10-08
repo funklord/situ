@@ -31304,6 +31304,96 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.601 The other six enums, and a silence that was right for an unwritten reason
+
+26.597's defect was a reader's copy of `image_kind` naming four of the
+eight values `std/image.situ` declares, over which a consumer then wrote a
+filter that was correct and pointed at the wrong set. That schema declares
+**seven** enums. Pointing the same comparison at all of them is the lens
+the last defect hands over, so it was run.
+
+	image_section_tag    25 declared   25 named
+	image_kind            8            8    (26.597)
+	image_check          19           19
+	image_endian          4            3    <- unset
+	image_bit_order       3            1    <- documented in a comment
+	image_severity        3            1    <- deliberate, and says so
+	image_offset_base     3            0    <- recorded before its consumer
+
+**Three of the four are not faults, and reading them is what says so.**
+`report.REFUSE = 0` carries *the only severity a verdict reads ... the
+other two say something about a message that conforms*. `LSB_FIRST = 2`
+sits under a comment naming all three values, and the single comparison is
+against the one that changes behaviour -- an unset bit order reads
+msb-first, which is the default it means. And `image_offset_base` is
+0024's, whose own header says the base is needed *before any backend can
+walk an `indexed` region*: the packer writes it, `report` destructures it
+as `_measured_from`, and no backend touches `index_table` at all. A value
+recorded ahead of its consumer on purpose.
+
+**`image_endian` is the one that mattered, and it mattered by absence.**
+`walk._order` falls through to big for anything that is not `LITTLE` or
+`NATIVE`, so a placement carrying `unset` reads big-endian -- and the
+packer writes `unset` **76 times** across the corpus, `keystore` among
+them, whose own `endian` is little.
+
+Nothing was wrong. What was missing is any statement of why:
+
+	 6   `marker_governed`       `_order` asks the marker first
+	 2   the markers THEMSELVES  read big because they decide the order
+	 3   sub-byte scalars        5, 7 and 5 bits: `bit_order` governs
+	33   byte runs               read as bytes either way
+	29   regions, variants, a tlv run -- spans, not values
+	 3   pads                    RESERVED, and `_scalars` never probes one
+
+**So the fix is not a fix.** `UNSET = 0` is named beside its three
+siblings, and the property is asserted as a PARTITION: every placement
+carrying it is either marker-governed or has nothing to order. "The packer
+never writes unset" is false, and "it does not matter" is a claim about
+every placement in a corpus that grows -- what is checkable is the
+division, so one arriving in neither cell fails as a message addressed to
+whoever made the packer write it.
+
+**And the consequence is pinned beside the partition**, because without it
+the partition could go on passing after the hazard had gone: a placement
+whose endian is cleared to `unset` really does read big, demonstrated on
+`keystore` -- which carries no marker at all, so its placements are
+unmarked as a fact rather than by a flag I cleared.
+
+**My own count was wrong first, in the flattering direction.** The table
+above began as *73 with nothing to order, 3 marker-governed* -- and the 3
+were only the MULTI-BYTE scalars among the marker-governed six, from a
+looser pass whose filter also swallowed a 24-bit pad. It was caught by
+asking for the breakdown rather than by re-reading the total, which is why
+the entry carries six rows instead of a sum. A count taken to justify a
+claim is the one nobody re-checks, including its author.
+
+**And the reason existed in the tree, in the reader that could not use
+it.** I had this entry saying nothing anywhere stated it. `situ_walk.c`
+returns `SITU_WALK_UNSUPPORTED` for a multi-byte read whose order is
+unstated, and says why: *an unstated order is the marker construct, whose
+whole point is that the message decides -- and this build does not resolve
+a marker, so it declines rather than picking an end.* That walker declines
+where this one answers, which is a capability difference it states by name
+and the README already advertises -- *what it declines it declines by
+name*. So the argument was written down, in C, by whoever could not act on
+it, and the Python side had it nowhere. **A second implementation is a
+place to look for a rule, not only a thing to agree with.**
+
+**One latent hazard, recorded rather than fixed.** `pack._index_base` maps
+`{"region": 0, "message": 1}` and returns **2** for anything else -- and 2
+is `base_field`, a valid value. `ast.IndexBase` has exactly three members
+today, so the fallback is unreachable; a fourth would be silently encoded
+as "measured from a field" rather than refused, and the schema's
+`default = error` cannot catch it because the value it receives is legal.
+The shape is *a check whose pass includes the failure*, one step before
+the check exists.
+
+Sabotage: the wrong enum value fails the table comparison, a fall-through
+to little fails the consequence, and a packer writing `unset` for little
+fails the partition on exactly the five little-endian schemas -- `bmp`,
+`keystore`, `pickle`, `register` and `std/image` itself.
+
 ### 26.600 The other verdict crashed too, and the question asked once instead of four times
 
 **26.598 fixed one symptom and left its cause.** `report.listing` prints
