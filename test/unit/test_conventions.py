@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tool"))
 
 import pytest
 
+from situc.cli import FUTURE_LAYERS
+from situc.layers import LAYERS
 from situc.parser import ATTRIBUTE_NAMES
 
 import python_floor  # noqa: E402
@@ -288,6 +290,49 @@ def test_the_failure_classes_match_the_runtimes() -> None:
 
 
 # -- the interpreter floor --------------------------------------------------
+
+
+def test_the_man_page_does_not_say_a_built_rung_is_unbuilt() -> None:
+	"""The ladder's documentation, tied to the ladder's own list (26.602).
+
+	`man situc` said four of the six rungs were *decided and not built, and
+	asking for one says which phase adds it* -- while `FUTURE_LAYERS` was
+	empty and all six built, so a reader was told four features did not
+	exist. Nothing caught it: a status claim about what is built goes stale
+	in silence, and its falsifier is a commit nobody connects to it.
+
+	So the claim is checked against the structure that decides it rather
+	than re-read periodically. `FUTURE_LAYERS` is the CLI's own record of
+	which rungs are accepted and then refused by name, so it answers both
+	directions: empty means the page must not call any rung unbuilt, and
+	non-empty means each named rung must be called unbuilt.
+	"""
+	page = (ROOT / "packaging" / "situc.1").read_text(encoding="utf-8")
+	start = page.index(r"\-\-layer")
+	end   = page.index(".TP", start)
+	about = page[start:end]
+
+	# `.I <rung>` ON ITS OWN LINE, which is how the page introduces each
+	# one -- not `rung in about`. That was the first version and it passed
+	# with a rung's description deleted, because the paragraph also says
+	# `dns_converse` and `its converse and drive output`: a substring
+	# cannot tell a described term from a mention of the same word.
+	introduced = {line[3:].strip() for line in about.splitlines()
+	              if line.startswith(".I ")}
+	for rung in LAYERS:
+		assert rung in introduced, (
+			f"`man situc` does not introduce the `{rung}` rung as a term; "
+			f"it introduces {sorted(introduced)}")
+
+	if not FUTURE_LAYERS:
+		assert "not built" not in about, (
+			"every rung is built -- `FUTURE_LAYERS` is empty -- and the man "
+			"page still says some are not")
+	else:
+		for rung in FUTURE_LAYERS:
+			assert rung in about and "not built" in about, (
+				f"`{rung}` is refused by name and the man page does not say "
+				f"so")
 
 
 def test_a_rung_is_numbered_and_a_layer_is_named() -> None:

@@ -43,17 +43,34 @@ and every schema this compilation read -- imports, transitively, \fBstd\fR
 ones included -- as their prerequisites, so that a build system rebuilds a
 generated header when an imported schema changed.
 .B \-\-layer
-chooses how much of the schema becomes code, each rung emitting everything
-below it:
+chooses how much of the schema becomes code. Six rungs, monotone -- each
+emits everything below it and answers exactly one more question yes
+(decision 0032) -- and all six are built:
 .I view
-is accessors over bytes the caller owns and is the default, and
+is accessors over bytes the caller owns, and is the default;
+.I edit
+builds or resizes a message whose extent is not fixed;
 .I relate
-adds one predicate per declared relation, over two views the caller already
-holds, in whichever backend
-.B \-\-target
-names. The remaining rungs --
-.IR edit ", " frame ", " converse " and " drive
--- are decided and not built, and asking for one says which phase adds it.
+adds one predicate per declared relation, over two views the caller
+already holds;
+.I frame
+takes a byte stream in and gives whole messages out;
+.I converse
+matches a reply to its request; and
+.I drive
+sends, receives, retransmits and times out. A rung adds files and changes
+none, and it adds them only where the schema has content for that rung:
+.I dns
+grows
+.IR dns_relate ", " dns_frame ", " dns_converse " and " dns_drive
+one per rung, while
+.I udp
+declares no request and reply so its converse and drive output is its
+frame output. Rung 6 owns I/O and never the clock: time
+enters as a parameter, so a retransmission and a timeout are
+deterministic. Which backend a rung is emitted in is
+.BR \-\-target "'s"
+to say.
 .TP
 .B map
 Emit the capability map, or with

@@ -1658,27 +1658,6 @@ today and which is a written-down design.
   cross-backend comparison by an allow-list, which hid three separate bugs
   in the walker's reading and writing of it. It is included now.
 
-**Designed and accepted, half built.**
-
-- **External arguments** (decision 0050). A format whose shape follows a
-  fact the message does not carry -- a negotiated cipher suite, a card
-  class, a block size. `prefix(...)` was already the precedent that a caller
-  may know something the message does not. `--define name=value` sets a
-  declared `const` before the layout is solved, and every command that reads
-  a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
-  are checked; the map and the wire signature name one; and the Wireshark
-  dissector reads a `[stream]` one from a preference, which is the first
-  preference that generator has ever emitted. All four views now take their
-  arguments -- Python and Rust by a field, C++ by a member, C by a trailing
-  parameter on the accessors that read it -- and none emits an accessor for
-  the parameter itself. The packed image and both walkers take it as well,
-  the per-layer generators take it or say why they cannot, and
-  `test/schema/edges.situ` carries one, so every gate now covers the
-  construct. What remains: a struct that takes an argument cannot be a
-  member of another yet, and `situc gen-tamper` declines a schema carrying
-  one -- nothing sweeps the corpus through it, so that costs nothing.
-
-**Designed and accepted, not yet built.**
 
 - **Messages a schema carries** (decision 0051), built end to end. `when`
   states what a message *means* beyond its layout -- an identity, a
@@ -1722,6 +1701,26 @@ today and which is a written-down design.
   cost falls on every OTHER arm, which each grew a member to own the byte
   it is chosen by -- so json's literals are `[must_eq = "true"]` where
   they were `[must_eq = "rue"]`.
+
+**Designed and accepted, half built.**
+
+- **External arguments** (decision 0050). A format whose shape follows a
+  fact the message does not carry -- a negotiated cipher suite, a card
+  class, a block size. `prefix(...)` was already the precedent that a caller
+  may know something the message does not. `--define name=value` sets a
+  declared `const` before the layout is solved, and every command that reads
+  a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
+  are checked; the map and the wire signature name one; and the Wireshark
+  dissector reads a `[stream]` one from a preference, which is the first
+  preference that generator has ever emitted. All four views now take their
+  arguments -- Python and Rust by a field, C++ by a member, C by a trailing
+  parameter on the accessors that read it -- and none emits an accessor for
+  the parameter itself. The packed image and both walkers take it as well,
+  the per-layer generators take it or say why they cannot, and
+  `test/schema/edges.situ` carries one, so every gate now covers the
+  construct. What remains: a struct that takes an argument cannot be a
+  member of another yet, and `situc gen-tamper` declines a schema carrying
+  one -- nothing sweeps the corpus through it, so that costs nothing.
 
 **Proposed.**
 
