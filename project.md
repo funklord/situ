@@ -31304,6 +31304,77 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.586 The editor printed a `[secret]`, and carried no effect axis at all
+
+Two axes the lattice has and no frontend read. Found by continuing 26.584's
+lens -- a capability the editor consumes partly -- down the list rather
+than stopping at the one that paid.
+
+**`[secret]` SAID THE BYTES ARE A KEY AND THE TOOL PRINTED THEM.** A
+`u8 key[8] [secret]` holding "SECRETKY" came out as `5345435245544b59` in
+the table and as the same hex in `--format json`. The corpus has three
+`secrecy = Secret` placements and **all three sit inside sealed regions**,
+which `fields()` never reaches -- so nothing noticed, and the hole was
+waiting for the first schema to mark a top-level field. This entry's test
+is that schema.
+
+The ROW stays and the VALUE goes, which is the reasoning `fields()`
+already applies to a member it cannot read: dropping the row would hide
+that the message has the field. It shows the length instead, so a reader
+still learns what is there.
+
+And `readable` stays a fact about the walk rather than about the display.
+The walk read it; what changed is who is shown it. Conflating the two
+would make a withheld field indistinguishable from an unreadable one,
+which is a different claim about the message.
+
+**There is deliberately no option to print it.** Whether this tool should
+have one is a decision about what it is for, it belongs to the holder, and
+a flag invented here is the kind of thing somebody later finds in a shell
+history.
+
+**The effect axis reached no frontend in any form**, and not because a
+branch was missing: `Field` had no member for it, so neither renderer
+could have shown it. register.situ's `fifo` is `[ro, on_read = pop]` --
+reading pops a FIFO, which that file's own comment calls the strongest
+effect there is -- and the marker said `[read-only]`, which is the mutate
+axis answering a different question. It reads
+`[read-only, effect on read]` now, and `ctrl_reg.start` reads
+`[rewrites, effect on write]`.
+
+The axis value in prose rather than a verb, because the verb is the
+schema's and the image does not carry it: `on_read = pop` and
+`on_read = clear` arrive as the same `EffectOnRead`, so naming one would
+be inventing it.
+
+**No actual effect occurs, and the marker is still right.** This tool
+reads a file; reading a byte of a dump pops nothing. What the marker says
+is what the capability map exists to say -- that in the system the schema
+describes, this field's value is not freely re-readable -- which is what a
+person reading a register dump needs to interpret it.
+
+**The population assertion grew from one axis to three**, and its name
+with it: it was `test_every_mutate_value_but_the_free_one_is_marked` and
+covered one axis. Each axis names the single value that means ordinary --
+`InPlaceFixed`, `Uncovered`, `Pure` -- and every other value must mark.
+
+Two things the existing tests caught in passing, which is the suite being
+worth its keep. The marker returns nothing at all when `mutate is None`,
+because that means the image carries no capabilities and saying nothing is
+right there -- so the loop needed a baseline mutate or the auth and effect
+branches were unreachable and would have reported themselves unmarked for
+the wrong reason. And `test_the_json_document_carries_everything_the_model_has`
+refused `withheld` as an invented key until it was declared a derived
+property, which is exactly the drift it exists to stop.
+
+Four sabotages, each failing through its own check. Inverting the axis
+value so that `Public` is withheld fails five tests including the README
+sample, so the over-withholding direction is as loud as the under.
+
+Three frontends and one renderer: `situ-edit-tui` delegates to `render`,
+so it inherited the withholding. Verified by running all three and
+grepping for the bytes in both spellings -- zero.
+
 ### 26.585 A RecursionError on every valid keystore, and the draw that cannot reach it
 
 `situ-edit` and `report.listing` both died with a traceback -- not a
