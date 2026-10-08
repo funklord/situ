@@ -31304,6 +31304,60 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.594 A predicate built, tested, and called by nothing
+
+`walker.report.relate` has existed since 26.95: *whether a pair satisfies
+relation `which`*, with its own tests in `test_relations.py`. **Nothing
+outside those tests called it.** Decision 0034 names the tool it was built
+for -- *follow a relation between two messages* is one of five things it
+lists as what a read-only editor is worth shipping with -- and `editor/`
+did not mention it.
+
+The same shape as an interface whose least-used method has no caller, one
+level up: the predicate is right, its tests prove it, and no front end
+asks. Reading the declarations found nothing, because nothing is wrong
+with them; reading the CALLERS is what found it.
+
+`situ-edit --relate reply_to --against reply.bin` now answers:
+
+	`reply_to`: dns_header then dns_header: holds
+
+The second message is opened as the struct the relation names rather than
+by a `--struct` the caller repeats, since the relation already says what
+its response is. And the verdict stays `holds` or `does not hold`: a
+walker that said WHICH `must` failed would answer a question the four
+compiled backends cannot, so the editor names the relation and the two
+structs instead of inventing a reason.
+
+**TWO MISTAKES OF MINE, BOTH CAUGHT BY A TEST WRITTEN FOR SOMETHING
+ELSE.**
+
+The guard compared struct INDICES across two images. `tick` is index 0 in
+its image exactly as `dns_header` is in dns's, so a document opened
+against a DIFFERENT SCHEMA passed straight through and would have been
+handed a verdict about neither message. The test that caught it is the one
+that passes two images on purpose, written to check a refusal rather than
+to find that.
+
+Identity on the image was the next attempt and was worse: every
+`open_document` loads its own, so two documents over the same bytes are
+different objects and the check refused the ordinary case. **Names are
+what both cases turn on.** The residual -- two schemas sharing a struct
+name -- is named rather than chased with a fingerprint.
+
+**AND THE CORPUS CANNOT TEST THE THING THAT MATTERS MOST.** dns's
+`reply_to` is `reply.id == query.id` and `reply.opcode == query.opcode`:
+two equalities, so it is symmetric by construction and holds for a pair
+either way round. A relation's whole point is that the order is temporal,
+and the one relation in 45 schemas cannot tell a correct implementation
+from one that sorts its arguments. The order is pinned against
+`must later.seq > earlier.seq`, written for the purpose -- and swapping
+the two views fails that test and no other, which is what earns it.
+
+`Relation.name` is a string-pool offset and nothing decoded one, for the
+same reason: with no consumer, nothing ever needed to say which relation
+it had checked.
+
 ### 26.593 Two generators of checks, and three sabotages that found my tests
 
 `gen-fuzz` and `gen-tamper` emit CHECKS rather than accessors, which makes
