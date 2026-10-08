@@ -31304,6 +31304,70 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.605 0034's fourth row is answered by two refusals meeting, and nothing said so
+
+0034 tabulates what writing a field drags in. Row 1 is built (`--set`,
+26.179), row 3 is built (a tag-covered field recomputed, 26.579), row 2 is
+refused and needs 12.3. Row 4 reads *a field an invariant reads -- the
+invariant has to be maintained, not merely checked*, and
+`editor/document.py`'s docstring repeated it: *an invariant must be
+maintained rather than checked. None of that is here.*
+
+Both true. Together they read as a gap, and there is not one.
+
+**The experiment, because the comfortable answer arrived first.** The
+corpus has exactly one invariant, `derived.total == size(derived.a) +
+size(derived.b)`, and both members it reads are fixed -- so nothing there
+can change what it reads and the interesting case is unreachable. Writing
+the derived field is refused: `total` is `mutate = Immutable` and the
+editor says *the schema does not let anyone write this*. That is one
+refusal and it would have been easy to stop there.
+
+So the case that could disagree was constructed: an invariant over the size
+of a VARIABLE run, where a fixed scalar decides it.
+
+	struct framed { u8 n [max = 8]; u8 payload[n]; u8 total; }
+	invariant framed.total == size(framed.payload);
+
+`n` is a fixed scalar written in place -- row 1, the built row -- and an
+analysis of "does writing this member shift anything?" says no. The editor
+refuses it anyway:
+
+	situ-edit: `n`: writing this moves framed.payload, framed.total, and
+	a shifting write is not built
+
+**Because it measures rather than analyses.** The write goes into a copy,
+the copy is walked, and every member's offset and size is compared, so a
+write whose CONSEQUENCE shifts is caught however it arrives. That is what
+closes the second route, and it is the property 0034's amendment already
+claimed for row 2 -- what nobody had noticed is that it also discharges
+row 4.
+
+**So no write this editor permits can leave an invariant stale**, by two
+refusals meeting: Immutable on the derived field, and measurement on
+anything that moves a size it reads.
+
+**Nothing asserted the conjunction, and the new test's deciding branch was
+empty.** Writing each member of the struct in turn, all three are refused
+-- so the branch checking that a PERMITTED write leaves the invariant
+holding had never executed, which is a deciding assertion over an empty
+set. The emptiness is now asserted rather than relied on: a member becoming
+writable fails with a message saying which branch has never run.
+
+And the sabotages populate that cell, which is the best answer it could
+have given. Turn off the Immutable refusal and the write is permitted,
+leaving `total` at 1 against three payload bytes. Turn off the measurement
+and writing `n` leaves `total` at 3 against one. Each refusal is
+load-bearing and each absence is caught by the branch that had never run.
+
+**The docstring was stale in three places at once**, which is what a module
+header says to every reader of the file: *READ-ONLY, DELIBERATELY*, a
+tag-covered field going stale, and an invariant needing maintenance. It
+also cited 26.99 as the blocker, which is finished -- rung 2 in the four
+backends and the walk -- where what the shifting row actually waits on is
+12.3's invalidation model, which is what the refusal itself says. Rewritten
+to the four rows and what each does.
+
 ### 26.604 Coverage by arithmetic with one term in it
 
 `test_codegen_c.py` sweeps every corpus schema at `view` and again at
