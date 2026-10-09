@@ -48,9 +48,9 @@ WORD_WIDTHS = (8, 16, 32, 64)
 #: 0032 asks a rung not to make.
 OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
-DIGITS, SCRATCH = "situ_digits", "situ_scratch"
+DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      "situ_fixed"})
+                      SCAN, "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -60,6 +60,7 @@ SIZE    = "size"	# the length of a run that follows it
 SCALAR  = "scalar"	# one whole-byte binary scalar, from the caller
 RUN     = "run"		# a byte run of fixed length, from the caller
 SPAN    = "span"	# a byte run whose length the caller supplies
+ENDED   = "ended"	# a byte run the caller measures, then its delimiter
 ZERO    = "zero"	# reserved bytes, which no caller names
 
 
@@ -168,6 +169,42 @@ def _radix_refusal(placement: Placement) -> str | None:
 	return None
 
 
+def _delimited_refusal(placement: Placement) -> str | None:
+	"""Why this run cannot be ended by writing its delimiter, or None.
+
+	The delimiter is what says where the run stops, so writing one means
+	guaranteeing it does not occur among the bytes. For a run of DIGITS
+	that is a property of the radix and `_radix_refusal` settles it
+	statically; for arbitrary bytes nothing can be known in advance, so the
+	writer scans what the caller gave it and refuses rather than altering
+	it. Scanning is the honest half of the trade: escaping would hand back
+	a different message from the one that was asked for.
+
+	Measured over the 45 corpus schemas when this was written: of 31
+	delimited members in structs with no builder, 23 are a single consumed
+	delimiter with no escape, quote or trim -- so the shapes refused below
+	are the tail rather than the body.
+	"""
+	if len(placement.delimiters) > 1:
+		return f"ends at any of {len(placement.delimiters)} delimiters, so " \
+		       "which byte to write after it is not stated"
+	if not placement.delimiter_consumed:
+		return "does not consume its delimiter, so the byte that ends it " \
+		       "belongs to the member after it"
+	if len(placement.delimiters[0]) != 1:
+		return "ends at a multi-byte delimiter"
+	if placement.delimiter_escape:
+		return "escapes its delimiter, and escaping would write bytes " \
+		       "other than the ones it was given"
+	if placement.delimiter_quote:
+		return "is quoted, so where it ends depends on a quote this " \
+		       "writer does not place"
+	if placement.trim_set:
+		return "is trimmed, so the bytes it holds are not the bytes it " \
+		       "was given"
+	return None
+
+
 def _scalar_refusal(placement: Placement) -> str | None:
 	"""Why this scalar's value is not its bytes in the runtime's own order.
 
@@ -220,13 +257,7 @@ def _member_refusal(placement: Placement) -> str | None:
 	if placement.index_table is not None:
 		return "is an index table"
 	if placement.delimiters and placement.radix is None:
-		# A run of digits is the one delimited member this writer can end,
-		# because the proof is static: the digits at a given radix are a
-		# known set, and `_radix_refusal` has already established the
-		# delimiter is not one of them. For arbitrary bytes it would be a
-		# scan, which this increment does not write.
-		return "ends at a delimiter the writer would have to prove its " \
-		       "bytes do not contain"
+		return _delimited_refusal(placement)
 	if placement.repeat_while is not None:
 		return "repeats while a condition holds"
 	if placement.pad_to is not None:
@@ -352,7 +383,21 @@ def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
 			                         sizes=measures[held.name]))
 			continue
 
+		# A delimiter decides a member's extent, so a delimited member is a
+		# RUN -- except where its digits make it a value, which is the radix
+		# case. `u8 chars[] until " "` carries a u8 scalar and no count,
+		# which is exactly the shape this branch would take for a
+		# single-byte write; letting it reported four more buildable
+		# structs with no delimited part among them, which is what a count
+		# says when the thing it counted went somewhere else.
+		#
+		# Keying on `delimiters` alone is sound because the parser refuses
+		# the other reading -- *`length` is a single value, so a delimiter
+		# has nothing to bound* -- so there is no delimited scalar for this
+		# to mistake a run for.
+		ends_at_byte = bool(held.delimiters) and held.radix is None
 		if held.scalar is not None and not traverse.data_sized(held) \
+				and not ends_at_byte \
 				and (held.array_count is None or held.radix is not None):
 			why = _scalar_refusal(held)
 			if why:
@@ -376,6 +421,13 @@ def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
 		if held.sized_by:
 			parts.append(Part(SPAN, held, local))
 			continue
+		if held.delimiters:
+			# `_delimited_refusal` has already settled the shape; what is
+			# left is the length, which the caller gives and `[max]` bounds.
+			parts.append(Part(ENDED, held, local,
+			                  delimiter=held.delimiters[0],
+			                  digits=held.delimiter_cap or 0))
+			continue
 		return [], f"`{traverse.local_name(struct, held)}` has no stated " \
 		           "length, so nothing says when the writer should stop"
 
@@ -393,7 +445,7 @@ def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
 			local += "_"
 		part.local = local
 		taken.add(local)
-		if part.role == SPAN:
+		if part.role in (SPAN, ENDED):
 			taken.add(f"{local}_len")
 
 	if not any(part.role in (SCALAR, RUN, SPAN) for part in parts):
@@ -428,7 +480,7 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			            f"{part.local}")
 		elif part.role == RUN:
 			args.append(f"const uint8_t *{part.local}")
-		elif part.role == SPAN:
+		elif part.role in (SPAN, ENDED):
 			args.append(f"const uint8_t *{part.local}")
 			args.append(f"uint32_t {part.local}_len")
 	args.append(f"uint32_t *{WROTE}")
@@ -610,6 +662,45 @@ def _one(struct: ResolvedStruct, prefix: str,
 				*_room(f"{part.bytes}u"),
 				f"\tmemcpy({OUT} + {AT}, {part.local}, {part.bytes}u);",
 				f"\t{AT} += {part.bytes}u;",
+				"",
+			]
+		elif part.role == ENDED:
+			ending = part.delimiter[0]
+			lines += [
+				f"\t/* {local}: the bytes, then the "
+				f"`{chr(ending) if 32 < ending < 127 else hex(ending)}` "
+				"that ends them.",
+				"\t * The delimiter is what says where the run stops, so a",
+				"\t * run containing it would read back shorter than it was",
+				"\t * written. Refused rather than escaped: escaping writes",
+				"\t * bytes other than the ones the caller gave. */",
+				*([f"\tif ({part.local}_len > {part.digits}u) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if part.digits else []),
+				"\t{",
+				f"\t\tuint32_t {SCAN};",
+				"",
+				f"\t\tfor ({SCAN} = 0u; {SCAN} < {part.local}_len; "
+				f"{SCAN}++) {{",
+				f"\t\t\tif ({part.local}[{SCAN}] == 0x{ending:02X}u) {{",
+				"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t\t}",
+				"\t\t}",
+				"\t}",
+				*_room(f"{part.local}_len"),
+				f"\tif ({part.local}_len != 0u) {{",
+				f"\t\tif ({part.local} == NULL) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemcpy({OUT} + {AT}, {part.local}, "
+				f"{part.local}_len);",
+				"\t}",
+				f"\t{AT} += {part.local}_len;",
+				# Two checks rather than one against `_len + 1u`, which can
+				# wrap on a length the caller supplied.
+				*_room("1u"),
+				f"\t{OUT}[{AT}] = 0x{ending:02X}u;",
+				f"\t{AT} += 1u;",
 				"",
 			]
 		else:

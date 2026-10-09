@@ -31304,6 +31304,94 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.612 A run ended by its delimiter, and a count that counted the wrong thing
+
+The largest refusal 26.610 left was a run of bytes ending at a delimiter,
+and the writing of one turns on a question the radix case answered
+statically: **the delimiter is what says where the run stops, so writing
+one means guaranteeing it does not occur among the bytes.** For digits
+that is a property of the radix. For arbitrary bytes nothing can be known
+in advance, so the writer **scans what it was given and refuses**, rather
+than escaping -- escaping would hand back a different message from the one
+that was asked for, and the reader's unescape would then have a writer
+nobody had tested it against.
+
+**The shape was measured before it was built, and the measurement decided
+the scope.** Of 31 delimited members in structs with no builder, **23 are
+a single consumed delimiter with no escape, quote or trim**, and 21 of
+those are byte runs. So the five shapes refused by name are the tail:
+more than one delimiter (which byte to write is not stated), a multi-byte
+delimiter, an escaped run, a quoted run, a trimmed run. `\r\n` is the
+reason http and smtp gain nothing from this increment and both are refused
+honestly rather than silently.
+
+**A guard that would have been needed is unreachable, and the parser owns
+it.** A size field written in bytes and ended by a delimiter would be two
+statements of one extent -- and situ refuses it at the parse: *`length` is
+a single value, so a delimiter has nothing to bound*. So a delimited
+member is always a run or a radix field, which is what makes it safe for
+the planner to key on `delimiters` alone. That was checked rather than
+assumed, the same way 26.611's zero-delimiter branch was found to be
+unreachable.
+
+**The fault this increment produced is the one worth the entry.** Letting
+delimited members past the member gate made four more structs report as
+buildable -- and `u8 name[] until " "` carries a u8 scalar and no count,
+which is exactly the shape the single-scalar branch takes, so each of them
+was planned as a **one-byte write**. The struct count went up and the
+thing it counted had gone somewhere else.
+
+**What caught it was measuring by ROLE rather than by struct**: 87
+buildable with **zero** delimited parts among them is a contradiction a
+struct count cannot express. `evidence.md`'s *a count and an exit code are
+halves of one result*, met from an unfamiliar side -- the count was true
+and was about a different population than the sentence it was about to
+support. The test that holds it asserts the role and not that the struct
+builds, because the struct built either way.
+
+**And the scan's first control could not be reached.** It was
+`edges.spoken`, whose runs are typed by byte-run enums -- and with the
+scan deleted that case still came back `SITU_ERR_CONSTRAINT`, because
+`greeting` closes with `default = error` and `HEL` is not a greeting. The
+scan was being credited with a refusal the enum was making. The fixture
+that answers for it carries no enum and no constraint:
+
+    struct ended { u8 name[] until " "; u8 rest[4]; }
+
+With `name` = `a b`, the bytes `a b` + `wxyz` are a **valid** message that
+is not the one asked for -- read back, `name` stops at the first space and
+`rest` begins two bytes early -- so without the scan the build returns
+`SITU_OK` and the caller is never told. That is the cost the scan buys,
+and it is visible only in a fixture nothing upstream can answer first.
+
+Re-measured, same method as 26.610 and 26.611 -- the 45 schemas
+`every_schema` holds: **86 of 242 structs have a builder, in 24 of the 45
+schemas**, with 5 delimited members written. Five rather than 21, because
+the other 16 sit in structs refused for something else; the per-struct
+gain is 3. A `max` on such a run is enforced as a refusal, which
+`edges.spoken`'s `max 16` exercises.
+
+**hull answered 26.606's open question while this was being built**, and
+the answer is theirs rather than mine: the edit decode should **propagate
+`_get`'s status** rather than read `_value`. Their argument is about the
+caller rather than about hull -- the decode is a public function taking
+raw bytes, so a length that fails to parse would become a silently clamped
+number in an owned copy that outlives the buffer, and a hostile message
+would read as a short atom. The function already returns `situ_err_t`.
+Recorded here because it decides which of the two fixes finding 10 gets;
+the fix itself is still open.
+
+They also reported, unprompted and measured against their own code, what
+a builder they would consume looks like. One item is not in situ today and
+is the next thing worth asking about: **a measure pass that gives the
+bytes needed, so a caller with no allocator can size a buffer before
+writing into it.** hull's agent is a static binary with no libc, so
+`_build` returning `SITU_ERR_BOUNDS` after a partial write is not a
+workable way to discover a length. The rest they named -- appending an
+atom from a pointer and a length, nesting lists to 32 levels, and
+round-tripping every write through the view -- is either done or is the
+list-of-structs case that remains refused.
+
 ### 26.611 Digits, and an absence manufactured by the pattern that looked for it
 
 26.610 said the runtime has "no decimal writer at all" and that hull's

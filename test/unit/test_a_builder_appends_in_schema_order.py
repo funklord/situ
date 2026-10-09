@@ -564,3 +564,138 @@ int main(void)
 	assert lines[3] == "0 23 20:" + "x" * 20, lines[3]
 	assert lines[4] == "1", f"a capacity of four cannot hold it: {lines[4]}"
 	assert lines[5] == "4", f"the length does not read back: {lines[5]}"
+
+
+#: A plain delimited run followed by a counted one. Deliberately carrying no
+#: enum and no constraint, because that is what makes it the only fixture
+#: that can answer for the scan: see the test below.
+ENDED = """struct ended {
+\tu8 name[] until " ";
+\tu8 rest[4];
+}
+"""
+
+
+def test_a_run_is_ended_by_writing_its_delimiter() -> None:
+	"""The shape 23 of the corpus's 31 refused delimited members have.
+
+	Measured when this was written, over the 45 schemas: a single consumed
+	delimiter, no escape, no quote, no trim. The tail shapes are refused by
+	name and tested below.
+	"""
+	parsed, resolved = _inline(ENDED)
+	parts, why = _only(resolved, "ended")
+	assert why is None, why
+	assert [part.role for part in parts] == [build.ENDED, build.RUN]
+
+	text = build.generate(parsed, resolved, "ended")["ended_build.h"]
+	body = text.split("situ_ended_build(")[1]
+	assert "uint32_t name_len" in body
+	assert f"{build.OUT}[{build.AT}] = 0x20u" in body, \
+		"the delimiter the schema states is not written"
+
+
+def test_a_delimited_member_is_a_run_and_not_a_one_byte_scalar() -> None:
+	"""`u8 name[] until " "` carries a u8 scalar and no count.
+
+	That is exactly the shape the single-scalar branch takes, and the first
+	draft let it: four more structs reported as buildable with no delimited
+	part among them. The count said the work was done and the thing it
+	counted had gone somewhere else -- which is why the measurement that
+	found it was per ROLE rather than per struct.
+
+	So this asserts the role, not that the struct builds.
+	"""
+	_, resolved = _inline(ENDED)
+	parts, _ = _only(resolved, "ended")
+	name = [part for part in parts if part.placement.name == "name"][0]
+	assert name.role == build.ENDED, \
+		f"a delimited run planned as {name.role}, which writes one byte"
+
+
+@pytest.mark.parametrize("member,wanted", [
+	# Several bytes may end it, so which to write is not stated. http's
+	# `header_field.value` is the corpus instance.
+	('u8 x[] until " " | "\\t"', "any of 2 delimiters"),
+	# `\r\n` is two bytes; http's and smtp's lines all end this way, which
+	# is why they gain nothing from this increment.
+	('u8 x[] until "\\r\\n"', "multi-byte delimiter"),
+	# Escaping would write bytes other than the ones the caller gave, and
+	# the reader's unescape has no writer to be tested against.
+	('u8 x[] until "\\"" [escape = "\\\\"]', "escapes its delimiter"),
+	# Trimming is the same: the bytes it holds are not the bytes given.
+	('u8 x[] until " " [trim = " "]', "is trimmed"),
+])
+def test_a_delimiter_the_writer_cannot_place_is_refused(
+		member: str, wanted: str) -> None:
+	_, resolved = _inline("struct one {\n\t%s;\n\tu8 rest[2];\n}\n"
+	                      % member)
+	_, why = _only(resolved, "one")
+	assert why is not None and wanted in why, why
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_run_carrying_its_own_delimiter_is_refused(tmp_path: Path) -> None:
+	"""The control for the scan, and it took two attempts to aim.
+
+	The first fixture was `edges.spoken`, whose runs are typed by byte-run
+	enums -- and with the scan deleted that case STILL came back
+	CONSTRAINT, because `greeting` closes with `default = error` and the
+	truncated value is not a greeting. The scan was being credited with a
+	refusal the enum was making: a control that cannot be reached, since
+	something upstream answers first.
+
+	This fixture has no enum and no constraint, so nothing but the scan can
+	refuse it -- and what the absence costs is visible rather than
+	theoretical. `name` = `a b` writes `a b` + `wxyz`; read back, `name`
+	stops at the first space and `rest` starts two bytes early, so the
+	message is valid, different from the one asked for, and SITU_OK.
+	"""
+	parsed, resolved = _inline(ENDED)
+	files = dict(build.generate(parsed, resolved, "ended"))
+	files.update(generate_c(parsed, resolved, "ended").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "ended_build.h"
+
+int main(void)
+{
+	uint8_t  buf[32];
+	uint32_t wrote = 0;
+
+	/* a run with no delimiter in it. Two statements, because reading
+	 * `wrote` in the same call that sets it is unsequenced. */
+	{
+		situ_err_t err = situ_ended_build(buf, sizeof buf,
+		                                  (const uint8_t *)"ab", 2,
+		                                  (const uint8_t *)"wxyz", &wrote);
+
+		printf("%d %u\\n", (int)err, wrote);
+	}
+	/* and one carrying the space that ends it */
+	printf("%d\\n", (int)situ_ended_build(buf, sizeof buf,
+	                                     (const uint8_t *)"a b", 3,
+	                                     (const uint8_t *)"wxyz", &wrote));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "ended.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 7", f"`ab wxyz` is seven bytes: {lines[0]}"
+	assert lines[1] == "2", \
+		f"a run containing its own delimiter must be refused: {lines[1]}"
