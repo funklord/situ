@@ -31304,6 +31304,97 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.615 A run of structs is one walk, and the deferral that said otherwise
+
+26.614 closed by calling the four remaining run shapes four open
+questions needing a decision rather than code. **That was wrong, and the
+rule it broke is written down**: before deferring something as a design
+question, check whether the project has already decided it -- and *a
+wrongly-deferred question is caught by nothing*, because it sits in the
+record looking exactly like diligence.
+
+What made it look like four questions was assuming an incremental API,
+where a count is unknown until the elements have been appended and a byte
+length needs a back-patch. **Caller-supplied bytes dissolve all of it.**
+The caller hands over the elements already encoded, so the count and the
+total are known before the first byte is written, and every shape reduces
+to one question -- *are these bytes a whole number of elements* -- which
+the element's own `_required` answers:
+
+    a fixed count       walk, then refuse unless the count matches
+    a count field       walk, and write what the walk found
+    the rest of a frame walk, and write nothing
+    a delimiter         walk, then write the delimiter
+
+So there is one role and one loop, not four. **A count field is written
+from the walk rather than from a length**: ble's `num` and edges' `count`
+are element counts -- "a LITERAL count of elements that have no single
+size" -- so the walk happens at the count field, where the answer is
+needed, rather than at the run further down.
+
+**Two checks in that loop, and each needed a fixture only it could
+answer.**
+
+*The boundary check.* A byte run refuses its delimiter anywhere in it; a
+struct run must not, because a `)` inside a nested element is legitimate
+and the reader walks structurally. What breaks a run is a delimiter at an
+ELEMENT BOUNDARY, where the reader stops early. sexpr's own case --
+an element beginning with `)` -- is **also** caught by the zero-progress
+guard, so neither sabotage goes red on it: the four-cell shape from
+26.610's `cap`. The fixture that separates them is constructed, a
+delimited run of FIXED-size cells, where `_required` always measures and
+only the boundary check can refuse. Measured with it removed: the bad
+blob is written and accepted.
+
+*The zero-progress guard.* A generated loop is somebody else's
+unattended program, so it says what stops it. `struct empty { }` has a
+`_required` that measures zero, and a run of it never advances: measured,
+the probe runs until `timeout` kills it at **exit 124** rather than
+returning. No delimiter is involved, so that is the guard's own fixture.
+
+**And a measurement error of mine is the most useful thing in this
+entry.** I reported that `situ_sexpr_required` answers `SITU_OK` with
+`need = 0`, called it a second framing defect beside hull's finding 12,
+swept the corpus for it, found 24 structs, and proposed a mechanism. All
+of it came from one probe that printed
+
+    printf("required=%d need=%u\n", situ_sexpr_required(d, n, &need), need);
+
+**Argument evaluation order is unspecified in C, so `need` was read
+before the call that sets it.** Sequenced, the answer is `need = 1` and
+nothing is wrong. There is no defect, the 24-struct sweep was measuring
+"the constant part is zero", which is normal for a struct whose first
+member is variable-length, and the mechanism I had in hand -- variants --
+was already dead: 24 structs showed the pattern and 3 had a variant,
+while 13 variant-bearing structs did not.
+
+Three things worth keeping from that, in order of how much they cost:
+
+  - **It was the second time today for the same C hazard.** A probe
+    earlier in this session had the identical fault and was fixed; the
+    remedy did not generalise because it was recorded as a fix to one
+    file rather than as a rule. It is one now: **never read an
+    out-parameter in the same call that sets it.**
+  - **A detector that over-matches by 24 is not a scope measurement.**
+    The pattern separated nothing -- it matched working and broken
+    alike -- and `evidence.md` names that exactly: a count inherits its
+    detector.
+  - **The instrument is where the error usually is.** Five probes were
+    wrong in one day once before in this workspace and nothing measured
+    was, which is the calibration this should have been read against
+    before a finding was written up.
+
+Nothing was committed on the strength of it, which is the only reason it
+cost an hour rather than a retraction in somebody else's tree.
+
+Re-measured, same method throughout -- the 45 schemas `every_schema`
+holds: **106 of 242 structs have a builder, in 28 of the 45 schemas**,
+with 8 struct runs written, one of each shape. sexpr's `list` builds
+`(a b )` from element bytes and reads back; `items_count` answers 3
+rather than 2, which is hull's finding 1 and the reader's, and is
+asserted as it stands so that fixing it turns the test red rather than
+leaving a stale expectation.
+
 ### 26.614 A nested struct is written as bytes, and asked its own extent
 
 **The measurement moved the task before any of it was built.** Of the 16
@@ -31316,12 +31407,15 @@ right and eight of them were answering about something else.
 
 So the remaining 8 of the 16 are the real runs, and they split four ways
 -- 4 sized by an earlier byte length, 3 ended by a delimiter, 1 counted.
-None of those is built here, and each has its own open question, which is
+None of those is built here. ~~Each has its own open question, which is
 why they are refused separately rather than bundled: a byte length is not
-known until the elements are written, which is a back-patch; and a
-delimited run of structs **cannot be scanned the way a byte run is**,
-because a `)` inside a nested element is legitimate and the reader walks
-structurally.
+known until the elements are written, which is a back-patch.~~ **That
+deferral was wrong and 26.615 settles all four with one walk** -- the
+back-patch does not arise, because the caller hands over encoded elements
+and the total is known before the first byte is written. What survives of
+it is the other half: a delimited run of structs **cannot be scanned the
+way a byte run is**, because a `)` inside a nested element is legitimate
+and the reader walks structurally.
 
 **A nested field is written as bytes the caller built.** That is the
 shape rather than a flattened parameter list, and the reason is in the

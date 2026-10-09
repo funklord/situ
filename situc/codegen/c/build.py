@@ -49,9 +49,9 @@ WORD_WIDTHS = (8, 16, 32, 64)
 OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
 DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
-NEED = "situ_need"
+NEED, COUNT = "situ_need", "situ_count"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      SCAN, NEED, "situ_fixed"})
+                      SCAN, NEED, COUNT, "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -63,16 +63,17 @@ RUN     = "run"		# a byte run of fixed length, from the caller
 SPAN    = "span"	# a byte run whose length the caller supplies
 ENDED   = "ended"	# a byte run the caller measures, then its delimiter
 NESTED  = "nested"	# a whole inner struct the caller built
+REPEAT  = "repeat"	# a run of inner structs the caller built
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
-CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED})
+CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it.
-MEASURED = frozenset({SPAN, ENDED, NESTED})
+MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT})
 ZERO    = "zero"	# reserved bytes, which no caller names
 
 
@@ -431,8 +432,16 @@ def plan(struct: ResolvedStruct, header: str = "",
 			why = _scalar_refusal(held)
 			if why:
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
-			parts.append(_value_part(SIZE, held, local,
-			                         sizes=measures[held.name]))
+			run = measures[held.name]
+			part = _value_part(SIZE, held, local, sizes=run)
+			if not run.element_bits and run.type_name:
+				# ble's `num` and edges' `count` are documented element
+				# counts -- "a LITERAL count of elements that have no
+				# single size" -- so a struct run's size field is not the
+				# byte length a span's is, and writing that would be a
+				# message nothing can read.
+				part.inner = ident(prefix, run.type_name)
+			parts.append(part)
 			continue
 
 		# A delimiter decides a member's extent, so a delimited member is a
@@ -472,11 +481,30 @@ def plan(struct: ResolvedStruct, header: str = "",
 			               or held.size_expr or held.delimiters
 			               or held.repeat_while is not None
 			               or held.remaining_cap)
-			if not repeats and held.type_name:
-				if frames_itself(header, ident(prefix, held.type_name)):
+			if held.type_name and frames_itself(header,
+			                                    ident(prefix,
+			                                          held.type_name)):
+				if not repeats:
 					parts.append(Part(NESTED, held, local,
 					                  inner=ident(prefix, held.type_name)))
 					continue
+				# Every struct run reduces to one walk: a fixed count, a
+				# count field, the rest of the frame, or a delimiter.
+				if (held.size_expr or held.repeat_while is not None
+						or len(held.delimiters) > 1
+						or (held.delimiters
+						    and (len(held.delimiters[0]) != 1
+						         or not held.delimiter_consumed))):
+					return [], f"`{traverse.local_name(struct, held)}` is " \
+					           f"a run of `{held.type_name}` whose end " \
+					           "this writer cannot state"
+				parts.append(Part(REPEAT, held, local,
+				                  inner=ident(prefix, held.type_name),
+				                  delimiter=(held.delimiters[0]
+				                             if held.delimiters else b""),
+				                  digits=held.array_count or 0))
+				continue
+			if not repeats and held.type_name:
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"nested `{held.type_name}`, whose extent its " \
 				           "own bytes do not determine, so the writer " \
@@ -635,6 +663,74 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 	]
 
 
+def _walk(part: Part, local: str, count: bool) -> list[str]:
+	"""Step through a run of inner structs the caller built.
+
+	Every shape a struct run takes reduces to this, which is why there is
+	one of them rather than four: a fixed count, a count field, a run that
+	takes the rest of the frame, and a run ended by a delimiter all need
+	the same question answered -- are these bytes a whole number of
+	elements -- and the element's own `_required` answers it exactly.
+
+	**What makes the loop terminate is the zero-progress check**, and it is
+	not hypothetical: `situ_nothing_required` sets `*need = 0`, so a run of
+	a zero-byte struct would spin for ever. A generated loop is somebody
+	else's unattended program, so it says what stops it.
+
+	**The delimiter check belongs INSIDE the loop and cannot be a scan.**
+	A byte run refuses a delimiter anywhere in it; a struct run must not,
+	because a `)` inside a nested element is legitimate and the reader
+	walks structurally. What breaks it is a delimiter at an ELEMENT
+	BOUNDARY, where the reader would stop early -- so the check is at each
+	boundary the walk reaches, which is exactly where the reader looks.
+	"""
+	ending = part.delimiter[0] if part.delimiter else None
+	lines = [
+		f"\t/* {local}: a run of `{part.placement.type_name}` the caller",
+		"\t * built. Walked with the element's own `_required`, because",
+		"\t * only it can say where one ends -- and the walk is what",
+		"\t * establishes these bytes are a whole number of them. */",
+		# Before the walk, not with the copy further down: the loop reads
+		# `x[scan]` and calls `_required(x + scan, ...)`, so a null pointer
+		# with a non-zero length would be dereferenced here first.
+		f"\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+		"\t\treturn SITU_ERR_BOUNDS;",
+		"\t}",
+		"\t{",
+		f"\t\tuint32_t {SCAN} = 0u;",
+		"",
+		f"\t\twhile ({SCAN} < {part.local}_len) {{",
+		f"\t\t\tuint32_t {NEED} = 0u;",
+		"",
+	]
+	if ending is not None:
+		lines += [
+			f"\t\t\t/* A `{chr(ending)}` here is where the reader would",
+			"\t\t\t * stop, so an element may hold one and may not",
+			"\t\t\t * BEGIN with one. */",
+			f"\t\t\tif ({part.local}[{SCAN}] == 0x{ending:02X}u) {{",
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+		]
+	lines += [
+		f"\t\t\tif ({part.inner}_required({part.local} + {SCAN},",
+		f"\t\t\t                      {part.local}_len - {SCAN},",
+		f"\t\t\t                      &{NEED}) != SITU_OK) {{",
+		"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t\t}",
+		f"\t\t\tif ({NEED} == 0u) {{",
+		"\t\t\t\t/* What stops the loop. A zero-byte element would",
+		"\t\t\t\t * otherwise never advance it. */",
+		"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t\t}",
+		f"\t\t\t{SCAN} += {NEED};",
+		*([f"\t\t\t{COUNT}++;"] if count else []),
+		"\t\t}",
+		"\t}",
+	]
+	return lines
+
+
 def _room(size: str) -> list[str]:
 	"""The capacity check before a write of `size` bytes.
 
@@ -670,6 +766,14 @@ def _one(struct: ResolvedStruct, prefix: str,
 		f"\tsitu_view_t {VIEW};",
 		f"\tsitu_err_t  {ERR};",
 		f"\tuint32_t    {AT} = 0;",
+		# Only where something reads it, or `-Wunused-but-set-variable`
+		# refuses the file: a run that takes the rest of the frame is
+		# walked without being counted.
+		*([f"\tuint32_t    {COUNT} = 0u;"]
+		  if any(part.role == REPEAT and (part.digits or part.inner
+		                                  in [other.inner for other in parts
+		                                      if other.role == SIZE])
+		         for part in parts) else []),
 		"",
 		f"\tif ({OUT} == NULL || {WROTE} == NULL) {{",
 		"\t\treturn SITU_ERR_BOUNDS;",
@@ -680,7 +784,22 @@ def _one(struct: ResolvedStruct, prefix: str,
 	for part in parts:
 		held  = part.placement
 		local = traverse.local_name(struct, held)
-		if part.role == SIZE:
+		if part.role == SIZE and part.inner:
+			# The count is not known from a length the caller passed: it is
+			# what the walk finds, so the walk happens HERE, at the field
+			# that states it, rather than at the run further down.
+			assert part.sizes is not None and held.scalar is not None
+			run  = _local(struct, part.sizes)
+			tally = Part(REPEAT, part.sizes, run, inner=part.inner,
+			             delimiter=(part.sizes.delimiters[0]
+			                        if part.sizes.delimiters else b""))
+			lines += [
+				*_walk(tally, traverse.local_name(struct, part.sizes), True),
+				f"\t/* {local}: how many the walk found. */",
+				*_value(part, COUNT, local),
+				"",
+			]
+		elif part.role == SIZE:
 			assert part.sizes is not None and held.scalar is not None
 			run   = _local(struct, part.sizes)
 			limit = (1 << held.scalar.bits) - 1
@@ -736,6 +855,36 @@ def _one(struct: ResolvedStruct, prefix: str,
 				f"\t{AT} += {part.bytes}u;",
 				"",
 			]
+		elif part.role == REPEAT:
+			counted = part.digits > 0
+			walked  = any(other.role == SIZE and other.inner == part.inner
+			              for other in parts)
+			lines += [
+				# Walked at the count field already, where the answer was
+				# needed; walking twice would be two measurements of one
+				# thing and they would have to agree.
+				*([] if walked else _walk(part, local, counted)),
+				*([f"\tif ({COUNT} != {part.digits}u) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if counted else []),
+				*_room(f"{part.local}_len"),
+				f"\tif ({part.local}_len != 0u) {{",
+				f"\t\tif ({part.local} == NULL) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemcpy({OUT} + {AT}, {part.local}, "
+				f"{part.local}_len);",
+				"\t}",
+				f"\t{AT} += {part.local}_len;",
+				*([] if not part.delimiter else [
+					f"\t/* and the `{chr(part.delimiter[0])}` that ends "
+					"the run. */",
+					*_room("1u"),
+					f"\t{OUT}[{AT}] = 0x{part.delimiter[0]:02X}u;",
+					f"\t{AT} += 1u;",
+				]),
+				"",
+			]
 		elif part.role == NESTED:
 			lines += [
 				f"\t/* {local}: one whole `{held.type_name}`, which the",
@@ -744,6 +893,9 @@ def _one(struct: ResolvedStruct, prefix: str,
 				"\t * given: three bytes too many shift every member after",
 				"\t * it, and whether `_validate` then refuses depends on",
 				"\t * what those three bytes happen to say. */",
+				f"\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
 				"\t{",
 				f"\t\tuint32_t {NEED} = 0u;",
 				"",

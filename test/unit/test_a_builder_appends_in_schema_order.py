@@ -877,3 +877,336 @@ int main(void)
 	assert lines[2] == "2", \
 		f"a length one byte over must be refused: {lines[2]}"
 	assert lines[3] == "2", f"and one byte under: {lines[3]}"
+
+
+@pytest.mark.parametrize("schema,struct,member,shape", [
+	# A count field naming the number of elements.
+	("example/ble/ble.situ", "le_advertising_report", "reports", "num"),
+	# The rest of the frame.
+	("example/mqtt/mqtt.situ", "unsubscribe_body", "filters", "remaining"),
+	# A delimiter.
+	("example/sexpr/sexpr.situ", "list", "items", "delimiter"),
+	# A literal count.
+	("test/schema/edges.situ", "pieces", "two", "fixed"),
+])
+def test_every_shape_a_struct_run_takes_is_one_walk(
+		schema: str, struct: str, member: str, shape: str) -> None:
+	"""Four shapes, one mechanism, which is why there is one role.
+
+	A fixed count, a count field, a run that takes the rest of the frame
+	and a run ended by a delimiter all need the same question answered --
+	are these bytes a whole number of elements -- and the element's own
+	`_required` answers it. Deferring them as four design questions was
+	wrong, and the thing that was wrong was assuming an incremental API
+	where caller-supplied bytes make it a verification loop.
+	"""
+	parsed, resolved = _parts(ROOT / schema)
+	header = _header(parsed, resolved, Path(schema).stem)
+	parts, why = _only(resolved, struct, header)
+	assert why is None, why
+
+	mine = [part for part in parts if part.placement.name == member]
+	assert mine and mine[0].role == build.REPEAT, [
+		(part.placement.name, part.role) for part in parts]
+	if shape == "fixed":
+		assert mine[0].digits == 2
+	if shape == "delimiter":
+		assert mine[0].delimiter == b")"
+
+
+def test_a_counted_run_writes_the_count_the_walk_found() -> None:
+	"""ble's `num` and edges' `count` are element counts, not byte lengths.
+
+	Both schemas say so -- "a LITERAL count of elements that have no
+	single size" -- so a struct run's size field cannot be written the way
+	a byte span's is. It is the walk that knows the number, which is why
+	the walk happens at the count field rather than at the run.
+
+	And the count is therefore NOT a caller parameter: a caller able to
+	pass both a count and the elements is one able to make them disagree.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "ble" / "ble.situ")
+	header = _header(parsed, resolved, "ble")
+	parts, why = _only(resolved, "le_advertising_report", header)
+	assert why is None, why
+
+	num = [part for part in parts if part.placement.name == "num"][0]
+	assert num.role == build.SIZE and num.inner == "situ_adv_report"
+
+	text = build.generate(parsed, resolved, "ble", "situ",
+	                      header)["ble_build.h"]
+	head = text.split("situ_le_advertising_report_build(")[1].split("{")[0]
+	assert "num" not in head, f"the count is a parameter: {head}"
+	assert f"{build.OUT}[{build.AT}] = (uint8_t){build.COUNT}" in text
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_counted_run_is_built_by_composing_its_elements(
+		tmp_path: Path) -> None:
+	"""Two `adv_report`s built separately, then composed into the run.
+
+	The control is the short blob: one byte fewer than two whole elements
+	is not a whole number of them, and only the walk can say so -- the
+	count field would otherwise be written from a number nobody checked.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "ble" / "ble.situ")
+	files = dict(build.generate(parsed, resolved, "ble", "situ",
+	                            _header(parsed, resolved, "ble")))
+	files.update(generate_c(parsed, resolved, "ble").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "ble_build.h"
+
+int main(void)
+{
+	uint8_t     one[64], two[64], run[192], whole[256];
+	uint32_t    n1 = 0, n2 = 0, wrote = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+	const uint8_t addr[6] = { 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 };
+	const uint8_t ad[2]   = { 0x02, 0x01 };
+
+	if (situ_adv_report_build(one, sizeof one, 0, 0, addr, ad, 2, -40, &n1)
+	    != SITU_OK) return 2;
+	if (situ_adv_report_build(two, sizeof two, 2, 1, addr, ad, 2, -50, &n2)
+	    != SITU_OK) return 3;
+	memcpy(run, one, n1);
+	memcpy(run + n1, two, n2);
+
+	err = situ_le_advertising_report_build(whole, sizeof whole, 0x3E,
+	                                       (uint8_t)(2u + n1 + n2), 0x02,
+	                                       run, n1 + n2, &wrote);
+	printf("%d %u %u\\n", (int)err, wrote,
+	       err == SITU_OK ? whole[3] : 0u);
+	if (err != SITU_OK) return 4;
+
+	situ_msg_init(&msg, whole, wrote);
+	printf("%d\\n",
+	       (int)situ_le_advertising_report_view(&msg, 0, wrote, &view));
+
+	/* one byte short of two whole elements */
+	printf("%d\\n", (int)situ_le_advertising_report_build(whole,
+	        sizeof whole, 0x3E, (uint8_t)(1u + n1 + n2), 0x02, run,
+	        n1 + n2 - 1u, &wrote));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "ble.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, f"exited {ran.returncode}: {ran.stderr}"
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 28 2", \
+		f"two reports, 28 bytes, and a count of 2: {lines[0]}"
+	assert lines[1] == "0", f"the result does not acquire a view: {lines[1]}"
+	assert lines[2] == "2", \
+		f"a blob that is not whole elements must be refused: {lines[2]}"
+
+
+#: A delimited run whose element is FIXED size, so `_required` always
+#: measures it and the zero-progress guard can never fire. That is what
+#: makes it the only fixture the boundary check alone answers -- sexpr's own
+#: case is caught by both, so neither sabotage goes red on it.
+BAG = """struct cell {
+\tu8  a;
+\tu8  b;
+}
+
+struct bag {
+\tu8    open;
+\tcell  cells[] until ")";
+}
+"""
+
+#: A run of a struct that is zero bytes long, which `_required` measures as
+#: zero. No delimiter, so only the zero-progress guard can refuse it.
+HEAP = """struct empty {
+}
+
+struct heap {
+\tu8     n;
+\tempty  items[n];
+}
+"""
+
+
+def _compile(tmp_path: Path, stem: str, body: str,	# type: ignore[no-untyped-def]
+		probe: str):
+	"""Generate, write and compile an inline schema with a probe."""
+	parsed, resolved = _inline(body)
+	files = dict(build.generate(parsed, resolved, stem, "situ",
+	                            _header(parsed, resolved, stem)))
+	files.update(generate_c(parsed, resolved, stem).files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+	(tmp_path / "probe.c").write_text(probe, encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / f"{stem}.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+	return tmp_path / "probe"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_delimiter_at_an_element_boundary_is_refused(
+		tmp_path: Path) -> None:
+	"""A struct run cannot be scanned the way a byte run is.
+
+	A byte run refuses its delimiter anywhere in it. A struct run must
+	not: a `)` inside a nested element is legitimate, and the reader walks
+	structurally. What breaks it is a delimiter at an ELEMENT BOUNDARY,
+	where the reader stops early -- so the check is at each boundary the
+	walk reaches, which is where the reader looks.
+
+	Measured with the check removed: the second cell beginning with `)` is
+	written and accepted, and a reader then sees a one-element run. The
+	fixture is constructed because sexpr's own case is caught by the
+	zero-progress guard as well, so on that one neither sabotage is red.
+	"""
+	probe = _compile(tmp_path, "bag", BAG, """
+#include <stdio.h>
+#include "bag_build.h"
+
+int main(void)
+{
+	uint8_t     out[32];
+	uint32_t    wrote = 0;
+	situ_err_t  err;
+	const uint8_t good[4] = { 'a', 'b', 'c', 'd' };
+	const uint8_t bad[4]  = { 'a', 'b', ')', 'd' };
+
+	err = situ_bag_build(out, sizeof out, '(', good, 4, &wrote);
+	printf("%d %u\\n", (int)err, wrote);
+	printf("%d\\n", (int)situ_bag_build(out, sizeof out, '(', bad, 4,
+	                                   &wrote));
+	return 0;
+}
+""")
+	ran = subprocess.run([str(probe)], capture_output=True, text=True,
+	                     cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0 6", f"two cells and the delimiter: {lines[0]}"
+	assert lines[1] == "2", \
+		f"an element beginning with the delimiter must be refused: {lines[1]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_an_element_that_measures_zero_stops_the_walk(
+		tmp_path: Path) -> None:
+	"""What makes a generated loop terminate, with a case that needs it.
+
+	A generated loop is somebody else's unattended program, so it says
+	what stops it. `empty` is zero bytes, its `_required` measures zero,
+	and without this check the walk never advances: measured, the probe
+	runs until `timeout` kills it at exit 124 rather than returning.
+
+	No delimiter is involved, so the boundary check cannot cover this one
+	-- which is what makes it the guard's own fixture rather than a second
+	assertion about a case something else already refuses.
+	"""
+	probe = _compile(tmp_path, "heap", HEAP, """
+#include <stdio.h>
+#include "heap_build.h"
+
+int main(void)
+{
+	uint8_t     out[32];
+	uint32_t    wrote = 0;
+	const uint8_t items[2] = { 0, 0 };
+
+	printf("%d\\n", (int)situ_heap_build(out, sizeof out, NULL, 0, &wrote));
+	printf("%d\\n", (int)situ_heap_build(out, sizeof out, items, 2,
+	                                    &wrote));
+	return 0;
+}
+""")
+	ran = subprocess.run([str(probe)], capture_output=True, text=True,
+	                     cwd=tmp_path, timeout=30)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0", f"a run of no elements is legal: {lines[0]}"
+	assert lines[1] == "2", \
+		f"an element that measures zero must be refused: {lines[1]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_delimited_run_of_structs_round_trips(tmp_path: Path) -> None:
+	"""sexpr's `list`, which is what hull's "opening and closing a list"
+	needs, built from element bytes and read back.
+
+	`items_count` answers 3 for `(a b )` rather than 2, and that is hull's
+	finding 1 -- a list closed after whitespace gains a phantom element --
+	which is the reader's and is recorded against `example/sexpr`. It is
+	asserted here as it stands so that fixing it turns this red rather
+	than leaving a stale expectation behind.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "sexpr" / "sexpr.situ")
+	files = dict(build.generate(parsed, resolved, "sexpr", "situ",
+	                            _header(parsed, resolved, "sexpr")))
+	files.update(generate_c(parsed, resolved, "sexpr").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "sexpr_build.h"
+
+int main(void)
+{
+	uint8_t     out[64];
+	uint32_t    wrote = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    i;
+	const uint8_t items[4] = { 'a', ' ', 'b', ' ' };
+
+	err = situ_list_build(out, sizeof out, '(', items, 4, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (i = 0; i < wrote; i++) putchar(out[i]);
+	printf("\\n");
+	if (err != SITU_OK) return 2;
+
+	situ_msg_init(&msg, out, wrote);
+	err = situ_list_view(&msg, 0, wrote, &view);
+	printf("%d\\n", (int)err);
+	if (err != SITU_OK) return 3;
+	printf("%u\\n", situ_list_items_count(view));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "sexpr.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0 6 (a b )", lines[0]
+	assert lines[1] == "0", f"the list does not acquire a view: {lines[1]}"
+	assert lines[2] == "3", \
+		f"hull's finding 1, the phantom element, still stands: {lines[2]}"
