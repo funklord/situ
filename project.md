@@ -31304,6 +31304,59 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.609 The coverage span moves to `traverse`, and the proof earned its keep twice
+
+Rung 2's builder has to ask whether a tag covers bytes written after
+itself, which is the question `pack.py` answered as a comprehension over
+its own row table with an `in_arm` closure beside it. A second derivation
+would be a second answer, and `traverse.py` opens by saying it exists
+because five places had grown their own copy of one rule. So the rule
+moved: `traverse.covered_members(struct, tag)` and `traverse.arm_paths`,
+with `pack` keeping only the mapping from members to row indices, since a
+row index is the image's vocabulary and not the schema's.
+
+**The invariant was stated first and it refused the first attempt.** Every
+corpus schema packed with and without its metadata tail, 90 images hashed:
+
+	dtls.situ      meta=0   191755f5... -> 1602bc74...
+	keystore.situ  meta=0   eee2dc1d... -> 7c4ba745...
+
+`is_own_member` excludes a sealed region's interior on purpose -- its
+accessors take the gated view type, so it belongs to the parent and its
+callers handle it -- and **the interior is exactly what a tag covers.**
+Reading `own_members` gave an empty span for both, and the images changed
+under a refactor meant to change nothing. Over `struct.entries` all 90 are
+byte-identical.
+
+**And the guard was inert, which the proof could not see.** `arm_paths`
+first read `own_members` too; a variant IS one, so the heads were found,
+but an arm's path holds a dot and so is not an own member -- the exclusion
+list came out empty for every struct in the corpus. It passed the 90-image
+proof anyway, because **in declaration order an arm sits at its variant's
+position rather than last**, so the first and last covered member are
+unchanged. Right for a reason the guard was not supplying. Over entries it
+finds ICMP's twelve, and the span is `type, code, rest`.
+
+**Then the exclusion turns out to be redundant here, measured rather than
+assumed.** With it working, deleting it STILL leaves all 90 images
+identical: the arms are never at the extremes in declaration order. It was
+load-bearing for `pack` because the row table APPENDS an arm after the
+struct's own members -- which is how ICMP's span came out 8 bytes where
+RFC 792 sums 21, `e5ca` against `3b5a` (26.579). That row order is the
+packer's own and is not this function's. The guard stays: its population is
+empty HERE rather than in principle, and a guard deleted on the strength of
+a sabotage that changed nothing is the shape `evidence.md` says to assert
+instead.
+
+`pack`'s `in_arm` closure and its `armed` cache are removed, being dead
+once the rule moved.
+
+**Two of my sabotages were misaimed before one landed**, which is the
+eighth today. The first reverted `arm_paths`'s *heads* loop and left the
+exclusion loop over entries, so the guard still fired and nothing went red;
+the bug had been in the second loop. The test catches it now and says which
+population is wrong.
+
 ### 26.608 This document is 88 per cent log, and that is the number to act on
 
 `claude-guidelines` measured every private tree's `project.md` on
