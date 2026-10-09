@@ -66,12 +66,14 @@ NESTED  = "nested"	# a whole inner struct the caller built
 REPEAT  = "repeat"	# a run of inner structs the caller built
 PEEKED  = "peeked"	# a member that reads bytes belonging to what follows
 ARMTAG  = "armtag"	# a discriminant the chosen arm decides
+BITS    = "bits"	# one field of a byte several members share
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
-CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT})
+CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
+                             BITS})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it.
@@ -87,7 +89,8 @@ class Part:
 			sizes: Placement | None = None, radix: int = 0,
 			minimal: bool = False, delimiter: bytes = b"",
 			digits: int = 0, inner: str = "", value: int = 0,
-			others: tuple[int, ...] = ()) -> None:
+			others: tuple[int, ...] = (), bit_at: int = 0,
+			opens: bool = False, closes: bool = False) -> None:
 		self.role      = role
 		self.placement = placement
 		self.local     = local
@@ -101,6 +104,9 @@ class Part:
 		self.inner     = inner		# the struct a nested member holds
 		self.value     = value		# what an `armtag` writes
 		self.others    = others		# the values other arms claim
+		self.bit_at    = bit_at		# where in a packed group this sits
+		self.opens     = opens		# first of a packed group
+		self.closes    = closes		# last of one
 
 
 def _local(struct: ResolvedStruct, placement: Placement) -> str:
@@ -376,6 +382,57 @@ def _value_part(role: str, placement: Placement, local: str,
 	            digits=most)
 
 
+def packed(placement: Placement) -> bool:
+	"""Whether this member shares a byte rather than owning whole ones.
+
+	Either because it is not a whole number of bytes wide, or because it
+	does not start on a byte boundary. `owned.py` splits its writer on the
+	same question and this is the same answer, which is why the ORDER
+	comes from `traverse.bit_extractor` here too: two derivations of which
+	way the bits run is how a little-endian `u24` came to be read one way
+	and written the other (26.285).
+	"""
+	if placement.scalar is None or placement.size_bits is None:
+		return False
+	if placement.offset_bits is None:
+		return False
+	return bool(placement.size_bits % BITS_PER_BYTE
+	            or placement.offset_bits % BITS_PER_BYTE)
+
+
+def _packed_groups(members: list[Placement]
+		) -> dict[int, tuple[int, int, int]]:
+	"""For each packed member, where it sits in its group and how big that
+	group is: `(bit within the group, group bytes, index of the first)`.
+
+	A group is a maximal run of consecutive packed members. It has to start
+	on a byte boundary and span whole bytes, because the writer zeroes
+	those bytes and then sets bits inside them -- a group that straddled a
+	boundary would need the byte before it back, which append-only does not
+	have.
+	"""
+	found: dict[int, tuple[int, int, int]] = {}
+	index = 0
+	while index < len(members):
+		if not packed(members[index]):
+			index += 1
+			continue
+		last = index
+		while last + 1 < len(members) and packed(members[last + 1]):
+			last += 1
+		first_bit = members[index].offset_bits or 0
+		end_bit = ((members[last].offset_bits or 0)
+		           + (members[last].size_bits or 0))
+		if first_bit % BITS_PER_BYTE == 0 \
+				and (end_bit - first_bit) % BITS_PER_BYTE == 0:
+			span = (end_bit - first_bit) // BITS_PER_BYTE
+			for at in range(index, last + 1):
+				found[at] = ((members[at].offset_bits or 0) - first_bit,
+				             span, index)
+		index = last + 1
+	return found
+
+
 def _arm_placement(struct: ResolvedStruct, path: str) -> Placement | None:
 	"""The placement an arm selects, which is an entry under the variant."""
 	for entry in struct.entries:
@@ -524,9 +581,31 @@ def plan(struct: ResolvedStruct, header: str = "",
 	                        if case.value is not None})
 	                ) if variant is not None else ()
 
+	groups = _packed_groups(members)
+
 	parts: list[Part] = []
-	for held in members:
+	for index, held in enumerate(members):
 		local = _local(struct, held)
+
+		if packed(held):
+			if index not in groups:
+				return [], f"`{traverse.local_name(struct, held)}` packs " \
+				           "into a group that does not start on a byte " \
+				           "boundary or does not span whole bytes"
+			bit_at, span, first = groups[index]
+			if held.kind not in ("field", "reserved"):
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           f"packed {held.kind}"
+			assert held.scalar is not None
+			if held.scalar.is_bcd or held.radix is not None \
+					or held.scaled:
+				return [], f"`{traverse.local_name(struct, held)}` is " \
+				           "packed and its value is not its bits"
+			parts.append(Part(BITS, held, local, span,
+			                  bit_at=bit_at, opens=index == first,
+			                  closes=(index + 1 not in groups
+			                          or groups[index + 1][2] != first)))
+			continue
 
 		if held.peek:
 			# Reads bytes that belong to what comes after it, so it writes
@@ -787,7 +866,12 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 	name = ident(prefix, struct.name, "build", suffix)
 	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}"]
 	for part in parts:
-		if part.role == SCALAR:
+		if part.role == BITS:
+			if part.placement.kind == "reserved":
+				continue	# zeroed by the group, not a value to pass
+			args.append(f"{_ctype(part.placement, prefix, enums)} "
+			            f"{part.local}")
+		elif part.role == SCALAR:
 			args.append(f"{_ctype(part.placement, prefix, enums)} "
 			            f"{part.local}")
 		elif part.role == RUN:
@@ -1084,6 +1168,34 @@ def _one(struct: ResolvedStruct, prefix: str,
 				f"\t{AT} += {part.bytes}u;",
 				"",
 			]
+		elif part.role == BITS:
+			assert held.scalar is not None
+			order = traverse.bit_extractor(held.scalar, held)
+			width = held.size_bits or 0
+			lines += [
+				*([f"\t/* {part.bytes} byte(s) of packed fields: zeroed,",
+				   "\t * then each one set in place. The reserved bits",
+				   "\t * among them are what the zeroing is for. */",
+				   *_room(f"{part.bytes}u"),
+				   f"\tmemset({OUT} + {AT}, 0, {part.bytes}u);"]
+				  if part.opens else []),
+			]
+			if held.kind != "reserved":
+				# `situ_bits_set_*` MASKS the value, so a field given more
+				# than it can hold would be written truncated -- a valid
+				# message saying something else, which `_validate` cannot
+				# object to. Refused instead.
+				lines += [
+					f"\t/* {local}: {width} bits at {part.bit_at}. */",
+					f"\tif ((uint64_t){part.local} > {(1 << width) - 1}u) {{",
+					"\t\treturn SITU_ERR_CONSTRAINT;",
+					"\t}",
+					f"\tsitu_bits_set_{order}({OUT} + {AT}, "
+					f"{part.bit_at}u, {width}u,",
+					f"\t                    (uint64_t){part.local});",
+				]
+			if part.closes:
+				lines += [f"\t{AT} += {part.bytes}u;", ""]
 		elif part.role == PEEKED:
 			lines += [
 				f"\t/* {local}: peeked, so it does not consume: the bytes",

@@ -31304,6 +31304,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.618 A byte several members share is written once, and refused when it cannot hold them
+
+The largest refusal the variant left was a sub-byte scalar -- 28 members,
+and all 28 measurable before any of it was written: **every one sits at a
+static bit offset, and in all fourteen structs the packed members total a
+whole number of bytes.** So the shape is a group rather than a member,
+and nothing has to handle a group that straddles a byte boundary, because
+the corpus has none and the writer refuses one by name.
+
+A group is a maximal run of consecutive packed members. The writer takes
+its capacity once, **zeroes its bytes once** -- which is what the
+reserved bits among them need, and `rtc.wall_clock` has thirteen fields
+in six bytes -- sets each field in place, and advances the cursor once at
+the end. `owned.py` splits its own writer on the same question and this
+asks the same `traverse.bit_extractor` for which way the bits run,
+because two derivations of that is how a little-endian `u24` came to be
+read one way and written the other (26.285).
+
+**And a value too wide for its field is refused rather than written.**
+`situ_bits_set_*` masks, which is right for a function that must not
+corrupt a neighbour, and wrong as a builder's answer: 9 into three bits
+lands as 1, which is **a valid message saying something else**, and
+`_validate` has nothing to object to.
+
+**The control for that needed a fixture with no constraints, and ntp
+could not be it.** `example/ntp`'s `version` is three bits and over-range
+values are refused by its own enum as well, so with the range check
+deleted that call still comes back `SITU_ERR_CONSTRAINT` -- the fourth
+overlap of this shape today. An inline `u3` and `u5` with nothing said
+about either answers it: with the check removed the build returns
+`SITU_OK` and the field reads back as 1.
+
+ntp is in the tests for the other half, which is worth separating: `leap
+= 0`, `version = 4`, `mode = 3` builds `0b00100011`, **0x23, which is the
+byte NTP puts on the wire**. That checks the packing against the format
+rather than against the writer's own arithmetic, which is what a
+round-trip through situ's own accessors alone would do.
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **129 of
+242 structs have a builder, in 31 of the 45 schemas**, with 51 packed
+members written. Three more schemas gained their first builder.
+
+**What is left is no longer structural**, and the list is short enough to
+state: a `while` run (11), a tag or checksum's arithmetic (11, where a
+trailing CRC is already append-only and only the computation is absent),
+a multi-byte delimiter (10, which is every `\r\n` in http and smtp), a
+reserved run with no stated length (9), a sealed region (9), a codec (7)
+and a register (5, which is not a buffer at all). Each is a conversion or
+a piece of arithmetic rather than a construct the design cannot express.
+
 ### 26.617 A variant is one builder per arm, and the arm says which it is
 
 The last structural gap. **Which arm to write is said by which builder

@@ -1459,3 +1459,151 @@ int main(void)
 		"the four calls are: right bytes to the named arm, wrong bytes to "
 		"the named arm, right bytes to the default, and a named arm's kind "
 		f"to the default -- got {ran.stdout.split(chr(10))[0]}")
+
+
+#: Two packed fields and no constraint on either, which is what makes it
+#: the fixture the range check answers for: `example/ntp`'s own over-range
+#: version is refused by its enum as well, so neither sabotage is red
+#: there. `situ_bits_set_*` MASKS, so without the check 9 lands as 1.
+PACKED = """bit_order msb_first;
+
+struct pk {
+\tu3  a;
+\tu5  b;
+}
+"""
+
+
+def test_a_byte_several_members_share_is_one_group() -> None:
+	"""A packed group is zeroed once and then set field by field.
+
+	ntp's first byte is leap, version and mode -- 2, 3 and 3 bits. The
+	group opens on the first and closes on the last, so the capacity
+	check, the zeroing and the cursor advance each happen once however
+	many fields share the byte.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "ntp" / "ntp.situ")
+	header = _header(parsed, resolved, "ntp")
+	parts, why = _only(resolved, "ntp_packet", header)
+	assert why is None, why
+
+	bits = [part for part in parts if part.role == build.BITS]
+	assert [part.placement.name for part in bits] == ["leap", "version",
+	                                                  "mode"]
+	assert [part.bit_at for part in bits] == [0, 2, 5]
+	assert [part.bytes for part in bits] == [1, 1, 1]
+	assert bits[0].opens and not bits[1].opens and not bits[2].opens
+	assert bits[2].closes and not bits[0].closes
+
+	text = build.generate(parsed, resolved, "ntp", "situ",
+	                      header)["ntp_build.h"]
+	body = text.split("situ_ntp_packet_build(")[1]
+	assert body.count(f"memset({build.OUT} + {build.AT}, 0, 1u)") == 1
+	# The ORDER is `traverse.bit_extractor`'s, which is also what
+	# `owned.py` asks: two derivations of which way the bits run is how a
+	# little-endian u24 came to be read one way and written the other.
+	assert "situ_bits_set_msb" in body
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_packed_fields_land_where_the_reader_looks(tmp_path: Path) -> None:
+	"""ntp's first byte, built and read back through the accessors.
+
+	`leap = 0`, `version = 4`, `mode = 3` is `0b00100011` -- 0x23 -- which
+	is the byte NTP puts on the wire, so this checks the packing against
+	the format rather than against the writer's own arithmetic.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "ntp" / "ntp.situ")
+	files = dict(build.generate(parsed, resolved, "ntp", "situ",
+	                            _header(parsed, resolved, "ntp")))
+	files.update(generate_c(parsed, resolved, "ntp").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "ntp_build.h"
+
+int main(void)
+{
+	uint8_t     out[64], ts[8];
+	uint32_t    n = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	memset(ts, 0, sizeof ts);
+	err = situ_ntp_packet_build(out, sizeof out, 0, 4, 3, 2, 6, -20,
+	                            0, 0, 0, ts, 8, ts, 8, ts, 8, ts, 8, &n);
+	printf("%d %u %02X\\n", (int)err, n, err == SITU_OK ? out[0] : 0);
+	if (err != SITU_OK) return 2;
+
+	situ_msg_init(&msg, out, n);
+	if (situ_ntp_packet_view(&msg, 0, &view) != SITU_OK) return 3;
+	printf("%u %u %u\\n",
+	       (unsigned)situ_ntp_packet_leap_get(view),
+	       (unsigned)situ_ntp_packet_version_get(view),
+	       (unsigned)situ_ntp_packet_mode_get(view));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "ntp.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0 48 23", f"NTP's first byte is 0x23: {lines[0]}"
+	assert lines[1] == "0 4 3", f"and reads back as given: {lines[1]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_value_wider_than_its_field_is_refused_not_masked(
+		tmp_path: Path) -> None:
+	"""`situ_bits_set_*` masks, so without a check 9 lands in three bits
+	as 1 -- a valid message saying something else, which `_validate` has
+	nothing to object to.
+
+	Measured with the check removed: this fixture returns SITU_OK. ntp's
+	own over-range `version` is refused by its enum as well, so it could
+	not have answered for this.
+	"""
+	probe = _compile(tmp_path, "pk", PACKED, """
+#include <stdio.h>
+#include "pk_build.h"
+
+int main(void)
+{
+	uint8_t     out[8];
+	uint32_t    n = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	err = situ_pk_build(out, sizeof out, 5, 9, &n);
+	printf("%d %u %02X\\n", (int)err, n, err == SITU_OK ? out[0] : 0);
+	if (err != SITU_OK) return 2;
+	situ_msg_init(&msg, out, n);
+	if (situ_pk_view(&msg, 0, &view) != SITU_OK) return 3;
+	printf("%u %u\\n", (unsigned)situ_pk_a_get(view),
+	       (unsigned)situ_pk_b_get(view));
+	printf("%d\\n", (int)situ_pk_build(out, sizeof out, 9, 0, &n));
+	return 0;
+}
+""")
+	ran = subprocess.run([str(probe)], capture_output=True, text=True,
+	                     cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0 1 A9", f"5 then 9 msb-first is 0xA9: {lines[0]}"
+	assert lines[1] == "5 9", f"and reads back as given: {lines[1]}"
+	assert lines[2] == "2", \
+		f"9 does not fit three bits and must be refused: {lines[2]}"
