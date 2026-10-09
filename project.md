@@ -31304,6 +31304,83 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.617 A variant is one builder per arm, and the arm says which it is
+
+The last structural gap. **Which arm to write is said by which builder
+you call**, not by a parameter -- so the discriminant is the function's to
+write and cannot disagree with the body, which is the same argument as
+computing a size field rather than asking for it. `situc build` emits
+`situ_<struct>_build_<arm>` for every arm it can write, and names the
+rest per arm on stderr.
+
+Four cases, and the schema decides which applies:
+
+    consumed discriminant, named case   write the case value
+    consumed discriminant, default arm  the caller gives it, and it is
+                                        refused if a named arm claims it
+    peeked discriminant, named case     write nothing; the ARM's first
+                                        byte must be that case
+    peeked discriminant, default arm    write nothing; the arm's first
+                                        byte must be no named case
+
+**A peeked discriminant writes nothing at all**, and that is not an
+optimisation. A peek does not consume, so those bytes belong to the arm
+that follows; writing them for the discriminant too would write them
+twice. It is also why the kind check moves onto the arm: with nothing
+written for the discriminant, **`_validate` cannot help** -- bytes
+beginning with another arm's kind are a *valid message of that other
+arm*, so a caller who asked for this one would be told `SITU_OK` about
+something else.
+
+**That check needed a fixture nothing else could answer, and the obvious
+one was no good.** Against `example/sexpr`, handing list bytes to
+`build_as_text` is refused by `text_required` as well, so neither
+sabotage goes red -- the third overlap of this shape today, after 26.610's
+`cap` and 26.612's scan. The fixture that separates them has two arms of
+**one type** behind a peeked discriminant, so the arm's own `_required`
+accepts either input:
+
+    a-bytes to the 'a' arm      SITU_OK
+    b-bytes to the 'a' arm      SITU_ERR_CONSTRAINT   (the case check)
+    b-bytes to the default      SITU_OK
+    a-bytes to the default      SITU_ERR_CONSTRAINT   (the claimed check)
+
+Each check goes red alone against it.
+
+**And one arm was accepted at plan time and refused every input at run
+time**, which is the state a refusal by name exists to prevent.
+`sexpr.as_symbol` holds a `symbol`, which is `u8 name[] before ' ' | '('
+| ')'` -- it HAS a `_required`, so `frames_itself` said yes, and that
+function can never answer the length a caller passes: with the delimiter
+absent it reports TRUNCATED, and with it present the extent stops short,
+because a `before` run does not consume. **The parent owns the byte that
+ends it.** So "can this be handed over as bytes" is now one predicate,
+`hands_over`, asked by the nested field, the run element and the arm
+alike -- the header's answer plus the schema's. Found only by building
+one: every static check had said it was fine.
+
+**Fourth instance today of the naming class, and the pattern in it is
+mine rather than the tree's.** An arm's parameter name came from
+`_local(...).split("_")[-1]`, which turned `body_write_register` into
+`register` and modbus would not compile. `<reserved0>`, `short`, `cap`
+and now this: every one came from **computing a name fragment instead of
+asking for the name**, and the remedy each time was `bare_name` on the
+thing the schema actually called it.
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **119 of
+242 structs have a builder, in 28 of the 45 schemas**, with **58 arms
+writable and 54 refused**, each refused one named per arm. The refusals
+are now `struct.arm`, so the partition test was restated: a struct can be
+in both sets at once, some arms writable and some not, and that test
+caught the change rather than being updated to suit it.
+
+**`sexpr` builds, which is what hull's "opening and closing a list"
+asked for.** `(())`, every byte written by generated code -- an empty
+list, that list as a `sexpr`, a list holding it, and the whole as a
+`sexpr`, four builders composed, and the result acquires a view. What
+remains refused there is `as_symbol`, above, and `text`, which escapes
+its delimiter.
+
 ### 26.616 hull's findings 13 to 15, verified: one fixed, two measured and left
 
 Three more from hull, and **all three were found by describing their own

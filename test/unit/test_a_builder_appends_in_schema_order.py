@@ -39,7 +39,7 @@ from every_schema import SCHEMAS, load_schema	# noqa: E402
 from situc import traverse			# noqa: E402
 from situc.codegen.c import build		# noqa: E402
 from situc.codegen.c import generate as generate_c	# noqa: E402
-from situc.layout import solve			# noqa: E402
+from situc.layout import Arm, solve		# noqa: E402
 from situc.resolve import resolve		# noqa: E402
 
 RUNTIME  = ROOT / "runtime" / "c"
@@ -62,9 +62,10 @@ def _header(parsed, resolved, stem: str) -> str:	# type: ignore[no-untyped-def]
 	return generate_c(parsed, resolved, stem).files().get(f"{stem}.h", "")
 
 
-def _only(resolved, name: str, header: str = ""):	# type: ignore[no-untyped-def]
+def _only(resolved, name: str, header: str = "",	# type: ignore[no-untyped-def]
+		arm: Arm | None = None):
 	struct = resolved.structs[name]
-	return build.plan(struct, header)
+	return build.plan(struct, header, "situ", arm, resolved.structs)
 
 
 def test_a_size_field_is_computed_rather_than_asked_for() -> None:
@@ -208,10 +209,22 @@ def test_every_struct_either_builds_or_is_named(path: Path) -> None:
 	built   = {struct.name for struct in build.buildable(resolved, header)}
 	refused = dict(build.refusals(resolved, header))
 
-	assert not (built & set(refused)), built & set(refused)
-	assert built | set(refused) == set(resolved.structs)
+	# A variant is refused PER ARM, so a refusal names `struct.arm` and a
+	# struct can be in both sets at once -- some arms writable and some
+	# not. That is the honest shape and this test caught the change to it,
+	# which is what it is for.
+	named = {key.split(".")[0] for key in refused}
+	assert built | named == set(resolved.structs), \
+		set(resolved.structs) - (built | named)
 	for name, why in refused.items():
 		assert why and why[0] in "`ihacr", f"{name}: {why}"
+
+	# And every struct that is neither built nor refused would be silently
+	# absent, which is the cell this test exists to keep empty.
+	for name, struct in resolved.structs.items():
+		if name in built:
+			continue
+		assert name in named, f"`{name}` is neither built nor named"
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
@@ -1210,3 +1223,239 @@ int main(void)
 	assert lines[1] == "0", f"the list does not acquire a view: {lines[1]}"
 	assert lines[2] == "3", \
 		f"hull's finding 1, the phantom element, still stands: {lines[2]}"
+
+
+def test_a_variant_gets_one_builder_per_arm() -> None:
+	"""Which arm is said by which builder, not by a parameter.
+
+	So the discriminant is the function's to write and cannot disagree
+	with the body -- the same argument as computing a size field rather
+	than asking for it. modbus's `request` switches on a `function_code`
+	enum, and `read_coils` is 1.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "modbus" / "modbus.situ")
+	header = _header(parsed, resolved, "modbus")
+	cases  = {build.arm_name(case): case
+	          for case in build.arms(resolved.structs["request"])}
+	assert "read_coils" in cases and "default" in cases
+
+	parts, why = _only(resolved, "request", header, cases["read_coils"])
+	assert why is None, why
+	tag = [part for part in parts if part.role == build.ARMTAG]
+	assert len(tag) == 1 and tag[0].value == 1, [
+		(part.placement.name, part.role) for part in parts]
+
+	text = build.generate(parsed, resolved, "modbus", "situ",
+	                      header)["modbus_build.h"]
+	head = text.split("situ_request_build_read_coils(")[1].split("{")[0]
+	assert "function" not in head, \
+		f"the discriminant is a parameter, so it can disagree: {head}"
+
+
+def test_the_default_arm_refuses_a_value_a_named_arm_claims() -> None:
+	"""The default builder DOES take the discriminant, because the schema
+	names no value for it -- and a value another arm claims would make the
+	message read as that arm, so it is refused.
+
+	The named builders are where those values are written.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "modbus" / "modbus.situ")
+	header = _header(parsed, resolved, "modbus")
+	cases  = {build.arm_name(case): case
+	          for case in build.arms(resolved.structs["request"])}
+
+	parts, why = _only(resolved, "request", header, cases["default"])
+	assert why is None, why
+	disc = [part for part in parts if part.others]
+	assert len(disc) == 1, [(part.placement.name, part.role)
+	                        for part in parts]
+	assert 1 in disc[0].others and 23 in disc[0].others
+
+
+def test_a_peeked_discriminant_is_written_by_the_arm() -> None:
+	"""A peek does not consume, so those bytes belong to the arm.
+
+	Writing them for the discriminant too would write them twice -- and
+	nothing in `_validate` could see it, because the result would simply
+	be a different, valid message. So the discriminant writes nothing and
+	the ARM carries the check that its first byte says which arm this is.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "sexpr" / "sexpr.situ")
+	header = _header(parsed, resolved, "sexpr")
+	cases  = {build.arm_name(case): case
+	          for case in build.arms(resolved.structs["sexpr"])}
+
+	parts, why = _only(resolved, "sexpr", header, cases["as_list"])
+	assert why is None, why
+	roles = [part.role for part in parts]
+	assert roles == [build.PEEKED, build.NESTED], roles
+	assert parts[0].placement.name == "kind"
+
+	text = build.generate(parsed, resolved, "sexpr", "situ",
+	                      header)["sexpr_build.h"]
+	assert "if (as_list[0] != 40u)" in text, \
+		"the arm's first byte is not checked against its own case"
+	assert "if (as_symbol[0] ==" not in text, \
+		"`as_symbol` should be refused outright, not emitted"
+
+
+def test_an_arm_that_ends_before_a_byte_it_does_not_own_is_refused() -> None:
+	"""`sexpr.as_symbol` was accepted at plan time and refused every input.
+
+	A `symbol` is `u8 name[] before ' ' | '(' | ')'`, so it has a
+	`_required` -- `frames_itself` said yes -- and that function can never
+	answer the length a caller passes: with the delimiter absent it
+	reports TRUNCATED, and with it present the extent stops short of it,
+	because a `before` run does not consume. The parent owns the byte that
+	ends it.
+
+	Found by building one, which is the only way this shows: every static
+	check said it was fine.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "sexpr" / "sexpr.situ")
+	header = _header(parsed, resolved, "sexpr")
+	cases  = {build.arm_name(case): case
+	          for case in build.arms(resolved.structs["sexpr"])}
+
+	_, why = _only(resolved, "sexpr", header, cases["as_symbol"])
+	assert why is not None and "handed over as bytes" in why, why
+
+	assert build.frames_itself(header, "situ_symbol"), \
+		"the header does declare a `_required` for it, which is the trap"
+	assert not build.hands_over(header, "symbol", "situ", resolved.structs)
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_nested_s_expression_is_built_by_its_own_builders(
+		tmp_path: Path) -> None:
+	"""`(())`, every byte of it written by generated code.
+
+	An empty list, that list as a `sexpr` element, a list holding that
+	element, and the whole thing as a `sexpr` -- four builders composed,
+	which is what hull's "opening and closing a list" asked for.
+
+	The last line is the control for the arm's first-byte check: the same
+	bytes asked for as a text are a VALID list, so `_validate` accepts
+	them and only that check can refuse.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "sexpr" / "sexpr.situ")
+	files = dict(build.generate(parsed, resolved, "sexpr", "situ",
+	                            _header(parsed, resolved, "sexpr")))
+	files.update(generate_c(parsed, resolved, "sexpr").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "sexpr_build.h"
+
+int main(void)
+{
+	uint8_t     inner[16], elem[16], outer[16], top[16];
+	uint32_t    n1 = 0, n2 = 0, n3 = 0, n4 = 0, n5 = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    i;
+
+	if (situ_list_build(inner, sizeof inner, '(', NULL, 0, &n1) != SITU_OK)
+		return 2;
+	if (situ_sexpr_build_as_list(elem, sizeof elem, inner, n1, &n2)
+	    != SITU_OK) return 3;
+	if (situ_list_build(outer, sizeof outer, '(', elem, n2, &n3) != SITU_OK)
+		return 4;
+	err = situ_sexpr_build_as_list(top, sizeof top, outer, n3, &n4);
+	printf("%d %u ", (int)err, n4);
+	for (i = 0; i < n4; i++) putchar(top[i]);
+	printf("\\n");
+	if (err != SITU_OK) return 5;
+
+	situ_msg_init(&msg, top, n4);
+	printf("%d\\n", (int)situ_sexpr_view(&msg, 0, n4, &view));
+
+	/* a valid list, asked for as a text */
+	printf("%d\\n", (int)situ_sexpr_build_as_text(top, sizeof top, outer,
+	                                             n3, &n5));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "sexpr.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, f"exited {ran.returncode}: {ran.stderr}"
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 4 (())", f"a nested list, four bytes: {lines[0]}"
+	assert lines[1] == "0", f"the result does not acquire a view: {lines[1]}"
+	assert lines[2] == "2", \
+		f"a list asked for as a text must be refused: {lines[2]}"
+
+
+#: Two arms of ONE type behind a peeked discriminant, so the arm's own
+#: `_required` accepts either input and nothing upstream can refuse. That
+#: is what makes it the only fixture the kind checks answer alone: against
+#: `example/sexpr` the wrong-arm call is caught by `text_required` as well,
+#: so neither sabotage goes red there.
+PICK = """struct two {
+\tu8  k;
+\tu8  x;
+}
+
+struct pick {
+\tpeek u8  kind;
+\tvariant  body switch (kind) {
+\t\tcase 'a': two  as_a;
+\t\tdefault:  two  as_b;
+\t}
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_peeked_arm_is_checked_against_the_case_it_was_called_for(
+		tmp_path: Path) -> None:
+	"""Four calls, and the two that must be refused are refused by nothing
+	else.
+
+	A peeked discriminant is not written -- those bytes belong to the arm
+	-- so a caller handing `b`-kind bytes to the `'a'` builder would get
+	SITU_OK about a message that reads as the OTHER arm. `_validate`
+	cannot object: it is a valid `pick`, just not the one asked for.
+
+	The default arm is the mirror: it takes no case value, so its bytes
+	must not begin with one a named arm claims.
+	"""
+	probe = _compile(tmp_path, "pick", PICK, """
+#include <stdio.h>
+#include "pick_build.h"
+
+int main(void)
+{
+	uint8_t     out[16];
+	uint32_t    n = 0;
+	const uint8_t a[2] = { 'a', 'z' };
+	const uint8_t b[2] = { 'b', 'z' };
+
+	printf("%d %d %d %d\\n",
+	       (int)situ_pick_build_as_a(out, sizeof out, a, 2, &n),
+	       (int)situ_pick_build_as_a(out, sizeof out, b, 2, &n),
+	       (int)situ_pick_build_as_b(out, sizeof out, b, 2, &n),
+	       (int)situ_pick_build_as_b(out, sizeof out, a, 2, &n));
+	return 0;
+}
+""")
+	ran = subprocess.run([str(probe)], capture_output=True, text=True,
+	                     cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	assert ran.stdout.split("\n")[0] == "0 2 0 2", (
+		"the four calls are: right bytes to the named arm, wrong bytes to "
+		"the named arm, right bytes to the default, and a named arm's kind "
+		f"to the default -- got {ran.stdout.split(chr(10))[0]}")
