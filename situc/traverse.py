@@ -1137,6 +1137,63 @@ def covered_members(struct: "ResolvedStruct",
 	        and entry.placement.path not in skip]
 
 
+def append_only_refusals(struct: "ResolvedStruct") -> list[str]:
+	"""Why this struct cannot be written in one forward pass (26.610).
+
+	0032 row 2 says `edit` is *build or resize a message whose extent is not
+	fixed*, and its permission is "may it allocate?". A builder that appends
+	into caller-supplied backing needs exactly that permission and nothing
+	above it: it invalidates nothing, because no view into the buffer exists
+	while it is being filled. That is why building is not blocked on 12.3's
+	invalidation model, which is about moving bytes under views somebody
+	already holds.
+
+	**Append-only is a property of the layout, not a choice**, so this is a
+	precondition read out of the schema rather than a flag -- 0032's closing
+	invariant is that no rung invents a fact the schema did not state, and
+	where the schema states none the rung is absent rather than defaulted.
+
+	A member is append-only if its value is settled by the caller's input and
+	by bytes BELOW its own offset. Three things break that, and each is a
+	value computed from bytes written later:
+
+	  - a member `located` by an expression, which may land anywhere;
+	  - an index table, whose entries are offsets of elements after it;
+	  - a tag or checksum covering members that follow it.
+
+	The third is positional, and that is the whole reason it needs
+	`covered_members`: a TRAILING tag is append-only -- emit the content,
+	then compute it, which is what PNG's CRC is -- while IPv4's header
+	checksum sits inside the region it sums and would need a back-patch. A
+	predicate that refused every tag would pass all three cases above and
+	say nothing, so that is the one with a test of its own.
+	"""
+	bad: list[str] = []
+	order = {held.path: i for i, held in enumerate(own_members(struct))}
+	for i, held in enumerate(own_members(struct)):
+		if held.located:
+			bad.append(f"`{local_name(struct, held)}` is located by an "
+			           f"expression, so where it lands is not where the "
+			           f"writer had reached")
+		if held.index_table is not None:
+			bad.append(f"`{local_name(struct, held)}` is an index table, "
+			           f"whose entries are the offsets of elements after it")
+		if not held.tag_covers:
+			continue
+		for member in covered_members(struct, held):
+			at = order.get(member.path)
+			# A covered member the struct does not own is inside a region,
+			# and a region's own placement carries the position: what
+			# decides is whether the TAG comes after everything it sums.
+			if at is None or at < i:
+				continue
+			bad.append(f"`{local_name(struct, held)}` covers "
+			           f"`{local_name(struct, member)}`, which follows it, "
+			           f"so its value is not known when the writer reaches it")
+			break
+	return bad
+
+
 def covered_bit_span(struct: "ResolvedStruct",
 		tag: Placement) -> tuple[int, int] | None:
 	"""What a tag covers, in BITS, where a byte range cannot say it.

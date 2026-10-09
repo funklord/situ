@@ -31304,6 +31304,133 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.610 Rung 2 writes: an append-only builder, and what it refuses by name
+
+hull asked for a writer and found none: 0032 names rung 2 *build or resize
+a message whose extent is not fixed*, and `grep` over `situc/codegen`
+found no builder, appender or resize in any backend (`suggestion/hull.md`,
+11). The gap was narrower than it looked. `--owned` already encodes --
+`_encode` lays a filled struct back into a buffer -- and it is restricted
+to a struct whose every member has a fixed-size C field, so what was
+missing was exactly the variable-extent half, which is the half 0032's
+sentence is about.
+
+**A builder is not a layer, and the holder's brief settles its shape:**
+*builder at edit, append-only layouts only, even if we expand situ support
+beyond append-only we keep append-only as the code is smaller and less
+complex for that case.* Three of 0032's own tests say it is not a rung.
+It asks no new permission -- allocation is rung 2's, and appending into
+backing the caller supplied needs that and nothing above it. The codec
+precedent refused a rung for the same reason: *it is a consumer of a rung,
+not a rung*. And `--owned` and `--materialize` establish that the SHAPE of
+emitted code is not the rung's invariant.
+
+Nor is append-only a flag. 0032's closing invariant is that no rung
+invents a fact the schema did not state, so it is a **precondition read
+out of the layout**: `traverse.append_only_refusals` names the three
+things that break a forward pass, each of them a value computed from bytes
+written later -- a member `located` by an expression, an index table whose
+entries are the offsets of elements after it, and a tag covering members
+that follow it.
+
+**And building is not blocked on 12.3's invalidation model**, which is
+what 0034's second row waits for. Appending into caller-supplied backing
+invalidates nothing: no view into the buffer exists while it is being
+filled.
+
+The third refusal is positional, which is the whole reason it consults
+`covered_members` (26.609) rather than `tag_covers`. PNG's CRC covers the
+chunk's type and data and comes after both, so nothing about appending
+refuses it; IPv4's header checksum sits inside the region it sums and
+would need a back-patch. **A predicate that refused every tag passes all
+three refusal cases and says nothing**, so the trailing tag is the case
+with a test of its own, and sabotaging the positional check turns that
+test red while the three stay green.
+
+**No representation conversion is emitted here, and that is deliberate
+rather than unfinished.** `owned.py` records what a second conversion
+costs: its BCD encode and decode were self-consistent and wrong together,
+so a round trip returned `SITU_OK` about a date the bytes did not spell.
+So this writer puts bytes down through the runtime's own `situ_put_*` and
+refuses every member whose value differs from its bits by more than byte
+order -- BCD, a radix, a sub-byte scalar, a varint, a scaled field. One
+implementation per direction, and it is not this one.
+
+The bytes are then checked by the view rather than by a second opinion:
+every build ends by acquiring a view over what it wrote and calling the
+generated `_validate`, for the reason `owned.py` states -- two checks of
+one schema is how they come to disagree. That tail is what refuses an
+`operation` of 99 in an ARP packet every member of which was bounds
+checked, because a scalar's legal range is not its width.
+
+A size field is **computed from the run it measures** rather than asked
+for: a caller able to pass both a length and a run is a caller able to
+make them disagree. `mqtt_string` is the shape, and it is hull's canonical
+atom with a binary length instead of a decimal one.
+
+Measured over the 45 schemas `every_schema` holds, which is
+`example/*/*.situ`, `std/*.situ` and `test/schema/*.situ`: **82 of 242
+structs have a builder, in 23 of the 45 schemas**; over `example/` alone
+it is 34 of 117 in 35 schemas. Every other struct is named on stderr, and
+the test asserts the partition rather than either cell -- the refused cell
+is what a later increment empties, and an entry arriving in it unnamed is
+how that increment would go unnoticed. The largest single refusal is a
+**delimited run, 24 of them**, which is hull's readable schema and the
+next increment along with a radix writer; the runtime has
+`situ_put_be16/32/64` and `situ_put_le16/32/64` and no decimal writer at
+all, so hull's `decimal u32 length until ":" max 10 [minimal]` is refused
+by name today.
+
+**The compile sweep found six faults, and it is the only thing that
+could.** It compiles the emitted header for every schema that has one, and
+each of these was a green test suite away from going unnoticed:
+
+  - a predicate testing `placement.scaled is not None` where `scaled` is a
+    bool, so it refused every scalar in the corpus -- an inert predicate's
+    mirror, firing always rather than never, and it is why the first
+    measurement said 2 of 117;
+  - `<reserved0>` reaching four parameter lists verbatim, the compiler's
+    own label for a field the schema did not name;
+  - reserved bytes asked of a caller at all, where they are a constraint
+    rather than a value (8.8) and have no accessor -- zero is not a choice
+    either, the content policy being `must_be_zero` or nothing, so zero is
+    required where it is stated and refused nowhere;
+  - a register struct, whose view function does not exist because a
+    register is a bus transaction rather than bytes in a buffer (15.1);
+  - a view acquired with the wrong arity, a frame's taking the length the
+    caller has and a fixed struct's not;
+  - a member called `short` in `test/schema/edges.situ`, legal in a schema
+    and not a name a C parameter can carry.
+
+The last of those is `bare_name`'s third caller rather than a new rule,
+and it mangles for 0025's argument: the schema keeps its name and the
+emitter moves. **Mangling costs a caller nothing here and that is specific
+to C** -- there are no named arguments, so a parameter name is
+documentation rather than call syntax, while refusing the struct would
+cost them the builder.
+
+**Two guards each save the one case the corpus holds, which means neither
+sabotage goes red alone.** `std/image.situ` has a member called `cap`,
+which redefined an earlier draft's capacity parameter and was then unused
+-- two errors from one collision. Measured in four cells: with the
+writer's locals prefixed and the uniquifier beside them, green; with the
+prefix removed, green, the uniquifier mangling `cap` to `cap_`; with the
+uniquifier disabled, green, the prefix keeping them apart; **with both
+gone, `image` does not compile.** So the uniquifier's own population --
+a member spelled `situ_at`, or a `value` whose span emits a `value_len`
+another member already answers to -- is empty in this corpus, and has a
+constructed test rather than none: the alternative is a guard whose only
+evidence is that nothing has needed it, which is the evidence a broken one
+leaves too.
+
+One process note, because it happened in this tree. Reverting a sabotage
+in `traverse.py` with `git checkout --` destroyed `append_only_refusals`,
+which was uncommitted at the time; the sabotage before it had been
+reverted safely from a copy kept aside. The function was restored from the
+session's own record, and the predicate and its first consumer went in
+together -- which is 26.592's rule, and is why neither was committed on
+its own while the other was being written.
+
 ### 26.609 The coverage span moves to `traverse`, and the proof earned its keep twice
 
 Rung 2's builder has to ask whether a tag covers bytes written after

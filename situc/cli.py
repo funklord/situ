@@ -1011,6 +1011,19 @@ def cmd_build(args: argparse.Namespace) -> int:
 			print(f"situc: no owned form for `{name}` at any rung: {why}",
 			      file=sys.stderr)
 
+		# The write half of the same rung, and C only so far. An
+		# append-only layout gets a builder and anything else is named,
+		# because a rung is absent rather than defaulted where the schema
+		# states something it cannot hold to (0032, 26.610).
+		if args.target == "c":
+			from situc.codegen.c import build
+
+			files.update(build.generate(parsed, resolved, args.schema.stem,
+			                            args.prefix))
+			for name, why in build.refusals(resolved):
+				print(f"situc: no builder for `{name}`: {why}",
+				      file=sys.stderr)
+
 	if args.layer in ("relate", "frame", "converse", "drive"):
 		from situc import relation as relation_module
 
