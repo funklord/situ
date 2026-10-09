@@ -31304,6 +31304,43 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.608 This document is 88 per cent log, and that is the number to act on
+
+`claude-guidelines` measured every private tree's `project.md` on
+2026-10-09 and signalled that thirteen of twenty-one cannot be read in one
+session. situ is second largest at 44,973 lines and about 628,000 tokens,
+3.1x a 200k window, having grown 20,503 lines in thirty days. **Each
+tree's answer is its own session's**, so this is situ's, measured here and
+kept short on purpose.
+
+	## 26. Implementation plan      39,564 lines    88%
+	the other 28 sections            5,628 lines
+	607 numbered entries, mean 65 lines each
+
+**And this session is a fair share of the problem**: 13 entries, 957
+lines, mean 73 -- about 5 per cent of a month's growth in one day. The
+measurement is not somebody else's to act on.
+
+**What decides the cut is `working-practice.md`'s own test, not the size.**
+It says where a rule will be argued with, keep the incident; where it will
+be looked up, the incident is weight -- and that this is a question about
+what the document is FOR. At 607 entries over three context windows
+nobody reads section 26 through, so it is consulted rather than read,
+which by that test makes most of its incidents weight. `evidence.md` was
+cut on exactly that reasoning, by its holder, when it reached 48 sections.
+
+**What makes a cut safe here is not the `fold:` commits.** Measured on
+four: the message carries 20 to 24 lines where the entry carries 50 to 90,
+so it holds the lesson and not the tables. What holds the rest is the
+commit that REMOVES text -- `git log -S` on an entry's own words recovers
+it, which is the property evidence.md's cut relied on rather than its
+summaries.
+
+**So the pass is: keep each entry's rule and its load-bearing number, drop
+the narration, one commit per pass rather than by attrition.** It is 607
+entries of reading and is not something to begin at the end of a session.
+Not started; the measurement is the deliverable the signal asked for.
+
 ### 26.607 Three reproduced codegen faults, a rung nothing compiles, and 26.604 qualified
 
 hull sent a reduced reproduction for their finding 6 and two more findings,
