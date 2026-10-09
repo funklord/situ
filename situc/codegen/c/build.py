@@ -382,6 +382,15 @@ def _value_part(role: str, placement: Placement, local: str,
 	            digits=most)
 
 
+def ident_view(inner: str) -> str:
+	"""`<inner>_view`, where `inner` is already prefixed."""
+	return f"{inner}_view"
+
+
+def ident_validate(inner: str) -> str:
+	return f"{inner}_validate"
+
+
 def packed(placement: Placement) -> bool:
 	"""Whether this member shares a byte rather than owning whole ones.
 
@@ -959,7 +968,8 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 	]
 
 
-def _walk(part: Part, local: str, count: bool) -> list[str]:
+def _walk(part: Part, local: str, count: bool,
+		structs: Mapping[str, ResolvedStruct] | None = None) -> list[str]:
 	"""Step through a run of inner structs the caller built.
 
 	Every shape a struct run takes reduces to this, which is why there is
@@ -981,6 +991,10 @@ def _walk(part: Part, local: str, count: bool) -> list[str]:
 	boundary the walk reaches, which is exactly where the reader looks.
 	"""
 	ending = part.delimiter[0] if part.delimiter else None
+	# Whether the element's view takes a length, which `emit.py` keys on
+	# `is_fixed_size` and so does this.
+	inner = (structs or {}).get(part.placement.type_name or "")
+	framed = inner is not None and not inner.layout.is_fixed_size
 	lines = [
 		f"\t/* {local}: a run of `{part.placement.type_name}` the caller",
 		"\t * built. Walked with the element's own `_required`, because",
@@ -995,6 +1009,11 @@ def _walk(part: Part, local: str, count: bool) -> list[str]:
 		"\t{",
 		f"\t\tuint32_t {SCAN} = 0u;",
 		"",
+		# One message over the caller's bytes, and a view per element out
+		# of it. Hoisted, because re-initialising it per element would
+		# advance the generation counter for no reason.
+		f"\t\tsitu_msg_init(&{MSG}, (uint8_t *)(uintptr_t){part.local},",
+		f"\t\t              {part.local}_len);",
 		f"\t\twhile ({SCAN} < {part.local}_len) {{",
 		f"\t\t\tuint32_t {NEED} = 0u;",
 		"",
@@ -1018,6 +1037,32 @@ def _walk(part: Part, local: str, count: bool) -> list[str]:
 		"\t\t\t\t/* What stops the loop. A zero-byte element would",
 		"\t\t\t\t * otherwise never advance it. */",
 		"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t\t}",
+		# Measuring an element is not validating it: `_required` answers
+		# how long one is, and the whole-message `_validate` at the end
+		# does not reach a run's elements -- "an array's elements are
+		# validated by the caller that chooses to walk them", and the
+		# caller choosing to walk them is this loop. So a list of atoms
+		# the schema refuses was being built and reported SITU_OK, with
+		# every element's own `_validate` saying CONSTRAINT. Reported by
+		# hull as finding 17; their own finding 3 is the same division
+		# seen from the reader's side.
+		f"\t\t\tif ({ident_view(part.inner)}(&{MSG}, {SCAN}, "
+		# The REST of the run, not the element's own measured length: the
+		# reader walks elements with what follows still visible, and an
+		# element that ends `before` a byte it does not own cannot be read
+		# from its own extent alone. A one-byte view of sexpr's `a ` was
+		# BOUNDS for exactly that reason.
+		+ (f"{part.local}_len - {SCAN}, " if framed else "")
+		+ f"&{VIEW}) != SITU_OK) {{",
+		"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t\t}",
+		f"\t\t\t{ERR} = {ident_validate(part.inner)}({VIEW});",
+		f"\t\t\tif ({ERR} != SITU_OK) {{",
+		# The element's own verdict rather than a flat CONSTRAINT: a
+		# caller told which of its elements is wrong, and why, can fix
+		# it.
+		f"\t\t\t\treturn {ERR};",
 		"\t\t\t}",
 		f"\t\t\t{SCAN} += {NEED};",
 		*([f"\t\t\t{COUNT}++;"] if count else []),
@@ -1098,7 +1143,8 @@ def _one(struct: ResolvedStruct, prefix: str,
 			             delimiter=(part.sizes.delimiters[0]
 			                        if part.sizes.delimiters else b""))
 			lines += [
-				*_walk(tally, traverse.local_name(struct, part.sizes), True),
+				*_walk(tally, traverse.local_name(struct, part.sizes),
+				       True, structs),
 				f"\t/* {local}: how many the walk found. */",
 				*_value(part, COUNT, local),
 				"",
@@ -1219,7 +1265,8 @@ def _one(struct: ResolvedStruct, prefix: str,
 				# Walked at the count field already, where the answer was
 				# needed; walking twice would be two measurements of one
 				# thing and they would have to agree.
-				*([] if walked else _walk(part, local, counted)),
+				*([] if walked else _walk(part, local, counted,
+				                          structs)),
 				*([f"\tif ({COUNT} != {part.digits}u) {{",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
 				   "\t}"] if counted else []),

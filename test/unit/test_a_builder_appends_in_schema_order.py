@@ -1163,14 +1163,19 @@ int main(void)
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
 def test_a_delimited_run_of_structs_round_trips(tmp_path: Path) -> None:
-	"""sexpr's `list`, which is what hull's "opening and closing a list"
-	needs, built from element bytes and read back.
+	"""sexpr's `list`, built from element bytes and read back.
 
-	`items_count` answers 3 for `(a b )` rather than 2, and that is hull's
-	finding 1 -- a list closed after whitespace gains a phantom element --
-	which is the reader's and is recorded against `example/sexpr`. It is
-	asserted here as it stands so that fixing it turns this red rather
-	than leaving a stale expectation behind.
+	Two cases, and the second is hull's finding 1 arriving on the write
+	side. `a b` builds `(a b)` and reads back as two items. `a b ` -- the
+	same with a trailing space -- is REFUSED, because that space makes a
+	third, empty element which the schema does not accept: their finding
+	says a list closed after whitespace gains a phantom element, and since
+	the walk validates every element the phantom is what refuses the
+	build.
+
+	So a caller cannot write a list whose items would read back with an
+	element they did not intend, which is a stronger guarantee than the
+	reader gives on its own.
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "sexpr" / "sexpr.situ")
 	files = dict(build.generate(parsed, resolved, "sexpr", "situ",
@@ -1185,24 +1190,26 @@ def test_a_delimited_run_of_structs_round_trips(tmp_path: Path) -> None:
 int main(void)
 {
 	uint8_t     out[64];
-	uint32_t    wrote = 0;
+	uint32_t    n = 0, i;
 	situ_err_t  err;
 	situ_msg_t  msg;
 	situ_view_t view;
-	uint32_t    i;
-	const uint8_t items[4] = { 'a', ' ', 'b', ' ' };
+	const uint8_t tight[3] = { 'a', ' ', 'b' };
+	const uint8_t loose[4] = { 'a', ' ', 'b', ' ' };
 
-	err = situ_list_build(out, sizeof out, '(', items, 4, &wrote);
-	printf("%d %u ", (int)err, wrote);
-	for (i = 0; i < wrote; i++) putchar(out[i]);
+	err = situ_list_build(out, sizeof out, '(', tight, 3, &n);
+	printf("%d %u ", (int)err, n);
+	for (i = 0; i < n; i++) putchar(out[i]);
 	printf("\\n");
 	if (err != SITU_OK) return 2;
 
-	situ_msg_init(&msg, out, wrote);
-	err = situ_list_view(&msg, 0, wrote, &view);
-	printf("%d\\n", (int)err);
-	if (err != SITU_OK) return 3;
+	situ_msg_init(&msg, out, n);
+	if (situ_list_view(&msg, 0, n, &view) != SITU_OK) return 3;
 	printf("%u\\n", situ_list_items_count(view));
+
+	/* the same with a trailing space, which makes a phantom element */
+	printf("%d\\n", (int)situ_list_build(out, sizeof out, '(', loose, 4,
+	                                    &n));
 	return 0;
 }
 """, encoding="ascii")
@@ -1217,12 +1224,14 @@ int main(void)
 
 	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
 	                     text=True, cwd=tmp_path, timeout=60)
-	assert ran.returncode == 0, ran.stderr
+	assert ran.returncode == 0, f"exited {ran.returncode}: {ran.stderr}"
 	lines = ran.stdout.split("\n")
-	assert lines[0] == "0 6 (a b )", lines[0]
-	assert lines[1] == "0", f"the list does not acquire a view: {lines[1]}"
-	assert lines[2] == "3", \
-		f"hull's finding 1, the phantom element, still stands: {lines[2]}"
+
+	assert lines[0] == "0 5 (a b)", lines[0]
+	assert lines[1] == "2", f"two items, not the phantom three: {lines[1]}"
+	assert lines[2] != "0", \
+		"a trailing space makes a phantom element and must be refused"
+
 
 
 def test_a_variant_gets_one_builder_per_arm() -> None:
@@ -1607,3 +1616,75 @@ int main(void)
 	assert lines[1] == "5 9", f"and reads back as given: {lines[1]}"
 	assert lines[2] == "2", \
 		f"9 does not fit three bits and must be refused: {lines[2]}"
+
+
+#: An element with a constraint and nothing else interesting. `n = 9`
+#: MEASURES fine -- two bytes, like any other element -- and its own
+#: `_validate` refuses it, which is the whole of hull's finding 17.
+CONSTRAINED = """struct el {
+\tu8  n [max = 3];
+\tu8  pad;
+}
+
+struct bag {
+\tu8   open;
+\tel   items[] until ")";
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_an_element_the_schema_refuses_is_not_built(tmp_path: Path) -> None:
+	"""Measuring an element is not validating it.
+
+	`_required` answers how long one is, and the whole-message `_validate`
+	does not reach a run's elements -- "an array's elements are validated
+	by the caller that chooses to walk them", and the caller choosing to
+	walk them is this writer's loop. So a run of elements the schema
+	refuses was built and reported SITU_OK while every element's own
+	`_validate` said CONSTRAINT.
+
+	Reported by hull as finding 17, against their canonical s-expressions:
+	`01:a` went through against `[minimal]`, and so did an atom whose list
+	was never closed. Their finding 3 is the same division seen from the
+	reader's side.
+
+	The element's own verdict is returned rather than a flat CONSTRAINT,
+	so a caller is told which failure it was.
+	"""
+	probe = _compile(tmp_path, "bag", CONSTRAINED, """
+#include <stdio.h>
+#include "bag_build.h"
+
+int main(void)
+{
+	uint8_t     out[32];
+	uint32_t    n = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+	const uint8_t good[2] = { 3, 0 };
+	const uint8_t bad[2]  = { 9, 0 };
+
+	printf("%d\\n", (int)situ_bag_build(out, sizeof out, '(', good, 2, &n));
+	err = situ_bag_build(out, sizeof out, '(', bad, 2, &n);
+	printf("%d\\n", (int)err);
+
+	/* and what the element itself says about those bytes, which is what
+	 * the build now reports */
+	situ_msg_init(&msg, (uint8_t *)(uintptr_t)bad, 2);
+	if (situ_el_view(&msg, 0, &view) != SITU_OK) return 2;
+	printf("%d\\n", (int)situ_el_validate(view));
+	return 0;
+}
+""")
+	ran = subprocess.run([str(probe)], capture_output=True, text=True,
+	                     cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0", f"a conforming element builds: {lines[0]}"
+	assert lines[1] == "2", \
+		f"one the schema refuses must not: {lines[1]}"
+	assert lines[1] == lines[2], (
+		"the element's own verdict is what the build reports, so a caller "
+		f"learns which failure it was: {lines[1]} vs {lines[2]}")

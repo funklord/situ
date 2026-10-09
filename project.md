@@ -31304,6 +31304,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.620 Measuring an element is not validating it
+
+hull's finding 17: `_list_build` returned `SITU_OK` for elements the
+schema refuses -- a non-minimal length against `[minimal]`, a space
+canonical form has none of, and **an element never closed, so the list
+was not either**. Reproduced here on a two-field element with
+`[max = 3]`: `n = 9` measures like any other element, its own `_validate`
+says `SITU_ERR_CONSTRAINT`, and the build said OK.
+
+**The division is the reader's and it is deliberate.** A run's elements
+are not validated by the struct that holds them -- *"an array's elements
+are validated by the caller that chooses to walk them"* -- which is
+hull's own finding 3 from the other side. What was wrong is that **the
+writer IS that caller**: the walk is the thing choosing to walk them, so
+validating each element is this design being followed rather than
+contradicted. The element's own verdict is returned rather than a flat
+CONSTRAINT, so a caller learns which failure it was.
+
+**A single nested field was already covered**, which is worth recording
+because it stops the next reader widening the fix: a nested struct's
+members are part of the enclosing struct's entries, so the final
+`_validate` does reach them. Measured, with the same constrained element
+nested rather than repeated: refused before this change. Only the run
+had the gap.
+
+**The element's view spans the rest of the run, not its own measured
+length.** The first attempt gave each element a view of exactly `need`
+bytes and sexpr's `a ` came back `SITU_ERR_BOUNDS`: a `before` run cannot
+be read from its own extent, because the byte that ends it belongs to
+what follows -- 26.617's lesson arriving in a third place. The reader
+walks elements with the rest still visible, so the writer's view does
+too.
+
+**And it closed a second hole nobody had asked about.** With every
+element validated, a caller can no longer build a list whose items read
+back with an element they did not intend: `a b ` -- a trailing space --
+is now refused, because that space is hull's finding 1, the phantom
+element, and the phantom does not validate. `a b` builds `(a b)` and
+reads back as **two** items. So the write side now refuses what the read
+side merely mis-counts, which is a stronger guarantee than the reader
+gives alone, and the test asserts both halves rather than the phantom
+count it asserted before.
+
+**Seventeen findings from one adopter, and the split is worth reading.**
+Fifteen were faults situ already had, one (26.619) was a regression situ
+introduced, and this one is a gap that only existed because the builder
+exists -- so it could not have been found before today. Five of the
+seventeen came from reading situ's generated output or its emitters
+rather than from using it.
+
 ### 26.619 The peek minimum counted peeks the data may never reach
 
 **A regression I shipped in 26.616 and an adopter found at head.** The
