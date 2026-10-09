@@ -699,3 +699,32 @@ int main(void)
 	assert lines[0] == "0 7", f"`ab wxyz` is seven bytes: {lines[0]}"
 	assert lines[1] == "2", \
 		f"a run containing its own delimiter must be refused: {lines[1]}"
+
+
+@pytest.mark.parametrize("schema,struct,wanted", [
+	# `before`, and it lists three. The count must not be what it is told
+	# about, because it writes no terminator at all.
+	("sexpr/sexpr.situ", "symbol", "is a `before` run"),
+	# `until`, and it lists two. Here the count IS the reason: the run ends
+	# at one of them and which to write is not stated.
+	("http/http.situ", "header_field", "any of 2 delimiters"),
+])
+def test_a_before_run_is_not_told_about_its_delimiter_count(
+		schema: str, struct: str, wanted: str) -> None:
+	"""Two corpus instances that separate two checks, in that order.
+
+	A `before` run writes no terminator -- the delimiter belongs to
+	whatever follows -- so the number it lists does not bear on it. Asked
+	count-first, `sexpr.symbol.name` was told *which byte to write after it
+	is not stated* when no byte is its to write: a refusal that was right
+	with a reason that was not.
+
+	Reported by hull, who read the function rather than its output; their
+	own `symbol` lists eight delimiters. Both refusals stand -- what a
+	`before` run cannot guarantee is that the bytes written AFTER it begin
+	with a delimiter, and that belongs to whatever composes it, which is
+	the run-of-structs case still missing.
+	"""
+	_, resolved = _parts(ROOT / "example" / schema)
+	_, why = _only(resolved, struct)
+	assert why is not None and wanted in why, why

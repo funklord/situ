@@ -185,12 +185,24 @@ def _delimited_refusal(placement: Placement) -> str | None:
 	delimiter with no escape, quote or trim -- so the shapes refused below
 	are the tail rather than the body.
 	"""
+	# `before` first, and the order is the whole diagnosis. Such a run
+	# writes NO terminator -- the delimiter belongs to whatever follows --
+	# so the number of delimiters it lists does not bear on it at all, and
+	# asked the other way round a `before` run with several was told "which
+	# byte to write after it is not stated" when no byte is its to write.
+	#
+	# Reported by hull 2026-10-09, who read this function rather than its
+	# output: their `symbol` lists eight. `sexpr.symbol.name` is the corpus
+	# instance, and the two tests over it and `http.header_field.value` are
+	# what separate these two checks.
+	if not placement.delimiter_consumed:
+		return "is a `before` run, so nothing it writes ends it: whether " \
+		       "the bytes after it begin with a delimiter is a property of " \
+		       "what is written next, which composes it rather than being " \
+		       "part of it"
 	if len(placement.delimiters) > 1:
 		return f"ends at any of {len(placement.delimiters)} delimiters, so " \
 		       "which byte to write after it is not stated"
-	if not placement.delimiter_consumed:
-		return "does not consume its delimiter, so the byte that ends it " \
-		       "belongs to the member after it"
 	if len(placement.delimiters[0]) != 1:
 		return "ends at a multi-byte delimiter"
 	if placement.delimiter_escape:

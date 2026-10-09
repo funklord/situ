@@ -31364,6 +31364,25 @@ is not the one asked for -- read back, `name` stops at the first space and
 `SITU_OK` and the caller is never told. That is the cost the scan buys,
 and it is visible only in a fixture nothing upstream can answer first.
 
+**And one refusal was right with a reason that was not.** Reported by
+hull the same day, who read `build.py` rather than its output: their
+`symbol` is a `before` run listing eight delimiters, and
+`_delimited_refusal` asked about the COUNT before asking whether the
+delimiter is consumed. A `before` run writes no terminator at all -- the
+delimiter belongs to whatever follows -- so the count does not bear on it,
+and `sexpr.symbol.name` was told *which byte to write after it is not
+stated* when no byte is its to write.
+
+The order is swapped, and the message now names the obligation rather
+than the symptom: what a `before` run cannot guarantee is that the bytes
+written AFTER it begin with a delimiter, which belongs to whatever
+composes it. Two corpus instances separate the two checks and are the
+test -- `sexpr.symbol` is `before` with three, `http.header_field` is
+`until` with two -- and with the old order the first fails while the
+second passes. **The refusal itself was never wrong**, which is what
+makes the class worth naming: a diagnosis nobody doubts because the
+verdict is correct.
+
 Re-measured, same method as 26.610 and 26.611 -- the 45 schemas
 `every_schema` holds: **86 of 242 structs have a builder, in 24 of the 45
 schemas**, with 5 delimited members written. Five rather than 21, because
