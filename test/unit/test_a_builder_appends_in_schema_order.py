@@ -401,3 +401,166 @@ struct collide {
 	assert spelt["value"] != "value", "the span's `_len` would collide"
 	assert spelt["situ_at"] != "situ_at", "that is the writer's cursor"
 	assert f"{spelt['value']}_len" not in locals_
+
+
+def _inline(body: str):				# type: ignore[no-untyped-def]
+	"""A schema from a string, for a shape no corpus schema holds."""
+	from situc.diagnostics import Source
+	from situc.parser import parse as parse_text
+
+	parsed = parse_text(Source("inline", "target buffer;\nendian big;\n\n"
+	                           + body))
+	return parsed, resolve(parsed, solve(parsed))
+
+
+#: Rivest's canonical atom, which is what hull adopted situ to write:
+#: a minimal decimal length, a colon, and that many bytes. Mirrored here
+#: rather than read from hull's tree, because a test that reads another
+#: project's working copy measures whatever that session left it as.
+ATOM = """struct atom {
+\tdecimal u32 length until ":" max 10 [minimal];
+\tu8 bytes[length];
+}
+"""
+
+
+def test_a_minimal_run_of_digits_is_written_with_its_terminator() -> None:
+	"""The radix path, and what it is built on.
+
+	`situ_format_uint` already writes digits -- it is `situ_parse_uint`
+	backwards -- at a fixed width, so leading zeros are mandatory and one
+	value is one byte sequence. `[minimal]` is the case it cannot do, and
+	what is missing for it is the WIDTH rather than the conversion: three
+	lines counting digits, then the same function.
+
+	So this asserts that the runtime's formatter is what writes the digits.
+	A second implementation here is the fault `owned.py` paid for in BCD,
+	where an encode and a decode were self-consistent and wrong together.
+	"""
+	parsed, resolved = _inline(ATOM)
+	parts, why = _only(resolved, "atom")
+	assert why is None, why
+
+	roles = {part.placement.name: part.role for part in parts}
+	assert roles == {"length": build.SIZE, "bytes": build.SPAN}, roles
+	length = [part for part in parts if part.placement.name == "length"][0]
+	assert length.radix == 10 and length.minimal
+	assert length.delimiter == b":" and length.digits == 10
+
+	text = build.generate(parsed, resolved, "canonical")["canonical_build.h"]
+	assert "situ_format_uint" in text, "the digits are written here instead"
+	assert "0x3Au" in text, "the colon the schema states is not written"
+
+
+@pytest.mark.parametrize("member,wanted", [
+	# Several bytes may end it, so which one to write is not stated. The
+	# case with NO delimiter is absent because the parser refuses it before
+	# this writer ever sees it.
+	('decimal u32 n until ":" | " " max 4 [minimal]', "any of 2 delimiters"),
+	# `5` is a decimal digit, so the digits cannot stop at it: a minimal run
+	# ends at the first byte that is not one.
+	('decimal u32 n until "5" max 4 [minimal]', "which is a digit"),
+	# Neither a width nor `[minimal]`, so how many digits to write is not
+	# stated anywhere.
+	('decimal u32 n until ":"', "neither a width"),
+	# The runtime formats unsigned values; a sign is a second thing to
+	# write and is not written here.
+	('decimal i32 n until ":" max 4 [minimal]', "signed number"),
+])
+def test_digits_the_writer_cannot_place_are_refused(
+		member: str, wanted: str) -> None:
+	"""Each of these is a schema situ accepts and this writer does not.
+
+	They are constructed rather than drawn from the corpus, which holds no
+	instance of any of them -- so without these the preconditions would be
+	four conditions whose only evidence is that nothing has tripped them.
+	"""
+	_, resolved = _inline("struct one {\n\t%s;\n\tu8 rest[4];\n}\n"
+	                      % member)
+	_, why = _only(resolved, "one")
+	assert why is not None and wanted in why, why
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_canonical_atom_is_built_and_reads_back(tmp_path: Path) -> None:
+	"""The adopter's own shape, end to end.
+
+	`0:` is the case the digit count gets wrong if it starts from zero
+	rather than one, and the empty run is legal, so it is here beside
+	`4:root`. `10:` is the case a one-digit assumption gets wrong.
+	"""
+	parsed, resolved = _inline(ATOM)
+	files = dict(build.generate(parsed, resolved, "canonical"))
+	files.update(generate_c(parsed, resolved, "canonical").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "canonical_build.h"
+
+static void show(const uint8_t *in, uint32_t len)
+{
+	uint8_t     buf[64];
+	uint32_t    wrote = 0;
+	situ_err_t  err = situ_atom_build(buf, sizeof buf, in, len, &wrote);
+
+	printf("%d %u ", (int)err, wrote);
+	if (err == SITU_OK) fwrite(buf, 1, wrote, stdout);
+	printf("\\n");
+}
+
+int main(void)
+{
+	uint8_t     big[20];
+	uint8_t     small[8];
+	uint32_t    wrote = 0;
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	show((const uint8_t *)"root", 4);
+	show((const uint8_t *)"", 0);
+	show((const uint8_t *)"0123456789", 10);
+	memset(big, 'x', sizeof big);
+	show(big, sizeof big);
+
+	/* room for neither the digits, the colon, nor the run */
+	printf("%d\\n", (int)situ_atom_build(small, 4,
+	                                     (const uint8_t *)"root", 4, &wrote));
+
+	/* and the length reads back through the view */
+	if (situ_atom_build(big, sizeof big, (const uint8_t *)"root", 4,
+	                    &wrote) != SITU_OK) return 2;
+	situ_msg_init(&msg, big, wrote);
+	if (situ_atom_view(&msg, 0, wrote, &view) != SITU_OK) return 3;
+	{
+		uint32_t back = 0;
+
+		if (situ_atom_length_get(view, &back) != SITU_OK) return 4;
+		printf("%u\\n", back);
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "canonical.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, f"exited {ran.returncode}: {ran.stderr}"
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 6 4:root", lines[0]
+	assert lines[1] == "0 2 0:", f"an empty atom is `0:`: {lines[1]}"
+	assert lines[2] == "0 13 10:0123456789", \
+		f"ten bytes need two digits: {lines[2]}"
+	assert lines[3] == "0 23 20:" + "x" * 20, lines[3]
+	assert lines[4] == "1", f"a capacity of four cannot hold it: {lines[4]}"
+	assert lines[5] == "4", f"the length does not read back: {lines[5]}"

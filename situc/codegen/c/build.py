@@ -48,7 +48,9 @@ WORD_WIDTHS = (8, 16, 32, 64)
 #: 0032 asks a rung not to make.
 OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
-FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, "situ_fixed"})
+DIGITS, SCRATCH = "situ_digits", "situ_scratch"
+FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
+                      "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -66,13 +68,19 @@ class Part:
 
 	def __init__(self, role: str, placement: Placement, local: str,
 			bytes_: int = 0, literal: bytes = b"",
-			sizes: Placement | None = None) -> None:
+			sizes: Placement | None = None, radix: int = 0,
+			minimal: bool = False, delimiter: bytes = b"",
+			digits: int = 0) -> None:
 		self.role      = role
 		self.placement = placement
 		self.local     = local
 		self.bytes     = bytes_
 		self.literal   = literal
 		self.sizes     = sizes		# the run this member's value measures
+		self.radix     = radix		# 0 where the value is written as bits
+		self.minimal   = minimal	# no leading zeros, so the width varies
+		self.delimiter = delimiter	# what ends a minimal run of digits
+		self.digits    = digits		# the most digits the schema allows
 
 
 def _local(struct: ResolvedStruct, placement: Placement) -> str:
@@ -104,6 +112,62 @@ def _whole_bytes(placement: Placement) -> int | None:
 	return placement.size_bits // BITS_PER_BYTE
 
 
+def _digit_bytes(radix: int) -> frozenset[int]:
+	"""The bytes `situ_format_uint` can emit at this radix.
+
+	Upper case only, which is that function's own choice and argued where it
+	lives: a lower-case hex digit is a second spelling of one number and is
+	refused on the way in rather than tolerated on the way out.
+	"""
+	alphabet = "0123456789ABCDEF"[:radix]
+	return frozenset(ord(digit) for digit in alphabet)
+
+
+def _radix_refusal(placement: Placement) -> str | None:
+	"""Why this member's digits cannot be written, or None.
+
+	The runtime writes digits already -- `situ_format_uint`, which is
+	`situ_parse_uint` backwards -- at a FIXED width, so the leading zeros
+	are mandatory and one value is one byte sequence. What it cannot do is
+	`[minimal]`, where the width follows the value; that needs the digit
+	count, which is three lines on top of it rather than a second
+	implementation of the conversion.
+	"""
+	scalar = placement.scalar
+	assert scalar is not None
+	if scalar.signed:
+		return "is a signed number written in digits, and the runtime " \
+		       "formats unsigned ones"
+	if placement.radix_minimal:
+		# Zero delimiters is not checked here because the parser refuses it
+		# outright -- *`decimal n` has no end* -- so a branch for it would
+		# be unreachable by construction rather than merely unexercised.
+		if len(placement.delimiters) > 1:
+			# The schema names several bytes that may end the digits, so
+			# the writer would be choosing one, which is the invention
+			# 0032 forbids.
+			return f"is minimal and ends at any of " \
+			       f"{len(placement.delimiters)} delimiters, so which byte " \
+			       "to write after it is not stated"
+		if not placement.delimiter_consumed:
+			return "is minimal and does not consume its delimiter, so the " \
+			       "byte that ends it belongs to the member after it"
+		ending = placement.delimiters[0]
+		if len(ending) != 1:
+			return "ends at a multi-byte delimiter"
+		if ending[0] in _digit_bytes(placement.radix or 10):
+			# Nothing else keeps a `[minimal]` field unambiguous: the digits
+			# stop at the first byte that is not one, so a delimiter that IS
+			# one cannot be found.
+			return f"ends at `{chr(ending[0])}`, which is a digit at radix " \
+			       f"{placement.radix}"
+		if placement.size_max_bits is None:
+			return "is minimal with no `max`, so nothing bounds its digits"
+	elif placement.array_count is None:
+		return "is written in digits with neither a width nor `[minimal]`"
+	return None
+
+
 def _scalar_refusal(placement: Placement) -> str | None:
 	"""Why this scalar's value is not its bytes in the runtime's own order.
 
@@ -121,8 +185,7 @@ def _scalar_refusal(placement: Placement) -> str | None:
 	if scalar.kind in (ScalarKind.SFIXED, ScalarKind.UFIXED):
 		return "is fixed point, whose value is scaled"
 	if placement.radix is not None:
-		return f"is written in base {placement.radix}, and the runtime has " \
-		       "no radix writer"
+		return _radix_refusal(placement)
 	if placement.scaled:
 		return "is scaled, so its value is not its bits"
 	if placement.varint:
@@ -156,7 +219,12 @@ def _member_refusal(placement: Placement) -> str | None:
 		return "is sealed, and sealing is rung 3's"
 	if placement.index_table is not None:
 		return "is an index table"
-	if placement.delimiters:
+	if placement.delimiters and placement.radix is None:
+		# A run of digits is the one delimited member this writer can end,
+		# because the proof is static: the digits at a given radix are a
+		# known set, and `_radix_refusal` has already established the
+		# delimiter is not one of them. For arbitrary bytes it would be a
+		# scan, which this increment does not write.
 		return "ends at a delimiter the writer would have to prove its " \
 		       "bytes do not contain"
 	if placement.repeat_while is not None:
@@ -174,6 +242,30 @@ def _member_refusal(placement: Placement) -> str | None:
 		return f"is sized by the expression `{placement.size_expr}`, which " \
 		       "this writer cannot invert"
 	return None
+
+
+def _value_part(role: str, placement: Placement, local: str,
+		sizes: Placement | None = None) -> Part:
+	"""One member whose value the writer puts down, in bits or in digits."""
+	scalar = placement.scalar
+	assert scalar is not None
+	if placement.radix is None:
+		return Part(role, placement, local,
+		            scalar.bits // BITS_PER_BYTE, sizes=sizes)
+
+	# A radix member's WIDTH is its digits, not its value's width: `decimal
+	# u32` is a u32 worth of value in up to ten bytes of wire. A minimal one
+	# has no fixed width at all, so it carries none.
+	assert placement.size_max_bits is not None or not placement.radix_minimal
+	most = ((placement.size_max_bits or 0) // BITS_PER_BYTE
+	        if placement.radix_minimal else placement.array_count or 0)
+	return Part(role, placement, local,
+	            0 if placement.radix_minimal else most,
+	            sizes=sizes, radix=placement.radix,
+	            minimal=placement.radix_minimal,
+	            delimiter=(placement.delimiters[0]
+	                       if placement.radix_minimal else b""),
+	            digits=most)
 
 
 def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
@@ -256,18 +348,16 @@ def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
 			why = _scalar_refusal(held)
 			if why:
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
-			parts.append(Part(SIZE, held, local,
-			                  held.scalar.bits // BITS_PER_BYTE,
-			                  sizes=measures[held.name]))
+			parts.append(_value_part(SIZE, held, local,
+			                         sizes=measures[held.name]))
 			continue
 
-		if held.scalar is not None and held.array_count is None \
-				and not traverse.data_sized(held):
+		if held.scalar is not None and not traverse.data_sized(held) \
+				and (held.array_count is None or held.radix is not None):
 			why = _scalar_refusal(held)
 			if why:
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
-			parts.append(Part(SCALAR, held, local,
-			                  held.scalar.bits // BITS_PER_BYTE))
+			parts.append(_value_part(SCALAR, held, local))
 			continue
 
 		# A byte run: fixed where the schema counted it, caller-measured
@@ -361,6 +451,66 @@ def _store(part: Part, value: str) -> list[str]:
 	        f"\t              (uint{width}_t){value});"]
 
 
+def _value(part: Part, value: str, local: str) -> list[str]:
+	"""Put one member's value down and advance the cursor.
+
+	Both roles that take a value come through here -- the caller's scalar
+	and the size field computed from a run -- because a radix reached by one
+	and not the other is how `atom.length`, which is both, would get the
+	binary writer.
+	"""
+	if not part.radix:
+		return [*_room(f"{part.bytes}u"),
+		        *_store(part, value),
+		        f"\t{AT} += {part.bytes}u;"]
+
+	scalar = part.placement.scalar
+	assert scalar is not None
+	if not part.minimal:
+		return [
+			f"\t/* {local}: {part.digits} digit(s) at radix {part.radix}, "
+			"leading zeros and all. */",
+			*_room(f"{part.digits}u"),
+			f"\tif (situ_format_uint({OUT} + {AT}, {part.digits}u, "
+			f"{part.radix}u,",
+			f"\t                     (uint64_t){value}) != 0) {{",
+			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+			f"\t{AT} += {part.digits}u;",
+		]
+
+	ending = part.delimiter[0]
+	return [
+		f"\t/* {local}: minimal digits at radix {part.radix}, then the "
+		f"`{chr(ending)}` that ends them. */",
+		"\t{",
+		f"\t\tuint32_t {DIGITS} = 1u;",
+		f"\t\tuint64_t {SCRATCH} = (uint64_t){value};",
+		"",
+		# The count rather than a second formatter: `situ_format_uint` pads
+		# to the width it is given, so the only thing missing for `[minimal]`
+		# is the width.
+		f"\t\twhile ({SCRATCH} >= {part.radix}u) {{",
+		f"\t\t\t{SCRATCH} /= {part.radix}u;",
+		f"\t\t\t{DIGITS}++;",
+		"\t\t}",
+		f"\t\tif ({DIGITS} > {part.digits}u) {{",
+		"\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t}",
+		f"\t\tif ({CAP} - {AT} < {DIGITS} + 1u) {{",
+		"\t\t\treturn SITU_ERR_BOUNDS;",
+		"\t\t}",
+		f"\t\tif (situ_format_uint({OUT} + {AT}, {DIGITS}, {part.radix}u,",
+		f"\t\t                     (uint64_t){value}) != 0) {{",
+		"\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t}",
+		f"\t\t{AT} += {DIGITS};",
+		f"\t\t{OUT}[{AT}] = 0x{ending:02X}u;",
+		f"\t\t{AT} += 1u;",
+		"\t}",
+	]
+
+
 def _room(size: str) -> list[str]:
 	"""The capacity check before a write of `size` bytes.
 
@@ -410,24 +560,24 @@ def _one(struct: ResolvedStruct, prefix: str,
 			assert part.sizes is not None and held.scalar is not None
 			run   = _local(struct, part.sizes)
 			limit = (1 << held.scalar.bits) - 1
+			# The value's own width, even where it is written in digits: a
+			# `decimal u32` holds what a u32 holds, and `[max]` bounds the
+			# digits separately in `_value`. Omitted where a `uint32_t`
+			# length cannot exceed it, because a check that cannot fire is
+			# noise -- `emit.py` declines `length < 0u` for the same
+			# reason -- and `> 4294967295u` on a `uint32_t` reads as a
+			# fault in the generator.
 			lines += [
 				f"\t/* {local}: the length of `{run}`, which the schema "
 				"states. */",
-				f"\tif ({run}_len > {limit}u) {{",
-				"\t\treturn SITU_ERR_CONSTRAINT;",
-				"\t}",
-				*_room(f"{part.bytes}u"),
-				*_store(part, f"{run}_len"),
-				f"\t{AT} += {part.bytes}u;",
+				*([f"\tif ({run}_len > {limit}u) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if held.scalar.bits < 32 else []),
+				*_value(part, f"{run}_len", local),
 				"",
 			]
 		elif part.role == SCALAR:
-			lines += [
-				*_room(f"{part.bytes}u"),
-				*_store(part, part.local),
-				f"\t{AT} += {part.bytes}u;",
-				"",
-			]
+			lines += [*_value(part, part.local, local), ""]
 		elif part.role == ZERO:
 			lines += [
 				f"\t/* {local}: {part.bytes} reserved byte(s). Zero is what",

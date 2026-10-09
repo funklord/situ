@@ -31304,6 +31304,95 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.611 Digits, and an absence manufactured by the pattern that looked for it
+
+26.610 said the runtime has "no decimal writer at all" and that hull's
+canonical atom was therefore refused. **Both halves were wrong, and the
+first was wrong when it was written.** `situ_format_uint` has written
+digits since 26.86 -- it is `situ_parse_uint` backwards, fixed width, so
+the leading zeros are mandatory and one value is one byte sequence.
+
+**The fault is the search, not the memory.** What was run was a grep for
+`situ_put_be16\|situ_put_le32`, which found the binary writers, and the
+absence of a decimal one was concluded from a pattern that could not have
+matched it. `evidence.md`'s first way to manufacture an absence, and the
+reassuring half of it: the pattern returned hits, so the result did not
+read like an empty search at all. **A probe that found what it named is no
+evidence about what it did not name.** The cost was a false claim in this
+document, in a commit message, and in a message to another project's
+inbox; all three are corrected, which is the propagation rule rather than
+a courtesy -- a message is the copy nobody re-reads.
+
+**What was actually missing is the WIDTH, not the conversion.**
+`[minimal]` means no leading zeros, so the digit count follows the value,
+and `situ_format_uint` pads to the width it is given. Counting the digits
+is three lines on top of it:
+
+    while (situ_scratch >= 10u) { situ_scratch /= 10u; situ_digits++; }
+
+So the increment adds no arithmetic that the runtime did not already own,
+which is the property that matters: a second formatter here is the fault
+`owned.py` paid for in BCD, where an encode and a decode were
+self-consistent and wrong together and a round trip returned `SITU_OK`
+about a date the bytes did not spell.
+
+**A run of digits is the one delimited member this writer can terminate,
+and the reason is that the proof is static.** For arbitrary bytes, writing
+a delimiter means proving the payload does not contain it, which is a
+runtime scan. For digits it is a property of the radix: the digits at
+radix N are a known set, so a delimiter outside that set cannot occur
+among them. Hence the preconditions, each refused by name:
+
+  - **more than one delimiter** -- the schema names several bytes that may
+    end the digits, so writing one would be the writer choosing;
+  - **a delimiter the radix can emit** -- `until "5"` at radix 10 cannot
+    end a minimal run, since the digits stop at the first byte that is not
+    one;
+  - **a delimiter the member does not consume** -- the byte belongs to the
+    member after it, and writing it here would write it twice;
+  - **neither `[minimal]` nor a width** -- nothing states how many digits;
+  - **a signed value** -- the runtime formats unsigned ones, and a sign is
+    a second thing to write.
+
+**Zero delimiters is deliberately not among them**, and that is the
+instructive refusal: the parser already says *`decimal n` has no end*, so
+a branch for it would be unreachable by construction rather than merely
+unexercised. The first draft had one, and the test written to reach it
+failed with the parser's own error -- which is how the branch was found
+rather than shipped as a guard no test could enter. **The other four are
+reachable and have constructed tests**, because this corpus holds no
+instance of any of them: without those they would be four conditions
+whose only evidence is that nothing has tripped them, which is the
+evidence a broken one leaves too.
+
+**hull's canonical atom builds now**, which is the point of the
+increment -- Rivest's length-prefixed form, `situc build --target c
+--layer edit` against their own `sexpr/canonical.situ`:
+
+    4:root
+    0:
+    10:0123456789
+    20:xxxxxxxxxxxxxxxxxxxx
+
+`0:` is the case a digit count starting from zero gets wrong and `10:`
+the case a one-digit assumption gets wrong, so both are in the test
+beside `4:root`. The shape is mirrored as an inline schema rather than
+read from hull's tree, because a test that reads another project's
+working copy measures whatever that session last left in it.
+
+Re-measured after the radix path, same method as 26.610 -- the 45 schemas
+`every_schema` holds: **83 of 242 structs have a builder, in 24 of the 45
+schemas**, and **13 radix members are written across the corpus**, so the
+path is exercised by real schemas rather than only by the inline one. The
+delimited-run refusal falls from 24 to 20, four of those having been
+radix members all along.
+
+One line was dropped on the way: a `uint32_t` length cannot exceed
+`4294967295u`, so the limit check a `decimal u32` size field would have
+carried is omitted rather than emitted. `emit.py` declines `length < 0u`
+for the same reason, and generated code that compares a `uint32_t` against
+its own maximum reads as a fault in the generator.
+
 ### 26.610 Rung 2 writes: an append-only builder, and what it refuses by name
 
 hull asked for a writer and found none: 0032 names rung 2 *build or resize
@@ -31375,11 +31464,15 @@ it is 34 of 117 in 35 schemas. Every other struct is named on stderr, and
 the test asserts the partition rather than either cell -- the refused cell
 is what a later increment empties, and an entry arriving in it unnamed is
 how that increment would go unnoticed. The largest single refusal is a
-**delimited run, 24 of them**, which is hull's readable schema and the
-next increment along with a radix writer; the runtime has
-`situ_put_be16/32/64` and `situ_put_le16/32/64` and no decimal writer at
-all, so hull's `decimal u32 length until ":" max 10 [minimal]` is refused
-by name today.
+**delimited run, 24 of them**, which is hull's readable schema.
+
+~~The runtime has no decimal writer at all, so hull's `decimal u32 length
+until ":" max 10 [minimal]` is refused by name today.~~ **Both halves of
+that were wrong within the hour; 26.611 has the correction and the
+figures above are superseded there.** The runtime has written digits since
+26.86 -- `situ_format_uint` -- and the radix path landed immediately
+after this entry, so a reader arriving at the sentence must not be left
+with it.
 
 **The compile sweep found six faults, and it is the only thing that
 could.** It compiles the emitted header for every schema that has one, and
