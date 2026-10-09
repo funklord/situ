@@ -53,9 +53,18 @@ def _parts(path: Path):				# type: ignore[no-untyped-def]
 	return parsed, resolved
 
 
-def _only(resolved, name: str):			# type: ignore[no-untyped-def]
+def _header(parsed, resolved, stem: str) -> str:	# type: ignore[no-untyped-def]
+	"""The ordinary header, which is what says who has a `_required`.
+
+	`situc build` passes it because it has just emitted it; a test that
+	did not would refuse every nested member and exercise none of them.
+	"""
+	return generate_c(parsed, resolved, stem).files().get(f"{stem}.h", "")
+
+
+def _only(resolved, name: str, header: str = ""):	# type: ignore[no-untyped-def]
 	struct = resolved.structs[name]
-	return build.plan(struct)
+	return build.plan(struct, header)
 
 
 def test_a_size_field_is_computed_rather_than_asked_for() -> None:
@@ -194,9 +203,10 @@ def test_every_struct_either_builds_or_is_named(path: Path) -> None:
 	one: it is what a later increment empties, and an entry arriving in it
 	unnamed is how that increment would go unnoticed.
 	"""
-	_, resolved = _parts(path)
-	built   = {struct.name for struct in build.buildable(resolved)}
-	refused = dict(build.refusals(resolved))
+	parsed, resolved = _parts(path)
+	header  = _header(parsed, resolved, path.stem)
+	built   = {struct.name for struct in build.buildable(resolved, header)}
+	refused = dict(build.refusals(resolved, header))
 
 	assert not (built & set(refused)), built & set(refused)
 	assert built | set(refused) == set(resolved.structs)
@@ -208,7 +218,8 @@ def test_every_struct_either_builds_or_is_named(path: Path) -> None:
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.stem)
 def test_the_build_header_compiles(path: Path, tmp_path: Path) -> None:
 	parsed, resolved = _parts(path)
-	files = dict(build.generate(parsed, resolved, path.stem))
+	files = dict(build.generate(parsed, resolved, path.stem, "situ",
+	                            _header(parsed, resolved, path.stem)))
 	if not files:
 		pytest.skip("no struct in this schema can be built forward")
 
@@ -728,3 +739,141 @@ def test_a_before_run_is_not_told_about_its_delimiter_count(
 	_, resolved = _parts(ROOT / "example" / schema)
 	_, why = _only(resolved, struct)
 	assert why is not None and wanted in why, why
+
+
+def test_a_nested_struct_is_a_field_and_not_a_run_of_them() -> None:
+	"""`mqtt_string topic;` is one struct, not a run of them.
+
+	It was refused as *a run of `mqtt_string`, not of bytes* -- a verdict
+	that was right with a reason about something else, which is the class
+	hull found in the `before` diagnosis. Measured at the time: 8 of the 16
+	members refused for "not of bytes" were single nested fields rather
+	than runs, and nothing in the message said so.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "mqtt" / "mqtt.situ")
+	header = _header(parsed, resolved, "mqtt")
+	parts, why = _only(resolved, "will_message", header)
+	assert why is None, why
+	assert [part.role for part in parts] == [build.NESTED, build.NESTED]
+	assert [part.inner for part in parts] == ["situ_mqtt_string"] * 2
+
+
+def test_a_nested_struct_whose_extent_its_bytes_do_not_state_is_refused() -> None:
+	"""The guard has a corpus population, which is why it is not empty.
+
+	`edges.edge_varint` has no `_required` -- its extent is not computable
+	from its own bytes -- so a caller's length for one could not be
+	checked, and three members in that schema are refused by name rather
+	than trusted.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	header = _header(parsed, resolved, "edges")
+	_, why = _only(resolved, "varint_driver", header)
+	assert why is not None and "nested `edge_varint`" in why, why
+	assert "its own bytes do not determine" in why
+
+	# And the predicate reads the artifact rather than guessing: the header
+	# declares one for `mqtt_string` and none for `edge_varint`.
+	assert not build.frames_itself(header, "situ_edge_varint")
+
+
+def test_a_builder_with_no_header_refuses_rather_than_guesses() -> None:
+	"""Without the header there is no way to know who has a `_required`.
+
+	A caller who does not pass it gets less rather than something wrong,
+	which is the direction that matters: the alternative is emitting a call
+	to a function that may not exist.
+	"""
+	_, resolved = _parts(ROOT / "example" / "mqtt" / "mqtt.situ")
+	_, why = _only(resolved, "will_message")
+	assert why is not None and "nested `mqtt_string`" in why, why
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_nested_struct_is_built_by_composing_two_builders(
+		tmp_path: Path) -> None:
+	"""The compositional case, and the control for asking `_required`.
+
+	Build two `mqtt_string`s with their own builder, then compose them into
+	a `will_message`. That is what an adopter does, and it is why a nested
+	member takes bytes rather than the inner struct's own parameters:
+	`json.value` holds a `value`, so flattening would not terminate.
+
+	The control is the TOO-LONG length, measured rather than assumed. With
+	the extent check removed, a length one byte over returns SITU_OK and
+	the payload starts a byte late -- `_validate` does not catch it,
+	because the shifted read is still a well-formed pair of strings. The
+	too-SHORT case it does catch, so only the first discriminates, and the
+	byte after the topic is set deliberately so that the shifted read is
+	defined rather than whatever the stack held.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "mqtt" / "mqtt.situ")
+	files = dict(build.generate(parsed, resolved, "mqtt", "situ",
+	                            _header(parsed, resolved, "mqtt")))
+	files.update(generate_c(parsed, resolved, "mqtt").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "mqtt_build.h"
+
+int main(void)
+{
+	uint8_t     topic[32], payload[32], whole[64];
+	uint32_t    tn = 0, pn = 0, wrote = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+	uint32_t    i;
+
+	if (situ_mqtt_string_build(topic, sizeof topic,
+	                           (const uint8_t *)"a/b", 3, &tn) != SITU_OK)
+		return 2;
+	if (situ_mqtt_string_build(payload, sizeof payload,
+	                           (const uint8_t *)"hi", 2, &pn) != SITU_OK)
+		return 3;
+	topic[tn] = 0x00;	/* so a shifted read is defined */
+
+	err = situ_will_message_build(whole, sizeof whole, topic, tn,
+	                              payload, pn, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (i = 0; i < wrote; i++)
+		printf("%02X", whole[i]);
+	printf("\\n");
+	if (err != SITU_OK) return 4;
+
+	situ_msg_init(&msg, whole, wrote);
+	printf("%d\\n", (int)situ_will_message_view(&msg, 0, wrote, &view));
+
+	/* one byte too long: only the inner `_required` sees this */
+	printf("%d\\n", (int)situ_will_message_build(whole, sizeof whole,
+	                                            topic, tn + 1u,
+	                                            payload, pn, &wrote));
+	/* one byte too short, which `_validate` would also refuse */
+	printf("%d\\n", (int)situ_will_message_build(whole, sizeof whole,
+	                                            topic, tn - 1u,
+	                                            payload, pn, &wrote));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "mqtt.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, f"exited {ran.returncode}: {ran.stderr}"
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 9 0003612F6200026869", \
+		f"two length-prefixed strings, nine bytes: {lines[0]}"
+	assert lines[1] == "0", f"the result does not acquire a view: {lines[1]}"
+	assert lines[2] == "2", \
+		f"a length one byte over must be refused: {lines[2]}"
+	assert lines[3] == "2", f"and one byte under: {lines[3]}"

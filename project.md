@@ -31304,6 +31304,82 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.614 A nested struct is written as bytes, and asked its own extent
+
+**The measurement moved the task before any of it was built.** Of the 16
+members refused as *a run of `X`, not of bytes*, **eight are not runs at
+all** -- `mqtt_string topic;`, `value held;`, `str name;` are single
+nested FIELDS, and the message was about a construct they are not. Same
+class as the `before` misdiagnosis in 26.612 and found the same way, by
+counting a population rather than reading a verdict: the refusals were
+right and eight of them were answering about something else.
+
+So the remaining 8 of the 16 are the real runs, and they split four ways
+-- 4 sized by an earlier byte length, 3 ended by a delimiter, 1 counted.
+None of those is built here, and each has its own open question, which is
+why they are refused separately rather than bundled: a byte length is not
+known until the elements are written, which is a back-patch; and a
+delimited run of structs **cannot be scanned the way a byte run is**,
+because a `)` inside a nested element is legitimate and the reader walks
+structurally.
+
+**A nested field is written as bytes the caller built.** That is the
+shape rather than a flattened parameter list, and the reason is in the
+corpus: `json.value` holds a `value`, so flattening would not terminate.
+It composes instead -- build the inner struct with its own `_build`, pass
+the bytes -- and it needs no state object, no allocation and no second
+concept. Measured end to end: two `mqtt_string`s built separately and
+composed into a `will_message` give `00 03 "a/b" 00 02 "hi"`, nine bytes
+that acquire a view.
+
+**And the writer ASKS the extent rather than trusting it**, by calling
+the inner struct's own `_required` and refusing unless it answers exactly
+the length it was given. Measured with the check removed: a length one
+byte too long returns `SITU_OK`, because the shifted read is still a
+well-formed pair of strings and `_validate` has nothing to object to. The
+too-short case validate does catch. **So only the over-long case
+discriminates**, and it is the one in the test, with the byte after the
+topic set deliberately so the shifted read is defined rather than
+whatever the stack held.
+
+**Whether a struct HAS a `_required` is read from the artifact, not
+derived a second time.** `emit.py` decides it across three of its own
+methods -- `extent_parts`, `_has_length`, `_framing_walk`, plus a
+`remaining` case -- and the emitted header states the outcome in the
+declaration. `frames_itself` matches that declaration in the header text
+this compilation produced, which `names.py` already does for the
+runtime's own function names. Extracting emit.py's decision into
+`traverse` would be the 26.609 move and is the better answer eventually;
+reimplementing it here would be the two-derivations fault that 26.609
+exists to prevent.
+
+Matching the WHOLE declaration is what makes it safe rather than merely
+cheap: a struct taking arguments (0050) carries them in its `_required`
+signature too, and this writer cannot pass them, so the exact match
+refuses that case without a second rule to maintain.
+
+**The guard has a corpus population**, which is what makes it a guard
+rather than a hope: `edges.edge_varint` has no `_required`, so three
+members in that schema are refused by name. And sabotaging the predicate
+to answer always-true **breaks the `edges` compile** -- a call to a
+function that is not there -- so it is load-bearing for correctness and
+not only for diagnostics.
+
+**A latent fault surfaced on the way, and it was three lists.** The
+"nothing for a caller to supply" check named three roles where the
+signature named five, so a struct whose every member is nested reported
+as *entirely literal*. It had been wrong since the delimited increment
+and could not show until a struct existed with no other kind of member.
+There is one `CALLER_SUPPLIED` set now, and one `MEASURED` subset for the
+roles that emit a `_len`, because three copies of a role list is how they
+came to disagree.
+
+Re-measured, same method as 26.610 to 26.612 -- the 45 schemas
+`every_schema` holds: **98 of 242 structs have a builder, in 26 of the 45
+schemas**, with **16 nested members** written. The jump from 86 is larger
+than the eight that prompted it, because a nested field appears in
+structs that had no other refusal left.
+
 ### 26.613 The frame reader hands out a message its schema forbids
 
 **hull reports, measured at `9d66b6d` and appended to

@@ -1018,9 +1018,14 @@ def cmd_build(args: argparse.Namespace) -> int:
 		if args.target == "c":
 			from situc.codegen.c import build
 
+			# The ordinary header is already in `files`, and it is the
+			# artifact that says which structs have a `_required` -- which
+			# is what lets a nested member be verified rather than trusted.
+			ordinary = files.get(f"{args.schema.stem}.h", "")
 			files.update(build.generate(parsed, resolved, args.schema.stem,
-			                            args.prefix))
-			for name, why in build.refusals(resolved):
+			                            args.prefix, ordinary))
+			for name, why in build.refusals(resolved, ordinary,
+			                                args.prefix):
 				print(f"situc: no builder for `{name}`: {why}",
 				      file=sys.stderr)
 

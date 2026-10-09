@@ -49,8 +49,9 @@ WORD_WIDTHS = (8, 16, 32, 64)
 OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
 DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
+NEED = "situ_need"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      SCAN, "situ_fixed"})
+                      SCAN, NEED, "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -61,6 +62,17 @@ SCALAR  = "scalar"	# one whole-byte binary scalar, from the caller
 RUN     = "run"		# a byte run of fixed length, from the caller
 SPAN    = "span"	# a byte run whose length the caller supplies
 ENDED   = "ended"	# a byte run the caller measures, then its delimiter
+NESTED  = "nested"	# a whole inner struct the caller built
+
+#: The roles a caller supplies a value for, which is one list because three
+#: of them had drifted: the signature named five, the uniquifier three and
+#: the "nothing to build" check three, so a struct of nested members was
+#: reported as entirely literal.
+CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED})
+
+#: And of those, the ones the caller measures, which emit a `_len` beside
+#: the pointer. A fixed run does not: the schema counted it.
+MEASURED = frozenset({SPAN, ENDED, NESTED})
 ZERO    = "zero"	# reserved bytes, which no caller names
 
 
@@ -71,7 +83,7 @@ class Part:
 			bytes_: int = 0, literal: bytes = b"",
 			sizes: Placement | None = None, radix: int = 0,
 			minimal: bool = False, delimiter: bytes = b"",
-			digits: int = 0) -> None:
+			digits: int = 0, inner: str = "") -> None:
 		self.role      = role
 		self.placement = placement
 		self.local     = local
@@ -82,6 +94,7 @@ class Part:
 		self.minimal   = minimal	# no leading zeros, so the width varies
 		self.delimiter = delimiter	# what ends a minimal run of digits
 		self.digits    = digits		# the most digits the schema allows
+		self.inner     = inner		# the struct a nested member holds
 
 
 def _local(struct: ResolvedStruct, placement: Placement) -> str:
@@ -111,6 +124,32 @@ def _whole_bytes(placement: Placement) -> int | None:
 	if placement.size_bits % BITS_PER_BYTE:
 		return None
 	return placement.size_bits // BITS_PER_BYTE
+
+
+def frames_itself(header: str, name: str) -> bool:
+	"""Whether the emitted header declares `<name>_required`.
+
+	A nested struct is written as bytes the caller built, and the writer
+	has to know they are exactly ONE of them -- a length three bytes too
+	long shifts every member after it, and whether the result then fails
+	`_validate` depends on what those three bytes happen to say. The
+	struct's own `_required` answers it exactly: situ emits one for every
+	struct whose extent its own bytes determine.
+
+	**Read from the artifact rather than predicted.** Whether `_required`
+	exists is decided inside `emit.py` by three of its methods, and the
+	header says plainly what they decided -- so this asks the file instead
+	of deriving the answer a second way, which is how two derivations come
+	to disagree. `names.py` scans the runtime header for its function
+	names on the same argument.
+
+	Matching the WHOLE declaration is what makes it safe: a struct taking
+	arguments (0050) has them in its `_required` signature too, and this
+	writer has no way to pass them, so the exact-match refuses it without
+	a second rule to maintain.
+	"""
+	return (f"situ_err_t {name}_required(const uint8_t *data, "
+	        "uint32_t have, uint32_t *need)") in header
 
 
 def _digit_bytes(radix: int) -> frozenset[int]:
@@ -311,7 +350,8 @@ def _value_part(role: str, placement: Placement, local: str,
 	            digits=most)
 
 
-def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
+def plan(struct: ResolvedStruct, header: str = "",
+		prefix: str = "situ") -> tuple[list[Part], str | None]:
 	"""What the writer does for each member, or the first reason it cannot.
 
 	The order is the schema's, which is what makes the pass forward-only.
@@ -423,6 +463,24 @@ def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
 		# element, which is a loop this increment does not write.
 		element = held.element_bits or 0
 		if element != BITS_PER_BYTE:
+			# A single nested struct is not a run of them, and calling it
+			# one was a wrong diagnosis for 8 of the 16 members refused
+			# here -- `mqtt_string topic;` and `value held;` are fields.
+			# Same class as the `before` misdiagnosis in 26.612: the
+			# verdict was right and the reason was about something else.
+			repeats = bool(held.array_count is not None or held.sized_by
+			               or held.size_expr or held.delimiters
+			               or held.repeat_while is not None
+			               or held.remaining_cap)
+			if not repeats and held.type_name:
+				if frames_itself(header, ident(prefix, held.type_name)):
+					parts.append(Part(NESTED, held, local,
+					                  inner=ident(prefix, held.type_name)))
+					continue
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           f"nested `{held.type_name}`, whose extent its " \
+				           "own bytes do not determine, so the writer " \
+				           "cannot tell one from a longer blob"
 			spelt = (f"a run of {element}-bit elements" if element
 			         else f"a run of `{held.type_name}`")
 			return [], f"`{traverse.local_name(struct, held)}` is {spelt}, " \
@@ -457,26 +515,28 @@ def plan(struct: ResolvedStruct) -> tuple[list[Part], str | None]:
 			local += "_"
 		part.local = local
 		taken.add(local)
-		if part.role in (SPAN, ENDED):
+		if part.role in MEASURED:
 			taken.add(f"{local}_len")
 
-	if not any(part.role in (SCALAR, RUN, SPAN) for part in parts):
+	if not any(part.role in CALLER_SUPPLIED for part in parts):
 		# Every byte is a fact the schema states, so there is nothing for a
 		# caller to supply and `_encode` of a constant is not a builder.
 		return [], "is entirely literal, so there is nothing to build"
 	return parts, None
 
 
-def buildable(resolved: ResolvedSchema) -> list[ResolvedStruct]:
+def buildable(resolved: ResolvedSchema, header: str = "",
+		prefix: str = "situ") -> list[ResolvedStruct]:
 	return [struct for struct in resolved.structs.values()
-	        if plan(struct)[0]]
+	        if plan(struct, header, prefix)[0]]
 
 
-def refusals(resolved: ResolvedSchema) -> list[tuple[str, str]]:
+def refusals(resolved: ResolvedSchema, header: str = "",
+		prefix: str = "situ") -> list[tuple[str, str]]:
 	"""Every struct with no builder, and why -- by name, on stderr."""
 	found = []
 	for name, struct in resolved.structs.items():
-		parts, why = plan(struct)
+		parts, why = plan(struct, header, prefix)
 		if not parts and why:
 			found.append((name, why))
 	return found
@@ -492,7 +552,7 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			            f"{part.local}")
 		elif part.role == RUN:
 			args.append(f"const uint8_t *{part.local}")
-		elif part.role in (SPAN, ENDED):
+		elif part.role in MEASURED:
 			args.append(f"const uint8_t *{part.local}")
 			args.append(f"uint32_t {part.local}_len")
 	args.append(f"uint32_t *{WROTE}")
@@ -588,8 +648,8 @@ def _room(size: str) -> list[str]:
 
 
 def _one(struct: ResolvedStruct, prefix: str,
-		enums: Mapping[str, object]) -> list[str]:
-	parts, _ = plan(struct)
+		enums: Mapping[str, object], header: str) -> list[str]:
+	parts, _ = plan(struct, header, prefix)
 	lines = [
 		f"/** Build a {struct.name} into `{OUT}`, one member at a time in",
 		" *  schema order, and validate the result before reporting it.",
@@ -676,6 +736,35 @@ def _one(struct: ResolvedStruct, prefix: str,
 				f"\t{AT} += {part.bytes}u;",
 				"",
 			]
+		elif part.role == NESTED:
+			lines += [
+				f"\t/* {local}: one whole `{held.type_name}`, which the",
+				"\t * caller built. Its extent is its own to state, so the",
+				"\t * writer ASKS rather than trusting the length it was",
+				"\t * given: three bytes too many shift every member after",
+				"\t * it, and whether `_validate` then refuses depends on",
+				"\t * what those three bytes happen to say. */",
+				"\t{",
+				f"\t\tuint32_t {NEED} = 0u;",
+				"",
+				f"\t\tif ({part.inner}_required({part.local}, "
+				f"{part.local}_len,",
+				f"\t\t                           &{NEED}) != SITU_OK",
+				f"\t\t    || {NEED} != {part.local}_len) {{",
+				"\t\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t\t}",
+				"\t}",
+				*_room(f"{part.local}_len"),
+				f"\tif ({part.local}_len != 0u) {{",
+				f"\t\tif ({part.local} == NULL) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\tmemcpy({OUT} + {AT}, {part.local}, "
+				f"{part.local}_len);",
+				"\t}",
+				f"\t{AT} += {part.local}_len;",
+				"",
+			]
 		elif part.role == ENDED:
 			ending = part.delimiter[0]
 			lines += [
@@ -758,9 +847,16 @@ def _one(struct: ResolvedStruct, prefix: str,
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
-		prefix: str = "situ") -> dict[str, str]:
-	"""The build header, or nothing where no layout qualifies."""
-	structs = buildable(resolved)
+		prefix: str = "situ", header: str = "") -> dict[str, str]:
+	"""The build header, or nothing where no layout qualifies.
+
+	`header` is the ordinary header this compilation emitted, which is the
+	artifact that says which structs have a `_required` -- see
+	`frames_itself`. Without it a nested member is refused rather than
+	guessed at, so a caller who does not pass it gets less rather than
+	something wrong.
+	"""
+	structs = buildable(resolved, header, prefix)
 	if not structs:
 		return {}
 
@@ -795,7 +891,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 
 	enums = dict(resolved.layout.env.enums)
 	for struct in structs:
-		lines.extend(_one(struct, prefix, enums))
+		lines.extend(_one(struct, prefix, enums, header))
 
 	lines += ["#ifdef __cplusplus", "}", "#endif", "",
 	          f"#endif /* {guard} */"]
