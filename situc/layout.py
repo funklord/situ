@@ -1111,6 +1111,34 @@ class Solver:
 		earliest = _first_versioned(layout)
 		if earliest is not None:
 			layout.size_bits = earliest
+
+		# A `peek` does not consume, so it advances no cursor and adds
+		# nothing to the extent -- which is right, and left the MINIMUM
+		# short by the bytes it reads. A struct cannot be read at all
+		# without them: the variant that follows a peek switches on them.
+		#
+		# So a peeked member at a static offset raises the minimum to its
+		# own end. Measured before the change: `struct { u8 a; peek u8
+		# next; variant ... }` accepted a ONE-byte buffer and read byte 1,
+		# which is not there -- while the same shape behind a
+		# variable-length member was refused "outside the frame", because
+		# a dynamic offset gets a runtime check instead. The two
+		# disagreed, and the static one disagreed in the direction that
+		# reads past the input. Reported by hull as finding 14, whose own
+		# repro needed nesting; it does not.
+		#
+		# Here rather than in the four backends and the walker, which all
+		# read this minimum: one decision, five consumers.
+		reaches = [held.offset_bits + held.size_bits
+		           for held in layout.placements
+		           if held.peek and held.offset_bits is not None
+		           and held.size_bits is not None]
+		if reaches:
+			layout.size_bits = max(layout.size_bits, *reaches)
+			if layout.size_max_bits is not None:
+				layout.size_max_bits = max(layout.size_max_bits,
+				                           layout.size_bits)
+
 		self.result.structs[name] = layout
 		return layout
 

@@ -31304,6 +31304,95 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.616 hull's findings 13 to 15, verified: one fixed, two measured and left
+
+Three more from hull, and **all three were found by describing their own
+formats as situ schemas rather than by using generated code** -- which is
+now five of fifteen found that way. Each was reproduced here before being
+believed, and the reproductions changed two of them.
+
+**14 is fixed, and reproducing it made it a different and worse fault.**
+hull reported that a trailing `peek` in a NESTED struct cannot see the
+parent's next byte, with a twenty-line repro. The nesting is not needed:
+
+    struct fixed_peek { u8 a; peek u8 next; variant more switch (next) ... }
+    one byte, peeking byte 1   -> CONFORMED, reading past the input
+
+    struct dyn_peek { u8 n; u8 body[n]; peek u8 next; variant more ... }
+    two bytes, peeking byte 2  -> BoundsError: outside the frame
+
+So the two shapes disagreed, and **the static one disagreed in the
+direction that reads past the buffer.** A `peek` advances no cursor, so
+it adds nothing to the extent -- which is right -- and added nothing to
+the MINIMUM either, which is not: the variant after a peek switches on
+those bytes, so a struct cannot be read at all without them. A dynamic
+offset got a runtime frame check and was saved by it; a static one got
+nothing.
+
+The minimum is raised to a static peek's own end, in `layout.py`, which
+is the one place **four backends and the walker** all read. The C header's
+`SITU_FIXED_PEEK_SIZE_MIN` goes from 1 to 2 by the same number, which is
+the argument for fixing it there rather than in each backend.
+
+**The half hull reported is not fixed and may not be a defect.** Their
+`inner.next` peeks a byte that belongs to the enclosing struct, and a
+nested struct's extent ends before it -- so "outside the frame" is
+arguably correct, and whether a nested peek should see the parent's next
+byte is a question about what a nested frame is. They keep every trailing
+peek in the struct that owns the next byte, so nothing waits on it.
+
+**The corpus has 3 peeked members** -- one at offset 0, which the minimum
+already covered, and two with dynamic offsets, which the runtime check
+covered. So **no corpus struct changes**, which is also why the corpus
+could not have found this and cannot prove the fix: the test carries its
+own schema, and the gap in the corpus is named here rather than closed,
+because adding a construct to `edges.situ` moves the differential, the
+map and the wire file and wants its own pass.
+
+**13 is confirmed and is four derivations rather than one.** A `decimal`
+run whose width a field gives is measured in elements, not digits:
+
+    struct g   { u8 n; decimal u16 code[n]; }   03 30 30 37 -> refused
+    struct lit { decimal u16 code[3]; }         30 30 37    -> conforms
+
+The control is the second line: **the two spellings of one width
+disagree**, and 8.6.2 is unambiguous -- the scalar beside `decimal` gives
+the value's domain, not its width, and `[3]` means three digits.
+
+What makes it a pass rather than a line: the shared answer is
+`traverse.element_bytes`, and **the backends do not all ask it.** The
+Python emitter has its own `_element_bytes` reading `scalar.bits`
+directly, which is where the `* 2` comes from; correcting `element_bits`
+in the layout fixed the shared answer and left the generated code
+unchanged. And C answers differently again -- `situ_parse_uint(ptr, 0u,
+...)`, a span of **zero** -- so the four disagree with each other as well
+as with the document. Rust alone has twelve `scalar.bits // BITS_PER_BYTE`
+sites, most of them correctly about a binary scalar's storage width, so
+the discriminator has to be read into each site rather than swept. **No
+corpus schema has the shape**, which is why the four-way differential
+never asked, so the first step is a corpus schema and not a fix. The
+partial layout change is reverted; it is in the session's scratch as a
+patch rather than in the tree, because a half-fix that leaves the symptom
+is the one thing worse than the gap.
+
+**15 is confirmed against their schema and does not reproduce on a
+minimal one.** A manifest of theirs takes **31 s** here. My own
+`u8 n; u8 name[n]; u32 size` in a counted run is flat at 0.22 s for 1, 2,
+4 and 8 entries -- so the cost is not "per element of a run" as such, and
+their entry has something mine lacks.
+
+The profile localises it, which is more use than the timing:
+**12.9 million calls to the generated reader's `_read` for a 1200-byte
+message**, with `length_len_from` and `scan` at 6.4 M each and
+`parse_uint` at 2.1 M. *My reading, stated as mine:* an offset chain is
+re-derived on every access rather than memoised, so a nested
+variable-length member multiplies the cost of everything after it. That
+is a property of the generated Python reader rather than of `verify`, and
+the same algorithmic shape is in the other three backends at compiled
+speed. Whether to memoise an offset chain is a design question about the
+generated interface -- a cache has to be invalidated by the same rule
+12.3 is about -- so it is recorded rather than attempted.
+
 ### 26.615 A run of structs is one walk, and the deferral that said otherwise
 
 26.614 closed by calling the four remaining run shapes four open
