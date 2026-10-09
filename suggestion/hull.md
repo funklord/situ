@@ -230,3 +230,29 @@ and the report then says the run's elements were not read ("an array's
 elements are validated by the caller"). hull cut its vector to two entries
 to keep `make test` near half a minute. Not a correctness fault; recorded
 because a corpus of real manifests would hold thousands of entries.
+
+## 16. A peek inside an arm not taken, or a run element not present, raises the minimum
+
+Added 2026-10-09, measured at `9f3274a`; not present at `9d66b6d`. The
+fix that made a peek count toward its struct's minimum counts every
+static peek inside it, including peeks in a variant arm the data may not
+choose and in the elements of a run that may hold none:
+
+    struct big   { u8 x[40]; peek u8 k2; variant w switch (k2) {
+                   case 1: u8 one; default: u8 other; } }
+    struct small { u8 y; }
+    struct t     { peek u8 k; variant v switch (k) {
+                   case 1: big b; default: small s; } }
+
+    map:    struct t size=41            (was 1..41)
+    t short 02 -> BoundsError: t needs 41 bytes at offset 0; the message is 1 bytes
+
+And for a run: `struct e { u8 a; peek u32 k; variant ... }` with
+`struct r { u8 o; e items[] until ")"; }` makes `r` need 5 bytes, so the
+empty `()` is refused; the same element without the peek leaves `r` at 2.
+
+hull met it moving its pin to `9f3274a` for the variant builders: in
+`manifest/manifest.situ` the empty `(7:entries)` and every entry not
+carrying its last optional key are refused, because the arm that would
+carry it peeks further on. hull's reader and framing schemas peek only at
+offset 0, and their maps did not move.
