@@ -31304,6 +31304,59 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.619 The peek minimum counted peeks the data may never reach
+
+**A regression I shipped in 26.616 and an adopter found at head.** The
+fix that raised a struct's minimum to a static peek's end counted *every*
+placement, and `layout.placements` carries a variant arm's interior and a
+run element's under a dotted path. So:
+
+    struct t { peek u8 k; variant v switch (k) {
+                 case 1: big b;      /* big is 40 bytes then a peek */
+                 default: small s; } }
+
+    map said  size=41   where it had said  1..41
+    the one-byte message `02`, which takes the OTHER arm -> refused
+
+and a `peek u32` inside a run's element made `r { u8 o; e items[] until
+")"; }` need five bytes, so the empty `()` was refused where two bytes
+are a complete `r`.
+
+**The fix is `traverse.is_own_member`'s rule** -- no dot in the name
+below this struct -- written out in `layout.py` rather than imported,
+because `traverse` is built on that module. A peek inside an arm is read
+only when the data takes that arm, and a run of no elements reads no
+element's bytes; neither is the enclosing struct's to require. `big`'s
+own minimum is still 41, which is the half of 26.616 that was right.
+
+**What the regression says about 26.616's own evidence is the part worth
+keeping.** That entry recorded, correctly, that the corpus has three
+peeked members -- one at offset 0 and two with dynamic offsets -- and
+that **no corpus struct changes**. Both halves were true and together
+they were the problem: a change that moves nothing in the corpus is a
+change the corpus cannot judge, and I wrote that down as reassurance
+rather than as the gap it was. The test I added carried its own schema
+because of it, and carried only the case the fix was *for*.
+
+So the lesson is not "add more fixtures" but which fixture was missing:
+**the one where the thing being counted should not count.** I had a
+fixture for a peek that must raise the minimum and none for a peek that
+must not, and the second is where every structure in situ that defers
+reading -- an arm, a run element, anything optional -- was going to land.
+`evidence.md`'s *a control has to be able to fail the way the thing it
+controls for fails*, met from the other side: my control could only fail
+by under-counting.
+
+hull's two cases are the tests now, and sabotaging the ownership filter
+turns both red while the original fix's own case stays green -- which is
+the pair that was missing.
+
+**And they caught it because they moved their pin onto head**, which no
+amount of corpus work here would have done: their `manifest.situ` has
+arms that peek further on, so the empty `(7:entries)` and every entry
+without its last optional key were refused. Sixteen findings now, and
+this is the first that is a fault situ introduced rather than one it had.
+
 ### 26.618 A byte several members share is written once, and refused when it cannot hold them
 
 The largest refusal the variant left was a sub-byte scalar -- 28 members,

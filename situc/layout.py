@@ -1129,10 +1129,24 @@ class Solver:
 		#
 		# Here rather than in the four backends and the walker, which all
 		# read this minimum: one decision, five consumers.
+		# ...and only this struct's OWN peeks. `layout.placements` carries
+		# a variant arm's interior and a run element's as well, under a
+		# dotted path, and counting those raises the minimum to a byte the
+		# data may never reach: a `peek` forty bytes inside ONE arm made a
+		# one-byte message of the OTHER arm refused, and a peek in a run's
+		# element made an empty run refused. Reported by hull as finding
+		# 16, against this fix two commits after it landed.
+		#
+		# The test is `traverse.is_own_member`'s -- no dot in the name
+		# below this struct -- written out rather than imported, because
+		# `traverse` is built on this module.
+		own = f"{name}."
 		reaches = [held.offset_bits + held.size_bits
 		           for held in layout.placements
 		           if held.peek and held.offset_bits is not None
-		           and held.size_bits is not None]
+		           and held.size_bits is not None
+		           and held.path.startswith(own)
+		           and "." not in held.path[len(own):]]
 		if reaches:
 			layout.size_bits = max(layout.size_bits, *reaches)
 			if layout.size_max_bits is not None:

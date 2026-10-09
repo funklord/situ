@@ -19,6 +19,13 @@ be read without them.
 
 The minimum is the one place all five consumers ask -- four backends and
 the walker -- so that is where it is fixed.
+
+And it has to count only the struct's OWN peeks. The first version
+counted every placement, which includes a variant arm's interior and a
+run element's, so a peek forty bytes inside one arm raised the minimum
+for a message that takes the other arm, and a peek in a run's element
+made an empty run impossible. hull reported that as finding 16 against
+the commit two later, having adopted it; the cases are below.
 """
 
 from __future__ import annotations
@@ -129,3 +136,89 @@ def test_both_shapes_refuse_a_buffer_short_of_the_peeked_byte(
 		 str(tmp_path / "p.situ"), str(tmp_path / "whole")],
 		capture_output=True, text=True, timeout=300)
 	assert whole.returncode == 0, whole.stderr
+
+
+#: hull's finding 16, reduced. The peek that broke it is inside ONE arm,
+#: forty bytes in, and the message takes the other: nothing in `t` itself
+#: reads byte 40, so a one-byte message is complete.
+ARMS = """struct nothing {
+}
+
+struct big {
+\tu8       x[40];
+\tpeek u8  k2;
+\tvariant  w switch (k2) {
+\t\tcase 'm': u8       extra;
+\t\tdefault:  nothing  none;
+\t}
+}
+
+struct small {
+\tu8  y;
+}
+
+struct t {
+\tpeek u8  k;
+\tvariant  v switch (k) {
+\t\tcase 1:   big    b;
+\t\tdefault:  small  s;
+\t}
+}
+"""
+
+#: And the run form: a peek in the ELEMENT must not make an empty run
+#: impossible, because a run of no elements reads no element's bytes.
+ELEMENTS = """struct nothing {
+}
+
+struct e {
+\tu8        a;
+\tpeek u32  k;
+\tvariant   w switch (k) {
+\t\tcase 1:   u8       extra;
+\t\tdefault:  nothing  none;
+\t}
+}
+
+struct r {
+\tu8  o;
+\te   items[] until ")";
+}
+"""
+
+
+def _resolved(body: str):			# type: ignore[no-untyped-def]
+	parsed = parse(Source("inline", "target buffer;\nendian big;\n\n"
+	                      + body))
+	return resolve(parsed, solve(parsed))
+
+
+def test_a_peek_inside_an_arm_does_not_bind_the_whole_struct() -> None:
+	"""`t` is one byte or forty-one, and its minimum is one.
+
+	A peek inside an arm is read only when the data takes that arm, so
+	counting it in the enclosing struct's minimum refuses a message of the
+	OTHER arm. Before the fix `t` was 41 bytes flat and the map said
+	`size=41` where it had said `1..41`.
+	"""
+	resolved = _resolved(ARMS)
+	assert resolved.structs["t"].layout.size_bytes == 1
+	# `big`'s own peek is still counted where it belongs: its last byte is
+	# the one the peek reads, so a complete `big` is 41 rather than 40.
+	assert resolved.structs["big"].layout.size_bytes == 41
+
+
+def test_a_peek_in_a_run_element_does_not_bind_the_run_s_owner() -> None:
+	"""`r` is one byte and a delimiter, whatever its elements hold.
+
+	A run of no elements reads no element's bytes, so a `peek u32` inside
+	the element made `()` impossible -- five bytes needed for a two-byte
+	message.
+
+	Two rather than one, and the second byte is the delimiter: a run that
+	ends at `)` cannot be complete without it. Asserting one here was my
+	own wrong expectation and this caught it.
+	"""
+	resolved = _resolved(ELEMENTS)
+	assert resolved.structs["r"].layout.size_bytes == 2
+	assert resolved.structs["e"].layout.size_bytes == 5
