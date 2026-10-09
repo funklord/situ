@@ -170,3 +170,63 @@ receiver can refuse an oversized message before reading it, and that needs
 (`agent/framing.c`) and validates every message `next` returns, so it does
 not depend on a fix. A caller following the header's own comment -- "call
 `next` until it answers SITU_ERR_TRUNCATED" -- gets the forbidden message.
+
+## 13. A `decimal` run whose width a field gives is measured in elements
+
+Added 2026-10-09, measured at `9d66b6d` and again at `73d4bee`, with
+`situc verify`. 8.6.2 says a width is digits, not elements, and a literal
+width obeys it; a width taken from a field does not:
+
+    struct g { u8 n; decimal u16 code[n]; }
+    g x 03 30 30 37          -> BoundsError: g.code: declared length does not fit
+    g b 01 37 37             -> conforms (one u16 is two bytes, "77")
+
+    struct h { u8 n; decimal u8 code[n]; }
+    h a 03 30 30 37          -> conforms
+
+So `decimal u32 value[length]` reads four bytes per digit. hull met it
+describing canonical s-expression numbers (`3:493`, a length then that many
+digits) in `manifest/manifest.situ` and `agent/protocol.situ`, and frames
+them as untyped atoms meanwhile; the comments there cite this entry.
+
+## 14. A peek at the end of a nested struct cannot see the parent's next byte
+
+Added 2026-10-09, measured at `9d66b6d`. A trailing `peek u8` after a
+member of varying length, where the byte peeked belongs to the enclosing
+struct:
+
+    struct word  { u8 n; u8 bytes[n]; }
+    struct inner { peek u8 k; variant w switch (k) { case 2: word has;
+                   default: absent no; }
+                   peek u8 next; variant more switch (next) {
+                   case 'm': u8 extra; default: absent none; } }
+    struct outer { peek u8 first; variant body switch (first) {
+                   case 2: inner in; default: absent none; }
+                   u8 close [must_eq = ')']; }
+
+    outer w  02 61 62 29     -> BoundsError: inner.next: outside the frame
+    outer wm 02 61 62 6D 29  -> conforms
+
+Without `word` -- fixed-width members only -- the same peek passes, and
+passes even past the end of the buffer (`inner` alone, one byte). If the
+struct closes itself (`u8 close` inside `inner`) it passes too. So the
+frame a nested struct's peek is checked against seems to end at the
+struct's own extent, which the peek is in the middle of deciding. hull
+keeps every trailing peek in the struct that owns the next byte
+(`manifest/manifest.situ`, `entry`).
+
+## 15. `verify` spends about three seconds on each element of a run it does not validate
+
+Added 2026-10-09, measured at `9d66b6d`. `manifest/manifest.situ` in hull,
+one manifest holding n copies of the same 219-byte entry:
+
+    entry alone             ~0.3 s beyond start-up
+    manifest, 6 entries     18.5 s
+    manifest, 12 entries    36.2 s
+    the 1200-byte manifest with six varied entries    118.6 s
+
+Linear, at roughly ten times the cost of the same entry verified alone --
+and the report then says the run's elements were not read ("an array's
+elements are validated by the caller"). hull cut its vector to two entries
+to keep `make test` near half a minute. Not a correctness fault; recorded
+because a corpus of real manifests would hold thousands of entries.
