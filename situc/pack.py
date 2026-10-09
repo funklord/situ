@@ -2391,18 +2391,6 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# tries first -- returns None for every arm in the corpus. Written
 	# that way once here, it excluded nothing and the span stayed wrong
 	# while the code read as though it were fixed.
-	armed: dict[str, frozenset[str]] = {}
-
-	def in_arm(of: str) -> frozenset[str]:
-		if of not in armed:
-			heads = [arm.member for who, held in rows if who == of
-			         for arm in held.arm_cases
-			         if isinstance(arm.member, str)]
-			armed[of] = frozenset(
-				held.path for who, held in rows if who == of
-				for head in heads
-				if held.path == head or held.path.startswith(head + "."))
-		return armed[of]
 
 	for at, (owner, placement) in enumerate(rows):
 		if placement.kind == "marker":
@@ -2499,15 +2487,30 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		# whose coverage is not one contiguous run carries `NONE` for both
 		# and a reader declines rather than checksumming a gap.
 		if placement.tag_covers:
+			# `traverse.covered_members` AND NOT A COPY HERE (26.609).
+			# This was a comprehension over the packer's own row table with
+			# an `in_arm` closure beside it, and rung 2's builder asks the
+			# same question -- does a tag cover bytes written after itself.
+			# Two derivations of that would be two answers, so the rule
+			# moved to the module whose header says it exists because five
+			# places had grown their own copy of one.
+			#
+			# The mapping back to row indices stays here, because a row
+			# index is the IMAGE's vocabulary and not the schema's: what
+			# `traverse` answers is which members, and which placement each
+			# one is written as is this function's own bookkeeping.
+			#
 			# `covered_rows` and not `inside`: this function already
 			# binds `inside` to a `Placement` eleven hundred lines up, and
 			# mypy caught the collision before anything ran. A long
 			# function wants names that cannot be two things.
-			covered_rows = [i for i, (held_owner, held) in enumerate(rows)
-			                if held_owner == owner
-			                and set(held.regions) & set(placement.tag_covers)
-			                and held.kind == "field"
-			                and held.path not in in_arm(owner)]
+			row_of = {held.path: i
+			          for i, (held_owner, held) in enumerate(rows)
+			          if held_owner == owner}
+			covered_rows = [row_of[held.path] for held
+			                in traverse.covered_members(
+			                    resolved.structs[owner], placement)
+			                if held.path in row_of]
 			tags_blob += _struct.pack(
 				"<IIIIIII", at,
 				_u32(codec_index.get(placement.tag_codec or "")),

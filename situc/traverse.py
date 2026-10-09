@@ -1067,6 +1067,76 @@ def covered_run(struct: "ResolvedStruct",
 	return run
 
 
+def arm_paths(struct: "ResolvedStruct") -> frozenset[str]:
+	"""Paths that belong to a variant's arms rather than to the struct.
+
+	An arm is not bytes of its own: exactly one is present in any message,
+	they all start where the variant starts, and the variant's placement
+	already spans whichever is chosen. So an arm adds no bytes a span does
+	not have, and only its POSITION in a placement table is misleading.
+
+	`arm.member` and not `arm.path`: the field is spelled `member` on
+	`Arm`, and `getattr(arm, "path", None)` returns None for every arm in
+	the corpus. Written the other way once, it excluded nothing while the
+	code read as though it did.
+	"""
+	# EVERY ENTRY, not `own_members`. A variant is in `NOT_A_MEMBER`, so
+	# reading own_members finds no `arm_cases` at all and this returned the
+	# empty set for every struct in the corpus -- a guard that cannot fire.
+	# It passed the packer's own proof anyway, because in declaration order
+	# an arm sits at the variant's position rather than last, so the first
+	# and last covered member were unchanged. Right for a reason the guard
+	# was not supplying, which is the shape worth refusing.
+	heads = [arm.member for entry in struct.entries
+	         for arm in entry.placement.arm_cases
+	         if isinstance(arm.member, str)]
+	return frozenset(
+		entry.placement.path for entry in struct.entries
+		for head in heads
+		if entry.placement.path == head
+		or entry.placement.path.startswith(head + "."))
+
+
+def covered_members(struct: "ResolvedStruct",
+		tag: Placement) -> list[Placement]:
+	"""The members a tag's coverage spans, in byte order (26.609).
+
+	`covers(summed)` names REGIONS, and an `authenticated` region has no
+	placement of its own, so what a reader can locate is the first and last
+	MEMBER inside the covered regions -- having every member's offset and
+	size already.
+
+	This lived in `pack.py` as a closure over the packer's own row table,
+	and the builder of 0032's rung 2 is a second consumer of the same
+	question: does a tag cover bytes written after itself? Two copies of
+	that would be two answers, which is the fault this module's own header
+	says it was created to stop -- five places had grown their own copy of
+	one rule.
+
+	Arms are excluded, and that exclusion is the expensive half. All six of
+	ICMP's arms sit at the variant's own offset, after `rest` in the
+	placement table and before it in the message, so taking the highest
+	index gave a span of 8 bytes where RFC 792 sums 21: the checksum came
+	out `e5ca` against a correct `3b5a` (26.579).
+	"""
+	if not tag.tag_covers:
+		return []
+	# EVERY ENTRY AND NOT `own_members`, which is the correction the proof
+	# forced. `is_own_member` excludes a sealed region's interior on
+	# purpose -- its accessors take the gated view type, so it belongs to
+	# the parent and its callers handle it themselves. But the interior is
+	# exactly what a tag covers: for `dtls.record` the covered member is
+	# `record.sealed.sequence`, and the region placement beside it is
+	# `kind="sealed"` which the field filter drops. Reading `own_members`
+	# here returned an empty span for dtls and keystore, and the packer's
+	# images changed under a refactor that was meant to change nothing.
+	skip = arm_paths(struct)
+	return [entry.placement for entry in struct.entries
+	        if set(entry.placement.regions) & set(tag.tag_covers)
+	        and entry.placement.kind == "field"
+	        and entry.placement.path not in skip]
+
+
 def covered_bit_span(struct: "ResolvedStruct",
 		tag: Placement) -> tuple[int, int] | None:
 	"""What a tag covers, in BITS, where a byte range cannot say it.

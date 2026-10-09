@@ -641,3 +641,69 @@ def test_a_member_that_is_not_located_does_contribute() -> None:
 }
 """
 	assert _before(body, "s", "tail") == 65
+
+
+def test_arm_paths_finds_a_variants_arms() -> None:
+	"""The guard that could not fire, as a test (26.609).
+
+	`arm_paths` was first written over `own_members`, and a variant is in
+	`NOT_A_MEMBER` -- so it found no `arm_cases` anywhere and returned the
+	empty set for every struct in the corpus. It passed the packer's own
+	byte-identical proof anyway, because in declaration order an arm sits
+	at its variant's position rather than last, so the first and last
+	covered member were unchanged either way.
+
+	A guard right for a reason it is not supplying is the shape to refuse,
+	and a count is what catches it: ICMP has six arms, each contributing
+	its own path and the members under it.
+	"""
+	from situc.traverse import arm_paths
+	schema = parse_text(
+		(Path(__file__).resolve().parents[2]
+		 / "example" / "icmp" / "icmp.situ").read_text(encoding="utf-8"))
+	resolved = resolve(schema, solve(schema))
+	found = arm_paths(resolved.structs["icmp_message"])
+
+	assert found, "no arm found; the predicate is reading the wrong population"
+	assert len(found) == 12, sorted(found)
+	assert "icmp_message.body.echo" in found
+	assert "icmp_message.body.echo.identifier" in found, (
+		"a member UNDER an arm is excluded by the same rule")
+	assert "icmp_message.rest" not in found
+
+
+def test_covered_members_excludes_the_arms_it_spans() -> None:
+	"""What the packer asked as a closure over its own row table, and what
+	rung 2's builder asks of the same tag: which members does this coverage
+	span? ICMP is the case it was paid for -- `e5ca` against a correct
+	`3b5a` when the arms were counted (26.579)."""
+	from situc.traverse import covered_members, own_members
+	schema = parse_text(
+		(Path(__file__).resolve().parents[2]
+		 / "example" / "icmp" / "icmp.situ").read_text(encoding="utf-8"))
+	resolved = resolve(schema, solve(schema))
+	struct = resolved.structs["icmp_message"]
+	tag = next(p for p in own_members(struct) if p.tag_covers)
+
+	spanned = [p.path for p in covered_members(struct, tag)]
+	assert spanned == ["icmp_message.type", "icmp_message.code",
+	                   "icmp_message.rest"], spanned
+
+
+def test_covered_members_reaches_a_sealed_regions_interior() -> None:
+	"""The correction the packer's proof forced. `is_own_member` excludes a
+	sealed region's interior on purpose, and the interior is exactly what a
+	tag covers -- reading `own_members` here returned an empty span for
+	dtls and keystore, and the images changed under a refactor meant to
+	change nothing."""
+	from situc.traverse import covered_members, own_members
+	schema = parse_text(
+		(Path(__file__).resolve().parents[2]
+		 / "example" / "dtls" / "dtls.situ").read_text(encoding="utf-8"))
+	resolved = resolve(schema, solve(schema))
+	struct = resolved.structs["record"]
+	tag = next(p for p in own_members(struct) if p.tag_covers)
+
+	spanned = [p.path for p in covered_members(struct, tag)]
+	assert spanned, "the covered span is empty; the interior was not reached"
+	assert all(p.startswith("record.sealed.") for p in spanned), spanned
