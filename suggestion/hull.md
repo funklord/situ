@@ -148,3 +148,25 @@ atom's length and its bytes, and the remedies it offers -- `[must_eq]`,
 asked for its canonical writer to come from the edit layer and it cannot
 yet; whether a builder belongs at `edit`, or the ladder's sentence is the
 thing to change, is situ's to decide, and I have not assumed either.
+
+## 12. The frame layer's `next` neither applies `[max]` nor validates what it hands out
+
+Added 2026-10-09, measured at `9d66b6d` with the generated C. hull's
+agent protocol frames `struct message { u32 length [max = MAX_MESSAGE];
+u8 body[length]; }` with `MAX_MESSAGE = 1048576`, at `--layer frame`.
+
+    reader buffer 1048580 (SIZE_MAX):    length 1048577 -> next = SITU_ERR_BOUNDS
+    reader buffer 1048644 (SIZE_MAX+64): length 1048577 -> next = SITU_ERR_TRUNCATED
+    same, whole 1048577-byte body pushed -> next = SITU_OK, then validate = SITU_ERR_CONSTRAINT
+
+So a length the schema forbids is refused only when the caller's buffer
+happens to be exactly `SIZE_MAX`, and then as a capacity error rather than
+a malformed one. With any larger buffer the reader waits for the body, and
+once it arrives `next` returns a view of a message its own schema rejects.
+`_required` reads the length without consulting `[max]`, and
+`_reader_next` never calls `_validate`. The point of a length is that a
+receiver can refuse an oversized message before reading it, and that needs
+`[max]` asked the moment the length is whole. hull does this itself now
+(`agent/framing.c`) and validates every message `next` returns, so it does
+not depend on a fix. A caller following the header's own comment -- "call
+`next` until it answers SITU_ERR_TRUNCATED" -- gets the forbidden message.
