@@ -31304,6 +31304,84 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.613 The frame reader hands out a message its schema forbids
+
+**hull reports, measured at `9d66b6d` and appended to
+`suggestion/hull.md` as finding 12**, that the frame layer's `next`
+neither applies a length field's `[max]` nor validates what it hands
+out. Their schema and their three outcomes, in their words:
+
+    struct message { u32 length [max = 1048576]; u8 body[length]; }
+
+    a length of 1048577, buffer exactly SIZE_MAX (1048580)
+        next = SITU_ERR_BOUNDS, a capacity error rather than a
+        malformed message
+    buffer 64 bytes larger
+        next = SITU_ERR_TRUNCATED, waiting for a body that should
+        never be read
+    that body then pushed whole
+        next = SITU_OK, and validate on the same view =
+        SITU_ERR_CONSTRAINT
+
+**Verified here from the generated code rather than from their probes**,
+by building that schema at `--layer frame` in this tree. `_required`
+reads the length with `situ_get_be32` into `situ_need_u32` and consults
+no bound; `_reader_next` calls `_required`, then `_view`, and never
+`_validate`. The number it would need is in the same header --
+`SITU_MESSAGE_LENGTH_VALUE_MAX 1048576u` -- and the check that uses it
+is in the `.c`, inside `_validate`.
+
+**The verdict is not in doubt and situ's own code says why.** The
+existing BOUNDS branch in `_reader_next` is justified in a comment: a
+whole message needing more than the buffer can hold *"never becomes true
+by waiting, so it is reported rather than left to spin on a stream that
+will never satisfy it."* A length beyond `[max]` is that same class --
+no amount of further reading makes it admissible -- so the principle for
+refusing it early is already written down beside the code that fails to.
+
+**What makes it a deliberate pass rather than a one-line fix is the
+contract.** `_required` currently has two outcomes, SITU_OK and
+SITU_ERR_TRUNCATED, and a caller reads `*need` on the second; refusing a
+length means a third, SITU_ERR_CONSTRAINT, with `*need` meaningless.
+Measured: **all four backends emit a `required`** -- `codegen/c`,
+`codegen/cpp`, `codegen/python` and `codegen/rust` each have one in
+`frame.py` and `emit.py` -- and `test_backends_refuse_the_same_members`
+holds them to each other. So changing one is a divergence the parity
+test exists to catch, and changing all four is a change to a public
+function in every language situ emits.
+
+**Two options, their cost, and whose they are.** Per
+*Describing a thing thoroughly is a way of proposing it*, this is
+recorded rather than chosen:
+
+  - **`_required` refuses the length**, which stops the spin and the
+    hand-out at the earliest point the fault is knowable, and costs the
+    third outcome in four backends.
+  - **`_reader_next` also calls `_validate`**, which closes the general
+    case rather than the length one -- any constraint, not just a bound
+    -- and costs a full validate per message on the framing path, which
+    is the hot path for a stream reader. It also changes what `next`
+    can return for a reason unrelated to framing.
+
+They are not alternatives: the first is about a value that can never
+become valid, the second about everything else. **Which to do, and
+whether to do the second at all, is the copyright holder's** -- it is a
+cost on every consumer of the frame layer, not a defect to be fixed by
+whoever happened to read the report.
+
+**Nothing waits on it.** hull states they check the length themselves as
+soon as it is whole and validate every view, so their reader is not
+exposed; the exposure is to a caller who follows the generated header's
+own instruction, *call `next` until it answers SITU_ERR_TRUNCATED*, and
+trusts what comes back.
+
+**The reporting is worth noting separately.** This is the third finding
+hull has produced by reading situ's generated output or its emitters
+rather than by using the result -- after 26.606's four and the `before`
+diagnosis in 26.612 -- and all three are things situ's own tests could
+not have asked, because each is a case where the code does exactly what
+some test asserts and the assertion is about the wrong question.
+
 ### 26.612 A run ended by its delimiter, and a count that counted the wrong thing
 
 The largest refusal 26.610 left was a run of bytes ending at a delimiter,
