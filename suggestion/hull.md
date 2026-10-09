@@ -256,3 +256,21 @@ hull met it moving its pin to `9f3274a` for the variant builders: in
 carrying its last optional key are refused, because the arm that would
 carry it peeks further on. hull's reader and framing schemas peek only at
 offset 0, and their maps did not move.
+
+## 17. A list built at the edit layer returns SITU_OK for elements the schema refuses
+
+Added 2026-10-09, measured at `9f3274a` with `hull_sexpr_c_list_build`
+from hull's `sexpr/canonical.situ`, items handed over as encoded bytes:
+
+    items " 1:a"  -> SITU_OK, wrote "( 1:a)"    a space, which canonical form has none of
+    items "(1:a"  -> SITU_OK, wrote "((1:a)"    an element never closed, so the list is not either
+    items "01:a"  -> SITU_OK, wrote "(01:a)"    a length the schema says is `[minimal]`
+
+The builder walks the items with `_form_required` and then validates the
+list, and a list's validate does not reach its elements (finding 3), so
+each of these comes back as built. The second is the one that matters: the
+builder's own reader frames `((1:a)` as a list holding `(1:a)` and then
+reaches the end with nothing to close the outer one. hull's writer reads
+every result back with its own walk and refuses all three; with that
+read-back removed, hull's suite shows these three, plus elements lying in
+the output buffer, going through.
