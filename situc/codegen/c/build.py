@@ -304,8 +304,6 @@ def _delimited_refusal(placement: Placement) -> str | None:
 	if len(placement.delimiters) > 1:
 		return f"ends at any of {len(placement.delimiters)} delimiters, so " \
 		       "which byte to write after it is not stated"
-	if len(placement.delimiters[0]) != 1:
-		return "ends at a multi-byte delimiter"
 	if placement.delimiter_escape:
 		return "escapes its delimiter, and escaping would write bytes " \
 		       "other than the ones it was given"
@@ -864,8 +862,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				if (held.size_expr or held.repeat_while is not None
 						or len(held.delimiters) > 1
 						or (held.delimiters
-						    and (len(held.delimiters[0]) != 1
-						         or not held.delimiter_consumed))):
+						    and not held.delimiter_consumed)):
 					return [], f"`{traverse.local_name(struct, held)}` is " \
 					           f"a run of `{held.type_name}` whose end " \
 					           "this writer cannot state"
@@ -1080,7 +1077,6 @@ def _walk(part: Part, local: str, count: bool,
 	BOUNDARY, where the reader would stop early -- so the check is at each
 	boundary the walk reaches, which is exactly where the reader looks.
 	"""
-	ending = part.delimiter[0] if part.delimiter else None
 	# Whether the element's view takes a length, which `emit.py` keys on
 	# `is_fixed_size` and so does this.
 	inner = (structs or {}).get(part.placement.type_name or "")
@@ -1108,12 +1104,15 @@ def _walk(part: Part, local: str, count: bool,
 		f"\t\t\tuint32_t {NEED} = 0u;",
 		"",
 	]
-	if ending is not None:
+	if part.delimiter:
+		wide = len(part.delimiter)
 		lines += [
-			f"\t\t\t/* A `{chr(ending)}` here is where the reader would",
-			"\t\t\t * stop, so an element may hold one and may not",
-			"\t\t\t * BEGIN with one. */",
-			f"\t\t\tif ({part.local}[{SCAN}] == 0x{ending:02X}u) {{",
+			"\t\t\t/* The delimiter here is where the reader would stop,",
+			"\t\t\t * so an element may hold one and may not BEGIN with",
+			"\t\t\t * one. With fewer than its length left there is",
+			"\t\t\t * nowhere for it to be. */",
+			f"\t\t\tif ({SCAN} + {wide}u <= {part.local}_len",
+			f"\t\t\t    && {_needle(part.local, SCAN, part.delimiter)}) {{",
 			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t\t\t}",
 		]
@@ -1160,6 +1159,37 @@ def _walk(part: Part, local: str, count: bool,
 		"\t}",
 	]
 	return lines
+
+
+def _needle(local: str, at: str, delim: bytes) -> str:
+	"""The condition that the delimiter sits at `at` in `local`.
+
+	One emitter for one byte and for several, because the single-byte form
+	is this with N = 1: `\r\n` is every line in http and smtp, and a
+	second comparison written for it is a second thing to be wrong.
+	"""
+	return " && ".join(
+		f"{local}[{at}{f' + {i}u' if i else ''}] == 0x{byte:02X}u"
+		for i, byte in enumerate(delim))
+
+
+def _write_needle(delim: bytes, what: str) -> list[str]:
+	"""The statements that put the delimiter down and advance."""
+	if len(delim) == 1:
+		return [f"\t/* and the {what} that ends it. */",
+		        *_room("1u"),
+		        f"\t{OUT}[{AT}] = 0x{delim[0]:02X}u;",
+		        f"\t{AT} += 1u;"]
+	spelt = ", ".join(f"0x{byte:02X}u" for byte in delim)
+	return [f"\t/* and the {len(delim)}-byte {what} that ends it. */",
+	        *_room(f"{len(delim)}u"),
+	        "\t{",
+	        f"\t\tstatic const uint8_t situ_ends[{len(delim)}] = "
+	        f"{{ {spelt} }};",
+	        "",
+	        f"\t\tmemcpy({OUT} + {AT}, situ_ends, {len(delim)}u);",
+	        "\t}",
+	        f"\t{AT} += {len(delim)}u;"]
 
 
 def _room(size: str) -> list[str]:
@@ -1452,13 +1482,9 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				f"{part.local}_len);",
 				"\t}",
 				f"\t{AT} += {part.local}_len;",
-				*([] if not part.delimiter else [
-					f"\t/* and the `{chr(part.delimiter[0])}` that ends "
-					"the run. */",
-					*_room("1u"),
-					f"\t{OUT}[{AT}] = 0x{part.delimiter[0]:02X}u;",
-					f"\t{AT} += 1u;",
-				]),
+				*([] if not part.delimiter
+				  else _write_needle(part.delimiter, "delimiter that ends "
+				                     "the run")),
 				"",
 			]
 		elif part.role == NESTED:
@@ -1524,9 +1550,13 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"\t{",
 				f"\t\tuint32_t {SCAN};",
 				"",
-				f"\t\tfor ({SCAN} = 0u; {SCAN} < {part.local}_len; "
-				f"{SCAN}++) {{",
-				f"\t\t\tif ({part.local}[{SCAN}] == 0x{ending:02X}u) {{",
+				# Bounded so the needle fits: with fewer than its length
+				# left there is nowhere for it to be, and the one-byte
+				# case is this with N = 1.
+				f"\t\tfor ({SCAN} = 0u; {SCAN} + {len(part.delimiter)}u "
+				f"<= {part.local}_len; {SCAN}++) {{",
+				f"\t\t\tif ({_needle(part.local, SCAN, part.delimiter)}) "
+				"{",
 				"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t\t\t}",
 				"\t\t}",
@@ -1542,9 +1572,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				f"\t{AT} += {part.local}_len;",
 				# Two checks rather than one against `_len + 1u`, which can
 				# wrap on a length the caller supplied.
-				*_room("1u"),
-				f"\t{OUT}[{AT}] = 0x{ending:02X}u;",
-				f"\t{AT} += 1u;",
+				*_write_needle(part.delimiter, "delimiter"),
 				"",
 			]
 		else:

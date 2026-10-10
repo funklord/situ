@@ -661,9 +661,6 @@ def test_a_delimited_member_is_a_run_and_not_a_one_byte_scalar() -> None:
 	# Several bytes may end it, so which to write is not stated. http's
 	# `header_field.value` is the corpus instance.
 	('u8 x[] until " " | "\\t"', "any of 2 delimiters"),
-	# `\r\n` is two bytes; http's and smtp's lines all end this way, which
-	# is why they gain nothing from this increment.
-	('u8 x[] until "\\r\\n"', "multi-byte delimiter"),
 	# Escaping would write bytes other than the ones the caller gave, and
 	# the reader's unescape has no writer to be tested against.
 	('u8 x[] until "\\"" [escape = "\\\\"]', "escapes its delimiter"),
@@ -672,6 +669,14 @@ def test_a_delimited_member_is_a_run_and_not_a_one_byte_scalar() -> None:
 ])
 def test_a_delimiter_the_writer_cannot_place_is_refused(
 		member: str, wanted: str) -> None:
+	"""The shapes a run's delimiter can still not be written in.
+
+	`\r\n` was in this list and is not any more: a multi-byte delimiter
+	is written now, and the row was removed rather than reworded because
+	there is no refusal left to assert. What remains is an ambiguity the
+	schema has (several delimiters) and two transformations of the
+	caller's bytes (escaping, trimming).
+	"""
 	_, resolved = _inline("struct one {\n\t%s;\n\tu8 rest[2];\n}\n"
 	                      % member)
 	_, why = _only(resolved, "one")
@@ -1975,3 +1980,118 @@ int main(void)
 	assert lines[3] == "0 C102AABB", f"MQTT's own example for 321: {lines[3]}"
 	assert lines[4] == "0 FFFFFF7FAABB", f"the 28-bit maximum: {lines[4]}"
 	assert lines[5] == "2 ", f"one past it is refused: {lines[5]}"
+
+
+def test_a_two_byte_delimiter_is_one_delimiter() -> None:
+	"""`\r\n` is every line in http and smtp.
+
+	The single-byte and multi-byte forms are one emitter, because the
+	one-byte case is the other with N = 1 and a second comparison written
+	for it is a second thing to be wrong. What stays refused in http is
+	the member that ends at TWO delimiters, which is an ambiguity in the
+	schema rather than a gap in the writer.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "http" / "http.situ")
+	header = _header(parsed, resolved, "http")
+	parts, why = _only(resolved, "request_line", header, None, parsed)
+	assert why is None, why
+
+	version = [part for part in parts
+	           if part.placement.name == "version"][0]
+	assert version.role == build.ENDED
+	assert version.delimiter == b"\r\n"
+
+	refused = dict(build.refusals(resolved, _shape(parsed, resolved,
+	                                               header)))
+	assert "header_field" in refused
+	assert "any of 2 delimiters" in refused["header_field"]
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_an_http_request_head_is_built_line_by_line(tmp_path: Path) -> None:
+	"""A real HTTP message head, every byte from generated code.
+
+	`GET / HTTP/1.1\r\nHost: example.invalid\r\n\r\n` -- the line from
+	`request_line_build`, the field handed over as bytes because a
+	`header_field` ends at two delimiters and is refused, and the blank
+	line written by the run's own delimiter. 41 bytes, and it acquires a
+	view.
+
+	The third call is the control for the needle being a SEQUENCE. A CR
+	not followed by LF is not the delimiter, so `HTTP\r1.1` must be
+	ACCEPTED -- and it sits where the scan reaches, which the first
+	fixture I tried did not: a trailing CR is excluded by the loop bound
+	either way, so it tested the bound and not the comparison. With the
+	needle cut to its first byte this case is refused.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "http" / "http.situ")
+	files = dict(build.generate(parsed, resolved, "http", "situ",
+	                            _header(parsed, resolved, "http")))
+	files.update(generate_c(parsed, resolved, "http").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "http_build.h"
+
+int main(void)
+{
+	uint8_t     line[64], head[256];
+	uint32_t    ln = 0, hn = 0, i;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+	const uint8_t field[] = "Host: example.invalid\\r\\n";
+
+	if (situ_request_line_build(line, sizeof line,
+	                            (const uint8_t *)"GET", 3,
+	                            (const uint8_t *)"/", 1,
+	                            (const uint8_t *)"HTTP/1.1", 8, &ln)
+	    != SITU_OK) return 2;
+
+	err = situ_request_head_build(head, sizeof head, line, ln,
+	                              field, sizeof field - 1, &hn);
+	printf("%d %u ", (int)err, hn);
+	for (i = 0; i < hn; i++)
+		putchar(head[i] == '\\r' ? '|' : head[i] == '\\n' ? '!' : head[i]);
+	printf("\\n");
+	if (err != SITU_OK) return 3;
+
+	situ_msg_init(&msg, head, hn);
+	printf("%d\\n", (int)situ_request_head_view(&msg, 0, hn, &view));
+
+	/* a version carrying the delimiter: refused, not truncated */
+	printf("%d\\n", (int)situ_request_line_build(line, sizeof line,
+	        (const uint8_t *)"GET", 3, (const uint8_t *)"/", 1,
+	        (const uint8_t *)"HTTP/1.1\\r\\nX", 11, &ln));
+
+	/* a CR not followed by LF is not the delimiter */
+	printf("%d\\n", (int)situ_request_line_build(line, sizeof line,
+	        (const uint8_t *)"GET", 3, (const uint8_t *)"/", 1,
+	        (const uint8_t *)"HTTP\\r1.1", 8, &ln));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "http.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, f"exited {ran.returncode}: {ran.stderr}"
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 41 GET / HTTP/1.1|!Host: example.invalid|!|!", \
+		lines[0]
+	assert lines[1] == "0", f"the head does not acquire a view: {lines[1]}"
+	assert lines[2] == "2", \
+		f"a member carrying the delimiter must be refused: {lines[2]}"
+	assert lines[3] == "0", (
+		"a CR not followed by LF is not the delimiter, so this must be "
+		f"accepted -- cut the needle to one byte and it is not: {lines[3]}")

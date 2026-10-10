@@ -31304,6 +31304,57 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.624 `\r\n` is one delimiter, and the control I wrote first tested the bound
+
+Eleven members ended at a multi-byte delimiter and every one was a
+single, consumed, two-byte sequence -- `\r\n` in http, smtp and edges,
+`: ` in one. So there was nothing to decide: the single-byte and
+multi-byte forms are **one emitter**, because the one-byte case is the
+other with N = 1, and a second comparison written for it is a second
+thing to be wrong.
+
+Three sites use it: the scan that refuses a byte run containing its own
+delimiter, the boundary check in a struct run, and the write. All three
+now take the sequence.
+
+**A real HTTP request head builds, every byte from generated code:**
+
+    GET / HTTP/1.1\r\nHost: example.invalid\r\n\r\n
+
+41 bytes -- the line from `request_line_build`, the field handed over as
+bytes because a `header_field` ends at TWO delimiters and is refused for
+that, and **the blank line written by the run's own delimiter**. It
+acquires a view.
+
+**The control I wrote first tested the loop bound rather than the
+comparison**, and that is the part worth keeping. A sequence scan must
+accept a CR *not* followed by LF, since that is not the delimiter -- so
+the fixture is a version carrying one. My first was `HTTP/1.1\r`, with
+the CR last, and it passed with the needle cut to its first byte:
+`scan + 2 <= len` never reaches the final byte, so the bound excluded it
+either way. The fixture that discriminates is `HTTP\r1.1`, with the CR in
+the middle where the scan looks: correct, it is accepted; first byte
+only, it is refused.
+
+That is `evidence.md`'s *a control has to be reached* for the fourth time
+in two days, and the first three were upstream checks intercepting the
+case. This one was intercepted by **the loop bound of the very check
+under test** -- which is nearer to home and harder to see, because the
+sabotage and the interception live in the same four lines.
+
+**And a parametrized case was removed rather than reworded.** The table
+of delimiters the writer cannot place had a `\r\n` row asserting the
+refusal this entry deletes. There is no refusal left to assert, so the
+row is gone; what remains is one ambiguity the schema has -- several
+delimiters -- and two transformations of the caller's bytes, escaping and
+trimming.
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **141 of
+242 structs have a builder, in 34 of the 45 schemas**, up eight structs
+and two schemas. What leads the refusals now is a `while` run (14), a
+sealed region (9), the eight tags naming no codec, a codec (7), and a
+`u8` run whose length nothing states (7).
+
 ### 26.623 A varint, and the fourth time a branch ordered by absence misread a member
 
 The largest refusal after the checksum named a construct that does not
