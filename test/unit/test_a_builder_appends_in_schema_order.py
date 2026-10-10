@@ -1360,7 +1360,12 @@ def test_an_arm_that_ends_before_a_byte_it_does_not_own_is_refused() -> None:
 	          for case in build.arms(resolved.structs["sexpr"])}
 
 	_, why = _only(resolved, "sexpr", header, cases["as_symbol"])
-	assert why is not None and "handed over as bytes" in why, why
+	# The message says WHICH of the two reasons applies. It used to hedge
+	# -- "either its own bytes do not state its extent, or it ends
+	# `before` a byte it does not own" -- while the code knew every time:
+	# measured over the corpus, fifteen were the first and two the second.
+	assert why is not None and "ends `before` a byte it does not own" in why, \
+		why
 
 	assert build.frames_itself(header, "situ_symbol"), \
 		"the header does declare a `_required` for it, which is the trap"

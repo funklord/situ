@@ -31304,6 +31304,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.625 Every refusal carries a claim, and the gate catches the half that is false
+
+Five of the builder's increments produced a message right in VERDICT and
+wrong in REASON, and twice a test of mine had pinned the wrong message in
+place so that correcting it would have gone red. A refusal is the
+builder's only interface for everything it cannot do, and it was the
+least-checked thing in it. So the messages were audited and the audit was
+made a gate.
+
+**The census first: 32 distinct messages over 132 refusals**, from 30
+refusal sites. Three families were wrong or useless:
+
+  - **18 of the 132 came from one fallback**, `f"is a {kind}"` --
+    *"is a sealed"*, which is not a sentence, and the same for `coded`,
+    `tlv` and `marker`. A kind as the whole reason. Each has one now: a
+    sealed region needs a key, which is rung 3's; a coded region puts the
+    codec's output on the wire and not what a caller hands over; a TLV
+    region's present fields are a choice no parameter here expresses --
+    the gap a variant had before 26.617; a marker's value the schema
+    pins, and a pinned SCALAR takes a different path from a pinned run.
+  - **17 hedged between two reasons the code could tell apart**: *"either
+    its own bytes do not state its extent, or it ends `before` a byte it
+    does not own"*. Measured: **fifteen were the first and two the
+    second**, and both facts are in hand at the refusal. They say which
+    now.
+  - **7 of those 17 named a `u8`** -- arms holding a byte RUN, told a
+    message about structs. An arm's content is one member and it is
+    whatever that member is.
+
+**The gate found a fifth misdiagnosis on its first run.** `native.wide`
+is a `u24` at offset 0: whole bytes, sharing nothing with anybody, and it
+was being told *"it shares a byte with its neighbours"*. Two reasons were
+one message -- a sub-byte field shares a byte, and a u24 occupies three
+of them and has no store -- and the second says so now: *"whole bytes and
+not a width the runtime stores -- 8, 16, 32 and 64 are"*.
+
+**What the gate is.** Each message carries a claim about the member, as a
+predicate, and the claim is asserted against the member the message
+names, over all 45 schemas. It also holds two shapes no single message
+owns: every member-level refusal names its member first -- the only ones
+that name none are the three about the struct -- and every claim in the
+table is either emitted over the corpus or listed as constructed, so the
+table cannot accumulate rows for messages that were reworded away.
+
+**And it catches two of the five, which is the honest number.** A
+claim-check catches a message whose claim is FALSE of the member:
+reinstating the varint-as-nested-struct and the u24-shares-a-byte faults
+turns it red. It cannot catch a claim that is TRUE and beside the point,
+and both of the remaining faults were that:
+
+    symbol.name     3 delimiters, told "ends at any of 3 delimiters"
+    will_message.topic   element_bits None, told "is a run of 0-bit elements"
+
+Each claim held. What was wrong was that the property named was not the
+one that decided the refusal, and no predicate over one member can say
+which branch should have fired. **So the gate is a floor on the
+messages, not a proof of them** -- it removes the half that is checkable
+and leaves the half that needs the author to have ordered the branches by
+what a member IS.
+
+One row went quiet in a way worth keeping: *"bits wide, so it shares a
+byte"* HAD a corpus population and lost it, because every sub-byte member
+in the corpus is now written as part of a packed group (26.618). The only
+routes left are an arm holding a sub-byte scalar and a sub-byte size
+field, and the corpus has neither -- so the table's second test is what
+noticed, which is the stale-claim class caught by a gate rather than by a
+sweep.
+
 ### 26.624 `\r\n` is one delimiter, and the control I wrote first tested the bound
 
 Eleven members ended at a multi-byte delimiter and every one was a

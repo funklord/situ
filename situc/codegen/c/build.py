@@ -338,9 +338,16 @@ def _scalar_refusal(placement: Placement) -> str | None:
 		return "is scaled, so its value is not its bits"
 	if placement.varint:
 		return "is a varint, whose width depends on its value"
-	if scalar.bits % BITS_PER_BYTE or scalar.bits not in WORD_WIDTHS:
+	if scalar.bits % BITS_PER_BYTE:
 		return f"is {scalar.bits} bits wide, so it shares a byte with its " \
 		       "neighbours and cannot be appended on its own"
+	if scalar.bits not in WORD_WIDTHS:
+		# Whole bytes and still not writable: the runtime stores 8, 16, 32
+		# and 64, so a `u24` needs an assembly this does not do. It was
+		# being told it shares a byte with its neighbours, which a u24 at
+		# offset 0 does not.
+		return f"is {scalar.bits} bits wide, which is whole bytes and not " \
+		       "a width the runtime stores -- 8, 16, 32 and 64 are"
 	if placement.offset_bits is not None \
 			and placement.offset_bits % BITS_PER_BYTE:
 		return "does not start on a byte boundary"
@@ -361,7 +368,25 @@ def _member_refusal(placement: Placement) -> str | None:
 		return "is a variant, so which arm to write is the caller's choice " \
 		       "and not yet expressible"
 	if placement.kind not in ("field", "reserved", "preamble"):
-		return f"is a {placement.kind}"
+		# Four kinds reached here and each got its own kind as the whole
+		# reason -- "is a sealed", which is not even a sentence. A refusal
+		# is the builder's only interface for what it cannot do, so each
+		# says what the construct is and why it is not written.
+		return {
+			"sealed": "is a sealed region, whose interior is written "
+			          "through the seal: that needs a key, which is rung "
+			          "3's and not a writer's",
+			"coded": "is a coded region, so the bytes on the wire are the "
+			         "codec's output and not the ones a caller would hand "
+			         "over",
+			"tlv": "is a TLV region, and which of its fields are present "
+			       "is a choice no parameter here can express -- the same "
+			       "gap a variant had before it got one builder per arm",
+			"marker": "is a marker, whose value the schema pins: it needs "
+			          "no caller and is not written yet because a pinned "
+			          "SCALAR takes a different path from a pinned run",
+		}.get(placement.kind, f"is a {placement.kind}, which this writer "
+		                      "has no case for")
 	if placement.codec is not None:
 		return "passes through a codec"
 	if placement.sealed_by or placement.sealed_nonce or placement.sealed_key:
@@ -519,14 +544,36 @@ def _arm_refusal(placement: Placement, header: str, prefix: str,
 	if placement.type_name and hands_over(header, placement.type_name,
 	                                      prefix, structs):
 		return None
-	if placement.scalar is not None and placement.array_count is None \
+
+	# A scalar arm, counted or not. Seven of these said "holds a `u8`,
+	# which cannot be handed over as bytes" -- a message about structs,
+	# for a byte run. An arm's content is one member and it is whatever
+	# that member is.
+	if placement.scalar is not None \
 			and placement.type_name not in (structs or {}):
+		if placement.array_count is not None:
+			return f"holds a run of {placement.array_count} " \
+			       f"{placement.scalar.bits}-bit elements, and an arm's " \
+			       "content is one value or one whole struct here"
 		return _scalar_refusal(placement)
+
+	inner = (structs or {}).get(placement.type_name or "")
+	if inner is not None:
+		# Which of the two it is, rather than "either or": the header says
+		# whether a `_required` was emitted and the schema says whether it
+		# ends `before` a byte it does not own, and both are in hand here.
+		# Measured over the corpus when this was written: fifteen were the
+		# first and two the second, and the message named neither.
+		if not frames_itself(header, ident(prefix, placement.type_name)):
+			return f"holds a `{placement.type_name}`, whose own bytes do " \
+			       "not state its extent -- situ emits no `_required` for " \
+			       "it -- so the writer cannot tell one from a longer blob"
+		return f"holds a `{placement.type_name}`, which ends `before` a " \
+		       "byte it does not own, so its own `_required` can never " \
+		       "answer the length a caller passes"
 	if placement.type_name:
-		return f"holds a `{placement.type_name}`, which cannot be handed " \
-		       "over as bytes: either its own bytes do not state its " \
-		       "extent, or it ends `before` a byte it does not own, so " \
-		       "the writer cannot tell one from a longer blob"
+		return f"holds a `{placement.type_name}`, which is neither a " \
+		       "scalar nor a struct of this schema"
 	return "holds something this writer cannot place"
 
 
@@ -733,7 +780,10 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				return [], f"`{arm.member}` is not a member of this struct"
 			why = _arm_refusal(inner, header, prefix, structs)
 			if why:
-				return [], f"`{arm.member}` {why}"
+				# The LOCAL name, as every other member-level message
+				# uses: this quoted the full dotted path including the
+				# struct, so one reader had two shapes to learn.
+				return [], f"`{traverse.local_name(struct, inner)}` {why}"
 			part = _arm_part(struct, inner, header, prefix, structs)
 			# Where the discriminant is peeked, nothing was written for it
 			# and `_validate` cannot help: bytes beginning with another
@@ -873,10 +923,17 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				                  digits=held.array_count or 0))
 				continue
 			if not repeats and held.type_name:
+				if not frames_itself(header,
+				                     ident(prefix, held.type_name)):
+					return [], f"`{traverse.local_name(struct, held)}` " \
+					           f"is a nested `{held.type_name}`, whose " \
+					           "own bytes do not state its extent -- situ " \
+					           "emits no `_required` for it"
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
-				           f"nested `{held.type_name}`, whose extent its " \
-				           "own bytes do not determine, so the writer " \
-				           "cannot tell one from a longer blob"
+				           f"nested `{held.type_name}`, which ends " \
+				           "`before` a byte it does not own, so its own " \
+				           "`_required` can never answer the length a " \
+				           "caller passes"
 			spelt = (f"a run of {element}-bit elements" if element
 			         else f"a run of `{held.type_name}`")
 			return [], f"`{traverse.local_name(struct, held)}` is {spelt}, " \
