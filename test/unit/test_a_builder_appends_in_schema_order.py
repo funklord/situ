@@ -187,11 +187,21 @@ def test_a_trailing_tag_does_not_make_a_layout_unwritable() -> None:
 	reason, that this writer computes no checksum. A predicate that
 	refused every tag would pass the three cases above and say nothing.
 	"""
-	_, resolved = _parts(ROOT / "example" / "png" / "png.situ")
+	parsed, resolved = _parts(ROOT / "example" / "png" / "png.situ")
 	chunk = resolved.structs["chunk"]
 	assert traverse.append_only_refusals(chunk) == []
-	_, why = build.plan(chunk)
-	assert why is not None and "does not compute" in why, why
+
+	# And it BUILDS, which is the stronger form of the same statement:
+	# the trailing CRC is reserved where the writer reaches it and filled
+	# once the message is whole. It used to be refused here for a second
+	# reason -- that nothing computed a checksum -- and this test asserted
+	# that refusal; the refusal is gone and the property it was standing
+	# in for is the one left.
+	header = _header(parsed, resolved, "png")
+	parts, why = _only(resolved, "chunk", header)
+	assert why is None, why
+	assert any(part.role == build.TAG for part in parts), [
+		(part.placement.name, part.role) for part in parts]
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.stem)
@@ -1688,3 +1698,155 @@ int main(void)
 	assert lines[1] == lines[2], (
 		"the element's own verdict is what the build reports, so a caller "
 		f"learns which failure it was: {lines[1]} vs {lines[2]}")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_trailing_checksum_is_computed_and_proved(tmp_path: Path) -> None:
+	"""PNG's chunk, built with its CRC, against a vector situ did not
+	produce.
+
+	`0000000049454E44AE426082` is the IEND chunk every PNG file ends
+	with: length 0, "IEND", and the CRC `AE426082` that the PNG
+	specification states. A round trip through situ's own `_check` would
+	only say the writer agrees with itself; this says it agrees with PNG.
+	The second case is checked against `zlib` in the assertion below,
+	which is the same argument twice over.
+
+	`validate` deliberately does not verify a checksum -- "the coverage
+	may run to the end of the message, and a constraint walk that costs a
+	file read is not the flat model 0051 settled on. Call it where the
+	caller has the whole message" -- and the writer is that caller, which
+	is 26.620's argument at a second construct.
+
+	The tag's bytes are reserved when the writer reaches them and filled
+	once the message is whole, and the store is then PROVED by the
+	generated `_check` rather than asserted: a wrong byte order refuses
+	the build instead of emitting a chunk whose own reader rejects it.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "png" / "png.situ")
+	files = dict(build.generate(parsed, resolved, "png", "situ",
+	                            _header(parsed, resolved, "png")))
+	files.update(generate_c(parsed, resolved, "png").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	# The codec's own implementation, which `_compute` calls: a CRC is
+	# `impl crc32 derived`, so the kernel is generated rather than linked
+	# from the runtime.
+	from situc.codegen.c import derived
+	(tmp_path / "png_derived.c").write_text(
+		derived.generate(parsed, "png"), encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "png_build.h"
+
+int main(void)
+{
+	uint8_t     out[64];
+	uint32_t    n = 0, i;
+	situ_err_t  err;
+	const uint8_t iend[4] = { 'I', 'E', 'N', 'D' };
+	const uint8_t idat[4] = { 'I', 'D', 'A', 'T' };
+	const uint8_t data[3] = { 1, 2, 3 };
+
+	err = situ_chunk_build(out, sizeof out, iend, NULL, 0, &n);
+	printf("%d ", (int)err);
+	for (i = 0; i < n; i++) printf("%02X", out[i]);
+	printf("\\n");
+
+	err = situ_chunk_build(out, sizeof out, idat, data, 3, &n);
+	printf("%d ", (int)err);
+	for (i = 0; i < n; i++) printf("%02X", out[i]);
+	printf("\\n");
+	return 0;
+}
+""", encoding="ascii")
+
+	sources = [str(tmp_path / "probe.c"), str(tmp_path / "png.c"),
+	           str(RUNTIME / "situ.c")]
+	derived_c = tmp_path / "png_derived.c"
+	if derived_c.exists():
+		sources.insert(2, str(derived_c))
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}", *sources,
+		 "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# The vector, from PNG rather than from situ.
+	assert lines[0] == "0 0000000049454E44AE426082", lines[0]
+
+	# And the second checked against zlib, which knows nothing of situ.
+	import zlib
+	want = zlib.crc32(b"IDAT\x01\x02\x03")
+	assert lines[1] == f"0 0000000349444154010203{want:08X}", (
+		f"{lines[1]} against zlib's {want:08X}")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_sixteen_bit_sum_is_stored_in_the_codec_s_order(
+		tmp_path: Path) -> None:
+	"""The other width, and the one with no external constant to check.
+
+	PNG's CRC has a vector the specification states; a `summing` codec
+	over sixteen bits has none, so the generated `_check` is what stands
+	between a wrong store and a message whose own reader rejects it. It is
+	demonstrably capable rather than merely present: with the byte order
+	deliberately flipped in the emitter, this case comes back
+	`SITU_ERR_CHECKSUM` (8) instead of building.
+
+	The assertion is on the bytes for the same reason as PNG's -- a
+	round trip through `_check` alone would say only that the writer
+	agrees with itself.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	files = dict(build.generate(parsed, resolved, "edges", "situ",
+	                            _header(parsed, resolved, "edges")))
+	files.update(generate_c(parsed, resolved, "edges").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	from situc.codegen.c import derived
+	(tmp_path / "edges_derived.c").write_text(
+		derived.generate(parsed, "edges"), encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "edges_build.h"
+
+int main(void)
+{
+	uint8_t     out[32];
+	uint32_t    n = 0, i;
+	situ_err_t  err = situ_inner_body_build(out, sizeof out, 0x1234, &n);
+
+	printf("%d ", (int)err);
+	for (i = 0; i < n; i++) printf("%02X", out[i]);
+	printf("\\n");
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "edges.c"),
+		 str(tmp_path / "edges_derived.c"), str(RUNTIME / "situ.c"),
+		 "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	# 0x1234 then its sum, which for a single u16 is itself -- stored
+	# big-endian, so `12341234` and not `12343412`.
+	assert ran.stdout.split("\n")[0] == "0 12341234", ran.stdout

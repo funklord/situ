@@ -49,9 +49,9 @@ WORD_WIDTHS = (8, 16, 32, 64)
 OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
 DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
-NEED, COUNT = "situ_need", "situ_count"
+NEED, COUNT, TAGV = "situ_need", "situ_count", "situ_tag"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      SCAN, NEED, COUNT, "situ_fixed"})
+                      SCAN, NEED, COUNT, TAGV, "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -67,6 +67,7 @@ REPEAT  = "repeat"	# a run of inner structs the caller built
 PEEKED  = "peeked"	# a member that reads bytes belonging to what follows
 ARMTAG  = "armtag"	# a discriminant the chosen arm decides
 BITS    = "bits"	# one field of a byte several members share
+TAG     = "tag"		# a checksum, computed once the message is whole
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
@@ -327,7 +328,8 @@ def _member_refusal(placement: Placement) -> str | None:
 	than defaulted where the schema states something it cannot hold to.
 	"""
 	if placement.kind == "checksum" or placement.tag_covers:
-		return "is a tag or checksum, which this writer does not compute"
+		# Handled in `plan`, which has the header to ask.
+		return None
 	if placement.kind == "variant":
 		return "is a variant, so which arm to write is the caller's choice " \
 		       "and not yet expressible"
@@ -389,6 +391,20 @@ def ident_view(inner: str) -> str:
 
 def ident_validate(inner: str) -> str:
 	return f"{inner}_validate"
+
+
+def computes_itself(header: str, name: str) -> bool:
+	"""Whether the emitted header can compute this tag's value.
+
+	A tag whose schema names no codec -- a MAC, a signature -- has no
+	`_compute`, and situ cannot invent one: of the twelve tags in structs
+	refused for one, nine are that, and the three that are not are a CRC
+	and two sums. Read from the artifact for `frames_itself`'s reason: the
+	header says what was emitted, and deriving it a second way is how two
+	answers come to disagree.
+	"""
+	return (f"situ_err_t {name}_compute(situ_view_t view, "
+	        "uint32_t *out)") in header
 
 
 def packed(placement: Placement) -> bool:
@@ -595,6 +611,23 @@ def plan(struct: ResolvedStruct, header: str = "",
 	parts: list[Part] = []
 	for index, held in enumerate(members):
 		local = _local(struct, held)
+
+		if held.kind in ("tag", "checksum") or held.tag_covers:
+			local_name = traverse.local_name(struct, held)
+			name = ident(prefix, struct.name, local_name)
+			if not computes_itself(header, name):
+				return [], f"`{local_name}` is a tag whose schema names " \
+				           "no codec, so there is nothing to compute it " \
+				           "from"
+			size = _whole_bytes(held)
+			if size is None or held.size_bits not in (16, 32, 64):
+				return [], f"`{local_name}` is a {held.size_bits}-bit tag, " \
+				           "and the runtime stores 16, 32 and 64"
+			if held.tag_codec_endian is None:
+				return [], f"`{local_name}` has no byte order for its " \
+				           "codec's output"
+			parts.append(Part(TAG, held, local, size, inner=name))
+			continue
 
 		if packed(held):
 			if index not in groups:
@@ -1084,6 +1117,55 @@ def _room(size: str) -> list[str]:
 	        "\t}"]
 
 
+def _tags(parts: list[Part]) -> list[str]:
+	"""Fill every reserved tag, now that the message is whole.
+
+	`validate` deliberately does not verify a checksum -- "the coverage
+	may run to the end of the message, and a constraint walk that costs a
+	file read is not the flat model 0051 settled on. Call it where the
+	caller has the whole message." **The writer is that caller**, which is
+	26.620's argument arriving at a second construct.
+
+	The store is proved rather than asserted: `_check` recomputes and
+	compares, so a wrong byte order refuses the build instead of emitting
+	a message whose own reader rejects it. That is why the order is
+	compute, store, check rather than compute and store.
+	"""
+	lines: list[str] = []
+	for part in parts:
+		if part.role != TAG:
+			continue
+		end = ("le" if part.placement.tag_codec_endian is ast.Endian.LITTLE
+		       else "be")
+		width = part.placement.size_bits or 32
+		lines += [
+			f"\t/* {part.placement.name}: computed over what was written, "
+			"stored, and",
+			"\t * then checked -- the check is what proves the store rather",
+			"\t * than this code asserting it. */",
+			"\t{",
+			f"\t\tuint32_t {TAGV} = 0u;",
+			f"\t\tuint8_t *{SCRATCH}_at = {part.inner}_ptr({VIEW});",
+			"",
+			f"\t\tif ({SCRATCH}_at == NULL) {{",
+			"\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t}",
+			f"\t\t{ERR} = {part.inner}_compute({VIEW}, &{TAGV});",
+			f"\t\tif ({ERR} != SITU_OK) {{",
+			f"\t\t\treturn {ERR};",
+			"\t\t}",
+			f"\t\tsitu_put_{end}{width}({SCRATCH}_at, "
+			f"(uint{width}_t){TAGV});",
+			f"\t\t{ERR} = {part.inner}_check({VIEW});",
+			f"\t\tif ({ERR} != SITU_OK) {{",
+			f"\t\t\treturn {ERR};",
+			"\t\t}",
+			f"\t\t{part.inner}_finalize(&{MSG});",
+			"\t}",
+		]
+	return lines
+
+
 def _one(struct: ResolvedStruct, prefix: str,
 		enums: Mapping[str, object], header: str,
 		arm: Arm | None = None,
@@ -1242,6 +1324,17 @@ def _one(struct: ResolvedStruct, prefix: str,
 				]
 			if part.closes:
 				lines += [f"\t{AT} += {part.bytes}u;", ""]
+		elif part.role == TAG:
+			lines += [
+				f"\t/* {local}: {part.bytes} bytes reserved. Its value",
+				"\t * covers bytes that are not all written yet, so it is",
+				"\t * filled once the message is whole -- which is below,",
+				"\t * after the view. */",
+				*_room(f"{part.bytes}u"),
+				f"\tmemset({OUT} + {AT}, 0, {part.bytes}u);",
+				f"\t{AT} += {part.bytes}u;",
+				"",
+			]
 		elif part.role == PEEKED:
 			lines += [
 				f"\t/* {local}: peeked, so it does not consume: the bytes",
@@ -1403,6 +1496,7 @@ def _one(struct: ResolvedStruct, prefix: str,
 		+ f"&{VIEW}) != SITU_OK) {{",
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
+		*_tags(parts),
 		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW});",
 		f"\tif ({ERR} != SITU_OK) {{",
 		f"\t\treturn {ERR};",

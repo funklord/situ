@@ -31304,6 +31304,121 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.622 A trailing checksum, computed where the caller has the whole message
+
+PNG's chunk builds, CRC and all, and the proof is a vector situ did not
+produce:
+
+    0000000049454E44AE426082
+
+That is the IEND chunk every PNG file ends with -- length 0, `IEND`, and
+the `AE426082` the specification states. The second case is checked
+against `zlib` in the test rather than against situ's own recompute, for
+the reason `evidence.md` gives: a round trip through `_check` says the
+writer agrees with itself, and a vector from the format says it agrees
+with PNG.
+
+**`validate` deliberately does not verify a checksum**, and the generated
+header says why: *"the coverage may run to the end of the message, and a
+constraint walk that costs a file read is not the flat model 0051 settled
+on. Call it where the caller has the whole message."* **The writer is
+that caller** -- which is 26.620's argument arriving at a second
+construct, two days' worth of findings apart in the same session. So the
+tag's bytes are reserved where the writer reaches them, zeroed, and
+filled after the view is acquired.
+
+**Only three of the twelve refused tags could be done, and the predicate
+is read from the artifact.** Nine name no codec -- a MAC, a signature --
+so no `_compute` is emitted and situ cannot invent one; `computes_itself`
+asks the header for the declaration, as `frames_itself` does. The three
+are PNG's CRC at 32 bits and two 16-bit sums.
+
+**Which check earns its keep differs by width, measured rather than
+assumed.** Flipping the emitter's byte order turns the PNG test red --
+the byte vector catches it -- while deleting the generated `_check`
+leaves it green, so for PNG the vector is the guard and `_check` is
+redundant. For the 16-bit sum there is no external constant, and with the
+order flipped that case comes back `SITU_ERR_CHECKSUM` **from `_check`**:
+capable rather than merely present, which is the one thing a guard with
+no test of its own needs to show. Both widths now assert bytes, so each
+has a guard that does not depend on the other.
+
+**And a test that asserted a refusal had to be restated rather than
+updated.** 26.610's trailing-tag case existed to show that
+`append_only_refusals` does not refuse a tag that comes after what it
+covers, and it demonstrated that by checking the struct was refused for a
+*different* reason -- that nothing computed a checksum. That reason is
+gone, so the test now asserts the stronger form: the struct builds, and a
+`TAG` part is in its plan. Sabotaging the positional check still turns it
+red while the three genuine append-only refusals stay green, so the
+discrimination survived the rewrite.
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **132 of
+242 structs have a builder, in 32 of the 45 schemas**. What leads the
+refusals now is a nested `remaining_length` (15), a `while` run (14), a
+multi-byte delimiter (10), a sealed region (9) and the eight tags with no
+codec, which are not situ's to compute at all.
+
+### 26.621 The cut has no outlier to lead with, and that decides how it can be done
+
+26.608 measured this document at 88 per cent log and called that the
+number to act on. The holder's instruction was to cut it: keep each
+entry's rule and its load-bearing number, drop the narration, **one
+commit per pass rather than by attrition** -- the shape `evidence.md`
+took on 2026-09-04, from 3044 lines to 1989.
+
+**Measured before starting, and the measurement says the pass cannot be
+done the way the instruction asks.** 620 entries, 38,974 lines between
+them, **mean 62 and median 55**, longest 543:
+
+    top  50 entries     7,194 lines   18% of the entry text
+    top 100 entries    11,779 lines   30%
+    top 200 entries    19,099 lines   49%
+    top 400 entries    30,465 lines   78%
+
+So there is no fat tail. Cutting the fifty longest entries perfectly
+removes under a fifth of the text, and reaching three quarters of it
+means touching **four hundred entries**, each wanting a judgement about
+which of its numbers is load-bearing. That is not one session's work,
+and it is work whose quality depends on having written the entry: of the
+620, this session wrote eleven.
+
+**A twenty-entry nibble is the thing the instruction rules out**, and for
+a reason this document can check: `git log -S` on a rule's own words
+recovers the case from the commit that removed it, which works only while
+the removals are deliberate commits rather than a trickle nobody can
+name. So the choice is a real pass or none, and a real pass is a
+different piece of work from the one that was authorised.
+
+**And the measurement went wrong twice in the same way first**, which is
+worth more than the figures. Both earlier attempts charged
+`### Invariants to hold across all phases` -- 1,391 lines of standing
+rules, the most load-bearing prose in the file -- to the entry above it,
+reporting a 1,432-line `26.115` whose real length is 41. An entry's span
+ends at the next heading of ANY depth, not at the next entry heading,
+and a document with non-entry blocks inside its log section breaks the
+simpler rule silently. **Twice, after the first correction was recorded**
+-- so the record of a measurement error is not a guard against repeating
+it, and the figures above are the first ones taken with the invariants
+block excluded.
+
+**What is left is a structural option, and it is not this session's to
+take.** Section 26 is 84 per cent of the file, and its entries are cited
+by number from everywhere -- which is exactly the justification
+`CLAUDE.md` gives `doc/decision/`: a single file cannot give a stable
+anchor per record, and a record that gets referenced needs one. Moving
+the log out of `project.md` would leave the design document readable in
+one window without any editorial judgement being spent, and it would
+cost a rewrite of every path that reads `project.md` -- the docs gate,
+the dangling-citation test, the conventions test -- plus a convention
+other projects would then look at. **The option, its cost, and whose it
+is: the copyright holder's**, per *Describing a thing thoroughly is a way
+of proposing it*.
+
+Until then the cut stays authorised and undone, and this entry is what a
+session picking it up should read first, so that the measurement is not
+taken a fourth time.
+
 ### 26.620 Measuring an element is not validating it
 
 hull's finding 17: `_list_build` returned `SITU_OK` for elements the
