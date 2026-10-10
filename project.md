@@ -31304,6 +31304,68 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.623 A varint, and the fourth time a branch ordered by absence misread a member
+
+The largest refusal after the checksum named a construct that does not
+exist: **fifteen refusals said "is a nested `remaining_length`"**, and
+`remaining_length` is mqtt's varint type. A varint has no `scalar` and a
+`type_name` naming no struct, so it fell through to the nested-struct
+branch, which is reached by what a member LACKS.
+
+**That is the fourth misdiagnosis of this family in two days** -- after
+the `before` run told about its delimiter count (26.612), the nested
+field called a run (26.614), and the arm parameter chopped out of a local
+(26.617). Every one had a correct verdict and a reason about something
+else, and every one came from a branch ordered by absence. The remedy
+each time was to ask first what the member IS.
+
+**And a test of mine was holding this one in place.** 26.614's test
+asserted the refusal text *"nested `edge_varint`"* -- so the suite pinned
+the misdiagnosis, including the wrong half, and would have gone red if
+the message were corrected without the test. A test that pins a message
+pins whatever the message says. It now checks the refusal that applies.
+
+**Writing one needs no new arithmetic**: `situ_varint_put` encodes
+minimally and returns the bytes written or zero, and `situ_varint_len` is
+beside it. So the writer bounds the value by the schema's `max_bits`,
+calls the runtime, and advances by what it reports. Against LEB128's own
+vectors, with 321 being MQTT 2.2.3's worked example:
+
+    0          -> 00
+    127        -> 7F
+    128        -> 8001
+    321        -> C102
+    268435455  -> FFFFFF7F
+    268435456  -> SITU_ERR_CONSTRAINT
+
+The last is the standard's *"the receiver MUST close the network
+connection"* seen from the writing side: one past 28 bits is refused
+rather than written in five bytes.
+
+**Two of the corpus's four varint types stay refused**, and by name:
+sqlite's and edges' are BE128, which has a reader and a length function
+and **no encoder**. Writing one here would be a second implementation of
+a conversion whose first lives in the runtime -- `owned.py`'s BCD, where
+an encode and a decode were self-consistent and wrong together.
+
+**The parameter the writer needed was the fourth, so the four became
+one.** `plan` had grown `header`, `prefix`, `structs` and `arm`, and the
+varint declarations would have made a sixth positional argument. They are
+a `Shape` now, and what makes it more than tidiness is that every field
+is read from something the compilation already produced -- the emitted
+header for `_required` and `_compute`, the resolved schema for a nested
+type, the declarations for an encoding -- rather than derived a second
+way. An absent field means the writer refuses more rather than guesses,
+which is the direction 26.614 established.
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **133 of
+242 structs have a builder, in 32 of the 45 schemas.** Only one more
+struct than before, which is the honest result: the fifteen refusals were
+fifteen ARMS of one struct, and fixing what they said revealed the next
+real reason in fourteen of them. What leads now is a `while` run (14), a
+multi-byte delimiter (10), a sealed region (9), the eight tags naming no
+codec, and a codec (7).
+
 ### 26.622 A trailing checksum, computed where the caller has the whole message
 
 PNG's chunk builds, CRC and all, and the proof is a vector situ did not

@@ -62,10 +62,19 @@ def _header(parsed, resolved, stem: str) -> str:	# type: ignore[no-untyped-def]
 	return generate_c(parsed, resolved, stem).files().get(f"{stem}.h", "")
 
 
+def _shape(parsed, resolved, header: str = ""):	# type: ignore[no-untyped-def]
+	"""What `situc build` passes, so a test asks the same question."""
+	return build.Shape(header, "situ", resolved.structs,
+	                   {decl.name: decl for decl in parsed.varints()})
+
+
 def _only(resolved, name: str, header: str = "",	# type: ignore[no-untyped-def]
-		arm: Arm | None = None):
+		arm: Arm | None = None, parsed=None):
 	struct = resolved.structs[name]
-	return build.plan(struct, header, "situ", arm, resolved.structs)
+	shape = build.Shape(header, "situ", resolved.structs,
+	                    {decl.name: decl for decl in parsed.varints()}
+	                    if parsed is not None else None)
+	return build.plan(struct, shape, arm)
 
 
 def test_a_size_field_is_computed_rather_than_asked_for() -> None:
@@ -216,8 +225,9 @@ def test_every_struct_either_builds_or_is_named(path: Path) -> None:
 	"""
 	parsed, resolved = _parts(path)
 	header  = _header(parsed, resolved, path.stem)
-	built   = {struct.name for struct in build.buildable(resolved, header)}
-	refused = dict(build.refusals(resolved, header))
+	shape   = _shape(parsed, resolved, header)
+	built   = {struct.name for struct in build.buildable(resolved, shape)}
+	refused = dict(build.refusals(resolved, shape))
 
 	# A variant is refused PER ARM, so a refusal names `struct.arm` and a
 	# struct can be in both sets at once -- some arms writable and some
@@ -784,19 +794,27 @@ def test_a_nested_struct_is_a_field_and_not_a_run_of_them() -> None:
 def test_a_nested_struct_whose_extent_its_bytes_do_not_state_is_refused() -> None:
 	"""The guard has a corpus population, which is why it is not empty.
 
-	`edges.edge_varint` has no `_required` -- its extent is not computable
-	from its own bytes -- so a caller's length for one could not be
-	checked, and three members in that schema are refused by name rather
-	than trusted.
+	**This test asserted a misdiagnosis for a day.** `edge_varint` is a
+	varint TYPE, and the refusal it checked for -- "a nested
+	`edge_varint`" -- called it a nested struct, which is what the planner
+	said before varints had a branch of their own. A test that pins a
+	message pins whatever the message says, including the part that is
+	wrong, so this one was holding the fault in place.
+
+	What it checks now is the refusal that applies: the runtime has one
+	varint encoder and it is LEB128, so a big-endian varint is refused by
+	name rather than written by a second implementation here.
+
+	`mqtt_string` keeps the original point -- the header's `_required` is
+	what `hands_over` reads -- which is why that half stays.
 	"""
 	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
 	header = _header(parsed, resolved, "edges")
-	_, why = _only(resolved, "varint_driver", header)
-	assert why is not None and "nested `edge_varint`" in why, why
-	assert "its own bytes do not determine" in why
+	_, why = _only(resolved, "varint_driver", header, None, parsed)
+	assert why is not None and "varint" in why, why
+	assert "the runtime writes LEB128" in why, why
 
-	# And the predicate reads the artifact rather than guessing: the header
-	# declares one for `mqtt_string` and none for `edge_varint`.
+	# And the predicate reads the artifact rather than guessing.
 	assert not build.frames_itself(header, "situ_edge_varint")
 
 
@@ -1850,3 +1868,110 @@ int main(void)
 	# 0x1234 then its sum, which for a single u16 is itself -- stored
 	# big-endian, so `12341234` and not `12343412`.
 	assert ran.stdout.split("\n")[0] == "0 12341234", ran.stdout
+
+
+#: One varint and two bytes after it, so the encoded width is visible in
+#: the output. `leb128` with a 28-bit bound is MQTT's remaining length.
+VARINT = """varint_type vlen {
+\tencoding  = leb128;
+\tmax_bits  = 28;
+\tmax_bytes = 4;
+}
+
+struct v {
+\tvlen  n;
+\tu8    rest[2];
+}
+"""
+
+
+def test_a_varint_is_not_a_nested_struct() -> None:
+	"""`mqtt.packet.length` is a `remaining_length`, which is a varint type.
+
+	It has no `scalar` and a `type_name` that names no struct, so it fell
+	into the nested-struct branch and was refused as "a nested
+	`remaining_length`" -- fifteen refusals naming a construct it is not.
+	The fourth misdiagnosis of this family in two days, and the same cause
+	every time: a branch ordered by what a member LACKS rather than by
+	what it is.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "mqtt" / "mqtt.situ")
+	header = _header(parsed, resolved, "mqtt")
+	cases  = {build.arm_name(case): case
+	          for case in build.arms(resolved.structs["packet"])}
+	parts, why = _only(resolved, "packet", header, cases["connect"], parsed)
+	assert why is None, why
+
+	length = [part for part in parts if part.placement.name == "length"]
+	assert length and length[0].role == build.VARINT, [
+		(part.placement.name, part.role) for part in parts]
+	assert length[0].value == 28, "the schema's own bound on the value"
+
+
+def test_a_big_endian_varint_is_refused_by_name() -> None:
+	"""`situ_varint_put` is the only encoder the runtime has.
+
+	The big-endian form has a reader and a length function and no writer,
+	so sqlite's and edges' varints are refused rather than written by a
+	second implementation here -- which is the fault `owned.py` paid for
+	in BCD, where an encode and a decode were self-consistent and wrong
+	together.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "sqlite" / "sqlite.situ")
+	header = _header(parsed, resolved, "sqlite")
+	shape  = _shape(parsed, resolved, header)
+	named  = [why for _, why in build.refusals(resolved, shape)
+	          if "varint" in why]
+	assert named, "no sqlite struct is refused for its varint any more"
+	assert any("the runtime writes LEB128" in why for why in named), named
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_varint_is_written_in_the_encoding_the_spec_states(
+		tmp_path: Path) -> None:
+	"""A vector table from LEB128 rather than from situ.
+
+	`321` is MQTT 2.2.3's own worked example and comes out `C1 02`; the
+	others are the boundaries where the encoded width changes, which is
+	what a length-prefixed format gets wrong first. One past the schema's
+	28-bit bound is refused rather than written in five bytes, which is
+	the standard's "the receiver MUST close the network connection" seen
+	from the writing side.
+	"""
+	probe = _compile(tmp_path, "vi", VARINT, """
+#include <stdio.h>
+#include "vi_build.h"
+
+static void show(uint64_t n)
+{
+	uint8_t     out[16];
+	uint32_t    w = 0, i;
+	const uint8_t rest[2] = { 0xAA, 0xBB };
+	situ_err_t  err = situ_v_build(out, sizeof out, n, rest, &w);
+
+	printf("%d ", (int)err);
+	for (i = 0; i < w; i++) printf("%02X", out[i]);
+	printf("\\n");
+}
+
+int main(void)
+{
+	show(0);
+	show(127);
+	show(128);
+	show(321);
+	show(268435455u);
+	show(268435456u);
+	return 0;
+}
+""")
+	ran = subprocess.run([str(probe)], capture_output=True, text=True,
+	                     cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+	assert lines[0] == "0 00AABB", lines[0]
+	assert lines[1] == "0 7FAABB", f"127 is one byte: {lines[1]}"
+	assert lines[2] == "0 8001AABB", f"128 is two: {lines[2]}"
+	assert lines[3] == "0 C102AABB", f"MQTT's own example for 321: {lines[3]}"
+	assert lines[4] == "0 FFFFFF7FAABB", f"the 28-bit maximum: {lines[4]}"
+	assert lines[5] == "2 ", f"one past it is refused: {lines[5]}"

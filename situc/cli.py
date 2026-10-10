@@ -1024,8 +1024,9 @@ def cmd_build(args: argparse.Namespace) -> int:
 			ordinary = files.get(f"{args.schema.stem}.h", "")
 			files.update(build.generate(parsed, resolved, args.schema.stem,
 			                            args.prefix, ordinary))
-			for name, why in build.refusals(resolved, ordinary,
-			                                args.prefix):
+			shape = build.Shape(ordinary, args.prefix, resolved.structs,
+			                    {d.name: d for d in parsed.varints()})
+			for name, why in build.refusals(resolved, shape):
 				print(f"situc: no builder for `{name}`: {why}",
 				      file=sys.stderr)
 

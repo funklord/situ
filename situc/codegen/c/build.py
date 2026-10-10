@@ -50,8 +50,9 @@ OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
 DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
 NEED, COUNT, TAGV = "situ_need", "situ_count", "situ_tag"
+USED = "situ_used"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      SCAN, NEED, COUNT, TAGV, "situ_fixed"})
+                      SCAN, NEED, COUNT, TAGV, USED, "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -68,6 +69,7 @@ PEEKED  = "peeked"	# a member that reads bytes belonging to what follows
 ARMTAG  = "armtag"	# a discriminant the chosen arm decides
 BITS    = "bits"	# one field of a byte several members share
 TAG     = "tag"		# a checksum, computed once the message is whole
+VARINT  = "varint"	# a value whose width is its own bytes'
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
@@ -80,6 +82,33 @@ CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
 #: the pointer. A fixed run does not: the schema counted it.
 MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT})
 ZERO    = "zero"	# reserved bytes, which no caller names
+
+
+class Shape:
+	"""What the writer needs besides the struct, in one argument.
+
+	Every field is read from something this compilation already produced
+	rather than derived a second way: the emitted header says which
+	structs have a `_required` and which tags have a `_compute`, the
+	resolved schema says what a nested type is, and the varint
+	declarations say which encoding a varint uses.
+
+	Bundled because each arrived as its own parameter and the fourth
+	would have made a sixth positional argument -- which is how a
+	signature stops being readable and then stops being read.
+
+	An absent field means the writer knows less and refuses more: without
+	the header a nested member is refused rather than guessed at, and
+	without the declarations a varint is. That direction is deliberate.
+	"""
+
+	def __init__(self, header: str = "", prefix: str = "situ",
+			structs: Mapping[str, ResolvedStruct] | None = None,
+			varints: Mapping[str, ast.VarintDecl] | None = None) -> None:
+		self.header  = header
+		self.prefix  = prefix
+		self.structs = structs
+		self.varints = varints
 
 
 class Part:
@@ -541,10 +570,8 @@ def arm_name(case: Arm) -> str:
 	return "default"
 
 
-def plan(struct: ResolvedStruct, header: str = "",
-		prefix: str = "situ", arm: Arm | None = None,
-		structs: Mapping[str, ResolvedStruct] | None = None
-		) -> tuple[list[Part], str | None]:
+def plan(struct: ResolvedStruct, shape: Shape | None = None,
+		arm: Arm | None = None) -> tuple[list[Part], str | None]:
 	"""What the writer does for each member, or the first reason it cannot.
 
 	The order is the schema's, which is what makes the pass forward-only.
@@ -567,6 +594,11 @@ def plan(struct: ResolvedStruct, header: str = "",
 	if not struct.layout.is_byte_sized:
 		return [], f"is {struct.layout.size_bits} bits, not a whole number " \
 		           "of bytes, so no accessors exist to read it back"
+
+	shape   = shape or Shape()
+	header  = shape.header
+	prefix  = shape.prefix
+	structs = shape.structs
 
 	refusals = traverse.append_only_refusals(struct)
 	if refusals:
@@ -611,6 +643,31 @@ def plan(struct: ResolvedStruct, header: str = "",
 	parts: list[Part] = []
 	for index, held in enumerate(members):
 		local = _local(struct, held)
+
+		if held.varint is not None:
+			# Before the nested branch, which it was falling into: a varint
+			# has no `scalar` and a `type_name` that is not a struct, so
+			# `mqtt.packet.length` was refused as "a nested
+			# `remaining_length`" -- fifteen refusals naming a construct it
+			# is not. The fourth misdiagnosis of this family, and the same
+			# cause each time: a branch ordered by what a member LACKS.
+			declared = (shape.varints or {}).get(held.varint)
+			if declared is None:
+				return [], f"`{traverse.local_name(struct, held)}` names " \
+				           f"the varint type `{held.varint}`, and no " \
+				           "declaration for it was supplied"
+			if declared.encoding is not ast.VarintEncoding.LEB128:
+				# `situ_varint_put` is the only writer the runtime has;
+				# the big-endian form has a reader and a length and no
+				# encoder, so sqlite's and edges' varints are refused.
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           f"{str(declared.encoding).rsplit('.', 1)[-1]} " \
+				           "varint, and the runtime writes LEB128"
+			parts.append(Part(VARINT, held, local,
+			                  value=declared.max_bits,
+			                  minimal=declared.transform
+			                  is ast.VarintTransform.ZIGZAG))
+			continue
 
 		if held.kind in ("tag", "checksum") or held.tag_covers:
 			local_name = traverse.local_name(struct, held)
@@ -867,37 +924,34 @@ def plan(struct: ResolvedStruct, header: str = "",
 	return parts, None
 
 
-def buildable(resolved: ResolvedSchema, header: str = "",
-		prefix: str = "situ") -> list[ResolvedStruct]:
+def buildable(resolved: ResolvedSchema,
+		shape: Shape | None = None) -> list[ResolvedStruct]:
 	found = []
 	for struct in resolved.structs.values():
 		cases = arms(struct)
 		if cases:
-			if any(plan(struct, header, prefix, case,
-			            resolved.structs)[0] for case in cases):
+			if any(plan(struct, shape, case)[0] for case in cases):
 				found.append(struct)
-		elif plan(struct, header, prefix, None, resolved.structs)[0]:
+		elif plan(struct, shape)[0]:
 			found.append(struct)
 	return found
 
 
-def refusals(resolved: ResolvedSchema, header: str = "",
-		prefix: str = "situ") -> list[tuple[str, str]]:
+def refusals(resolved: ResolvedSchema,
+		shape: Shape | None = None) -> list[tuple[str, str]]:
 	"""Every struct with no builder, and why -- by name, on stderr."""
 	found = []
 	for name, struct in resolved.structs.items():
 		cases = arms(struct)
 		if not cases:
-			parts, why = plan(struct, header, prefix, None,
-			                  resolved.structs)
+			parts, why = plan(struct, shape)
 			if not parts and why:
 				found.append((name, why))
 			continue
 		# A variant is reported per arm, because the useful answer is which
 		# arms can be written rather than whether the struct can.
 		for case in cases:
-			parts, why = plan(struct, header, prefix, case,
-			                  resolved.structs)
+			parts, why = plan(struct, shape, case)
 			if not parts and why:
 				found.append((f"{name}.{arm_name(case)}", why))
 	return found
@@ -908,7 +962,10 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 	name = ident(prefix, struct.name, "build", suffix)
 	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}"]
 	for part in parts:
-		if part.role == BITS:
+		if part.role == VARINT:
+			args.append(f"{'int64_t' if part.minimal else 'uint64_t'} "
+			            f"{part.local}")
+		elif part.role == BITS:
 			if part.placement.kind == "reserved":
 				continue	# zeroed by the group, not a value to pass
 			args.append(f"{_ctype(part.placement, prefix, enums)} "
@@ -1166,11 +1223,11 @@ def _tags(parts: list[Part]) -> list[str]:
 	return lines
 
 
-def _one(struct: ResolvedStruct, prefix: str,
-		enums: Mapping[str, object], header: str,
-		arm: Arm | None = None,
-		structs: Mapping[str, ResolvedStruct] | None = None) -> list[str]:
-	parts, _ = plan(struct, header, prefix, arm, structs)
+def _one(struct: ResolvedStruct, shape: Shape,
+		enums: Mapping[str, object], arm: Arm | None = None) -> list[str]:
+	parts, _ = plan(struct, shape, arm)
+	prefix   = shape.prefix
+	structs  = shape.structs
 	lines = [
 		f"/** Build a {struct.name} into `{OUT}`, one member at a time in",
 		" *  schema order, and validate the result before reporting it.",
@@ -1324,6 +1381,29 @@ def _one(struct: ResolvedStruct, prefix: str,
 				]
 			if part.closes:
 				lines += [f"\t{AT} += {part.bytes}u;", ""]
+		elif part.role == VARINT:
+			most = (1 << part.value) - 1
+			zig  = f"situ_zigzag_encode({part.local})" if part.minimal \
+			       else f"(uint64_t){part.local}"
+			lines += [
+				f"\t/* {local}: a varint, so its width is its own bytes'.",
+				f"\t * The schema bounds the VALUE at {part.value} bits, and",
+				"\t * `situ_varint_put` writes the minimal encoding, which",
+				"\t * satisfies a `minimal` declaration by construction. */",
+				*([f"\tif ((uint64_t){part.local} > {most}u) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if part.value < 64 else []),
+				"\t{",
+				f"\t\tconst uint32_t {USED} = situ_varint_put({OUT} + {AT},",
+				f"\t\t                        {CAP} - {AT}, {zig});",
+				"",
+				f"\t\tif ({USED} == 0u) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+				f"\t\t{AT} += {USED};",
+				"\t}",
+				"",
+			]
 		elif part.role == TAG:
 			lines += [
 				f"\t/* {local}: {part.bytes} bytes reserved. Its value",
@@ -1520,7 +1600,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	guessed at, so a caller who does not pass it gets less rather than
 	something wrong.
 	"""
-	structs = buildable(resolved, header, prefix)
+	shape   = Shape(header, prefix, resolved.structs,
+	                {decl.name: decl for decl in schema.varints()})
+	structs = buildable(resolved, shape)
 	if not structs:
 		return {}
 
@@ -1554,16 +1636,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 	]
 
 	enums = dict(resolved.layout.env.enums)
-	known = resolved.structs
 	for struct in structs:
 		cases = arms(struct)
 		if not cases:
-			lines.extend(_one(struct, prefix, enums, header, None, known))
+			lines.extend(_one(struct, shape, enums))
 			continue
 		for case in cases:
-			if plan(struct, header, prefix, case, known)[0]:
-				lines.extend(_one(struct, prefix, enums, header, case,
-				                  known))
+			if plan(struct, shape, case)[0]:
+				lines.extend(_one(struct, shape, enums, case))
 
 	lines += ["#ifdef __cplusplus", "}", "#endif", "",
 	          f"#endif /* {guard} */"]
