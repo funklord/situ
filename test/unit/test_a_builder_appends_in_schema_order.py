@@ -2100,3 +2100,138 @@ int main(void)
 	assert lines[3] == "0", (
 		"a CR not followed by LF is not the delimiter, so this must be "
 		f"accepted -- cut the needle to one byte and it is not: {lines[3]}")
+
+
+def test_a_while_run_is_proved_by_the_reader_s_own_count() -> None:
+	"""The predicate that ends a `while` run is the reader's to evaluate.
+
+	json's `array` is `element entries[] while (sep == ',')`, and the
+	reader tests that AFTER each element: elements 1..N-1 have to satisfy
+	it or the reader stops early. Re-emitting the expression here would be
+	a second derivation of the reader's own loop, and this project's
+	answer to that is to ask the artifact instead -- so the writer walks
+	the caller's bytes, counts the elements, and compares its count with
+	what the reader's own `_count` reports.
+
+	Two independent measurements that must agree, and it needs no
+	knowledge of what the predicate IS: a schema whose condition this
+	writer could never evaluate is written anyway.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "json" / "json.situ")
+	header = _header(parsed, resolved, "json")
+	parts, why = _only(resolved, "array", header, None, parsed)
+	assert why is None, why
+
+	run = [part for part in parts if part.role == build.REPEAT][0]
+	assert run.placement.repeat_while is not None
+	assert run.inner_count == "situ_array_entries_count"
+
+	text = build.generate(parsed, resolved, "json", "situ",
+	                      header)["json_build.h"]
+	assert "situ_array_entries_count(situ_view) != situ_count" in text
+
+
+def test_a_while_run_is_always_a_run_of_structs() -> None:
+	"""So there is no byte-run case, and no branch for one.
+
+	I wrote a refusal saying a run of bytes has no element boundary for a
+	count to check -- true, and unreachable: the parser refuses
+	`u8 x[] while (...)` with *"`x` repeats `u8`, which is not a
+	struct"*. The branch is gone.
+
+	**Third time a guard here was written for a shape the front end
+	already rejects**, after 26.611's zero-delimiter minimal run and
+	26.615's zero-delimiter struct run. The remedy is the same every
+	time and is one command: try the schema before writing the branch.
+	"""
+	from situc.diagnostics import SituError
+	from situc.diagnostics import Source
+	from situc.parser import parse as parse_text
+
+	with pytest.raises(SituError) as raised:
+		parse_text(Source("inline", "target buffer;\nendian big;\n\n"
+		                  "struct one {\n\tu8 n;\n"
+		                  "\tu8 x[] while (n == 1);\n}\n"))
+	assert "which is not a struct" in str(raised.value)
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_json_array_is_built_and_the_reader_agrees(tmp_path: Path) -> None:
+	"""Real JSON, and the case the count check exists for.
+
+	`1]2]` is the control: the first element's separator is `]`, so the
+	READER stops after it and sees one element while the writer's walk
+	counted two -- the second element would be bytes nobody reads. Only
+	the count comparison catches that; with it removed the build returns
+	SITU_OK and `_count` reports 1.
+
+	The trailing comma is in here as the case that is NOT a disagreement,
+	which is worth asserting so nobody tightens it by mistake: `1,2,`
+	gives `[1,2,` and the reader sees two elements, because the run ends
+	where the frame does. Whether a trailing comma should be legal is
+	json.situ's business and not the writer's.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "json" / "json.situ")
+	files = dict(build.generate(parsed, resolved, "json", "situ",
+	                            _header(parsed, resolved, "json")))
+	files.update(generate_c(parsed, resolved, "json").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "json_build.h"
+
+static void show(const char *items)
+{
+	uint8_t     out[64];
+	uint32_t    n = 0, i;
+	situ_err_t  err = situ_array_build(out, sizeof out, '[',
+	                                   (const uint8_t *)items,
+	                                   (uint32_t)strlen(items), &n);
+
+	printf("%d ", (int)err);
+	if (err == SITU_OK) {
+		situ_msg_t  msg;
+		situ_view_t view;
+
+		for (i = 0; i < n; i++) putchar(out[i]);
+		situ_msg_init(&msg, out, n);
+		if (situ_array_view(&msg, 0, n, &view) == SITU_OK)
+			printf(" %u", situ_array_entries_count(view));
+	}
+	printf("\\n");
+}
+
+int main(void)
+{
+	show("1,2]");
+	show("1]");
+	show("1,2,");
+	show("1]2]");
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "json.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path, timeout=60)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 [1,2] 2", lines[0]
+	assert lines[1] == "0 [1] 1", lines[1]
+	assert lines[2] == "0 [1,2, 2", (
+		"a trailing comma is not a disagreement: the run ends where the "
+		f"frame does and the reader sees two: {lines[2]}")
+	assert lines[3] == "2 ", (
+		"the reader stops after the first element here, so the second is "
+		f"bytes nobody reads and the build must refuse: {lines[3]}")

@@ -133,6 +133,7 @@ class Part:
 		self.digits    = digits		# the most digits the schema allows
 		self.inner     = inner		# the struct a nested member holds
 		self.value     = value		# what an `armtag` writes
+		self.inner_count = ""		# a `while` run's own `_count`
 		self.others    = others		# the values other arms claim
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
@@ -395,8 +396,6 @@ def _member_refusal(placement: Placement) -> str | None:
 		return "is an index table"
 	if placement.delimiters and placement.radix is None:
 		return _delimited_refusal(placement)
-	if placement.repeat_while is not None:
-		return "repeats while a condition holds"
 	if placement.pad_to is not None:
 		return "pads to an alignment"
 	if placement.pad_bounds is not None:
@@ -909,7 +908,16 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					continue
 				# Every struct run reduces to one walk: a fixed count, a
 				# count field, the rest of the frame, or a delimiter.
-				if (held.size_expr or held.repeat_while is not None
+				counts = ident(prefix, struct.name,
+				               traverse.local_name(struct, held), "count")
+				if held.repeat_while is not None and (
+						f"static inline uint32_t {counts}"
+						"(situ_view_t view)") not in header:
+					return [], f"`{traverse.local_name(struct, held)}` " \
+					           "repeats while a condition holds and this " \
+					           "schema emits no count for it, so there is " \
+					           "nothing to check the writer's walk against"
+				if (held.size_expr
 						or len(held.delimiters) > 1
 						or (held.delimiters
 						    and not held.delimiter_consumed)):
@@ -920,7 +928,10 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				                  inner=ident(prefix, held.type_name),
 				                  delimiter=(held.delimiters[0]
 				                             if held.delimiters else b""),
-				                  digits=held.array_count or 0))
+				                  digits=held.array_count or 0,
+				                  value=1 if held.repeat_while is not None
+				                  else 0))
+				parts[-1].inner_count = counts
 				continue
 			if not repeats and held.type_name:
 				if not frames_itself(header,
@@ -1277,6 +1288,31 @@ def _tags(parts: list[Part]) -> list[str]:
 	"""
 	lines: list[str] = []
 	for part in parts:
+		if part.role == REPEAT and part.value == 1:
+			# A `while` run ends where a PREDICATE stops holding, which
+			# the reader tests after each element. Re-emitting that
+			# expression here would be a second derivation of the reader's
+			# own loop, and this project's answer to that is to ask the
+			# artifact: the reader's `_count` says how many elements it
+			# sees in these bytes, and the walk says how many the caller
+			# handed over. **Two independent measurements that must
+			# agree** -- and where they do not, the bytes are ambiguous and
+			# refusing is the honest answer.
+			#
+			# It also needs no knowledge of what the predicate IS, so a
+			# schema whose condition this writer could never evaluate is
+			# written anyway.
+			lines += [
+				f"\t/* {part.placement.name}: the reader's own count "
+				"against the",
+				"\t * walk's. The predicate that ends this run is the",
+				"\t * reader's to evaluate, so it is asked rather than",
+				"\t * reproduced. */",
+				f"\tif ({part.inner_count}({VIEW}) != {COUNT}) {{",
+				"\t\treturn SITU_ERR_CONSTRAINT;",
+				"\t}",
+			]
+			continue
 		if part.role != TAG:
 			continue
 		end = ("le" if part.placement.tag_codec_endian is ast.Endian.LITTLE
@@ -1345,9 +1381,10 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# refuses the file: a run that takes the rest of the frame is
 		# walked without being counted.
 		*([f"\tuint32_t    {COUNT} = 0u;"]
-		  if any(part.role == REPEAT and (part.digits or part.inner
-		                                  in [other.inner for other in parts
-		                                      if other.role == SIZE])
+		  if any(part.role == REPEAT
+		         and (part.digits or part.value == 1
+		              or part.inner in [other.inner for other in parts
+		                                if other.role == SIZE])
 		         for part in parts) else []),
 		"",
 		f"\tif ({OUT} == NULL || {WROTE} == NULL) {{",
@@ -1518,7 +1555,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"",
 			]
 		elif part.role == REPEAT:
-			counted = part.digits > 0
+			counted = part.digits > 0 or part.value == 1
 			walked  = any(other.role == SIZE and other.inner == part.inner
 			              for other in parts)
 			lines += [
@@ -1527,9 +1564,14 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				# thing and they would have to agree.
 				*([] if walked else _walk(part, local, counted,
 				                          structs)),
+				# Only where the schema DECLARED a count. `counted` says
+				# the walk keeps one, which a `while` run also needs --
+				# for the reader's own count to be compared against at
+				# the end -- and conflating the two asserted `count != 0`
+				# on every such run and refused them all.
 				*([f"\tif ({COUNT} != {part.digits}u) {{",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
-				   "\t}"] if counted else []),
+				   "\t}"] if part.digits > 0 else []),
 				*_room(f"{part.local}_len"),
 				f"\tif ({part.local}_len != 0u) {{",
 				f"\t\tif ({part.local} == NULL) {{",

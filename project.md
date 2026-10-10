@@ -31304,6 +31304,83 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.626 A `while` run is proved by the reader's own count, not by its predicate
+
+The last large refusal was a run that repeats while a condition holds --
+fourteen of them, every one a run of structs whose predicate reads a
+field: `sep == ','`, `nla_len >= 4`, `kind == 0x11`.
+
+**Reading the generated loop is what made it tractable.** The reader
+tests the predicate AFTER each element:
+
+    at = start
+    while at < limit:
+        size = <element>_extent(element at `at`)
+        if size == 0 or at + size > limit: break
+        at += size; n += 1
+        if !(predicate of that element): break
+
+So elements 1..N-1 must satisfy it or the reader stops early, and the run
+then ends where the frame does. **A writer could evaluate that predicate
+only by re-emitting the expression**, which is a second derivation of the
+reader's own loop -- the fault this project keeps paying for.
+
+**So the reader is asked instead.** The writer walks the caller's bytes
+with the element's `_required`, counts the elements, and compares its
+count with what the generated `_count` reports for the finished message.
+Two independent measurements that must agree, and **it needs no knowledge
+of what the predicate is**: a schema whose condition this writer could
+never evaluate is written anyway. Same move as the checksum's `_check`
+proving the store (26.622) and the element validate (26.620) -- ask the
+artifact rather than reproduce its logic.
+
+Measured: every one of the nine `while` runs in the corpus has a
+generated `_count`, so the predicate's reach was never the obstacle.
+
+**The control is the case where the reader stops early**, and the
+trailing-comma case is in the test as the one that is NOT a
+disagreement:
+
+    items `1,2]`  ->  `[1,2]`, reader counts 2    built
+    items `1,2,`  ->  `[1,2,`, reader counts 2    built, and correctly:
+                                                  the run ends at the frame
+    items `1]2]`  ->  refused: the reader stops after the first element
+                      and the second is bytes nobody reads
+
+With the count comparison removed the last one builds and `_count`
+reports 1. Whether `[1,2,` ought to be legal is `json.situ`'s business,
+not the writer's, and the test says so to stop anybody tightening it
+here.
+
+**Two faults of mine on the way, and the second is the third instance of
+one habit.**
+
+A flag meant "the walk keeps a count" and was read as "there is a
+declared count to compare", so every `while` run was asserted to have
+exactly **zero** elements and all of them refused. One flag, two
+questions.
+
+And I wrote a refusal saying a run of BYTES has no element boundary for a
+count to check -- true, and **unreachable**: the parser refuses
+`u8 x[] while (...)` with *"`x` repeats `u8`, which is not a struct"*.
+The branch is gone and the test asserts the parser's refusal in its
+place. **Third time a guard here was written for a shape the front end
+already rejects**, after 26.611's zero-delimiter minimal run and
+26.615's zero-delimiter struct run, and the remedy is the same each time
+and is one command: try the schema before writing the branch.
+
+Both were caught by the refusal gate's second test (26.625) rather than
+by the suite: no `while` message was emitted anywhere in the corpus, and
+the gate requires every claim in its table to be emitted or listed as
+constructed. **A row going quiet is how a branch announces it is dead.**
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **150 of
+242 structs have a builder, in 35 of the 45 schemas**, up nine structs
+and one schema, and 118 refusals remain. What leads them now is a sealed
+region (9), the eight tags naming no codec, a coded region (7), a tag
+covering what follows it (6), a run of 16-bit elements (6) and a register
+(5) -- and four of those six are things situ should not write at all.
+
 ### 26.625 Every refusal carries a claim, and the gate catches the half that is false
 
 Five of the builder's increments produced a message right in VERDICT and

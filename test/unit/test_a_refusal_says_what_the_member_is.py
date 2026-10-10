@@ -46,7 +46,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct, resolve  # noqa: E402
 Claim = Callable[[Placement, ResolvedSchema], bool]
 
 CLAIMS: tuple[tuple[str, Claim], ...] = (
-	("repeats while a condition holds",
+	("repeats while a condition holds and this schema emits no count",
 	 lambda pl, res: pl.repeat_while is not None),
 	("holds a run of",
 	 lambda pl, res: pl.scalar is not None and pl.array_count is not None),
@@ -227,6 +227,7 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"is the discriminant of a variant", "is quoted", "is a variant",
 		"is minimal and ends at any of",
 		"is minimal and does not consume its delimiter",
+		"repeats while a condition holds and this schema emits no count",
 		# This one HAD a corpus population and lost it, which is the more
 		# interesting way a row goes quiet: every sub-byte member in the
 		# corpus is now written as part of a packed group, so the only
