@@ -10714,16 +10714,10 @@ def _has_attr(attrs: tuple[ast.Attr, ...], name: str) -> bool:
 _self_as = traverse.self_as
 
 
-def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:
-	"""Reserved behaviour, defaulting to must_be_zero (section 8.8).
-
-	The default is deliberate: every ignored bit is a malleability surface, so
-	the safe option is the silent one.
-	"""
-	for attr in attrs:
-		if attr.name in ("must_be_zero", "must_be_one", "preserve", "unknown"):
-			return attr.name
-	return "must_be_zero"
+#: One definition, in `traverse`, for the reason the line above gives: this
+#: was the second of six copies, and the writer at `--layer edit` needed a
+#: third C caller to agree with both.
+_reserved_policy = traverse.reserved_policy
 
 
 def _order_suffix(endian: ast.Endian | None) -> str:

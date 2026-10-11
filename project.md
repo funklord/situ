@@ -31304,6 +31304,203 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.628 A reserved region has a content policy, and the writer ignored it
+
+Four refusals said *`X` is reserved and has no stated length*, and the
+four were three different shapes: an alignment pad, a length-hiding pad
+with declared bounds, and a run sized by an expression. One message for
+three facts is the 26.625 misdiagnosis class in the one place a caller
+has nothing else to read -- and it was structural rather than careless.
+The reserved branch in `plan` answered for every unsized reserved member
+itself, ahead of `_member_refusal`, so the table's own `pad_to` and
+`pad_bounds` entries were **unreachable**: two refusals written, never
+emitted, and listed in the claim gate as constructed, which is how they
+stayed green.
+
+**And reading the policy found the worse half.** A reserved region was
+written as zeros whatever the schema said, over a comment asserting
+*"Zero is what a `must_be_zero` policy requires and what no other policy
+refuses."* `must_be_one` refuses it. Measured by building one: a
+`reserved u8 [must_be_one]` byte went down as `00`, the struct's own
+`_validate` -- which this writer calls before returning -- rejected it,
+and the builder answered `SITU_ERR_CONSTRAINT` for every input it could
+ever be given. Accepted at plan time, useless at run time, which is the
+state a refusal by name exists to avoid.
+
+The corpus has two such members and both sit in structs refused for
+unrelated reasons, so nothing here would have caught it. The fixture is
+inline, and the test runs the builder rather than inspecting its plan:
+the parts were right and the bytes were wrong, so a plan-level assertion
+passes throughout.
+
+**What the writer does now is one sentence: it writes the content the
+schema states and takes the content the schema leaves open.**
+`must_be_zero` and `must_be_one` are facts, so they need no caller --
+`memset` of `0` or `0xFF`, and a packed group's reserved bits are set
+rather than left in the zeroed group. `preserve` and `unknown` state
+nothing, so the bytes come from the caller, which is 0032's closing
+invariant reaching the one kind of member with no accessor to read it
+back.
+
+**The sub-byte half is the same rule one level down, and the corpus
+cannot show it either.** A packed group is zeroed and each member set in
+place, which IS the whole of `must_be_zero` -- so the other three
+policies had to be said: ones are set from the schema, and `preserve`
+and `unknown` bits come from a caller who gets a parameter for them
+exactly as a field does, with the same refusal for a value too wide,
+since `situ_bits_set_*` masks and a truncated value is a valid message
+saying something else. The two `must_be_one` members in the corpus are 4
+bits and 1 bit and both sit in refused structs, so the group path could
+have written zeros over either and nothing here would have shown it.
+
+`--owned` answers the same question by refusing such a struct, and the
+difference is worth naming rather than looking like drift: an owned
+struct holds fields rather than the buffer, so it has nowhere to keep
+those bytes and cannot promise the round trip it exists for. A writer
+has a caller who is holding them. Two mechanisms, each naming its own
+reason -- the shape 0043's amendment used for the pad base.
+
+#### The pad is the cursor, which 0043's amendment is what settles
+
+`pad_to(n)` reaches the next n-byte boundary **from the base of the
+struct that declares it**, not from the message base: 0043 said the
+message base, and its 2026-09-04 amendment narrowed it, because a
+struct's extent has to be a property of the struct or `SIZE_FIXED` is a
+lie for every struct holding a pad. The writer's cursor is exactly that
+offset -- it has written every member before the pad and nothing else --
+so the length is computable with no caller and no analysis. Verified
+against the reader rather than against itself: `_pad_offset` and
+`_trailer_offset` are the reader's own arithmetic over the bytes that
+came out, and every pad length from 0 to 3 puts the trailer where the
+reader looks for it.
+
+**The runtime gained `situ_pad_to_u32` for it, and the reason is that
+the reader's helper is wrong here.** `situ_align_up_u32` saturates at
+the view's limit, which is right for a reader -- an aligned offset past
+a short frame is a truncated message for `validate` to report -- and in
+a writer it silently SHORTENS the pad instead of refusing for want of
+room. So the pad expression is its own function and `align_up` is that
+function plus the clamp: one expression, two callers, and they cannot
+disagree about where the next member starts.
+
+**A runtime symbol has a second place to be named, and the gate knew
+before I did.** `RUNTIME_SYMBOLS` in `codegen/c/names.py` is a literal
+list of the runtime's definitions -- carried in situc rather than read
+at generation time, because the header installs separately -- and it is
+what stops a generated name colliding with a runtime one. Adding
+`situ_pad_to_u32` to the header and not to the list failed
+`test_the_runtime_symbols_are_the_runtime_s` an hour into `make check`,
+which is the one-claim-two-places rule being enforced rather than
+remembered. Nothing else lists them: the C++ reader, the dissector and
+the walker all USE `situ_align_up_u32`, which is right, a reader wanting
+the clamp.
+
+**The control for that took two attempts, and the first one passed the
+sabotage.** Asking `pickle_string` for a capacity too small for its pad
+returns BOUNDS with the saturating helper too -- because the trailer has
+no room either, so the right answer arrives for the wrong reason. With
+the pad LAST there is nothing after it to run out of room and the two
+separate: the clamp makes the pad zero bytes, the capacity check passes
+over nothing, and the reader computing the same clamped arithmetic over
+the same short buffer agrees the message is whole. Three bytes, reported
+SITU_OK, where a peer reads four. That is the fifth guard in these
+increments that the corpus fixture could not discriminate.
+
+#### A length nobody measures is the caller's, in three spellings
+
+`pad_random(min, max)` is 0045's construct, and that record settled it
+as "a claim checked on parse" because situ writes readers and has no
+random source. Writing one does not move that: the length is still the
+sender's choice, so it is a parameter rather than something this
+compiler invents, and what the schema states -- the bounds, the content
+policy -- is what the writer holds to. Two more shapes turned out to be
+the same part: a reserved run sized by a field, whose length nobody
+measures because a reserved member has no accessor, and one that runs to
+the end of the message, which 0045 names as the shape a schema could
+already say without `pad_random`. Both had the wrong refusal too; the
+field-sized one now has its size field computed from what the caller
+passed, exactly as a byte run's is, so a message cannot disagree with
+itself about how much padding it carries.
+
+**The bounds are not checked by the writer, and that was measured rather
+than assumed.** Removing the check left both ends of the range answering
+CONSTRAINT exactly as before: the view states the bounds and this
+builder validates against it before returning. Two checks of one schema
+is how they come to disagree -- which the builder's own epilogue says,
+and which a first cut had just violated.
+
+#### The claim gate caught a row for a message that never existed
+
+The two refusals this increment deleted were exempt from the gate's
+"every claim has a corpus instance" test by being listed as constructed,
+which is exactly the row-accumulation the gate's docstring says it
+prevents. So the fragments are now checked against the generator's own
+source -- every string literal in `build.py` and `traverse.py`, joined
+in order with whitespace flattened, because a message is assembled from
+adjacent literals and a fragment can straddle the join. On its first run
+it found a third row: *"is spelled the same as one of the writer's own
+locals"*, a claim for a refusal that **has never been emitted by
+anything**. A name that collides with one of the writer's locals is
+renamed, not refused. It arrived with the gate itself and nothing could
+have noticed.
+
+Both files, because two of those messages are `traverse`'s: a located
+member and a size field with two consumers are refused by the decision
+layer, which answers them once for every backend. A check reading only
+`build.py` reports those two as deleted, and a gate that cries wolf is a
+gate whose exemption list grows.
+
+#### The policy rule had six copies, in two conventions
+
+`_reserved_policy` existed in `codegen/c/emit.py`, `codegen/c/owned.py`,
+`codegen/c/checks.py`, and the C++, Python and Rust emitters. Four
+return the policy name with `must_be_zero` as the default; `checks.py`
+returns `str | None`, folding `preserve` and `unknown` into None because
+it is answering what `validate` must CHECK rather than what the policy
+IS -- a different question wearing the same name. The three C callers
+read one definition in `traverse` now, which is where every decision of
+this kind is answered once; the other three backends still hold their
+own, and collapsing those changes generated output in three languages,
+so it is its own piece of work rather than a side effect of this one.
+
+#### Two stale comments about the pad base, and one document
+
+`layout.py`'s `pad_to` field and `situ.h`'s `align_up` helper both said
+the pad is measured from the message base -- 0043 as written, not 0043
+as amended five weeks ago. Both corrected, because the base is the fact
+this increment's arithmetic depends on and a reader checking it would
+have found two files agreeing with each other and not with the decision.
+
+**And one discrepancy left open rather than resolved.** 0043 says
+`pad_to(n) [preserve]` "is the escape for a format that genuinely
+carries data there"; the front end refuses the attribute in that
+position -- *"`[preserve]` means nothing here: belongs on a `reserved`
+member, whose policy it sets"*. One of them is wrong and which is a real
+question: the parser's refusal makes every `pad_to` `must_be_zero`,
+which is what let the writer's pad branch be total. Recorded for the
+holder rather than settled from inside a writer increment.
+
+#### And a size field was recomputing a name instead of reading it
+
+Found while wiring the field-sized reserved run, whose size field goes
+through the same path. `_local` computes a parameter name from a member;
+the pass at the end of `plan` then renames whatever collides with one of
+the writer's own locals or with another member's `_len`. All three size
+branches were calling `_local` again rather than reading the settled
+name, so `u8 situ_at[n]` emitted the parameter `situ_at__len` and a size
+field reading `situ_at_len` -- an identifier declared nowhere.
+
+Reachable, and checked by compiling rather than by reading: *error:
+`situ_at_len` undeclared*. The honest half is that it cannot produce a
+wrong message, only no builder at all, which is why nothing had noticed
+-- no corpus schema names a member after one of the writer's locals, and
+the uniquifier that makes the collision safe is the thing that made the
+name unpredictable.
+
+**The writer now reaches 160 of 242 structs**, 36 of 45 schemas, 90 of
+112 variant arms -- three more structs than 26.627, and two builders
+that could not succeed for any input now can.
+
 ### 26.627 Elements wider than a byte, and asking what an element IS
 
 Seventeen refusals named a run of elements that are not single bytes, and

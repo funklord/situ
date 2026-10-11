@@ -233,9 +233,12 @@ class Placement:
 	# applies; this is only what the bytes must be.
 	pinned_runs: tuple[bytes, ...] | None	= None
 	# `pad_to(n)` alignment in bytes (0043). The member is padding to the next
-	# multiple of n from the message base; its length is a constant where the
-	# offset is static and `align_up(offset, n) - offset` where it is not, so
-	# a backend reads this rather than a `size_expr`. `kind` is "reserved", so
+	# multiple of n from the base of the struct that declares it -- 0043's
+	# amendment, and not the message base this comment said for five weeks:
+	# a struct's extent has to be a property of the struct, or `SIZE_FIXED`
+	# is a lie for every struct holding a pad. Its length is a constant where
+	# the offset is static and `align_up(offset, n) - offset` where it is
+	# not, so a backend reads this rather than a `size_expr`. `kind` is "reserved", so
 	# the must_be_zero validation applies unchanged.
 	pad_to: int | None		= None
 	# `pad_random(min, max)` -- the inclusive byte bounds a length-hiding pad

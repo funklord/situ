@@ -2272,3 +2272,501 @@ def test_a_run_of_wider_elements_is_asked_what_its_element_is() -> None:
 	# generic "not of bytes" message alive: the parser accepts `u24 x[4]`.
 	odd = refusal("u24 x[4];")
 	assert odd is not None and "24-bit elements, not of bytes" in odd, odd
+
+
+def test_a_reserved_region_gets_the_content_the_schema_states() -> None:
+	"""Four content policies, and the writer wrote zeros for all of them.
+
+	`must_be_one` is the case that makes this a fault rather than a
+	preference: the bytes went down as zeros and the struct's own
+	`_validate`, which this builder calls before returning, then refused
+	them. The builder was accepted at plan time and answered CONSTRAINT
+	for every input -- measured by running one, which is how it was
+	found. The comment above the branch had asserted the opposite in as
+	many words: "Zero is what a `must_be_zero` policy requires and what
+	no other policy refuses."
+
+	`preserve` and `unknown` are the other half. They state no content,
+	so zeros there are a value the writer invented; the caller hands them
+	over instead. `--owned` refuses such a struct rather than carrying
+	them, and the difference is not drift -- an owned struct holds fields
+	rather than the buffer, so it has nowhere to keep them.
+	"""
+	_, resolved = _inline("""
+	struct ones {
+		u8        lead;
+		reserved  u8[2] [must_be_one];
+		u16       trailer;
+	}
+
+	struct kept {
+		u8        lead;
+		reserved  u8[2] [preserve];
+	}
+
+	struct zeroed {
+		u8        lead;
+		reserved  u8[2];
+	}
+	""")
+	ones = {part.role: part for part in _only(resolved, "ones")[0]}
+	assert build.ZERO in ones, _only(resolved, "ones")
+	assert ones[build.ZERO].bytes == 2
+
+	# The caller names the open ones and does not name the stated ones,
+	# which is the whole of the rule in two assertions.
+	kept = [part for part in _only(resolved, "kept")[0]
+	        if part.role == build.OPAQUE]
+	assert len(kept) == 1, _only(resolved, "kept")
+	zeroed = [part for part in _only(resolved, "zeroed")[0]
+	          if part.role == build.OPAQUE]
+	assert not zeroed, "a `must_be_zero` region takes no parameter"
+
+
+def test_a_pad_is_written_from_the_cursor() -> None:
+	"""`pad_to(n)` was refused for want of a length the schema states.
+
+	It states it exactly: the pad reaches the next n-byte boundary from
+	the base of the struct that declares it (0043's amendment of
+	2026-09-04), and the writer's cursor IS that offset, because it has
+	written every member before it and nothing else.
+
+	The refusal it used to get said the member "is reserved and has no
+	stated length", which was the answer for every unsized reserved
+	member and was wrong about four of them in three different ways.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "padded.situ")
+	parts, why = _only(resolved, "pickle_string",
+	                   _header(parsed, resolved, "padded"), parsed=parsed)
+	assert why is None, why
+	pads = [part for part in parts if part.role == build.PAD]
+	assert len(pads) == 1, [part.role for part in parts]
+
+	# A static pad is not this: `aligned_header`'s folds to three bytes
+	# at compile time and has been written as plain reserved bytes all
+	# along, which is why only the dynamic ones were missing.
+	parts, why = _only(resolved, "aligned_header",
+	                   _header(parsed, resolved, "padded"), parsed=parsed)
+	assert why is None, why
+	assert not [part for part in parts if part.role == build.PAD]
+	assert [part for part in parts if part.role == build.ZERO]
+
+
+def test_a_length_hiding_pad_takes_its_length_from_the_caller() -> None:
+	"""`pad_random(min, max)`, and the two spellings beside it.
+
+	0045 settled that the construct is "a claim checked on parse" because
+	situ writes readers and has no random source. A writer does not
+	change that: the length is still the sender's to choose, so it is a
+	parameter rather than something this compiler invents. What the
+	schema does state -- the bounds, and the content policy -- is what
+	the writer holds to, and the bounds are checked by the view rather
+	than a second time here.
+
+	The same part carries two more shapes that had the same wrong
+	refusal: a reserved run sized by a field, whose length nobody
+	measures because a reserved member has no accessor, and one that runs
+	to the end of the message, which 0045 names as the shape a schema
+	could already say.
+	"""
+	_, resolved = _inline("""
+	struct hiding {
+		u8   n;
+		u8   body[n];
+		pad_random(2, 6) u8[remaining] [unknown];
+	}
+
+	struct counted {
+		u8        n;
+		reserved  u8[n];
+		u16       trailer;
+	}
+
+	struct tailed {
+		u16       length;
+		u8        body[length];
+		reserved  u8[remaining] [must_be_zero];
+	}
+	""")
+	for name in ("hiding", "counted", "tailed"):
+		parts, why = _only(resolved, name)
+		assert why is None, f"{name}: {why}"
+		hidden = [part for part in parts if part.role == build.HIDDEN]
+		assert len(hidden) == 1, f"{name}: {[p.role for p in parts]}"
+
+	# And the field that states the length is computed from what the
+	# caller passed, exactly as a byte run's size field is -- so the
+	# message cannot disagree with itself about how much padding it has.
+	sizes = [part for part in _only(resolved, "counted")[0]
+	         if part.role == build.SIZE]
+	assert len(sizes) == 1 and sizes[0].sizes is not None
+	assert sizes[0].sizes.kind == "reserved"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_pad_lands_where_the_reader_looks_for_it(tmp_path: Path) -> None:
+	"""Every pad length from 0 to 3, proved by the reader rather than by
+	the writer agreeing with itself.
+
+	`situ_pickle_string_pad_offset` and `_trailer_offset` are the
+	reader's own arithmetic over the bytes that came out, so a pad one
+	byte wrong moves the trailer and the assertion fails on the offset
+	rather than on anything this test computed.
+
+	The short-capacity call is the discriminating one. The reader's
+	`situ_align_up_u32` saturates at the view's limit, which is right
+	for a reader -- an offset past a short frame is a truncated message
+	-- and would have had the writer emit a SHORT pad and report
+	SITU_OK, leaving the trailer on no boundary at all. Hence
+	`situ_pad_to_u32`: the same expression without the clamp, and a
+	capacity check that refuses.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "padded.situ")
+	files = dict(build.generate(parsed, resolved, "padded"))
+	files.update(generate_c(parsed, resolved, "padded").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "padded_build.h"
+
+int main(void)
+{
+	uint8_t     buf[64];
+	uint8_t     data[8];
+	uint32_t    wrote;
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	memset(data, 0xAB, sizeof data);
+	for (uint32_t n = 0; n <= 3u; n++) {
+		wrote = 0;
+		if (situ_pickle_string_build(buf, sizeof buf, data, n, 0xBEEFu,
+		                             &wrote) != SITU_OK) return 2;
+		situ_msg_init(&msg, buf, wrote);
+		if (situ_pickle_string_view(&msg, 0, wrote, &view) != SITU_OK)
+			return 3;
+		printf("%u %d %u %u %04X\\n", wrote,
+		       (int)situ_pickle_string_validate(view),
+		       situ_pickle_string_pad_offset(view),
+		       situ_pickle_string_trailer_offset(view),
+		       situ_pickle_string_trailer_get(view));
+	}
+
+	/* Three bytes written, a one-byte pad due, and room for none of it. */
+	wrote = 0;
+	printf("%d %u\\n",
+	       (int)situ_pickle_string_build(buf, 4u, data, 1u, 0xBEEFu, &wrote),
+	       wrote);
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "padded.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# `used` is two bytes, so a run of n bytes puts the pad at n + 2 and
+	# the trailer at the next multiple of four: a two-byte pad, a
+	# one-byte pad, none at all, and three.
+	assert lines[0] == "6 0 2 4 BEEF", lines[0]
+	assert lines[1] == "6 0 3 4 BEEF", lines[1]
+	assert lines[2] == "6 0 4 4 BEEF", f"a zero-length pad is legal: {lines[2]}"
+	assert lines[3] == "10 0 5 8 BEEF", lines[3]
+	assert lines[4] == "1 0", \
+		f"no room for the pad is BOUNDS, not a short pad: {lines[4]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_reserved_bytes_the_schema_states_are_not_zeros(
+		tmp_path: Path) -> None:
+	"""The control for the `must_be_one` fault, run rather than read.
+
+	Before this increment both calls here returned SITU_ERR_CONSTRAINT
+	for every input, because the writer put zeros where the schema says
+	ones and then validated its own output. A test that only inspected
+	the plan would have passed throughout: the parts were right and the
+	bytes were wrong.
+	"""
+	parsed, resolved = _inline("""
+	struct ones {
+		u8        lead;
+		reserved  u8 [must_be_one];
+		u16       trailer;
+	}
+
+	struct kept {
+		u8        lead;
+		reserved  u8[2] [preserve];
+		u16       trailer;
+	}
+	""")
+	files = dict(build.generate(parsed, resolved, "inline"))
+	files.update(generate_c(parsed, resolved, "inline").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "inline_build.h"
+
+int main(void)
+{
+	uint8_t       buf[16];
+	uint32_t      wrote = 0;
+	const uint8_t carried[2] = { 0xDE, 0xAD };
+
+	if (situ_ones_build(buf, sizeof buf, 0x11u, 0x2233u, &wrote) != SITU_OK)
+		return 2;
+	printf("%u ", wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+
+	wrote = 0;
+	if (situ_kept_build(buf, sizeof buf, 0x11u, carried, 0x2233u,
+	                    &wrote) != SITU_OK) return 3;
+	printf("%u ", wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "inline.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "4 11FF2233", \
+		f"a `must_be_one` byte is 0xFF, and the build succeeds: {lines[0]}"
+	assert lines[1] == "5 11DEAD2233", \
+		f"`preserve` bytes are the caller's, not zeros: {lines[1]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_pad_with_no_room_refuses_rather_than_shortening(
+		tmp_path: Path) -> None:
+	"""The control that the test above could not be.
+
+	That one asks for a capacity too small for the pad and gets BOUNDS
+	with the saturating helper too -- because the TRAILER has no room
+	either, so the right answer arrives for the wrong reason. Sabotaging
+	`situ_pad_to_u32` back to `situ_align_up_u32(...) - at` left it
+	green, which is what a control is for.
+
+	With the pad LAST there is nothing after it to run out of room, and
+	the two answers separate: the clamp makes the pad zero bytes long,
+	the capacity check passes over nothing, and the reader -- computing
+	the same clamped arithmetic over the same short buffer -- agrees
+	that the message is whole. A three-byte message, reported SITU_OK,
+	that any peer reading a four-byte struct will disagree with.
+	"""
+	parsed, resolved = _inline("""
+	struct tail_pad {
+		u8   n;
+		u8   data[n];
+		pad_to(4);
+	}
+	""")
+	files = dict(build.generate(parsed, resolved, "inline"))
+	files.update(generate_c(parsed, resolved, "inline").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "inline_build.h"
+
+int main(void)
+{
+	uint8_t       buf[16];
+	uint32_t      wrote = 0;
+	const uint8_t data[2] = { 0xAA, 0xBB };
+
+	/* n = 2 puts the cursor at 3, so one byte of pad is due.
+	 *
+	 * The call is its own statement: `printf(f(&wrote), wrote)` reads the
+	 * out-parameter in the same call that sets it, which is unsequenced
+	 * and was got wrong three times in this builder's increments. */
+	situ_err_t err = situ_tail_pad_build(buf, 3u, data, 2u, &wrote);
+	printf("%d %u\\n", (int)err, wrote);
+
+	wrote = 0;
+	err = situ_tail_pad_build(buf, 4u, data, 2u, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "inline.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "1 0", \
+		f"a pad with no room is BOUNDS, not a pad of zero bytes: {lines[0]}"
+	assert lines[1] == "0 4 02AABB00", lines[1]
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_size_field_names_the_parameter_the_run_ended_up_with(
+		tmp_path: Path) -> None:
+	"""A run renamed for colliding with a fixture, and its size field.
+
+	`_local` computes a parameter name from the member; the pass at the
+	end of `plan` renames whatever collides with one of the writer's own
+	locals or with another member's `_len`. A size field was recomputing
+	the name instead of reading the settled one, so a member called
+	`situ_at` became the parameter `situ_at_` with a length
+	`situ_at__len`, while the size field above it read `situ_at_len` --
+	an identifier declared nowhere.
+
+	The honest half of the fault is that it cannot produce a wrong
+	message, only a header that does not compile. Which is why this test
+	compiles rather than inspects: the plan was right and the text was
+	not.
+	"""
+	parsed, resolved = _inline("""
+	struct collide {
+		u16  n;
+		u8   situ_at[n];
+	}
+	""")
+	files = dict(build.generate(parsed, resolved, "inline"))
+	files.update(generate_c(parsed, resolved, "inline").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+	(tmp_path / "probe.c").write_text(
+		'#include "inline_build.h"\nint main(void) { return 0; }\n',
+		encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "inline.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	# And the two names agree, which is the fault stated rather than its
+	# symptom: a compile error is what it happened to produce here.
+	text = (tmp_path / "inline_build.h").read_text()
+	assert "situ_at__len > 65535u" in text, text[:400]
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_reserved_bits_in_a_packed_group_follow_their_policy(
+		tmp_path: Path) -> None:
+	"""The sub-byte half of the content policy, which the corpus hides.
+
+	`edges` has the only two `must_be_one` members in the corpus, 4 bits
+	and 1 bit, and both sit in structs refused for an unrelated reason --
+	a tag with no codec, and a 7-bit tag the runtime cannot store. So the
+	group path could write zeros over a `must_be_one` field and no
+	schema here would show it.
+
+	The group is zeroed and each member set in place, which IS the whole
+	of `must_be_zero` and is why the other three needed saying: ones are
+	set from the schema, and `preserve` and `unknown` bits are set from a
+	caller who gets a parameter for them exactly as a field does -- with
+	the same refusal for a value too wide, since `situ_bits_set_*` masks
+	and a truncated value is a valid message saying something else.
+	"""
+	parsed, resolved = _inline("""
+	bit_order msb_first;
+
+	struct packed_ones {
+		u3        kind;
+		reserved  u2 [must_be_one];
+		u3        flags;
+	}
+
+	struct packed_kept {
+		u4        kind;
+		reserved  u4 [preserve];
+	}
+	""")
+	files = dict(build.generate(parsed, resolved, "inline"))
+	files.update(generate_c(parsed, resolved, "inline").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "inline_build.h"
+
+int main(void)
+{
+	uint8_t     buf[8];
+	uint32_t    wrote = 0;
+	situ_err_t  err;
+	situ_msg_t  msg;
+	situ_view_t view;
+
+	err = situ_packed_ones_build(buf, sizeof buf, 5u, 7u, &wrote);
+	situ_msg_init(&msg, buf, wrote);
+	if (situ_packed_ones_view(&msg, 0, &view) != SITU_OK) return 2;
+	printf("%d %u %02X %d\\n", (int)err, wrote, buf[0],
+	       (int)situ_packed_ones_validate(view));
+
+	wrote = 0;
+	err = situ_packed_kept_build(buf, sizeof buf, 0xAu, 0x5u, &wrote);
+	printf("%d %u %02X\\n", (int)err, wrote, buf[0]);
+
+	/* A reserved value wider than its bits is refused, not masked. */
+	wrote = 0;
+	err = situ_packed_kept_build(buf, sizeof buf, 0xAu, 0x1Fu, &wrote);
+	printf("%d\\n", (int)err);
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "inline.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# 101 11 111: the reserved pair is ones between the two fields, and
+	# the struct's own `_validate` accepts what came out.
+	assert lines[0] == "0 1 BF 0", lines[0]
+	assert lines[1] == "0 1 A5", \
+		f"`preserve` bits are the caller's: {lines[1]}"
+	assert lines[2] == "2", \
+		f"a reserved value too wide for its bits is CONSTRAINT: {lines[2]}"

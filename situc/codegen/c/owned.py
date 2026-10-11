@@ -42,7 +42,8 @@ from situc.types import ScalarKind
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import bit_extractor, own_entries, pinned_runs
+from situc.traverse import (bit_extractor, own_entries, pinned_runs,
+                            reserved_policy)
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -359,12 +360,8 @@ def _decode_body(struct: ResolvedStruct, prefix: str,
 	return lines
 
 
-def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:
-	"""Reserved behaviour, defaulting to must_be_zero (section 8.8)."""
-	for attr in attrs:
-		if attr.name in ("must_be_zero", "must_be_one", "preserve", "unknown"):
-			return attr.name
-	return "must_be_zero"
+#: One definition, in `traverse`, rather than the third C copy of it.
+_reserved_policy = reserved_policy
 
 
 def _reserved_write(placement: Placement) -> list[str]:

@@ -50,9 +50,9 @@ OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
 DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
 NEED, COUNT, TAGV = "situ_need", "situ_count", "situ_tag"
-USED = "situ_used"
+USED, PADLEN = "situ_used", "situ_pad"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      SCAN, NEED, COUNT, TAGV, USED, "situ_fixed"})
+                      SCAN, NEED, COUNT, TAGV, USED, PADLEN, "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -71,17 +71,22 @@ BITS    = "bits"	# one field of a byte several members share
 TAG     = "tag"		# a checksum, computed once the message is whole
 VARINT  = "varint"	# a value whose width is its own bytes'
 WIDE    = "wide"	# a run whose elements are wider than a byte
+PAD     = "pad"		# padding to an alignment, whose length is the cursor's
+OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
+HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
-                             BITS, WIDE})
+                             BITS, WIDE, OPAQUE, HIDDEN})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
-#: the pointer. A fixed run does not: the schema counted it.
-MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT})
+#: the pointer. A fixed run does not: the schema counted it. A length-hiding
+#: pad is measured and may have no pointer at all, which is why the signature
+#: asks `_supplies_bytes` rather than reading this set twice.
+MEASURED = frozenset({SPAN, ENDED, NESTED, REPEAT, HIDDEN})
 ZERO    = "zero"	# reserved bytes, which no caller names
 
 
@@ -139,6 +144,68 @@ class Part:
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
 		self.closes    = closes		# last of one
+
+
+def _states_its_content(placement: Placement) -> bool:
+	"""Whether the schema says what a reserved member's bytes must be.
+
+	`must_be_zero` and `must_be_one` are facts, and a writer puts a fact
+	down. `preserve` and `unknown` say the bytes are somebody else's, so
+	writing anything there invents content the schema does not state --
+	which is 0032's closing invariant reaching the one kind of member that
+	has no accessor to read it back.
+
+	`--owned` answers the same question by refusing the struct, and the
+	difference is worth naming rather than looking like drift: an owned
+	struct holds fields rather than the buffer, so it has nowhere to keep
+	those bytes and cannot promise the round trip. A writer has a caller
+	who is holding them.
+	"""
+	return traverse.reserved_policy(placement.attrs) in traverse.RESERVED_STATED
+
+
+def _settled(parts: list["Part"], placement: Placement,
+		struct: ResolvedStruct) -> str:
+	"""The parameter a member ENDED UP with, which is not `_local`.
+
+	`_local` computes a name from the member; the pass at the end of
+	`plan` then renames whatever collides with one of the writer's own
+	locals or with another member's `_len`. A size field names the run it
+	measures, and it was recomputing the name rather than reading the
+	settled one -- so `u8 situ_at[n]` emitted a parameter `situ_at__len`
+	and a size field reading `situ_at_len`, an identifier that does not
+	exist. The generated header did not compile, which is the honest half
+	of the fault: it cannot ship a wrong message, only no builder at all.
+	"""
+	for part in parts:
+		if part.placement is placement:
+			return part.local
+	return _local(struct, placement)
+
+
+def _supplies_bytes(part: "Part") -> bool:
+	"""Whether the caller hands over bytes for this member.
+
+	True for every caller-supplied role but one: a length-hiding pad whose
+	content the schema states takes a length and no pointer, because the
+	bytes are the schema's and only the length is the caller's (0045).
+	"""
+	if part.role == HIDDEN:
+		return not _states_its_content(part.placement)
+	return part.role in CALLER_SUPPLIED
+
+
+def _supplies_a_value(part: "Part") -> bool:
+	"""Whether the caller passes anything at all for this member.
+
+	`CALLER_SUPPLIED` answers this by role, which is right for every role
+	but one: a packed reserved member is a `BITS` part whether or not it
+	needs a caller, and what decides is the content policy rather than the
+	role.
+	"""
+	if part.role == BITS and part.placement.kind == "reserved":
+		return not _states_its_content(part.placement)
+	return part.role in CALLER_SUPPLIED
 
 
 def _local(struct: ResolvedStruct, placement: Placement) -> str:
@@ -397,11 +464,6 @@ def _member_refusal(placement: Placement) -> str | None:
 		return "is an index table"
 	if placement.delimiters and placement.radix is None:
 		return _delimited_refusal(placement)
-	if placement.pad_to is not None:
-		return "pads to an alignment"
-	if placement.pad_bounds is not None:
-		return "is a length-hiding pad, so how long to make it is a " \
-		       "decision rather than a fact the schema states"
 	if placement.parameter:
 		return "comes from a struct argument"
 	if placement.remaining_cap:
@@ -837,14 +899,40 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			continue
 
 		if held.kind in ("reserved", "preamble"):
-			# Reserved bytes are a constraint rather than a value (8.8) and
-			# have no accessor, so there is nothing for a caller to pass.
-			# Zero is not a choice either: the content policy is
-			# `must_be_zero` or nothing, so zero is the one value that is
-			# required where it is stated and refused nowhere.
+			# Reserved bytes have no accessor, so what goes there is the
+			# schema's business or the caller's and never a field's. Which
+			# of the two is the content policy's answer (8.8), and this
+			# branch asks it: the first cut wrote zeros for all four
+			# policies, over a comment claiming zero was "what no other
+			# policy refuses". `must_be_one` refuses it -- measured, by
+			# running a builder whose every call returned CONSTRAINT.
 			if size is None:
-				return [], f"`{traverse.local_name(struct, held)}` is " \
-				           "reserved and has no stated length"
+				align = traverse.pad_alignment(held)
+				if align is not None:
+					parts.append(Part(PAD, held, local))
+					continue
+				if held.pad_bounds is not None or held.sized_by:
+					# Two spellings of one shape: a pad with declared
+					# bounds, and a reserved run whose length an earlier
+					# field states. Both leave the length to the caller,
+					# because a reserved member has no accessor and so
+					# nothing to measure -- and the field that states it
+					# is computed from what they pass, exactly as a byte
+					# run's size field is.
+					parts.append(Part(HIDDEN, held, local))
+					continue
+				# And the reason comes from the one table that has one.
+				# This branch used to answer for every unsized reserved
+				# member itself, which put "has no stated length" on four
+				# members whose length the schema states three different
+				# ways -- the 26.625 misdiagnosis class, in the one place
+				# a refusal was all a caller could get.
+				why = _member_refusal(held)
+				return [], f"`{traverse.local_name(struct, held)}` " + \
+				           (why or "is reserved and has no stated length")
+			if not _states_its_content(held):
+				parts.append(Part(OPAQUE, held, local, size))
+				continue
 			parts.append(Part(ZERO, held, local, size))
 			continue
 
@@ -1017,7 +1105,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		if part.role == WIDE:
 			taken.add(f"{local}_count")
 
-	if not any(part.role in CALLER_SUPPLIED for part in parts):
+	if not any(_supplies_a_value(part) for part in parts):
 		# Every byte is a fact the schema states, so there is nothing for a
 		# caller to supply and `_encode` of a constant is not a builder.
 		return [], "is entirely literal, so there is nothing to build"
@@ -1066,14 +1154,14 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			args.append(f"{'int64_t' if part.minimal else 'uint64_t'} "
 			            f"{part.local}")
 		elif part.role == BITS:
-			if part.placement.kind == "reserved":
-				continue	# zeroed by the group, not a value to pass
+			if not _supplies_a_value(part):
+				continue	# the schema states these bits, so nobody passes them
 			args.append(f"{_ctype(part.placement, prefix, enums)} "
 			            f"{part.local}")
 		elif part.role == SCALAR:
 			args.append(f"{_ctype(part.placement, prefix, enums)} "
 			            f"{part.local}")
-		elif part.role == RUN:
+		elif part.role in (RUN, OPAQUE):
 			args.append(f"const uint8_t *{part.local}")
 		elif part.role == WIDE:
 			args.append(f"const {_ctype(part.placement, prefix, enums)} "
@@ -1081,7 +1169,8 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			if not part.bytes:
 				args.append(f"uint32_t {part.local}_count")
 		elif part.role in MEASURED:
-			args.append(f"const uint8_t *{part.local}")
+			if _supplies_bytes(part):
+				args.append(f"const uint8_t *{part.local}")
 			args.append(f"uint32_t {part.local}_len")
 	args.append(f"uint32_t *{WROTE}")
 
@@ -1420,6 +1509,8 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# Only where something reads it, or `-Wunused-but-set-variable`
 		# refuses the file: a run that takes the rest of the frame is
 		# walked without being counted.
+		*([f"\tuint32_t    {PADLEN};"]
+		  if any(part.role == PAD for part in parts) else []),
 		*([f"\tuint32_t    {COUNT} = 0u;"]
 		  if any(part.role == REPEAT
 		         and (part.digits or part.value == 1
@@ -1442,7 +1533,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 			# The count, not the byte length: `u16 a[n]` has `n` elements
 			# and `n * 2` bytes, and the reader divides. A byte run's size
 			# field is its length because an element is a byte there.
-			run = _local(struct, part.sizes)
+			run = _settled(parts, part.sizes, struct)
 			lines += [
 				f"\t/* {local}: how many `{part.sizes.type_name}` elements "
 				f"`{run}` holds. */",
@@ -1454,7 +1545,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 			# what the walk finds, so the walk happens HERE, at the field
 			# that states it, rather than at the run further down.
 			assert part.sizes is not None and held.scalar is not None
-			run  = _local(struct, part.sizes)
+			run  = _settled(parts, part.sizes, struct)
 			tally = Part(REPEAT, part.sizes, run, inner=part.inner,
 			             delimiter=(part.sizes.delimiters[0]
 			                        if part.sizes.delimiters else b""))
@@ -1467,7 +1558,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 			]
 		elif part.role == SIZE:
 			assert part.sizes is not None and held.scalar is not None
-			run   = _local(struct, part.sizes)
+			run   = _settled(parts, part.sizes, struct)
 			limit = (1 << held.scalar.bits) - 1
 			# The value's own width, even where it is written in digits: a
 			# `decimal u32` holds what a u32 holds, and `[max]` bounds the
@@ -1497,13 +1588,107 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"",
 			]
 		elif part.role == ZERO:
+			ones = traverse.reserved_policy(held.attrs) == "must_be_one"
 			lines += [
-				f"\t/* {local}: {part.bytes} reserved byte(s). Zero is what",
-				"\t * a `must_be_zero` policy requires and what no other",
-				"\t * policy refuses. */",
+				f"\t/* {local}: {part.bytes} reserved byte(s), "
+				f"{'0xFF' if ones else 'zero'} because the",
+				f"\t * schema says `[{traverse.reserved_policy(held.attrs)}]`"
+				" -- a fact, so the",
+				"\t * writer puts it down and no caller names it. */",
 				*_room(f"{part.bytes}u"),
-				f"\tmemset({OUT} + {AT}, 0, {part.bytes}u);",
+				f"\tmemset({OUT} + {AT}, {'0xFF' if ones else '0'}, "
+				f"{part.bytes}u);",
 				f"\t{AT} += {part.bytes}u;",
+				"",
+			]
+		elif part.role == PAD:
+			align = traverse.pad_alignment(held)
+			lines += [
+				f"\t/* {local}: zeros to the next {align}-byte boundary,",
+				"\t * measured from this struct's own base -- which is where",
+				"\t * the cursor is, and is the base 0043's amendment",
+				"\t * settled. `situ_pad_to_u32` is the reader's own",
+				"\t * arithmetic without the saturation a reader wants: a",
+				"\t * clamp here would shorten the pad where this has to",
+				"\t * refuse for want of room. */",
+				f"\t{PADLEN} = situ_pad_to_u32({AT}, {align}u);",
+				*_room(PADLEN),
+				f"\tmemset({OUT} + {AT}, 0, {PADLEN});",
+				f"\t{AT} += {PADLEN};",
+				"",
+			]
+		elif part.role == HIDDEN:
+			stated = _states_its_content(held)
+			policy = traverse.reserved_policy(held.attrs)
+			# Reserved bytes whose length nothing in the message decides,
+			# in its two spellings. The comment says which, because the
+			# two carry different arguments for the same parameter.
+			if held.pad_bounds is not None:
+				low, high = held.pad_bounds
+				why = [
+					f"\t/* {local}: a pad whose length hides what the",
+					f"\t * body's length would say. {low} to {high} bytes,",
+					"\t * and which is the caller's choice: 0045 keeps the",
+					"\t * choosing outside this compiler, which has no",
+					"\t * random source and would be stating a sender's",
+					"\t * policy rather than reading a schema's.",
+					"\t *",
+					"\t * The bounds are NOT checked here. The view states",
+					"\t * them and this validates against it at the end, so",
+					"\t * a length outside them is refused already --",
+					"\t * measured by removing the check and watching both",
+					"\t * ends of the range answer CONSTRAINT exactly as",
+					"\t * before. Two checks of one schema is how they come",
+					"\t * to disagree.",
+				]
+			elif held.sized_by == "remaining":
+				why = [
+					f"\t/* {local}: reserved bytes to the end of the",
+					"\t * message, so their length is not written anywhere",
+					"\t * and is what the caller chooses to append. 0045",
+					"\t * names this shape as the one a schema can already",
+					"\t * say without `pad_random`, and the writer's side",
+					"\t * of it is the same: a length nothing records.",
+				]
+			else:
+				why = [
+					f"\t/* {local}: reserved bytes whose length the field",
+					f"\t * `{held.sized_by}` states -- and which nobody",
+					"\t * measures, a reserved member having no accessor to",
+					"\t * measure. So the length is the caller's, and the",
+					"\t * field that states it holds what they passed.",
+				]
+			lines += [
+				*why,
+				"\t *",
+				(f"\t * The bytes are the schema's: `[{policy}]`. */"
+				 if stated else
+				 f"\t * The bytes are the caller's too, `[{policy}]`"
+				 " stating\n\t * none. */"),
+				*_room(f"{part.local}_len"),
+			]
+			if stated:
+				fill = "0xFF" if policy == "must_be_one" else "0"
+				lines += [
+					f"\tmemset({OUT} + {AT}, {fill}, {part.local}_len);",
+				]
+			else:
+				lines += [
+					# Unconditional, unlike the other caller-measured
+					# runs, which skip the copy at zero length rather
+					# than refuse. Nothing here has checked the pad
+					# against its floor yet -- `_validate` does, at the
+					# end -- so a zero length reaches this point, and
+					# `memcpy` from a null source is undefined even for
+					# zero bytes.
+					f"\tif ({part.local} == NULL) {{",
+					"\t\treturn SITU_ERR_BOUNDS;",
+					"\t}",
+					f"\tmemcpy({OUT} + {AT}, {part.local}, "
+					f"{part.local}_len);",
+				]
+			lines += [
+				f"\t{AT} += {part.local}_len;",
 				"",
 			]
 		elif part.role == LITERAL:
@@ -1520,8 +1705,15 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				f"\t{AT} += {part.bytes}u;",
 				"",
 			]
-		elif part.role == RUN:
+		elif part.role in (RUN, OPAQUE):
 			lines += [
+				*([f"\t/* {local}: {part.bytes} reserved byte(s) the schema",
+				   "\t * leaves open, so they are the caller's to state."
+				   " `--owned`",
+				   "\t * refuses such a struct instead, holding fields"
+				   " rather than",
+				   "\t * the buffer; a writer has a caller who holds them. */"]
+				  if part.role == OPAQUE else []),
 				f"\tif ({part.local} == NULL) {{",
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
@@ -1536,19 +1728,42 @@ def _one(struct: ResolvedStruct, shape: Shape,
 			width = held.size_bits or 0
 			lines += [
 				*([f"\t/* {part.bytes} byte(s) of packed fields: zeroed,",
-				   "\t * then each one set in place. The reserved bits",
-				   "\t * among them are what the zeroing is for. */",
+				   "\t * then each one set in place. The zeroing is what",
+				   "\t * writes a `must_be_zero` reserved group member;",
+				   "\t * the other three policies are set below, from the",
+				   "\t * schema or from the caller. */",
 				   *_room(f"{part.bytes}u"),
 				   f"\tmemset({OUT} + {AT}, 0, {part.bytes}u);"]
 				  if part.opens else []),
 			]
-			if held.kind != "reserved":
+			if held.kind == "reserved" and _states_its_content(held):
+				# The group was zeroed above, which is already the whole of
+				# `must_be_zero`. `must_be_one` is the case that was
+				# getting zeros and then failing its own `_validate`.
+				if traverse.reserved_policy(held.attrs) == "must_be_one":
+					lines += [
+						f"\t/* {local}: {width} reserved bit(s) at "
+						f"{part.bit_at}, all",
+						"\t * ones, which is what the schema says they"
+						" must be. */",
+						f"\tsitu_bits_set_{order}({OUT} + {AT}, "
+						f"{part.bit_at}u, {width}u,",
+						f"\t                    {(1 << width) - 1}u);",
+					]
+			else:
 				# `situ_bits_set_*` MASKS the value, so a field given more
 				# than it can hold would be written truncated -- a valid
 				# message saying something else, which `_validate` cannot
 				# object to. Refused instead.
+				#
+				# A reserved member reaches this too, where the schema
+				# leaves its content open: the caller passes those bits
+				# exactly as they pass a field's, and the masking hazard is
+				# the same, so the check is not skipped for them.
 				lines += [
-					f"\t/* {local}: {width} bits at {part.bit_at}. */",
+					f"\t/* {local}: {width} bits at {part.bit_at}."
+					+ (" Reserved, and the schema states no value for"
+					   " them." if held.kind == "reserved" else "") + " */",
 					f"\tif ((uint64_t){part.local} > {(1 << width) - 1}u) {{",
 					"\t\treturn SITU_ERR_CONSTRAINT;",
 					"\t}",

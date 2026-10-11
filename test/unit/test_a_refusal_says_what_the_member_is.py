@@ -106,8 +106,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	 lambda pl, res: pl.type_name not in res.structs and pl.scalar is None),
 	("is a variant", lambda pl, res: pl.kind == "variant"),
 	("is the discriminant of a variant", lambda pl, res: True),
-	("pads to an alignment", lambda pl, res: pl.pad_to is not None),
-	("is a length-hiding pad", lambda pl, res: pl.pad_bounds is not None),
 	("is a peeked", lambda pl, res: bool(pl.peek)),
 	("packs into a group", lambda pl, res: build.packed(pl)),
 	("is a packed", lambda pl, res: build.packed(pl)),
@@ -121,8 +119,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("which is a digit at radix", lambda pl, res: pl.radix is not None),
 	("has no byte order for its codec's output",
 	 lambda pl, res: pl.kind in ("tag", "checksum") or bool(pl.tag_covers)),
-	("is spelled the same as one of the writer's own locals",
-	 lambda pl, res: True),
 	("sizes `", lambda pl, res: True),
 	("is not a member of this struct", lambda pl, res: True),
 	("holds something this writer cannot place",
@@ -220,9 +216,7 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"is minimal and ends at any of", "is minimal and does not consume",
 		"is minimal with no `max`", "which is a digit at radix",
 		"is written in digits with neither a width",
-		"is spelled the same as one of the writer's own locals",
 		"is the stated size of both", "is not a member of this struct",
-		"pads to an alignment", "is a length-hiding pad",
 		"is a peeked", "packs into a group", "is a packed",
 		"has no byte order for its codec's output",
 		"holds something this writer cannot place",
@@ -241,6 +235,16 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		# routes left are an arm holding a sub-byte scalar and a sub-byte
 		# size field, and the corpus has neither.
 		"bits wide, so it shares a byte",
+		# And this one lost its population to the increment that read the
+		# reserved shapes properly. It was the answer for every unsized
+		# reserved member, which is why it was a misdiagnosis four times
+		# over: a `pad_to` is written from the cursor now, a `pad_random`
+		# and a field-sized reserved run take their length from the
+		# caller, and an expression-sized one is refused by the
+		# expression. What is left is a reserved member whose length
+		# nothing this writer asks about answers -- which nothing in the
+		# corpus is, and which no inline schema here has managed to be.
+		"is reserved and has no stated length",
 		"ends at a multi-byte delimiter", "sizes `",
 		"names the varint type", "is fixed point",
 		"is neither a scalar nor a struct of this schema",
@@ -249,3 +253,44 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 	assert not unseen, (
 		"these claims are in the table, are not emitted over the corpus, "
 		f"and are not listed as constructed: {sorted(unseen)}")
+
+
+def test_no_claim_outlives_its_message() -> None:
+	"""Every fragment in the table is still a thing the writer says.
+
+	`CONSTRUCTED` above exempts a claim from needing a corpus instance,
+	and it therefore exempts a claim whose message has been DELETED --
+	which is the row-accumulation this file's docstring says it prevents
+	and, as written, could not. Two rows proved it: the writer stopped
+	refusing `pad_to` and `pad_random` when it learned to write them, and
+	both rows stayed green because both were listed as constructed.
+
+	So the fragments are checked against the generator's own source,
+	which is where a message that no longer exists cannot hide. Every
+	string literal in `build.py`, joined in order and with whitespace
+	flattened, because a message is assembled from adjacent literals and
+	a fragment can straddle the join.
+	"""
+	import ast as python_ast
+	import re
+
+	# Both files, because two of these messages are `traverse`'s: a
+	# located member and a size field with two consumers are refused by
+	# the decision layer, which answers them once for every backend. A
+	# check that read only `build.py` would report those two as deleted,
+	# which is how a gate teaches people to widen its exemptions.
+	spoken = ""
+	for module in (("situc", "codegen", "c", "build.py"),
+	               ("situc", "traverse.py")):
+		source = ROOT.joinpath(*module).read_text()
+		literals = [node.value for node in python_ast.walk(
+			python_ast.parse(source))
+			if isinstance(node, python_ast.Constant)
+			and isinstance(node.value, str)]
+		spoken += " " + re.sub(r"\s+", " ", " ".join(literals))
+
+	missing = [fragment for fragment, _ in CLAIMS
+	           if re.sub(r"\s+", " ", fragment) not in spoken]
+	assert not missing, (
+		"these claims are in the table and the writer no longer says "
+		f"them: {missing}")

@@ -2377,6 +2377,32 @@ def pad_alignment(placement: Placement) -> int | None:
 	return placement.pad_to
 
 
+#: What a `reserved` member's content policy may be (8.8). The two the
+#: schema STATES are a fact a writer can put down; the other two say the
+#: bytes are somebody else's, which is a different thing from saying they
+#: are zero.
+RESERVED_STATED = frozenset({"must_be_zero", "must_be_one"})
+RESERVED_OPEN   = frozenset({"preserve", "unknown"})
+
+
+def reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:
+	"""Reserved behaviour, defaulting to must_be_zero (section 8.8).
+
+	The default is deliberate: every ignored bit is a malleability surface,
+	so the safe option is the silent one.
+
+	Here rather than in a backend because six files held a copy of it, in
+	two conventions -- this one, and a `str | None` that folds `preserve`
+	and `unknown` into None because it is answering what `validate` must
+	CHECK rather than what the policy IS. The C backend's three copies read
+	this one now; the other three backends still hold their own (26.628).
+	"""
+	for attr in attrs:
+		if attr.name in RESERVED_STATED or attr.name in RESERVED_OPEN:
+			return attr.name
+	return "must_be_zero"
+
+
 def pinned_bytes(placement: Placement) -> int | None:
 	"""The footprint `[size = N]` pinned, in bytes, or None where none is.
 
