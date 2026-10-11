@@ -70,13 +70,14 @@ ARMTAG  = "armtag"	# a discriminant the chosen arm decides
 BITS    = "bits"	# one field of a byte several members share
 TAG     = "tag"		# a checksum, computed once the message is whole
 VARINT  = "varint"	# a value whose width is its own bytes'
+WIDE    = "wide"	# a run whose elements are wider than a byte
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
-                             BITS})
+                             BITS, WIDE})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it.
@@ -551,9 +552,14 @@ def _arm_refusal(placement: Placement, header: str, prefix: str,
 	if placement.scalar is not None \
 			and placement.type_name not in (structs or {}):
 		if placement.array_count is not None:
+			# A fixed run of BYTES is placed the way one is anywhere; a
+			# run of wider elements needs the per-element byte order,
+			# which an arm's single `_arm_part` does not emit.
+			if placement.element_bits == BITS_PER_BYTE:
+				return None
 			return f"holds a run of {placement.array_count} " \
-			       f"{placement.scalar.bits}-bit elements, and an arm's " \
-			       "content is one value or one whole struct here"
+			       f"{placement.scalar.bits}-bit elements, and an arm " \
+			       "places a run of bytes but not of wider elements"
 		return _scalar_refusal(placement)
 
 	inner = (structs or {}).get(placement.type_name or "")
@@ -591,6 +597,8 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 	                                      prefix, structs):
 		return Part(NESTED, placement, local,
 		            inner=ident(prefix, placement.type_name))
+	if placement.array_count is not None:
+		return Part(RUN, placement, local, placement.array_count)
 	return _value_part(SCALAR, placement, local)
 
 
@@ -890,6 +898,31 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		# per element would need the element's byte order applied per
 		# element, which is a loop this increment does not write.
 		element = held.element_bits or 0
+		if element in (16, 32, 64) and held.scalar is not None \
+				and held.type_name not in (structs or {}):
+			# Elements are VALUES, as the reader's `_get(view, index)`
+			# gives them, so the caller hands over a typed pointer and the
+			# writer applies the byte order per element. Measured first:
+			# for `u16 a[n]` the reader computes `a_len` as `n * 2`, so
+			# `n` counts ELEMENTS and not bytes -- in `edges` and in
+			# `pickle` alike.
+			if held.array_count is None and not held.sized_by:
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           f"run of {element}-bit elements with no count, " \
+				           "and nothing says how many to write"
+			# What the element IS, not just how wide it is. Keying on the
+			# width alone let `f32 x[2]` through, and the store casts --
+			# `(uint32_t)x[i]` converts 1.5 to 1 rather than writing its
+			# bits. The same question `_scalar_refusal` answers for a
+			# single scalar, asked of the element.
+			why = _scalar_refusal(held)
+			if why:
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           f"run whose element {why}"
+			parts.append(Part(WIDE, held, local, held.array_count or 0,
+			                  bit_at=element // BITS_PER_BYTE))
+			continue
+
 		if element != BITS_PER_BYTE:
 			# A single nested struct is not a run of them, and calling it
 			# one was a wrong diagnosis for 8 of the 16 members refused
@@ -981,6 +1014,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		taken.add(local)
 		if part.role in MEASURED:
 			taken.add(f"{local}_len")
+		if part.role == WIDE:
+			taken.add(f"{local}_count")
 
 	if not any(part.role in CALLER_SUPPLIED for part in parts):
 		# Every byte is a fact the schema states, so there is nothing for a
@@ -1040,6 +1075,11 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			            f"{part.local}")
 		elif part.role == RUN:
 			args.append(f"const uint8_t *{part.local}")
+		elif part.role == WIDE:
+			args.append(f"const {_ctype(part.placement, prefix, enums)} "
+			            f"*{part.local}")
+			if not part.bytes:
+				args.append(f"uint32_t {part.local}_count")
 		elif part.role in MEASURED:
 			args.append(f"const uint8_t *{part.local}")
 			args.append(f"uint32_t {part.local}_len")
@@ -1396,7 +1436,20 @@ def _one(struct: ResolvedStruct, shape: Shape,
 	for part in parts:
 		held  = part.placement
 		local = traverse.local_name(struct, held)
-		if part.role == SIZE and part.inner:
+		if part.role == SIZE and part.sizes is not None \
+				and (part.sizes.element_bits or 0) in (16, 32, 64) \
+				and part.sizes.scalar is not None:
+			# The count, not the byte length: `u16 a[n]` has `n` elements
+			# and `n * 2` bytes, and the reader divides. A byte run's size
+			# field is its length because an element is a byte there.
+			run = _local(struct, part.sizes)
+			lines += [
+				f"\t/* {local}: how many `{part.sizes.type_name}` elements "
+				f"`{run}` holds. */",
+				*_value(part, f"{run}_count", local),
+				"",
+			]
+		elif part.role == SIZE and part.inner:
 			# The count is not known from a length the caller passed: it is
 			# what the walk finds, so the walk happens HERE, at the field
 			# that states it, rather than at the run further down.
@@ -1505,6 +1558,43 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				]
 			if part.closes:
 				lines += [f"\t{AT} += {part.bytes}u;", ""]
+		elif part.role == WIDE:
+			assert held.scalar is not None
+			each  = part.bit_at
+			count = f"{part.bytes}u" if part.bytes \
+			        else f"{part.local}_count"
+			end   = ("le" if held.endian is ast.Endian.LITTLE else "be")
+			width = held.scalar.bits
+			lines += [
+				f"\t/* {local}: {count} element(s) of {width} bits, each "
+				f"written",
+				f"\t * {end} as the schema says. The reader hands these "
+				"back as",
+				"\t * values rather than bytes, so the caller passes values "
+				"and",
+				"\t * the byte order is the writer's to apply. */",
+				f"\tif ({part.local} == NULL) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				# `count * each` on a caller's count can overflow, so the
+				# count is bounded against the room first and the
+				# multiplication never leaves the range it was checked in.
+				f"\tif (({CAP} - {AT}) / {each}u < {count}) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"\t{",
+				f"\t\tuint32_t {SCAN};",
+				"",
+				f"\t\tfor ({SCAN} = 0u; {SCAN} < {count}; {SCAN}++) {{",
+				f"\t\t\tsitu_put_{end}{width}({OUT} + {AT} + "
+				f"{SCAN} * {each}u,",
+				f"\t\t\t              (uint{width}_t){part.local}"
+				f"[{SCAN}]);",
+				"\t\t}",
+				"\t}",
+				f"\t{AT} += {count} * {each}u;",
+				"",
+			]
 		elif part.role == VARINT:
 			most = (1 << part.value) - 1
 			zig  = f"situ_zigzag_encode({part.local})" if part.minimal \

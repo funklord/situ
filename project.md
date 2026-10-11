@@ -31304,6 +31304,68 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.627 Elements wider than a byte, and asking what an element IS
+
+Seventeen refusals named a run of elements that are not single bytes, and
+they were two families rather than one. **Nine were arms holding a fixed
+run of BYTES** -- writable with the role a struct's own byte run already
+uses, and refused only because an arm's content had two cases and a run
+was neither. **Eight were genuinely wider elements**: `u16`, `i16`,
+`u32`, in `pickle` and `edges`.
+
+**Elements are values, which the reader settles rather than this
+writer.** `situ_edges_samples_get(view, index)` hands back a `uint16_t`
+with the byte order applied, so the caller passes values and the byte
+order is the writer's to apply -- not bytes already in wire order, which
+would push the one job situ exists for back onto the caller.
+
+**And the count is elements, measured rather than assumed.** For
+`u16 a[n]` the reader computes `a_len` as `n * 2`, so `n` counts
+elements; `pickle`'s `data[length]` is the same, `data_len = length * 2`.
+So a size field measuring such a run states the count and the writer
+multiplies -- where a byte run's size field is its length, because there
+an element IS a byte.
+
+A pickle wstring, hand-checkable against Python's own format:
+
+    situ_pickle_wstring_build(out, cap, { 'h', 'i' }, 2, &n)
+    -> 02 00 00 00 68 00 69 00
+
+Length 2 as a little-endian `u32`, then `h` and `i` as little-endian
+`u16`s. It reads back as two elements spelling `hi`.
+
+**The probe that checked a refusal's reachability caught a fault I had
+just written.** `f32 x[2]` BUILT, and the store is
+`situ_put_be32((uint32_t)x[i])` -- a numeric conversion, so 1.5 would go
+on the wire as 1 rather than as its bits. The branch keyed on
+`element_bits in (16, 32, 64)` and never asked what the element was. It
+asks `_scalar_refusal` of the element now, which is the same question a
+single scalar answers, and floats, BCD, fixed point and scaled elements
+are refused by name.
+
+**That is the fifth instance of one habit and the first time the habit
+caught itself.** Three dead branches (26.611, 26.615, 26.626) were
+guards for shapes the parser already rejects, and the remedy recorded
+each time was: try the schema. Here that remedy was followed -- to find
+out whether the generic *"is a run of N-bit elements, not of bytes"*
+message was still reachable -- and it answered two questions at once:
+the message IS reachable, because the parser accepts `u24 x[4]` and the
+runtime has no 24-bit store, and the float case was broken. **The habit
+paid for itself the first time it was applied deliberately.**
+
+Both now have tests with constructed schemas, which is what the refusal
+gate's second half demanded: `"is a run of"` had gone quiet over the
+corpus and could not be listed as constructed without something
+reaching it.
+
+Re-measured, same method -- the 45 schemas `every_schema` holds: **157 of
+242 structs have a builder, in 36 of the 45 schemas**, with **90 of 112
+variant arms** writable, and 104 refusals left. Of the six largest
+remaining, five are things situ should not write at all: a sealed region
+needs a key, eight tags name no codec, a coded region is the codec's
+output, a tag covering what follows needs a back-patch, and a register is
+not a buffer.
+
 ### 26.626 A `while` run is proved by the reader's own count, not by its predicate
 
 The last large refusal was a run that repeats while a condition holds --

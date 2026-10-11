@@ -2235,3 +2235,40 @@ int main(void)
 	assert lines[3] == "2 ", (
 		"the reader stops after the first element here, so the second is "
 		f"bytes nobody reads and the build must refuse: {lines[3]}")
+
+
+def test_a_run_of_wider_elements_is_asked_what_its_element_is() -> None:
+	"""Width is not the question; what the element IS is.
+
+	Keying the wide-run branch on `element_bits in (16, 32, 64)` alone let
+	`f32 x[2]` through, and the store is `situ_put_be32((uint32_t)x[i])`
+	-- a numeric CONVERSION, so 1.5 would be written as 1 rather than as
+	its bits. The element gets `_scalar_refusal` asked of it, which is
+	the same question a single scalar answers.
+
+	Found by probing whether the generic "not of bytes" message was still
+	reachable, which is the habit three dead branches earned (26.611,
+	26.615, 26.626): try the schema.
+	"""
+	from situc.diagnostics import Source
+	from situc.parser import parse as parse_text
+
+	def refusal(body: str) -> str | None:
+		parsed = parse_text(Source("inline", "target buffer;\nendian big;"
+		                           "\n\nstruct one {\n\t%s\n\tu8 t;\n}\n"
+		                           % body))
+		resolved = resolve(parsed, solve(parsed))
+		header = generate_c(parsed, resolved, "one").files()["one.h"]
+		shape = build.Shape(header, "situ", resolved.structs, {})
+		return build.plan(resolved.structs["one"], shape)[1]
+
+	assert refusal("u16 x[2];") is None, "a u16 run is written"
+	assert refusal("i32 x[3];") is None, "and a signed one"
+
+	floats = refusal("f32 x[2];")
+	assert floats is not None and "floating point" in floats, floats
+
+	# And the width the runtime has no store for, which is what keeps the
+	# generic "not of bytes" message alive: the parser accepts `u24 x[4]`.
+	odd = refusal("u24 x[4];")
+	assert odd is not None and "24-bit elements, not of bytes" in odd, odd

@@ -52,6 +52,8 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	 lambda pl, res: pl.scalar is not None and pl.array_count is not None),
 	("is a run of",
 	 lambda pl, res: pl.element_bits != 8),
+	("is a run whose element",
+	 lambda pl, res: pl.scalar is not None and pl.element_bits != 8),
 	("is a sealed region", lambda pl, res: pl.kind == "sealed"),
 	("is a coded region", lambda pl, res: pl.kind == "coded"),
 	("is a TLV region", lambda pl, res: pl.kind == "tlv"),
@@ -228,6 +230,11 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		"is minimal and ends at any of",
 		"is minimal and does not consume its delimiter",
 		"repeats while a condition holds and this schema emits no count",
+		# Both have constructible populations and tests of their own in
+		# the builder's suite: a `u24` run, which the parser accepts and
+		# the runtime cannot store, and a run of floats, where the store
+		# would convert the value rather than write its bits.
+		"is a run of", "is a run whose element",
 		# This one HAD a corpus population and lost it, which is the more
 		# interesting way a row goes quiet: every sub-byte member in the
 		# corpus is now written as part of a packed group, so the only
