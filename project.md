@@ -31304,6 +31304,89 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.632 Escaping is forced, not invented -- and three copies of one cap
+
+Three refusals said a run *"escapes its delimiter, and escaping would
+write bytes other than the ones it was given"*. That is true and it is
+not a reason. **The caller hands over CONTENT and the wire form is the
+schema's**, which is the division every other member here already
+follows: a size field is computed, a pad is computed, a checksum is
+computed, and these bytes are encoded.
+
+What makes it not an invention is that the encoding is **forced**.
+`situ_scan_relaxed` takes the byte after an escape as content whatever it
+is, so exactly two kinds of byte must carry one:
+
+  - the delimiter, or the run reads back shorter than it was written;
+  - the escape byte itself, or it swallows the byte after it -- and a
+    content byte ending in one swallows the DELIMITER, leaving the member
+    unterminated, which is the fault `sexpr`'s own comment describes from
+    the reading side.
+
+**Nothing else is escaped**, and that is the line: a JSON encoder also
+escapes control bytes, and situ's `[escape = ...]` does not say so. It
+says which byte escapes, and the reader accepts any byte after it.
+
+So json's and sexpr's strings and `edges.escaped_run` build:
+`a"b` comes out `"a\"b"`, `ab\` comes out `"ab\\"`, and the reader's own
+scan finds its delimiter in both.
+
+**The sabotage separates the two rules, and only one of them is caught by
+`_validate`.** Dropping the escape-the-escape rule makes `ab\` fail the
+build -- the closing quote is escaped, the member is unterminated, and
+the struct's own validation refuses it. But `a\b` comes out `"a\b"`,
+which the reader accepts **at the same length** while meaning something
+else under the escape rule: `\b` is one escaped byte rather than two
+content ones. That half is invisible to every check situ has, which is
+the argument for the rule rather than for the validation, and the reason
+the test asserts bytes.
+
+#### The cap was three copies of one rule, all short by one
+
+`[max = N]` bounds the member's bytes, and the reader's scan window is
+`min(N, remaining)` -- so the delimiter has to land INSIDE the cap and
+the rule is "content and delimiter together". **This writer checked it in
+three places and every one read it as "content"**: a delimited run, an
+escaped run, and minimal digits. Each accepted exactly one length that
+`_validate` then refused.
+
+Measured, with `max 8` and `max 4`: seven content bytes build and eight
+return CONSTRAINT having agreed to them; three digits build and four do
+the same. A builder that reports CONSTRAINT for an input it accepted at
+plan time is the honest-but-useless state a refusal by name exists to
+avoid, and here it was produced by arithmetic rather than by a missing
+branch.
+
+**They are gone rather than corrected**, which is 26.628's answer to a
+pad's bounds and is this file's own stated rule: two checks of one schema
+is how they come to disagree, and these had. The view states the cap, the
+builder validates against the view before returning, and that catches
+every over-cap run by construction -- an over-long run is precisely one
+whose delimiter is not in the window. Behaviour measured identical with
+the checks in and out, at the boundary and either side of it.
+
+What the cap means is now visible in the escaped case:
+`edges.escaped_run` is `until "," max 64 [escape]`, so a comma in the
+content costs two of the sixty-four, and 62 bytes with one in them take
+the same budget as 63 without. That is the one place the three-way
+relationship -- content, encoding, cap -- can be seen at all, which is
+why the test is written over it.
+
+#### Two more things the loop had to get right
+
+The length is accumulated **against the room left** rather than summed
+and compared afterwards: a content length near `UINT32_MAX` doubles past
+it, and a wrapped total passes a capacity check it should fail.
+`situ_cap - situ_at - situ_need` cannot wrap, because the running total
+is at most the capacity by induction.
+
+And the null check goes **before** the loops rather than inside the copy,
+unlike every other caller-measured run here: those skip a `memcpy` at
+zero length, where these loops read bytes one at a time. A length with a
+null pointer is the caller's mistake and it gets BOUNDS, not a crash.
+
+**176 of 242 structs build**, 36 of 45 schemas, 96 of 112 arms.
+
 ### 26.631 Two writing primitives the runtime did not have
 
 Seven refusals were one family: the runtime could not write the bytes.

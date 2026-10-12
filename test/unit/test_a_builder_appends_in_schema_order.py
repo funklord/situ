@@ -677,9 +677,10 @@ def test_a_delimited_member_is_a_run_and_not_a_one_byte_scalar() -> None:
 	# Several bytes may end it, so which to write is not stated. http's
 	# `header_field.value` is the corpus instance.
 	('u8 x[] until " " | "\\t"', "any of 2 delimiters"),
-	# Escaping would write bytes other than the ones the caller gave, and
-	# the reader's unescape has no writer to be tested against.
-	('u8 x[] until "\\"" [escape = "\\\\"]', "escapes its delimiter"),
+	# The escape row went the way the `\r\n` one did: escaping is
+	# written now, so there is no refusal left to assert. It moved to
+	# `test_an_escaped_run_writes_the_encoding_its_reader_scans`, which
+	# asserts the bytes.
 	# Trimming is the same: the bytes it holds are not the bytes given.
 	('u8 x[] until " " [trim = " "]', "is trimmed"),
 ])
@@ -3409,3 +3410,193 @@ def test_a_scaled_text_number_is_refused_for_the_point() -> None:
 		assert not parts and why is not None, why
 		assert f"`{member}` is scaled" in why, why
 		assert "point the runtime does not format" in why, why
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_an_escaped_run_writes_the_encoding_its_reader_scans(
+		tmp_path: Path) -> None:
+	"""JSON strings, which the writer refused for escaping them.
+
+	The refusal said escaping "would write bytes other than the ones it
+	was given", and that is true and is not a reason: the caller hands
+	over CONTENT and the wire form is the schema's, which is the division
+	every other member here follows -- a size field is computed, a pad is
+	computed, and these bytes are encoded.
+
+	What makes it not an invention is that the encoding is FORCED.
+	`situ_scan_relaxed` takes the byte after an escape as content
+	whatever it is, so exactly two kinds of byte must carry one: the
+	delimiter, or the run reads back short, and the escape itself, or it
+	swallows the byte after it. Nothing else is escaped -- a JSON encoder
+	also escapes control bytes, and that is a rule this schema does not
+	state.
+
+	`ab\\\\` is the case that proves the second rule. Written bare it
+	produces `"ab\\"`, whose closing quote is escaped, and the member is
+	unterminated -- which `_validate` catches, so the sabotage shows as a
+	build that refuses. The mid-string case `a\\\\b` is the subtler half:
+	bare, it comes out `"a\\b"`, which the reader accepts at the same
+	length while meaning something else under the escape rule. Only the
+	bytes tell those apart, which is why this asserts bytes.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "json" / "json.situ")
+	header = _header(parsed, resolved, "json")
+	files  = dict(build.generate(parsed, resolved, "json", header=header))
+	files.update(generate_c(parsed, resolved, "json").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text(r"""
+#include <stdio.h>
+#include "json_build.h"
+
+static void one(const uint8_t *content, uint32_t len)
+{
+	uint8_t      buf[128];
+	uint32_t     wrote = 0;
+	situ_err_t   err;
+	situ_msg_t   msg;
+	situ_view_t  view;
+
+	err = situ_text_build(buf, sizeof buf, (uint8_t)'"', content, len,
+	                      &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%c", buf[i]);
+	if (err != SITU_OK) { printf("\n"); return; }
+
+	situ_msg_init(&msg, buf, wrote);
+	if (situ_text_view(&msg, 0, wrote, &view) != SITU_OK) {
+		printf(" view-refused\n");
+		return;
+	}
+	{
+		const uint32_t scan = situ_text_chars_len(view);
+		const int done = situ_text_chars_terminated(view);
+		const situ_err_t v = situ_text_validate(view);
+
+		printf(" %u %d %d\n", scan, done, (int)v);
+	}
+}
+
+int main(void)
+{
+	one((const uint8_t *)"hi", 2u);
+	one(NULL, 0u);
+	one((const uint8_t *)"a\"b", 3u);
+	one((const uint8_t *)"a\\b", 3u);
+	one((const uint8_t *)"ab\\", 3u);
+	one((const uint8_t *)"\"\"", 2u);
+	/* A length with a null pointer is the caller's mistake, not a
+	 * crash: the loops read bytes, so the check is before them. */
+	{
+		uint32_t wrote = 0;
+		printf("%d\n", (int)situ_text_build((uint8_t[8]){0}, 8u,
+		                                    (uint8_t)'"', NULL, 2u,
+		                                    &wrote));
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "json.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# err, bytes written, the wire form, then the reader's scan length,
+	# whether it found its delimiter, and `validate`. The scan length is
+	# the ENCODED one, which is what the reader reports.
+	assert lines[0] == '0 4 "hi" 2 1 0', lines[0]
+	assert lines[1] == '0 2 "" 0 1 0', f"an empty string is legal: {lines[1]}"
+	assert lines[2] == '0 6 "a\\"b" 4 1 0', lines[2]
+	assert lines[3] == '0 6 "a\\\\b" 4 1 0', lines[3]
+	assert lines[4] == '0 6 "ab\\\\" 4 1 0', \
+		f"a trailing escape must not escape the delimiter: {lines[4]}"
+	assert lines[5] == '0 6 "\\"\\"" 4 1 0', lines[5]
+	assert lines[6] == "1", f"a length with no pointer is BOUNDS: {lines[6]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_cap_counts_the_delimiter_and_the_escapes(tmp_path: Path) -> None:
+	"""`[max = N]` bounds the member's bytes, delimiter included.
+
+	The reader's scan window is `min(N, remaining)`, so the delimiter has
+	to land INSIDE the cap: with a one-byte delimiter the content gets
+	N - 1. This writer checked the cap in three places -- a delimited
+	run, an escaped run and minimal digits -- and every one of them was
+	short by the delimiter's length, so each accepted exactly one length
+	that `_validate` then refused.
+
+	The checks are gone rather than corrected, which is this file's own
+	rule about two checks of one schema and is what 26.628 did with a
+	pad's bounds. The behaviour is pinned here instead, at the boundary,
+	because that is what a caller sees however it is produced: an
+	over-cap run is one whose delimiter is not in the window, which
+	`_validate` catches by construction.
+
+	`edges.escaped_run` is `until "," max 64 [escape]`, so a comma in the
+	content costs two of the sixty-four and 62 bytes with one in them
+	take the same budget as 63 without.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	header = _header(parsed, resolved, "edges")
+	files  = dict(build.generate(parsed, resolved, "edges", header=header))
+	files.update(generate_c(parsed, resolved, "edges").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "edges_build.h"
+
+static void one(uint32_t n, int comma)
+{
+	uint8_t     buf[256];
+	uint8_t     content[80];
+	uint32_t    wrote = 0;
+	situ_err_t  err;
+
+	memset(content, 'x', sizeof content);
+	if (comma) content[0] = (uint8_t)',';
+	err = situ_escaped_run_build(buf, sizeof buf, content, n,
+	                             (const uint8_t *)"Z", 1u, &wrote);
+	printf("%d %u\\n", (int)err, wrote);
+}
+
+int main(void)
+{
+	one(63u, 0);	/* 63 content and the comma: exactly 64 */
+	one(64u, 0);	/* one past */
+	one(62u, 1);	/* 62 content, one escaped, and the comma: 64 */
+	one(63u, 1);	/* one past, by the escape */
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "edges.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 65", f"63 and the delimiter fit 64: {lines[0]}"
+	assert lines[1] == "2 0", f"64 and the delimiter do not: {lines[1]}"
+	assert lines[2] == "0 65", \
+		f"an escaped comma costs two of the budget: {lines[2]}"
+	assert lines[3] == "2 0", lines[3]

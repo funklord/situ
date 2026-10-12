@@ -391,9 +391,6 @@ def _delimited_refusal(placement: Placement) -> str | None:
 	if len(placement.delimiters) > 1:
 		return f"ends at any of {len(placement.delimiters)} delimiters, so " \
 		       "which byte to write after it is not stated"
-	if placement.delimiter_escape:
-		return "escapes its delimiter, and escaping would write bytes " \
-		       "other than the ones it was given"
 	if placement.delimiter_quote:
 		return "is quoted, so where it ends depends on a quote this " \
 		       "writer does not place"
@@ -1441,9 +1438,6 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 		*([f"\t\tif (({value}) < 0) {{",
 		   f"\t\t\t{DIGITS}++;",
 		   "\t\t}"] if signed_digits else []),
-		f"\t\tif ({DIGITS} > {part.digits}u) {{",
-		"\t\t\treturn SITU_ERR_CONSTRAINT;",
-		"\t\t}",
 		f"\t\tif ({CAP} - {AT} < {DIGITS} + 1u) {{",
 		"\t\t\treturn SITU_ERR_BOUNDS;",
 		"\t\t}",
@@ -1576,8 +1570,107 @@ def _needle(local: str, at: str, delim: bytes) -> str:
 		for i, byte in enumerate(delim))
 
 
+def _escaped(part: Part, local: str, escape: int) -> list[str]:
+	"""Write a delimited run whose content the schema says to escape.
+
+	The caller hands over CONTENT and the wire form is the schema's, which
+	is the same division every other member here follows -- a size field
+	is computed, a pad is computed, and these bytes are encoded. What
+	makes it not an invention is that the encoding is forced rather than
+	chosen: `situ_scan_relaxed` takes the byte after an escape as content
+	whatever it is, so exactly two kinds of byte have to carry one.
+
+	  - the delimiter, or a run containing it would read back short;
+	  - the escape byte itself, or it would swallow the byte after it --
+	    and a content byte ending in one swallows the DELIMITER, leaving
+	    the member unterminated. That is the fault `sexpr`'s own comment
+	    describes from the reading side.
+
+	Nothing else is escaped. A JSON encoder also escapes control bytes,
+	and that is a rule this schema does not state: situ's `[escape]` says
+	which byte escapes, and the reader accepts any byte after it.
+
+	`[max = N]` bounds what is ON THE WIRE, so the encoded length is what
+	is checked against it -- sixty-four bytes of content with a quote
+	among them do not fit a sixty-four byte cap.
+
+	The length is accumulated against the room left rather than summed and
+	compared afterwards: a content length near `UINT32_MAX` doubles past
+	it, and a wrapped total passes a capacity check it should fail.
+	"""
+	ends = part.delimiter
+	spelt = (chr(ends[0]) if len(ends) == 1 and 32 < ends[0] < 127
+	         else " ".join(f"{byte:02X}" for byte in ends))
+	# The first byte of the delimiter is the one that carries the escape:
+	# with it escaped the reader's scan steps past the position where the
+	# sequence would have matched, so the bytes after it are content.
+	hit = (f"{part.local}[{SCAN}] == 0x{escape:02X}u"
+	       + (f" || ({_needle(part.local, SCAN, ends)})" if len(ends) == 1
+	          else f" || ({SCAN} + {len(ends)}u <= {part.local}_len"
+	               f" && ({_needle(part.local, SCAN, ends)}))"))
+	return [
+		f"\t/* {local}: the caller's content, escaped as the schema says,",
+		f"\t * then the `{spelt}` that ends it. A byte equal to the",
+		f"\t * delimiter or to the escape (0x{escape:02X}) is written with",
+		"\t * the escape before it -- forced rather than chosen, because",
+		"\t * the reader takes the byte after an escape as content and a",
+		"\t * bare one would leave the run short or unterminated. */",
+		"\t{",
+		f"\t\tuint32_t {SCAN};",
+		f"\t\tuint32_t {NEED} = 0u;",
+		"",
+		# Before either loop reads a byte, and not folded into the loop
+		# condition: zero length with a null pointer is a legal empty run,
+		# and a length with a null pointer is the caller's mistake rather
+		# than this writer's crash.
+		f"\t\tif ({part.local}_len != 0u && {part.local} == NULL) {{",
+		"\t\t\treturn SITU_ERR_BOUNDS;",
+		"\t\t}",
+		"",
+		f"\t\tfor ({SCAN} = 0u; {SCAN} < {part.local}_len; {SCAN}++) {{",
+		f"\t\t\tconst uint32_t {USED} = ({hit})",
+		"\t\t\t    ? 2u : 1u;",
+		"",
+		# Against the room LEFT, which cannot wrap: `situ_need` is at most
+		# the capacity by induction, so the subtraction stays positive.
+		f"\t\t\tif ({CAP} - {AT} - {NEED} < {USED}) {{",
+		"\t\t\t\treturn SITU_ERR_BOUNDS;",
+		"\t\t\t}",
+		f"\t\t\t{NEED} += {USED};",
+		"\t\t}",
+		f"\t\tfor ({SCAN} = 0u; {SCAN} < {part.local}_len; {SCAN}++) {{",
+		f"\t\t\tif ({hit}) {{",
+		f"\t\t\t\t{OUT}[{AT}] = 0x{escape:02X}u;",
+		f"\t\t\t\t{AT} += 1u;",
+		"\t\t\t}",
+		f"\t\t\t{OUT}[{AT}] = {part.local}[{SCAN}];",
+		f"\t\t\t{AT} += 1u;",
+		"\t\t}",
+		"\t}",
+	]
+
+
 def _write_needle(delim: bytes, what: str) -> list[str]:
-	"""The statements that put the delimiter down and advance."""
+	"""The statements that put the delimiter down and advance.
+
+	**`[max = N]` is not checked by this writer**, and the note belongs
+	here because the three places that did check it all end at this
+	function. The reader's scan window is `min(N, remaining)`, so the
+	delimiter has to land INSIDE the cap: the rule is "content and
+	delimiter together" and every one of those three read it as
+	"content". Each therefore accepted exactly one length that
+	`_validate` then refused, which is the honest-but-useless state a
+	refusal by name exists to avoid -- a builder reporting CONSTRAINT for
+	an input it had agreed to.
+
+	They are gone rather than corrected, for this file's own reason: two
+	checks of one schema is how they come to disagree, and these had. The
+	view states the cap and the builder validates against it before
+	returning, which catches every over-cap run by construction -- an
+	over-long one is precisely one whose delimiter is not in the window.
+	Measured across all three shapes, a delimited run and an escaped run
+	and minimal digits, before the checks came out and after.
+	"""
 	if len(delim) == 1:
 		return [f"\t/* and the {what} that ends it. */",
 		        *_room("1u"),
@@ -2289,6 +2382,12 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				f"\t{AT} += {part.local}_len;",
 				"",
 			]
+		elif part.role == ENDED and held.delimiter_escape is not None:
+			lines += [
+				*_escaped(part, local, held.delimiter_escape),
+				*_write_needle(part.delimiter, "delimiter"),
+				"",
+			]
 		elif part.role == ENDED:
 			ending = part.delimiter[0]
 			lines += [
@@ -2297,11 +2396,10 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"that ends them.",
 				"\t * The delimiter is what says where the run stops, so a",
 				"\t * run containing it would read back shorter than it was",
-				"\t * written. Refused rather than escaped: escaping writes",
-				"\t * bytes other than the ones the caller gave. */",
-				*([f"\tif ({part.local}_len > {part.digits}u) {{",
-				   "\t\treturn SITU_ERR_CONSTRAINT;",
-				   "\t}"] if part.digits else []),
+				"\t * written. Refused rather than escaped, this schema",
+				"\t * naming no escape byte: inventing one would write",
+				"\t * bytes the caller did not give under a rule the",
+				"\t * schema does not state. */",
 				"\t{",
 				f"\t\tuint32_t {SCAN};",
 				"",
