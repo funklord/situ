@@ -517,9 +517,15 @@ def test_a_minimal_run_of_digits_is_written_with_its_terminator() -> None:
 	# Neither a width nor `[minimal]`, so how many digits to write is not
 	# stated anywhere.
 	('decimal u32 n until ":"', "neither a width"),
-	# The runtime formats unsigned values; a sign is a second thing to
-	# write and is not written here.
-	('decimal i32 n until ":" max 4 [minimal]', "signed number"),
+	# A signed one was here, for a runtime that formatted magnitudes
+	# only. `situ_format_int` writes one now and the case moved to
+	# `test_a_signed_text_number_spends_a_byte_on_its_sign`, which
+	# asserts the bytes rather than the absence of them. A scaled one
+	# takes its place: the digits carry a point no formatter here writes,
+	# and the guard for it had to arrive WITH the signed support --
+	# `_radix_refusal` returns before the `scaled` check below it, so
+	# handling the sign alone would have written 1.5 as 1.
+	('scaled i32 n until ":" max 4', "is scaled"),
 ])
 def test_digits_the_writer_cannot_place_are_refused(
 		member: str, wanted: str) -> None:
@@ -816,18 +822,23 @@ def test_a_nested_struct_whose_extent_its_bytes_do_not_state_is_refused() -> Non
 	message pins whatever the message says, including the part that is
 	wrong, so this one was holding the fault in place.
 
-	What it checks now is the refusal that applies: the runtime has one
-	varint encoder and it is LEB128, so a big-endian varint is refused by
-	name rather than written by a second implementation here.
+	It was then corrected to pin the refusal that DID apply -- that the
+	runtime wrote LEB128 only -- and that one has gone too, because the
+	runtime writes big-endian varints now. **A message pinned twice is a
+	message this test should not be pinning**, so what it checks is the
+	property underneath: a varint type has no `_required`, which is what
+	`frames_itself` reads from the artifact, and the planner reaches its
+	varint branch rather than calling the member a nested struct.
 
 	`mqtt_string` keeps the original point -- the header's `_required` is
 	what `hands_over` reads -- which is why that half stays.
 	"""
 	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
 	header = _header(parsed, resolved, "edges")
-	_, why = _only(resolved, "varint_driver", header, None, parsed)
-	assert why is not None and "varint" in why, why
-	assert "the runtime writes LEB128" in why, why
+	parts, why = _only(resolved, "varint_driver", header, None, parsed)
+	assert why is None, why
+	assert [part.role for part in parts
+	        if part.placement.name == "n"] == [build.VARINT]
 
 	# And the predicate reads the artifact rather than guessing.
 	assert not build.frames_itself(header, "situ_edge_varint")
@@ -1928,22 +1939,39 @@ def test_a_varint_is_not_a_nested_struct() -> None:
 	assert length[0].value == 28, "the schema's own bound on the value"
 
 
-def test_a_big_endian_varint_is_refused_by_name() -> None:
-	"""`situ_varint_put` is the only encoder the runtime has.
+def test_a_big_endian_varint_is_written_in_its_own_encoding() -> None:
+	"""This asserted the refusal, and the refusal was about the runtime.
 
-	The big-endian form has a reader and a length function and no writer,
-	so sqlite's and edges' varints are refused rather than written by a
-	second implementation here -- which is the fault `owned.py` paid for
-	in BCD, where an encode and a decode were self-consistent and wrong
-	together.
+	`situ_varint_put` was the only encoder there, so the big-endian form
+	-- which had a reader and a length function -- was refused rather
+	than written by a second implementation here, the fault `owned.py`
+	paid for in BCD where an encode and a decode were self-consistent and
+	wrong together. The answer was never to write one in the generator:
+	it is `situ_varint_be_put` in the runtime, beside the reader it has to
+	agree with, taking its length from the same `_len` the minimality
+	check reads.
+
+	So the statement left is which encoder the writer calls, and that it
+	passes the declaration's own limits rather than numbers computed a
+	second time -- which is also what `emit.py` hands the reader.
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "sqlite" / "sqlite.situ")
 	header = _header(parsed, resolved, "sqlite")
 	shape  = _shape(parsed, resolved, header)
-	named  = [why for _, why in build.refusals(resolved, shape)
-	          if "varint" in why]
-	assert named, "no sqlite struct is refused for its varint any more"
-	assert any("the runtime writes LEB128" in why for why in named), named
+	assert not [why for _, why in build.refusals(resolved, shape)
+	            if "varint" in why]
+
+	text = build.generate(parsed, resolved, "sqlite",
+	                      header=header)["sqlite_build.h"]
+	assert "situ_varint_be_put" in text
+	assert "situ_varint_put(" not in text, "LEB128's encoder has no business"
+
+	# 9 bytes and a terminal 8 bits are `VarintDecl.max_bytes` and
+	# `.terminal_bits`, the properties `emit.py` reads for the reader's
+	# own `_get` -- so the two cannot disagree about where a value ends.
+	decl = {d.name: d for d in parsed.varints()}["sqlite_varint"]
+	assert (decl.max_bytes, decl.terminal_bits) == (9, 8)
+	assert f"{decl.max_bytes}u, {decl.terminal_bits}u);" in text
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
@@ -3181,3 +3209,203 @@ def test_a_packed_size_field_is_written_from_its_run() -> None:
 	assert len(sized) == 1 and sized[0].placement.name == "n"
 	assert "n" not in [part.local for part in parts
 	                   if build._supplies_a_value(part)]
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_sqlite_cell_writes_big_endian_varints(tmp_path: Path) -> None:
+	"""`situ_varint_be_put`, against the decoder that was already there.
+
+	The runtime could read a big-endian base-128 varint and compute its
+	length and not write one, so sqlite's and three of edges' varints
+	were refused. The encoder is the decoder backwards and takes its
+	length from `situ_varint_be_len` -- the same function the minimality
+	check reads, so a value is written at the length a reader calls
+	minimal rather than at one the writer computed again.
+
+	The vectors are SQLite's own: 200 encodes as `81 48` (one group of
+	128 and 72) and 300 as `82 2C`. And `payload_size` is not a parameter
+	-- it is the length of `payload`, which the varint branch was taking
+	from the caller as well, two numbers for one fact.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "sqlite" / "sqlite.situ")
+	header = _header(parsed, resolved, "sqlite")
+	files  = dict(build.generate(parsed, resolved, "sqlite", header=header))
+	files.update(generate_c(parsed, resolved, "sqlite").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "sqlite_build.h"
+
+int main(void)
+{
+	uint8_t      buf[512];
+	uint8_t      payload[200];
+	uint32_t     wrote = 0;
+	situ_err_t   err;
+	situ_msg_t   msg;
+	situ_view_t  view;
+	uint64_t     size = 0, id = 0;
+
+	for (uint32_t i = 0; i < sizeof payload; i++) payload[i] = (uint8_t)i;
+
+	err = situ_table_leaf_cell_build(buf, sizeof buf, 1u, payload, 5u,
+	                                 &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+
+	wrote = 0;
+	err = situ_table_leaf_cell_build(buf, sizeof buf, 300u, payload, 200u,
+	                                 &wrote);
+	printf("%d %u %02X%02X%02X%02X\\n", (int)err, wrote,
+	       buf[0], buf[1], buf[2], buf[3]);
+
+	situ_msg_init(&msg, buf, wrote);
+	if (situ_table_leaf_cell_view(&msg, 0, wrote, &view) != SITU_OK)
+		return 2;
+	/* Each call its own statement: an out-parameter read in the same
+	 * call that sets it is unsequenced, and printed `0 0` here for a
+	 * writer that was right -- the fourth time in these increments. */
+	{
+		const int a = (int)situ_table_leaf_cell_payload_size_get(view,
+		                                                         &size);
+		const int b = (int)situ_table_leaf_cell_rowid_get(view, &id);
+		const int c = (int)situ_table_leaf_cell_validate(view);
+
+		printf("%d%d%d %llu %llu\\n", a, b, c,
+		       (unsigned long long)size, (unsigned long long)id);
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "sqlite.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# payload_size 5 from five bytes of payload, rowid 1, then the bytes.
+	assert lines[0] == "0 7 05010001020304", lines[0]
+	assert lines[1] == "0 204 8148822C", \
+		f"200 is `81 48` and 300 is `82 2C`: {lines[1]}"
+	assert lines[2] == "000 200 300", \
+		f"and the reader gets both back: {lines[2]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_signed_text_number_spends_a_byte_on_its_sign(
+		tmp_path: Path) -> None:
+	"""`situ_format_int`, which is `situ_parse_int` backwards.
+
+	The runtime formatted magnitudes only, so a text number the schema
+	declares signed was refused. The sign costs a byte of width, and for
+	`[minimal]` that width is counted in the generated code -- the
+	magnitude's digits, plus one where the value is negative. INT16_MIN
+	is the case worth having: its magnitude is one past INT16_MAX, so a
+	writer that negates the value rather than its predecessor plus one
+	gets it wrong at exactly one input.
+
+	Each value is read back with the reader's own getter, which is what
+	says the spelling is one it accepts -- `-` and never `+`, and no
+	`-0`, the rules that keep a signed text number canonical.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	header = _header(parsed, resolved, "edges")
+	files  = dict(build.generate(parsed, resolved, "edges", header=header))
+	files.update(generate_c(parsed, resolved, "edges").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "edges_build.h"
+
+int main(void)
+{
+	uint8_t       buf[32];
+	uint32_t      wrote;
+	situ_err_t    err;
+	situ_msg_t    msg;
+	situ_view_t   view;
+	const int16_t cases[] = { 0, 7, -7, -42, 32767, -32768 };
+
+	for (unsigned i = 0; i < sizeof cases / sizeof *cases; i++) {
+		int16_t back = 0;
+
+		wrote = 0;
+		err = situ_signed_number_build(buf, sizeof buf, cases[i], 0xEEu,
+		                               &wrote);
+		printf("%d %u %.*s", (int)err, wrote,
+		       (int)(wrote > 1u ? wrote - 1u : 0u), (char *)buf);
+		if (err == SITU_OK) {
+			situ_msg_init(&msg, buf, wrote);
+			if (situ_signed_number_view(&msg, 0, wrote, &view) == SITU_OK) {
+				const int r = (int)situ_signed_number_offset_get(view,
+				                                                &back);
+				const int v = (int)situ_signed_number_validate(view);
+
+				printf(" %d %d %d", r, (int)back, v);
+			}
+		}
+		printf("\\n");
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "edges.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# err, bytes written (digits, sign and the comma), the text, then the
+	# reader's own error, value and validate.
+	assert lines[0] == "0 3 0, 0 0 0", lines[0]
+	assert lines[1] == "0 3 7, 0 7 0", lines[1]
+	assert lines[2] == "0 4 -7, 0 -7 0", lines[2]
+	assert lines[3] == "0 5 -42, 0 -42 0", lines[3]
+	assert lines[4] == "0 7 32767, 0 32767 0", lines[4]
+	assert lines[5] == "0 8 -32768, 0 -32768 0", \
+		f"INT16_MIN is the magnitude edge: {lines[5]}"
+
+
+def test_a_scaled_text_number_is_refused_for_the_point() -> None:
+	"""The guard that came with signed digits, not before them.
+
+	`_radix_refusal` returns before `_scalar_refusal`'s own `scaled`
+	check, so a `scaled i64` written in digits was reaching the radix
+	table and being refused for its SIGN. Handle the sign and it would
+	have fallen through to the writer, which formats an integer: 1.5
+	written as 1, the conversion fault `f32 x[2]` had in a second
+	construct.
+
+	json's numbers and edges' `measured` are the two, and both now say
+	what is actually in the way.
+	"""
+	for path, name, member in (
+			(ROOT / "example" / "json" / "json.situ", "number", "value"),
+			(ROOT / "test" / "schema" / "edges.situ", "measured",
+			 "reading")):
+		_, resolved = _parts(path)
+		parts, why = _only(resolved, name)
+		assert not parts and why is not None, why
+		assert f"`{member}` is scaled" in why, why
+		assert "point the runtime does not format" in why, why

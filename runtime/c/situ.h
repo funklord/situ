@@ -1298,6 +1298,41 @@ static inline int situ_format_uint(uint8_t *data, uint32_t len, uint32_t radix,
 	return value == 0u ? 0 : -1;
 }
 
+/* Format a signed value: `situ_parse_int` backwards.
+ *
+ * `-` and never `+`, and no `-0`, which is what that parser accepts and what
+ * keeps a signed text number canonical -- `+5` and `5` are two spellings of
+ * one value, and zero has one. A caller passing zero gets `0` whatever the
+ * sign of the variable it came from.
+ *
+ * `len` is the WHOLE field including the sign, as `situ_format_uint`'s is
+ * including its leading zeros, so a four-byte field holding -42 reads
+ * `-042`. Returns 0, or -1 where the value does not fit the width -- which
+ * for a negative value includes having no room for the sign.
+ *
+ * A separate function for the reason `situ_parse_int` is one: every schema
+ * written before signed text numbers existed calls what it called before.
+ */
+static inline int situ_format_int(uint8_t *data, uint32_t len, uint32_t radix,
+        int64_t value)
+{
+	/* `-(value + 1) + 1` rather than `-value`, which is undefined at
+	 * INT64_MIN: the magnitude of the most negative value is one past the
+	 * most positive one. */
+	const uint64_t magnitude = value < 0
+	    ? (uint64_t)(-(value + 1)) + 1u
+	    : (uint64_t)value;
+
+	if (value >= 0) {
+		return situ_format_uint(data, len, radix, magnitude);
+	}
+	if (len < 2u) {
+		return -1;
+	}
+	data[0] = (uint8_t)'-';
+	return situ_format_uint(data + 1, len - 1u, radix, magnitude);
+}
+
 /* Whether these digits are the spelling `situ_format_uint` would write.
  *
  * The owned form stores a *value*, so it can only give back the one spelling
@@ -1754,6 +1789,55 @@ static inline uint32_t situ_varint_be_len(uint64_t value, uint32_t max_bytes,
 		n = max_bytes;
 	}
 	return n;
+}
+
+/* Encode one big-endian base-128 varint: `situ_varint_be_get` backwards.
+ *
+ * High group first, continuation bit set on every byte but the last, and
+ * the length is `situ_varint_be_len`'s -- the same function the minimality
+ * check reads, so a value is written at the length a reader calls minimal
+ * rather than at one this computed again.
+ *
+ * `terminal_bits == 8` is SQLite's ninth byte, which carries all eight of
+ * its bits and ends the value whatever its high bit says. The decoder takes
+ * the byte at `max_bytes - 1` whole unconditionally, so the encoder must
+ * too: at that length the low eight bits go down as they are, and the seven-
+ * bit groups above them carry the continuation flag as usual.
+ *
+ * Returns bytes written, or 0 where they do not fit.
+ *
+ * PRECONDITION: `max_bytes` is positive and `terminal_bits` is between one
+ * and eight, which `VarintDecl.max_bytes` and `.terminal_bits` guarantee --
+ * they are derived from a declared `max_bits` the front end has checked. */
+static inline uint32_t situ_varint_be_put(uint8_t *p, uint32_t avail,
+        uint64_t value, uint32_t max_bytes, uint32_t terminal_bits)
+{
+	const uint32_t n = situ_varint_be_len(value, max_bytes, terminal_bits);
+	uint64_t rest = value;
+	uint32_t i;
+
+	if (n > avail || n > max_bytes) {
+		return 0;
+	}
+
+	if (terminal_bits == 8u && n == max_bytes) {
+		p[n - 1u] = (uint8_t)(rest & 0xFFu);
+		rest >>= 8;
+	} else {
+		p[n - 1u] = (uint8_t)(rest & 0x7Fu);
+		rest >>= 7;
+	}
+
+	for (i = n - 1u; i > 0u; i--) {
+		p[i - 1u] = (uint8_t)((rest & 0x7Fu) | 0x80u);
+		rest >>= 7;
+	}
+
+	/* A value too wide for the format is a refusal rather than a truncated
+	 * encoding: `situ_varint_be_len` clamps its answer to `max_bytes`, so
+	 * the loop above would otherwise drop the high bits silently and write
+	 * a different number. */
+	return rest == 0u ? n : 0u;
 }
 
 /* Encoded length of a value, so a writer can tell whether it still fits. */

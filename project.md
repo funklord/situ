@@ -31304,6 +31304,110 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.631 Two writing primitives the runtime did not have
+
+Seven refusals were one family: the runtime could not write the bytes.
+Four were big-endian base-128 varints -- SQLite's record varints, and
+three in `edges` -- and three were text numbers the schema declares
+signed. Both are runtime gaps rather than generator ones, which is the
+distinction that decides where the fix goes: a second implementation in
+the generator is the fault `owned.py` paid for in BCD, where an encode
+and a decode were self-consistent and wrong together.
+
+**`situ_varint_be_put` is the decoder backwards, beside it.** The runtime
+had `situ_varint_be_get` and `situ_varint_be_len` and no encoder, so the
+length comes from that same `_len` -- the function the minimality check
+reads -- rather than from arithmetic done twice. SQLite's ninth byte is
+the case worth stating: `terminal_bits == 8` means it carries all eight
+of its bits and ends the value whatever its high bit says, which the
+decoder does unconditionally at `max_bytes - 1`, so the encoder must too.
+A value too wide is refused rather than truncated, because `_len` clamps
+its answer to `max_bytes` and the write would otherwise drop the high
+bits silently.
+
+Round-tripped at every boundary against the decoder, which is the only
+check that catches a sign or shift error: 0, 127, 128, 2^14-1, 2^56-1,
+2^56 and UINT64_MAX through SQLite's nine-byte form, and MIDI's
+four-byte one beside it. 2^56 comes out `80 C0 80 80 80 80 80 80 00`, and
+a cell with a 200-byte payload writes its size as `81 48` and a rowid of
+300 as `82 2C` -- SQLite's own spelling.
+
+**`situ_format_int` is `situ_parse_int` backwards**: `-` and never `+`,
+no `-0`, and `len` is the whole field including the sign, as
+`situ_format_uint`'s is including its leading zeros. The magnitude is
+`-(value + 1) + 1` rather than `-value`, which is undefined at
+INT64_MIN -- and INT16_MIN is in the test for the same reason, since a
+writer that negates the value rather than its predecessor is wrong at
+exactly one input.
+
+For `[minimal]` the sign is a byte of width on top of the magnitude's
+digits, counted in the generated code because that is where the digit
+count already lives. All six values round-trip through the reader's own
+getter and `_validate`.
+
+#### A varint can be the size field, and that is three for three
+
+`payload_size` was in the signature. SQLite's cell is
+`payload_size`, `rowid`, `payload[payload_size]`, so the caller was
+passing the size AND the payload's length -- two numbers for one fact,
+with nothing to stop a message disagreeing with itself.
+
+**The third branch in two days to take a value for a member the schema
+says the writer computes.** A packed field was the first (26.630), a
+varint the second, and the element-count branch ordering was the third.
+The cause is structural and worth stating where the next branch will be
+written: the size-field check sits AFTER every branch keyed on what a
+member IS, so each of those branches has to ask the question itself or
+silently win. Three instances is a pattern rather than three bugs.
+
+`VARINT` was also missing from `CALLER_SUPPLIED`, which came out when the
+signature guard dropped every varint rather than the computed one: a
+struct whose only caller-supplied member is a varint would have been
+reported as "entirely literal, so there is nothing to build".
+
+#### The guard that had to arrive with the signed support
+
+`_radix_refusal` returns before `_scalar_refusal`'s own `scaled` check,
+so a `scaled i64` written in digits was being refused for its SIGN.
+Handle the sign and it falls through to a writer that formats an
+integer: **1.5 written as 1**, which is `f32 x[2]` from the previous day
+in a second construct. The scaled check now lives in the radix table
+where it is reachable, and json's numbers and edges' `measured` say what
+is actually in the way.
+
+That is twice now that adding a capability would have un-refused
+something that needed a different refusal. The habit that catches it is
+reading the branch ORDER rather than the branch: a refusal table ordered
+by what a member lacks answers for whatever it reaches first.
+
+#### An out-parameter read in its own call, for the fourth time
+
+`printf("%d %llu", f(view, &size), size)` prints the value `size` had
+before the call, because the arguments are unsequenced. It has now
+happened four times in these increments, every time in a throwaway C
+probe, and every time the symptom was a plausible wrong number rather
+than a crash -- here `0 0` for a writer that was correct.
+
+The rule is in the probes as a comment now, where the next one gets
+written: **call it, then print it.** A probe is not a test and gets
+written fast, which is exactly why the same hazard keeps finding it.
+
+#### Three tests pinned refusals this removed, and one had moved twice
+
+`test_a_nested_struct_whose_extent_its_bytes_do_not_state_is_refused`
+asserted a misdiagnosis for a day, was corrected to pin the LEB128-only
+refusal, and that is gone as well. A message pinned twice is a message
+the test should not be pinning, so it checks the property underneath --
+a varint type has no `_required`, read from the artifact -- and that the
+planner reaches its varint branch at all.
+
+The BE128 refusal test became a statement about which encoder the writer
+calls and that it passes the declaration's own `max_bytes` and
+`terminal_bits`, the same properties `emit.py` hands the reader. And the
+signed digits case left the refusal table for a test that asserts bytes.
+
+**173 of 242 structs build**, 36 of 45 schemas, 96 of 112 arms.
+
 ### 26.630 Running a size expression backwards, and the canonical IPv4 header
 
 The largest family left was ten refusals saying *`X` is sized by the

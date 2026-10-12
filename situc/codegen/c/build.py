@@ -85,7 +85,7 @@ HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
-                             BITS, WIDE, OPAQUE, HIDDEN})
+                             BITS, WIDE, OPAQUE, HIDDEN, VARINT})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
@@ -148,6 +148,9 @@ class Part:
 		self.solved: invariant.Linear | None = None
 					# how a size field the schema states
 					# as arithmetic is computed
+		self.declared: ast.VarintDecl | None = None
+					# a varint's own declaration, which
+					# says its encoding and its limits
 		self.others    = others		# the values other arms claim
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
@@ -213,7 +216,7 @@ def _supplies_a_value(part: "Part") -> bool:
 	"""
 	if part.role == BITS and part.placement.kind == "reserved":
 		return not _states_its_content(part.placement)
-	if part.role == BITS and part.sizes is not None:
+	if part.role in (BITS, VARINT) and part.sizes is not None:
 		return False		# computed from the run it measures, with or
 					# without an expression between them
 	return part.role in CALLER_SUPPLIED
@@ -317,9 +320,13 @@ def _radix_refusal(placement: Placement) -> str | None:
 	"""
 	scalar = placement.scalar
 	assert scalar is not None
-	if scalar.signed:
-		return "is a signed number written in digits, and the runtime " \
-		       "formats unsigned ones"
+	if placement.scaled:
+		# Reached here rather than at `_scalar_refusal`'s own `scaled`
+		# check, which sits BELOW the radix branch and so never runs for a
+		# member that has both. `situ_format_int` would write 1.5 as 1 --
+		# the conversion fault `f32 x[2]` had, in a second construct.
+		return "is scaled, so its digits carry a point the runtime does " \
+		       "not format"
 	if placement.radix_minimal:
 		# Zero delimiters is not checked here because the parser refuses it
 		# outright -- *`decimal n` has no end* -- so a branch for it would
@@ -883,17 +890,24 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				return [], f"`{traverse.local_name(struct, held)}` names " \
 				           f"the varint type `{held.varint}`, and no " \
 				           "declaration for it was supplied"
-			if declared.encoding is not ast.VarintEncoding.LEB128:
-				# `situ_varint_put` is the only writer the runtime has;
-				# the big-endian form has a reader and a length and no
-				# encoder, so sqlite's and edges' varints are refused.
-				return [], f"`{traverse.local_name(struct, held)}` is a " \
-				           f"{str(declared.encoding).rsplit('.', 1)[-1]} " \
-				           "varint, and the runtime writes LEB128"
 			parts.append(Part(VARINT, held, local,
 			                  value=declared.max_bits,
 			                  minimal=declared.transform
 			                  is ast.VarintTransform.ZIGZAG))
+			parts[-1].declared = declared
+			# A varint can be the size field too, and SQLite's is: a cell
+			# is `payload_size`, `rowid`, `payload[payload_size]`, and the
+			# caller was passing the size AND the payload's length -- two
+			# numbers for one fact, the third branch today found taking a
+			# value for a member the schema says the writer computes.
+			#
+			# The pattern is worth stating where the next branch will be
+			# written: ANY branch keyed on what a member IS has to ask
+			# whether it is also a size field, because the size-field
+			# check comes after all of them and never gets the chance.
+			if held.name in measures:
+				parts[-1].sizes  = measures[held.name]
+				parts[-1].solved = solved.get(held.name)
 			continue
 
 		if held.kind in ("tag", "checksum") or held.tag_covers:
@@ -1317,6 +1331,8 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}"]
 	for part in parts:
 		if part.role == VARINT:
+			if not _supplies_a_value(part):
+				continue	# the run it measures says what it holds
 			args.append(f"{'int64_t' if part.minimal else 'uint64_t'} "
 			            f"{part.local}")
 		elif part.role == BITS:
@@ -1378,26 +1394,42 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 
 	scalar = part.placement.scalar
 	assert scalar is not None
+	signed_digits = bool(part.placement.scalar
+	                     and part.placement.scalar.signed)
+	formatter = "situ_format_int" if signed_digits else "situ_format_uint"
+	widest    = "int64_t" if signed_digits else "uint64_t"
 	if not part.minimal:
 		return [
 			f"\t/* {local}: {part.digits} digit(s) at radix {part.radix}, "
 			"leading zeros and all. */",
 			*_room(f"{part.digits}u"),
-			f"\tif (situ_format_uint({OUT} + {AT}, {part.digits}u, "
+			f"\tif ({formatter}({OUT} + {AT}, {part.digits}u, "
 			f"{part.radix}u,",
-			f"\t                     (uint64_t){value}) != 0) {{",
+			f"\t                     ({widest}){value}) != 0) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
 			"\t}",
 			f"\t{AT} += {part.digits}u;",
 		]
 
 	ending = part.delimiter[0]
+	# A negative value's digits are its MAGNITUDE's, and the sign is a byte
+	# of width on top -- counted here rather than in the runtime, because
+	# the loop below is what `[minimal]` needs and `situ_format_int` pads
+	# to whatever width it is given.
+	# Three lines where it is signed, because one is 110 columns of
+	# conditional and generated code is read by people chasing a byte.
+	magnitude = ([f"\t\tuint64_t {SCRATCH} = ({value}) < 0",
+	              f"\t\t    ? (uint64_t)(-((int64_t)({value}) + 1)) + 1u",
+	              f"\t\t    : (uint64_t)({value});"] if signed_digits
+	             else [f"\t\tuint64_t {SCRATCH} = (uint64_t){value};"])
 	return [
 		f"\t/* {local}: minimal digits at radix {part.radix}, then the "
-		f"`{chr(ending)}` that ends them. */",
+		f"`{chr(ending)}` that ends them."
+		+ (" A negative\n\t * value spends one of its bytes on the sign. */"
+		   if signed_digits else " */"),
 		"\t{",
 		f"\t\tuint32_t {DIGITS} = 1u;",
-		f"\t\tuint64_t {SCRATCH} = (uint64_t){value};",
+		*magnitude,
 		"",
 		# The count rather than a second formatter: `situ_format_uint` pads
 		# to the width it is given, so the only thing missing for `[minimal]`
@@ -1406,14 +1438,17 @@ def _value(part: Part, value: str, local: str) -> list[str]:
 		f"\t\t\t{SCRATCH} /= {part.radix}u;",
 		f"\t\t\t{DIGITS}++;",
 		"\t\t}",
+		*([f"\t\tif (({value}) < 0) {{",
+		   f"\t\t\t{DIGITS}++;",
+		   "\t\t}"] if signed_digits else []),
 		f"\t\tif ({DIGITS} > {part.digits}u) {{",
 		"\t\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t\t}",
 		f"\t\tif ({CAP} - {AT} < {DIGITS} + 1u) {{",
 		"\t\t\treturn SITU_ERR_BOUNDS;",
 		"\t\t}",
-		f"\t\tif (situ_format_uint({OUT} + {AT}, {DIGITS}, {part.radix}u,",
-		f"\t\t                     (uint64_t){value}) != 0) {{",
+		f"\t\tif ({formatter}({OUT} + {AT}, {DIGITS}, {part.radix}u,",
+		f"\t\t                     ({widest}){value}) != 0) {{",
 		"\t\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t\t}",
 		f"\t\t{AT} += {DIGITS};",
@@ -1591,9 +1626,14 @@ def _invert(part: Part, run: str, local: str, limit: int) -> list[str]:
 		"\t\treturn SITU_ERR_CONSTRAINT;",
 		"\t}",
 		*([f"\t{SOLVED} /= {scale};"] if scale != 1 else []),
-		f"\tif ({SOLVED} > {limit}) {{",
-		"\t\treturn SITU_ERR_CONSTRAINT;",
-		"\t}",
+		# Omitted where it cannot fire: `SOLVED` is an `int64_t`, so a
+		# 64-bit varint's ceiling is past what it can hold -- and the
+		# constant for it is unsigned, which `-Werror` refuses next to a
+		# signed comparison. The same judgement the plain size field makes
+		# about `> 4294967295u` on a `uint32_t`.
+		*([f"\tif ({SOLVED} > {limit}) {{",
+		   "\t\treturn SITU_ERR_CONSTRAINT;",
+		   "\t}"] if limit < (1 << 63) - 1 else []),
 	]
 
 
@@ -2098,17 +2138,44 @@ def _one(struct: ResolvedStruct, shape: Shape,
 			most = (1 << part.value) - 1
 			zig  = f"situ_zigzag_encode({part.local})" if part.minimal \
 			       else f"(uint64_t){part.local}"
+			assert part.declared is not None
+			big  = part.declared.encoding is ast.VarintEncoding.BE128
+			call = "situ_varint_be_put" if big else "situ_varint_put"
+			if part.sizes is not None:
+				# The length it states, in whatever unit the schema
+				# counts: elements for a run of wider ones, bytes
+				# otherwise, which is the measurement the size field's
+				# own branch makes.
+				run = _settled(parts, part.sizes, struct)
+				zig = ((SOLVED if part.solved is not None else
+				        f"{run}_count"
+				        if (part.sizes.element_bits or 0) in (16, 32, 64)
+				        else f"{run}_len"))
+				lines += _invert(part, run, local, most) \
+					if part.solved is not None else []
+				zig = f"(uint64_t){zig}"
 			lines += [
 				f"\t/* {local}: a varint, so its width is its own bytes'.",
 				f"\t * The schema bounds the VALUE at {part.value} bits, and",
-				"\t * `situ_varint_put` writes the minimal encoding, which",
-				"\t * satisfies a `minimal` declaration by construction. */",
+				f"\t * `{call}` writes the minimal encoding, which",
+				"\t * satisfies a `minimal` declaration by construction.",
+				*([f"\t * The limits are the declaration's own: "
+				   f"{part.declared.max_bytes} bytes,",
+				   f"\t * the last carrying {part.declared.terminal_bits}"
+				   " bits, which is what the",
+				   "\t * reader's `_get` is passed as well. */"]
+				  if big else ["\t */"]),
 				*([f"\tif ((uint64_t){part.local} > {most}u) {{",
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
 				   "\t}"] if part.value < 64 else []),
 				"\t{",
-				f"\t\tconst uint32_t {USED} = situ_varint_put({OUT} + {AT},",
-				f"\t\t                        {CAP} - {AT}, {zig});",
+				f"\t\tconst uint32_t {USED} = {call}({OUT} + {AT},",
+				(f"\t\t                        {CAP} - {AT}, {zig},"
+				 if big else
+				 f"\t\t                        {CAP} - {AT}, {zig});"),
+				*([f"\t\t                        "
+				   f"{part.declared.max_bytes}u, "
+				   f"{part.declared.terminal_bits}u);"] if big else []),
 				"",
 				f"\t\tif ({USED} == 0u) {{",
 				"\t\t\treturn SITU_ERR_BOUNDS;",

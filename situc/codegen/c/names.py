@@ -64,7 +64,7 @@ RUNTIME_SYMBOLS = frozenset({
 	"situ_bytes_eq", "situ_checksum_internet", "situ_delimiter_absent",
 	"situ_digits_canonical", "situ_digits_minimal", "situ_err_str",
 	"situ_err_t", "situ_fletcher16", "situ_fletcher32",
-	"situ_format_uint", "situ_get_be16", "situ_get_be32",
+	"situ_format_int", "situ_format_uint", "situ_get_be16", "situ_get_be32",
 	"situ_get_be64", "situ_get_le16", "situ_get_le32", "situ_get_le64",
 	"situ_get_ne16", "situ_get_ne32", "situ_get_ne64", "situ_in_bounds",
 	"situ_in_set", "situ_leaf_i64", "situ_leaf_u64", "situ_min_u32",
@@ -80,7 +80,7 @@ RUNTIME_SYMBOLS = frozenset({
 	"situ_scan_relaxed", "situ_sign_extend", "situ_skip", "situ_span_t",
 	"situ_trim_len", "situ_trim_start", "situ_utf16_valid",
 	"situ_utf16be_valid", "situ_utf16le_valid", "situ_utf8_valid",
-	"situ_varint_be_get", "situ_varint_be_len", "situ_varint_get",
+	"situ_varint_be_get", "situ_varint_be_len", "situ_varint_be_put", "situ_varint_get",
 	"situ_varint_len", "situ_varint_put", "situ_view_assert",
 	"situ_view_at", "situ_view_check", "situ_view_sub", "situ_view_t",
 	"situ_zeroize", "situ_zigzag_decode", "situ_zigzag_encode"

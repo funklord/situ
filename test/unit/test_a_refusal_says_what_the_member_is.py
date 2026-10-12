@@ -67,8 +67,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("is reserved and has no stated length",
 	 lambda pl, res: pl.kind in ("reserved", "preamble")),
 	("names the varint type", lambda pl, res: pl.varint is not None),
-	("varint, and the runtime writes LEB128",
-	 lambda pl, res: pl.varint is not None),
 	("escapes its delimiter",
 	 lambda pl, res: bool(pl.delimiter_escape)),
 	("is trimmed", lambda pl, res: bool(pl.trim_set)),
@@ -77,10 +75,13 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	 lambda pl, res: len(pl.delimiters) > 1),
 	("run, so nothing it writes ends it",
 	 lambda pl, res: bool(pl.delimiters) and not pl.delimiter_consumed),
-	("is a signed number written in digits",
-	 lambda pl, res: pl.radix is not None),
 	("is written in digits with neither a width",
 	 lambda pl, res: pl.radix is not None),
+	# The guard that arrived with signed digits: `_radix_refusal` returns
+	# before `_scalar_refusal`'s own `scaled` check, so without this the
+	# writer would format 1.5 as 1.
+	("is scaled, so its digits carry a point",
+	 lambda pl, res: bool(pl.scaled) and pl.radix is not None),
 	("is fixed point", lambda pl, res: pl.scalar is not None),
 	("is packed and its value is not its bits",
 	 lambda pl, res: build.packed(pl)),
