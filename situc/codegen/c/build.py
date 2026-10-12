@@ -6,11 +6,15 @@
 # or resize a message whose extent is not fixed". hull asked for that half
 # and found nothing emitting it in any backend (suggestion/hull.md, 11).
 #
-# The restriction here is append-only, and it is a property of the LAYOUT
-# rather than a flag: `traverse.append_only_refusals` reads it out of the
-# schema, because 0032's closing invariant is that no rung invents a fact
-# the schema did not state. A caller cannot ask for an append-only build of
-# a format that is not one.
+# The restriction here is that the writer must know where it is, and it is
+# a property of the LAYOUT rather than a flag:
+# `traverse.late_position_refusals` reads it out of the schema, because
+# 0032's closing invariant is that no rung invents a fact the schema did
+# not state. A caller cannot ask for a forward build of a format whose
+# positions are not forward. It was append-only until 26.629, which is a
+# stronger condition than the writer needs: a tag covering what follows it
+# is a late VALUE at a position the schema fixes, and tags are filled once
+# the message is whole whatever their offset.
 #
 # Two writers of one member is how a pair comes to be self-consistent and
 # wrong together, which `owned.py` paid for in BCD. So this file emits no
@@ -518,6 +522,27 @@ def computes_itself(header: str, name: str) -> bool:
 	answers come to disagree.
 	"""
 	return (f"situ_err_t {name}_compute(situ_view_t view, "
+	        "uint32_t *out)") in header or computes_over_a_prefix(header, name)
+
+
+def computes_over_a_prefix(header: str, name: str) -> bool:
+	"""Whether this tag's `_compute` sums bytes the message does not hold.
+
+	UDP's and TCP's checksums run over a pseudo-header first -- the
+	addresses, the protocol and the length, twelve bytes that are nowhere
+	in the datagram -- which the schema says with `prefix(...)` (14.2a)
+	and the emitted `_compute` and `_check` both take as `prefix` and
+	`prefix_len`.
+
+	Asked separately because the writer's refusal for a tag it cannot
+	compute said "names no codec", and for these two that was false: they
+	name one, and what they need is bytes only a caller has. The arity of
+	the emitted function is what distinguishes them, which is why this
+	reads the artifact rather than the schema -- the header is what the
+	call has to match.
+	"""
+	return (f"situ_err_t {name}_compute(situ_view_t view, "
+	        "const uint8_t *prefix, uint32_t prefix_len, "
 	        "uint32_t *out)") in header
 
 
@@ -714,7 +739,25 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	prefix  = shape.prefix
 	structs = shape.structs
 
-	refusals = traverse.append_only_refusals(struct)
+	# Two of the three things that break append-only are refusals here and
+	# the third is not, which needs saying because 26.610 took all three.
+	#
+	# A tag covering members that follow it cannot be written IN ORDER --
+	# its value is not known when the writer reaches it -- and this writer
+	# does not write tags in order. It reserves their bytes and fills them
+	# once the message is whole, from the reader's own `_ptr`, `_compute`
+	# and `_check`; `_tags` never asked where the tag was, so a trailing
+	# PNG CRC and an IPv4 header checksum are one code path.
+	#
+	# What makes that legitimate rather than a back-patch is the argument
+	# `late_position_refusals` carries for why building needs no
+	# permission above rung 2: no view into the buffer exists while it is
+	# being filled, so there is nothing to invalidate. That holds for a byte at
+	# offset ten exactly as it holds for the last one. And for all nine of
+	# these -- the internet checksums -- a zero field is what the
+	# algorithm sums over, so the reserved bytes are not a placeholder but
+	# the thing itself.
+	refusals = traverse.late_position_refusals(struct)
 	if refusals:
 		return [], refusals[0]
 
@@ -797,7 +840,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			if held.tag_codec_endian is None:
 				return [], f"`{local_name}` has no byte order for its " \
 				           "codec's output"
-			parts.append(Part(TAG, held, local, size, inner=name))
+			part = Part(TAG, held, local, size, inner=name)
+			# The pseudo-header is the caller's: it is not in the message,
+			# and 14.2a's `prefix(...)` says as much. situ emits a builder
+			# for the struct that holds it, so the two compose -- build the
+			# pseudo-header, hand it over, and this writer never has to
+			# know what an address is.
+			part.opens = computes_over_a_prefix(header, name)
+			parts.append(part)
 			continue
 
 		if packed(held):
@@ -1104,6 +1154,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			taken.add(f"{local}_len")
 		if part.role == WIDE:
 			taken.add(f"{local}_count")
+		if part.role == TAG and part.opens:
+			taken.add(f"{local}_prefix")
+			taken.add(f"{local}_prefix_len")
 
 	if not any(_supplies_a_value(part) for part in parts):
 		# Every byte is a fact the schema states, so there is nothing for a
@@ -1172,6 +1225,11 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			if _supplies_bytes(part):
 				args.append(f"const uint8_t *{part.local}")
 			args.append(f"uint32_t {part.local}_len")
+		elif part.role == TAG and part.opens:
+			# Not a member's bytes: the pseudo-header this tag's codec
+			# sums before the message, which no member holds.
+			args.append(f"const uint8_t *{part.local}_prefix")
+			args.append(f"uint32_t {part.local}_prefix_len")
 	args.append(f"uint32_t *{WROTE}")
 
 	lines = [f"static inline situ_err_t {name}("]
@@ -1401,7 +1459,8 @@ def _room(size: str) -> list[str]:
 	        "\t}"]
 
 
-def _tags(parts: list[Part]) -> list[str]:
+def _tags(parts: list[Part], structs: Mapping[str, ResolvedStruct] | None,
+		prefix: str = "situ") -> list[str]:
 	"""Fill every reserved tag, now that the message is whole.
 
 	`validate` deliberately does not verify a checksum -- "the coverage
@@ -1447,11 +1506,38 @@ def _tags(parts: list[Part]) -> list[str]:
 		end = ("le" if part.placement.tag_codec_endian is ast.Endian.LITTLE
 		       else "be")
 		width = part.placement.size_bits or 32
+		# The pseudo-header, where the codec sums one: the same two
+		# arguments the emitted `_compute` and `_check` declare, in the
+		# order they declare them, so a mismatch is a compile error rather
+		# than a wrong sum.
+		over = (f"{part.local}_prefix, {part.local}_prefix_len, "
+		        if part.opens else "")
+		also = (f", {part.local}_prefix, {part.local}_prefix_len"
+		        if part.opens else "")
+		inner = (structs or {}).get(part.placement.tag_prefix or "")
 		lines += [
 			f"\t/* {part.placement.name}: computed over what was written, "
 			"stored, and",
 			"\t * then checked -- the check is what proves the store rather",
 			"\t * than this code asserting it. */",
+			*([f"\t/* The pseudo-header is {inner.name}, and its length is"
+			   " the one",
+			   "\t * thing a caller can get wrong silently: a short prefix"
+			   " sums",
+			   "\t * to a different number and the message still"
+			   " validates. */",
+			   f"\tif ({part.local}_prefix == NULL",
+			   f"\t\t\t|| {part.local}_prefix_len != "
+			   f"{macro(prefix, inner.name, 'SIZE_FIXED')}) {{",
+			   "\t\treturn SITU_ERR_BOUNDS;",
+			   "\t}"]
+			  if part.opens and inner is not None
+			  and inner.layout.is_fixed_size else []),
+			*([f"\tif ({part.local}_prefix == NULL) {{",
+			   "\t\treturn SITU_ERR_BOUNDS;",
+			   "\t}"]
+			  if part.opens and (inner is None
+			                     or not inner.layout.is_fixed_size) else []),
 			"\t{",
 			f"\t\tuint32_t {TAGV} = 0u;",
 			f"\t\tuint8_t *{SCRATCH}_at = {part.inner}_ptr({VIEW});",
@@ -1459,13 +1545,21 @@ def _tags(parts: list[Part]) -> list[str]:
 			f"\t\tif ({SCRATCH}_at == NULL) {{",
 			"\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t}",
-			f"\t\t{ERR} = {part.inner}_compute({VIEW}, &{TAGV});",
+			*([f"\t\t{ERR} = {part.inner}_compute({VIEW},",
+			   f"\t\t                    {part.local}_prefix,",
+			   f"\t\t                    {part.local}_prefix_len,",
+			   f"\t\t                    &{TAGV});"] if part.opens else
+			  [f"\t\t{ERR} = {part.inner}_compute({VIEW}, &{TAGV});"]),
 			f"\t\tif ({ERR} != SITU_OK) {{",
 			f"\t\t\treturn {ERR};",
 			"\t\t}",
 			f"\t\tsitu_put_{end}{width}({SCRATCH}_at, "
 			f"(uint{width}_t){TAGV});",
-			f"\t\t{ERR} = {part.inner}_check({VIEW});",
+			*([f"\t\t{ERR} = {part.inner}_check({VIEW},",
+			   f"\t\t                    {part.local}_prefix,",
+			   f"\t\t                    {part.local}_prefix_len);"]
+			  if part.opens else
+			  [f"\t\t{ERR} = {part.inner}_check({VIEW});"]),
 			f"\t\tif ({ERR} != SITU_OK) {{",
 			f"\t\t\treturn {ERR};",
 			"\t\t}",
@@ -2008,7 +2102,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		+ f"&{VIEW}) != SITU_OK) {{",
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
-		*_tags(parts),
+		*_tags(parts, structs, prefix),
 		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW});",
 		f"\tif ({ERR} != SITU_OK) {{",
 		f"\t\treturn {ERR};",

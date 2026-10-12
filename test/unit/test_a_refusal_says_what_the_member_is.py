@@ -58,7 +58,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("is a coded region", lambda pl, res: pl.kind == "coded"),
 	("is a TLV region", lambda pl, res: pl.kind == "tlv"),
 	("is a marker", lambda pl, res: pl.kind == "marker"),
-	("which follows it", lambda pl, res: bool(pl.tag_covers)),
 	("is sized by the expression",
 	 lambda pl, res: pl.size_expr is not None),
 	("is a tag whose schema names no codec",

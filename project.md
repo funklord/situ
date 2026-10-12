@@ -31304,6 +31304,108 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.629 The internet checksums, and a refusal overturned by its own argument
+
+Nine of the ninety-five refusals were *`X` covers `X`, which follows it,
+so its value is not known when the writer reaches it* -- and the nine are
+ICMP's checksum in six arms, IPv4's header checksum, TCP's and UDP's. The
+most recognisable checksums in existence, and a message builder that
+cannot write them is missing the obvious case.
+
+**26.610 refused them deliberately, and the argument that overturns it is
+in 26.610.** That entry says building needs no permission above rung 2
+because *"appending into caller-supplied backing invalidates nothing: no
+view into the buffer exists while it is being filled"* -- and then refuses
+a tag inside its own coverage because it *"would need a back-patch"*. Both
+cannot be true. If no view exists, nothing is invalidated by writing a
+byte at offset ten either; the buffer is the writer's until it returns.
+
+**And the writer was already filling tags out of order.** `_tags` takes
+the field's address from the reader's own `_ptr`, computes with
+`_compute`, stores, and proves the store with `_check`. It never asked
+where the tag was -- so a trailing PNG CRC and a header checksum inside
+its own coverage were one code path all along, and the only thing
+stopping the second was a struct-level gate refusing to plan it.
+
+**For these nine the reserved bytes are not even a placeholder.** RFC
+1071 sums the message with the checksum field taken as zero, which is
+what `[self_as = 0]` says in the schema and what the writer writes while
+appending. The zeros are the thing itself.
+
+So the rule split by **what is late**. A `located` member and an index
+table are late POSITIONS: nothing learnt at the end repairs them, because
+the bytes in between are already down. A tag is a late VALUE at a
+position the schema fixes. `traverse.late_position_refusals` answers the
+first question and is what the writer consults;
+`traverse.tags_covering_later` answers the second and returns the pairs
+rather than a flag, so a refusal built from it can say which member.
+`append_only_refusals` is gone -- with the builder no longer asking it,
+it had no caller and its message was emitted by nothing, which is a row
+the claim gate would have carried for ever.
+
+#### Proved against arithmetic from the RFC, not against situ
+
+An echo request with type 8, code 0, identifier 0x1234 and sequence 1
+builds as `0800E5CA12340001`. RFC 1071's sum over those bytes with the
+checksum field zero is `0x0800 + 0x1234 + 0x0001 = 0x1A35`, whose
+one's complement is `0xE5CA`. That number comes from the RFC's
+arithmetic, so it is evidence about the bytes; the reader's own `_check`,
+asserted beside it, is evidence that situ agrees with itself. Both are
+worth having and they are not the same claim.
+
+#### UDP's and TCP's refusal was false, and the arity said so
+
+They were refused with *"is a tag whose schema names no codec"*. They
+name one -- `internet_checksum` -- and the emitted `_compute` is right
+there in the header. What differs is its **arity**: UDP's takes
+`(view, prefix, prefix_len, out)` where ICMP's takes `(view, out)`,
+because the sum runs over a twelve-byte pseudo-header that is nowhere in
+the datagram. 14.2a's `prefix(...)` is the schema saying so.
+
+The sixth misdiagnosis of this family, and the detector is the same one
+that fixes it: `computes_itself` asked whether a *specific signature* was
+in the header and reported its absence as "no codec". It asks both
+signatures now, and `computes_over_a_prefix` is the separate question --
+read from the artifact, because the header is what the call has to match.
+
+**So the writer asks the caller for those twelve bytes**, and situ emits
+a builder for the struct that holds them, so the two compose: build the
+pseudo-header, hand it over, and this writer never has to know what an
+address is. The length is checked against that struct's own `SIZE_FIXED`
+macro, because it is the one thing a caller can get wrong silently -- a
+short prefix sums to a different number and the message still validates.
+
+Hand-computed again: pseudo-header words `0A00 0001 0A00 0002 0011 0008`
+and message words `1234 0000 DEAD BEEF` sum with end-around carry to
+`0xC3ED`, complement `0x3C12`, and the builder writes
+`12343C12DEADBEEF`.
+
+**The fixture for that is inline, and deliberately.** `udp_header` still
+has no builder: `payload[length - 8]` needs an inverse this writer does
+not have, and `ipv4_header` wants `(ihl - 5) * 4`. A test that waited for
+them would have left the prefix path written and exercised by nothing,
+which is the state this increment found `computes_itself` in.
+
+#### What moved, and the two expectations that were wrong
+
+ICMP's six arms build, so **161 of 242 structs and 96 of 112 arms** --
+the arms are where this landed. IPv4, TCP and UDP now hit the next reason
+along, which is the largest remaining family: ten refusals for a size
+field the writer cannot derive from the run's length. `length - 8`,
+`(ihl - 5) * 4`, `nla_len - 4`, `((hdr_ext_len + 1) * 8) - 2` -- affine
+in one field, and invertible with a divisibility check. That is the next
+increment, and it is what stands between this writer and the three most
+familiar headers on the wire.
+
+Two of my own tests had pinned the old behaviour and both were corrected
+rather than updated: a parametrised case asserting `ipv4_header` is
+refused for *"which follows it"*, and the claim-gate row for that
+message. The first could not simply be repointed at the new reason --
+without the header passed in, the tag is refused for having no
+`_compute`, which stands in front of the refusal the case is about. So it
+passes the header now, which is what `situc build` does and what the
+test should have done from the start.
+
 ### 26.628 A reserved region has a content policy, and the writer ignored it
 
 Four refusals said *`X` is reserved and has no stated length*, and the
@@ -32741,6 +32843,17 @@ would need a back-patch. **A predicate that refused every tag passes all
 three refusal cases and says nothing**, so the trailing tag is the case
 with a test of its own, and sabotaging the positional check turns that
 test red while the three stay green.
+
+**~~The third refusal stands.~~ It does not, and the paragraph above is
+what overturned it (26.629).** If no view into the buffer exists while it
+is being filled, nothing is invalidated by writing a byte at offset ten
+either -- so a tag whose position the schema fixes and whose value is
+merely late is not a layout this writer cannot write. It reserves the
+field and fills it once the message is whole, which is what it already
+did for PNG's CRC through a helper that never asked where the tag was.
+What survives as a refusal is the two that are about POSITION, and
+`append_only_refusals` is gone: `late_position_refusals` asks that, and
+`tags_covering_later` asks the other question for anyone who wants it.
 
 **No representation conversion is emitted here, and that is deliberate
 rather than unfinished.** `owned.py` records what a second conversion

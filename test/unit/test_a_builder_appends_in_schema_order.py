@@ -170,9 +170,13 @@ def test_the_writer_s_own_locals_are_out_of_the_schema_s_namespace() -> None:
 
 
 @pytest.mark.parametrize("schema,name,wanted", [
-	# A checksum INSIDE the region it sums: the writer would have to go
-	# back, which is what append-only means it cannot do.
-	("ipv4/ipv4.situ", "ipv4_header", "which follows it"),
+	# A checksum INSIDE the region it sums was here, as a layout the
+	# writer could not write forward. It is not: the field's position is
+	# fixed and only its value is late, and tags are filled once the
+	# message is whole whatever their offset (26.629). What refuses
+	# `ipv4_header` now is the next thing along, and it is about a
+	# length rather than a position.
+	("ipv4/ipv4.situ", "ipv4_header", "cannot invert"),
 	# An index table holds the offsets of elements that come after it.
 	("sqlite/sqlite.situ", "btree_leaf_page", "index table"),
 	# A located member lands where an expression says, not where the
@@ -181,8 +185,13 @@ def test_the_writer_s_own_locals_are_out_of_the_schema_s_namespace() -> None:
 ])
 def test_a_layout_that_cannot_be_written_forward_is_refused(
 		schema: str, name: str, wanted: str) -> None:
-	_, resolved = _parts(ROOT / "example" / schema)
-	parts, why  = _only(resolved, name)
+	parsed, resolved = _parts(ROOT / "example" / schema)
+	# With the header, because that is what `situc build` passes and
+	# because without it a tag is refused for having no `_compute` --
+	# which would stand in front of the refusal each of these is about.
+	stem = Path(schema).stem
+	parts, why = _only(resolved, name, _header(parsed, resolved, stem),
+	                   parsed=parsed)
 	assert not parts
 	assert why is not None and wanted in why, why
 
@@ -198,7 +207,8 @@ def test_a_trailing_tag_does_not_make_a_layout_unwritable() -> None:
 	"""
 	parsed, resolved = _parts(ROOT / "example" / "png" / "png.situ")
 	chunk = resolved.structs["chunk"]
-	assert traverse.append_only_refusals(chunk) == []
+	assert traverse.late_position_refusals(chunk) == []
+	assert traverse.tags_covering_later(chunk) == []
 
 	# And it BUILDS, which is the stronger form of the same statement:
 	# the trailing CRC is reserved where the writer reaches it and filled
@@ -2770,3 +2780,220 @@ int main(void)
 		f"`preserve` bits are the caller's: {lines[1]}"
 	assert lines[2] == "2", \
 		f"a reserved value too wide for its bits is CONSTRAINT: {lines[2]}"
+
+
+def test_a_tag_covering_what_follows_is_not_a_position_the_writer_lacks(
+		) -> None:
+	"""26.610 refused all three breakers of append-only; two of them stand.
+
+	The third is the nine internet checksums -- ICMP's, IPv4's, TCP's and
+	UDP's -- and the reason it was refused does not survive its own
+	argument. The reason building needs no permission above rung 2 is
+	that no view into the buffer exists while it is being filled, so
+	there is nothing to invalidate -- and that holds for a byte at offset
+	ten exactly as it holds for the last byte.
+
+	And the writer already filled tags out of order: `_tags` takes the
+	field's address from the reader's own `_ptr`, so a trailing PNG CRC
+	and a header checksum inside its own coverage are one code path.
+
+	So the two questions are asked separately, and this asserts both
+	answers rather than either: the struct is NOT append-only, and there
+	is no position the writer cannot know.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "icmp" / "icmp.situ")
+	struct = resolved.structs["icmp_message"]
+
+	assert traverse.tags_covering_later(struct), \
+		"a checksum inside its own coverage is not append-only"
+	assert traverse.late_position_refusals(struct) == [], \
+		"and nothing about it is a position the writer cannot know"
+
+	# The tag covering later members is named with the member, so a
+	# refusal built from it can say which: the list is pairs, not flags.
+	pairs = traverse.tags_covering_later(struct)
+	assert len(pairs) == 1
+	tag, covered = pairs[0]
+	assert tag.name == "checksum" and covered.name == "rest", pairs
+
+	header = _header(parsed, resolved, "icmp")
+	shape  = _shape(parsed, resolved, header)
+	built  = {s.name for s in build.buildable(resolved, shape)}
+	assert "icmp_message" in built, build.refusals(resolved, shape)
+	for case in build.arms(struct):
+		parts, why = build.plan(struct, shape, case)
+		assert why is None, f"{build.arm_name(case)}: {why}"
+		assert [part for part in parts if part.role == build.TAG]
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_an_icmp_echo_carries_the_checksum_rfc_792_says(
+		tmp_path: Path) -> None:
+	"""An external vector, computed by hand rather than by situ.
+
+	Type 8, code 0, identifier 0x1234, sequence 1, no payload. RFC 1071's
+	sum over the message with the checksum field taken as zero is
+	0x0800 + 0x1234 + 0x0001 = 0x1A35, and its one's complement is
+	0xE5CA. That number comes from the arithmetic in the RFC, so it is
+	evidence about the bytes rather than about situ agreeing with itself
+	-- which the reader's own `_check`, asserted beside it, is.
+	"""
+	from situc.codegen.c import derived
+
+	parsed, resolved = _parts(ROOT / "example" / "icmp" / "icmp.situ")
+	# The header is passed because that is what says the tag has a
+	# `_compute`: without it the writer refuses the struct, and this test
+	# would be asserting an absence it had arranged.
+	header = _header(parsed, resolved, "icmp")
+	files = dict(build.generate(parsed, resolved, "icmp", header=header))
+	files.update(generate_c(parsed, resolved, "icmp").files())
+	files["icmp_derived.c"] = derived.generate(parsed, "icmp")
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "icmp_build.h"
+
+int main(void)
+{
+	uint8_t       buf[64];
+	uint32_t      wrote = 0;
+	situ_err_t    err;
+	situ_msg_t    msg;
+	situ_view_t   view;
+	const uint8_t echo[4] = { 0x12, 0x34, 0x00, 0x01 };
+
+	err = situ_icmp_message_build_echo(buf, sizeof buf, 0u, echo, 4u,
+	                                   NULL, 0u, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+
+	situ_msg_init(&msg, buf, wrote);
+	if (situ_icmp_message_view(&msg, 0, wrote, &view) != SITU_OK) return 2;
+	printf("%d\\n", (int)situ_icmp_message_checksum_check(view));
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "icmp.c"),
+		 str(tmp_path / "icmp_derived.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 8 0800E5CA12340001", lines[0]
+	assert lines[1] == "0", f"and the reader checks it: {lines[1]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_checksum_over_a_pseudo_header_asks_for_it(tmp_path: Path) -> None:
+	"""UDP's and TCP's shape: bytes the sum runs over that are not in the
+	message at all.
+
+	Their refusal said the tag "names no codec", which was false -- they
+	name `internet_checksum` and the emitted `_compute` is right there.
+	What differs is its arity: it takes `prefix` and `prefix_len`, which
+	14.2a's `prefix(...)` is the schema saying so. The writer asks the
+	caller for those twelve bytes, and situ emits a builder for the
+	struct that holds them, so the two compose.
+
+	The vector is hand-computed again: pseudo-header words 0x0A00, 0x0001,
+	0x0A00, 0x0002, 0x0011, 0x0008 and message words 0x1234, 0x0000,
+	0xDEAD, 0xBEEF sum with end-around carry to 0xC3ED, whose complement
+	is 0x3C12.
+
+	`udp_header` itself still has no builder, for the next reason along --
+	`payload[length - 8]` needs an inverse this writer does not have --
+	so this is the shape without that in the way. Which is why the
+	fixture is inline: a test that waited for UDP would have left the
+	prefix path written and unexercised.
+	"""
+	from situc.codegen.c import derived
+
+	parsed, resolved = _inline("""
+	codec internet_checksum {
+		kernel = ones_complement(width = 16, complement);
+	}
+	impl internet_checksum derived;
+
+	struct datagram {
+		authenticated summed {
+			u16  port;
+			checksum u8 checksum[2] covers(summed) prefix(pseudo)
+				is internet_checksum [self_as = 0];
+			u8   payload[4];
+		}
+	}
+
+	struct pseudo {
+		u32  source_address;
+		u32  destination_address;
+		u8   zero;
+		u8   protocol;
+		u16  length;
+	}
+	""")
+	header = _header(parsed, resolved, "inline")
+	files = dict(build.generate(parsed, resolved, "inline", header=header))
+	files.update(generate_c(parsed, resolved, "inline").files())
+	files["inline_derived.c"] = derived.generate(parsed, "inline")
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "inline_build.h"
+
+int main(void)
+{
+	uint8_t       buf[32];
+	uint32_t      wrote = 0;
+	situ_err_t    err;
+	const uint8_t pseudo[12] = { 0x0A, 0x00, 0x00, 0x01,
+	                             0x0A, 0x00, 0x00, 0x02,
+	                             0x00, 0x11, 0x00, 0x08 };
+	const uint8_t payload[4] = { 0xDE, 0xAD, 0xBE, 0xEF };
+
+	err = situ_datagram_build(buf, sizeof buf, 0x1234u, pseudo,
+	                          sizeof pseudo, payload, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+
+	/* A prefix of the wrong length sums to a different number and the
+	 * message still validates, so this is refused rather than summed. */
+	wrote = 0;
+	err = situ_datagram_build(buf, sizeof buf, 0x1234u, pseudo, 8u,
+	                          payload, &wrote);
+	printf("%d %u\\n", (int)err, wrote);
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "inline.c"),
+		 str(tmp_path / "inline_derived.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 8 12343C12DEADBEEF", lines[0]
+	assert lines[1] == "1 0", \
+		f"a prefix of the wrong length is refused: {lines[1]}"
