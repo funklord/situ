@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from situc import ast, traverse
+from situc import ast, invariant, traverse
 from situc.codegen.c.names import bare_name, ident, macro
 from situc.codegen.c.owned import _ctype, storage_width
 from situc.layout import Arm, BITS_PER_BYTE, Placement
@@ -54,9 +54,10 @@ OUT, CAP, WROTE = "situ_out", "situ_cap", "situ_wrote"
 AT, MSG, VIEW, ERR = "situ_at", "situ_msg", "situ_view", "situ_err"
 DIGITS, SCRATCH, SCAN = "situ_digits", "situ_scratch", "situ_scan"
 NEED, COUNT, TAGV = "situ_need", "situ_count", "situ_tag"
-USED, PADLEN = "situ_used", "situ_pad"
+USED, PADLEN, SOLVED = "situ_used", "situ_pad", "situ_solved"
 FIXTURES = frozenset({OUT, CAP, WROTE, AT, MSG, VIEW, ERR, DIGITS, SCRATCH,
-                      SCAN, NEED, COUNT, TAGV, USED, PADLEN, "situ_fixed"})
+                      SCAN, NEED, COUNT, TAGV, USED, PADLEN, SOLVED,
+                      "situ_fixed"})
 
 # What a member is to the writer. `literal` and `size` take no parameter:
 # both are facts the schema states, and asking the caller for either would
@@ -144,6 +145,9 @@ class Part:
 		self.inner     = inner		# the struct a nested member holds
 		self.value     = value		# what an `armtag` writes
 		self.inner_count = ""		# a `while` run's own `_count`
+		self.solved: invariant.Linear | None = None
+					# how a size field the schema states
+					# as arithmetic is computed
 		self.others    = others		# the values other arms claim
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
@@ -209,6 +213,9 @@ def _supplies_a_value(part: "Part") -> bool:
 	"""
 	if part.role == BITS and part.placement.kind == "reserved":
 		return not _states_its_content(part.placement)
+	if part.role == BITS and part.sizes is not None:
+		return False		# computed from the run it measures, with or
+					# without an expression between them
 	return part.role in CALLER_SUPPLIED
 
 
@@ -427,7 +434,9 @@ def _scalar_refusal(placement: Placement) -> str | None:
 	return None
 
 
-def _member_refusal(placement: Placement) -> str | None:
+def _member_refusal(placement: Placement,
+		inverse: invariant.Linear | None = None,
+		declined: str | None = None) -> str | None:
 	"""Why this member is beyond the first writer, by name.
 
 	Everything here is a real construct that a later increment may reach.
@@ -472,9 +481,15 @@ def _member_refusal(placement: Placement) -> str | None:
 		return "comes from a struct argument"
 	if placement.remaining_cap:
 		return "takes whatever is left, so its length is the frame's"
-	if placement.size_expr is not None:
-		return f"is sized by the expression `{placement.size_expr}`, which " \
-		       "this writer cannot invert"
+	if placement.size_expr is not None and inverse is None:
+		# `inverse` says the caller has already run the expression
+		# backwards and `declined` says why it could not, both being
+		# knowledge `plan` has and a placement does not. Without them
+		# this said "cannot invert" about every expression, including the
+		# eight it can (26.630).
+		assert declined is not None, placement.size_expr
+		return (f"is sized by the expression `{placement.size_expr}`, "
+		        f"which {declined}")
 	return None
 
 
@@ -785,6 +800,61 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			           f"`{held.name}`, so one value cannot say both"
 		measures[held.sized_by] = held
 
+	# And a run whose length the schema states as ARITHMETIC over a field
+	# is the same relationship one step further: `payload[length - 8]`
+	# says what the field holds, so the writer runs it backwards rather
+	# than asking a caller for a number the message would then be free to
+	# contradict. `invariant.invertible` is where the boundary of "can be
+	# run backwards" lives, because it is a question about the schema and
+	# a second writer would ask it too.
+	#
+	# `sized_by` is None for these, which is why it is a second pass and
+	# not a wider condition on the first: the link from field to run is
+	# the one path the expression names, and the solver does not record it.
+	# Every run with such an expression is accounted for here, whether it
+	# is wired or not, because the REASON it is not belongs to this pass
+	# and nowhere else. `_member_refusal` had been composing one from the
+	# expression alone, which cannot see that the field is a struct
+	# argument or already measures something -- and answered "does not
+	# determine `block`" about an expression that determines it exactly.
+	solved: dict[str, invariant.Linear] = {}
+	accounted: dict[str, invariant.Linear] = {}
+	declined: dict[str, str] = {}
+	for held in members:
+		if held.size_ast is None or held.sized_by:
+			continue
+		inverse = invariant.invertible(held.size_ast)
+		if inverse is None:
+			declined[held.path] = invariant.inversion_refusal(held.size_ast)
+			continue
+		field = by_name.get(inverse.path)
+		if field is None:
+			declined[held.path] = f"names `{inverse.path}`, not a member " \
+			                      "of this struct"
+			continue
+		if field.parameter:
+			# 0050: the parent passes it, so it is in no byte this writer
+			# puts down and solving for it would compute a value nothing
+			# stores.
+			declined[held.path] = f"determines `{inverse.path}`, which is " \
+			                      "a struct argument and in none of these " \
+			                      "bytes"
+			continue
+		if inverse.path in measures:
+			declined[held.path] = f"determines `{inverse.path}`, which is " \
+			                      "the stated size of " \
+			                      f"`{measures[inverse.path].name}` too, " \
+			                      "so one value cannot say both"
+			continue
+		measures[inverse.path] = held
+		solved[inverse.path]   = inverse
+		# Keyed by the RUN as well, because that is what the loop has in
+		# hand when it asks whether this run's length is accounted for.
+		# Matching them by re-deriving the inversion was the first cut,
+		# and a second derivation of anything is how two answers come to
+		# disagree -- this file says so about bit order twice over.
+		accounted[held.path]   = inverse
+
 	# Which member the variant switches on, and what the chosen arm says it
 	# must hold. A `peek`ed discriminant is not written at all: a peek does
 	# not consume, so those bytes belong to the arm that follows and
@@ -864,10 +934,35 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 					or held.scaled:
 				return [], f"`{traverse.local_name(struct, held)}` is " \
 				           "packed and its value is not its bits"
-			parts.append(Part(BITS, held, local, span,
-			                  bit_at=bit_at, opens=index == first,
-			                  closes=(index + 1 not in groups
-			                          or groups[index + 1][2] != first)))
+			part = Part(BITS, held, local, span,
+			            bit_at=bit_at, opens=index == first,
+			            closes=(index + 1 not in groups
+			                    or groups[index + 1][2] != first))
+			if held.name in measures:
+				# `ihl` is four bits AND the length of `options`, which
+				# nothing had met before: the packed branch comes first,
+				# so the member became a caller's value and the run after
+				# it was told nothing stated its length. A size field is
+				# the writer's to compute whatever its width.
+				#
+				# And that was already wrong for the simpler shape beside
+				# it. `edges.packed_driver` is `u4 n; u32 d[n]`, and the
+				# caller was passing BOTH `n` and the run's count -- two
+				# numbers for one fact, with nothing to stop a message
+				# saying four elements and carrying five. It builds here
+				# from the run, like every other size field.
+				part.sizes  = measures[held.name]
+				part.solved = solved.get(held.name)
+				measured = measures[held.name]
+				if part.solved is None and measured.type_name \
+						and not measured.element_bits:
+					return [], f"`{traverse.local_name(struct, held)}` " \
+					           f"counts `{measured.name}`, a run of " \
+					           "structs " \
+					           "whose length is what a walk finds, and " \
+					           "this writer does not walk one into a " \
+					           "packed field"
+			parts.append(part)
 			continue
 
 		if held.peek:
@@ -977,7 +1072,15 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				# members whose length the schema states three different
 				# ways -- the 26.625 misdiagnosis class, in the one place
 				# a refusal was all a caller could get.
-				why = _member_refusal(held)
+				if accounted.get(held.path) is not None:
+					# A reserved run whose length a field states through
+					# arithmetic: the length is the caller's, as it is for
+					# every reserved run nobody measures, and the field is
+					# computed from it.
+					parts.append(Part(HIDDEN, held, local))
+					continue
+				why = _member_refusal(held, None,
+				                      declined.get(held.path))
 				return [], f"`{traverse.local_name(struct, held)}` " + \
 				           (why or "is reserved and has no stated length")
 			if not _states_its_content(held):
@@ -986,7 +1089,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			parts.append(Part(ZERO, held, local, size))
 			continue
 
-		why = _member_refusal(held)
+		why = _member_refusal(held, accounted.get(held.path),
+		                      declined.get(held.path))
 		if why:
 			return [], f"`{traverse.local_name(struct, held)}` {why}"
 
@@ -1006,6 +1110,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				# byte length a span's is, and writing that would be a
 				# message nothing can read.
 				part.inner = ident(prefix, run.type_name)
+			part.solved = solved.get(held.name)
 			parts.append(part)
 			continue
 
@@ -1044,7 +1149,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# for `u16 a[n]` the reader computes `a_len` as `n * 2`, so
 			# `n` counts ELEMENTS and not bytes -- in `edges` and in
 			# `pickle` alike.
-			if held.array_count is None and not held.sized_by:
+			if held.array_count is None and not held.sized_by \
+					and accounted.get(held.path) is None:
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"run of {element}-bit elements with no count, " \
 				           "and nothing says how many to write"
@@ -1123,7 +1229,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		if held.array_count is not None:
 			parts.append(Part(RUN, held, local, held.array_count))
 			continue
-		if held.sized_by:
+		if held.sized_by or (held.size_ast is not None
+		                     and any(part.sizes is held
+		                             and part.solved is not None
+		                             for part in parts)):
+			# The second arm is a run the field above measures through
+			# arithmetic. It is a span either way -- the caller gives the
+			# bytes and their length -- and what differs is only what the
+			# field holds, which is that field's own part's business.
 			parts.append(Part(SPAN, held, local))
 			continue
 		if held.delimiters:
@@ -1447,6 +1560,43 @@ def _write_needle(delim: bytes, what: str) -> list[str]:
 	        f"\t{AT} += {len(delim)}u;"]
 
 
+def _invert(part: Part, run: str, local: str, limit: int) -> list[str]:
+	"""Run a size expression backwards into `SOLVED`, or refuse.
+
+	The caller gives a length and this is the only value of the field
+	that describes it, so there is nothing to ask for -- asking would let
+	a message disagree with its own schema, which is the rule every other
+	size field here follows.
+
+	Exact or refused: where the scale does not divide, the length is one
+	this format cannot state, and rounding it would write a field that
+	says a different length from the bytes that follow.
+	"""
+	assert part.solved is not None
+	scale  = part.solved.scale
+	offset = part.solved.offset
+	shift   = (f" + {-offset}" if offset < 0
+	           else f" - {offset}" if offset else "")
+	assert part.sizes is not None
+	many = (f"{run}_count" if (part.sizes.element_bits or 0) in (16, 32, 64)
+	        else f"{run}_len")
+	return [
+		f"\t/* {local}: what `{part.sizes.size_expr}` must hold for "
+		f"`{run}`",
+		f"\t * to be {many} "
+		f"{'element(s)' if many.endswith('_count') else 'bytes'}. */",
+		f"\t{SOLVED} = (int64_t){many}{shift};",
+		*([f"\tif ({SOLVED} < 0 || {SOLVED} % {scale} != 0) {{"]
+		  if scale != 1 else [f"\tif ({SOLVED} < 0) {{"]),
+		"\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t}",
+		*([f"\t{SOLVED} /= {scale};"] if scale != 1 else []),
+		f"\tif ({SOLVED} > {limit}) {{",
+		"\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t}",
+	]
+
+
 def _room(size: str) -> list[str]:
 	"""The capacity check before a write of `size` bytes.
 
@@ -1605,6 +1755,8 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		# walked without being counted.
 		*([f"\tuint32_t    {PADLEN};"]
 		  if any(part.role == PAD for part in parts) else []),
+		*([f"\tint64_t     {SOLVED};"]
+		  if any(part.solved is not None for part in parts) else []),
 		*([f"\tuint32_t    {COUNT} = 0u;"]
 		  if any(part.role == REPEAT
 		         and (part.digits or part.value == 1
@@ -1621,7 +1773,22 @@ def _one(struct: ResolvedStruct, shape: Shape,
 	for part in parts:
 		held  = part.placement
 		local = traverse.local_name(struct, held)
-		if part.role == SIZE and part.sizes is not None \
+		if part.role == SIZE and part.solved is not None:
+			# The schema states this field's relationship to the run as
+			# arithmetic, so the writer runs it backwards: the caller
+			# gives a length and this is the only value of the field that
+			# describes it. Asking the caller for the field instead would
+			# let a message disagree with its own schema, which is the
+			# rule every other size field here follows.
+			assert part.sizes is not None
+			run   = _settled(parts, part.sizes, struct)
+			limit = (1 << (held.scalar.bits if held.scalar else 32)) - 1
+			lines += [
+				*_invert(part, run, local, limit),
+				*_value(part, SOLVED, local),
+				"",
+			]
+		elif part.role == SIZE and part.sizes is not None \
 				and (part.sizes.element_bits or 0) in (16, 32, 64) \
 				and part.sizes.scalar is not None:
 			# The count, not the byte length: `u16 a[n]` has `n` elements
@@ -1844,6 +2011,29 @@ def _one(struct: ResolvedStruct, shape: Shape,
 						f"{part.bit_at}u, {width}u,",
 						f"\t                    {(1 << width) - 1}u);",
 					]
+			elif part.sizes is not None:
+				# A size field that shares a byte. Its value comes from
+				# the run either way; what differs is whether an
+				# expression stands between them.
+				run = _settled(parts, part.sizes, struct)
+				held_count = (part.sizes.element_bits or 0) in (16, 32, 64)
+				value = (SOLVED if part.solved is not None
+				         else f"{run}_count" if held_count
+				         else f"{run}_len")
+				lines += [
+					*(_invert(part, run, local, (1 << width) - 1)
+					  if part.solved is not None else
+					  [f"\tif ({value} > {(1 << width) - 1}u) {{",
+					   "\t\treturn SITU_ERR_CONSTRAINT;",
+					   "\t}"]),
+					f"\t/* {local}: {width} bits at {part.bit_at}, and the",
+					f"\t * {'count' if held_count else 'length'} of "
+					f"`{part.sizes.name}` -- so the writer states it",
+					"\t * rather than the caller. */",
+					f"\tsitu_bits_set_{order}({OUT} + {AT}, "
+					f"{part.bit_at}u, {width}u,",
+					f"\t                    (uint64_t){value});",
+				]
 			else:
 				# `situ_bits_set_*` MASKS the value, so a field given more
 				# than it can hold would be written truncated -- a valid

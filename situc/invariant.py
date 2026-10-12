@@ -516,3 +516,160 @@ def derived(schema: ast.Schema, struct: "ResolvedStruct") -> list[ast.Invariant]
 	"""The invariants this struct maintains, in declaration order."""
 	return [decl for decl in schema.invariants()
 	        if decl.derived.partition(".")[0] == struct.name]
+
+
+class Linear:
+	"""A size expression as `scale * path + offset`, solved for `path`.
+
+	A writer knows a run's LENGTH and has to put down the field the schema
+	measures it with, which means running the schema's arithmetic
+	backwards. That is only possible for some expressions, and the
+	boundary is worth stating in one place rather than per backend:
+	affine in exactly one field, with a positive integer scale.
+
+	`path` is the field to write, and the value is
+	`(length - offset) / scale` where that division is exact. A length
+	that leaves a remainder is not one this format can express, which is
+	a refusal rather than something to round -- the message would claim a
+	length the field cannot say.
+	"""
+
+	def __init__(self, path: str, scale: int, offset: int) -> None:
+		self.path   = path
+		self.scale  = scale
+		self.offset = offset
+
+	def __repr__(self) -> str:		# pragma: no cover - diagnostics
+		return f"Linear({self.path!r}, {self.scale}, {self.offset})"
+
+
+#: What a term contributes to a linear form: a constant, and a coefficient
+#: per path. Two paths, or a path with a coefficient of zero, are not
+#: solvable and say so through `_linear`'s second return value.
+_Form = tuple[int, dict[str, int]]
+
+
+def _linear(expr: ast.Expr) -> tuple[_Form | None, str | None]:
+	"""Fold an expression into `constant + sum(coefficient * path)`.
+
+	One walk answering both questions -- the form, and why there is none
+	-- because `invertible` and `inversion_refusal` must not disagree
+	about a case. The reasons are written for a schema author: each names
+	the operator or the shape that stopped it, not the node type.
+	"""
+	if isinstance(expr, ast.IntLiteral):
+		return (expr.value, {}), None
+
+	paths = paths_in(expr)
+	if isinstance(expr, (ast.NameRef, ast.Access)) and len(paths) == 1:
+		return (0, {paths[0]: 1}), None
+
+	if isinstance(expr, ast.Unary):
+		if expr.op != "-":
+			return None, f"applies the unary `{expr.op}`"
+		inner, why = _linear(expr.operand)
+		if inner is None:
+			return None, why
+		constant, terms = inner
+		return (-constant, {path: -by for path, by in terms.items()}), None
+
+	if isinstance(expr, ast.Binary):
+		left,  why = _linear(expr.left)
+		if left is None:
+			return None, why
+		right, why = _linear(expr.right)
+		if right is None:
+			return None, why
+		return _combine(expr.op, left, right)
+
+	if isinstance(expr, ast.Call):
+		# `align_up(x, 4) - x` is the padding shape, which is linear in
+		# nothing: the whole point of it is that the result depends on
+		# where `x` lands rather than on how big it is.
+		return None, f"calls `{expr.name}`, so it cannot be run backwards"
+
+	return None, "is not arithmetic over one field and constants"
+
+
+def _combine(op: str, left: _Form, right: _Form
+		) -> tuple[_Form | None, str | None]:
+	"""Apply one operator to two linear forms, where the result is one."""
+	(lc, lt), (rc, rt) = left, right
+
+	if op in ("+", "-"):
+		sign  = 1 if op == "+" else -1
+		terms = dict(lt)
+		for path, by in rt.items():
+			terms[path] = terms.get(path, 0) + sign * by
+		return (lc + sign * rc, {path: by for path, by in terms.items()
+		                         if by}), None
+
+	if op in ("*", "<<"):
+		# A product is linear only where one side is constant, and a shift
+		# only where the amount is: `size_0 << 21` is a multiply by a
+		# power of two, which is how ID3 spells a synchsafe integer.
+		if rt:
+			if op == "<<":
+				return None, "shifts by a field rather than a constant"
+			if lt:
+				return None, "multiplies two fields together"
+			lc, lt, rc, rt = rc, rt, lc, lt
+		by = (1 << rc) if op == "<<" else rc
+		if by == 0:
+			return None, f"multiplies by zero, so no length names one field"
+		return (lc * by, {path: coeff * by
+		                  for path, coeff in lt.items()}), None
+
+	if op in ("/", "%"):
+		# Floor division loses the remainder, so two different field
+		# values give the same length and there is nothing to invert
+		# back to. `(units / 2) + 1` is the measured case.
+		return None, (f"divides by {op == '/' and 'a value' or 'a modulus'}, "
+		              "so two field values give the same length")
+
+	return None, f"is not arithmetic this can invert: it uses `{op}`"
+
+
+def invertible(expr: ast.Expr) -> Linear | None:
+	"""The field a length determines, and how, or None where it does not.
+
+	`length - 8` solves to `length = len + 8`; `(ihl - 5) * 4` to
+	`ihl = len / 4 + 5`, with the division exact or refused. The
+	arithmetic itself is the writer's to emit -- this says what it is.
+	"""
+	form, _ = _linear(expr)
+	if form is None:
+		return None
+	constant, terms = form
+	if len(terms) != 1:
+		return None
+	path, scale = next(iter(terms.items()))
+	if scale <= 0:
+		# A negative coefficient means a longer run writes a smaller
+		# field, which no format here does and which would need the
+		# bound to be checked from the other end.
+		return None
+	return Linear(path, scale, constant)
+
+
+def inversion_refusal(expr: ast.Expr) -> str:
+	"""Why this size expression cannot be run backwards, for a message.
+
+	Phrased to follow the expression in a sentence -- "`X` is sized by
+	`E`, which <this>" -- and never empty: a caller who asked for a
+	builder and was told only that it could not be made would have
+	nowhere to go.
+	"""
+	form, why = _linear(expr)
+	if form is None:
+		return why or "is not arithmetic over one field and constants"
+	constant, terms = form
+	if not terms:
+		return "names no field, so no field records the length"
+	if len(terms) > 1:
+		return ("names " + " and ".join(f"`{path}`" for path in sorted(terms))
+		        + ", and one length cannot say what two fields hold")
+	path, scale = next(iter(terms.items()))
+	if scale < 0:
+		return f"shrinks as the run grows, which leaves `{path}` unbounded"
+	return f"does not determine `{path}`"

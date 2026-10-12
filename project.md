@@ -31304,6 +31304,119 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.630 Running a size expression backwards, and the canonical IPv4 header
+
+The largest family left was ten refusals saying *`X` is sized by the
+expression `E`, which this writer cannot invert* -- and it could invert
+eight of them. A reader is handed a field and derives a length; a writer
+is handed a length and has to derive the field, which for `length - 8`
+is `payload_len + 8` and for `(ihl - 5) * 4` is `options_len / 4 + 5`.
+
+**The boundary is affine in exactly one field with a positive scale**, and
+it lives in `invariant.py` rather than in the C writer, because which
+expressions can be run backwards is a question about the schema and a
+second writer would ask it the same way. `invariant.invertible` folds the
+expression into `scale * field + offset` and `inversion_refusal` says
+which operator or shape stopped it, from the same walk so the two cannot
+disagree about a case. The corpus's own expressions are the test table:
+eight invert, and the four that do not each name their obstacle -- floor
+division, where two field values give one length; two fields, where one
+length cannot say what both hold; ID3's synchsafe `|`; and the
+`align_up(x, 4) - x` padding, whose whole point is that the result
+depends on where the run lands rather than on how long it is.
+
+**Exact or refused.** Three bytes of IPv4 options are a length no `ihl`
+can state, and the writer answers CONSTRAINT: rounding up would write a
+header claiming a length the bytes do not have, and rounding down would
+hide an option byte from every reader.
+
+#### The vector that needed both increments
+
+    45 00 00 73 00 00 40 00 40 11 B8 61 C0 A8 00 01 C0 A8 00 C7
+
+RFC 791's worked example, byte for byte, and **two of those bytes are not
+given to the builder at all**. The low nibble of `45` is `ihl`, derived
+from zero bytes of options; `B861` is the checksum, computed once the
+message is whole. With either half missing the header has no builder, so
+one twenty-byte vector exercises 26.629 and this entry together.
+
+UDP is the same arithmetic in the other direction -- `length - 8` solving
+to ten bytes for a two-byte payload -- and it comes out
+`12345678000A3AC24869`, the checksum again being the hand-computed
+`0x3AC2`.
+
+#### A packed member can be the size field, which nothing had met
+
+IPv4's `ihl` is four bits wide. The packed branch runs before the
+size-field check, so `ihl` became a caller's parameter and the run after
+it was told *"`options` has no stated length, so nothing says when the
+writer should stop"* -- a true sentence about a schema that states it
+exactly. A size field is the writer's to compute whatever its width, so
+the packed branch asks `measures` first now and sets the bits from the
+run.
+
+**And that was already wrong for the simpler shape beside it.**
+`edges.packed_driver` is `u4 n; u32 d[n]`, and the caller was passing
+BOTH `n` and the run's count: two numbers for one fact, with nothing to
+stop a message saying four elements and carrying five. It is computed
+now, and the parameter is gone rather than ignored -- an unused one fails
+the generated file's own `-Wunused-parameter`.
+
+#### Found by diffing the set, not by counting it
+
+That packed case was collateral: the first cut of the size-field check
+refused a packed member whose run has no expression between them, so
+`edges.packed_driver` lost its builder in the same pass that gained
+seven. **The total went from 161 to 167 and the loss was invisible** --
+six is what a net gain of seven minus one looks like, and nothing in the
+numbers says which.
+
+What found it was a second worktree at the previous commit, listing the
+buildable structs by name in both and diffing. `evidence.md`'s *a count
+inherits its detector* is about the instrument; this is the same hazard
+one level up, where the instrument is fine and the SUMMARY is lossy. A
+count cannot report a swap. So the measurement for an increment that
+moves a set is the set.
+
+It is 168 of 242 now, 36 of 45 schemas, 96 of 112 arms.
+
+#### Elements, not bytes, where the run has them
+
+`u16 a[n]` makes `n` a count of ELEMENTS -- the reader computes the byte
+length as `n * 2` -- so an expression over such a run inverts in elements
+too, and the arithmetic has to read the caller's `_count`. It read `_len`
+first, which does not exist for a wide run, and the generated header did
+not compile. Then the element-count branch matched ahead of the inverted
+one and wrote the raw count: three elements where `n + 1` means the field
+says two, with `situ_solved` computed and unused.
+
+Both are the fault that produced `situ_at_len` this morning -- a name or
+a branch chosen by the shape a member usually has -- and in both the
+compiler was the detector, the second time through
+`-Werror=unused-variable` on a value nothing read. Neither was reachable
+from the corpus: `edges.wide_run` has `u16 a[n]` and `i32 b[n + 1]`
+sharing one `n`, so it is refused for that instead, and the probe that
+found both was an inline schema with one wide run.
+
+#### The refusal had to move with it
+
+`_member_refusal` was composing the reason from the expression alone,
+which cannot see that the field it solves for is a struct argument, or
+already measures something else. Asked about `edges.negotiated`'s
+`trailer[block + 1]` it answered *"does not determine `block`"* about an
+expression that determines it exactly -- while the real blocker was that
+`block` is a struct argument (0050) and in none of the bytes this writer
+puts down.
+
+So the pass that wires an inversion now owns the reasons for the ones it
+declines, and there are three: the field is not a member of this struct,
+the field is a struct argument, or the field is already the stated size
+of something else. `edges.arithmetic` is the third case nine times over
+-- nine runs whose lengths are nine different functions of one `units` --
+and the claim gate noticed the shuffle immediately, because *"comes from
+a struct argument"* had lost its only corpus instance to a message that
+was worse.
+
 ### 26.629 The internet checksums, and a refusal overturned by its own argument
 
 Nine of the ninety-five refusals were *`X` covers `X`, which follows it,

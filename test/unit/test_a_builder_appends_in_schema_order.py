@@ -170,13 +170,13 @@ def test_the_writer_s_own_locals_are_out_of_the_schema_s_namespace() -> None:
 
 
 @pytest.mark.parametrize("schema,name,wanted", [
-	# A checksum INSIDE the region it sums was here, as a layout the
-	# writer could not write forward. It is not: the field's position is
-	# fixed and only its value is late, and tags are filled once the
-	# message is whole whatever their offset (26.629). What refuses
-	# `ipv4_header` now is the next thing along, and it is about a
-	# length rather than a position.
-	("ipv4/ipv4.situ", "ipv4_header", "cannot invert"),
+	# `ipv4_header` was here twice and is gone. It was the example of a
+	# layout the writer could not write forward, for a checksum inside
+	# the region it sums; that was overturned in 26.629, leaving it
+	# refused for `options[(ihl - 5) * 4]`; and 26.630 runs that
+	# backwards, so the header builds -- checksum, computed `ihl` and
+	# all. What is left here are the two refusals that are about a
+	# POSITION, which no later knowledge repairs.
 	# An index table holds the offsets of elements that come after it.
 	("sqlite/sqlite.situ", "btree_leaf_page", "index table"),
 	# A located member lands where an expression says, not where the
@@ -2997,3 +2997,187 @@ int main(void)
 	assert lines[0] == "0 8 12343C12DEADBEEF", lines[0]
 	assert lines[1] == "1 0", \
 		f"a prefix of the wrong length is refused: {lines[1]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_the_canonical_ipv4_header_comes_out_byte_for_byte(
+		tmp_path: Path) -> None:
+	"""RFC 791's worked example, which is the strongest vector here.
+
+	`45 00 00 73 00 00 40 00 40 11 B8 61 C0 A8 00 01 C0 A8 00 C7` is the
+	header everybody's checksum notes use. Two of its bytes are not given
+	to the builder at all: `45`'s low nibble is `ihl`, which the writer
+	derives from zero bytes of options -- `(ihl - 5) * 4 = 0` solves to
+	5 -- and `B861` is the checksum, computed once the message is whole.
+	Everything else is a parameter.
+
+	So this one vector exercises both halves of the two increments that
+	reached it: a tag inside the region it sums (26.629) and a size
+	expression run backwards (26.630). It needed both -- with either
+	missing the header has no builder.
+
+	The second call is the exactness control. Three bytes of options
+	cannot be stated by a field counting four-byte words, and the honest
+	answer is a refusal: rounding `ihl` up would write a header claiming
+	a length the bytes do not have, and rounding down would hide an
+	option byte from every reader.
+	"""
+	from situc.codegen.c import derived
+
+	parsed, resolved = _parts(ROOT / "example" / "ipv4" / "ipv4.situ")
+	header = _header(parsed, resolved, "ipv4")
+	files  = dict(build.generate(parsed, resolved, "ipv4", header=header))
+	files.update(generate_c(parsed, resolved, "ipv4").files())
+	files["ipv4_derived.c"] = derived.generate(parsed, "ipv4")
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "ipv4_build.h"
+
+int main(void)
+{
+	uint8_t       buf[64];
+	uint32_t      wrote = 0;
+	situ_err_t    err;
+	const uint8_t src[4] = { 192, 168, 0, 1 };
+	const uint8_t dst[4] = { 192, 168, 0, 199 };
+	const uint8_t opt[3] = { 0, 0, 0 };
+
+	err = situ_ipv4_header_build(buf, sizeof buf, 4u, 0u, 0u,
+	                             0x0073u, 0x0000u, 1u, 0u, 0u, 0x40u,
+	                             (situ_protocol_t)17, src, 4u, dst, 4u,
+	                             NULL, 0u, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+
+	/* Three bytes of options: no value of `ihl` says that. */
+	wrote = 0;
+	err = situ_ipv4_header_build(buf, sizeof buf, 4u, 0u, 0u,
+	                             0x0073u, 0x0000u, 1u, 0u, 0u, 0x40u,
+	                             (situ_protocol_t)17, src, 4u, dst, 4u,
+	                             opt, 3u, &wrote);
+	printf("%d %u\\n", (int)err, wrote);
+
+	/* Four bytes of options: ihl 6, and the checksum follows. */
+	wrote = 0;
+	err = situ_ipv4_header_build(buf, sizeof buf, 4u, 0u, 0u,
+	                             0x0073u, 0x0000u, 1u, 0u, 0u, 0x40u,
+	                             (situ_protocol_t)17, src, 4u, dst, 4u,
+	                             opt, 4u, &wrote);
+	printf("%d %u %02X\\n", (int)err, wrote, buf[0]);
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "ipv4.c"),
+		 str(tmp_path / "ipv4_derived.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == ("0 20 45000073000040004011B861C0A80001C0A800C7"), \
+		lines[0]
+	assert lines[1] == "2 0", \
+		f"a length no `ihl` can state is refused, not rounded: {lines[1]}"
+	assert lines[2] == "0 24 46", \
+		f"four bytes of options make `ihl` 6: {lines[2]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_udp_datagram_states_its_own_length(tmp_path: Path) -> None:
+	"""The other shape of the same arithmetic, with the pseudo-header.
+
+	`length - 8` solves to `payload_len + 8`, so a two-byte payload makes
+	the length ten -- which is also what the pseudo-header says, and the
+	two are independent here: the caller fills the pseudo-header from the
+	IP layer, and a disagreement between them is a wrong checksum rather
+	than a wrong length. RFC 768's sum over
+	`0A000001 0A000002 00 11 000A` and `1234 5678 000A 0000 4869` is
+	0xC53D, complement 0x3AC2.
+	"""
+	from situc.codegen.c import derived
+
+	parsed, resolved = _parts(ROOT / "example" / "udp" / "udp.situ")
+	header = _header(parsed, resolved, "udp")
+	files  = dict(build.generate(parsed, resolved, "udp", header=header))
+	files.update(generate_c(parsed, resolved, "udp").files())
+	files["udp_derived.c"] = derived.generate(parsed, "udp")
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "udp_build.h"
+
+int main(void)
+{
+	uint8_t       buf[64];
+	uint32_t      wrote = 0;
+	situ_err_t    err;
+	const uint8_t pseudo[12] = { 0x0A, 0x00, 0x00, 0x01,
+	                             0x0A, 0x00, 0x00, 0x02,
+	                             0x00, 0x11, 0x00, 0x0A };
+	const uint8_t payload[2] = { 'H', 'i' };
+
+	err = situ_udp_header_build(buf, sizeof buf, 0x1234u, 0x5678u,
+	                            pseudo, sizeof pseudo, payload, 2u,
+	                            &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "udp.c"),
+		 str(tmp_path / "udp_derived.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	assert ran.stdout.split("\n")[0] == "0 10 12345678000A3AC24869", \
+		ran.stdout
+
+
+def test_a_packed_size_field_is_written_from_its_run() -> None:
+	"""`u4 n; u32 d[n]`: two numbers for one fact, and the caller had both.
+
+	The packed branch comes before the size-field check, so `n` became a
+	caller's parameter while the run's count was another -- nothing
+	stopped a message saying four elements and carrying five. It is
+	computed now, like every other size field, and the parameter is gone
+	rather than ignored: an unused one fails the generated file's own
+	`-Wunused-parameter`.
+
+	Found by DIFFING the buildable set rather than counting it. The
+	increment that reached IPv4's `ihl` refused this struct as collateral
+	-- a packed member that measures a run with no expression between
+	them -- and the total still went up by six, so a count would have
+	reported progress and hidden it.
+	"""
+	_, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	parts, why  = _only(resolved, "packed_driver")
+	assert why is None, why
+
+	sized = [part for part in parts
+	         if part.role == build.BITS and part.sizes is not None]
+	assert len(sized) == 1 and sized[0].placement.name == "n"
+	assert "n" not in [part.local for part in parts
+	                   if build._supplies_a_value(part)]
