@@ -233,6 +233,16 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 		# routes left are an arm holding a sub-byte scalar and a sub-byte
 		# size field, and the corpus has neither.
 		"bits wide, so it shares a byte",
+		# Its three corpus instances were all MISDIAGNOSES, which is the
+		# most interesting way yet for a row to go quiet: `flags flags;`
+		# and two like it are nested structs one byte wide, and the
+		# branch that asked how wide an element is sent them down the
+		# byte-run path to this fall-through. They build now, and what
+		# would still reach the message is `u8 x[]` with nothing stating
+		# its length -- which the parser refuses outright, *an array
+		# needs a size here*. So it is a net for a shape nobody has
+		# found, kept for the reason the one below it is.
+		"has no stated length, so nothing says when",
 		# And this one lost its population to the increment that read the
 		# reserved shapes properly. It was the answer for every unsized
 		# reserved member, which is why it was a misdiagnosis four times

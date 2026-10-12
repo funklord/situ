@@ -1178,16 +1178,27 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			                  bit_at=element // BITS_PER_BYTE))
 			continue
 
-		if element != BITS_PER_BYTE:
+		repeats = bool(held.array_count is not None or held.sized_by
+		               or held.size_expr or held.delimiters
+		               or held.repeat_while is not None
+		               or held.remaining_cap)
+		# A nested struct ONE BYTE wide answered this question wrong. The
+		# guard asked how wide an element is, and a byte-wide element is
+		# what a byte run has -- so `flags flags;` went down the byte-run
+		# path, found no count there, and was told "has no stated length"
+		# about a member whose length is one byte and fixed. Three corpus
+		# members, in `message`, `telemetry` and `header`, all of them a
+		# nested group of bits that closes a byte exactly.
+		#
+		# What distinguishes the two is not a width: it is whether the
+		# member names a struct of this schema and is one of it.
+		alone = (not repeats and held.type_name in (structs or {}))
+		if element != BITS_PER_BYTE or alone:
 			# A single nested struct is not a run of them, and calling it
 			# one was a wrong diagnosis for 8 of the 16 members refused
 			# here -- `mqtt_string topic;` and `value held;` are fields.
 			# Same class as the `before` misdiagnosis in 26.612: the
 			# verdict was right and the reason was about something else.
-			repeats = bool(held.array_count is not None or held.sized_by
-			               or held.size_expr or held.delimiters
-			               or held.repeat_while is not None
-			               or held.remaining_cap)
 			if held.type_name and hands_over(header, held.type_name,
 			                                 prefix, structs):
 				if not repeats:

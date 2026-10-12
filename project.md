@@ -31304,6 +31304,65 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.633 A nested struct one byte wide is not a byte run
+
+Three refusals said *`flags` has no stated length, so nothing says when
+the writer should stop*. Its length is one byte and fixed.
+
+**The branch asked how wide an element is**, and a byte-wide element is
+exactly what a byte RUN has -- so `flags flags;` went down the run path,
+found no count there, and reached the fall-through refusal. The three are
+`message.header.flags`, `telemetry.reading.status` and
+`header.header.flags`, each a group of bits that closes a byte exactly,
+which is the commonest shape a protocol header has. A nested struct TWO
+bytes wide was never affected, which is why the family had three members
+and not thirty.
+
+What distinguishes the two is not a width: **it is whether the member
+names a struct of this schema and is one of it**, which is the question
+the branch asks now. The sixth branch in these increments keyed on a
+shape a member usually has rather than on what the member is, after the
+packed size field, the varint size field, the element-count ordering,
+`_len` on a run measured in elements, and `situ_at_len`.
+
+The composition is what the fix buys, and it is the ordinary one:
+`situ_flags_build` writes the byte and `situ_header_build` takes it as
+bytes, like every other nested member. `A8` is `1010 1000` -- urgent
+set, ack clear, priority five, and the reserved three bits zero because
+the schema says so -- and the header comes out
+`01 02 A8 00 10 00 03 11 22 33 44` with the reader finding the bits
+inside the byte again.
+
+**And the message's only corpus instances were all three of those
+misdiagnoses**, which is a new way for a claim to go quiet: the gate
+reported the row unemitted the moment the fault was fixed. What would
+still reach it is `u8 x[]` with nothing stating its length, and the
+parser refuses that outright -- *an array needs a size here* -- so it is
+listed as constructed, a net for a shape nobody has found, like the
+reserved fall-through 26.628 left in the same position.
+
+**179 of 242 structs build**, 36 of 45 schemas, 96 of 112 arms.
+
+#### What is left is mostly correct refusals
+
+80 refusals in 35 families before this, 77 after, and the top of the
+list is things a writer at this rung SHOULD decline: nine sealed
+regions, whose interior is written through the seal and needs a key that
+is rung 3's; eight tags whose schema names no codec, which situ cannot
+invent; seven coded regions, where the bytes are a codec's output; five
+registers, which are bus transactions rather than bytes in a buffer.
+
+Of the rest, one is a decision rather than a gap and belongs to the
+copyright holder: **four structs are refused as "entirely literal, so
+there is nothing to build"** -- json's `true`, `false` and `null` among
+them. The refusal is accurate and the rule behind it was deliberate:
+`_encode` of a constant is not a builder. But an adopter composing a
+JSON document then hand-writes those four bytes, which is the
+duplication this compiler exists to remove, and situ emits no constant
+for them to use either. Whether a struct with nothing for a caller to
+supply should get a builder is a question about what a builder IS, so it
+is recorded here rather than answered in passing.
+
 ### 26.632 Escaping is forced, not invented -- and three copies of one cap
 
 Three refusals said a run *"escapes its delimiter, and escaping would

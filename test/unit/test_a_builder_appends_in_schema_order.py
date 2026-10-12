@@ -3600,3 +3600,102 @@ int main(void)
 	assert lines[2] == "0 65", \
 		f"an escaped comma costs two of the budget: {lines[2]}"
 	assert lines[3] == "2 0", lines[3]
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_nested_struct_one_byte_wide_is_not_a_byte_run(
+		tmp_path: Path) -> None:
+	"""`flags flags;` was told it had no stated length.
+
+	Its length is one byte and fixed. What went wrong is the question the
+	branch asked: `element_bits != 8` sends a member to the nested path,
+	and a byte-wide element is exactly what a byte RUN has -- so a nested
+	struct that closes a byte went down the run path, found no count
+	there, and got the fall-through refusal. Three corpus members, in
+	`message`, `telemetry` and `header`, each a group of bits that closes
+	a byte exactly, which is the commonest shape a protocol header has.
+
+	What distinguishes the two is not a width: it is whether the member
+	names a struct of this schema and is one of it. The sixth branch in
+	these increments to key on a shape a member usually has rather than
+	on what it is.
+
+	The composition is the point, so it is exercised rather than
+	asserted: `situ_flags_build` writes the byte and `situ_header_build`
+	takes it as bytes, which is what every nested member does. `A8` is
+	`1010 1000` -- urgent set, ack clear, priority five, and the reserved
+	three bits zero because the schema says so.
+	"""
+	parsed, resolved = _parts(ROOT / "example" / "message" / "message.situ")
+	header = _header(parsed, resolved, "message")
+	files  = dict(build.generate(parsed, resolved, "message", header=header))
+	files.update(generate_c(parsed, resolved, "message").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	# The plan first, because the role is the fault: a NESTED part means
+	# the writer hands the inner struct's bytes over, and a RUN part
+	# would mean it had been taken for a run of bytes.
+	parts, why = _only(resolved, "header", header, None, parsed)
+	assert why is None, why
+	flags = [part for part in parts if part.placement.name == "flags"]
+	assert [part.role for part in flags] == [build.NESTED], \
+		[(part.placement.name, part.role) for part in parts]
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include "message_build.h"
+
+int main(void)
+{
+	uint8_t      bits[4];
+	uint8_t      buf[64];
+	uint32_t     wrote = 0, head = 0;
+	situ_err_t   err;
+	situ_msg_t   msg;
+	situ_view_t  view;
+	situ_view_t  inner;
+
+	err = situ_flags_build(bits, sizeof bits, 1u, 0u, 5u, &wrote);
+	printf("%d %u %02X\\n", (int)err, wrote, bits[0]);
+	if (err != SITU_OK) return 2;
+
+	err = situ_header_build(buf, sizeof buf, 1u, (situ_msg_type_t)2,
+	                        bits, wrote, 16u, 3u, 0x11223344u, &head);
+	printf("%d %u ", (int)err, head);
+	for (uint32_t i = 0; i < head; i++) printf("%02X", buf[i]);
+	printf("\\n");
+	if (err != SITU_OK) return 3;
+
+	situ_msg_init(&msg, buf, head);
+	if (situ_header_view(&msg, 0, &view) != SITU_OK) return 4;
+	if (situ_header_flags_view(view, &inner) != SITU_OK) return 5;
+	{
+		const situ_err_t v = situ_header_validate(view);
+		const int urgent = situ_flags_urgent_get(inner);
+		const int prio = (int)situ_flags_priority_get(inner);
+
+		printf("%d %d %d %08X\\n", (int)v, urgent, prio,
+		       situ_header_seq_get(view));
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "message.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	assert lines[0] == "0 1 A8", lines[0]
+	assert lines[1] == "0 11 0102A80010000311223344", lines[1]
+	assert lines[2] == "0 1 5 11223344", \
+		f"and the reader finds the bits inside the byte: {lines[2]}"
