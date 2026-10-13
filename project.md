@@ -31304,6 +31304,118 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.636 Fold: rung 2 writes, 160 to 180 structs, and the lens that replaces guessing
+
+Eight increments over three days, each gated on a pinned worktree and
+pushed with the verdict read from the recorded file rather than from a
+task's exit code. `e91b205` reserved content policies, `435cb75` a tag
+covering what follows it, `3ebdf2b` a size expression run backwards,
+`ef81543` big-endian varints and signed text numbers, `3ea0458` an
+escaped delimited run, `12d1a9a` a nested struct one byte wide,
+`ed22898` struct arguments as parameters, `3faded4` the claim gate over
+the composition space. Entries 26.628 through 26.635 have the detail;
+this is what a session picking it up needs.
+
+**Where the writer stands: 180 of 242 structs, 36 of 45 schemas, 99 of
+112 variant arms.** It writes the canonical IPv4 header byte-for-byte
+including a derived `ihl` and a computed checksum, a UDP datagram with
+its pseudo-header, ICMP echo requests, SQLite cells with varints in
+SQLite's own spelling, JSON strings with the escaping the reader's
+scanner forces, and a negotiated frame whose lengths come from a struct
+argument. Every one of those was checked against arithmetic from the
+specification rather than against situ agreeing with itself.
+
+**What remains is mostly correct refusals.** 77 in 34 families, and the
+largest are things a rung-2 writer should decline: nine sealed regions
+(the key is rung 3's), eight tags whose codec situ cannot invent, seven
+coded regions, five registers, four structs that are entirely literal.
+
+#### The fault pattern, which is the transferable part
+
+**Six branches keyed on a shape a member usually has rather than on what
+the member is**, and in five of them the verdict was right while the
+reason was about something else -- the state a refusal by name exists to
+prevent. A packed size field, a varint size field, the element-count
+branch ordering, `_len` on a run measured in elements, `situ_at_len`
+from a uniquified name, and a nested struct one byte wide taken for a
+byte run.
+
+The structural cause is worth more than the six fixes: **the size-field
+check sits after every branch keyed on what a member IS**, so each of
+those branches has to ask the question itself or silently win. That
+sentence is in `build.py` where the next branch will be written.
+
+**And a duplicated schema rule drifts.** The delimiter cap was checked in
+three places and all three were short by the delimiter's length, so each
+accepted exactly one length `_validate` then refused. They are gone
+rather than corrected, which is what 26.628 did with a pad's bounds.
+
+**The detectors that found these were the compiler (three times), a
+claim gate (three times) and one set diff -- never a count.** 161 to 167
+hid a struct that had lost its builder, and only diffing the buildable
+set by name showed it.
+
+#### What the next session should pick up
+
+**The lens, not the corpus.** `python3 tool/sweep.py --writer --all` runs
+the planner over 9000 composed cells in 77 seconds and asks the claim
+gate's question of every refusal. It is green now (13356 plans, 5544
+claimed refusals, no crash, no silent cell, no false claim), and it is
+where the next writer fault will show, because every one so far was in a
+shape the corpus lacks. The suite carries a 400-cell sample of it.
+
+**The compile half of that lens is not a gate yet**, and it found the
+reader finding below. Making it one needs the readers' warnings fixed
+first, or it fails for somebody else's reasons.
+
+#### Open, and whose
+
+**The readers' count accessor for a dynamic nested run (26.635).** Four
+backends, three positions: C answers `0` so every element is
+unreachable, Python answers `None` and raises on indexing, C++ and Rust
+emit neither with a stated reason. Verified by running both. The
+four-way differential calls that cell `agreed` because nothing in it
+asks for the count, so **the coverage has to move before the fix** or
+the fix is unverified. Which position is right is the readers' owner's
+decision.
+
+**0056's open question** -- what a canonical decimal spelling is --
+gates scaled text numbers, and measurement shrank the prize to one
+corpus struct: json's own `number` is refused for its three delimiters
+and its `before` run, both for reasons unrelated to scaling.
+
+**Whether a struct with nothing for a caller to supply gets a builder.**
+json's `true`, `false` and `null` are refused as entirely literal, which
+is accurate and was deliberate; an adopter composing a document then
+hand-writes those bytes, and situ emits no constant for them to use.
+
+**0043 against the parser**: the record says `pad_to(n) [preserve]` is
+the escape for padding that carries data and the front end refuses the
+attribute there. The parser's refusal is what makes every pad
+`must_be_zero`, which is what let the pad branch be total.
+
+**Three copies of `_reserved_policy` remain** in the C++, Python and
+Rust emitters, in a second convention. The three C ones read one
+definition in `traverse` now; collapsing the rest changes generated
+output in three languages.
+
+#### Housekeeping this session leaves
+
+`/` is at 79 per cent with 14 GB free, and the growth is
+`/tmp/pytest-of-funk` at 7.6 GB over seven roots -- the gate runs.
+pytest prunes to the last three at the START of a run, so it
+self-heals; no root was swept by hand, because the PID-wrap incident in
+`running-code.md` is exactly that sweep. 165 orphaned
+`dbus-daemon --session` processes on this account, 158 of them days
+old, 363 MB resident, unattributable and left alone.
+
+**This entry is a fold at 90 per cent of the weekly window**, written
+because the enforcement hook asked for it and the rule is to prefer
+finishing the record over finishing the change. The full gate was not
+run for it: it is documentation only, `style_gate.py docs` is the check
+that reads it, and spending an hour of container time on prose is what
+the threshold exists to prevent.
+
 ### 26.635 The writer over the composition space, and what the readers do there
 
 Every fault these increments found was in a shape the corpus does not
