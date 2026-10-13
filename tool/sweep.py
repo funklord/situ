@@ -52,7 +52,52 @@ from compose import Case, cases				# noqa: E402
 from probe import Outcome, run				# noqa: E402
 
 
-def _writer(chosen: list[Case], verbose: bool) -> int:
+def _compiled(files: dict[str, str]) -> str:
+	"""Compile one cell's generated code, and report only what the
+	BUILDER's header is blamed for.
+
+	Warnings are on and `-Werror` is not, which is deliberate rather
+	than lenient: the READER's header does not survive `-Werror` for
+	some of these shapes -- a comparison of mixed signedness in a loop
+	bound, an unused `view` -- and a lens that stopped there would be
+	measuring somebody else's code. project.md 26.635 has those, with
+	the measurement that the four backends agree on the values and that
+	the warning is cosmetic for every count this space can spell.
+
+	So the filter is the filename. A diagnostic naming the writer's own
+	header is this lens's finding; one naming the reader's is recorded
+	already and not this run's business.
+	"""
+	import subprocess, tempfile
+
+	with tempfile.TemporaryDirectory(prefix="situ-writer-") as held:
+		tmp = Path(held)
+		for name, text in files.items():
+			(tmp / name).write_text(text, encoding="utf-8")
+		(tmp / "probe.c").write_text(
+			'#include "cell_build.h"\nint main(void) { return 0; }\n',
+			encoding="ascii")
+		done = subprocess.run(
+			["cc", "-std=c11", "-O1", "-Wall", "-Wextra",
+			 f"-I{ROOT / 'runtime' / 'c'}", f"-I{tmp}",
+			 str(tmp / "probe.c"), str(tmp / "cell.c"),
+			 str(ROOT / "runtime" / "c" / "situ.c"),
+			 "-o", str(tmp / "probe")],
+			capture_output=True, text=True)
+		blamed = [line for line in done.stderr.splitlines()
+		          if "cell_build.h:" in line
+		          and (": error:" in line or ": warning:" in line)]
+		if blamed:
+			return blamed[0].partition("cell_build.h:")[2][:160]
+		# An error nowhere near the builder still stops the compile, and
+		# saying so is better than reporting a clean run.
+		if done.returncode != 0 and not blamed:
+			return ""
+	return ""
+
+
+def _writer(chosen: list[Case], verbose: bool, compiling: bool = False
+		) -> int:
 	"""The builder's planner over these cells.
 
 	No compiling and no subprocesses, so the whole space is a minute
@@ -94,6 +139,20 @@ def _writer(chosen: list[Case], verbose: bool) -> int:
 			bad.append(f"{case.name}: front end: "
 			           + traceback.format_exc().splitlines()[-1])
 			continue
+
+		if compiling:
+			try:
+				files = generate_c(parsed, resolved, "cell").files()
+				files.update(build.generate(parsed, resolved, "cell",
+				                            header=header))
+			except Exception:
+				bad.append(f"{case.name}: generating: "
+				           + traceback.format_exc().splitlines()[-1])
+				files = {}
+			if "cell_build.h" in files:
+				blamed = _compiled(files)
+				if blamed:
+					bad.append(f"{case.name}: {blamed}")
 
 		shape = build.Shape(header, "situ", resolved.structs,
 		                    {decl.name: decl for decl in parsed.varints()})
@@ -165,6 +224,9 @@ def main() -> int:
 	                    help="the BUILDER over the space rather than the "
 	                         "four readers: no compiling, so the whole "
 	                         "9000 take a minute")
+	parser.add_argument("--compile", action="store_true",
+	                    help="with --writer, also compile what it writes; "
+	                         "one `cc` per cell, so use --limit")
 	args = parser.parse_args()
 
 	space = [case for case in cases() if args.only in case.name]
@@ -191,7 +253,7 @@ def main() -> int:
 	print(f"{len(chosen)} of {len(space)} cells, seed {args.seed}")
 
 	if args.writer:
-		return _writer(chosen, args.verbose)
+		return _writer(chosen, args.verbose, args.compile)
 
 	tally  = Counter[str]()
 	failed: list[Outcome] = []

@@ -31364,9 +31364,29 @@ claimed refusals, no crash, no silent cell, no false claim), and it is
 where the next writer fault will show, because every one so far was in a
 shape the corpus lacks. The suite carries a 400-cell sample of it.
 
-**The compile half of that lens is not a gate yet**, and it found the
-reader finding below. Making it one needs the readers' warnings fixed
-first, or it fails for somebody else's reasons.
+**The compile half of that lens is `sweep.py --writer --compile`**, and
+it does not wait on the readers' warnings: warnings are on, `-Werror` is
+not, and a diagnostic counts only where the filename blamed is the
+WRITER's header. A lens that stopped at the reader's header would be
+measuring somebody else's code -- and the reader's warnings are recorded
+below with the measurement that says they are cosmetic.
+
+150 cells compiled with nothing blamed on the builder. The lens was seen
+to FAIL before that was believed: an undeclared identifier added to the
+scalar emitter was reported for 8 of 12 cells, by name and with the
+line.
+
+**What it did not do is hold the reader to `-Werror`.** That was measured
+rather than deferred: the one warning class with a value behind it is a
+mixed-signedness comparison in a counted run's loop bound, where the
+count is rendered as a C `int` and compared against a `uint32_t`. The
+composition space spells that count only as `field + 1`, so it cannot go
+negative, and the four-way differential agrees on every `arith-vrec`
+cell sampled -- six of six. Making the comparison unsigned-safe is
+therefore a change of generated output in every backend for a warning
+whose value is cosmetic today, and it would change behaviour only for a
+SUBTRACTIVE count the space cannot express. That is a reader decision
+with a measurement attached rather than a fix somebody should slip in.
 
 #### Open, and whose
 
