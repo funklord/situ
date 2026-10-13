@@ -3699,3 +3699,113 @@ int main(void)
 	assert lines[1] == "0 11 0102A80010000311223344", lines[1]
 	assert lines[2] == "0 1 5 11223344", \
 		f"and the reader finds the bits inside the byte: {lines[2]}"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_a_struct_argument_is_the_writers_parameter(tmp_path: Path) -> None:
+	"""0050's construct, from the writing side.
+
+	A `parameter` member is not in the message: the length it states came
+	from somewhere else -- a negotiation, a transport header -- and the
+	schema says so. A READER takes it per accessor,
+	`situ_negotiated_payload_len(view, arg_block)`, and a WRITER takes it
+	once, because it puts the whole struct down in one call.
+
+	So the runs it sizes have no `_len` parameter at all. `payload[block]`
+	is `arg_block` bytes and `trailer[block + 1]` is one more, which is
+	the FORWARD direction of the same linear form a computed size field
+	inverts -- and asking the caller for those lengths as well would be
+	two numbers for one fact, which is the rule every size field here
+	follows.
+
+	The argument is first, in member order, because that is where the
+	schema declares it and this writer's contract is "one member at a
+	time in schema order". The reader puts its arguments last for its own
+	reason: an accessor takes one view and whichever arguments that
+	member needs.
+
+	Two things went wrong and both were caught by a tool rather than by
+	reading. The inversion pass declined `trailer` for the very fact that
+	makes it writable -- that `block` is an argument -- which fired the
+	assertion guarding "a size expression with no reason", exactly what
+	that assertion is for. And the epilogue called `_validate(view)`
+	where the reader's signature is `(view, arg_block)`, which was a
+	compile error.
+	"""
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	header = _header(parsed, resolved, "edges")
+	shape  = _shape(parsed, resolved, header)
+	struct = resolved.structs["negotiated"]
+
+	# The plan: an argument writes nothing, and neither run is measured.
+	parts, why = build.plan(struct, shape, build.arms(struct)[0])
+	assert why is None, why
+	roles = {part.placement.name: part.role for part in parts}
+	assert roles["block"] == build.ARG, roles
+	assert roles["payload"] == build.SPAN and roles["trailer"] == build.SPAN
+	for name in ("payload", "trailer"):
+		part = [p for p in parts if p.placement.name == name][0]
+		assert part.length, f"{name} takes its length from the argument"
+
+	files = dict(build.generate(parsed, resolved, "edges", header=header))
+	files.update(generate_c(parsed, resolved, "edges").files())
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="utf-8")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <string.h>
+#include "edges_build.h"
+
+int main(void)
+{
+	uint8_t      buf[64];
+	uint8_t      body[8];
+	uint8_t      tail[8];
+	uint8_t      mark[8];
+	uint32_t     wrote = 0;
+	situ_err_t   err;
+	situ_msg_t   msg;
+	situ_view_t  view;
+
+	memset(body, 0xA1, sizeof body);
+	memset(tail, 0xB2, sizeof tail);
+	memset(mark, 0xC3, sizeof mark);
+
+	err = situ_negotiated_build_marker(buf, sizeof buf, 3u, body, tail,
+	                                   0xBEEFu, mark, 2u, &wrote);
+	printf("%d %u ", (int)err, wrote);
+	for (uint32_t i = 0; i < wrote; i++) printf("%02X", buf[i]);
+	printf("\\n");
+	if (err != SITU_OK) return 2;
+
+	situ_msg_init(&msg, buf, wrote);
+	if (situ_negotiated_view(&msg, 0, wrote, &view) != SITU_OK) return 3;
+	{
+		const situ_err_t v = situ_negotiated_validate(view, 3u);
+		const uint32_t plen = situ_negotiated_payload_len(view, 3u);
+		const uint8_t kind = situ_negotiated_kind_get(view, 3u);
+
+		printf("%d %u %u\\n", (int)v, plen, kind);
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	assert HOST_CC is not None
+	done = subprocess.run(
+		[HOST_CC, *WARNINGS, f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "edges.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	assert done.returncode == 0, done.stderr
+
+	ran = subprocess.run([str(tmp_path / "probe")], capture_output=True,
+	                     text=True, cwd=tmp_path)
+	assert ran.returncode == 0, ran.stderr
+	lines = ran.stdout.split("\n")
+
+	# Three bytes of payload and four of trailer, from one argument of 3.
+	assert lines[0] == "0 12 A1A1A1B2B2B2B2BEEF01C3C3", lines[0]
+	assert lines[1] == "0 3 1", \
+		f"and the reader reads it back with the same argument: {lines[1]}"

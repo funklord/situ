@@ -89,7 +89,6 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("which is whole bytes and not a width the runtime stores",
 	 lambda pl, res: (pl.scalar is not None and pl.scalar.bits % 8 == 0
 	                  and pl.scalar.bits not in (8, 16, 32, 64))),
-	("comes from a struct argument", lambda pl, res: bool(pl.parameter)),
 	("is located by an expression", lambda pl, res: bool(pl.located)),
 	("is an index table", lambda pl, res: pl.index_table is not None),
 	("takes whatever is left", lambda pl, res: bool(pl.remaining_cap)),

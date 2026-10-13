@@ -31304,6 +31304,92 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.634 A struct argument is the writer's parameter
+
+0050's construct from the writing side, and three refusals said *`block`
+comes from a struct argument*. It does, and that is what makes the struct
+writable rather than what stops it.
+
+**A `parameter` member is not in the message.** The length it states came
+from somewhere else -- a negotiation, a transport header -- and the schema
+says so. A reader takes it per accessor,
+`situ_negotiated_payload_len(view, arg_block)`; a writer takes it once,
+because it puts the whole struct down in one call. So the runs it sizes
+have **no `_len` parameter at all**: `payload[block]` is `arg_block`
+bytes and `trailer[block + 1]` is one more, which is the FORWARD
+direction of the linear form a computed size field inverts. Asking the
+caller for those lengths as well would be two numbers for one fact, which
+is the rule every size field here follows.
+
+    situ_negotiated_build_marker(out, cap, 3, body, tail, 0xBEEF,
+                                 mark, 2, &wrote)
+    -> A1A1A1 B2B2B2B2 BEEF 01 C3C3
+
+Three bytes of payload and four of trailer, from one argument of three,
+and the reader validates it with the same argument.
+
+**The argument goes first, in member order**, because that is where the
+schema declares it and this writer's contract is *one member at a time in
+schema order*. The reader puts its arguments last for its own reason: an
+accessor takes one view and whichever arguments that member needs. The
+NAME is shared -- `traverse.argument_name` now, moved out of
+`codegen/c/emit.py` -- because a caller holding one value for both should
+not have to learn two spellings of it.
+
+#### Two tools caught what reading did not
+
+**The assertion fired, which is what it is for.** The inversion pass
+declined `trailer` for the very fact that makes it writable, so
+`_member_refusal` reached a size expression with no reason attached and
+asserted. That assertion was added in 26.630 to catch a message composed
+from the expression alone; it caught the opposite case a day later.
+
+**And the epilogue called `_validate(view)` where the reader's signature
+is `(view, arg_block)`** -- a compile error rather than a quiet one,
+which is the direction worth having. A parameter is in no byte, so every
+accessor and the validation take it passed.
+
+#### A grep that could not see a traceback
+
+Worth recording against myself. The run that should have shown the
+assertion was `situc build ... | grep -c "no builder"`, which printed
+`0` -- and I read that as "nothing refused" when it meant "the pattern
+did not match a Python traceback". The traceback was on the very next
+line of a stream I had filtered.
+
+That is `evidence.md`'s *never reduce a check's output before you know it
+passed*, in the one place it is easiest to break: a count over a filtered
+stream, in a shell pipeline, where the exit status belongs to `grep`
+rather than to the thing being measured.
+
+**180 of 242 structs build**, 36 of 45 schemas, 99 of 112 arms.
+
+#### And one piece of work that measurement cancelled
+
+The next candidate was the scaled text number -- json's `number`, which
+0056 calls that schema's largest silence. Two things came out of reading
+before writing:
+
+**It needs 0056's open question settled.** That record says in as many
+words that *what a canonical decimal spelling is remains open* and is
+*not one to settle in the record that introduces the construct*. A writer
+must choose a spelling, and for a positive scale the choice is real:
+`(1, 3)` is `1e3` keeping the pair and `1000` keeping only the value.
+`1e3` is the only one that round-trips the pair, and the pair is
+deliberately a reading of the SPELLING -- which is 0056's own argument
+against normalizing.
+
+**And it would buy one struct, not json's.** `json.number.value` ends
+`before` any of THREE delimiters, and both of those are refusals already
+in the table for reasons that have nothing to do with scaling: the byte
+that ends it belongs to the object, and which of three to write is not
+stated. So a scaled formatter unlocks `edges.measured` alone.
+
+A question that survives measurement is a real decision and goes to
+whoever owns it; this one shrank to one corpus struct behind an open
+decision, which is a different answer from "hard" and the reason the work
+was not started.
+
 ### 26.633 A nested struct one byte wide is not a byte run
 
 Three refusals said *`flags` has no stated length, so nothing says when

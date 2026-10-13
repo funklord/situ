@@ -10275,19 +10275,9 @@ class Emitter:
 		return [held for held in own_members(struct)
 		        if held.parameter and held.scalar is not None]
 
-	@staticmethod
-	def _argument_name(placement: Placement) -> str:
-		"""What the argument is called in a signature.
-
-		Prefixed, which the other three backends do not need. They put the
-		value on the view object, where a schema's name cannot collide with
-		anything; C has no such object and the bodies here declare locals --
-		`view`, `at`, `lead`, `size`, `depth`, and `n` in two loop prologues
-		-- out of the same flat namespace a schema names a parameter in.
-		`parameter u8 n` is the natural spelling and `n` is the one this
-		backend is likeliest to shadow.
-		"""
-		return f"arg_{c_name(placement.name)}"
+	#: One definition, in `traverse`, because the writer at `--layer edit`
+	#: takes the same argument under the same name.
+	_argument_name = staticmethod(traverse.argument_name)
 
 	def _argument_tail(self, struct: ResolvedStruct) -> str:
 		"""Every argument this struct takes, as a signature's trailing

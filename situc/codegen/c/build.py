@@ -79,13 +79,14 @@ WIDE    = "wide"	# a run whose elements are wider than a byte
 PAD     = "pad"		# padding to an alignment, whose length is the cursor's
 OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
 HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
+ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
-                             BITS, WIDE, OPAQUE, HIDDEN, VARINT})
+                             BITS, WIDE, OPAQUE, HIDDEN, VARINT, ARG})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
@@ -151,6 +152,8 @@ class Part:
 		self.declared: ast.VarintDecl | None = None
 					# a varint's own declaration, which
 					# says its encoding and its limits
+		self.length = ""		# where a run's length comes from,
+					# where it is not the caller's `_len`
 		self.others    = others		# the values other arms claim
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
@@ -192,6 +195,17 @@ def _settled(parts: list["Part"], placement: Placement,
 		if part.placement is placement:
 			return part.local
 	return _local(struct, placement)
+
+
+def _length_of(part: "Part") -> str:
+	"""The C expression for how many bytes a caller-supplied run holds.
+
+	Usually the `_len` beside its pointer. A run whose length a struct
+	ARGUMENT states has no such parameter: the schema says the length, so
+	asking for it as well would be two numbers for one fact -- the same
+	rule a computed size field follows, one step further out.
+	"""
+	return part.length or f"{part.local}_len"
 
 
 def _supplies_bytes(part: "Part") -> bool:
@@ -440,7 +454,8 @@ def _scalar_refusal(placement: Placement) -> str | None:
 
 def _member_refusal(placement: Placement,
 		inverse: invariant.Linear | None = None,
-		declined: str | None = None) -> str | None:
+		declined: str | None = None,
+		stated: bool = False) -> str | None:
 	"""Why this member is beyond the first writer, by name.
 
 	Everything here is a real construct that a later increment may reach.
@@ -481,16 +496,17 @@ def _member_refusal(placement: Placement,
 		return "is an index table"
 	if placement.delimiters and placement.radix is None:
 		return _delimited_refusal(placement)
-	if placement.parameter:
-		return "comes from a struct argument"
 	if placement.remaining_cap:
 		return "takes whatever is left, so its length is the frame's"
-	if placement.size_expr is not None and inverse is None:
+	if placement.size_expr is not None and inverse is None and not stated:
 		# `inverse` says the caller has already run the expression
-		# backwards and `declined` says why it could not, both being
-		# knowledge `plan` has and a placement does not. Without them
-		# this said "cannot invert" about every expression, including the
-		# eight it can (26.630).
+		# backwards, `stated` that a struct argument gives the length so
+		# there is nothing to run backwards, and `declined` why neither
+		# could -- all three being knowledge `plan` has and a placement
+		# does not. Without the first this said "cannot invert" about
+		# every expression, including the eight it can (26.630); without
+		# the second the assertion below fired on `block + 1`, which is
+		# what an assertion is for.
 		assert declined is not None, placement.size_expr
 		return (f"is sized by the expression `{placement.size_expr}`, "
 		        f"which {declined}")
@@ -824,8 +840,38 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	solved: dict[str, invariant.Linear] = {}
 	accounted: dict[str, invariant.Linear] = {}
 	declined: dict[str, str] = {}
+	# How long a run is where a struct ARGUMENT says so, as C. The
+	# argument is a parameter, so the length is known at run time and
+	# nothing is inverted: `block` is `arg_block` and `block + 1` is the
+	# same linear form read forwards.
+	stated: dict[str, str] = {}
+	for held in members:
+		named = by_name.get(held.sized_by or "")
+		if named is not None and named.parameter:
+			stated[held.path] = f"(uint32_t){traverse.argument_name(named)}"
+			continue
+		if held.size_ast is None:
+			continue
+		forward = invariant.invertible(held.size_ast)
+		if forward is None:
+			continue
+		field = by_name.get(forward.path)
+		if field is None or not field.parameter:
+			continue
+		scale = (f"{forward.scale}u * " if forward.scale != 1 else "")
+		shift = (f" + {forward.offset}u" if forward.offset > 0
+		         else f" - {-forward.offset}u" if forward.offset else "")
+		stated[held.path] = (f"({scale}(uint32_t)"
+		                     f"{traverse.argument_name(field)}{shift})")
 	for held in members:
 		if held.size_ast is None or held.sized_by:
+			continue
+		if held.path in stated:
+			# A struct argument states this length, so there is nothing to
+			# invert: the pass below solves for a FIELD the message
+			# carries, and `block` is in none of these bytes. Without this
+			# the run was declined for the very reason that makes it
+			# writable.
 			continue
 		inverse = invariant.invertible(held.size_ast)
 		if inverse is None:
@@ -976,6 +1022,22 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			parts.append(part)
 			continue
 
+		if held.parameter:
+			# 0050: the value is not in the message. A reader takes it per
+			# accessor -- `situ_negotiated_payload_len(view, arg_block)` --
+			# and a writer takes it once, because it puts the whole struct
+			# down in one call. It writes nothing, like a peeked member,
+			# and it is here rather than refused because the runs whose
+			# length it states have no other source: the schema says they
+			# are `block` long, so asking a caller for a length as well
+			# would be two numbers for one fact.
+			if held.scalar is None:
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           "struct argument that is not a scalar, so there " \
+				           "is no value to take"
+			parts.append(Part(ARG, held, local))
+			continue
+
 		if held.peek:
 			# Reads bytes that belong to what comes after it, so it writes
 			# nothing and asks for nothing. The arm carries them -- and
@@ -1101,7 +1163,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			continue
 
 		why = _member_refusal(held, accounted.get(held.path),
-		                      declined.get(held.path))
+		                      declined.get(held.path),
+		                      held.path in stated)
 		if why:
 			return [], f"`{traverse.local_name(struct, held)}` {why}"
 
@@ -1251,6 +1314,10 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		if held.array_count is not None:
 			parts.append(Part(RUN, held, local, held.array_count))
 			continue
+		if held.path in stated:
+			parts.append(Part(SPAN, held, local))
+			parts[-1].length = stated[held.path]
+			continue
 		if held.sized_by or (held.size_ast is not None
 		                     and any(part.sizes is held
 		                             and part.solved is not None
@@ -1285,7 +1352,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			local += "_"
 		part.local = local
 		taken.add(local)
-		if part.role in MEASURED:
+		if part.role in MEASURED and not part.length:
 			taken.add(f"{local}_len")
 		if part.role == WIDE:
 			taken.add(f"{local}_count")
@@ -1358,10 +1425,19 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			            f"*{part.local}")
 			if not part.bytes:
 				args.append(f"uint32_t {part.local}_count")
+		elif part.role == ARG:
+			# First, in member order, because that is where the schema
+			# declares it and this writer's whole contract is "one member
+			# at a time in schema order". The reader puts its arguments
+			# last, after the view, for a different reason: its accessors
+			# take one view and whichever arguments that member needs.
+			args.append(f"{_ctype(part.placement, prefix, enums)} "
+			            f"{traverse.argument_name(part.placement)}")
 		elif part.role in MEASURED:
 			if _supplies_bytes(part):
 				args.append(f"const uint8_t *{part.local}")
-			args.append(f"uint32_t {part.local}_len")
+			if not part.length:
+				args.append(f"uint32_t {part.local}_len")
 		elif part.role == TAG and part.opens:
 			# Not a member's bytes: the pseudo-header this tag's codec
 			# sums before the message, which no member holds.
@@ -2439,18 +2515,31 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				*_write_needle(part.delimiter, "delimiter"),
 				"",
 			]
-		else:
+		elif part.role == ARG:
 			lines += [
-				*_room(f"{part.local}_len"),
+				f"\t/* {local}: a struct argument (0050), so it is a",
+				"\t * parameter and not a byte. The runs whose length it",
+				"\t * states read it below, exactly as the reader's own",
+				"\t * accessors take it. */",
+				"",
+			]
+		else:
+			held_len = _length_of(part)
+			lines += [
+				*([f"\t/* {local}: {held.sized_by or part.placement.size_expr}"
+				   " bytes, which a struct",
+				   "\t * argument states -- so the caller passes the bytes",
+				   "\t * and not their length. */"] if part.length else []),
+				*_room(held_len),
 				# A zero-length run is a legal message, and `memcpy` with a
 				# null source is undefined even for zero bytes.
-				f"\tif ({part.local}_len != 0u) {{",
+				f"\tif ({held_len} != 0u) {{",
 				f"\t\tif ({part.local} == NULL) {{",
 				"\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t}",
-				f"\t\tmemcpy({OUT} + {AT}, {part.local}, {part.local}_len);",
+				f"\t\tmemcpy({OUT} + {AT}, {part.local}, {held_len});",
 				"\t}",
-				f"\t{AT} += {part.local}_len;",
+				f"\t{AT} += {held_len};",
 				"",
 			]
 
@@ -2469,7 +2558,14 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
 		*_tags(parts, structs, prefix),
-		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW});",
+		# The struct's arguments go to `_validate` as well, because that
+		# is what the reader's own signature takes: a parameter is not in
+		# the message, so every accessor and the validation need it
+		# passed. Omitting them was a compile error rather than a quiet
+		# one, which is the direction worth having.
+		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW}"
+		+ "".join(f", {traverse.argument_name(held)}"
+		          for held in traverse.arguments(struct)) + ");",
 		f"\tif ({ERR} != SITU_OK) {{",
 		f"\t\treturn {ERR};",
 		"\t}",

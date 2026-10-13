@@ -2395,6 +2395,38 @@ RESERVED_STATED = frozenset({"must_be_zero", "must_be_one"})
 RESERVED_OPEN   = frozenset({"preserve", "unknown"})
 
 
+def arguments(struct: "ResolvedStruct") -> list[Placement]:
+	"""The struct's own arguments, in declaration order (0050).
+
+	A `parameter` member is not in the message: the caller of a reader
+	passes it per accessor, and the caller of a WRITER passes it once,
+	because the writer puts the whole struct down in one call. Both need
+	the same list and the same spelling, which is why this is here.
+	"""
+	return [held for held in own_members(struct)
+	        if held.parameter and held.scalar is not None]
+
+
+def argument_name(placement: Placement) -> str:
+	"""What a struct argument is called in generated C.
+
+	Prefixed, which the other three backends do not need: they put the
+	value on the view object, where a schema's name cannot collide with
+	anything, while C has no such object and the bodies declare locals
+	out of the same flat namespace a schema names a parameter in.
+	`parameter u8 n` is the natural spelling and `n` is the likeliest to
+	shadow.
+
+	Moved here from `codegen/c/emit.py` when the writer needed it: the
+	reader's accessor argument and the writer's parameter are the same
+	name, and a caller holding one value for both should not have to
+	learn two spellings of it.
+	"""
+	from situc.codegen.c.names import c_name
+
+	return f"arg_{c_name(placement.name)}"
+
+
 def reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:
 	"""Reserved behaviour, defaulting to must_be_zero (section 8.8).
 
