@@ -31304,6 +31304,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.637 Fold: the sweep command that cannot answer zero, signalled
+
+Two sweeps in this session read as a leak and both were the sweep's own
+shell. `running-code.md` prescribes
+
+    ps -o pid,ppid,stat,etime,rss,cmd --ppid 1 | grep -i <name>
+
+after a run, and the pattern is in the command line of the shell doing
+the matching -- so a CLEAN sweep, which is the result the sweep exists
+to establish, reads back as one.
+
+Measured here, both read at the time as something left behind:
+
+    ps ... | awk '$3=="funk" && $2==1' | grep -icE "pytest|qemu|make"
+                                     counted 1,  alive 0
+    ps ... --ppid 1 | grep -iE "pytest|cc1"
+                                     counted 2,  alive 0
+
+**The second is why "subtract one" is not the remedy.** It answered TWO
+because the eval ran a pipeline whose shell and subshell both carried
+the pattern, so the inflation is a function of how many shells the
+command happens to spawn. Printing the rows and reading them caught
+both.
+
+And 26.634 has the same class pointed at situ's own output rather than
+at the process table: `situc build | grep -c "no builder"` printed 0,
+which read as "nothing refused" and meant "the pattern does not match a
+Python traceback" -- the generator was raising on the next line of the
+stream the count had filtered.
+
+**Signalled rather than fixed, and the entry is named**: the sweep
+section is shared by every tree, so which form it prescribes is a
+document decision. netcfgd had signalled the same thing on 2026-10-13
+with four instances of its own; situ's two are appended to that entry
+under *Signals from the projects* in `claude-guidelines`' `project.md`,
+in `9771f4e`. The guidelines were re-read at that commit and
+`~/.claude/tool/rules-seen` acknowledges it, so the marker returns the
+next time they move.
+
+#### Where this session stops
+
+At `b319cbf` for the code and `3a84c44` for the record, both gated green
+and pushed, with nothing uncommitted but another session's
+`tool/style_gate.py`. **Weekly usage reached 94 per cent**, two points
+below the line where `CLAUDE.md` stops development, and nothing further
+was started for that reason: the two candidates left -- the readers'
+count accessor and the mixed-signedness loop bound -- are
+generated-output changes across four backends whose verification is an
+hour of container time each, which is exactly what the threshold is for.
+
+26.636 has the nine increments, what was measured, and the four open
+decisions with the measurement attached to each. The next session's
+first move is `python3 tool/sweep.py --writer --all`, which is green and
+is where the next writer fault will show.
+
 ### 26.636 Fold: rung 2 writes, 160 to 180 structs, and the lens that replaces guessing
 
 Nine increments over three days, each gated on a pinned worktree and
