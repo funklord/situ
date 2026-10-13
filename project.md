@@ -31306,15 +31306,24 @@ reproductions, in a file that was not its own.
 
 ### 26.636 Fold: rung 2 writes, 160 to 180 structs, and the lens that replaces guessing
 
-Eight increments over three days, each gated on a pinned worktree and
+Nine increments over three days, each gated on a pinned worktree and
 pushed with the verdict read from the recorded file rather than from a
 task's exit code. `e91b205` reserved content policies, `435cb75` a tag
 covering what follows it, `3ebdf2b` a size expression run backwards,
 `ef81543` big-endian varints and signed text numbers, `3ea0458` an
 escaped delimited run, `12d1a9a` a nested struct one byte wide,
 `ed22898` struct arguments as parameters, `3faded4` the claim gate over
-the composition space. Entries 26.628 through 26.635 have the detail;
-this is what a session picking it up needs.
+the composition space, and `b319cbf` the compile half of it. Entries
+26.628 through 26.635 have the detail; this is what a session picking it
+up needs.
+
+**The session ends at `b319cbf`, gated green and pushed**, with nothing
+uncommitted but another session's `tool/style_gate.py`. The figure that
+stopped it is the weekly window at 92 per cent: `CLAUDE.md` puts the
+fold at 90 and stopping development at 96, so what is left undone here
+is left deliberately rather than for want of a next step -- and the next
+step is named under *What the next session should pick up* below rather
+than in anybody's memory.
 
 **Where the writer stands: 180 of 242 structs, 36 of 45 schemas, 99 of
 112 variant arms.** It writes the canonical IPv4 header byte-for-byte
