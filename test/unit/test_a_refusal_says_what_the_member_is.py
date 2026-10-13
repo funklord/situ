@@ -106,6 +106,12 @@ CLAIMS: tuple[tuple[str, Claim], ...] = (
 	("is a peeked", lambda pl, res: bool(pl.peek)),
 	("packs into a group", lambda pl, res: build.packed(pl)),
 	("is a packed", lambda pl, res: build.packed(pl)),
+	# A packed member that counts a run of structs, which no corpus
+	# schema has and the composition space produces 36 times: the
+	# writer walks a struct run to count it, and a walk cannot put its
+	# answer into bits that share a byte.
+	("a run of structs whose length is what a walk finds",
+	 lambda pl, res: build.packed(pl)),
 	("ends at a multi-byte delimiter",
 	 lambda pl, res: bool(pl.delimiters) and len(pl.delimiters[0]) > 1),
 	("is minimal and ends at any of",
@@ -207,6 +213,16 @@ def test_every_claim_in_the_table_is_one_the_builder_emits() -> None:
 			seen.update(fragment for fragment, _ in CLAIMS
 			            if fragment in why)
 
+	# And the composed sample, which is evidence of the same kind: a
+	# claim the corpus cannot produce but the composition space can is
+	# EXERCISED rather than exempt, and the row below it is shorter for
+	# it. The extra seconds buy the difference between "no schema here
+	# reaches this" and "nothing reaches this".
+	for case in _composed():
+		for _, _name, why in _composed_refusals(case)[1]:
+			seen.update(fragment for fragment, _ in CLAIMS
+			            if why and fragment in why)
+
 	#: Reached by the builder's own inline fixtures rather than by any
 	#: corpus schema, or by a guard whose population is empty here.
 	CONSTRUCTED = {
@@ -301,3 +317,103 @@ def test_no_claim_outlives_its_message() -> None:
 	assert not missing, (
 		"these claims are in the table and the writer no longer says "
 		f"them: {missing}")
+
+
+#: How many composed cells the sampled gate below reads, and which
+#: sample. Fixed so a failure has the same name tomorrow, which is
+#: `test_composed_schemas.py`'s reason for its own seed.
+COMPOSED_SEED  = 20261013
+COMPOSED_COUNT = 400
+
+
+def _composed() -> list[object]:			# pragma: no cover - data
+	import random
+
+	from compose import cases
+
+	return random.Random(COMPOSED_SEED).sample(cases(), COMPOSED_COUNT)
+
+
+def _composed_refusals(case: object):			# type: ignore[no-untyped-def]
+	"""One composed cell: the resolved schema, and what it refused.
+
+	Both tests below read it, so the walk is written once -- the
+	alternative is two derivations of "plan every struct and every arm",
+	which is how they come to ask different questions.
+
+	`None` where the front end refused the schema itself, which is a
+	pass: most of this space is illegal and a diagnostic is the right
+	answer to all of it.
+	"""
+	from situc.diagnostics import Source, SituError
+	from situc.parser import parse
+
+	try:
+		parsed   = parse(Source(case.name, case.schema()))	# type: ignore[attr-defined]
+		resolved = resolve(parsed, solve(parsed))
+		header   = generate_c(parsed, resolved, "cell").files().get(
+			"cell.h", "")
+	except SituError:
+		return None, []
+
+	shape = build.Shape(header, "situ", resolved.structs,
+	                    {decl.name: decl for decl in parsed.varints()})
+	found = []
+	for name, struct in resolved.structs.items():
+		arms  = build.arms(struct)
+		plans = ([build.plan(struct, shape, arm) for arm in arms]
+		         if arms else [build.plan(struct, shape)])
+		for parts, why in plans:
+			if not parts:
+				found.append((struct, name, why))
+	return resolved, found
+
+
+@pytest.mark.parametrize("case", _composed(),
+                         ids=lambda case: case.name)
+def test_a_composed_schema_gets_a_plan_or_a_claim(case: object) -> None:
+	"""The gate above, over schemas nobody wrote.
+
+	Every fault these increments found was in a shape the corpus does
+	not have -- a wide run sized by an expression, a nested struct one
+	byte wide, a packed member that counts a run -- so the lens worth
+	having is the composition space `tool/sweep.py` already enumerates:
+	9000 cells of one construct after another, in six places.
+
+	What it asks is this file's own question. A struct is planned or
+	refused and never neither, the planner does not raise, and each
+	refusal carries exactly one claim that holds of the member it names.
+	Measured over the whole space before this was written: 13356 plans,
+	5508 claimed refusals, no crash, no silent cell, no false claim --
+	and 36 refusals with no claim at all, for a message the corpus
+	cannot produce. That row is in the table now.
+
+	A sample here and the whole space in the tool, which is
+	`test_composed_schemas.py`'s split and for its reason: what belongs
+	in a suite is a fixed sample, and the long run is a tool somebody
+	chooses to start.
+	"""
+	resolved, refused = _composed_refusals(case)
+	if resolved is None:
+		return			# the front end refused it: a pass
+
+	for struct, name, why in refused:
+		assert why, f"`{name}` is neither built nor named"
+		if not why.startswith("`"):
+			assert any(part in why for part in ABOUT_THE_STRUCT), \
+				f"{name}: names no member and is not about the " \
+				f"struct: {why}"
+			continue
+		quoted = why.split("`")[1]
+		held   = _member(struct, quoted)
+		assert held is not None, \
+			f"{name}: the message names `{quoted}`, not a member: {why}"
+		matched = [(fragment, claim) for fragment, claim in CLAIMS
+		           if fragment in why]
+		assert len(matched) == 1, \
+			f"{name}: {len(matched)} claims match: {why}\n" \
+			f"  {[f for f, _ in matched]}"
+		fragment, claim = matched[0]
+		assert claim(held, resolved), \
+			f"{name}: claims `{fragment}` and the member is not " \
+			f"that: {why}"

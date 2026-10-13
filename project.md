@@ -31304,6 +31304,86 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.635 The writer over the composition space, and what the readers do there
+
+Every fault these increments found was in a shape the corpus does not
+have: a wide run sized by an expression, a nested struct one byte wide, a
+packed member counting a run of structs, a member named after one of the
+writer's own locals. **So the lens is the composition space**, which
+`tool/sweep.py` has enumerated since 26.47 -- 9000 cells of one construct
+after another, in six places -- and which nothing had ever pointed at the
+writer.
+
+It is cheap to point there. The planner needs no compiler and no
+subprocess, so **the whole space is 77 seconds** rather than the hour the
+four-backend sweep takes, which is what makes it worth running over 9000
+cells instead of a sample.
+
+What it asks is the claim gate's own question, over schemas nobody wrote:
+a struct is planned or refused and never neither, the planner does not
+raise, and each refusal carries exactly one claim that holds of the
+member it names.
+
+**13356 plans, 5544 claimed refusals, no crash, no silent cell, no false
+claim, no ambiguous one** -- and, on the first run, **36 refusals with no
+claim at all.** All 36 were one message, the one the packed branch gained
+in 26.630 for a member that counts a run of structs: the corpus has no
+such member, so the row the gate needs had nowhere to come from. It is in
+the table now, and the composed sample reaches it twice, which is why it
+is listed as exercised rather than exempt.
+
+The sampled gate is 400 cells in the suite, with the whole space behind
+`sweep.py --writer`: `test_composed_schemas.py`'s split, for its reason
+-- what belongs in a suite is a fixed sample, and the long run is a tool
+somebody chooses to start.
+
+#### What the same lens says about the READERS
+
+The compile half of it found eight of 120 sampled cells whose generated
+code will not build under `-Wall -Wextra -Werror`, and **every one was in
+the reader's header rather than the writer's**: `-Wsign-compare` in a
+generated loop bound, and `-Wunused-parameter` on a `view` nothing reads.
+The project's own four-way harness compiles with `-std=c11 -O1` and no
+warning flags, so nothing had asked.
+
+**And one of those warnings was standing on a defect.** The unused `view`
+is in this:
+
+    static inline uint32_t situ_held_run_count(situ_view_t view)
+    {
+        return (uint32_t)0u;
+    }
+
+for `rec run[remaining]` inside a nested struct, where `rec` is three
+fixed bytes. The count is not zero; it is what is left of the view
+divided by three. `situ_held_run_at` checks `index >= run_count(view)`,
+so **every index refuses**: no element of that run is reachable in C.
+
+Python emits the same accessor returning `None`, and indexing it raises
+`TypeError: '<' not supported between instances of 'int' and
+'NoneType'`. **C++ and Rust emit neither**, with a comment saying why --
+*"one `rec` cannot be measured from its own bytes, so a run of them can
+neither be counted nor walked"*.
+
+So four backends take three positions: two refuse with a reason, one
+answers zero, one answers None. Both of the answers are verified by
+running rather than by reading, with the inner view constructed directly
+through `situ_held_view` and `cell.held.at`, which both backends offer.
+
+**The four-way differential reports this cell as `agreed`**, which is the
+finding under the finding: it compares the answers four backends give to
+drawn packets, and nothing in it asks for this count. A sampled
+differential over 24 of 9000 cells could not have found it either way.
+
+Which of the three positions is right is a decision rather than a gap --
+compute the count from the view, as the arithmetic allows, or refuse it
+as C++ and Rust do -- and it belongs to whoever owns the readers. Writing
+it up rather than fixing it is deliberate: the change is two backends
+moving in step with a differential that cannot currently see the
+accessor, so the coverage has to move first or the fix is unverified.
+That is its own piece of work, and it is recorded here with the
+reproduction so it does not have to be found twice.
+
 ### 26.634 A struct argument is the writer's parameter
 
 0050's construct from the writing side, and three refusals said *`block`

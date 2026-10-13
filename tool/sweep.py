@@ -52,6 +52,100 @@ from compose import Case, cases				# noqa: E402
 from probe import Outcome, run				# noqa: E402
 
 
+def _writer(chosen: list[Case], verbose: bool) -> int:
+	"""The builder's planner over these cells.
+
+	No compiling and no subprocesses, so the whole space is a minute
+	rather than an hour -- which is what makes it worth running over
+	9000 cells rather than a sample. What it looks for is what the unit
+	gate looks for over the corpus: a struct that is neither built nor
+	named, a planner that raises instead of refusing, and a refusal
+	whose claim is missing or false.
+
+	Every fault the writer's increments found was in a shape the corpus
+	does not have, which is the argument for pointing it at this space.
+	The first run of it found 36 refusals with no claim -- a message the
+	corpus cannot produce -- and no crash, no silent cell and no false
+	claim over 13356 plans.
+	"""
+	import traceback
+
+	from situc.diagnostics import Source, SituError
+	from situc.parser import parse
+	from situc.resolve import resolve
+	from situc.layout import solve
+	from situc.codegen.c import build
+	from situc.codegen.c.emit import generate as generate_c
+	from test_a_refusal_says_what_the_member_is import (
+		CLAIMS, ABOUT_THE_STRUCT, _member)
+
+	plans = refused = rejected = 0
+	bad: list[str] = []
+	for index, case in enumerate(chosen, start=1):
+		try:
+			parsed   = parse(Source(case.name, case.schema()))
+			resolved = resolve(parsed, solve(parsed))
+			header   = generate_c(parsed, resolved, "cell").files().get(
+				"cell.h", "")
+		except SituError:
+			rejected += 1
+			continue
+		except Exception:
+			bad.append(f"{case.name}: front end: "
+			           + traceback.format_exc().splitlines()[-1])
+			continue
+
+		shape = build.Shape(header, "situ", resolved.structs,
+		                    {decl.name: decl for decl in parsed.varints()})
+		for name, struct in resolved.structs.items():
+			arms = build.arms(struct)
+			try:
+				walked = ([build.plan(struct, shape, arm) for arm in arms]
+				          if arms else [build.plan(struct, shape)])
+			except Exception:
+				bad.append(f"{case.name}:{name}: "
+				           + traceback.format_exc().splitlines()[-1])
+				continue
+			for parts, why in walked:
+				if parts:
+					plans += 1
+					continue
+				if not why:
+					bad.append(f"{case.name}:{name}: neither built nor named")
+					continue
+				refused += 1
+				if not why.startswith("`"):
+					if not any(part in why for part in ABOUT_THE_STRUCT):
+						bad.append(f"{case.name}:{name}: names no member "
+						           f"and is not about the struct: {why}")
+					continue
+				quoted = why.split("`")[1]
+				held   = _member(struct, quoted)
+				if held is None:
+					bad.append(f"{case.name}:{name}: names `{quoted}`, "
+					           f"not a member: {why}")
+					continue
+				matched = [(fragment, claim) for fragment, claim in CLAIMS
+				           if fragment in why]
+				if len(matched) != 1:
+					bad.append(f"{case.name}:{name}: {len(matched)} claims "
+					           f"match: {why}")
+					continue
+				fragment, claim = matched[0]
+				if not claim(held, resolved):
+					bad.append(f"{case.name}:{name}: claims `{fragment}` "
+					           f"and the member is not that: {why}")
+		if verbose:
+			print(f"[{index}/{len(chosen)}] {case.name}")
+
+	print(f"\n  {plans} plans, {refused} claimed refusals, "
+	      f"{rejected} schemas the front end refused")
+	for line in bad[:20]:
+		print(f"  {line}")
+	print(f"\n  {len(bad)} finding(s)")
+	return 1 if bad else 0
+
+
 def main() -> int:
 	parser = argparse.ArgumentParser(
 		prog="sweep", description=__doc__.splitlines()[0])
@@ -67,6 +161,10 @@ def main() -> int:
 	                    help="print every cell rather than the failures")
 	parser.add_argument("--shard", default="",
 	                    help="run one slice of the space, as `i/n`")
+	parser.add_argument("--writer", action="store_true",
+	                    help="the BUILDER over the space rather than the "
+	                         "four readers: no compiling, so the whole "
+	                         "9000 take a minute")
 	args = parser.parse_args()
 
 	space = [case for case in cases() if args.only in case.name]
@@ -91,6 +189,9 @@ def main() -> int:
 		print(f"sweep: shard {index} of {count},", end=" ")
 
 	print(f"{len(chosen)} of {len(space)} cells, seed {args.seed}")
+
+	if args.writer:
+		return _writer(chosen, args.verbose)
 
 	tally  = Counter[str]()
 	failed: list[Outcome] = []
