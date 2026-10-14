@@ -7183,9 +7183,21 @@ class Emitter:
 		           for member in rule.variable]
 		inner   = " + ".join([f"{rule.constant}u"]
 		                     + [f"({length})" for length in lengths])
+		wide    = " + ".join([f"(int64_t){rule.constant}"]
+		                     + [f"(int64_t)({length})" for length in lengths])
 
+		# Even `preserving` adds, wherever the interior has a constant
+		# part: `inner` is `32u + (length)` for keystore's sealed region,
+		# and a length that has saturated to `UINT32_MAX` makes that sum
+		# wrap to 31. Nothing in the corpus reaches it -- a stride-1 run
+		# caps at `SITU_LEAF_MAX`, and the one stride-2 run inside a
+		# region is driven by a `u8` -- so this is the kind that was
+		# measured UNREACHABLE and fixed anyway, because it was the last
+		# arithmetic in this function outside the clamp and an exception
+		# wider than its reason is how a rule stops being enforced
+		# (26.650).
 		if rule.kind == "preserving":
-			return inner
+			return inner if not rule.variable else f"situ_nonneg_u32({wide})"
 
 		# The arithmetic kinds in `int64_t`, clamped once -- 14.2b, and
 		# not optional here. Each length above is already clamped, which
@@ -7200,9 +7212,6 @@ class Emitter:
 		# fixed for a multiplication INSIDE the clamped expression. This
 		# function put one outside it, which is the same rule failing one
 		# level out: a clamp bounds only the arithmetic it encloses.
-		wide = " + ".join([f"(int64_t){rule.constant}"]
-		                  + [f"(int64_t)({length})" for length in lengths])
-
 		if rule.kind == "add":
 			return f"situ_nonneg_u32(({wide}) + {rule.add})"
 		if rule.kind == "ratio":

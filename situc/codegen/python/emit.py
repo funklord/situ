@@ -5854,8 +5854,13 @@ class Emitter:
 			terms.append(f"({length})")
 		inner = " + ".join(terms)
 
+		# `preserving` adds too, wherever the interior has a constant
+		# part, so it gets the clamp for the reason the kinds below do:
+		# not because this backend can wrap, but so that all four answer
+		# the same number. The three that wrap were measured unreachable
+		# here for this kind and fixed anyway (26.650).
 		if rule.kind == "preserving":
-			return inner
+			return inner if not rule.variable else f"nonneg({inner})"
 
 		# The arithmetic kinds clamped once -- 14.2b. Python's integers
 		# do not overflow, so this changes no answer this backend could

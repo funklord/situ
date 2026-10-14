@@ -6203,16 +6203,28 @@ class Emitter:
 			return None
 
 		terms = [str(rule.constant)]
+		wides = [f"(({rule.constant}) as i64)"]
 		for member in rule.variable:
 			length = self._length_expression(struct, member)
 			if length is None:
 				return None
 			terms.append(f"({length})")
+			wides.append(f"(({length}) as i64)")
 		inner = " + ".join(terms)
+		wide  = " + ".join(wides)
 
+		# Each term widened on its own, not the sum cast afterwards: a
+		# cast applied to `32 + (length)` widens a value the 32-bit
+		# addition has already wrapped, which is this same rule failing
+		# one step earlier. And `preserving` adds too, wherever the
+		# interior has a constant part -- measured UNREACHABLE in this
+		# corpus (a stride-1 run caps at `LEAF_MAX`, and the one
+		# stride-2 run inside a region is driven by a `u8`) and fixed
+		# anyway, because it was the last arithmetic here outside the
+		# clamp and an exception wider than its reason is how a rule
+		# stops being enforced (26.650).
 		if rule.kind == "preserving":
-			return inner
-		wide = f"(({inner}) as i64)"
+			return inner if not rule.variable else f"situ_rt::nonneg({wide})"
 		# The arithmetic kinds in 64 bits, clamped once -- 14.2b. Each
 		# length above is already clamped, which makes it as large as
 		# `UINT32_MAX`, and the clamp saturates there rather than at
