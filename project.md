@@ -31304,6 +31304,78 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.640 The probe list as a partition, and a detector that could not see the exempt case
+
+26.639 ended by saying the differ's probe subset is worth auditing
+against `traverse.classify` rather than grown by instalments. This is
+that audit, as a test: every `Member` kind either reaches a probe or is
+named with the reason it does not.
+
+Measured over the corpus, 17 kinds occur and **15 are probed**:
+
+    SCALAR 616 members   VARIABLE 81   ARRAY 55   DELIMITED 40
+    NESTED 36   REGION 30   TAG 26   TEXT_NUMBER 16   REPEAT_WHILE 9
+    VARINT 7   RECORD_RUN 4   CODED 4   MARKER 2   TLV 1   INDEXED 1
+
+**Two are asked nothing, and they are not the same case.**
+
+`RESERVED`, 58 members, is a real exemption: reserved bytes have no
+accessor in any backend, their content being a policy rather than a
+value, and the policy is what `validate` checks -- which every driver
+already asks.
+
+`LOCATED`, two members, is a gap with a reason. They are
+`bmp.bitmap_file.pixels` and `edges.located_tail.payload`, both byte
+runs whose POSITION comes from a field, which is where four independent
+clamps are most likely to differ -- and BMP's are the pixel data every
+reader of that format wants. What stops a one-line probe is that the
+four expose such a run through four different interfaces: C emits
+`situ_bitmap_file_pixels_view(msg, view, &out)`, taking the MESSAGE
+because the offset is the message's rather than the struct's, while
+Python gives a `memoryview` property. Comparing them needs a probe
+shaped like `NESTED`'s, and that is the next piece here.
+
+**And the gap is coverage rather than correctness, which was measured
+before it was prioritised.** All four located accessors were read in
+full, and all four spell the bounds check the same non-wrapping way:
+`n > size || at > size - n` in C, C++ and Rust, and Python's
+`at + n > len(buffer)` which cannot overflow because its integers do
+not. The suspicion worth having -- that one of four independent clamps
+over an attacker's offset had the wrapping form -- is false today. So a
+`LOCATED` probe buys regression protection for code that agrees, not a
+defect, and the next session can take it in that order rather than
+re-deriving the four bodies.
+
+**The exemptions hold in both directions**, which is what keeps them
+from outliving their reason: a kind named exempt that starts being
+probed fails too. Both halves were sabotaged and seen to fail -- a
+removed `VARINT` probe fails by kind name, and a probe added for
+`RESERVED` fails with *"the drivers now ask about 58 of its 58
+members"*.
+
+And a third test says what the partition cannot: `NOTHING`, `OPAQUE`
+and `UNPLACED` have no corpus members, so nothing is claimed about them
+either way -- asserted, so the day a corpus schema grows one, the
+silence is re-measured rather than inherited.
+
+#### The detector could not see the one case that mattered
+
+**The second sabotage passed, and should not have.** `asks` stores an
+`Ask.local` through `c_name`, and my coverage walk compared the raw
+`traverse.local_name`. For an ordinary identifier the two spellings are
+identical, which is why the first sabotage worked; they differ for
+exactly the kind being exempted -- `<reserved0>` against `reserved0` --
+so a probe for a reserved member was invisible to the test asserting
+that none exists.
+
+A count inherits its detector, inside a test written to catch that
+shape. The useful part is which sabotage found it: direction one passed
+with the bug present, and only the direction that exercised the EXEMPT
+kind exposed it. **A guard tested in one direction is tested on the
+case it already handles**, which is the argument for sabotaging both
+ends of a two-directional claim rather than the end that reads more
+naturally.
+
 ### 26.639 The differential asked a run of structs nothing at all
 
 26.638 closed a count that answered zero in C and `None` in Python while
