@@ -31413,31 +31413,39 @@ next time they move.
 
 #### Where this session stops
 
-At `b319cbf` for the code and `3a84c44` for the record, both gated green
-and pushed, with nothing uncommitted but another session's
-`tool/style_gate.py`. **Weekly usage reached 94 per cent**, two points
-below the line where `CLAUDE.md` stops development, and nothing further
-was started for that reason: the two candidates left -- the readers'
-count accessor and the mixed-signedness loop bound -- are
-generated-output changes across four backends whose verification is an
-hour of container time each, which is exactly what the threshold is for.
+**At `b34511c`, gated green and pushed**, with nothing uncommitted but
+another session's `tool/style_gate.py`. This paragraph said `b319cbf`
+and 94 per cent, and both moved: the holder said to continue with the
+weekly reset six hours off, so the deferred reader question was measured
+rather than handed over -- which turned it into 26.638's four-backend
+fix -- and the window then reached **97 per cent**, past the line where
+`CLAUDE.md` stops development. Nothing was started after that.
 
-26.636 has the nine increments, what was measured, and the four open
-decisions with the measurement attached to each. The next session's
-first move is `python3 tool/sweep.py --writer --all`, which is green and
-is where the next writer fault will show.
+What the last increment cost is worth knowing for the next one: one
+measurement (ten minutes), four emitters each one rule, three backends
+verified by running and one by reading, a constructed test because the
+differential cannot see the accessor, and one container gate. The
+remaining candidate of that shape -- the mixed-signedness loop bound --
+was measured as cosmetic for every count this corpus and this
+composition space can spell, so it is not the next thing to do.
+
+26.636 has the ten increments and what was measured; the open list above
+it is three decisions and one coverage gap. The next session's first
+move is `python3 tool/sweep.py --writer --all`, which is green, and the
+first thing worth BUILDING is the driver that asks a run for its count.
 
 ### 26.636 Fold: rung 2 writes, 160 to 180 structs, and the lens that replaces guessing
 
-Nine increments over three days, each gated on a pinned worktree and
+Ten increments over four days, each gated on a pinned worktree and
 pushed with the verdict read from the recorded file rather than from a
 task's exit code. `e91b205` reserved content policies, `435cb75` a tag
 covering what follows it, `3ebdf2b` a size expression run backwards,
 `ef81543` big-endian varints and signed text numbers, `3ea0458` an
 escaped delimited run, `12d1a9a` a nested struct one byte wide,
 `ed22898` struct arguments as parameters, `3faded4` the claim gate over
-the composition space, and `b319cbf` the compile half of it. Entries
-26.628 through 26.635 have the detail; this is what a session picking it
+the composition space, `b319cbf` the compile half of it, and `b34511c`
+a reader fix that lens found. Entries 26.628 through 26.638 have the
+detail; this is what a session picking it
 up needs.
 
 **The session ends at `b319cbf`, gated green and pushed**, with nothing
@@ -31522,14 +31530,15 @@ with a measurement attached rather than a fix somebody should slip in.
 
 #### Open, and whose
 
-**The readers' count accessor for a dynamic nested run (26.635).** Four
-backends, three positions: C answers `0` so every element is
-unreachable, Python answers `None` and raises on indexing, C++ and Rust
-emit neither with a stated reason. Verified by running both. The
-four-way differential calls that cell `agreed` because nothing in it
-asks for the count, so **the coverage has to move before the fix** or
-the fix is unverified. Which position is right is the readers' owner's
-decision.
+**~~The readers' count accessor for a dynamic nested run.~~ Fixed in
+26.638, and it was never a decision.** Ten minutes of measurement -- the
+element is `SIZE_FIXED` and has its own `_required` -- made it one bug
+with one answer in four renderings. What is open is the half that let it
+live: **the four-way differential asks no run for its count**, so it
+reported the cell as `agreed` while C answered zero and Python answered
+`None`. A driver that asked would have caught this when the walking
+branch beside it was fixed. That is the coverage piece, and it is the
+first thing a session with budget should write.
 
 **0056's open question** -- what a canonical decimal spelling is --
 gates scaled text numbers, and measurement shrank the prize to one
