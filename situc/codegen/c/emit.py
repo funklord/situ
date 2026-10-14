@@ -7386,7 +7386,19 @@ class Emitter:
 		# it landed at the run's own start while the other three walked it
 		# (invariant 69).
 		if placement.sized_by is None and placement.size_expr is not None:
-			return f"({self._over_fields(struct, placement.size_expr, held)})"
+			# Bounded leaves, signed arithmetic, one clamp -- 14.2b, the
+			# same device the LENGTH path above uses, and missing here
+			# until 26.645. Unbounded, this cast the sum to `uint32_t`
+			# and truncated it: `n + 1` over a lying varint answered
+			# 1364443823 where Python and Rust answered 637019603631,
+			# the same number modulo 2^32. A count places every member
+			# after the run, so three answers put them in three places.
+			#
+			# No `* element_bytes` as the length path has: this is a
+			# count of elements and the clamp applies to the count.
+			return ("situ_nonneg_u32("
+			        + self._over_fields(struct, placement.size_expr, held,
+			                            bounded=True) + ")")
 
 		if placement.sized_by is None:
 			return f"{placement.array_count or 0}u"

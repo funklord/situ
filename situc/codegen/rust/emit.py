@@ -6411,7 +6411,16 @@ class Emitter:
 			# caller above already knows how to decline a count of None.
 			# Left to raise, it was a traceback out of the code generator.
 			try:
-				return self._over_fields(struct, placement.size_expr, "self")
+				# Bounded leaves, signed arithmetic, one clamp -- 14.2b,
+				# the same device the LENGTH path above uses, and missing
+				# here until 26.645. A count places every member after the
+				# run, and unbounded the three backends answered a lying
+				# varint's `n + 1` three ways: 1364443823 in C where its
+				# cast truncated, and 637019603631 here and in Python.
+				return ("situ_rt::nonneg("
+				        + self._over_fields(struct, placement.size_expr,
+				                            "self", cast="i64",
+				                            bounded=True) + ")")
 			except UnknownName:
 				return None
 
