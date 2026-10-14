@@ -6053,6 +6053,21 @@ class Emitter:
 			except UnknownName:
 				return None
 
+		# `x[remaining]` over elements of ONE size: the bytes left are
+		# known and so is the stride, so the count is a division. It
+		# reached the lookup below instead, which finds no member called
+		# `remaining`, returned None, and the accessor read `return None`
+		# -- so `run(0)` raised comparing an int with it. The walking form
+		# beside it was fixed for elements with no single size and this
+		# shape was left behind (26.638).
+		if placement.sized_by == "remaining" and placement.type_name:
+			inner = self.resolved.structs.get(placement.type_name)
+			if (inner is not None and inner.layout.is_fixed_size
+					and placement.array_count is None):
+				name = py_name(local_name(struct, placement))
+				return (f"max(self._len - self.{name}_offset, 0)"
+				        f" // {placement.type_name}.SIZE_BYTES")
+
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None

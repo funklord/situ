@@ -6415,6 +6415,22 @@ class Emitter:
 			except UnknownName:
 				return None
 
+		# `x[remaining]` over elements of ONE size: the bytes left are
+		# known and so is the stride, so the count is a division and not
+		# the walk below. Falling through to the lookup found no member
+		# called `remaining`, answered None, and the caller emitted the
+		# refusal comment instead -- whose stated reason, that one
+		# element cannot be measured from its own bytes, is false for a
+		# fixed-size one. The walking form was fixed for elements with no
+		# single size and this shape was left behind (26.638).
+		if placement.sized_by == "remaining" and placement.type_name:
+			inner = self.resolved.structs.get(placement.type_name)
+			if (inner is not None and inner.layout.is_fixed_size
+					and placement.array_count is None):
+				at = _ident(f"{local_name(struct, placement)}_offset")
+				return (f"self.bytes.len().saturating_sub(self.{at}())"
+				        f" / {_pascal(placement.type_name)}::SIZE")
+
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None

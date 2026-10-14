@@ -3459,6 +3459,30 @@ class Emitter:
 			except UnknownName:
 				return None
 
+		# `x[remaining]` over elements of ONE size: the bytes left are
+		# known and so is the stride, so the count is a division rather
+		# than the walk beside it. The lookup below finds no member
+		# called `remaining`, answers None, and the caller declines the
+		# accessor on a stated reason -- that one element cannot be
+		# measured from its own bytes -- which is false for a fixed-size
+		# one. Fixed in all four backends at once, the walking form
+		# having been fixed for variable elements and this shape left
+		# behind (26.638).
+		if placement.sized_by == "remaining" and placement.type_name:
+			inner = self.resolved.structs.get(placement.type_name)
+			if (inner is not None and inner.layout.is_fixed_size
+					and placement.array_count is None):
+				at = c_name(local_name(struct, placement))
+				# Guarded like the other three -- C tests the base,
+				# Python clamps with `max`, Rust uses `saturating_sub`.
+				# The offset accessor saturates at the view, so the
+				# subtraction cannot wrap today; the guard is for the
+				# day one of them stops saturating, and an unsigned wrap
+				# here answers a very large count rather than zero.
+				return (f"({at}_offset() < raw_.limit"
+				        f" ? (raw_.limit - {at}_offset()) / "
+				        f"{placement.type_name}::size_bytes : 0u)")
+
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
 			return None

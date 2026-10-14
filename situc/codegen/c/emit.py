@@ -7651,10 +7651,45 @@ class Emitter:
 		          and inner_struct is not None
 		          and not inner_struct.layout.is_fixed_size
 		          and bool(self._struct_extent(inner_struct)))
+		# The same shape with a FIXED element, which the branch below was
+		# written for and did not cover: `x[remaining]` over elements of
+		# one size needs no walk, it needs a division -- and falling
+		# through to `_count_expression` answered `array_count or 0`,
+		# which for a `remaining` run is zero. Every index then refused,
+		# so no element of the run was reachable at all (26.638).
+		divided = (placement.sized_by == "remaining"
+		           and inner_struct is not None
+		           and inner_struct.layout.is_fixed_size
+		           and placement.array_count is None)
 
 		if placement.array_count is not None:
 			lines.append(f"#define {macro(self.prefix, struct.name, local, 'COUNT')} "
 			             f"{placement.array_count}u")
+		elif divided:
+			assert inner_struct is not None
+			size = macro(self.prefix, inner_struct.name, "SIZE_FIXED")
+			lines.extend([
+				f"/* How many `{nested}` are in what is left. Each is "
+				f"{size}",
+				" * bytes, so the count is a division rather than a walk --"
+				" and the",
+				" * guard is for a view that ends before this member"
+				" begins, which a",
+				" * truncated message gives: the subtraction would wrap and"
+				" the",
+				" * division would answer a very large number. */",
+				f"static inline uint32_t "
+				f"{ident(self.prefix, struct.name, local, 'count')}"
+				f"(situ_view_t view)",
+				"{",
+				f"\tconst uint32_t base = {base};",
+				"",
+				"\tif (base >= view.limit) {",
+				"\t\treturn 0u;",
+				"\t}",
+				f"\treturn (view.limit - base) / {size};",
+				"}",
+			])
 		elif walked:
 			# `x[remaining]` over elements with no single size: the bytes left
 			# are known and the number of elements in them is not, so the

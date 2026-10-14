@@ -31304,6 +31304,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.638 A `remaining` run of fixed elements counted zero, in four backends
+
+26.635 recorded this as a decision for whoever owns the readers. **It is
+a bug, and the measurement that says so took ten minutes**: the element
+is `SIZE_FIXED 3` with its own `_required`, so the count is
+`(limit - offset) / 3` and the two backends that declined to emit it
+declined on a reason that is false for a fixed-size element. The
+guidelines' *measure the feared cost before deliberating* applied to a
+question I had deferred rather than measured, and the measurement
+removed the branch instead of informing it.
+
+What each backend did with `rec run[remaining]`, where `rec` is three
+fixed bytes:
+
+| C | `return (uint32_t)0u;` -- so `run_at` refused EVERY index |
+| Python | `return None` -- `run(0)` raised comparing `int` with it |
+| C++ | no accessor, with a stated reason |
+| Rust | no accessor, same stated reason |
+
+The reason the last two give is *"one `rec` cannot be measured from its
+own bytes, so a run of them can neither be counted nor walked"*. True of
+an element with no single size; false of this one.
+
+**The sibling branch had already been fixed for exactly these two
+symptoms.** The walking count's own comment records them: *"
+`_count_expression` had no answer and returned the fallback zero -- so
+the run read as empty... C++ formatted a Python `None` into the same
+accessor, which at least did not compile."* That fix was made for
+elements with NO single size, and the fixed-size case kept falling
+through to `array_count or 0`, which for a `remaining` run is zero. A
+rule written under one configuration, met by the second configuration a
+year later -- and the first fix's own evidence was sitting next to the
+second fault the whole time.
+
+**The fix is one rule rendered four ways**, beside the walk rather than
+inside it: a run of one-size elements needs a division, not a walk.
+Guarded in each language's idiom, which is worth stating because they
+are not the same device -- C tests the base against the limit, Python
+clamps with `max(..., 0)`, Rust uses `saturating_sub`, C++ a ternary.
+The offset accessors saturate at the view today, so none of the guards
+can fire; they are there for the day one of them stops, where an
+unsigned wrap answers a very large count rather than zero.
+
+Verified by RUNNING, not by reading, on the same twelve bytes: C,
+Python and C++ each count 3, read back `0102 03`, `0405 06`, `0708 09`,
+and refuse index 3. Rust is read from its emitted source and left to the
+gate's cross-test.
+
+#### Why nothing else had found it
+
+**No corpus schema has the shape.** The corpus's two `remaining` runs of
+structs are mqtt's `subscribe_body.filters` and
+`unsubscribe_body.filters`, and both have variable-size elements -- so
+both take the walking branch, which works. The fixed-element case exists
+only in the composition space, which is where 26.635's lens found it.
+
+**And the four-way differential reports the cell as `agreed`**, because
+it compares answers to drawn packets and no driver asks for this count.
+That is unchanged by this fix: the backends now agree on a right answer
+where they agreed on nothing before, and the differential still cannot
+see it. **The coverage gap is the open half** -- a driver that asks for
+every run's count would have caught this in 2026, and writing one is its
+own piece of work.
+
+What is closed is the defect. What is open is that nothing in the
+regression net would notice if it came back, apart from the constructed
+test this entry's commit adds.
+
 ### 26.637 Fold: the sweep command that cannot answer zero, signalled
 
 Two sweeps in this session read as a leak and both were the sweep's own
@@ -31571,14 +31639,13 @@ finding under the finding: it compares the answers four backends give to
 drawn packets, and nothing in it asks for this count. A sampled
 differential over 24 of 9000 cells could not have found it either way.
 
-Which of the three positions is right is a decision rather than a gap --
-compute the count from the view, as the arithmetic allows, or refuse it
-as C++ and Rust do -- and it belongs to whoever owns the readers. Writing
-it up rather than fixing it is deliberate: the change is two backends
-moving in step with a differential that cannot currently see the
-accessor, so the coverage has to move first or the fix is unverified.
-That is its own piece of work, and it is recorded here with the
-reproduction so it does not have to be found twice.
+~~Which of the three positions is right is a decision rather than a
+gap.~~ **It was not a decision and this paragraph was wrong.** Ten
+minutes of measurement -- the element is `SIZE_FIXED 3` and has its own
+`_required`, so `(limit - offset) / 3` is its count -- made it a bug
+with one answer, fixed in all four backends in 26.638. What survives of
+the paragraph is its second half: the differential still cannot see the
+accessor, so the coverage gap is the part that is open.
 
 ### 26.634 A struct argument is the writer's parameter
 
