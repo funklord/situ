@@ -31457,10 +31457,25 @@ to fix, and only one of them is what the differential found** -- so the
 other two are the ones that would have outlived it.
 
 The fix is the shape 26.645 settled for counts: build the terms wide,
-do the arithmetic in `int64_t`, clamp once at the end. Not done here:
-it was found while verifying something else, at the end of a budget,
-and a third clamp-once change deserves its own gate rather than riding
-on this one's.
+do the arithmetic in `int64_t`, clamp once at the end. Done, in all
+four, and the cell agrees now -- every backend computes
+`nonneg((wide * 2) / 1)` and answers 45.
+
+**Python needed the change although Python could not get it wrong**,
+and that is the part worth keeping. Its integers do not overflow, so
+the product is exact there whatever the other three do. But all four
+clamps saturate at `UINT32_MAX`, so once C, C++ and Rust clamp the
+product they answer 4294967295 where an unclamped Python answers
+4294967296. **The fix would have replaced a disagreement of four
+billion with a disagreement of one** -- and a differential is at its
+worst on those: a near-miss reads as a rounding question rather than as
+the arithmetic failure it is, and the cell that found this one was
+flagged by the size of the gap.
+
+So the rule is not "clamp the backends that overflow". It is: a value
+four programs have to agree about is clamped in all four or in none,
+because **the clamp is part of the answer and not a safeguard around
+it.**
 
 #### The argument for the probe, restated with a number
 

@@ -7179,20 +7179,37 @@ class Emitter:
 		       for member in rule.variable):
 			return None
 
-		terms = [f"{rule.constant}u"]
-		terms += [f"({self._length_expression(struct, member, held)})"
-		          for member in rule.variable]
-		inner = " + ".join(terms)
+		lengths = [self._length_expression(struct, member, held)
+		           for member in rule.variable]
+		inner   = " + ".join([f"{rule.constant}u"]
+		                     + [f"({length})" for length in lengths])
 
 		if rule.kind == "preserving":
 			return inner
+
+		# The arithmetic kinds in `int64_t`, clamped once -- 14.2b, and
+		# not optional here. Each length above is already clamped, which
+		# makes it as large as `UINT32_MAX`, and `situ_nonneg_u32`
+		# saturates there rather than at `SITU_LEAF_MAX`: so a `ratio`
+		# codec doubling a clamped length computed `2147483648 * 2u` in
+		# `uint32_t`, which is exactly 2^32 and therefore exactly ZERO.
+		# A `coded` body then read as empty where Python and Rust read 45
+		# bytes (26.646).
+		#
+		# `situ_nonneg_u32`'s own comment names that product, having been
+		# fixed for a multiplication INSIDE the clamped expression. This
+		# function put one outside it, which is the same rule failing one
+		# level out: a clamp bounds only the arithmetic it encloses.
+		wide = " + ".join([f"(int64_t){rule.constant}"]
+		                  + [f"(int64_t)({length})" for length in lengths])
+
 		if rule.kind == "add":
-			return f"({inner}) + {rule.add}u"
+			return f"situ_nonneg_u32(({wide}) + {rule.add})"
 		if rule.kind == "ratio":
-			return f"(({inner}) * {rule.out}u) / {rule.into}u"
+			return f"situ_nonneg_u32((({wide}) * {rule.out}) / {rule.into})"
 		# Whole groups only, so a partial one still costs a full group.
-		return (f"((({inner}) + {rule.group_in - 1}u)"
-		        f" / {rule.group_in}u) * {rule.group_out}u")
+		return (f"situ_nonneg_u32(((({wide}) + {rule.group_in - 1})"
+		        f" / {rule.group_in}) * {rule.group_out})")
 
 	def _ungated_scan_note(self, placement: Placement) -> list[str]:
 		"""No accessor for a scanned member inside a gated region (26.571).

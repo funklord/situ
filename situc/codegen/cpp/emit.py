@@ -3248,13 +3248,23 @@ class Emitter:
 
 		if rule.kind == "preserving":
 			return inner
+		wide = f"static_cast<std::int64_t>({inner})"
+		# The arithmetic kinds in 64 bits, clamped once -- 14.2b. Each
+		# length above is already clamped, which makes it as large as
+		# `UINT32_MAX`, and the clamp saturates there rather than at
+		# `LEAF_MAX`: so a `ratio` codec doubling a clamped length
+		# computed `2147483648 * 2` in 32-bit arithmetic, which is
+		# exactly 2^32 and therefore exactly ZERO, and a `coded` body
+		# read as empty. A clamp bounds only the arithmetic it encloses
+		# (26.646).
 		if rule.kind == "add":
-			return f"({inner}) + {rule.add}"
+			return f"::situ::rt::nonneg({wide} + {rule.add})"
 		if rule.kind == "ratio":
-			return f"(({inner}) * {rule.out}) / {rule.into}"
+			return (f"::situ::rt::nonneg(({wide} * {rule.out})"
+			        f" / {rule.into})")
 		# Whole groups only, so a partial one still costs a full group.
-		return (f"((({inner}) + {rule.group_in - 1})"
-		        f" / {rule.group_in}) * {rule.group_out}")
+		return (f"::situ::rt::nonneg((({wide} + {rule.group_in - 1})"
+		        f" / {rule.group_in}) * {rule.group_out})")
 
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,

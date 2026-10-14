@@ -5856,12 +5856,21 @@ class Emitter:
 
 		if rule.kind == "preserving":
 			return inner
+
+		# The arithmetic kinds clamped once -- 14.2b. Python's integers
+		# do not overflow, so this changes no answer this backend could
+		# get wrong; it is here because the other three now clamp, and
+		# an unclamped product here would make PYTHON the outlier by
+		# one. A `ratio` codec doubling a clamped length is 2^32, which
+		# saturates to `UINT32_MAX` in C, C++ and Rust and would stay
+		# 4294967296 here -- a disagreement of 1, which is the shape a
+		# differential is worst at making legible (26.646).
 		if rule.kind == "add":
-			return f"({inner}) + {rule.add}"
+			return f"nonneg(({inner}) + {rule.add})"
 		if rule.kind == "ratio":
-			return f"(({inner}) * {rule.out}) // {rule.into}"
-		return (f"((({inner}) + {rule.group_in - 1})"
-		        f" // {rule.group_in}) * {rule.group_out}")
+			return f"nonneg((({inner}) * {rule.out}) // {rule.into})"
+		return (f"nonneg(((({inner}) + {rule.group_in - 1})"
+		        f" // {rule.group_in}) * {rule.group_out})")
 
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
