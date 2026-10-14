@@ -224,30 +224,36 @@ class Ask:
 	scaled: bool = False
 
 
-#: Whether to ask a run of STRUCTS for its count. Off, and the two
-#: reasons are findings rather than taste -- 26.641 has both with their
-#: reproductions.
+#: Whether to ask a run of STRUCTS for its count. **On.** It was held
+#: back on two findings and both are closed, which is the record worth
+#: keeping rather than the flag.
 #:
-#: ~~Turning it on asked five members the WALKER has no list for.~~ That
-#: half is closed: `walker/report.py` grew `_sized_runs` and
-#: `walk.sized_run_count`, so ble's reports, message's recs, mqtt's two
-#: filter lists and edges' segments.parts are counted now -- from the
-#: EXTENT, because `size_code` means elements for a counted run and
-#: bytes for a `[remaining]` one (26.642).
+#: It was called `HELD_BACK`, and the name asserted the opposite of the
+#: value: the guard reads `HELD_BACK and ...`, so `False` was what held
+#: the ask back and `True` was what let it through. Harmless while
+#: nobody touched it and actively misleading the moment somebody did --
+#: a comment saying the probe is on, above `HELD_BACK = True`, reads as
+#: a contradiction. Named for what it does now.
 #:
-#: What still holds it back is the second reason alone:
+#: The walker had no count for five such runs: closed by
+#: `walker/report.py`'s `_sized_runs` and `walk.sized_run_count`, so
+#: ble's reports, message's recs, mqtt's two filter lists and edges'
+#: segments.parts are counted from the EXTENT -- `size_code` means
+#: elements for a counted run and bytes for a `[remaining]` one
+#: (26.642).
 #:
-#: And it found the three generated backends DISAGREEING about such a
-#: count where the message lies about it --
-#: `varint-arith-vrec-after-varint-in-frame-since`, where C answers
-#: 1364443823 and Python and Rust 637019603631. ~~Which answer is right
-#: is a decision.~~ **It is not**: 14.2b settles it -- bound every leaf,
-#: arithmetic signed in 64 bits, clamp once saturating at both ends --
-#: the walker obeys it, and none of the three applies it on the count
-#: path. C's number is the other two truncated by its cast to
-#: `uint32_t`, which is the failure 14.2b names. 26.644 has the
-#: measurement and the fix; this flag comes off when that lands.
-HELD_BACK = False
+#: And the generated backends disagreed about such a count wherever a
+#: message lied about it, because 14.2b's leaf bound was absent from
+#: every branch of `_count_expression` but one. Closed in 26.645 and
+#: 26.646: the function is `_count_read` plus one clamp at the exit
+#: now, in all four.
+#:
+#: What the probe then found is the argument for having kept it: the
+#: bare-reference count path, which nothing else could see -- with this
+#: off, nothing asks a struct run for its count, so a prediction read
+#: out of the generated C was unfalsifiable by any instrument in the
+#: tree (26.646).
+ASKS_STRUCT_RUN_COUNT = True
 
 
 def asks(struct: ResolvedStruct, structs: set[str],
@@ -445,7 +451,7 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# are exactly the ones where four independent clamps could
 			# disagree.
 			found.append(Ask(Probe.BYTES, local))
-		elif (HELD_BACK and kind is Member.VARIABLE
+		elif (ASKS_STRUCT_RUN_COUNT and kind is Member.VARIABLE
 				and placement.type_name in structs
 				and placement.array_count is None):
 			# A run of STRUCTS the message sizes, which reached no branch
