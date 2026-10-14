@@ -31403,10 +31403,64 @@ emitters at `95d8725`, so it is neither the probe's nor 26.645's:
 
 C alone reads an empty body where the other two read 45 bytes, in a
 `coded` struct whose run is delimited and whose count is arithmetic.
-Unmeasured: whether C is refusing something the others accept, or
-locating the body somewhere there is nothing. It is recorded rather
-than chased because it was found while verifying something else, and
-guessing at it from the one line of output is how an afternoon goes.
+
+**Measured, and it is 14.2b's own named failure, in the code, one
+level out from the helper whose comment names it.** C emits
+
+    static inline uint32_t situ_s_body_len(situ_view_t view)
+    {
+    	return situ_min_u32(((0u + (situ_nonneg_u32(
+    		situ_leaf_u64(situ_s_n_value(view)) + 1))) * 2u) / 1u,
+    		situ_remaining_u32(view.limit, situ_s_body_offset(view)));
+    }
+
+The `* 2u` is the `doubling` codec's expansion ratio, and it is applied
+to the clamp's RESULT in `uint32_t`. Evaluating it over the sweep's own
+buffer: the varint reads 637019603630, the leaf bound holds it to
+`SITU_LEAF_MAX`, `+ 1` makes 2147483648, and `situ_nonneg_u32`
+saturates at `UINT32_MAX` so that value passes through unchanged. Then
+`2147483648 * 2` is exactly 2^32, which in `uint32_t` is **0** -- the
+one product whose truncation is zero rather than merely wrong. So
+`situ_min_u32(0, 45)` is 0, and the body is empty.
+
+`situ_nonneg_u32`'s own comment names this:
+
+    Saturating at the top as well, and this half was missed once:
+    bounded leaves keep the arithmetic inside `int64_t`, and the
+    *result* can still exceed `uint32_t` -- `(SITU_LEAF_MAX + 1) * 2`
+    does.
+
+That is the arithmetic above, to the literal. The helper was fixed for
+a multiplication INSIDE the clamped expression, and `_region_length`
+then put one OUTSIDE it. **A clamp is only a bound for the arithmetic
+it encloses**, which is the same sentence as the count path's *multiply
+after clamping and the product leaves the domain again* -- written two
+hours earlier in this session, about the path I was looking at, while
+this one sat in the next function.
+
+#### Where else the shape is
+
+`_region_length` has four kinds and three of them do arithmetic on the
+inner length: `ratio` (`* out / into`), `add` (`+ n`), and the group
+form (`(inner + g-1) / g * g_out`). Only `preserving` hands the clamped
+value through untouched. All three are in `uint32_t` in C and in
+`std::uint32_t` in C++; Python's integers do not overflow, and Rust's
+`usize` is 64-bit here -- which is why only C printed a wrong number in
+a differential that compares all four.
+
+C++ emits the same product (`(((0 + (::situ::rt::nonneg(...)) * 2) / 1)`)
+at the decode call rather than in a length accessor, and Rust emits it
+with an `as u32` on the end, which truncates the same way. Neither was
+caught by this cell because the probe reads the span those backends
+compute elsewhere, not the expression at the decode site. **Three sites
+to fix, and only one of them is what the differential found** -- so the
+other two are the ones that would have outlived it.
+
+The fix is the shape 26.645 settled for counts: build the terms wide,
+do the arithmetic in `int64_t`, clamp once at the end. Not done here:
+it was found while verifying something else, at the end of a budget,
+and a third clamp-once change deserves its own gate rather than riding
+on this one's.
 
 #### The argument for the probe, restated with a number
 
