@@ -31324,17 +31324,44 @@ the packed image for the three corpus cases:
     message.message.recs          size_code=set  element_bits=64
     edges.segments.parts          size_code=set  element_bits=NONE
 
-`size_code` is the code that computes the member's byte extent from the
-message, and `walk.py` already evaluates it in two places. So the count
-is a division where `element_bits` is set -- `message.recs` is eight
-bytes an element -- and a walk where it is not, which is the machinery
-`_record_runs` already uses for a terminated run. Neither sub-case needs
-a new datum in the image or a change to the packer.
+~~`size_code` is the code that computes the member's byte extent~~ --
+**and that was wrong in the direction that ships a wrong number.**
+Measured before the selector was written: for
+`mqtt.subscribe_body.filters[remaining]` over a buffer holding two
+six-byte subscriptions, `size_code` evaluates to **12**, which is the
+remaining BYTES. For a counted run it is the ELEMENT count -- the extent
+path proves it by walking `range(size_code)` elements. One field, two
+units, told apart by the member's form and by nothing in the image.
+
+**The extent path is insensitive to the difference and a count is
+not.** For a `remaining` run it uses the byte number as an element
+count and walks that many, stopping on `at >= view.limit` -- so the
+extent comes out right by the loop's bound rather than by the number
+meaning what the code assumed. A selector that returned `size_code` as
+the count would have answered 12 filters where there are 2.
+
+So the instruction is bigger than one selector in `report.py`. The unit
+has to be knowable: either the packer records it beside the code, or the
+walker inspects the code for `Op.REMAINING` (0x03) -- which is reading a
+bytecode to decide semantics, and is the sort of thing to choose
+deliberately rather than reach for. Where the unit IS elements the count
+needs no walk at all, which is the one simplification this measurement
+adds.
 
 The selector itself is the complement of the other four:
 `type_struct != NONE and size_code != NONE and repeat_code == NONE`,
 excluding the delimited and region indices the three existing lists
 already claim.
+
+**Twice in one session a recorded conclusion needed correcting**, and
+both times measurement caught it before code did: the readers' count
+accessor called a decision when it was a bug (26.638), and this
+entry's own claim about `size_code`. The common shape is a conclusion
+drawn from reading one call site -- `walk.py` line 403 for the extent
+-- and generalised to a field's meaning. **A field's meaning is not a
+property of the first use you read**, which is the same error as the
+branch-ordering family the writer increments kept finding, one layer
+up.
 
 #### The fourth instance of one pattern
 
