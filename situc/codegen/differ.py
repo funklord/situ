@@ -237,12 +237,16 @@ class Ask:
 #:
 #: What still holds it back is the second reason alone:
 #:
-#: And it found the four backends DISAGREEING about such a count where
-#: the message lies about it -- `varint-arith-vrec-after-varint-in-frame
-#: -since`, where C answers 1364443823 and Python and Rust 637019603631,
-#: a number past what 32 bits hold. Which answer is right is a decision
-#: about what a count larger than the frame means, and it is not one to
-#: settle inside a test probe.
+#: And it found the three generated backends DISAGREEING about such a
+#: count where the message lies about it --
+#: `varint-arith-vrec-after-varint-in-frame-since`, where C answers
+#: 1364443823 and Python and Rust 637019603631. ~~Which answer is right
+#: is a decision.~~ **It is not**: 14.2b settles it -- bound every leaf,
+#: arithmetic signed in 64 bits, clamp once saturating at both ends --
+#: the walker obeys it, and none of the three applies it on the count
+#: path. C's number is the other two truncated by its cast to
+#: `uint32_t`, which is the failure 14.2b names. 26.644 has the
+#: measurement and the fix; this flag comes off when that lands.
 HELD_BACK = False
 
 

@@ -31304,6 +31304,69 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.644 The count disagreement is not a decision: 14.2b already settled it
+
+26.641 held the probe back partly on *"a decision about what a count
+larger than the frame means"*. **There is no decision. The rule is
+settled and no generated backend applies it on this path.**
+
+14.2b, and the entry that states it here: *bound every leaf, in the
+domain it was read in; do the arithmetic signed in 64 bits; clamp once,
+saturating at both ends*, with `SITU_LEAF_MAX` at `INT32_MAX`. The
+walker implements exactly that -- `min(max(count, 0), 0xFFFFFFFF)` --
+and its comment says why in as many words: *"a lying varint has to
+produce the same offset in all four, and a bound applied everywhere but
+here is a disagreement waiting to happen."*
+
+The count path in the three generated backends is that bound missing:
+
+    C       return (uint32_t)(situ_s_n_value(view) + 1);
+    Python  return self.n_value + 1
+    Rust    (self.n_value() as usize) + 1
+
+Over the cell `varint-arith-vrec-after-varint-in-frame-since` those
+answer 1364443823, 637019603631 and 637019603631. **C's number is the
+other two truncated**: 637019603631 mod 2^32 is 1364443823 exactly. So
+C is not the one that applies the rule -- it is the one whose cast
+hides the overflow, which is the failure 14.2b's own text names:
+*"clamping the low end alone left `(LEAF_MAX + 1) * 2` truncating to
+zero on the cast to `uint32_t` -- the same failure one step along."*
+
+**All three are wrong, in three different ways, against a rule the
+project wrote down and the walker obeys.** What makes it worth more
+than a count is where that count goes: it places every member after the
+run. A lying varint therefore puts them in three different places, and
+the walker in a fourth.
+
+#### Three times in one session
+
+This is the third thing I recorded as the holder's decision that was
+already settled somewhere else under another name -- after the readers'
+count accessor (26.638, a bug with one answer) and `size_code`'s
+meaning (26.643, answered by `size_bits`). `working-practice.md` names
+the trap and the cost: *a wrongly-deferred question is caught by
+nothing. It sits in the document looking exactly like diligence.*
+
+What the three have in common is that **the deferral was written from
+the diff rather than from the project.** Each time the evidence that
+settled it was one grep away -- 14.2b for this, a `SIZE_FIXED` macro for
+the accessor, `size_bits` for the field -- and each time I wrote the
+entry while still inside the change that raised the question. The habit
+that would have caught all three is the one `working-practice.md`
+prescribes and I did not run: before deferring, search for the decision
+under a different name.
+
+#### What the fix is, and what it unblocks
+
+Apply the leaf bound on the count path in all three backends, as the
+length path already does: `situ_leaf_i64`/`leaf_u64` in C and the
+matching helpers in C++, Python and Rust, arithmetic signed in 64 bits,
+one clamp at both ends. The walker needs no change.
+
+That closes 26.641's second obstacle, which means the struct-run count
+probe can be turned on -- and the probe is what found this, which is
+the argument for it rather than a cost of it.
+
 ### 26.643 The fifth count, and a field read three times before the right question
 
 `walker/report.py` answers `count=` for a run the message sizes now --
