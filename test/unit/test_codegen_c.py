@@ -1686,7 +1686,13 @@ def test_opaque_gets_bytes_and_a_length() -> None:
 
 def test_opaque_length_is_a_byte_count_not_an_element_count() -> None:
 	header, _ = emit("struct S { u16 n; opaque payload [n]; }")
-	assert "return (uint32_t)(situ_get_be16(situ_base(view) + 0u));" in header
+	# Through the leaf bound and the clamp, as every count is since
+	# 26.646: `situ_leaf_u64` holds the `u16` to `SITU_LEAF_MAX` and
+	# `situ_nonneg_u32` clamps once. What this test is about is the
+	# absence of a `* 2u` -- an opaque region's size expression is
+	# already bytes, so there are no elements to scale by.
+	assert ("return (uint32_t)situ_nonneg_u32(situ_leaf_u64("
+	        "situ_get_be16(situ_base(view) + 0u)));") in header
 
 
 VARINT = "varint_type v { encoding = leb128; max_bits = 64; minimal; }"
@@ -2993,7 +2999,8 @@ def test_a_bit_packed_element_contributes_its_bits_to_the_extent() -> None:
 
 	# One byte for the packed pair, plus however many `rest` says.
 	assert "uint32_t extent = 1u;" in header
-	assert "extent = extent + ((uint32_t)((uint8_t)situ_bits_get_msb(" in header
+	assert ("extent = extent + ((uint32_t)situ_nonneg_u32(situ_leaf_u64("
+	        "(uint8_t)situ_bits_get_msb(") in header
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
@@ -3191,7 +3198,8 @@ def test_a_declared_length_is_clamped_to_the_frame() -> None:
 	"""
 	header, _ = emit(OVERLONG)
 
-	assert "situ_min_u32((uint32_t)(situ_get_be16(situ_base(view) + 1u))," in header
+	assert ("situ_min_u32((uint32_t)situ_nonneg_u32(situ_leaf_u64("
+	        "situ_get_be16(situ_base(view) + 1u)))," ) in header
 	assert "situ_remaining_u32(view.limit," in header
 
 

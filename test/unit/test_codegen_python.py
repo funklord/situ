@@ -2595,7 +2595,9 @@ struct S {
 """)
 
 	# `len` at 0, `body` at 1, `kind` at 1 + len, the arm at 2 + len.
-	assert "advance(2, (self._read(0, 1, signed=False, big=True))" in module
+	# Through the leaf bound and the clamp (26.646); the 2 is the claim.
+	assert ("advance(2, (nonneg(leaf(self._read(0, 1, signed=False, "
+	        "big=True))))" in module)
 
 	# The control: an arm the schema places keeps its constant, so a
 	# change that always computed an expression would churn every header.

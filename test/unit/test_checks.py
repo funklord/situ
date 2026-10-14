@@ -426,10 +426,21 @@ def test_a_run_length_that_stops_clamping_is_caught(tmp_path: Path) -> None:
 	returning the field's raw claim -- left every other check in the suite
 	green, which is what the differential-oracle ask (`suggestion/apt-emerge.md`)
 	is about: break the generator, watch the generated suite go red."""
+	# The corruption target MOVED once, and this test said so itself: the
+	# count path gained 14.2b's leaf bound and clamp (26.646), so the line
+	# below stopped existing and `build`'s own `assert applied` fired --
+	# "nothing to corrupt". That assertion is the only reason a control
+	# whose target has gone stale announces itself rather than passing
+	# over an uncorrupted program, which is the vacuous case this file
+	# exists to rule out. Re-aim it when the emission moves; do not relax
+	# it to a substring, because a pattern loose enough to survive the
+	# next change is one that no longer names the clamp.
 	result = build(tmp_path, "struct s { u8 n; u8 data[n]; u8 tail; }",
 		corrupt=(
-			"return situ_min_u32((uint32_t)((uint8_t)(situ_base(view))[0u]),",
-			"return ((uint32_t)((uint8_t)(situ_base(view))[0u]) + 0u * (uint32_t)0 +"))
+			"return situ_min_u32((uint32_t)situ_nonneg_u32(situ_leaf_u64("
+			"(uint8_t)(situ_base(view))[0u])),",
+			"return ((uint32_t)situ_nonneg_u32(situ_leaf_u64("
+			"(uint8_t)(situ_base(view))[0u])) + 0u * (uint32_t)0 +"))
 
 	assert result.returncode != 0, "a dropped run-length clamp went unnoticed"
 	assert "length_is_clamped_to_the_frame" in result.stdout

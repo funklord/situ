@@ -3780,7 +3780,11 @@ def test_a_plain_sized_by_reads_the_member() -> None:
 	body = held[held.index("bytes body()"):]
 	body = body[:body.index("\t}")]
 
-	assert "static_cast<std::uint32_t>(n)" in body
+	# Bounded and clamped like any other count (26.646). The parameter is
+	# caller-supplied rather than read, and it is bounded all the same:
+	# this one is a `std::uint32_t` and Python's is an `int`, so a caller
+	# passing 2^40 would have the two disagree.
+	assert "::situ::rt::nonneg(::situ::rt::leaf_u(n))" in body
 	assert "situ_base(raw_) + 0)" not in body, "the length is read off the wire"
 
 	# The control: with `n` a real field the SAME accessor must read the

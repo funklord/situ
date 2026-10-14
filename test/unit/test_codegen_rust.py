@@ -1337,7 +1337,8 @@ def test_a_member_after_a_varint_is_placed_past_it() -> None:
 def test_a_varint_may_size_an_array() -> None:
 	module = emit(VARINT + "struct S { v n; u8 payload[n]; }")
 
-	assert "self.n_value() as usize" in module
+	assert ("situ_rt::nonneg(situ_rt::leaf_u(self.n_value() as u64))"
+	        in module)
 
 
 def test_a_minimal_varint_refuses_a_padded_encoding() -> None:
@@ -2418,8 +2419,10 @@ struct S {
 """)
 
 	# `len` at 0, `body` at 1, `kind` at 1 + len, the arm at 2 + len.
-	assert ("situ_rt::advance(2, situ_rt::read_be(self.bytes, 0, 1) as usize"
-	        in module)
+	# `len` reaches the offset through the leaf bound and the clamp
+	# (26.646); what this asserts is the 2, which is where the arm sits.
+	assert ("situ_rt::advance(2, situ_rt::nonneg(situ_rt::leaf_u("
+	        "situ_rt::read_be(self.bytes, 0, 1) as u64))" in module)
 
 	# The control: an arm the schema places keeps its constant.
 	fixed = emit("""struct inner { u16 v; }

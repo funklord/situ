@@ -465,9 +465,23 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 					break
 				at += size
 			return (at - start) * BITS_PER_BYTE
-		element = (placement.element_bits
-		           if placement.element_bits != NONE else BITS_PER_BYTE)
-		width = count * element
+		# `size_code` for the bare `x[remaining]` states BYTES rather than
+		# a count of elements, so multiplying it by the element width
+		# inflates the extent by exactly the stride -- and then
+		# `sized_run_count` divides by the stride and reports bytes as a
+		# count. `_sizes_in_bytes` is what tells the two spellings apart.
+		#
+		# Invisible in this corpus, and the reason is worth keeping: every
+		# bare `[remaining]` run in it is `u8`, where the stride is 1 and
+		# `count * 8` is the right number of BITS by coincidence. A `u16`
+		# run or a run of records is the shape that breaks, and the corpus
+		# has neither -- so no test could have caught this (26.649).
+		if _sizes_in_bytes(view.image, placement.size_code):
+			width = count * BITS_PER_BYTE
+		else:
+			element = (placement.element_bits
+			           if placement.element_bits != NONE else BITS_PER_BYTE)
+			width = count * element
 		# Clamped to a *pin* and to nothing else. `[size = N]` makes the
 		# member hold N bytes whatever the length field says, which is what
 		# the four backends clamp their accessors to (0039).
@@ -722,6 +736,34 @@ def _evaluate(view: View, code_at: int,
 			0, view.limit - view.at
 			- (from_byte() if callable(from_byte) else from_byte)),
 	)
+
+
+def _sizes_in_bytes(image: Image, code_at: int) -> bool:
+	"""Whether a run's size program states BYTES rather than elements.
+
+	The bare `x[remaining]` is the only form that does, and it compiles to
+	exactly `REMAINING, END` -- two bytes. Every other form yields a count
+	of elements: `x[n]` is `FIELD n, END`, `x[n + 1]` adds a `PUSH`, and
+	`x[remaining / 2]` opens with `REMAINING` and is an element count all
+	the same, because the schema language treats a bare `remaining` and
+	`remaining` inside arithmetic as different things (the parser makes
+	the first `sized_by` and the second a `size_expr`, and every backend
+	branches on that).
+
+	So the test is that the program IS `REMAINING`, not that it mentions
+	it -- a program that merely mentions it would take `remaining / 2` for
+	a byte count and divide by the stride a second time.
+
+	26.642 said "nothing in the image says which" and closed the walker's
+	count gap by deriving every such count from the extent. That was a
+	claim about `size_code`'s VALUE, which is indeed ambiguous, and it
+	held for the field while being false for the program the field points
+	at. Measured on four one-line schemas before this was written.
+	"""
+	return (code_at != NONE
+	        and code_at + 1 < len(image.code)
+	        and image.code[code_at] == vm.REMAINING
+	        and image.code[code_at + 1] == vm.END)
 
 
 def _count(view: View, index: int) -> int:
@@ -1657,21 +1699,30 @@ def sized_run_count(view: View, index: int, depth: int = 0) -> int:
 	arithmetic, or from `remaining`. 26.639's probe asked five of these
 	and this walk answered nothing.
 
-	**Taken from the EXTENT and not from `size_code`**, which is the
-	third reading of that field and the first that holds. For a counted
-	run `size_code` is a number of ELEMENTS and for a `[remaining]` one
-	it is BYTES -- measured at 12 for `mqtt.subscribe_body.filters` over
-	two six-byte subscriptions -- and nothing in the image says which. A
-	count built on it would have answered 12 filters where there are 2.
+	**The count the message DECLARES, where it declares one** -- set by
+	the copyright holder after the probe showed this walk and the four
+	backends answering different questions: ble's `reports` read 2 here
+	against C's 32, and edges' `parts` 0 against 234. The backends report
+	what the driving field says, bounded at the leaf; this reported how
+	many elements fit in the extent. 0032's closing invariant settles
+	which is right -- no rung invents a fact the schema did not state --
+	and a declared count is stated while "how many fit" is derived.
 
-	`size_bits` already resolves both forms to one number, because the
-	extent path walks the elements for the variable case and multiplies
-	for the fixed one. So the question was never what `size_code` means:
-	the count follows from the extent, and only the element's own size
-	differs between the two sub-cases.
+	It is not a weaker answer. Nothing is unbounded by it: every element
+	accessor checks its own read, so a declared 32 over a buffer holding
+	2 yields two elements and then refusals, which is what a reader needs
+	to be told rather than a count quietly trimmed to the truncation.
 
-	Bounded twice, as every walk here is: by the extent rather than by
-	the view, and by refusing to advance on a zero-length element.
+	**The exception is the bare `x[remaining]`**, which declares BYTES and
+	no count at all, so there is nothing to report but what the extent
+	holds -- and the generated backends compute exactly that, dividing the
+	bytes left by the stride. `_sizes_in_bytes` tells the two apart by the
+	size program rather than by its value, which is what 26.642 could not
+	see a way to do.
+
+	Bounded twice in that branch, as every walk here is: by the extent
+	rather than by the view, and by refusing to advance on a zero-length
+	element.
 	"""
 	placement = view.image.placements[index]
 	element   = placement.type_struct
@@ -1679,6 +1730,13 @@ def sized_run_count(view: View, index: int, depth: int = 0) -> int:
 		raise Refused(f"placement {index} is not a run of records")
 	if placement.size_code == NONE:
 		raise Refused(f"placement {index} is not sized by the message")
+
+	if not _sizes_in_bytes(view.image, placement.size_code):
+		# Negative reads as zero and an overflow saturates high (14.2b),
+		# the same two lines `size_bits` carries and for the same reason:
+		# this walker evaluates in Python and cannot overflow, so the
+		# bound is here to AGREE with the three backends that can.
+		return min(max(_count(view, index), 0), 0xFFFFFFFF)
 
 	reach = size_bits(view, index, depth) // BITS_PER_BYTE
 	if placement.element_bits != NONE and placement.element_bits:

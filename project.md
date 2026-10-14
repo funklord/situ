@@ -31304,6 +31304,136 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.649 The walker reports the declared count, and 26.642's blocker was not real
+
+Set by the copyright holder, answering 26.648: **the walker reports the
+count the message declares.** `sized_run_count` returns the driving
+expression's value, bounded `min(max(count, 0), 0xFFFFFFFF)` -- the same
+two lines `size_bits` carries, and for the stated reason, that this
+walker evaluates in Python and cannot overflow, so the bound is there to
+agree with the three backends that can.
+
+Nothing is left unbounded by it. Every element accessor checks its own
+read, so a declared 32 over a buffer holding 2 yields two elements and
+then refusals, which is what a reader needs to be told rather than a
+count quietly trimmed to the truncation it found.
+
+#### `nothing in the image says which` was true of the field and false of the program
+
+26.642 could not take the declared count because `size_code` is a number
+of ELEMENTS for a counted run and BYTES for a `[remaining]` one, and it
+recorded that nothing distinguishes them. That held for the field's
+value. It does not hold for the program the field points at:
+
+| form | the program opens | reads as |
+|---|---|---|
+| `parts[remaining]` | `REMAINING, END` | bytes |
+| `parts[n]` | `FIELD 4, END` | elements |
+| `parts[n + 1]` | `FIELD 6, PUSH 1 ...` | elements |
+| `parts[remaining / 2]` | `REMAINING, PUSH 2 ...` | **elements** |
+
+Measured on four one-line schemas before anything was built on it.
+`_sizes_in_bytes` asks whether the program **is** `REMAINING` -- two
+bytes, opcode then END -- rather than whether it mentions it, and the
+last row is why: a test that merely looked for the opcode would take
+`remaining / 2` for a byte count and divide by the stride twice.
+
+It also matches the compiler, which decides the same thing
+syntactically: the parser makes a bare `remaining` into `sized_by` and
+`remaining` inside arithmetic into a `size_expr`, and all four backends
+branch on that. So the walker now draws the line where situc draws it,
+rather than where the image's ambiguity forced it.
+
+**The transferable part is the shape of the wrong claim.** 26.642 did not
+guess; it measured, and its measurement was of the wrong artifact. An
+ambiguity in a VALUE says nothing about the PROGRAM that produced it, and
+the entry generalised from one to the other in a sentence -- *nothing in
+the image says which* -- that reads as exhaustive and was about a single
+field. A claim of the form "nothing here distinguishes X" is worth
+re-reading for which "here" was searched.
+
+#### Which uncovered a second defect, invisible by construction
+
+`size_bits` multiplied `size_code` by the element width for a bare
+`[remaining]` run -- where `size_code` is already bytes. The extent came
+out inflated by exactly the stride, and `sized_run_count` then divided
+by the stride and reported bytes as a count: 4 for a four-byte run of
+two-byte records, where the backends divide and say 2.
+
+**No test could have caught it.** Every bare `[remaining]` run in the
+corpus is `u8`:
+
+    u8 rest[remaining];        edges, x7
+    u8 payload[remaining];     edges
+    u8 content[remaining];     edges, x2
+
+and at a stride of 1 the inflation factor is 1, so `count * 8` is the
+right number of BITS by coincidence. A `u16` run or a run of records is
+the shape that breaks and the corpus has neither -- confirmed by
+searching for both. So the bug sat behind a factor that is only ever
+one, in the one corpus that could have exercised it.
+
+Fixed with the same discriminator, and the four forms now agree with
+what the backends compute.
+
+#### What it fixed, measured
+
+`test/unit/test_walker.py`: **92 passed, 3 skipped**, where the gate at
+`3fff69f` had it failing three ways. All three were the one cause:
+
+- `test_the_walker_agrees_with_the_compiled_backends[ble/ble.situ]` and
+  `[schema/edges.situ]`, the two disagreements 26.648 recorded;
+- `test_the_writes_are_compared_at_all`, which had dropped to 29
+  contributing schemas against a floor of 31. **The two that fell out
+  came back with the declared count**, which is the answer to the
+  question 26.648 left open about which they were -- they were not a
+  separate regression at all. A count that stopped at the extent left
+  the members past it unwritable, so the replay for those schemas
+  declined and the coverage floor caught it. The floor existing is why
+  that was a measurement rather than a guess.
+
+One more thing the timings say, since two runs of this were abandoned
+to a wall-clock bound before any of it was known: `test_walker.py` is
+143 seconds and `test_walker_c.py` is the eighteen-minute half, because
+it compiles a probe per schema. Bound them separately rather than as a
+pair.
+
+#### The gate's twelve, and the one that is a question
+
+Seven assertions quoted emission that changed and are re-quoted against
+it, with the clamp named rather than relaxed to a substring that would
+survive the next change by not testing anything.
+
+`test_a_run_length_that_stops_clamping_is_caught` is re-aimed and fires
+again. It failed in the right way -- through its own `assert applied,
+"nothing to corrupt"` -- and that assertion is the entire reason a
+control whose target has gone stale announces itself instead of passing
+over an uncorrupted program. Its comment now says the target has moved
+once and why not to loosen it.
+
+**`test_required_saturates_rather_than_wrapping` is left failing, for
+the holder.** It is a real behavioural change and not stale text. With
+`u32 length = 0xFFFFFFFF`, `situ_S_required` reported
+`need = 0xFFFFFFFF` and now reports `0x80000004`, because the leaf bound
+reached that read:
+
+    at = situ_need_u32(at, (uint32_t)situ_nonneg_u32(
+            situ_leaf_u64(situ_get_be32(situ_base(view) + 1u))));
+
+14.2b prescribes the new value -- bound every leaf -- and all four
+backends agree on it. The cost runs the other way: 4 GB is a need no
+`uint32_t` caller can satisfy, and 2 GB is one they can, so a caller
+could supply it and be handed a body truncated from the declared length.
+That is the plausible-number failure this repository rates worst, and
+the test's docstring names the incident behind it from `raidcfgd`.
+
+The reading on offer: the leaf bound exists so that **placement**
+arithmetic agrees across backends, and `required` places nothing -- it
+reports a size to a caller -- so it should saturate at the type's
+maximum rather than at the leaf's. That is an argument and not the
+decision, and it is not what was asked for, so the test stays red rather
+than being edited to agree with the code.
+
 ### 26.648 The gate is red at the tip, and one of the twelve is a design question
 
 `make check` on the pinned worktree at `3fff69f`: **`MAKE_RC=2`, 12
