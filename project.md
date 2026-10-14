@@ -31304,6 +31304,81 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.647 Fold: four clamp-once fixes, and the probe that found three
+
+One session, one class of defect, found by turning on a probe that two
+earlier entries had held back. The ladder, newest first:
+
+| commit | what it fixed |
+|---|---|
+| `3fff69f` | a region's length arithmetic, wide and clamped once |
+| `f7a090a` | the struct-run count ask turned on, flag renamed |
+| `3d77ce5` | `_count_expression` split, one clamp at the exit |
+| `a35e1a2` | the arithmetic count path's leaves bounded |
+
+`tool/sweep.py --all --shard 0/120` went from `agreed 73, disagree 2`
+to `agreed 75`, and a disjoint second shard (`1/120`, 75 more cells) is
+also clean -- 150 of the 9000 with the probe on and nothing left to
+answer for.
+
+#### The one sentence worth carrying out of it
+
+**A clamp bounds only the arithmetic it encloses.** Three of the four
+faults were that sentence in a different place: a leaf unbounded before
+a sum, a sum unbounded before a cast, and a clamped length multiplied
+afterwards. 14.2b has said *bound every leaf, arithmetic signed in 64
+bits, clamp once* since it was written, and every one of these was that
+rule applied to the expression somebody was looking at rather than to
+the expression that reached the caller.
+
+#### What the instruments did, which is the other half
+
+- **The probe could not be held back and trusted at the same time.**
+  With the ask off, nothing reads a struct run's count, so a sweep of
+  all eighteen cells with that shape reported `agreed 18` over a fault
+  I had already read in the generated C and could not demonstrate.
+- **My own write-up cited a vacuous pass as evidence** -- `sweep
+  --only <cell>` reporting `agreed` while the probe was off -- in the
+  entry recording a fix for exactly that. 26.645 carries the
+  correction and the real control: probe on with the clamp in, agreed;
+  probe on with C's clamp reverted, DISAGREE.
+- **`--shard 1/120` without `--all` examined one cell** and printed
+  `agreed 1, examined 1/1`. The number that would have caught it was
+  on the line above.
+- **C was the backend that looked right in every one of these.** A
+  narrowing cast turns an implausible number into a plausible one, so
+  the two honest backends read as the broken ones. Where four
+  implementations disagree, prefer the absurd answer as the honest one.
+
+#### How to stop this project's gate, measured here
+
+The gate is `timeout 5400 make check` in a pinned worktree, run as a
+background task. **Signalling the task's wrapper shell does not stop
+it**: TERM on that bash left `timeout`, `make` and `pytest` alive and
+reparented to init, which is `running-code.md`'s rule -- anything that
+kills the supervisor rather than signalling the work leaves the work
+running -- met from a third direction, after containers and
+harness-kills.
+
+What works is to find the `timeout 5400 make check` and signal that,
+re-reading each `/proc/<pid>/cmdline` immediately before the kill
+because a PID is a moment. Then check for orphans, `/tmp` (which is on
+`/` on this machine, not a tmpfs), and deleted-but-open files. All
+three were clear afterwards.
+
+#### Open, with its measurement
+
+- **A `preserving` region's length is still a sum in 32 bits.** It
+  returns the inner terms unchanged, so one clamped term is safe and
+  two could overflow between them. Unmeasured: whether a region with
+  two variable members is reachable in the corpus. The other three
+  kinds are fixed.
+- The remaining items from 26.641 onwards stand: the `LOCATED` probe
+  (four interfaces, no live defect), 0056's canonical decimal
+  spelling, whether a literal-only struct gets a builder, 0043 versus
+  the parser on `pad_to(n) [preserve]`, the three `_reserved_policy`
+  copies in the non-C backends, and the `project.md` cut.
+
 ### 26.646 Two cells in seventy-five: the probe pays out twice more
 
 26.645 said the probe could come on. Before turning it on I ran a real
