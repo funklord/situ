@@ -6026,13 +6026,29 @@ class Emitter:
 
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
+		"""The count a run is walked by, bounded where a message gave it.
+
+		`_count_read` finds it and says whether it came out of the
+		message; this clamps it when it did. One clamp, at the exit
+		(14.2b) -- the reading branches each returned their own
+		expression and only the arithmetic one bounded anything, so a
+		bare `[n]` over a varint read 637019603630 here against C's
+		truncated 1364443822 (26.646).
+		"""
+		counted, from_data = self._count_read(struct, placement)
+		if counted is None or not from_data:
+			return counted
+		return f"nonneg({counted})"
+
+	def _count_read(self, struct: ResolvedStruct,
+			placement: Placement) -> tuple[str | None, bool]:
 		# A count the SCHEMA gives. `sized_by` and `size_expr` are the two
 		# the message carries, and `T x[2]` carries neither -- so a caller
 		# walking a run asked for the count, got None, and fell back to "the
 		# frame is the bound", walking past the elements the schema asked
 		# for (26.267).
 		if placement.array_count is not None:
-			return str(placement.array_count)
+			return (str(placement.array_count), False)
 
 		# A count written as arithmetic. `sized_by` holds a path and holds
 		# nothing for `x[n + 1]`, so this looked up a driver named "None",
@@ -6049,17 +6065,13 @@ class Emitter:
 			# caller above already knows how to decline a count of None.
 			# Left to raise, it was a traceback out of the code generator.
 			try:
-				# Bounded leaves, signed arithmetic, one clamp -- 14.2b,
-				# the same device the LENGTH path above uses, and missing
-				# here until 26.645. A count places every member after the
-				# run, and unbounded the three backends answered a lying
-				# varint's `n + 1` three ways: 1364443823 in C where its
-				# cast truncated, and 637019603631 here and in Rust.
-				return ("nonneg("
-				        + self._over_fields(struct, placement.size_expr,
-				                            "self", bounded=True) + ")")
+				# `bounded` holds each leaf to `LEAF_MAX`; the caller
+				# clamps the sum. No stride multiplication, unlike the
+				# length path: this is elements, not bytes.
+				return (self._over_fields(struct, placement.size_expr,
+				                          "self", bounded=True), True)
 			except UnknownName:
-				return None
+				return (None, False)
 
 		# `x[remaining]` over elements of ONE size: the bytes left are
 		# known and so is the stride, so the count is a division. It
@@ -6073,20 +6085,27 @@ class Emitter:
 			if (inner is not None and inner.layout.is_fixed_size
 					and placement.array_count is None):
 				name = py_name(local_name(struct, placement))
+				# Derived from the frame rather than from a leaf: already
+				# non-negative, and already no larger than the bytes
+				# there are. Nothing for the clamp to do.
 				return (f"max(self._len - self.{name}_offset, 0)"
-				        f" // {placement.type_name}.SIZE_BYTES")
+				        f" // {placement.type_name}.SIZE_BYTES", False)
 
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
-			return None
+			return (None, False)
 
 		# A `[stream]` driver is the argument the caller gave `at`, carried
 		# on the view (0050). Read from the buffer it would be the member
 		# after it, a parameter occupying nothing -- and this is the second
 		# of the two spellings, which the comment above already names as the
 		# place one of them gets missed.
+		# Caller-supplied rather than read (0050), and bounded all the
+		# same: C's parameter is a `uint32_t` and this one is an `int`,
+		# so a caller passing 2^40 would have the two disagree for the
+		# reason a lying varint did.
 		if driver.placement.parameter:
-			return f"self.{py_name(placement.sized_by or '')}"
+			return (f"leaf(self.{py_name(placement.sized_by or '')})", True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the
@@ -6094,17 +6113,19 @@ class Emitter:
 		# thing a varint is usually for -- could not be sized by one.
 		if driver.placement.varint is not None:
 			if not self._reads_varint(driver.placement):
-				return None
-			return f"self.{py_name(local_name(struct, driver.placement))}_value"
+				return (None, False)
+			name = py_name(local_name(struct, driver.placement))
+			return (f"leaf(self.{name}_value)", True)
 
 		if driver.placement.scalar is None:
-			return None
+			return (None, False)
 
 		# A text driver holds digits, not bits, and sits behind the scans of
 		# everything before it -- so neither the offset check below nor the
 		# raw load after it applies.
 		if driver.placement.radix is not None:
-			return f"self.{py_name(local_name(struct, driver.placement))}_value"
+			name = py_name(local_name(struct, driver.placement))
+			return (f"leaf(self.{name}_value)", True)
 
 		if driver.placement.offset_bits is None:
 			# The driver is itself behind a variable-length member, so there
@@ -6114,8 +6135,9 @@ class Emitter:
 			# was dropped with a note, which is the whole of what "cannot
 			# resolve" meant. All three backends had it; C did not.
 			name = py_name(local_name(struct, driver.placement))
-			return f"self.{name}"
-		return self._raw_load(driver.placement, driver.placement.scalar)
+			return (f"leaf(self.{name})", True)
+		return (f"leaf({self._raw_load(driver.placement, driver.placement.scalar)})",
+		        True)
 
 	def _element_bytes(self, placement: Placement) -> int | None:
 		nested = self.resolved.structs.get(placement.type_name or "")

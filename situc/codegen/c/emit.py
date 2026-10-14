@@ -7371,13 +7371,40 @@ class Emitter:
 
 	def _count_expression(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view") -> str:
-		"""Read the field that drives a member's length.
+		"""Read the field that drives a member's length, bounded.
+
+		`_count_read` finds the count and says whether it came out of the
+		message; this clamps it when it did. One clamp, at the exit, which
+		is what 14.2b asks for -- the five reading branches each used to
+		return their own expression and only one of them bounded anything
+		(26.646).
+		"""
+		counted, from_data = self._count_read(struct, placement, held)
+		if not from_data:
+			return counted
+
+		# Bounded leaves, signed arithmetic, one clamp (14.2b). A count
+		# places every member after the run, so an unbounded one does not
+		# merely answer wrongly: it answers differently per backend, and
+		# the members land in as many places. C is the backend where that
+		# is invisible, because a narrowing cast turns an implausible
+		# count into a plausible one -- `(uint32_t)` over a varint's
+		# 637019603630 gave 1364443822 and nothing looked wrong.
+		return f"situ_nonneg_u32({counted})"
+
+	def _count_read(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "view") -> tuple[str, bool]:
+		"""The count itself, and whether a message supplied it.
 
 		Usually a constant-offset load, but not always: the driving field has to
 		precede the member it sizes, which does not mean it precedes every
 		dynamic member. A second variable-length region can be counted by a
 		field that is itself dynamically placed, so this goes through the same
 		base resolution as any other read.
+
+		The second half of the pair is what the clamp keys on. A count
+		written in the schema -- `array_count` -- is not a leaf and needs
+		no bound; everything a message can lie about does.
 		"""
 		# A count written as arithmetic: the expression *is* the count, and
 		# only the bare-reference form needs a driver looked up. Falling
@@ -7386,26 +7413,20 @@ class Emitter:
 		# it landed at the run's own start while the other three walked it
 		# (invariant 69).
 		if placement.sized_by is None and placement.size_expr is not None:
-			# Bounded leaves, signed arithmetic, one clamp -- 14.2b, the
-			# same device the LENGTH path above uses, and missing here
-			# until 26.645. Unbounded, this cast the sum to `uint32_t`
-			# and truncated it: `n + 1` over a lying varint answered
-			# 1364443823 where Python and Rust answered 637019603631,
-			# the same number modulo 2^32. A count places every member
-			# after the run, so three answers put them in three places.
-			#
-			# No `* element_bytes` as the length path has: this is a
-			# count of elements and the clamp applies to the count.
-			return ("situ_nonneg_u32("
-			        + self._over_fields(struct, placement.size_expr, held,
-			                            bounded=True) + ")")
+			# `bounded` holds each leaf to `SITU_LEAF_MAX` and widens the
+			# arithmetic to `int64_t`; the caller clamps the result. No
+			# `* element_bytes` as the length path has -- that is bytes
+			# and this is elements, and multiplying after the clamp would
+			# leave the domain again.
+			return (self._over_fields(struct, placement.size_expr, held,
+			                          bounded=True), True)
 
 		if placement.sized_by is None:
-			return f"{placement.array_count or 0}u"
+			return (f"{placement.array_count or 0}u", False)
 
 		target = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if target is None:
-			return f"{placement.array_count or 0}u"
+			return (f"{placement.array_count or 0}u", False)
 
 		# A `[stream]` driver is the argument the caller supplied (0050),
 		# carried on the signature. The second of the two spellings a length
@@ -7413,8 +7434,13 @@ class Emitter:
 		# `_over_fields` above -- and this is the one a backend misses,
 		# because the arithmetic form is the one anybody writing the feature
 		# tries first (invariant 69).
+		# Caller-supplied rather than read (0050), and bounded all the
+		# same: the C parameter is a `uint32_t` and Python's is an `int`,
+		# so a caller passing 2^40 would have the two disagree for the
+		# same reason a lying varint did.
 		if target.placement.parameter:
-			return f"({self._argument_name(target.placement)})"
+			return (f"situ_leaf_u64({self._argument_name(target.placement)})",
+			        True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# load below nor the check above applies to it. It reached the `scalar
@@ -7423,24 +7449,31 @@ class Emitter:
 		# the two silent zeros a varint used to produce.
 		if target.placement.varint is not None:
 			local = c_name(self._local(struct, target.placement))
-			return (f"{ident(self.prefix, struct.name, local, 'value')}"
-			        f"({held})")
+			return (f"situ_leaf_u64("
+			        f"{ident(self.prefix, struct.name, local, 'value')}"
+			        f"({held}))", True)
 
 		if target.placement.scalar is None:
-			return f"{placement.array_count or 0}u"
+			return (f"{placement.array_count or 0}u", False)
 
 		# A text driver's value is digits, not bits. Loading it with
 		# `situ_get_be32` read the ASCII as a big-endian integer, which is the
 		# kind of wrong that produces a plausible number: "10" came out as
 		# 0x3130.
 		if target.placement.radix is not None:
-			return self._text_count_expression(struct, target.placement, held)
+			digits = self._text_count_expression(struct, target.placement,
+			                                     held)
+			return (f"situ_leaf_u64({digits})", True)
 
 		loaded = self._load_expression(
 			target.placement.scalar, target.placement,
 			self._value_base(struct, target.placement, gated=held != "view"),
 			offset=self._value_offset(target.placement))
-		return f"({loaded})"
+		# A signed scalar can drive a count, and a negative one must not
+		# become four billion on the way to the clamp.
+		helper = ("situ_leaf_i64" if target.placement.scalar.signed
+		          else "situ_leaf_u64")
+		return (f"{helper}({loaded})", True)
 
 	def _text_count_expression(self, struct: ResolvedStruct,
 			driver: Placement, held: str = "view") -> str:

@@ -141,6 +141,16 @@ def _is_run(placement: Placement) -> bool:
 	        or data_sized(placement))
 
 
+def _leaf(scalar: ScalarType) -> str:
+	"""Which leaf bound a scalar's domain asks for (14.2b).
+
+	Signed and unsigned are different bounds rather than two spellings of
+	one: `leaf_u` takes a `std::uint64_t`, and a negative driver converted
+	to it is 1.8e19, which clamps to the top rather than to zero.
+	"""
+	return "::situ::rt::leaf_i" if scalar.signed else "::situ::rt::leaf_u"
+
+
 def _int64_literal(value: int | None) -> str:
 	"""An `int64_t` constant a compiler will accept, INT64_MIN included.
 
@@ -3430,7 +3440,23 @@ class Emitter:
 
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement) -> str | None:
-		"""The value of the field that sizes a member, read at run time."""
+		"""The value of the field that sizes a member, read and bounded.
+
+		`_count_read` finds it and says whether it came out of the
+		message; this clamps it when it did. One clamp, at the exit
+		(14.2b). The reading branches each ended in a
+		`static_cast<std::uint32_t>`, which is a narrowing cast and not
+		a bound -- the same shape that let C answer a truncated
+		1364443822 where Python and Rust answered 637019603630 (26.646).
+		"""
+		counted, from_data = self._count_read(struct, placement)
+		if counted is None or not from_data:
+			return counted
+		return f"::situ::rt::nonneg({counted})"
+
+	def _count_read(self, struct: ResolvedStruct,
+			placement: Placement) -> tuple[str | None, bool]:
+		"""The count itself, and whether a message supplied it."""
 		# A count the SCHEMA gives. `sized_by` and `size_expr` are the two
 		# the message carries, and `T x[2]` carries neither -- so every
 		# caller that walks a run asked for the count, got None, and fell
@@ -3438,7 +3464,7 @@ class Emitter:
 		# the schema asked for (26.267). The fifth place this question has
 		# been spelled one way short.
 		if placement.array_count is not None:
-			return str(placement.array_count)
+			return (str(placement.array_count), False)
 
 		# A count written as arithmetic. `sized_by` holds a path and holds
 		# nothing for `x[n + 1]`, so this looked up a driver named "None",
@@ -3455,17 +3481,14 @@ class Emitter:
 			# caller above already knows how to decline a count of None.
 			# Left to raise, it was a traceback out of the code generator.
 			try:
-				# Bounded leaves, signed arithmetic, one clamp -- 14.2b,
-				# the same device the LENGTH path above uses, and missing
-				# here until 26.645. A count places every member after the
-				# run, and unbounded the three backends answered a lying
-				# varint's `n + 1` three ways: 1364443823 in C where its
-				# cast truncated, and 637019603631 here and in Rust.
-				return ("::situ::rt::nonneg("
-				        + self._over_fields(struct, placement.size_expr,
-				                            bounded=True) + ")")
+				# `bounded` holds each leaf to `LEAF_MAX` and widens the
+				# arithmetic to `std::int64_t`; the caller clamps the
+				# sum. No stride multiplication, unlike the length path:
+				# this is elements, not bytes.
+				return (self._over_fields(struct, placement.size_expr,
+				                          bounded=True), True)
 			except UnknownName:
-				return None
+				return (None, False)
 
 		# `x[remaining]` over elements of ONE size: the bytes left are
 		# known and so is the stride, so the count is a division rather
@@ -3487,13 +3510,15 @@ class Emitter:
 				# subtraction cannot wrap today; the guard is for the
 				# day one of them stops saturating, and an unsigned wrap
 				# here answers a very large count rather than zero.
+				# Derived from the frame rather than from a leaf, and
+				# guarded above. Nothing for the clamp to do.
 				return (f"({at}_offset() < raw_.limit"
 				        f" ? (raw_.limit - {at}_offset()) / "
-				        f"{placement.type_name}::size_bytes : 0u)")
+				        f"{placement.type_name}::size_bytes : 0u)", False)
 
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
 		if driver is None:
-			return None
+			return (None, False)
 
 		# A `[stream]` driver is the argument the caller gave `at`, held on
 		# the view (0050). The second of the two places a member is read by
@@ -3501,9 +3526,12 @@ class Emitter:
 		# above covers `body[n + 1]` and this covers the bare `body[n]`,
 		# which looks the driver up and reads it where it sits -- and a
 		# parameter sits at the offset of the member after it.
+		# Caller-supplied rather than read, and bounded all the same: a
+		# caller passing 2^40 would have this and Python disagree for
+		# the reason a lying varint did.
 		if driver.placement.parameter:
 			member = self._argument_member(struct, driver.placement)
-			return f"static_cast<std::uint32_t>({member})"
+			return (f"::situ::rt::leaf_u({member})", True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the
@@ -3511,19 +3539,19 @@ class Emitter:
 		# thing a varint is usually for -- could not be sized by one.
 		if driver.placement.varint is not None:
 			if not self._reads_varint(driver.placement):
-				return None
+				return (None, False)
 			name = bare_name(local_name(struct, driver.placement))
-			return f"static_cast<std::uint32_t>({name}_value())"
+			return (f"::situ::rt::leaf_u({name}_value())", True)
 
 		if driver.placement.scalar is None:
-			return None
+			return (None, False)
 
 		# A text driver's value is digits, not bits, and it has no fixed
 		# offset either -- it is behind the scans of everything before it.
 		# Both of the checks below would have refused it for the wrong reason.
 		if driver.placement.radix is not None:
 			name = bare_name(local_name(struct, driver.placement))
-			return f"static_cast<std::uint32_t>({name}_value())"
+			return (f"::situ::rt::leaf_u({name}_value())", True)
 
 		if driver.placement.offset_bits is None:
 			# The driver is itself behind a variable-length member, so there
@@ -3538,7 +3566,7 @@ class Emitter:
 			# allows and C does not: a member function may call one declared
 			# after it.
 			name = bare_name(local_name(struct, driver.placement))
-			return f"static_cast<std::uint32_t>({name}())"
+			return (f"{_leaf(driver.placement.scalar)}({name}())", True)
 
 		# The address as a separate name rather than a nested f-string: an
 		# expression split across lines inside `{...}` is PEP 701, which is
@@ -3546,7 +3574,9 @@ class Emitter:
 		address = f"situ_base(raw_) + {driver.placement.offset_bytes}"
 		load    = self._raw_load(driver.placement.scalar, driver.placement,
 		                         address)
-		return f"static_cast<std::uint32_t>({load})"
+		# A signed scalar can drive a count, and `leaf_u` over a
+		# negative one reads 1.8e19 rather than something too small.
+		return (f"{_leaf(driver.placement.scalar)}({load})", True)
 
 	def _element_bytes(self, placement: Placement) -> int | None:
 		nested = self.resolved.structs.get(placement.type_name or "")

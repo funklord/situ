@@ -31304,6 +31304,120 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.646 Two cells in seventy-five: the probe pays out twice more
+
+26.645 said the probe could come on. Before turning it on I ran a real
+shard of the composition space with it enabled -- `tool/sweep.py --all
+--shard 0/120`, 75 of the 9000 cells -- and it disagreed on two.
+
+Neither is the cell the probe was built for, and they are not the same
+kind of finding, so both are recorded here and `HELD_BACK` stays
+`False` until the first is fixed.
+
+#### `--shard` without `--all` is one cell, not a slice
+
+The first run I did was `--shard 1/120`, which reported `shard 1 of
+120, 1 of 9000 cells` and examined one. The option strides `chosen`,
+and `chosen` is a 40-cell random sample unless `--all` is given, so a
+stride of 120 over 40 leaves one. The tool's own usage line says
+`--all --shard 0/6` and I did not read it.
+
+Worth the paragraph because of what the output looked like: `agreed 1`,
+`examined 1/1`, exit 0. **A 1/120 shard that examines one cell reports
+exactly like a 1/120 shard that passes**, and the figure that would
+have caught it was printed on the line above. That is `evidence.md`'s
+*a count inherits its detector* with the detector being my own
+command line.
+
+#### The bare-reference count path has the same hole, and the probe found it
+
+`varint-count-rec-after-bytes-in-frame-constrained`, a struct run
+counted by a bare `[n]` over a varint:
+
+    c    : run count=1364443822
+    python: run count=637019603630
+    rust : run count=637019603630
+
+The same two numbers as 26.644, one apart, and `1364443822` is again
+`637019603630` modulo 2^32. 26.645 fixed the arithmetic branch of
+`_count_expression` -- `sized_by is None and size_expr is not None` --
+and that function has four other branches that return a count: the
+`[stream]` argument, a varint driver, a scalar load, and digits through
+`_text_count_expression`. None of them bounds anything. The varint one
+is this cell:
+
+    static inline uint32_t situ_s_run_count(situ_view_t view)
+    {
+    	return (uint32_t)situ_s_n_value(view);
+    }
+
+where `situ_s_n_value` returns `uint64_t` and clamps nothing, so the
+cast is the only narrowing and it truncates. I read that code in
+26.645's session, predicted the fault from it, and could not
+demonstrate it: a sweep of the eighteen `*-count-vrec-after-varint-*`
+cells reported `agreed 18`, because with the probe held back **nothing
+asks a struct run for its count** and the prediction was unfalsifiable
+by the instrument I had. The probe turned on is what made it visible,
+one cell into a shard that was not looking for it.
+
+So the fix is one clamp at the function's exit rather than four at its
+branches, which is what 14.2b asks for in as many words -- *clamp
+once*. `_count_expression` is now two functions in each backend:
+`_count_read` answers the count and whether a message supplied it, and
+`_count_expression` clamps when it did. The constant branches
+(`array_count`, and the `[remaining]` division, which is derived from
+the frame and already bounded by it) say so and are left alone.
+
+Three things the restructure turned up that a per-branch patch would
+have missed:
+
+- **The `[stream]` argument is a leaf too.** It is caller-supplied
+  rather than read (0050), so it is not a thing a message lies about
+  -- but C's parameter is a `uint32_t` and Python's is an `int`, so a
+  caller passing 2^40 makes the two disagree for the same reason a
+  varint did. Bounded.
+- **A signed scalar can drive a count**, and `leaf_u` over a negative
+  one reads 1.8e19 and clamps to the top rather than to zero. Each
+  backend now picks `leaf_i` or `leaf_u` by the driver's own
+  signedness, which is what 14.2b means by *in the domain it was read
+  in* and what a single helper per backend would have got wrong.
+- **C++ ended every reading branch in
+  `static_cast<std::uint32_t>`**, which is the same narrowing cast as
+  C's and was the same non-bound. It read correctly in the one
+  measurement that mattered in 26.644 only because that path was the
+  arithmetic one.
+
+Re-running the same shard with the probe on: `agreed 74, disagree 1`,
+the one being the body fault below, which reproduces with the probe
+off and against the pre-clamp emitters.
+
+#### The other is older than the change and is not a count
+
+`varint-arith-u8-after-delim-in-coded-constrained` disagrees with the
+probe **off** as well, and disagrees identically against the pre-clamp
+emitters at `95d8725`, so it is neither the probe's nor 26.645's:
+
+    python: body len=45 first=47
+    c    : body len=0 first=-1
+    rust : body len=45 first=47
+
+C alone reads an empty body where the other two read 45 bytes, in a
+`coded` struct whose run is delimited and whose count is arithmetic.
+Unmeasured: whether C is refusing something the others accept, or
+locating the body somewhere there is nothing. It is recorded rather
+than chased because it was found while verifying something else, and
+guessing at it from the one line of output is how an afternoon goes.
+
+#### The argument for the probe, restated with a number
+
+26.641 held it back and 26.644 and 26.645 are what it produced. It has
+now paid out three times: the arithmetic count path, the bare-reference
+count path, and -- by making a shard worth running at all -- a
+pre-existing C-only body fault that nothing else had reported. Two
+disagreements in 75 cells is not a defect rate, since these 75 were
+chosen by stride rather than for difficulty; what it is, is evidence
+that the space has more of this in it than the one cell that started it.
+
 ### 26.645 The clamp on the count path, and the C cast that hid it
 
 26.644 named the fix and said the walker needed none. Applied: the count
