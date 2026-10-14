@@ -1649,6 +1649,65 @@ def record_run_count(view: View, index: int, depth: int = 0) -> int:
 	return count
 
 
+def sized_run_count(view: View, index: int, depth: int = 0) -> int:
+	"""How many elements a run of records the MESSAGE sizes holds.
+
+	The fifth count beside `while`, `until`, `tlv` and `indexed`, and the
+	one no list had: a run whose length comes from a count field, from
+	arithmetic, or from `remaining`. 26.639's probe asked five of these
+	and this walk answered nothing.
+
+	**Taken from the EXTENT and not from `size_code`**, which is the
+	third reading of that field and the first that holds. For a counted
+	run `size_code` is a number of ELEMENTS and for a `[remaining]` one
+	it is BYTES -- measured at 12 for `mqtt.subscribe_body.filters` over
+	two six-byte subscriptions -- and nothing in the image says which. A
+	count built on it would have answered 12 filters where there are 2.
+
+	`size_bits` already resolves both forms to one number, because the
+	extent path walks the elements for the variable case and multiplies
+	for the fixed one. So the question was never what `size_code` means:
+	the count follows from the extent, and only the element's own size
+	differs between the two sub-cases.
+
+	Bounded twice, as every walk here is: by the extent rather than by
+	the view, and by refusing to advance on a zero-length element.
+	"""
+	placement = view.image.placements[index]
+	element   = placement.type_struct
+	if element == NONE:
+		raise Refused(f"placement {index} is not a run of records")
+	if placement.size_code == NONE:
+		raise Refused(f"placement {index} is not sized by the message")
+
+	reach = size_bits(view, index, depth) // BITS_PER_BYTE
+	if placement.element_bits != NONE and placement.element_bits:
+		stride = placement.element_bits // BITS_PER_BYTE
+		return reach // stride if stride else 0
+
+	# Variable elements: the same walk a terminated run makes, stopping
+	# at the extent instead of at a delimiter. The extent is the walked
+	# length for this shape, so the two agree by construction -- and the
+	# zero-extent guard is still load-bearing, a zero-length element
+	# being the way a walk of a lying message fails to advance.
+	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	end   = min(at + reach, view.limit)
+	count = 0
+	while at < end:
+		sub = View(view.image, view.buffer, element, at, end)
+		try:
+			extent = struct_extent(sub, depth + 1)
+		except Unplaceable:
+			raise
+		except Refused:
+			break
+		if extent <= 0 or at + extent > end:
+			break
+		at    += extent
+		count += 1
+	return count
+
+
 def _while_walk(view: View, index: int,
 		depth: int = 0) -> tuple[int, int]:
 	"""How many elements a `while` run holds.

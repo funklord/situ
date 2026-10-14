@@ -2181,3 +2181,59 @@ def test_a_delimited_arm_agrees_with_the_compiled_backend(
 	# which is the disagreement between the two constructs that a walker
 	# returning the span would get half right.
 	assert len(lengths) > 1, f"every selected arm answered {lengths}"
+
+
+def test_a_run_the_message_sizes_is_counted_from_its_extent() -> None:
+	"""The fifth count, and why it is taken from the extent (26.642).
+
+	Four lists answered `count=` -- a `while` run, a terminated run, a
+	`tlv` region, an `indexed` one -- and a run the MESSAGE sizes
+	matched none of them, which is what 26.639's probe found when it
+	asked five such members and got silence.
+
+	**`size_code` is the wrong field to build it on**, and that took
+	three readings. For a counted run it holds a number of ELEMENTS; for
+	a `[remaining]` one it holds BYTES -- measured at 12 for the mqtt
+	case below, where the truth is two six-byte subscriptions -- and
+	nothing in the image says which. A count built on it answers 12
+	where the answer is 2.
+
+	`size_bits` resolves both forms to one number, because the extent
+	path walks the elements for the variable case and multiplies for the
+	fixed one. So the count is the extent divided by the element's size
+	where it has one, and a walk inside the extent where it does not.
+	Both are asserted here, because they are different code.
+	"""
+	# Two six-byte subscriptions: a u16 length, three bytes, one option
+	# byte each, after the two-byte packet id.
+	one  = bytes([0x00, 0x03]) + b"a/b" + bytes([0x01])
+	mqtt = _count_lines("example/mqtt/mqtt.situ", "subscribe_body",
+	                    bytes([0x12, 0x34]) + one * 2)
+	assert mqtt == ["filters count=2"], mqtt
+
+	# Three eight-byte records, with the header's `rec_count` saying so:
+	# version, type, flags, length, rec_count, seq.
+	head = (bytes([1, 2, 0]) + bytes([0, 8]) + bytes([0, 3])
+	        + bytes([0, 0, 0, 0]))
+	msg  = _count_lines("example/message/message.situ", "message",
+	                    head + bytes(8 * 3))
+	assert msg == ["recs count=3"], msg
+
+
+def _count_lines(schema: str, struct: str, buffer: bytes) -> list[str]:
+	"""The `count=` lines this walk renders for one struct.
+
+	Through `report._members` rather than the counter directly, for the
+	reason `test_every_count_the_differ_asks_is_one_the_walk_answers`
+	gives: a helper that returns the right number and a renderer that
+	never calls it are indistinguishable from the lists.
+	"""
+	parsed   = load_schema(ROOT / schema)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+	names    = [image.struct_name(i) for i in range(len(image.structs))]
+	which    = names.index(struct)
+	view     = acquire(image, buffer, which)
+	return [line for line in report._members(image, view, which)
+	        if " count=" in line]

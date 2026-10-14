@@ -228,10 +228,14 @@ class Ask:
 #: reasons are findings rather than taste -- 26.641 has both with their
 #: reproductions.
 #:
-#: Turning it on asked five members the WALKER has no list for, which
-#: `test_every_count_the_differ_asks_is_one_the_walk_answers` catches by
-#: asserting over the schema rather than over a run: ble's reports,
-#: message's recs, mqtt's two filter lists and edges' segments.parts.
+#: ~~Turning it on asked five members the WALKER has no list for.~~ That
+#: half is closed: `walker/report.py` grew `_sized_runs` and
+#: `walk.sized_run_count`, so ble's reports, message's recs, mqtt's two
+#: filter lists and edges' segments.parts are counted now -- from the
+#: EXTENT, because `size_code` means elements for a counted run and
+#: bytes for a `[remaining]` one (26.642).
+#:
+#: What still holds it back is the second reason alone:
 #:
 #: And it found the four backends DISAGREEING about such a count where
 #: the message lies about it -- `varint-arith-vrec-after-varint-in-frame

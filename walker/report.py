@@ -30,7 +30,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
                          _evaluate, _read_at, offset_bits, record_run_count,
-                         chosen_arm, scan, size_bits,
+                         chosen_arm, scan, size_bits, sized_run_count,
                          struct_extent, tlv_count, varint, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
@@ -376,6 +376,29 @@ def _record_runs(image: Image, struct_index: int) -> list[int]:
 	        and image.placements[index].type_struct != NONE
 	        and not image.placements[index].is_tag
 	        and index not in image.regions]
+
+
+def _sized_runs(image: Image, struct_index: int) -> list[int]:
+	"""Runs of records the MESSAGE sizes: a count field, arithmetic, or
+	`[remaining]` (26.642).
+
+	The fifth list, and the complement of the four rather than a fifth
+	shape somebody met: each of the others carries the same sentence in
+	its own docstring -- the differ asked `count=` and this walk
+	answered nothing -- and three of them exist because that happened
+	three times. The question *which struct runs can the message size*
+	has one answer and it is in the layout, so this is written as what
+	the other four are not.
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if image.placements[index].type_struct != NONE
+	        and image.placements[index].size_code != NONE
+	        and image.placements[index].repeat_code == NONE
+	        and not image.placements[index].is_tag
+	        and index not in image.delimiters
+	        and index not in image.regions
+	        and index not in image.tlvs
+	        and index not in image.indexes]
 
 
 def _tlv_runs(image: Image, struct_index: int) -> list[int]:
@@ -1792,6 +1815,13 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		local = _local(image, index)
 		try:
 			lines.append(f"{local} count={record_run_count(view, index)}")
+		except (Refused, Unplaceable):
+			continue
+
+	for index in _sized_runs(image, struct_index):
+		local = _local(image, index)
+		try:
+			lines.append(f"{local} count={sized_run_count(view, index)}")
 		except (Refused, Unplaceable):
 			continue
 
