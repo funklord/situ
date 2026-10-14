@@ -31304,6 +31304,56 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.642 What the walker needs for the fifth count, measured rather than guessed
+
+26.641 held the struct-run count probe back partly because the walker
+has no list for five such members. This is the diagnosis, so the next
+session has an instruction rather than a question.
+
+**The walker answers `count=` through four named selectors** in
+`walker/report.py`: `_while_runs` for a `repeat_while` run,
+`_record_runs` for a struct run ending at a terminator, `_tlv_runs` and
+`_indexed_runs` for the two region kinds. A struct run the MESSAGE
+sizes -- by a count field, by `remaining`, or by arithmetic -- matches
+none of them, which is why the probe found nothing to compare against.
+
+**The image already carries what a fifth selector needs.** Read from
+the packed image for the three corpus cases:
+
+    mqtt.subscribe_body.filters   size_code=set  element_bits=NONE
+    message.message.recs          size_code=set  element_bits=64
+    edges.segments.parts          size_code=set  element_bits=NONE
+
+`size_code` is the code that computes the member's byte extent from the
+message, and `walk.py` already evaluates it in two places. So the count
+is a division where `element_bits` is set -- `message.recs` is eight
+bytes an element -- and a walk where it is not, which is the machinery
+`_record_runs` already uses for a terminated run. Neither sub-case needs
+a new datum in the image or a change to the packer.
+
+The selector itself is the complement of the other four:
+`type_struct != NONE and size_code != NONE and repeat_code == NONE`,
+excluding the delimited and region indices the three existing lists
+already claim.
+
+#### The fourth instance of one pattern
+
+Each of those four selectors carries the same sentence in its own
+docstring -- *"the differ asks these `count=` and this walk answered
+nothing"* for the record runs, *"the section existed and nothing loaded
+it"* for `tlv`, *"written by the packer as `none` until 26.341 and
+loaded by nobody"* for `indexed`. **Three selectors exist because the
+same hole was found three times**, and this is the fourth, found the
+same way: a probe asked and the walk was silent.
+
+What makes it the fourth rather than the first is that nobody looked for
+the complement. The four selectors are a list of shapes somebody met;
+the question *which struct runs can the message size* has one answer and
+it is in the layout, not in a list of cases. **A partition over that
+question would have produced all five selectors at once** -- which is
+26.640's argument about the probe list, arriving at the walker from the
+other side, and is the shape worth taking to both.
+
 ### 26.641 The probe that found two things and is held back for both
 
 26.639 added a `count=` probe for a run of structs, which nothing had
