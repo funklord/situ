@@ -31304,6 +31304,74 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.639 The differential asked a run of structs nothing at all
+
+26.638 closed a count that answered zero in C and `None` in Python while
+the four-way differential called the cell `agreed`. **This is why it
+could**: a `Member.VARIABLE` run whose elements are STRUCTS reached no
+branch in `differ.asks`. `indexed_elements` is false for it and
+`scalar` is None, so neither the run-element probe nor the byte-run
+probe fired, and nothing else claimed it. The driver asked that member
+no question in any language, and four backends agreeing about a question
+nobody put is what `agreed` meant.
+
+**It is not a composed-schema curiosity.** Both of the corpus's
+`[remaining]` runs of structs are this shape --
+`mqtt.subscribe_body.filters` and `mqtt.unsubscribe_body.filters` -- so
+the four walks over MQTT's topic filters had never been compared with
+each other either. The construct has been in the corpus since the
+differential existed.
+
+The fix is one branch and one probe: a run of structs is asked for its
+`count`, which is the question the three other spellings of it already
+get -- `RECORD_RUN`, `TLV` and `INDEXED` all ask exactly this, and the
+comment above them says why, *every count is a walk over numbers the
+message chose*. A struct run sized by the message is the fourth
+spelling of the same sentence and was the one left out.
+
+**Checked that the probe is ASKED, not just that the suite is green.**
+`differ.asks` now answers `[('scalar', 'n'), ('varint', 'skip'),
+('count', 'run')]` for the cell, and `run_count` appears in the C
+driver; mqtt's two bodies answer `[('scalar', 'packet_id'), ('count',
+'filters')]`. Without that check a green suite would have been the same
+vacuous pass the bug lived in -- which is the whole lesson of the entry
+above this one, so verifying it was not optional.
+
+And the cell that exposed 26.638 now reports `agreed` with the count
+actually compared, which is stronger evidence for that fix than the
+three probes I ran by hand: three backends verified by running and one
+by reading becomes four compared against each other on drawn bytes.
+
+**The probe's first run failed, and on the right thing.** It asked
+`edges.pieces.two[2]` for a count, and C emits a schema-stated count as
+a MACRO rather than an accessor -- so the driver would not compile. The
+condition carries `array_count is None` now, which is not a workaround
+but the sentence the three probes beside it are written on: *every count
+is a walk over numbers the MESSAGE chose*. A count the schema states is
+the same constant in four languages by construction and there is
+nothing to compare. Both shapes the probe exists for keep it --
+mqtt's two bodies and the composed cell all still answer `count`.
+
+#### What this says about the probe list
+
+The differ's docstring has always ended with the honest sentence *"what
+is probed is a subset, and the subset is the thing to grow"*, and it
+lists what the subset has cost each time it was short: a wide-scalar run
+whose count came from the message (26.47), HTTP's status code and
+cpio's thirteen hex fields, SMTP's reply code. This is the fourth such
+hole and the first one found by a lens rather than by a defect: the
+composition sweep produced a cell whose count was wrong in two backends,
+and the blind spot was what let it stay wrong.
+
+**So the subset is worth auditing against `traverse.classify` rather
+than grown by instalments.** Every `Member` kind either reaches a probe
+or is deliberately out, and today that is a reading of a long `elif`
+chain rather than a statement anybody can check. A test asserting the
+partition -- every kind probed or named as exempt, with the reason --
+is the shape this project uses for the builder's refusals, and it would
+have found this hole without a defect to point at it. That is the next
+piece of work here, and it is not large.
+
 ### 26.638 A `remaining` run of fixed elements counted zero, in four backends
 
 26.635 recorded this as a decision for whoever owns the readers. **It is

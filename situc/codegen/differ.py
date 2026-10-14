@@ -419,6 +419,31 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# are exactly the ones where four independent clamps could
 			# disagree.
 			found.append(Ask(Probe.BYTES, local))
+		elif (kind is Member.VARIABLE and placement.type_name in structs
+				and placement.array_count is None):
+			# A run of STRUCTS the message sizes, which reached no branch
+			# at all: `indexed_elements` is false for it and `scalar` is
+			# None, so neither of the two above fired and nothing asked
+			# it anything. Both of the corpus's `[remaining]` runs of
+			# structs are this -- mqtt's `subscribe_body.filters` and
+			# `unsubscribe_body.filters` -- so the four backends' walks
+			# over them had never been compared.
+			#
+			# What that cost is measured: the same classification covers
+			# a run whose elements are one FIXED size, where the count is
+			# a division rather than a walk, and there C answered zero
+			# while Python answered None and the other two declined to
+			# emit the accessor. The differential reported the cell as
+			# `agreed` throughout, because agreement about nothing is
+			# what it compares when nobody asks (26.639).
+			#
+			# `array_count is None` because a count the SCHEMA states is
+			# not a number the message chose, which is the sentence the
+			# three probes below are written on. C emits it as a macro
+			# rather than an accessor, so asking for one named `_count`
+			# failed to compile on `edges.pieces.two[2]` -- the first
+			# thing this probe did, and the suite caught it.
+			found.append(Ask(Probe.COUNT, local))
 		elif kind is Member.NESTED and placement.type_name in structs \
 				and _nested_is_measurable(placement, structs_by_name):
 			# A fixed-size nested struct measures its own constant; a
