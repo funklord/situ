@@ -31304,6 +31304,61 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.641 The probe that found two things and is held back for both
+
+26.639 added a `count=` probe for a run of structs, which nothing had
+ever asked. The gate was red, and both reasons are findings.
+
+**The walker has no list for five of them.**
+`test_every_count_the_differ_asks_is_one_the_walk_answers` asserts that
+every member the differ asks `count=` is one the walker's image can
+answer, and it asserts it **over the schema rather than over a run** --
+its own docstring says why, because `_by_member` compares only the keys
+both listings have, so a line the walk never emits is skipped and the
+differential passes. The five are `ble.le_advertising_report.reports`,
+`message.message.recs`, mqtt's two filter lists and
+`edges.segments.parts`. The probe was right to ask and the walker is
+the fifth implementation that has to answer.
+
+**And the four backends disagree about such a count when the message
+lies about it.** From the composition space:
+
+    varint-arith-vrec-after-varint-in-frame-since: disagree
+      c     : run count=1364443823
+      python: run count=637019603631
+      rust  : run count=637019603631
+
+A `vrec` run whose count is arithmetic over a varint the message chose.
+637019603631 is past what 32 bits hold: C computes the count in
+`uint32_t` and the other two in wider arithmetic, so a lying varint
+produces three answers. **Which one is right is a decision about what a
+count larger than the frame MEANS** -- the number the message states, or
+what the bytes can hold -- and the differ's own comment names this class
+in the sentence beside the probes: *the arithmetic is over ATTACKER
+bytes*.
+
+So `HELD_BACK = False` sits above `asks`, with both reasons written
+there rather than in a commit message nobody will re-read. The
+condition is unreachable and the code is not deleted, because what a
+reader needs when they turn it on is exactly these two obstacles.
+
+**That is the probe working, not failing.** It was added to close a
+blind spot and it found, in one run, a fifth implementation that cannot
+answer the question and a three-way split on an attacker-controlled
+number. Both were invisible while nobody asked. The honest order is
+walker first, decision second, probe third -- and none of them belongs
+in the last hour of a weekly window.
+
+#### What this cost and what it bought
+
+One red gate, 65 minutes, after four suites passed locally. The suites
+I ran covered the corpus and the differ's own tests; what caught the
+divergence was the composition space inside `make check`, and what
+caught the walker gap was a schema-level assertion nobody would think
+to run by hand. **A local pass over the corpus is not a gate**, which is
+the whole reason the gate exists -- and the reason to read a red one
+rather than to narrow the thing that turned it red.
+
 ### 26.640 The probe list as a partition, and a detector that could not see the exempt case
 
 26.639 ended by saying the differ's probe subset is worth auditing
@@ -31414,7 +31469,15 @@ actually compared, which is stronger evidence for that fix than the
 three probes I ran by hand: three backends verified by running and one
 by reading becomes four compared against each other on drawn bytes.
 
-**The probe's first run failed, and on the right thing.** It asked
+**And the probe is HELD BACK, which 26.641 records.** The corpus agreed
+under it and the composition space did not: the gate found four
+backends splitting three ways on a count the message lies about, and a
+schema-level test found five members the WALKER cannot count. Both are
+obstacles in front of the probe rather than faults in it, and
+`HELD_BACK = False` carries them where somebody turning it on will read
+them.
+
+**Its first run failed on the right thing too.** It asked
 `edges.pieces.two[2]` for a count, and C emits a schema-stated count as
 a MACRO rather than an accessor -- so the driver would not compile. The
 condition carries `array_count is None` now, which is not a workaround
