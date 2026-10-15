@@ -31304,6 +31304,82 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.651 `required` saturates at the type's maximum, and the cast that would have lied
+
+Set by the copyright holder, answering 26.649: **`required` saturates at
+the type's maximum and keeps its old behaviour.** A `u32` length of
+0xFFFFFFFF makes `need` 0xFFFFFFFF again, not the leaf-bounded
+0x80000004.
+
+The reason the holder's answer is the right one, stated so a later pass
+does not re-derive it: 14.2b's leaf bound exists so that four backends
+PLACE a member identically. `required` places nothing -- it reports a
+byte count to a caller -- and for that the two bounds say different
+things. 0x80000004 is two gigabytes, which a caller CAN satisfy, and
+would then be handed a body truncated from the four the message
+declared. 0xFFFFFFFF is a need nobody can meet, which is the honest
+reading of a length nobody can meet.
+
+#### How it is expressed: one flag, one caller
+
+`leaf_bounded` threads through `_length_expression` ->
+`_raw_length_expression` -> `_content_length_expression` ->
+`_count_expression` -> `_count_read`, defaulting True, and `required`
+is the only caller that passes False. It drops the BOUND and keeps the
+CLAMP, which is the whole distinction: the result saturates at the
+type's maximum instead of the leaf's.
+
+    at = situ_need_u32(at, (uint32_t)situ_nonneg_u32(
+            situ_saturate_i64(situ_get_be32(situ_base(view) + 1u))));
+
+#### The cast that would have lied, and why a compiler could not say so
+
+Dropping the bound broke five generated-code compiles at once:
+`nonneg` takes `i64`, and the `as u64` and
+`static_cast<std::uint32_t>` casts in the emitted text were there to
+feed `leaf_u`'s parameter. **The obvious repair is wrong and nothing
+would have reported it.** A plain cast to the signed type turns a
+varint a lying message sets to 1.6e19 NEGATIVE, and the clamp after it
+reads zero -- so `required` would answer "five bytes" for a message
+claiming nine exabytes. That is 14.2b's own named failure, arriving by
+the one path that deliberately declines 14.2b's bound.
+
+So the two paths differ only in WHERE they saturate, and the unbounded
+form is a sibling call rather than a cast: `situ_saturate_i64` in the C
+runtime, `saturate_i64` in `situ::rt` and `situ_rt`, each widening a
+`u64` to `i64` saturating at the signed maximum, with the caller's
+`nonneg` carrying it to `UINT32_MAX`. Listed in `RUNTIME_SYMBOLS` as
+part of the same change, that omission having cost a red 63-minute gate
+earlier in this session.
+
+**The transferable shape: a type error is a question, not just a
+breakage.** Five compiles failed and the quick fix was one token. What
+the failure was actually reporting is that the cast had been carrying
+the bound's saturation all along, so removing the bound removed a
+saturation nobody had named. A fix that satisfies the compiler would
+have passed every test in this tree.
+
+#### And Python stopped agreeing, by a route the bound had hidden
+
+`required` accumulated with a plain `at += length` there, where C uses
+`situ_need_u32` and Rust `saturating_add`. Python's integers do not
+overflow, so its total simply grew past `u32`: `5 + 0xFFFFFFFF` is
+0x100000004, a need the other three cannot express. It now emits
+`at = min(at + length, 0xFFFFFFFF)`.
+
+**That asymmetry predates all of this and was invisible while the bound
+held.** Every length was capped at `LEAF_MAX`, and `5 + 0x7FFFFFFF`
+fits in a `u32`, so the missing saturation never showed. Removing a
+bound exposed a missing saturation, which is this session's other
+findings run backwards -- bounds ADDED exposed missing clamps in
+26.645, 26.646 and 26.650, and a bound REMOVED exposed this. Both
+classes were hidden by the arithmetic staying inside its type for every
+input anybody had tried, which is the property a differential over
+hostile inputs is for.
+
+1692 passed over the four codegen suites plus codecs and checks, with
+no failures.
+
 ### 26.650 The last unclamped sum, and a reachability claim I got wrong twice
 
 26.648 left `preserving` open as *"a sum in 32 bits, which is safe for

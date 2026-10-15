@@ -633,6 +633,28 @@ static inline int64_t situ_leaf_u64(uint64_t value)
 	return (int64_t)value;
 }
 
+/* A declared length widened without wrapping, saturating at the SIGNED
+ * maximum. `situ_leaf_u64`'s sibling, and the two differ only in where they
+ * stop: a leaf of a size expression is held to `SITU_LEAF_MAX` so that four
+ * backends place a member identically, while a byte count handed to a caller
+ * must saturate at the type's own maximum instead -- `required`'s, set by the
+ * copyright holder (26.651).
+ *
+ * Needed rather than a plain cast because `int64_t` cannot hold every
+ * `uint64_t`: a varint a lying message sets to 1.6e19 becomes NEGATIVE on the
+ * cast, and the clamp after it then reads zero -- so `required` would answer
+ * "five bytes" for a message claiming nine exabytes. That is 14.2b's own
+ * named failure, reached by the one path that does not want its bound. The
+ * caller's `situ_nonneg_u32` brings it the rest of the way to `UINT32_MAX`.
+ */
+static inline int64_t situ_saturate_i64(uint64_t value)
+{
+	if (value > (uint64_t)INT64_MAX) {
+		return INT64_MAX;
+	}
+	return (int64_t)value;
+}
+
 static inline int64_t situ_leaf_i64(int64_t value)
 {
 	if (value >  SITU_LEAF_MAX) { return  SITU_LEAF_MAX; }

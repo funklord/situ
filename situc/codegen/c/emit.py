@@ -4509,8 +4509,16 @@ class Emitter:
 			# the verdict was OK (26.556). Not `situ_advance_u32`, whose
 			# clamp is to the view -- the comment above this loop says why
 			# that would be the one thing `required` must never do.
+			# `leaf_bounded=False`, and this is the only caller that asks
+			# for it. `situ_need_u32` saturates at `UINT32_MAX`, which is
+			# what this function must report -- a need no caller can
+			# satisfy, where the message claims one. Bounded, a `u32`
+			# length of 0xFFFFFFFF came back as 0x80000004: two gigabytes,
+			# which a caller CAN supply, and would then be handed a body
+			# truncated from the four the message declared (26.651).
 			steps.append("\tat = situ_need_u32(at, "
-				+ self._length_expression(struct, placement, running="at")
+				+ self._length_expression(struct, placement, running="at",
+				                          leaf_bounded=False)
 				+ ");")
 
 		# Only where something reads through it. A length that is arithmetic
@@ -6922,8 +6930,20 @@ class Emitter:
 
 	def _length_expression(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view", running: str | None = None,
-			depth: str | None = None) -> str:
+			depth: str | None = None, leaf_bounded: bool = True) -> str:
 		"""The length a caller sees, clamped to `[size = N]` where one is.
+
+		`leaf_bounded` is True for every caller but one. `required` passes
+		False, because what it answers is not an offset inside the frame
+		but a byte count to hand a caller, and those want different
+		saturation: 14.2b holds a leaf to `SITU_LEAF_MAX` so that four
+		backends place a member identically, while `required` must report
+		a need no caller can satisfy where the message claims one. Bounded,
+		a `u32` length of 0xFFFFFFFF comes back as a need of 0x80000004 --
+		two gigabytes, which a caller CAN satisfy, and would then be handed
+		a body truncated from the four the message declared. Set by the
+		copyright holder: `required` saturates at the type's maximum
+		(26.651).
 
 		A pinned member holds N bytes whatever the length field says, so a
 		declared 127 inside a 16-byte pin is 16 here. `validate` wants the
@@ -6935,7 +6955,7 @@ class Emitter:
 		one that was missed (0039).
 		"""
 		found = self._raw_length_expression(struct, placement, held,
-		                                    running, depth)
+		                                    running, depth, leaf_bounded)
 		pin   = pinned_bytes(placement)
 		if pin is None or found is None:
 			return found
@@ -6943,7 +6963,7 @@ class Emitter:
 
 	def _raw_length_expression(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view", running: str | None = None,
-			depth: str | None = None) -> str:
+			depth: str | None = None, leaf_bounded: bool = True) -> str:
 		"""How many bytes a member occupies, at runtime -- lead included.
 
 		A `skip` member's SPAN is its lead plus its content, and this is the
@@ -6961,7 +6981,7 @@ class Emitter:
 				return f"{stride}_from{deep}({held}, {running}{carry})"
 			return f"{stride}{deep}({held}{carry})"
 		return self._content_length_expression(struct, placement, held,
-		                                       running, depth)
+		                                       running, depth, leaf_bounded)
 
 	def _lead_needs_depth(self, placement: Placement) -> bool:
 		"""Whether a lead member's content length carries the depth counter.
@@ -6975,7 +6995,7 @@ class Emitter:
 	def _content_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, held: str = "view",
 			running: str | None = None,
-			depth: str | None = None) -> str:
+			depth: str | None = None, leaf_bounded: bool = True) -> str:
 		"""How many bytes a variable-length member occupies, at runtime.
 
 		`held` names the view in scope, which is `gate.view` inside a sealed
@@ -7108,7 +7128,8 @@ class Emitter:
 		# `offset_type` wide (`traverse.index_entry_bytes`).
 		entry = index_entry_bytes(placement)
 		if entry is not None:
-			table = self._count_expression(struct, placement, held)
+			table = self._count_expression(struct, placement, held,
+			                               leaf_bounded=leaf_bounded)
 			return f"(uint32_t){table} * {entry}u"
 
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
@@ -7120,7 +7141,8 @@ class Emitter:
 			return (f"situ_remaining_u32({held}.limit, "
 			        f"{self._base_expression(struct, placement, gated)})")
 
-		count = self._count_expression(struct, placement, held)
+		count = self._count_expression(struct, placement, held,
+		                               leaf_bounded=leaf_bounded)
 		return f"(uint32_t){count}" if element == 1 else f"(uint32_t){count} * {element}u"
 
 	def _region_length(self, struct: ResolvedStruct, region: Placement,
@@ -7396,7 +7418,7 @@ class Emitter:
 		return self._region_length(struct, placement) is not None
 
 	def _count_expression(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view") -> str:
+			held: str = "view", leaf_bounded: bool = True) -> str:
 		"""Read the field that drives a member's length, bounded.
 
 		`_count_read` finds the count and says whether it came out of the
@@ -7405,7 +7427,8 @@ class Emitter:
 		return their own expression and only one of them bounded anything
 		(26.646).
 		"""
-		counted, from_data = self._count_read(struct, placement, held)
+		counted, from_data = self._count_read(struct, placement, held,
+		                                      leaf_bounded=leaf_bounded)
 		if not from_data:
 			return counted
 
@@ -7419,7 +7442,7 @@ class Emitter:
 		return f"situ_nonneg_u32({counted})"
 
 	def _count_read(self, struct: ResolvedStruct, placement: Placement,
-			held: str = "view") -> tuple[str, bool]:
+			held: str = "view", leaf_bounded: bool = True) -> tuple[str, bool]:
 		"""The count itself, and whether a message supplied it.
 
 		Usually a constant-offset load, but not always: the driving field has to
@@ -7431,7 +7454,26 @@ class Emitter:
 		The second half of the pair is what the clamp keys on. A count
 		written in the schema -- `array_count` -- is not a leaf and needs
 		no bound; everything a message can lie about does.
+
+		`leaf_bounded` False leaves the leaf alone, for `required` and for
+		nothing else -- see `_length_expression`, which says why the two
+		want different saturation. The `nonneg` the caller applies stays
+		either way: dropping the bound does not mean dropping the clamp,
+		it means clamping at the TYPE's maximum rather than the leaf's.
 		"""
+		def leaf(text: str, signed: bool = False) -> str:
+			# Bounded and unbounded differ only in WHERE they saturate,
+			# so the unbounded form is a sibling call rather than a bare
+			# cast: `(int64_t)` of a varint set to 1.6e19 is negative,
+			# and the clamp after it reads zero (26.651). A signed source
+			# is already inside `int64_t`, so the cast is exact there and
+			# `situ_nonneg_u32` caps it.
+			if not leaf_bounded:
+				return (f"(int64_t)({text})" if signed
+				        else f"situ_saturate_i64({text})")
+			helper = "situ_leaf_i64" if signed else "situ_leaf_u64"
+			return f"{helper}({text})"
+
 		# A count written as arithmetic: the expression *is* the count, and
 		# only the bare-reference form needs a driver looked up. Falling
 		# through to `array_count or 0` made `vrec run[n + 1]` a run of zero
@@ -7445,7 +7487,7 @@ class Emitter:
 			# and this is elements, and multiplying after the clamp would
 			# leave the domain again.
 			return (self._over_fields(struct, placement.size_expr, held,
-			                          bounded=True), True)
+			                          bounded=leaf_bounded), True)
 
 		if placement.sized_by is None:
 			return (f"{placement.array_count or 0}u", False)
@@ -7465,8 +7507,7 @@ class Emitter:
 		# so a caller passing 2^40 would have the two disagree for the
 		# same reason a lying varint did.
 		if target.placement.parameter:
-			return (f"situ_leaf_u64({self._argument_name(target.placement)})",
-			        True)
+			return (leaf(self._argument_name(target.placement)), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# load below nor the check above applies to it. It reached the `scalar
@@ -7475,9 +7516,8 @@ class Emitter:
 		# the two silent zeros a varint used to produce.
 		if target.placement.varint is not None:
 			local = c_name(self._local(struct, target.placement))
-			return (f"situ_leaf_u64("
-			        f"{ident(self.prefix, struct.name, local, 'value')}"
-			        f"({held}))", True)
+			return (leaf(f"{ident(self.prefix, struct.name, local, 'value')}"
+			             f"({held})"), True)
 
 		if target.placement.scalar is None:
 			return (f"{placement.array_count or 0}u", False)
@@ -7489,7 +7529,7 @@ class Emitter:
 		if target.placement.radix is not None:
 			digits = self._text_count_expression(struct, target.placement,
 			                                     held)
-			return (f"situ_leaf_u64({digits})", True)
+			return (leaf(digits), True)
 
 		loaded = self._load_expression(
 			target.placement.scalar, target.placement,
@@ -7497,9 +7537,7 @@ class Emitter:
 			offset=self._value_offset(target.placement))
 		# A signed scalar can drive a count, and a negative one must not
 		# become four billion on the way to the clamp.
-		helper = ("situ_leaf_i64" if target.placement.scalar.signed
-		          else "situ_leaf_u64")
-		return (f"{helper}({loaded})", True)
+		return (leaf(loaded, target.placement.scalar.signed), True)
 
 	def _text_count_expression(self, struct: ResolvedStruct,
 			driver: Placement, held: str = "view") -> str:

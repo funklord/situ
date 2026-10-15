@@ -957,6 +957,17 @@ pub fn leaf_u(value: u64) -> i64 {
 	if value > LEAF_MAX as u64 { LEAF_MAX } else { value as i64 }
 }
 
+/// `leaf_u`'s sibling, saturating at `i64::MAX` rather than at `LEAF_MAX`.
+///
+/// A byte count handed to a caller saturates at the type's own maximum, where
+/// a leaf that places a member is held to `LEAF_MAX`. `as i64` will not do:
+/// a varint a lying message sets to 1.6e19 becomes negative, and the clamp
+/// after it reads zero.
+#[must_use]
+pub fn saturate_i64(value: u64) -> i64 {
+	if value > i64::MAX as u64 { i64::MAX } else { value as i64 }
+}
+
 #[must_use]
 pub fn leaf_i(value: i64) -> i64 {
 	value.clamp(-LEAF_MAX, LEAF_MAX)

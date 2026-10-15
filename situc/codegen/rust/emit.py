@@ -5264,7 +5264,14 @@ class Emitter:
 				steps.extend(walk)
 				continue
 
-			length = self._length_expression(struct, placement)
+			# `leaf_bounded=False`, the only caller that asks: this
+			# reports a byte count to a caller rather than placing a
+			# member, so it saturates at the type's maximum. Bounded, a
+			# `u32` length of 0xFFFFFFFF answered 0x80000004 -- two
+			# gigabytes, which a caller can satisfy and would then be
+			# handed a body truncated from the four declared (26.651).
+			length = self._length_expression(struct, placement,
+			                                 leaf_bounded=False)
 			if length is None:
 				return self._unframeable(struct)
 
@@ -6243,7 +6250,8 @@ class Emitter:
 
 	def _length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
-			depth: str | None = None) -> str | None:
+			depth: str | None = None,
+			leaf_bounded: bool = True) -> str | None:
 		"""The length a caller sees, clamped to `[size = N]` where one is.
 
 		A pinned member holds N bytes whatever the length field says, so a
@@ -6254,9 +6262,19 @@ class Emitter:
 		The clamp lives here rather than at the accessor sites because
 		there are four of them per backend and the differential found the
 		one that was missed (0039).
+
+		`leaf_bounded` is True for every caller but one. `required` passes
+		False, because what it answers is not an offset inside the frame
+		but a byte count to hand a caller, and those want different
+		saturation: 14.2b holds a leaf to `LEAF_MAX` so that four backends
+		place a member identically, while `required` must report a need no
+		caller can satisfy where the message claims one. Bounded, a `u32`
+		length of 0xFFFFFFFF came back as a need of 0x80000004 -- two
+		gigabytes, which a caller CAN satisfy. Set by the copyright
+		holder: `required` saturates at the type's maximum (26.651).
 		"""
 		found = self._raw_length_expression(struct, placement, running,
-		                                    depth)
+		                                    depth, leaf_bounded)
 		pin   = pinned_bytes(placement)
 		if pin is None or found is None:
 			return found
@@ -6268,7 +6286,8 @@ class Emitter:
 
 	def _raw_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
-			depth: str | None = None) -> str | None:
+			depth: str | None = None,
+			leaf_bounded: bool = True) -> str | None:
 		"""How many bytes a member occupies -- its lead included.
 
 		The span rather than the size, because this is what every offset
@@ -6281,11 +6300,12 @@ class Emitter:
 				        f"({running})")
 			return f"self.{_ident(name + '_stride')}()"
 		return self._content_length_expression(struct, placement, running,
-		                                       depth)
+		                                       depth, leaf_bounded)
 
 	def _content_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,
-			depth: str | None = None) -> str | None:
+			depth: str | None = None,
+			leaf_bounded: bool = True) -> str | None:
 		# A length only a transform can produce is not a length (26.570).
 		# The sibling of 26.440's name branch below: a varint, a delimited
 		# run and a `while` run have no name to ask the renderer about --
@@ -6399,7 +6419,8 @@ class Emitter:
 		# no elements to multiply by, and asking for an element width finds no
 		# scalar and gives up. C has had this branch all along.
 		if placement.kind == "opaque":
-			count = self._count_expression(struct, placement)
+			count = self._count_expression(struct, placement,
+						       leaf_bounded=leaf_bounded)
 			return None if count is None else f"({count})"
 
 		if placement.sized_by == "remaining":
@@ -6414,17 +6435,20 @@ class Emitter:
 		# so the region had no length here and `validate` had no check.
 		entry = index_entry_bytes(placement)
 		if entry is not None:
-			table = self._count_expression(struct, placement)
+			table = self._count_expression(struct, placement,
+						       leaf_bounded=leaf_bounded)
 			return None if table is None else f"({table}) * {entry}"
 
-		count = self._count_expression(struct, placement)
+		count = self._count_expression(struct, placement,
+						       leaf_bounded=leaf_bounded)
 		element = self._element_bytes(placement)
 		if count is None or element is None:
 			return None
 		return f"({count})" if element == 1 else f"({count}) * {element}"
 
 	def _count_expression(self, struct: ResolvedStruct,
-			placement: Placement) -> str | None:
+			placement: Placement,
+			leaf_bounded: bool = True) -> str | None:
 		"""The count a run is walked by, bounded where a message gave it.
 
 		`_count_read` finds it and says whether it came out of the
@@ -6434,13 +6458,34 @@ class Emitter:
 		`[n]` over a varint read 637019603630 here against C's
 		truncated 1364443822 (26.646).
 		"""
-		counted, from_data = self._count_read(struct, placement)
+		counted, from_data = self._count_read(struct, placement,
+		                                      leaf_bounded=leaf_bounded)
 		if counted is None or not from_data:
 			return counted
 		return f"situ_rt::nonneg({counted})"
 
 	def _count_read(self, struct: ResolvedStruct,
-			placement: Placement) -> tuple[str | None, bool]:
+			placement: Placement,
+			leaf_bounded: bool = True) -> tuple[str | None, bool]:
+		def leaf(text: str, scalar: ScalarType | None = None) -> str:
+			"""The leaf bound, where the caller asked for one.
+
+			`leaf_bounded` False is `required`'s, and it drops the bound
+			without dropping the clamp: the result then saturates at the
+			TYPE's maximum rather than the leaf's (26.651).
+			"""
+			# A sibling call rather than a bare cast: see
+			# `saturate_i64`'s own comment for why (26.651). The text
+			# arrives already cast -- `x as u64` for an unsigned source,
+			# `x as i64` for a signed one -- which is what each sibling
+			# takes.
+			if not leaf_bounded:
+				if scalar is not None and scalar.signed:
+					return f"({text})"
+				return f"situ_rt::saturate_i64({text})"
+			helper = _leaf(scalar) if scalar is not None else "situ_rt::leaf_u"
+			return f"{helper}({text})"
+
 		# A count the SCHEMA gives. `sized_by` and `size_expr` are the two
 		# the message carries, and `T x[2]` carries neither -- so a caller
 		# walking a run asked for the count, got None, and fell back to "the
@@ -6470,7 +6515,7 @@ class Emitter:
 				# this is elements, not bytes.
 				return (self._over_fields(struct, placement.size_expr,
 				                          "self", cast="i64",
-				                          bounded=True), True)
+				                          bounded=leaf_bounded), True)
 			except UnknownName:
 				return (None, False)
 
@@ -6506,7 +6551,7 @@ class Emitter:
 		# a lying varint did.
 		if driver.placement.parameter:
 			name = _ident(c_name(placement.sized_by or ''))
-			return (f"situ_rt::leaf_u(self.{name} as u64)", True)
+			return (leaf(f"self.{name} as u64"), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the
@@ -6516,7 +6561,7 @@ class Emitter:
 			if not self._reads_varint(driver.placement):
 				return (None, False)
 			name = _ident(c_name(local_name(struct, driver.placement)) + "_value")
-			return (f"situ_rt::leaf_u(self.{name}() as u64)", True)
+			return (leaf(f"self.{name}() as u64"), True)
 
 		if driver.placement.scalar is None:
 			return (None, False)
@@ -6525,7 +6570,7 @@ class Emitter:
 		# so neither the offset check nor the raw load below applies.
 		if driver.placement.radix is not None:
 			name = _ident(c_name(local_name(struct, driver.placement)) + "_value")
-			return (f"situ_rt::leaf_u(self.{name}() as u64)", True)
+			return (leaf(f"self.{name}() as u64"), True)
 
 		if driver.placement.offset_bits is None:
 			# The driver is itself behind a variable-length member, so there
@@ -6535,13 +6580,14 @@ class Emitter:
 			# was dropped with a note, which is the whole of what "cannot
 			# resolve" meant. All three backends had it; C did not.
 			name = _ident(c_name(local_name(struct, driver.placement)))
-			return (f"{_leaf(driver.placement.scalar)}(self.{name}() "
-			        f"as {_wide(driver.placement.scalar)})", True)
+			return (leaf(f"self.{name}() as "
+			             f"{_wide(driver.placement.scalar)}",
+			             driver.placement.scalar), True)
 		loaded = self._raw_load(driver.placement, driver.placement.scalar)
 		# A signed scalar can drive a count, and `as u64` on a negative
 		# one is 1.8e19 rather than something a clamp reads as too small.
-		return (f"{_leaf(driver.placement.scalar)}({loaded} "
-		        f"as {_wide(driver.placement.scalar)})", True)
+		return (leaf(f"{loaded} as {_wide(driver.placement.scalar)}",
+		             driver.placement.scalar), True)
 
 	def _element_bytes(self, placement: Placement) -> int | None:
 		nested = self.resolved.structs.get(placement.type_name or "")

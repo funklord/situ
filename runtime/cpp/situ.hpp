@@ -198,6 +198,18 @@ constexpr std::int64_t leaf_u(std::uint64_t value) noexcept
 	return static_cast<std::int64_t>(value);
 }
 
+/* `leaf_u`'s sibling, saturating at the signed maximum rather than at
+ * `LEAF_MAX`: a byte count handed to a caller saturates at the type's own
+ * maximum, where a leaf that places a member is held to `LEAF_MAX`. See
+ * `situ_saturate_i64` in the C runtime for why a plain cast will not do. */
+constexpr std::int64_t saturate_i64(std::uint64_t value) noexcept
+{
+	if (value > static_cast<std::uint64_t>(INT64_MAX)) {
+		return INT64_MAX;
+	}
+	return static_cast<std::int64_t>(value);
+}
+
 constexpr std::int64_t leaf_i(std::int64_t value) noexcept
 {
 	if (value > SITU_LEAF_MAX) {
