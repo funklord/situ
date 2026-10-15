@@ -31304,6 +31304,87 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.652 The LOCATED probe, and the control that refused to fire
+
+The last of 26.641's list. `Probe.LOCATED` asks what four backends say
+about a byte run placed at an offset the message chooses --
+`name ok=<0|1> len=<n> first=<byte|-1>`, shaped like `ARM_BYTES`'
+because the accessor is fallible in three of the four.
+
+26.643 called this *a gap with a reason* and the reason was real: one
+question, four interfaces.
+
+    c       situ_<s>_<m>_view(&msg, view, &held)   fills a situ_view_t
+    cpp     view.<m>(msg.raw(), held)              fills ::situ::rt::bytes
+    rust    view.<m>(&raw)                         Result<&[u8]>
+    python  view.<m>                               memoryview property, raises
+
+C's branch is the only READ probe in that file needing `&msg` as well as
+the view, which is the whole of what makes this member a different kind:
+its bytes are at an offset in the message rather than in the frame.
+
+The ask is narrowed to byte runs -- every located member the corpus has,
+`bmp.bitmap_file.pixels` sized by a field and
+`edges.located_tail.payload` a fixed `u8[2]`. A located scalar or struct
+would want its own shape, and asking for one emits a driver that does
+not compile, which is a schema nobody compares rather than a question
+nobody asks.
+
+`LOCATED` came out of the partition test's exemption table in the same
+change, that table asserting in both directions.
+
+#### The control refused to fire, which is the finding
+
+Sabotaging C's clamp to the wrapping form `at + n > size` left the
+random-bytes differential **green**. The sabotage was in the generated
+code -- checked, not assumed -- so the probe ran and the four agreed
+anyway.
+
+The arithmetic says why. The wrapping form is wrong only when the sum
+lands back inside the buffer: `at + n` in `[2^32, 2^32 + size]`, which
+for a 60-byte buffer is **61 values out of 2^32**, about 1.4e-8 per
+draw. Forty-eight random buffers per schema will never see it.
+
+**So the probe guards agreement and cannot guard this answer.** A
+differential over random bytes finds faults whose wrong inputs are
+common; a clamp's wrapping window is the opposite shape -- astronomically
+rare and perfectly reachable on purpose. The two need different
+instruments, and the probe alone would have been recorded as protection
+it does not provide.
+
+#### What was added instead, and proved in both directions
+
+`test/unit/test_a_located_offset_that_wraps_is_refused.py` crafts
+`pixel_offset + image_size` to be exactly 2^32 over `bmp`, whose `u32`
+offset field is the only one in the corpus wide enough to reach it --
+`edges`' is driven by a `u8` and cannot.
+
+    correct clamp    all four: pixels ok=0 len=0 first=-1
+    wrapping clamp   c: BuildFailed -- the driver DIES
+
+The wrapping form does not disagree, it crashes: C accepts the offset
+and the probe reads at `base + 0x80000001`. `fourway.answers` counts a
+driver that dies as part of its answer, which is why that is caught
+rather than silent.
+
+**The test pins the VALUE, not the agreement.** Four backends that all
+adopted the wrapping form would agree with each other about a buffer
+they should all refuse, so asserting agreement alone would pass. That is
+`evidence.md`'s *break the symmetry, not a side of it*, and it is the
+difference between this test and the probe beside it.
+
+#### Why it was nearly recorded as working
+
+The differential went green for `bmp` and `edges` the first time it ran,
+and the probe lines were there in all four drivers. Both facts are true
+and neither is the claim. **Stopping there would have published a probe
+that cannot fail** -- the same vacuous pass as 26.645's sweep, in the
+session that wrote the entry about it, and the second time the shape
+has appeared in my own work rather than in the tree's.
+
+69 passed over the differ, partition, random-bytes and this new suite,
+and mypy clean over 247 files.
+
 ### 26.651 `required` saturates at the type's maximum, and the cast that would have lied
 
 Set by the copyright holder, answering 26.649: **`required` saturates at

@@ -46,15 +46,15 @@ EXEMPT: dict[Member, str] = {
 		"reserved bytes have no accessor in any backend -- their "
 		"content is a policy, not a value -- and the policy is what "
 		"`validate` checks, which every driver already asks.",
-	Member.LOCATED:
-		"the four expose a located run through four different "
-		"interfaces: C a `_view` taking the MESSAGE, because the "
-		"offset is the message's rather than the struct's, and Python "
-		"a `memoryview` property. There is no one probe to spell, so "
-		"this needs a shape like `NESTED`'s rather than a line in the "
-		"chain. `bmp.bitmap_file.pixels` and "
-		"`edges.located_tail.payload` are the two in the corpus, and "
-		"BMP's are the pixel data every reader of that format wants.",
+	# `LOCATED` was exempt here and is not any more: `Probe.LOCATED`
+	# asks it, shaped like `ARM_BYTES`' because the accessor is fallible
+	# in three of the four, and each driver reaches it its own way --
+	# C fills a `situ_view_t` and takes `&msg`, C++ a
+	# `::situ::rt::bytes` and takes `msg.raw()`, Rust returns
+	# `Result<&[u8]>` over the raw slice, Python is a `memoryview`
+	# property that raises. The exemption said "there is no one probe to
+	# spell", which was true and was not a reason to ask nothing
+	# (26.652).
 }
 
 

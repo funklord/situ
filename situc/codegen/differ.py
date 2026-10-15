@@ -184,6 +184,23 @@ class Probe(Enum):
 	#: range in three backends and refused every message, uncaught, because
 	#: grepping for "covered" finds the write probe and stops (26.449).
 	COVERED_RANGE = "covered_range"
+	#: `name ok=<0|1> len=<n> first=<byte|-1>` -- a byte run whose POSITION
+	#: comes from a field, so its bytes are at an offset in the MESSAGE
+	#: rather than in this frame.
+	#:
+	#: Four interfaces for one question, which is why this was a gap with a
+	#: reason rather than a one-line probe (26.643): C fills a
+	#: `situ_view_t` out-parameter and takes the message,
+	#: `situ_bitmap_file_pixels_view(&msg, view, &out)`; C++ fills a
+	#: `::situ::rt::bytes` and takes `msg.raw()`; Rust returns
+	#: `Result<&[u8]>` over the raw slice; Python is a `memoryview`
+	#: property that raises. So the probe is shaped like `ARM_BYTES`' --
+	#: fallible, with the length and the first byte -- and each driver
+	#: reaches it its own way.
+	#:
+	#: Where four independent clamps over an attacker-chosen offset are
+	#: most likely to differ, and the one place this corpus has them.
+	LOCATED   = "located"
 
 
 @dataclass(frozen=True)
@@ -532,6 +549,16 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:
 			found.append(Ask(Probe.VARINT, local))
+		elif kind is Member.LOCATED:
+			# Byte runs only, which is every located member this corpus
+			# has: `bmp.bitmap_file.pixels` sized by a field and
+			# `edges.located_tail.payload` a fixed `u8[2]`. A located
+			# SCALAR or a located struct would want a shape of its own --
+			# the four expose those differently again -- and asking for
+			# one here emits a driver that does not compile, which is a
+			# schema nobody compares rather than a question nobody asks.
+			if scalar is not None and scalar.bits == BITS_PER_BYTE:
+				found.append(Ask(Probe.LOCATED, local))
 		elif kind in (Member.RECORD_RUN, Member.REPEAT_WHILE, Member.TLV,
 				Member.INDEXED):
 			# Every count is a walk over numbers the message chose: a run's
@@ -1354,6 +1381,21 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        "\t\t\t\t\tn == 0u ? 0LL : (long long)"
 		        f"{call.format('get')}(view, 0u));",
 		        "\t\t\t}"]
+	if ask.probe is Probe.LOCATED:
+		# `&msg` as well as the view: the offset is the MESSAGE's, which is
+		# the whole of what makes this member a different kind. Every other
+		# read probe here needs only the view.
+		return ["\t\t\t{",
+		        "\t\t\t\tsitu_view_t held;",
+		        f"\t\t\t\tconst situ_err_t e = {call.format('view')}"
+		        "(&msg, view, &held);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local} ok=%d len=%u first=%d\\n",',
+		        "\t\t\t\t\te == SITU_OK ? 1 : 0,",
+		        "\t\t\t\t\te == SITU_OK ? held.limit : 0u,",
+		        "\t\t\t\t\te == SITU_OK && held.limit > 0u"
+		        " ? (int)situ_base(held)[0] : -1);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.NESTED:
 		return ["\t\t\t{",
 		        "\t\t\t\tsitu_view_t sub;",
@@ -1701,6 +1743,21 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t\tstatic_cast<std::uint32_t>(held.size()),",
 		        "\t\t\t\t\theld.empty() ? -1 : static_cast<int>(held[0]));",
 		        "\t\t\t}"]
+	if ask.probe is Probe.LOCATED:
+		# `msg.raw()`: the accessor takes the C message, because the offset
+		# is the message's rather than this frame's.
+		return ["\t\t\t{",
+		        "\t\t\t\t::situ::rt::bytes held;",
+		        f"\t\t\t\tconst auto e = view.{call}(msg.raw(), held);",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local} ok=%d len=%u'
+		        ' first=%d\\n",',
+		        "\t\t\t\t\te == ::situ::rt::err::ok ? 1 : 0,",
+		        "\t\t\t\t\te == ::situ::rt::err::ok"
+		        " ? static_cast<unsigned>(held.size()) : 0u,",
+		        "\t\t\t\t\te == ::situ::rt::err::ok && !held.empty()"
+		        " ? static_cast<int>(held.data()[0]) : -1);",
+		        "\t\t\t}"]
 	if ask.probe is Probe.COVERED_RANGE:
 		return ["\t\t\t{",
 		        "\t\t\t\tstd::uint32_t at = 0, len = 0;",
@@ -1974,6 +2031,17 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        f" view.{rust_ident(ask.local + '_len')}(),"
 		        f" if view.{rust_ident(ask.local + '_terminated')}()"
 		        " { 1 } else { 0 });"]
+	if ask.probe is Probe.LOCATED:
+		# `&raw`: the bytes are at an offset in the message, and the
+		# message is the slice this driver was handed.
+		return ["\t\t\t\tmatch view." + call + "(&raw) {",
+		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
+		        ' len={} first={}", held.len(),',
+		        "\t\t\t\t\t\tif held.is_empty() { -1i32 }"
+		        " else { i32::from(held[0]) }),",
+		        f'\t\t\t\t\tErr(_) => println!("{ask.local} ok=0 len=0'
+		        ' first=-1"),',
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.COUNT:
 		return [f'\t\t\t\tprintln!("{ask.local} count={{}}",'
 		        f" view.{rust_ident(ask.local + '_count')}());"]
@@ -2213,6 +2281,17 @@ def _python_ask(ask: Ask) -> list[str]:
 		return [f'print("{ask.local} len=%d term=%d"'
 		        f" % (view.{call}_len,"
 		        f" 1 if view.{call}_terminated else 0))"]
+	if ask.probe is Probe.LOCATED:
+		# A property rather than a call, and it raises rather than
+		# returning an error -- the one backend where this member reads
+		# like any other.
+		return ["try:",
+		        f"\theld = view.{call}",
+		        "except situ_runtime.SituError:",
+		        f'\tprint("{ask.local} ok=0 len=0 first=-1")',
+		        "else:",
+		        f'\tprint("{ask.local} ok=1 len=%d first=%d"',
+		        "\t\t% (len(held), -1 if len(held) == 0 else held[0]))"]
 	if ask.probe is Probe.COUNT:
 		return [f'print("{ask.local} count=%d" % view.{call}_count)']
 	if ask.probe is Probe.TAG:
