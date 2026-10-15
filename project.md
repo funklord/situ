@@ -31592,7 +31592,18 @@ maximum rather than at the leaf's. That is an argument and not the
 decision, and it is not what was asked for, so the test stays red rather
 than being edited to agree with the code.
 
-### 26.648 The gate is red at the tip, and one of the twelve is a design question
+### 26.648 ~~The gate is red at the tip~~, and one of the twelve is a design question
+
+**Closed.** `make check` at `571b522` is `MAKE_RC=0`: 8721 passed, 75
+skipped, 49 minutes, and all three cross stages ran -- host, aarch64
+little-endian under qemu, aarch64 big-endian compile-only. Pushed, so
+`master` carries every commit below. The twelve failures recorded here
+are all answered: the stale assertions re-quoted and the control
+re-aimed in 26.649, the walker's count settled by the holder in the
+same entry, the write comparison back to its floor by the same change,
+and `required` settled in 26.651. The heading keeps its original words
+struck through rather than rewritten, because the entries that cite it
+cite that sentence.
 
 `make check` on the pinned worktree at `3fff69f`: **`MAKE_RC=2`, 12
 failed, 8709 passed, 75 skipped, 46m35s.** Only `a35e1a2` is pushed.
