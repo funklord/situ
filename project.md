@@ -4841,7 +4841,6 @@ and the thing it guards are maintained by hand and nothing checks that they
 agree -- which is the same shape as a schema left out of the generated
 Makefile, one row above.
 
-
 **Performance is measured and never asserted.** `tool/bench.py` builds a
 driver in each backend and reports what the offset cache of 26.30 costs and
 saves; nothing in the suite holds a wall-clock number, because a threshold
@@ -5519,11 +5518,6 @@ independent of each other. Do not implement ahead of the plan.
 
 **Status: complete.**
 
-- Repo layout per Section 23; CMake and Make both building an empty target.
-- pytest and mypy strict running in CI; cmocka wired up and running one trivial
-  test over hand-written C.
-- `doc/decision/0001-implementation-language.md` recording the Python choice.
-
 **Acceptance:** `make test` and `cmake --build . --target test` both pass with
 zero warnings on host and aarch64 cross.
 
@@ -5537,33 +5531,14 @@ against `make test` alone until CMake lands.
 duplicate names, unresolvable types, recursion, and the constant/attribute
 collision that decision 0006 left open.
 
-Lexer, parser, AST for: directives, `const`, `enum`, `struct`, scalar fields,
-fixed arrays, `reserved`, bit fields, endian/bit_order scoping, offset pins,
-attribute lists. Reject everything else with "not yet implemented" plus the
-phase number that will add it.
-
-**Acceptance:** `situc dump-ast` round-trips example 5.1 exactly. Recursive
-type declarations are rejected with a clear error. 40+ parser tests including
-malformed input.
-
 ### 26.2 Phase 2: layout solver, static subset
 
 **Status: complete.** `situc map` emits the capability map, and every buildable
 example carries a committed `.situ.map` the test suite regenerates and compares.
 
-Compute size, offset, alignment, bit positions for the static subset. Evaluate
-offset pins and `size()` requirements as assertions. Emit the capability map for
-the static subset (offset, size, align, repr, atomic axes only).
-
 Offsets are tracked internally in **bits**, not bytes, from this phase onward,
 and reported in bytes only where byte-aligned. Sub-byte codecs (Section 13.4)
 will require bit phase later, and retrofitting it is a rewrite.
-
-**Acceptance:** example 5.1 produces the correct map; a deliberately wrong pin
-produces the diagnostic format of Section 17; bit-field packing verified against
-hand-computed layouts for both bit orders, including a straddle rejection test;
-a test asserts that internal offsets are bit-valued and that a non-byte-aligned
-offset is reported as such rather than silently truncated.
 
 ### 26.3 Phase 3: capability lattice
 
@@ -5577,15 +5552,6 @@ lists the rest against the phase that will discharge them. A deferred
 requirement is reported on every run rather than silently passing, and that
 must stay true: a predicate that quietly succeeds because nothing implements it
 yet is worse than one that fails.
-
-Implement axes, meet, and the propagation table as data. Implement `require`
-and `assert` for the static subset predicates. Implement blame chains and the
-full diagnostic renderer plus JSON output.
-
-**Acceptance:** one passing test per row of the 11.3 table that is reachable in
-the static subset; every failing requirement produces a blame chain that names
-the correct root cause; `--diagnostics=json` output validates against a
-committed schema.
 
 ### 26.4 Phase 4: C backend, static subset
 
@@ -5601,40 +5567,9 @@ while every multi-byte access is explicit byte indexing rather than a cast. A
 optimisation -- would break the argument and needs the decision revisited
 first.
 
-Generate `.h`/`.c` for the static subset: getters, setters where permitted,
-endianness conversion, bit-field RMW, size constants, `SITU_CHECKED` checks.
-Generate golden-vector tests and a fuzz harness.
-
-**Acceptance:** generated C for example 5.1 compiles with
-`-Wall -Wextra -Werror -Wconversion` on host and aarch64; cmocka tests
-round-trip a hex vector byte-identically; a field whose `mutate` axis forbids
-in-place setting has no setter and the header explains why; disassembly check
-confirms constant-offset access.
-
-Also in this phase: `endian_marker` (Section 8.3), including the generated
-host-order constant and accessor, and `ConditionallyConverted` propagation.
-
-**Additional acceptance:** a byte-order-marked struct parses both orders from
-hex vectors; the generated host constant matches the build's endianness on both
-a little-endian host and an aarch64 big-endian cross build;
-`require canonical(X)` on such a struct reports `CanonicalGiven(byte_order)`
-rather than passing or failing outright; `require deterministic_writer(X)`
-passes.
-
 ### 26.5 Phase 5: expressions and dynamic layout
 
 **Status: complete.** `example/message/` reproduces the 11.4 map exactly.
-
-Expression language with interval arithmetic. Counted arrays, length-driven
-sizes, `remaining`. Frame detection and frame-relative staticness. Views,
-generation counters, invalidation rules. Capability propagation for the dynamic
-constructs.
-
-**Acceptance:** example 5.2 produces the map in Section 11.4 exactly;
-`require frame_static(message.recs[])` passes and
-`require absolute_static(message.recs)` fails with blame on `opts`; a cmocka
-test proves a stale view is caught in `SITU_CHECKED` and that mutation of a
-preceding length field increments the generation.
 
 ### 26.6 Phase 6: variants, opaque, TLV, indexed, varints
 
@@ -5644,27 +5579,6 @@ turned out to be in the attribute vocabulary while checking nothing.
 
 Two checks belong to a later phase, now that expressions evaluate: an enum
 value that does not fit its backing type, and a duplicate enum value.
-
-`variant switch`, exhaustiveness checking, `opaque`, `tlv` in both the simple and
-general forms (composite `tag_decode`, dispatched `value_size`,
-`duplicate_tags`), `indexed` regions, and `varint_type` including zigzag.
-
-Also in this phase: the ambiguity table of Section 17.0 must be fully enforced.
-Every row is a test.
-
-**Acceptance:** a variant with unequal arm sizes correctly marks following
-members dynamic and the advisor reports the equalization cost; TLV iteration and
-same-size item mutation work under cmocka; `unknown = preserve` correctly sets
-`canonical = NonCanonical` and `require canonical` fails naming it; a
-non-`minimal` varint sets `NonCanonical` with the right reason; every row of the
-17.0 ambiguity table produces an error when unresolved and compiles when resolved.
-
-**Gate acceptance -- the protobuf conformance test.** The schema in Section 9.7
-must compile, parse real protobuf-encoded hex vectors correctly (generate them
-with `protoc` and a reference implementation), and `situc explain proto_message`
-must enumerate all five causes of non-canonicity with source locations. Do not
-proceed to phase 7 until this passes. It is the sharpest single test of whether
-the capability system is real.
 
 ### 26.7 Phase 7: transforms, tier 1 (extern codecs)
 
@@ -5677,22 +5591,7 @@ becomes `coded` plus authentication rather than a second mechanism.
 The property held throughout: **the lattice reads property signatures and
 nothing else** (13.1). No rule in `propagate.py` knows what an algorithm does.
 
-`codec` signatures with the full property set of 13.2, separated from `impl`
-bindings. Staging. Propagation per the 13.5 table. Enforce the three prohibitions
-in 13.3. Mark extern codecs `trusted` in the capability map. Ship
-`std/codecs.situ`. Implement `situc gen-codec-tests`.
-
 A `codec` with no bound `impl` must analyze cleanly and fail only at codegen.
-
-**Acceptance:** one test per row of 13.5; a schema referencing transform output
-in an expression is rejected; a `length_preserving + seekable = linear` codec
-yields in-place interior mutation while `seekable = none` yields
-`mutate = RewriteRequired`, both verified in the generated API surface; an
-`expansion = ratio_exact(2,1)` codec preserves static interior offsets and a
-`ratio_bounded` one does not; a `systematic` codec permits interior reads with
-no decode; swapping `impl X derived` for `impl X extern "..."` changes not one
-byte of the capability map; a deliberately mismatched implementation is caught by
-the generated conformance tests for every property in the 13.1 table.
 
 ### 26.8 Phase 8: cryptographic model
 
@@ -5717,16 +5616,6 @@ placement was counted twice in the offset arithmetic of anything after it, and
 a coded region had no runtime length expression at all, so a member following
 one landed on the wrong bytes.
 
-`authenticated`, `sealed`, `tag` with coverage inference, `nonce`, `secret`.
-Tag-dirty tracking. `VerifyGated` staging with no unverified interior access.
-`require canonical` covering all of 14.4. Strictness policy.
-
-**Acceptance:** example 5.3 compiles; the interior of a sealed region is
-unreachable before verification and a test attempting it fails to compile;
-mutating a covered field marks the tag dirty and finalize recomputes it;
-`[secret]` fields have no debug accessor and are zeroized; every item in the
-14.4 checklist has a test.
-
 ### 26.9 Phase 9: advisor
 
 **Status: complete.** `situc/advise.py` holds the 18.2 catalog as data and
@@ -5741,14 +5630,6 @@ The diff found a bug in the propagation table on its first real run: a
 multi-byte scalar with a dynamic offset kept `atomic = AtomicWord`, because the
 alignment row skipped anything whose offset it could not see. An offset that is
 not known is not an aligned one, and the row says so now.
-
-Suggestion catalog, cost model with typical and worst case, `situc advise`,
-`situc explain`, `situc map --check`, `situc diff`.
-
-**Acceptance:** `advise` on a deliberately badly-ordered schema produces the
-field-reordering suggestion with a correct byte cost; `map --check` fails on an
-uncommitted capability change; `diff` correctly identifies a regression from
-`InPlaceFixed` to `Shifting`.
 
 ### 26.10 Phase 10: MMIO target
 
@@ -5772,13 +5653,6 @@ decide, all recorded in `doc/decision/0015-register-access-modes.md`:
   a `u8` three bits in is ordinary rather than an error.
 - **An access mode shapes which operations exist; the lattice costs the ones
   that do.** `wo` generating no getter is not a fourteenth axis.
-
-`target mmio`, `register`, `register_block`, access modes, side effects, scoped
-defaults, and the capability interactions in 15.3.
-
-**Acceptance:** example 15.2 generates an API with no `set_enable()` and a
-diagnostic explaining why; `w1c` generates `clear_error()`; volatile access is
-emitted correctly and verified by disassembly; `ro`/`wo` asymmetry holds.
 
 ### 26.11 Phase 11: Rust backend
 
@@ -5813,10 +5687,6 @@ claiming an error propagation a block code does not have.
 Composing the section 13.4 example needed the expansion vocabulary widened --
 `rs |> interleave |> manchester` is a ratio *and* an addend, which 13.2 offers
 only as alternatives. See `doc/decision/0016-composed-expansion.md`.
-
-Generate codec implementations from kernel descriptions and derive property
-signatures from them (Section 13.4). Because the property signature is the only
-interface to the lattice, **no propagation rule changes in this phase.**
 
 Recommended order within the phase, cheapest and highest-value first:
 
@@ -5871,11 +5741,6 @@ Recommended order within the phase, cheapest and highest-value first:
    document disagreeing with itself rather than with the code: the refusal
    has been in `wellformed` throughout.
 
-**Acceptance per family:** derived properties match a hand-written signature for
-a known code; generated implementation passes vectors from an independent
-reference implementation; a pipeline of two families composes properties
-correctly and conservatively.
-
 ### 26.13 Phase 13: `.proto` importer
 
 **Status: complete.** `situc/proto.py` reads the subset of `.proto` with a
@@ -5892,16 +5757,6 @@ varint. And the scanner reads statements rather than lines, because
 `message M { optional int32 a = 1; }` is legal on one line and a line-based
 scanner would silently import an empty message -- which is exactly the silent
 partial success 26.13 warns about.
-
-Per Section 19.2. Deliberately after tier 2, because the importer is only useful
-once the language it targets is complete, and because it is the one component
-where a silent partial success does real harm.
-
-**Acceptance:** a `.proto` file exercising every translatable construct produces
-a schema that parses vectors generated by `protoc`; a `.proto` using `map`,
-`Any`, or groups exits non-zero with a fidelity report naming each construct and
-its source location; `--accept-lossy` downgrades to warnings and the resulting
-schema still compiles.
 
 ### 26.13a Auditing the tests by breaking the compiler
 
@@ -14333,7 +14188,6 @@ triple quotes, which may span lines in every version. The check was then
 mutation-tested against a real module: `f"{d["k"]}"` in `situc/dump.py` fails
 it, naming the file, the line and the construct.
 
-
 ### 26.120 The standard that was requested and never enforced
 
 Section 22 says "C++ (C++17) -- done". It was not. `_delimiter_array` in the
@@ -14393,7 +14247,6 @@ exactly 3 fail, naming the three schemas with delimited scans. New emitter
 with the new flag: 33 pass. The middle row is the one that matters -- it is
 the only evidence that the flag, rather than the fix, is what closes the hole.
 
-
 ### 26.121 The floor the generated code was never held to
 
 Finishing what 26.119 started, and the sweep it belongs to. Four backends
@@ -14450,7 +14303,6 @@ appended to `runtime/python/situ_runtime.py` fails the widened check by file
 and line -- which is the proof the three added trees are read rather than
 merely listed. The same construct appended to what the Python backend emits
 fails all thirty-three generated modules.
-
 
 ### 26.122 The tag whose width meant nothing
 
@@ -14520,7 +14372,6 @@ four are refused as unimplemented, and six remain unplaced.
 QUIC's key-phase bit, WireGuard's receiver index -- and conversation keys wider
 than 64 bits. Both are named in 14.8, both are unblocked by this, and neither
 follows from it. Each needs its own record.
-
 
 ### 26.123 The attribute that was parsed for eleven phases and read by none
 
@@ -14775,7 +14626,6 @@ shifting the emitted constant by one fails it. If the constant's folding and
 the check's rendering ever diverge, the drift the constants exist to prevent
 has reached the compiler itself, and the canary says so.
 
-
 ### 26.126 The two defects the argv exercise left behind
 
 Both were found by 26.124 and both were the silently-nothing shape; neither
@@ -14815,7 +14665,6 @@ refusal converts four silent wrongs into one loud one, and implementing
 later is additive. A top-level `located` member is a working construct and
 the control holds it untouched.
 
-
 ### 26.127 The refusal the survey promised
 
 Preparing the key-selection record meant reading what `nonce = field`
@@ -14849,7 +14698,6 @@ could write to earn the exemption. When `key = field` lands (the 14.8
 follow-on this session set out to draft), regions under distinct selectors
 are the case that loosens this check, and the check is where that decision
 will be enforced rather than documented.
-
 
 ### 26.128 The field that says which key
 
@@ -14896,7 +14744,6 @@ the codec would refuse the 8-byte field, and declaring 8 would misstate
 the primitive. The codec stays silent on the width -- 0038's "silence
 claims nothing", met by the protocol that shows why the setting had to be
 optional.
-
 
 ### 26.129 The signature keeps only kept promises
 
@@ -14948,7 +14795,6 @@ was "each project's gates run against the result", and the gate that would
 have said otherwise was the one broken. Fixed here because nothing lands
 over a suite that cannot collect.
 
-
 ### 26.130 The key that was never allowed to be wrong, made wider
 
 Decision 0042, accepted and built: a conversation key is the exact bytes of
@@ -14998,7 +14844,6 @@ variable-width case 0042 deliberately refuses. A fake protocol would
 demonstrate nothing (the vectors files' own rule), so the construct is held
 by executable tests over the relation fixtures instead, and the example
 directory waits for a protocol that earns it.
-
 
 ### 26.131 Three answers to the consumers
 
@@ -15051,7 +14896,6 @@ is caught with `failed_at` naming that byte's exact offset. A harness only
 the honest half exercised could pass vacuously; the liar is what proves the
 flips reach the verifier.
 
-
 ### 26.132 The floor stated, and the clamp that was checked by nothing
 
 Two consumer asks, and the second turned into a defect the way these do.
@@ -15102,7 +14946,6 @@ independent implementation, the way its `vercmp` runs every pair through
 `dpkg --compare-versions` -- is the larger piece and stays open. This is the
 generator-mutation half, which was the cheaper and is the one their own
 method most directly asked for.
-
 
 ### 26.133 The session, folded
 
@@ -15161,7 +15004,6 @@ paren-balanced clamp drop that a first check could not fail, a byte-run guard
 that fired on a record run and did not compile, a constant that fit the
 buffer it was checked against. The session's method was the session's
 subject: a check is not evidence until it has been watched failing.
-
 
 ### 26.134 pad_to, built across the stack
 
@@ -15312,7 +15154,6 @@ a `u4` with no `bit_order`, so generation refused before the compile the pin
 existed to watch ever ran. A vacuous pass wearing an xfail. Both pins that
 were left behind have since flipped to XPASS and been retired, which is what
 `strict=True` is for: a pin that outlives its bug asserts the wrong thing.
-
 
 ---
 
@@ -18524,7 +18365,6 @@ candidate offsets hold the same bytes. That is wrong, and it was wrong in the
 comfortable direction -- the differential draws *random* bytes, which
 separate offset 2 from offset 6 immediately. The real reason is structural
 and is recorded next.
-
 
 ### 26.185 The differential compares the intersection, and the defects were outside it
 
@@ -25426,7 +25266,6 @@ That is true of C, was true of only half of C's own drivers, and was true
 of no other backend -- which is how a question about setters became one
 about invalidation.
 
-
 ### 26.307 The check is real now, and one line is why it was not
 
 26.306 left C and C++ bumping a generation that nothing read, and called
@@ -26373,8 +26212,6 @@ in C++, 32 in Python, all 36 in C. The assertion has to name the guard's
 own condition -- `if (view.limit < SITU_X_SIZE_MIN)` -- and not the error
 it returns, which is the difference between checking that a refusal exists
 and checking that this one does.
-
-
 
 ### 26.323 CI had been red for five days, and nobody had looked
 
@@ -31303,6 +31140,86 @@ it as a refusal.
 
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
+
+### 26.655 The cut, pass one: the tool, its proof, and the rate
+
+26.608 measured the problem and left the pass authorised and undone. This
+is the first one, and `tool/cut.py` is what performs it.
+
+#### The measurement that shaped the method
+
+716 entries, 43,002 lines, mean 60. **There is no small set of giants to
+cut**: the largest 25 entries hold 10 per cent of section 26 and the
+largest 200 hold 44, so the weight is spread and this is 716 entries of
+reading, about 23 passes at pass one's size.
+
+And the obvious mechanical key does not work. Keying on *"the paragraph
+contains bold"* would drop 7,524 of 36,000 entry lines -- 21 per cent --
+because almost every paragraph carries some emphasis. The rule is the
+bold SENTENCE and the prose around it is the narration, which no regex
+separates. So the cut is read rather than computed, and the tool's job
+is the proof rather than the choosing.
+
+#### Deletion only, which is what makes the proof mechanical
+
+`CLAUDE.md` requires a mechanical change to state what must not change,
+check it, and refuse to write when the check fails. So nothing is
+rewritten and nothing is added, by whole paragraphs:
+
+- **every heading survives, spelled identically and in order** -- an
+  entry is cited by number from elsewhere, and a lost heading is a
+  dangling reference somebody else holds;
+- **every `N.NNN` reference that resolved still resolves**;
+- **every retained line is a line of the original, in order**, proved as
+  a subsequence rather than asserted.
+
+A compressed paraphrase would read better and could not be checked. What
+recovers a dropped paragraph is `git log -S` on its own words, which is
+the property `evidence.md`'s cut relied on and the reason each pass is
+one commit.
+
+**All three were sabotaged and seen to fail**, which is the half a proof
+needs most:
+
+    heading removed    1 heading(s) changed or lost: #### The guard ...
+    entry 26.35 gone   heading lost, and: 1 reference(s) now name no
+                       heading: 26.35
+    line rewritten     a retained line is not an original line, in order
+    the pass applied   clean
+
+#### Pass one: the fourteen phase entries, 388 lines to 223
+
+26.0 through 26.13 are the implementation plan itself. For a COMPLETED
+phase the deliverables list and the `**Acceptance:**` criteria are spent
+plan -- neither a rule nor a number -- while the status, the caveats
+carried forward and the rules are live. So 26.4 keeps its big-endian
+compile-only caveat and 26.3 keeps *a predicate that quietly succeeds
+because nothing implements it yet is worse than one that fails*, and the
+"Implement X, Y, Z" and acceptance paragraphs went.
+
+42 per cent off those entries, 849 headings intact, the docs gate green.
+
+#### Two faults in the tool, one of which cost four lines
+
+**The entry boundary was wrong.** A body ended at the next heading of
+ANY level, so a `####` subheading terminated it: 26.654 listed four
+paragraphs of nineteen lines, and the prose under its subheadings was
+unaddressable -- which is where most of the narration in recent entries
+sits. Bodies end at the next NUMBERED entry now. That also makes the
+heading invariant reachable, where before no `--drop` could delete a
+heading and the check could not be exercised through the tool at all.
+
+**And I deleted four good lines testing the heading control**, by
+passing `--drop 26.654:4` against a listing `head -6` had truncated, so
+paragraph 4 was prose rather than the subheading I meant. Recovered by
+reading `git diff --numstat` first -- 0 insertions, 170 deletions, all
+mine, nothing rewritten and no other session's content in it -- then
+restoring from HEAD and replaying the drop list, which is one command.
+
+**That the pass is one reproducible command is why the mistake cost
+nothing**, and it is the same argument as one-commit-per-pass arriving
+from the other side: a cut that accumulates by attrition can be neither
+replayed nor recovered.
 
 ### 26.654 A located accessor refuses an offset field the frame cannot reach
 
@@ -43122,7 +43039,6 @@ remedy for a count that is quoted often is to stop quoting it, which
 `evidence.md` says in as many words and which took two roundings-off here
 to actually do.
 
-
 ### 26.498 The log is 85% of the document, and the first measure of it was 30% high
 
 **Measured on 2026-09-24, section 26 was 31,066 of this file's 36,644 lines
@@ -43775,7 +43691,6 @@ subscript's tail instead of its base. The crash is one of fourteen
 shapes that mis-read closed, and the nested-struct assertion this
 entry feared is not reached, because the schema is refused before any
 backend runs.
-
 
 **`names.over_fields` raises `UnknownName` for any name it cannot
 rewrite, and the paths that do not guard are the defect. It is not about
