@@ -111,12 +111,23 @@ def check(before: list[str], after: list[str]) -> list[str]:
 	"""What the cut broke. Empty is the proof."""
 	broken = []
 
-	was = [l for l in before if HEADING.match(l)]
-	now = [l for l in after if HEADING.match(l)]
+	# NUMBERED headings only. A `####` subheading titles a subsection and
+	# goes with it when the subsection is narration, which is most of what
+	# this cut removes; nothing can cite one, because a citation here is a
+	# number. What must not move is the entry heading somebody else holds a
+	# reference to -- and the reference check below is the other half of
+	# that, since a surviving heading with a renumbered neighbour would
+	# pass this test and fail that one.
+	#
+	# The first version of this check said "every heading", and refused a
+	# write it should have allowed. Relaxed deliberately rather than
+	# bypassed: the invariant was wrong, not the intent (26.656).
+	was = [l for l in before if ENTRY.match(l)]
+	now = [l for l in after if ENTRY.match(l)]
 	if was != now:
 		lost = [l for l in was if l not in now]
-		broken.append(f"{len(was) - len(now)} heading(s) changed or lost: "
-		              + "; ".join(l[:60] for l in lost[:4]))
+		broken.append(f"{len(was) - len(now)} numbered heading(s) changed "
+		              f"or lost: " + "; ".join(l[:60] for l in lost[:4]))
 
 	known = set(entries(after))
 	text  = "\n".join(after)

@@ -31221,6 +31221,39 @@ nothing**, and it is the same argument as one-commit-per-pass arriving
 from the other side: a cut that accumulates by attrition can be neither
 replayed nor recovered.
 
+#### The passes, one line each
+
+Pass one's record was 130 lines about a 165-line cut, so the file GREW
+by that commit. That is the weight 26.608 measured, reproduced in the
+act of removing it. This entry is the method, written once; a pass is a
+line.
+
+	1  26.0-26.13   the phase entries     388 -> 223   -165
+	2  26.628 .646 .636 .649  mine        533 -> 399   -134
+
+#### What the cut will and will not reach, measured at pass two
+
+**The yield is a property of the entry KIND, not of the reading.** A
+completed phase's deliverables and `**Acceptance:**` criteria are spent
+plan with a mechanical signature, and gave 42 per cent. Session-log
+entries gave 15 to 20, because they were written as rules. The
+signature is now exhausted: one `**Acceptance:**` paragraph, two lines,
+remains in the document.
+
+So the projection, which the holder should have before the other 21
+passes are spent: the document is 80 to 85 per cent rule by its own
+measure, the cut takes 7,000 to 9,000 lines over about 700 entries of
+reading, and 49,000 lines becomes roughly 41,000 -- **still three
+context windows.** The cut is worth doing and does not make this file
+readable in one session.
+
+What would is structural, and is not a cutting pass: splitting section
+26, or moving the entries cited by number into `doc/decision/`, which
+`harmonization.md` names as exactly the case a second document earns --
+303 citations by number across two trees were what justified that
+directory. **Whose decision that is, is the holder's**, and naming the
+option with its cost is the whole of what this entry does with it.
+
 ### 26.654 A located accessor refuses an offset field the frame cannot reach
 
 Set by the copyright holder, answering 26.653's open question: **the
@@ -31698,42 +31731,6 @@ to a wall-clock bound before any of it was known: `test_walker.py` is
 it compiles a probe per schema. Bound them separately rather than as a
 pair.
 
-#### The gate's twelve, and the one that is a question
-
-Seven assertions quoted emission that changed and are re-quoted against
-it, with the clamp named rather than relaxed to a substring that would
-survive the next change by not testing anything.
-
-`test_a_run_length_that_stops_clamping_is_caught` is re-aimed and fires
-again. It failed in the right way -- through its own `assert applied,
-"nothing to corrupt"` -- and that assertion is the entire reason a
-control whose target has gone stale announces itself instead of passing
-over an uncorrupted program. Its comment now says the target has moved
-once and why not to loosen it.
-
-**`test_required_saturates_rather_than_wrapping` is left failing, for
-the holder.** It is a real behavioural change and not stale text. With
-`u32 length = 0xFFFFFFFF`, `situ_S_required` reported
-`need = 0xFFFFFFFF` and now reports `0x80000004`, because the leaf bound
-reached that read:
-
-    at = situ_need_u32(at, (uint32_t)situ_nonneg_u32(
-            situ_leaf_u64(situ_get_be32(situ_base(view) + 1u))));
-
-14.2b prescribes the new value -- bound every leaf -- and all four
-backends agree on it. The cost runs the other way: 4 GB is a need no
-`uint32_t` caller can satisfy, and 2 GB is one they can, so a caller
-could supply it and be handed a body truncated from the declared length.
-That is the plausible-number failure this repository rates worst, and
-the test's docstring names the incident behind it from `raidcfgd`.
-
-The reading on offer: the leaf bound exists so that **placement**
-arithmetic agrees across backends, and `required` places nothing -- it
-reports a size to a caller -- so it should saturate at the type's
-maximum rather than at the leaf's. That is an argument and not the
-decision, and it is not what was asked for, so the test stays red rather
-than being edited to agree with the code.
-
 ### 26.648 ~~The gate is red at the tip~~, and one of the twelve is a design question
 
 **Closed.** `make check` at `571b522` is `MAKE_RC=0`: 8721 passed, 75
@@ -31951,20 +31948,6 @@ and that function has four other branches that return a count: the
 `_text_count_expression`. None of them bounds anything. The varint one
 is this cell:
 
-    static inline uint32_t situ_s_run_count(situ_view_t view)
-    {
-    	return (uint32_t)situ_s_n_value(view);
-    }
-
-where `situ_s_n_value` returns `uint64_t` and clamps nothing, so the
-cast is the only narrowing and it truncates. I read that code in
-26.645's session, predicted the fault from it, and could not
-demonstrate it: a sweep of the eighteen `*-count-vrec-after-varint-*`
-cells reported `agreed 18`, because with the probe held back **nothing
-asks a struct run for its count** and the prediction was unfalsifiable
-by the instrument I had. The probe turned on is what made it visible,
-one cell into a shard that was not looking for it.
-
 So the fix is one clamp at the function's exit rather than four at its
 branches, which is what 14.2b asks for in as many words -- *clamp
 once*. `_count_expression` is now two functions in each backend:
@@ -32002,22 +31985,8 @@ off and against the pre-clamp emitters.
 probe **off** as well, and disagrees identically against the pre-clamp
 emitters at `95d8725`, so it is neither the probe's nor 26.645's:
 
-    python: body len=45 first=47
-    c    : body len=0 first=-1
-    rust : body len=45 first=47
-
-C alone reads an empty body where the other two read 45 bytes, in a
-`coded` struct whose run is delimited and whose count is arithmetic.
-
 **Measured, and it is 14.2b's own named failure, in the code, one
 level out from the helper whose comment names it.** C emits
-
-    static inline uint32_t situ_s_body_len(situ_view_t view)
-    {
-    	return situ_min_u32(((0u + (situ_nonneg_u32(
-    		situ_leaf_u64(situ_s_n_value(view)) + 1))) * 2u) / 1u,
-    		situ_remaining_u32(view.limit, situ_s_body_offset(view)));
-    }
 
 The `* 2u` is the `doubling` codec's expansion ratio, and it is applied
 to the clamp's RESULT in `uint32_t`. Evaluating it over the sweep's own
@@ -32027,13 +31996,6 @@ saturates at `UINT32_MAX` so that value passes through unchanged. Then
 `2147483648 * 2` is exactly 2^32, which in `uint32_t` is **0** -- the
 one product whose truncation is zero rather than merely wrong. So
 `situ_min_u32(0, 45)` is 0, and the body is empty.
-
-`situ_nonneg_u32`'s own comment names this:
-
-    Saturating at the top as well, and this half was missed once:
-    bounded leaves keep the arithmetic inside `int64_t`, and the
-    *result* can still exceed `uint32_t` -- `(SITU_LEAF_MAX + 1) * 2`
-    does.
 
 That is the arithmetic above, to the literal. The helper was fixed for
 a multiplication INSIDE the clamped expression, and `_region_length`
@@ -32810,23 +32772,6 @@ Rust emitters, in a second convention. The three C ones read one
 definition in `traverse` now; collapsing the rest changes generated
 output in three languages.
 
-#### Housekeeping this session leaves
-
-`/` is at 79 per cent with 14 GB free, and the growth is
-`/tmp/pytest-of-funk` at 7.6 GB over seven roots -- the gate runs.
-pytest prunes to the last three at the START of a run, so it
-self-heals; no root was swept by hand, because the PID-wrap incident in
-`running-code.md` is exactly that sweep. 165 orphaned
-`dbus-daemon --session` processes on this account, 158 of them days
-old, 363 MB resident, unattributable and left alone.
-
-**This entry is a fold at 90 per cent of the weekly window**, written
-because the enforcement hook asked for it and the rule is to prefer
-finishing the record over finishing the change. The full gate was not
-run for it: it is documentation only, `style_gate.py docs` is the check
-that reads it, and spending an hour of container time on prose is what
-the threshold exists to prevent.
-
 ### 26.635 The writer over the composition space, and what the readers do there
 
 Every fault these increments found was in a shape the corpus does not
@@ -33578,27 +33523,6 @@ builder validates against it before returning. Two checks of one schema
 is how they come to disagree -- which the builder's own epilogue says,
 and which a first cut had just violated.
 
-#### The claim gate caught a row for a message that never existed
-
-The two refusals this increment deleted were exempt from the gate's
-"every claim has a corpus instance" test by being listed as constructed,
-which is exactly the row-accumulation the gate's docstring says it
-prevents. So the fragments are now checked against the generator's own
-source -- every string literal in `build.py` and `traverse.py`, joined
-in order with whitespace flattened, because a message is assembled from
-adjacent literals and a fragment can straddle the join. On its first run
-it found a third row: *"is spelled the same as one of the writer's own
-locals"*, a claim for a refusal that **has never been emitted by
-anything**. A name that collides with one of the writer's locals is
-renamed, not refused. It arrived with the gate itself and nothing could
-have noticed.
-
-Both files, because two of those messages are `traverse`'s: a located
-member and a size field with two consumers are refused by the decision
-layer, which answers them once for every backend. A check reading only
-`build.py` reports those two as deleted, and a gate that cries wolf is a
-gate whose exemption list grows.
-
 #### The policy rule had six copies, in two conventions
 
 `_reserved_policy` existed in `codegen/c/emit.py`, `codegen/c/owned.py`,
@@ -33612,14 +33536,6 @@ this kind is answered once; the other three backends still hold their
 own, and collapsing those changes generated output in three languages,
 so it is its own piece of work rather than a side effect of this one.
 
-#### Two stale comments about the pad base, and one document
-
-`layout.py`'s `pad_to` field and `situ.h`'s `align_up` helper both said
-the pad is measured from the message base -- 0043 as written, not 0043
-as amended five weeks ago. Both corrected, because the base is the fact
-this increment's arithmetic depends on and a reader checking it would
-have found two files agreeing with each other and not with the decision.
-
 **And one discrepancy left open rather than resolved.** 0043 says
 `pad_to(n) [preserve]` "is the escape for a format that genuinely
 carries data there"; the front end refuses the attribute in that
@@ -33628,23 +33544,6 @@ member, whose policy it sets"*. One of them is wrong and which is a real
 question: the parser's refusal makes every `pad_to` `must_be_zero`,
 which is what let the writer's pad branch be total. Recorded for the
 holder rather than settled from inside a writer increment.
-
-#### And a size field was recomputing a name instead of reading it
-
-Found while wiring the field-sized reserved run, whose size field goes
-through the same path. `_local` computes a parameter name from a member;
-the pass at the end of `plan` then renames whatever collides with one of
-the writer's own locals or with another member's `_len`. All three size
-branches were calling `_local` again rather than reading the settled
-name, so `u8 situ_at[n]` emitted the parameter `situ_at__len` and a size
-field reading `situ_at_len` -- an identifier declared nowhere.
-
-Reachable, and checked by compiling rather than by reading: *error:
-`situ_at_len` undeclared*. The honest half is that it cannot produce a
-wrong message, only no builder at all, which is why nothing had noticed
--- no corpus schema names a member after one of the writer's locals, and
-the uniquifier that makes the collision safe is the thing that made the
-name unpredictable.
 
 **The writer now reaches 160 of 242 structs**, 36 of 45 schemas, 90 of
 112 variant arms -- three more structs than 26.627, and two builders
