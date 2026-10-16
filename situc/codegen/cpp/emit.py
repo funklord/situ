@@ -60,6 +60,7 @@ from situc.traverse import (
 	data_sized,
 	dynamic_frame_owner,
 	length_is_transform_output,
+	fields_named,
 	readable_names,
 	decode_bound, decode_ratio, region_extent, offset_plan,
 	decode_counts_bits, decodes_here, classify,
@@ -6317,6 +6318,25 @@ class Emitter:
 			        f"\t * `{placement.located}`, and how long it is is not",
 			        "\t * something this backend can work out. */"]
 
+		# REFUSE where the frame does not reach the field the offset is
+		# computed from, rather than taking the zero its getter hands
+		# back. Set by the copyright holder after `Probe.LOCATED` found
+		# all four answering `ok=1 len=2 first=234` over a 22-byte frame
+		# that cannot reach `located_tail.spot` -- the run served from
+		# offset 0, two real bytes of the message under a name whose
+		# offset nobody wrote (26.654).
+		#
+		# Only for a field at a DYNAMIC offset: `_fits` answers None for
+		# a constant one, which the bounds check that acquired the view
+		# already covers.
+		reaches = [test for test in
+		           (self._fits(struct, named,
+		                       max(1, (named.scalar.bits + BITS_PER_BYTE - 1)
+		                           // BITS_PER_BYTE))
+		            for named in fields_named(struct, placement.located or "")
+		            if named.scalar is not None)
+		           if test is not None]
+
 		return [
 			"",
 			f"\t/* {placement.path}, at `{placement.located}` bytes from the start",
@@ -6327,6 +6347,9 @@ class Emitter:
 			f"\t[[nodiscard]] ::situ::rt::err {name}(const situ_msg_t *msg,",
 			"\t\t\t::situ::rt::bytes &out) const noexcept",
 			"\t{",
+			*(["\t\tif (!(" + " && ".join(reaches) + ")) {",
+			   "\t\t\treturn ::situ::rt::err::bounds;",
+			   "\t\t}"] if reaches else []),
 			f"\t\tconst std::uint32_t at = static_cast<std::uint32_t>({offset});",
 			f"\t\tconst std::uint32_t n  = static_cast<std::uint32_t>({length});",
 			"",

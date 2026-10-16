@@ -151,7 +151,8 @@ def _runs(image: Image, struct_index: int) -> list[tuple[int, str]]:
 	"""Members that are a run of elements, and which probe shape each takes.
 
 	`bytes` where the element is a byte: the differ asks for a pointer and a
-	length, and prints the first byte or -1. `element` where the element is
+	length, and prints the first byte or -1. `located` is that shape plus
+	`ok=`, for a run whose offset comes from a field. `element` where the element is
 	wider and the *schema* gives the count, which is reached by index because
 	a converted value has no pointer into it. `run_element` where the message
 	gives the count, which is the same question with the count asked first --
@@ -179,7 +180,14 @@ def _runs(image: Image, struct_index: int) -> list[tuple[int, str]]:
 		if not _offset_computable(image, struct_index, index):
 			continue
 		if placement.element_bits == 8:
-			chosen.append((index, "bytes"))
+			# `located` rather than `bytes` where the offset is the
+			# MESSAGE's: the drivers ask that one with `ok=`, because
+			# reaching past the message is a REFUSAL and an empty run is
+			# not, and `len=0 first=-1` cannot tell those apart. The
+			# distinction is the whole of what a located clamp decides
+			# (26.653).
+			chosen.append((index, "located"
+			               if placement.located_code != NONE else "bytes"))
 		elif counted and placement.element_bits <= 64:
 			chosen.append((index, "element"))
 		elif sized and placement.element_bits <= 64:
@@ -1934,7 +1942,11 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		try:
 			lines.append(_run_line(view, index, local, shape))
 		except Refused:
-			if shape == "bytes":
+			if shape == "located":
+				# The refusal IS the answer here, and saying it as
+				# `ok=0` is what the four drivers say.
+				lines.append(f"{local} ok=0 len=0 first=-1")
+			elif shape == "bytes":
 				# A pointer accessor that refuses hands back NULL, and the
 				# driver prints the empty answer rather than nothing. Saying
 				# it the same way is the difference between agreeing and
@@ -1945,10 +1957,11 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 
 def _run_line(view: View, index: int, local: str, shape: str) -> str:
 	count = _run_count(view, index)
-	if shape == "bytes":
+	if shape in ("bytes", "located"):
 		raw = _run_bytes(view, index)
 		first = raw[0] if raw else -1
-		return f"{local} len={len(raw)} first={first}"
+		ok    = "ok=1 " if shape == "located" else ""
+		return f"{local} {ok}len={len(raw)} first={first}"
 	if shape == "element":
 		return f"{local}[0] {_element(view, index, 0)}"
 	# `[0]=` is printed even for an empty run, as zero. The count and the
@@ -1976,6 +1989,26 @@ def _run_bytes(view: View, index: int) -> bytes:
 	if start % 8:
 		raise Refused("a byte run that does not start on a byte")
 	first = view.at + start // 8
+
+	# A LOCATED run is refused, never clamped, and bounded by the MESSAGE
+	# rather than by this frame. Both halves differ from the rule below and
+	# both are what the four backends do: `n > size || at > size - n` in C,
+	# C++ and Rust, and `at + n > len(buffer)` in Python, every one of them
+	# against the message's size and every one of them an error.
+	#
+	# The clamp below is for a run whose offset is known good and whose
+	# LENGTH is the attacker's (26.35). A located run is the other shape --
+	# the OFFSET is the attacker's -- so clamping it reported an empty run
+	# where all four refused, and the fifth column said `ok=1 len=0`
+	# against their `ok=0 len=0`. Found by `Probe.LOCATED` on its first
+	# run against the corpus (26.653).
+	if placement.located_code != NONE:
+		size = len(view.buffer)
+		want = (placement.array_count if placement.array_count != NONE
+		        else size_bits(view, index) // 8)
+		if first > size or want > size - first:
+			raise Refused("the message does not hold this located run")
+		return bytes(view.buffer[first:first + want])
 
 	if placement.array_count != NONE:
 		last = first + placement.array_count

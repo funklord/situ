@@ -55,6 +55,7 @@ from situc.traverse import (
 	data_sized,
 	dynamic_frame_owner,
 	length_is_transform_output,
+	fields_named,
 	readable_names,
 	decode_bound, decode_ratio, frame_cap, region_extent, offset_plan,
 	decodes_here, classify,
@@ -3983,6 +3984,25 @@ class Emitter:
 			        f"\t# `{placement.located}`, and how long it is is not",
 			        "\t# something this backend can work out."]
 
+		# REFUSE where the frame does not reach the field the offset is
+		# computed from, rather than taking the zero its getter hands
+		# back. Set by the copyright holder after `Probe.LOCATED` found
+		# all four answering `ok=1 len=2 first=234` over a 22-byte frame
+		# that cannot reach `located_tail.spot` -- the run served from
+		# offset 0, two real bytes of the message under a name whose
+		# offset nobody wrote (26.654).
+		#
+		# Only for a field at a DYNAMIC offset: `_fits` answers None for
+		# a constant one, which the bounds check that acquired the view
+		# already covers.
+		reaches = [test for test in
+		           (self._fits(struct, named,
+		                       max(1, (named.scalar.bits + BITS_PER_BYTE - 1)
+		                           // BITS_PER_BYTE))
+		            for named in fields_named(struct, placement.located or "")
+		            if named.scalar is not None)
+		           if test is not None]
+
 		return [
 			"", "\t@property",
 			f"\tdef {name}(self) -> memoryview:",
@@ -3993,6 +4013,9 @@ class Emitter:
 			"\t\tthe buffer -- checked here, on every read, which is what",
 			'\t\t`offset = DataPlaced` in the map costs."""',
 			"\t\tself._check()",
+			*([f"\t\tif not ({' and '.join(reaches)}):",
+			   f'\t\t\traise BoundsError("{placement.path}: the frame does'
+			   f' not reach `{placement.located}`")'] if reaches else []),
 			f"\t\tat = {offset}",
 			f"\t\tn  = {length}",
 			"\t\tif at + n > len(self._msg.buffer):",

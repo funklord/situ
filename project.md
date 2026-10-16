@@ -31304,6 +31304,150 @@ it as a refusal.
 Found by the worker converting the per-layer generators, from minimal
 reproductions, in a file that was not its own.
 
+### 26.654 A located accessor refuses an offset field the frame cannot reach
+
+Set by the copyright holder, answering 26.653's open question: **the
+located accessor refuses.** The walker was right and the four backends
+were wrong.
+
+What they did: `located_tail.spot` sits after a variable-length member,
+so its offset saturates at the frame limit (`situ_advance_u32`), and its
+getter is guarded -- `situ_in_bounds(view, offset, 1) ? load : 0`. Over
+a 22-byte buffer the guard failed, the getter answered **0**, and
+`payload at spot` served two bytes from offset 0:
+
+    payload ok=1 len=2 first=234
+
+234 is the buffer's first byte. So the accessor handed back real bytes
+of the message under a name whose offset nobody wrote -- the plausible
+number this repository rates worst, produced by a bounds check that
+worked and a zero that lied.
+
+#### The guard has to be on the READ
+
+A zero that came from an unreadable field is indistinguishable from a
+field that says zero, so nothing downstream can recover the difference.
+C was already computing exactly the test needed, inside the getter, and
+discarding its answer.
+
+So each backend now refuses before using the offset, and three pieces
+already existed:
+
+- **`traverse.fields_named(struct, source)`**, new, returns the
+  placements an expression reads -- the same question `_over_fields`
+  answers when it substitutes a field, answered once because four
+  backends needed the LIST rather than the rendering.
+- **`_fits`**, in all four already, renders the bounds test and answers
+  None for a field at a CONSTANT offset, which the check that acquired
+  the view covers (20.2).
+- **`readable_names` and `_names_a_field`**, which `fields_named` is
+  built from.
+
+**So the corpus split fell out rather than being arranged.** bmp's
+`file.pixel_offset` is at offset 10 and gets no guard; edges' `spot` is
+dynamically placed and gets one. The two located members in the tree
+are exactly one of each case, which is luck worth naming: a corpus with
+only bmp in it would have let this ship, since the guard that matters
+is emitted for the shape bmp does not have.
+
+    c       if (!(situ_in_bounds(view, situ_located_tail_spot_offset(view), 1u)))
+    cpp     if (!(situ_in_bounds(raw(), situ_advance_u32(1, ...)))
+    python  if not (self._len - (advance(1, ...)) >= 1):
+    rust    if !(self.bytes.len().saturating_sub(situ_rt::advance(1, ...)) >= 1)
+
+136 passed over the walker suite, the crafted-offset control and the
+whole corpus differential, and mypy clean over 247 files.
+
+#### The chain this closes
+
+A probe held back for four interfaces (26.643) was built (26.652), found
+the walker clamping where four refuse (26.653), and the holder's answer
+then turned that into a fault in the four rather than in the walk. **The
+probe's value was recorded in advance as "regression protection for code
+that agrees" -- and the code did not agree.** That estimate was made by
+reading all four located accessors and finding their bounds checks
+spelled the same non-wrapping way, which was true and was about the
+wrong line: the clamps agreed, and what the offset field answered when
+it could not be read did not.
+
+So a review that reads the four implementations of a check can still
+miss the question, and the differential is what asks it. That is the
+argument for the probe stated better than before it ran.
+
+### 26.653 What the LOCATED probe found: the walker clamped where four refuse
+
+`Probe.LOCATED` (26.652) went red on its first full gate, and not for
+the reason I reported before measuring. Four failures, one cause each
+time narrower than the last.
+
+#### First: the walker's line had no `ok=`
+
+    walker: 'pixels len=0 first=-1'
+    C:      'pixels ok=0 len=0 first=-1'
+
+The walker renders a located byte run through its generic byte-run path.
+`report.py` gives it its own shape now, printing `ok=1` and `ok=0` on
+refusal.
+
+**Keeping `ok=` rather than dropping it from the probe was the decision
+there**, and dropping it was the tempting fix: all five would have
+agreed at once. They would have agreed by no longer asking. Without that
+field a REFUSAL and an accepted EMPTY run print identically, and which
+of the two a located clamp returns is the whole question.
+
+#### Second: it clamped where all four refuse
+
+    walker: 'pixels ok=1 len=0 first=-1'
+    C:      'pixels ok=0 len=0 first=-1'
+
+`report._run_bytes` ends in
+`view.buffer[first:min(first + want, view.limit)]`, and its docstring
+says why: a count the MESSAGE gives is an attacker's claim, so it is
+clamped to what the frame holds -- 26.35's fix, after an accessor handed
+a caller fifty-five bytes out of a five-byte frame.
+
+**A located run is the other shape.** There the OFFSET is the
+attacker's, and every backend refuses: `n > size || at > size - n` in C,
+C++ and Rust, `at + n > len(buffer)` in Python. Measured on the failing
+buffer -- `pixel_offset = 775173163`, `image_size = 1161049669`, over 62
+bytes -- the walker's slice came out empty and it reported an accepted
+empty run where four refused.
+
+Two faults in that one line, and the second would have outlived the
+first: it bounded by `view.limit`, this frame, where a located offset is
+measured from the MESSAGE. A nested located member would have disagreed
+even once the clamp was right. The located branch refuses and bounds by
+`len(view.buffer)`.
+
+**`walk.read_bytes` was already correct** and refuses this case -- I
+checked it directly and it raised. The fifth column was getting its
+answer from `report._run_bytes` instead. So the walker had two readers
+for one question, one agreeing with the backends and one not, which is
+`working-practice.md`'s *a value with two consumers where only some are
+wired* in the reader rather than in the writer.
+
+#### Third: I reported the cause before measuring it
+
+The `ok=` fix was real and was not the fault. I said it was, in as many
+words, and the next run corrected me -- then the run after that
+corrected the correction, because the edges case was a third thing
+again. Three failures, three different causes, and the first two
+diagnoses were each confidently stated from a diff.
+
+The habit that would have caught it is the one this session keeps
+re-learning: the probe PRINTS the disagreement, and reading the printed
+line costs one command. I reasoned about the emitter instead, twice.
+
+#### And the precedent was in the entry I was closing
+
+26.641 held the struct-run count probe back on exactly this -- turning a
+probe on asks the WALKER something it does not answer -- and 26.642 is
+the entry that closed it. I ran the differ suites, the partition test
+and the random-bytes differential, and not `test_walker.py`, which is
+where the fifth column lives. **The lesson was in the entry I was
+working against**, which is a stronger failure than not knowing it: a
+probe's two halves are the drivers and the walk, and that is now twice.
+
 ### 26.652 The LOCATED probe, and the control that refused to fire
 
 The last of 26.641's list. `Probe.LOCATED` asks what four backends say

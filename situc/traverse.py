@@ -807,6 +807,25 @@ def invalidating_members(
 	return found
 
 
+def fields_named(struct: ResolvedStruct, source: str) -> list[Placement]:
+	"""The fields an expression written in this struct reads.
+
+	The same question `_over_fields` answers when it substitutes a field
+	into an emitted expression, answered once here because four backends
+	now need the LIST rather than the rendering: a located member's
+	accessor has to refuse where the frame does not reach the field its
+	offset is computed from, and each backend spells that bounds test its
+	own way (26.654).
+
+	Set by the copyright holder after `Probe.LOCATED` found the four
+	answering `ok=1` over a frame that cannot reach the offset field --
+	serving two real bytes from offset 0, because the unreadable field
+	read as zero.
+	"""
+	return [placement for placement in readable_names(struct)
+	        if _names_a_field(source, local_name(struct, placement))]
+
+
 def _names_a_field(source: str, local: str) -> bool:
 	"""Whether an expression's source reads the field called `local`.
 

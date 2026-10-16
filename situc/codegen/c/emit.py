@@ -60,6 +60,7 @@ from situc.traverse import (
 	must_be_terminated,
 	local_name, offset_plan, own_members, recursion_cycle,
 	length_is_transform_output,
+	fields_named,
 	readable_names,
 	region_extent,
 	decode_counts_bits, decodes_here,
@@ -6598,6 +6599,12 @@ class Emitter:
 		# takes nothing.
 		taken = self._argument_tail_in(struct, offset, length)
 
+		reaches = [test for test in
+		           (self._fits(struct, named, self._scalar_bytes(named.scalar))
+		            for named in fields_named(struct, placement.located or "")
+		            if named.scalar is not None)
+		           if test is not None]
+
 		return [
 			"",
 			f"/* `{placement.name}` sits at `{placement.located}` bytes from the",
@@ -6617,6 +6624,24 @@ class Emitter:
 			f"(const situ_msg_t *msg, situ_view_t view, situ_view_t *out"
 			f"{taken})",
 			"{",
+			# REFUSE where the frame does not reach the field the offset
+			# is computed from, rather than taking the zero its getter
+			# hands back. Set by the copyright holder after
+			# `Probe.LOCATED` found all four answering `ok=1 len=2
+			# first=234` over a 22-byte frame that cannot reach
+			# `located_tail.spot`: the unreadable field read as zero, so
+			# the run was served from offset 0 -- two real bytes of the
+			# message under a name whose offset nobody wrote, which is
+			# the plausible number this repository rates worst (26.654).
+			#
+			# Only for a field at a DYNAMIC offset: `_fits` answers None
+			# for a constant one, which the bounds check that acquired
+			# the view already covers (20.2). bmp's `file.pixel_offset`
+			# is that case and needs nothing; edges' `spot` sits after a
+			# variable-length member and is the one that does.
+			*(["\tif (!(" + " && ".join(reaches) + ")) {",
+			   "\t\treturn SITU_ERR_BOUNDS;",
+			   "\t}"] if reaches else []),
 			f"\tconst uint32_t at = (uint32_t)({offset});",
 			f"\tconst uint32_t n  = (uint32_t)({length});",
 			"",

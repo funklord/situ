@@ -54,6 +54,7 @@ from situc.traverse import (
 	decode_bound, decode_ratio,
 	dynamic_frame_owner, offset_plan,
 	length_is_transform_output,
+	fields_named,
 	readable_names,
 	frame_cap,
 	region_decodes,
@@ -6065,6 +6066,25 @@ class Emitter:
 			        f"\t// `{placement.located}`, and how long it is is not",
 			        "\t// something this backend can work out."]
 
+		# REFUSE where the frame does not reach the field the offset is
+		# computed from, rather than taking the zero its getter hands
+		# back. Set by the copyright holder after `Probe.LOCATED` found
+		# all four answering `ok=1 len=2 first=234` over a 22-byte frame
+		# that cannot reach `located_tail.spot` -- the run served from
+		# offset 0, two real bytes of the message under a name whose
+		# offset nobody wrote (26.654).
+		#
+		# Only for a field at a DYNAMIC offset: `_fits` answers None for
+		# a constant one, which the bounds check that acquired the view
+		# already covers.
+		reaches = [test for test in
+		           (self._fits(struct, named,
+		                       max(1, (named.scalar.bits + BITS_PER_BYTE - 1)
+		                           // BITS_PER_BYTE))
+		            for named in fields_named(struct, placement.located or "")
+		            if named.scalar is not None)
+		           if test is not None]
+
 		return [
 			"",
 			f"\t/// {placement.path}, at `{placement.located}` bytes from the",
@@ -6078,6 +6098,9 @@ class Emitter:
 			# under `-D warnings`. Same helper as the variant chain: the
 			# sub-expressions arrive parenthesised because that is how a
 			# generator stays composable, and Rust objects to it everywhere.
+			*(["\t\tif !(" + " && ".join(reaches) + ") {",
+			   "\t\t\treturn Err(Error::Bounds);",
+			   "\t\t}"] if reaches else []),
 			f"\t\tlet at = {self._unparen(offset)};",
 			f"\t\tlet n  = {self._unparen(length)};",
 			"",
