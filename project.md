@@ -57,6 +57,21 @@ Rules for the implementer:
    reason. Signalled to `claude-guidelines`' signal list rather than left
    as one tree's habit, because the next tree to move findings into
    records meets the same question.
+
+   **The append-only rule above is the DECISION's, and findings are
+   exempt.** Set by the copyright holder 2026-10-17. A decision is a
+   position taken, so amending one rewrites history somebody may have
+   relied on and a later record supersedes it instead. A finding is a
+   running record of what the code does: it gets struck through when it
+   is overtaken and amended when it is wrong, which is how section 26
+   was written and is why these moved at all.
+
+   **The `Status:` line says which rule applies**, so a reader need not
+   remember this paragraph: a finding reads `Status: recorded` and a
+   decision `Status: accepted`. Held by
+   `test_a_record_says_which_rule_governs_it`, because a distinction
+   between two kinds of file that lives only in prose is one that drifts
+   -- 512 and 62 today.
 6. **Where this document can be checked against the code, it is.** Five things
    here are held to the implementation by a test that fails when they drift:
 

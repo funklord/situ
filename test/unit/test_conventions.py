@@ -959,6 +959,54 @@ def _register_items() -> list[tuple[str, str]]:
 	return found
 
 
+def test_a_record_says_which_rule_governs_it() -> None:
+	"""`doc/decision/` holds two kinds of record under two rules.
+
+	A DECISION is append-only: amending one rewrites a position somebody
+	may have relied on, so a later record supersedes it instead. A FINDING
+	is a running record of what the code does -- struck through when it is
+	overtaken, amended when it is wrong -- which is how section 26 was
+	written and why 512 of its entries moved here (26.656). The holder set
+	the exemption 2026-10-17.
+
+	**So the `Status:` line has to say which rule applies**, because a
+	distinction between two kinds of file that lives only in prose is one
+	that drifts: the next finding written by hand takes `accepted` from
+	the file beside it and is append-only by accident.
+
+	Keyed on the filename, which is the other half of the same
+	convention -- `26.NNN-slug.md` keeps the number it is cited by, where
+	a decision takes the next in the `NNNN` sequence.
+
+	**It asks for the word `recorded` and not for the word `accepted`,
+	which is the first thing this test got wrong.** A decision's status
+	is a SENTENCE its author writes: 0031's reads *"the enumeration is
+	accepted; the mechanism is superseded in part"*, and three more carry
+	a clause about when or how far. That is more informative than a
+	keyword and not something a convention test should flatten. What has
+	to be unambiguous is only which RULE governs the file, so this checks
+	that a finding says `recorded` and that a decision does not.
+	"""
+	records = sorted((ROOT / "doc" / "decision").glob("*.md"))
+	assert len(records) > 400, f"only {len(records)} records; the population moved"
+
+	wrong = []
+	for path in records:
+		first = re.search(r"^Status:\s*(\S+)", path.read_text(encoding="utf-8"),
+		                  re.M)
+		said = (first.group(1).strip().rstrip(".,;").lower() if first
+		        else "(no Status line)")
+		finding = path.name.startswith("26.")
+		if finding and said != "recorded":
+			wrong.append(f"{path.name}: a finding says {said!r}, not 'recorded'")
+		elif not finding and said == "recorded":
+			wrong.append(f"{path.name}: a decision says 'recorded', so the "
+			             f"append-only rule reads as exempt")
+
+	assert not wrong, ("a record does not say which rule governs it:\n  "
+	                   + "\n  ".join(wrong[:8]))
+
+
 def test_the_open_register_agrees_with_the_records_it_cites() -> None:
 	"""26.144 says which decision records are built; the records say too.
 
