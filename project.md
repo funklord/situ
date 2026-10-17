@@ -5574,16 +5574,7 @@ Moved to `doc/decision/26.6-phase-6-variants-opaque-tlv-indexed-varints.md`.
 
 ### 26.7 Phase 7: transforms, tier 1 (extern codecs)
 
-**Status: complete.** `situc gen-codec-tests` output was checked against four
-deliberately lying implementations. `coded(C) { ... }` is the general transform
-region this table needed and this document did not name;
-`doc/decision/0009-coded-regions.md` records why, and phase 8's `sealed`
-becomes `coded` plus authentication rather than a second mechanism.
-
-The property held throughout: **the lattice reads property signatures and
-nothing else** (13.1). No rule in `propagate.py` knows what an algorithm does.
-
-A `codec` with no bound `impl` must analyze cleanly and fail only at codegen.
+Moved to `doc/decision/26.7-phase-7-transforms-tier-1-extern-codecs.md`.
 
 ### 26.8 Phase 8: cryptographic model
 
@@ -5599,10 +5590,7 @@ Moved to `doc/decision/26.10-phase-10-mmio-target.md`.
 
 ### 26.11 Phase 11: Rust backend
 
-**Superseded by 26.18.** This number was allocated to the Rust backend before
-the backend order was decided; section 20.1 now puts C++ and Python ahead of
-it. The number stays rather than being reused, so that a reference to "phase
-11" written earlier still lands somewhere true.
+Moved to `doc/decision/26.11-phase-11-rust-backend.md`.
 
 ### 26.12 Phase 12: transforms, tier 2 (derived codecs)
 
@@ -5638,20 +5626,7 @@ Moved to `doc/decision/26.19-language-server.md`.
 
 ### 26.20 Cross-field invariants
 
-Open question 3's construct, built after the roadmap ran out. `invariant
-frame.total == size(frame.header) + size(frame.body);` -- see 16.1 for what it
-means and what each backend emits.
-
-Worth recording is how little was needed and where the cost actually fell. The
-resolution had said the maintenance obligation goes where coverage already
-puts it, and that was exactly true: no axis was added, no propagation rule
-changed shape, one row. What took the time was everything downstream of the
-construct rather than the construct -- one numbering shared by four backends,
-four recompute emitters over one shared expression walk, and five artifacts
-that describe a field and each had to learn the word "derived".
-
-Every bug in it was a disagreement rather than a crash, which is why
-`test/unit/test_invariants.py` compares the backends instead of reading each.
+Moved to `doc/decision/26.20-cross-field-invariants.md`.
 
 ### 26.21 Text protocols
 
@@ -5659,47 +5634,7 @@ Moved to `doc/decision/26.21-text-protocols.md`.
 
 ### 26.22 Schema evolution
 
-Section 19's model, built after the roadmap ran out and prompted by one
-question: can two `.situ` files be compared for a backward-compatible
-extension, and can one file carry more than one version.
-
-Both turned out to rest on a mistake in 19 itself. `situc diff` was described
-as the compatibility linter and is a *cost* linter -- it compares capability
-vectors. Three edits proved the gap before anything was built: a byte-order
-flip reported "No capability change", a same-width member swap reported zero
-regressions, and moving a field out of an authenticated region reported an
-**improvement**. The third is not a bug in the lattice. `Uncovered` ranks
-stronger than `Covered` because a field with no tag over it is cheaper to
-write, and the lattice is right about cost. The mistake was reading a cost
-ordering as a compatibility ordering.
-
-Delivered:
-
-- **`situc wire`** (19.3): the byte-level contract, committed as
-  `NAME.situ.wire` and checked, with the currency test the map has. It
-  classifies rather than diffing -- BREAKING, COVERAGE, backward, forward,
-  api-only -- because the categories are not equally alarming.
-- **`[since = N]`** (19.4): more than one version in one file, append-only by
-  construction. Every member keeps a static offset and the struct's extent is
-  a range, which sound contradictory and are both exact.
-- The two meet: appending a member reports as *probably* safe, and appending
-  one behind a `[since]` reports as *provably* safe, because the old receiver
-  reads the version field and knows the bytes are not its own.
-
-What building it cost, and what that says:
-
-The same accessor was ungated in four backends and the write side in all four
-including C (invariants 27 and 28). The C++ factory shadowed its own class
-name for any schema with a struct called `msg` (invariant 29). `gen-fuzz` had
-never compiled for a variable-size struct at all -- the artifact whose purpose
-is hostile input did not build for the structs most likely to fail on it. And
-the layout solver had been recording `array_count = 1` for a delimited member
-since the construct was added, which six consumers had absorbed (invariant
-25).
-
-None of those are about schema evolution. They were found by it, because
-adding a construct means walking every backend and every artifact, and that
-walk is the only thing that reads them all in one sitting.
+Moved to `doc/decision/26.22-schema-evolution.md`.
 
 ### 26.23 What the worked examples asked for
 
@@ -5707,100 +5642,15 @@ Moved to `doc/decision/26.23-what-the-worked-examples-asked-for.md`.
 
 ### 26.24 DNS name compression, and what it cost
 
-A fourth worked example, chosen for the same reason as the other three: a shape
-the tree did not have. A compressed name is a run of labels where a label is a
-variant on its top two bits, and one of the arms is a pointer to somewhere else
-in the message.
-
-It asked for three things and got all three.
-
-**A weakening the layout does not imply** (11.5). Every construct in the schema
-is canonical taken alone, and the format admits many spellings of one name,
-because the redundancy is between the name and bytes elsewhere in the message.
-No per-member rule can see that, so `[non_canonical = "reason"]` lets the
-schema say it -- one axis, a required reason, and no way to strengthen
-anything.
-
-**An extent for a variant** (11.6). This is the one that mattered. A variant's
-extent had been refused outright on the grounds that it depends on the
-discriminant, which is an argument that the extent is a *switch*, not that
-there is none. The refusal propagated: no extent meant no run over a variant,
-so the example could describe a compressed name and not walk one, which is the
-thing it exists to show.
-
-**A check nobody had written.** Walking labels immediately showed that
-`default: error` was enforced by no backend, in a language whose specification
-had said it was since 14.5 was written, with `SITU_ERR_VERSION` defined for it
-and returned by nothing. Nothing had noticed because nothing could reach a
-variant closely enough to care.
-
-It also found the extent calculation copied into four backends, each dividing
-every member to whole bytes before summing -- so a `u2` and a `u6` contributed
-nothing where together they are a byte. That moved to `traverse.extent_parts`,
-and the "can this be measured at all" predicate with it, because `gen-checks`
-had been deciding it separately and disagreeing (invariant 34).
-
-And what it did not get: situ describes a compressed name and walks one, and
-does not follow the pointer. Resolving one means re-entering the parser at an
-arbitrary earlier offset with a cycle check and a budget, which is control flow
-rather than layout. Naming that boundary precisely is the difference between a
-limit and a shrug -- the earlier `example/dns/dns.situ` had claimed situ could
-not describe DNS names "statically at all", which was wrong by a wide margin.
+Moved to `doc/decision/26.24-dns-name-compression-and-what-it-cost.md`.
 
 ### 26.25 The dissector reads the same layout
 
-Making a variant walkable in the four code backends left the dissector saying
-`no bytes of its own` for the variant and `elements of no fixed size` for the
-run -- so Wireshark showed a DNS name as nothing at all. That is invariant 36
-one artifact further out: the dissector is a fifth reader of the same walk, and
-fixing four of them is not fixing it.
-
-It now emits, per struct, the same two functions the C backend does -- an
-extent and a run span -- from the same `traverse.extent_parts` and
-`traverse.arm_members`. Only the reads are Lua's.
-
-Three other things were wrong for the same reason and had never been noticed,
-because nothing reached far enough into a variable struct to see them:
-
-- a variable-size nested struct was dissected over `size_bytes`, its
-  *minimum*, so a whole name showed as its first byte
-- a fixed-width member after a variable one reported `no bytes of its own`,
-  which is a strange thing to say about a `u16`: `byte_span` is None for a
-  dynamic offset, and *where* it sits was the only thing unknown
-- and it was therefore declared `ProtoField.bytes` and shown as hex
-
-Two operator translations now share one function. The schema's operators are
-C's; Python spells three of them in words and Lua spells four, and both need
-`!=` rewritten before `!` or the result is `not =`. That ordering is the whole
-of the difficulty, so it is written once (`names.translate_operators`) rather
-than got right twice.
-
-Why Lua at all is `doc/decision/0021-dissector-language.md`, written because
-the question was asked and nothing answered it: no build step and no ABI to
-match, against a Wireshark whose plugin ABI moves between minor releases, for
-an artifact meant to be committed beside the schema.
+Moved to `doc/decision/26.25-the-dissector-reads-the-same-layout.md`.
 
 ### 26.26 What the folds keep finding
 
-"Fold what the implementation learned back into this document" has been run
-several times now, and the same thing happens each time: the prose is roughly
-right and the *lists* are wrong. The propagation table was twenty rows behind,
-the CLI surface named a flag that never existed, the repository layout was
-missing a module, and the nested-copy field list in the solver had fallen six
-behind (invariant 39).
-
-The pattern is worth naming because it predicts where to look. Prose drifts
-slowly, because a paragraph that has gone wrong usually reads wrong. A list
-does not: an entry that should be there and is not looks exactly like a list
-that is complete. Nothing about reading it says otherwise.
-
-So the rule in section 0 is not "keep the document current" -- everybody
-intends that -- it is that a list in this document should be *derived* or
-*checked*, and the four that now are took one test each. The remaining
-hand-maintained lists here are the glossary and the decision index, and both
-are append-only by nature: an entry never becomes wrong, it only fails to
-appear, and a missing glossary term costs a reader a search rather than a
-wrong build.
+Moved to `doc/decision/26.26-what-the-folds-keep-finding.md`.
 
 ### 26.27 What fuzzing every schema found
 
@@ -5808,60 +5658,11 @@ Moved to `doc/decision/26.27-what-fuzzing-every-schema-found.md`.
 
 ### 26.28 Where a generated artifact cannot be purged
 
-Decision 0022 measured what removes an unused accessor. Two of the four
-languages cannot do it fully, and the position taken is to accept that rather
-than contort the generator around it:
-
-- **Rust** eliminates everything unused in a binary crate and keeps 33 symbols
-  in a library one, because `pub` is the public API and dead-code elimination
-  may not touch it. A consumer who cares uses the module inside their own
-  crate, where it is eliminated, or a feature gate.
-- **Python** eliminates nothing, ever. Every method and property exists at
-  import; there is no flag, and there is no version of this generator that
-  changes that.
-
-Both are properties of the language rather than of situ, and the alternatives
--- generating a subset from a declared use-list, or splitting every struct into
-its own module -- cost the user a thing to maintain in exchange for bytes that
-matter in neither language's usual deployment. C and C++ are the targets where
-size is the argument, and there the answer is a linker flag, now documented in
-20.2.
-
-The consequence for the accessor families of 0022 is that "emit both and let
-the toolchain purge" is a strategy for C and C++ only. That is a reason to
-keep the lattice-driven rule -- emit the second family only where the first
-one's vector is weak -- rather than a reason to abandon the split.
+Moved to `doc/decision/26.28-where-a-generated-artifact-cannot-be-purged.md`.
 
 ### 26.29 One list, four runtimes
 
-The framing work needed a new failure class, `truncated`, and adding it meant
-editing four runtimes by hand. Nothing would have caught a fourth omission, so
-section 20.2's list of the classes is now held to `runtime/c/situ.h` *and* the
-other three runtimes are held to it.
-
-It found two holes on its first run, neither of them recent:
-
-- **C++ had no `stale`.** The C runtime has named it since section 12.3 was
-  written -- a view outliving a write that shifted layout under it -- and the
-  C++ `err` enum did not, so a caller could not name the condition it was
-  being protected from.
-- **Python reported the stage gate as `TagError`.** A tag that fails to
-  verify is a hostile or corrupt message; reaching a sealed interior without
-  opening the gate is a bug in the caller. A receiver that cannot tell them
-  apart logs the second as an attack and the first as a typo. It has a
-  `StageError` now.
-
-One exemption, written into the test rather than left implicit: **Rust has no
-`Stale`**, because invalidation there is the borrow checker (26.18) -- a view
-outliving such a write does not compile, and there is no run-time condition to
-name. Having the exemption in the test is what makes a second one something
-that has to be argued for.
-
-The general point is the one section 0 keeps making, at a level above the
-document: a *runtime* can drift from another runtime as easily as a table can
-drift from the code, and four hand-edited copies of anything will disagree
-eventually. What made this checkable is that the C enum is the definition and
-the other three claim to mirror it -- where that is true, say it in a test.
+Moved to `doc/decision/26.29-one-list-four-runtimes.md`.
 
 ### 26.30 The second accessor family, and what it materializes
 
@@ -5909,57 +5710,7 @@ Moved to `doc/decision/26.40-the-radix-nothing-had-used.md`.
 
 ### 26.41 The rest of the list
 
-26.40 chose its example by surveying every construct the language offers
-against every schema in the repository, and the survey named more than one
-unused thing. This is the rest of them: five in `test/schema/edges.situ`,
-which exists to say exactly this, and eight register access modes in
-`example/registers`, where the vocabulary they are borrowed from lives.
-
-The result is worth stating plainly because it cuts both ways. **Two of the
-thirteen were wrong. Eleven were right.** The eleven are not a waste: the only
-way to know which two were wrong was to write all thirteen, and "we have never
-run this" is not a defect report either way.
-
-**`rc` and `rs`, wrong in both halves.** They are *read*-triggered -- the read
-is what clears or sets the bit -- so there is no write side at all, and the
-read is not pure.
-
-- situ had them **writable**, because the test was "not read-only". Both
-  generated a setter that writes a whole word of ones with one bit cleared: an
-  operation the bus does not offer, aimed at a field nobody can write.
-- And both came out **`effect = Pure`**, which is the axis reporting a
-  destructive read as a pure one. `on_read = clear` was understood and `rc`
-  was not -- the same fact in SystemRDL's other spelling, and situ read only
-  one of the two. 15.2 lists both in the same table.
-
-`w1s`, `w0c`, `w0s`, `wo_once` and `rsvd` were right, as were `namespace`,
-`[escape]`, `[unknown]`, `[equalize]` and `[allow_unverified_read]`.
-
-**Three defects around them**, each from the first schema to reach it:
-
-- **The differential driver opened a gate that is not there.**
-  `[allow_unverified_read]` is the one construct whose purpose is to give up a
-  guarantee (14.3), and where it is written there is no gate type and no
-  `_open` to call. The driver named both.
-- **`gen-fuzz` emitted `wire::framed_body` into C.** `::` is not an identifier
-  there; the compiler read it as a label and a stray colon.
-- **And the check that every struct reaches the fuzz harness compared the same
-  unflattened name**, so it would have passed on the broken output. The C
-  compiler caught it first, which is luck rather than coverage -- the check
-  was written against the generator's spelling rather than the target's.
-
-**What the survey is now.** Every attribute in the vocabulary has a user, and
-the constructs listed as unused in 26.40 have one each. The survey script is
-not committed and should not be: it is twenty lines of regular expressions
-over the schema sources, it answers a question worth asking about twice a
-year, and a committed version of it would be a list to maintain rather than a
-measurement to take. What is worth keeping is the habit -- ask the language
-what it offers, ask the schemas what they use, and read the difference.
-
-**Status:** 2729 unit tests, 7 skipped; generated C compiled and run on the
-host and under aarch64 emulation; every dissector executed; `make fuzz` clean
-over 27 harnesses; eight worked examples carrying bytes an independent
-implementation wrote.
+Moved to `doc/decision/26.41-the-rest-of-the-list.md`.
 
 ### 26.42 The search, and where the bracket was still a count
 
@@ -5987,51 +5738,7 @@ Moved to `doc/decision/26.47-putting-the-last-fold-s-shapes-in-a-schema.md`.
 
 ### 26.48 The constructs that had never met a run
 
-26.47's family was one construct meeting an element width. This fold takes the
-same run to the constructs it had never been written beside: a nested struct,
-a variant arm, and a byte-order marker. Three probe schemas, and two of the
-three produced something no backend should emit.
-
-**A marker at a dynamic offset crashed the compiler.** `example/tiff` is the
-only `endian_marker` in the tree and it is a header of constant offsets, so
-the marker-conditional load had never been asked for a member behind a
-variable-length one. C's asks the placement for its constant offset while
-every other load on that path takes one from the caller -- so it hit the
-assertion inside `offset_bytes` and came out as a Python traceback, where
-section 17 asks for a diagnostic with a blame chain. The other three emit it
-correctly, which is the shape of most cross-backend findings reversed.
-
-**And Rust wrote `self.as_ref().as_ref()`.** The setter for a member at a
-dynamic offset rewrites its body to run the *reads* on the immutable view, by
-substituting `self.` -- and the store had already put an `as_ref()` on the
-marker predicate, because every other setter site needs one. So the rewrite
-found its own output and wrapped it again. That is invariant 53's rule from
-the other side: a rewrite over generated text has to move past what somebody
-already wrote there, not only past what it wrote itself.
-
-**A variant arm may be a scalar, a byte run or a struct.** A run of *values*
-was none of those, in any of the four: C and C++ said so in the generated file
-("not a shape this backend reaches into yet"), and Python and Rust emitted
-nothing at all -- no accessor and no note, which is invariant 27's floor and
-one step below it. Both spellings were unreachable, `u16 x[n]` and `u16 x[3]`
-alike, the arm's own base being dynamic whatever its count says. All four emit
-the pair now, the count carrying the discriminant test and the getter reaching
-through it.
-
-**The differ asked that arm the wrong question**, which is why nothing found
-it: `_arms` sorted a member into "byte run" or "scalar" by its element width
-alone, so a run of `u16` was a scalar arm and the generated driver named a
-getter taking no index. A driver that does not compile is a schema nobody
-compares -- and no schema here had one.
-
-**What did not break** is worth as much as what did. A nested struct's field
-driving a run, a run of values under a marker, `[remaining]` with a wide
-element, a fixed-point element reached by index: written, generated, executed
-in all four, agreed. The sweep is only evidence when it says both.
-
-**Status:** 2804 unit tests, 7 skipped; generated C compiled and run on the
-host and under aarch64 emulation; five probe schemas built and run through
-all four backends, three of them now in `test/schema/edges.situ`.
+Moved to `doc/decision/26.48-the-constructs-that-had-never-met-a-run.md`.
 
 ### 26.49 An offset the message decides, in the places that assumed otherwise
 
@@ -6091,49 +5798,7 @@ Moved to `doc/decision/26.62-seven-oracles-and-the-one-that-was-flaky-before-it-
 
 ### 26.63 The rest of the stack, and a filter that had to be shared
 
-26.62 left five formats with `randpkt` types and no oracle. They have them
-now: ipv4, icmp, udp, tcp and dns, which with the earlier seven makes twelve
-over layout and two over arithmetic. Every one of them has a mutation in
-`LIES`, so every one has been shown able to fail.
-
-Five formats, one shape. `_reader` and `_situ_reader` are built from a table
-of tshark's name for a field, situ's name for it, and the base tshark prints
-it in; only the extraction differs, because a bit-packed nibble is not a
-`u16`. The layer offsets still come from tshark's own `_raw` entries.
-
-**The first version had the bug invariant 98 was written about**, three days
-after writing it. `_situ_reader` wrapped its accessor call in `try/except:
-continue`, on the reasoning that a frame situ refuses is a frame situ cannot
-answer about -- which is true, and which quietly let the situ side choose its
-own subset. The udp oracle read seven rows against tshark's eight, every
-shared value identical, one frame simply missing from one side. The rule was
-already written down and the code broke it anyway, because dropping a frame
-where you happen to be standing looks like error handling rather than like
-choosing a subset.
-
-`_comparable` is the fix: one predicate, evaluated identically on both sides,
-taking the struct's own minimum. `_situ_reader` asserts that minimum against
-the generated module's `SIZE_MIN`, so a schema whose extent moves fails here
-instead of silently filtering frames neither side mentions.
-
-**Two adjustments where randpkt's output and situ's question did not meet.**
-
-`randpkt -t ip` fills the header with noise, so tshark reports `ip.version`
-and gives up, and the comparison filtered to nothing. The IPv4 oracle takes
-its corpus from the udp generator instead, which emits a well-formed IP
-header underneath -- still randpkt's bytes, still the IPv4 layer under test.
-
-And `tcp` was flaky at one run in twenty, always as *"tshark reported nothing
-to compare"* -- the empty-comparison guard from 26.62 doing precisely its
-job. Measured rather than guessed at: with eight packets a tcp run yields
-zero comparable frames about five percent of the time. Forty packets, and
-zero in twenty trials. The cause was the sample size, not the randomness,
-which is invariant 99 in the direction it is easy to get wrong: the fix that
-suggests itself is to relax the guard.
-
-**Status:** 2972 unit tests, 7 skipped; `make check` clean over 109 files;
-twelve layout oracles and two computation ones; twenty-six consecutive runs
-of the oracle suite clean after the sample size went up.
+Moved to `doc/decision/26.63-the-rest-of-the-stack-and-a-filter-that-had-to-be-shared.md`.
 
 ### 26.64 Modbus, whose oracle is a library and whose corpus is a stream
 
@@ -6189,98 +5854,11 @@ Moved to `doc/decision/26.76-the-run-that-examined-nothing-and-read-as-clean.md`
 
 ### 26.77 The instrument builds somewhere it does not own
 
-26.76 taught the sweep to say whether it ran. This is the other half, and
-it arrived immediately: three full runs were destroyed in one session, and
-**not one of them failed for a reason inside situ**. Each time an unrelated
-process on the same machine exhausted a filesystem the sweep happened to be
-building in, and each time the shards died mid-cell.
-
-situ was checked and cleared twice, by counting: a full sweep leaves exactly
-one `situ-sweep-*` directory per shard at a time, because each cell's tree
-is removed in a `finally`. At the worst moment there was one such directory
-totalling 128K. The tool does not leak. It simply has no claim on the space
-it needs, and no notice when the space goes.
-
-**The whole failure is a resource the tool depends on and does not own.**
-Every fold since 26.54 rests on a sweep, the sweep needs an hour of a
-filesystem staying available, and it shares that filesystem with everything
-else running. That is a dependency the record never stated, so it was never
-a thing anyone could decide about.
-
-**The remedy needed no code**, which is the part worth writing down.
-`tempfile.mkdtemp` resolves through `tempfile.gettempdir()`, which honours
-`TMPDIR`, so `TMPDIR=$HOME/.cache/situ-sweep python3 tool/sweep.py --all`
-already builds somewhere private and off the shared tmpfs. The knob was
-always there; what was missing was knowing the instrument had a shared,
-volatile floor at all. That is 26.45's shape a second time in two folds --
-the capability present, the question unasked -- and it is why this is
-recorded rather than fixed with a patch.
-
-**A diagnostic worth keeping, because the first reading was wrong.** `du`
-reported 165G on a filesystem `df` called 859G full, and the 694G gap was
-not an accounting quirk: it was two processes holding deleted files open,
-530.2G and 163.8G. **When `du` and `df` disagree, the difference is held by
-a process rather than by the filesystem** -- `lsof +L1` names it, and the
-space returns the moment the holder dies. The wrong inference was drawn
-first, out loud, that a reboot would not help; the opposite was true, since
-process-held deletions are exactly what a reboot reclaims. Check before
-concluding which of the two is lying.
-
-**Afterwards, check the repository rather than the reasoning.** Work was
-committed minutes after a filesystem hit zero, and the question of whether
-anything had been written *during* that window has an evidence answer and a
-reconstruction answer. The reconstruction was right -- the one write
-attempted at zero bytes failed loudly with `ENOSPC`, which is what prompted
-looking at `df` at all -- and it was still the wrong thing to offer, because
-a commit written into a full filesystem can be corrupt in ways a plausible
-timeline cannot rule out. `git fsck` exits zero, and the fold is confirmed
-present in `git show HEAD:project.md` rather than in the working copy,
-which is the only version that survives a reboot. Dangling commits in the
-output were old `git stash` entries, dated days earlier, and not damage.
-
-**Status:** no situ change. Recorded as an operating condition of the
-sweep, with `TMPDIR` named as the way to meet it.
+Moved to `doc/decision/26.77-the-instrument-builds-somewhere-it-does-not-own.md`.
 
 ### 26.78 The conventions the log did not follow, and the gate that agreed
 
-The history was reformatted to 25.1 in one pass, 313 commits to 311. The
-reformat is not what is worth an entry; what measuring first turned up is.
-
-**The written convention and the enforced convention were different sizes.**
-`tool/hooks/commit-msg` checks two things -- generator attribution, and a
-subject over 75 columns -- and the standing rule has at least six. So the
-four nobody mechanised drifted for the entire history without one complaint
-from the tooling: 237 of 313 subjects carried no subsystem at all, 2330 body
-lines were wrapped at 80 rather than 75, and the hook accepted 301 of the 313
-messages. Nothing was broken. The mechanised part of the rule was simply a
-small part of it, and a green hook was read for years as the message being
-right.
-
-**The documented-path check reads five paths in a ten-thousand-line
-document.** `make style` reports "project.md says nothing twice and names no
-missing file" while section 23 declared `tool/lint_conventions.py`, renamed
-to `style_gate.py` back in 26.68 and gone from the tree since. The gate is
-not wrong: `doc_paths` deliberately reads backticked paths in *table rows*,
-which is exactly what took its false-positive rate to zero across every
-project that carries it. But section 23 is a fenced indentation listing, so
-**the one place this document declares the whole tree is the one place the
-check cannot look.** Of its 74 checkable entries 73 were accurate, one named
-a deleted file, and `tool/style_gate.py` and `tool/hooks/commit-msg` were
-missing from it altogether -- a listing that had drifted precisely where
-nothing read it.
-
-Both are the same shape as 26.76, one level up. There the sweep passed while
-examining nothing; here the gates pass while examining a fraction, and in
-both cases the number that would have said so was available and never
-asserted.
-
-**Status:** section 23, section 25 and the README corrected; 25.1 added.
-Section 23 is left as a listing rather than converted to tables to satisfy
-the gate -- that would be bending the document to fit the checker, which is
-the fault the checker's own narrowness was written to avoid. The gate is
-shared tooling, copied verbatim from one source into every project, so
-widening it past table rows is a cross-project change and is raised rather
-than made here.
+Moved to `doc/decision/26.78-the-conventions-the-log-did-not-follow-and-the-gate-that-agreed.md`.
 
 ### 26.79 The image, and what packing a schema into one found
 
@@ -6320,39 +5898,7 @@ Moved to `doc/decision/26.87-the-archive-nothing-built-and-the-compiler-nobody-h
 
 ### 26.88 A nested sub-view, a tag, and the extent that was zero
 
-`nested` and `tag` take the walk to 504 members across 28 of the 32 schemas.
-Neither is a hard probe -- `ok= extent=` and `present=` are the two simplest
-answers in the differ -- and both were wrong for reasons about what a
-*question* is rather than about bytes.
-
-**A run of records is not a nested member.** sqlite's `cells` is an `indexed`
-region of `table_leaf_cell`, so it has a struct type and is asked `count=`.
-Answering `ok= extent=` is a line about a different question, and the
-comparison only caught it because the names matched. `kind` tells them apart.
-
-**A tag whose offset nobody can compute is absent.** keystore's tag sits
-after a sealed region whose extent is the codec's, so C's pointer accessor
-hands back NULL and the answer is `present=0`. A walker that summed its way
-to an offset anyway said `present=1` about bytes nothing can find, which is
-worse than not answering.
-
-**A `while` run's extent was still the minimum.** `size_bits` had learned
-varints, delimiters and variants and not this, so a struct whose only member
-is a `while` run measured one element where it held two -- dnsname's `qname`
-sub-view, off by a label. The run's extent is however far the walk got, which
-the walk already computed and threw away.
-
-**And zero is an answer.** A `name` whose first label does not fit holds no
-labels and is zero bytes long; C makes a zero-length sub-view of it and says
-`ok=1 extent=0`. `struct_extent` refused instead, on a guard that belonged
-somewhere else entirely -- the run walk, where a zero-extent element would
-mean never advancing. The guard was right and its position was wrong, which
-is a distinction worth keeping: **a check that stops an infinite loop is not
-a check that a value is legal.**
-
-**Status:** 332 scalars, 67 runs, 42 arms, 3 gates with 2 interiors, 19
-delimited, 4 varints, 5 `while` runs, 23 nested sub-views and 7 tags. Every
-step of `make check` green, each run separately.
+Moved to `doc/decision/26.88-a-nested-sub-view-a-tag-and-the-extent-that-was-zero.md`.
 
 ### 26.89 `validate`, which cannot be rendered by halves
 
@@ -6372,85 +5918,7 @@ Moved to `doc/decision/26.92-the-last-twenty-one-and-what-they-were-really-defer
 
 ### 26.93 The file nothing referenced, except the tests
 
-`packaging/situc.control` and `packaging/libsitu-dev.control` were the
-hand-rolled dpkg-deb build's inputs. Debhelper replaced that build the day
-after it was written and the two files sat unread for months, so removing
-them was right. The removal commit says "nothing has referenced either
-since", and the search behind that sentence did not include `test/`, where
-`test_packaging.py` had been reading both since they were written. Eight
-tests started failing with `FileNotFoundError`, and master was red until
-somebody looked.
-
-**A test is a reader like any other.** That is the whole finding, and it is
-worth writing down because the search that establishes a file is dead is
-exactly the search that feels complete when it has covered the build. The
-build is where a *product* dependency lives; a test dependency lives
-somewhere the build never looks, and it is the one that turns red.
-
-The tests read `debian/` now, which is where the packaging actually is, and
-in moving them three of the six claims changed shape rather than location:
-
-- **The version is not substituted any more, it is in `debian/changelog`,**
-  so what the test holds is the changelog against `situc.__version__`.
-  `make version-check` asks the same question and *skips* where
-  `dpkg-parsechangelog` is absent -- a check reporting success over nothing,
-  on precisely the machines least likely to have the tool. This one parses
-  the line itself and cannot skip.
-- **`Depends` is a list now**, because debhelper adds `${misc:Depends}` to
-  every binary package. "No comma" was the old way of saying "nothing but
-  python3" and stopped meaning that; the test splits the field and ignores
-  the substitution instead, which says what was meant in the first place.
-- **`Architecture: any`, not `@ARCH@`.** The old build substituted the
-  string; debhelper resolves it. The claim -- compiler architecture-
-  independent, runtime not -- is unchanged and is the reason the packages
-  are split at all.
-
-**One claim was added rather than moved.** `Build-Depends` carries a Python
-floor too, and nothing checked it against `pyproject.toml` while the two
-lived in different files. A source package that builds under an interpreter
-older than the code's floor fails inside `dh_auto_build`, a long way from
-anything that names a version.
-
-**And the same rule's own gate, which skipped.** `make version-check`
-asked `dpkg-parsechangelog` and printed "skipped" when it was absent --
-success reported over nothing, on exactly the machine least likely to have
-`dpkg-dev` installed. The topmost changelog entry *is* the current version
-by the format's own definition, so `sed` reads it and there is no machine
-where the rule has to give up. `dpkg-parsechangelog` is still asked where it
-exists and the two are compared with each other rather than one being
-preferred, which is what keeps the fallback honest: a path that only ever
-runs where nothing can check it is a path that is wrong the first time it
-matters.
-
-Six invocations to establish that, and one of them is worth naming. With
-`dpkg-dev` unreachable -- a scratch `PATH` holding symlinks to `cat`, `sed`,
-`sh` and `make` and nothing else -- the rule reads line 1 and passes. With
-`VERSION` bumped it refuses either way. With line 1 malformed it refuses
-*closed*, saying the changelog names no version rather than falling through
-to a silent success, and a double space before the parenthesis is enough to
-trigger that -- `dpkg-parsechangelog` calls the same line badly formatted,
-so both readers agree it is broken.
-
-**The disagreement branch is a guard rather than a tested path, and is
-recorded as such.** No changelog both readers accept can make them differ:
-where the line is well-formed they read the same token, and where it is not
-`dpkg-parsechangelog` returns nothing and the rule fails on the missing
-version instead. It costs one comparison, it runs on every machine with
-`dpkg-dev`, and it is there for the day the fallback is edited.
-
-`version-check` guards `deb` and is not part of `make check`, so none of
-this runs in CI -- which is why the invariant is *also* a test, reading the
-changelog with no tools at all. Two routes to one fact, deliberately: the
-rule stops a bad package being built, and the test stops the disagreement
-being committed.
-
-**Six mutations, six caught.** Turning `situc` into `Architecture: any`,
-giving `libsitu-dev` a dependency on `situc`, dropping either floor to 3.9,
-disagreeing the changelog with `VERSION`, and deleting `Maintainer` -- each
-was applied to the real files and each failed the suite, and the files were
-restored and re-run to confirm the tree came back. A test that reads a file
-in a directory that has just been reorganised is one to check has not
-quietly stopped reading anything.
+Moved to `doc/decision/26.93-the-file-nothing-referenced-except-the-tests.md`.
 
 ### 26.94 The attribute that was parsed, accepted and never checked
 
@@ -6486,89 +5954,11 @@ Moved to `doc/decision/26.101-the-divergence-that-was-recorded-with-the-wrong-si
 
 ### 26.102 The table nobody cleared, and the stack that was zero
 
-Reading `situ_walk_open` on the way to the delimiter scan found the varint
-commit's other half. It added three fields to `situ_walk_image` and a branch
-to the section loop that fills them, and did not add them to the list of
-fields cleared before the loop runs -- which was ten lines of `= NULL` and
-`= 0u`, one per table. **A section the image does not carry leaves its entry
-exactly as the caller's stack left it**, so an image with no varints sent
-`varint_rules` binary-searching a pointer and a count nobody wrote.
-
-Every test passed, and every test passed for the reason that makes this the
-worst shape of defect: the callers declare `situ_walk_image` on the stack at
-the top of `main`, where it is zero. `memset(&image, 0xAA, sizeof image)`
-before the open is an immediate segfault under a sanitizer, in `u32_at`,
-reached from `situ_walk_read` on udp -- a schema with no varint in it.
-
-Two things follow, and the second is the one worth keeping.
-
-**The fix is `*out = (situ_walk_image){0}`, not another line in the list.**
-A list of what to clear is a list that goes stale the next time a table
-arrives, and this is invariant 39 in its smallest form: the hand-maintained
-enumeration was wrong within one commit of being right. Clearing the whole
-struct cannot be.
-
-**The differential cannot see this class at all.** Two walkers are compared
-on what they answer, and this one answered correctly whenever it did not
-crash -- there is no divergence to find, because uninitialised memory is not
-a second opinion. What found it was reading the function, and what makes it
-a regression test is the poison: every C case in the file now opens against
-a struct filled with `0xAA`, so "the stack was zero" stops being available
-as an accident. A test that supplies a *clean* environment tests the
-environment as much as the code.
+Moved to `doc/decision/26.102-the-table-nobody-cleared-and-the-stack-that-was-zero.md`.
 
 ### 26.103 The delimiter scan, and the value a run does not have
 
-0035 predicted delimited members as the next place `read_scalar` would read
-bits where the walk's public answer wants values, and named the Python
-walker as the one to watch. It was right about the construct and wrong about
-the ownership again, in the same way and for a different reason each time.
-
-**Both walkers answered a delimited member as a number.** Python read the
-span, so `"GET "` came back as 1195725856. The C walker had no scan at all,
-so it took the record's `size_bits` -- which for a delimited member is its
-*delimiter's* width, the number invariant 25 names as the one that is not
-the answer -- and gave 0x47, then placed the `u16` after it at offset 1
-where it belongs at 4. Two implementations, two different wrong numbers, one
-question neither was asking: does this construct have a value at all.
-
-It does not, and both refuse it now. Two of the three constructs in this
-pattern are settled by refusing and one by decoding, which is the shape of
-the question rather than an inconsistency: a run and a delimited member have
-no single value, a varint has one.
-
-**The scan is what the C walker actually gained**: quoting, escapes, the
-`max` cap, and the truncated case where the delimiter never arrives and the
-member reaches as far as it got rather than becoming unplaceable. Two
-binary searches over two side tables became one, which is the second
-consumer arriving and the answer being private to the first -- `relation.py`
-and `layers.py` one level down.
-
-**The differential compares widths now, not only values.** A walker can
-agree about every value in a struct and still disagree about the struct: the
-extent is what places everything after it, and the last member's extent is
-not observable through anything's offset. The scan is exactly the answer
-that shape of check was missing -- before this, "they agree" meant "they
-agree about the numbers each was willing to produce".
-
-**The owned decode is where the refusal would have cost something.** Rung 2
-is whole-or-nothing, so `read_scalar` refusing means every schema with a
-delimited member fails to produce an owned value -- the editor's document,
-for HTTP and SMTP and every text protocol. It routes a delimited member to
-its content instead, which is what a backend's `_ptr` and `_len` hand back:
-content and not span, the two differing by exactly the delimiter, because
-the span is what places the member after it and the value is not. `[trim]`
-now has one derivation serving the probe's length and the owned value's
-bytes, rather than a second copy waiting to disagree.
-
-**A bounds hole found on the way through.** `fits` checks that a table's
-`count * stride` lies inside the image, which is the table -- and says
-nothing about a row narrower than the fields this build reads out of one. A
-hostile image declaring a four-byte varint stride would have had
-`situ_walk_varint` read past the last row. Each table this build understands
-now states how far into a row it reads, checked when the section is bound. A
-stride *wider* than expected stays fine, because that is how the format
-grows.
+Moved to `doc/decision/26.103-the-delimiter-scan-and-the-value-a-run-does-not-have.md`.
 
 ### 26.104 The constraint cpio's own comment defends, checked by nobody
 
@@ -6580,62 +5970,11 @@ Moved to `doc/decision/26.105-the-other-form-and-the-schema-that-had-to-be-writt
 
 ### 26.106 The last construct, and the width its values could not show
 
-Text numbers were the fourth and last construct in the pattern 0035 named
-when `read_scalar` first answered a byte run as an integer, and the C walker
-parses both forms now. The pattern's four instances settle two ways, and the
-split is the question rather than an inconsistency: **a byte run and a
-delimited member have no single value and are refused; a varint and a text
-number have one and are decoded.**
-
-**The refusal this replaces was true for a false reason.** `decimal u32 n[4]`
-is one number in four digits, and the C walker declined it through the branch
-that refuses a run -- because `array_count` is 4. The caller got the answer
-it should have got, from a premise about the construct that is wrong, which
-is invariant 18's other half: a real gap has to be attributed to whatever
-actually causes it. `traverse.classify` puts the text-number branch before
-the array branch for exactly this reason and has since three backends read
-the bracket as a count; the walker now does the same.
-
-**Writing it found a width bug that no value differential could show.**
-`size_code` is set on a fixed-width text number, so C's sized-run branch read
-`[4]` as four 32-bit elements and answered *sixteen bytes* for a four-byte
-member -- the same arithmetic that once put `edges`' `text_driver` tail
-twelve bytes past every backend, in the Python walker, and the reason
-`walk.py` carries that branch with a comment.
-
-Why it hid is the part worth keeping. **The layout solver hands a member
-after a fixed-width text number a constant offset**, because the width is
-known at compile time -- so `situ_walk_offset_bits` returns that constant and
-never sums the wrong width. The struct was measured four times too long and
-every value in it still read correctly. Only the extent was wrong, and only
-a check that asks for extents could see it: the width differential added one
-commit earlier, for a reason that turned out to be this one.
-
-One divergence is left and is written down rather than waiting to be found:
-the C parse accumulates into `uint64_t` and refuses on overflow, Python's has
-arbitrary precision and does not. cpio's widest text number is eight digits,
-so the two agree everywhere the tree can ask.
+Moved to `doc/decision/26.106-the-last-construct-and-the-width-its-values-could-not-show.md`.
 
 ### 26.107 The member that says where it is
 
-`at expr` is the fifth row of 0035's table and the smallest: a member that
-joins no offset chain, because it states its own offset. The Python walk has
-evaluated one since it had a VM; the C walker refused it by name, which was
-honest and is now unnecessary -- the program is the answer, the VM was
-already there, and the summing loop had known to skip a located member when
-measuring what comes before it since it was written.
-
-**The test uses two messages, and that is the whole of its design.** A
-located member whose expression happens to land where the chain would have
-put it proves nothing, because both readings agree there. `where = 4` places
-the `u16` at 4; `where = 2` places it at 2, overlapping the member before
-it. That overlap is deliberate: `at` is what a format uses when a header
-declares an offset, and nothing says the regions it names are disjoint --
-bmp's `pixels at file.pixel_offset` is the case the tree already has.
-
-It is the same lesson as 26.101's `96 01`, in the smaller form it takes when
-you are writing the check rather than reading somebody's conclusion: choose
-the input on which the readings differ.
+Moved to `doc/decision/26.107-the-member-that-says-where-it-is.md`.
 
 ### 26.108 The run a device could measure and not read
 
@@ -6643,117 +5982,15 @@ Moved to `doc/decision/26.108-the-run-a-device-could-measure-and-not-read.md`.
 
 ### 26.109 The loop in the arena, and the bound that had a public entrance
 
-A `while` run's extent is the one thing in the C walker that is a loop, and
-0026's argument for shipping an evaluator to a device does not cover it: the
-VM is safe because section 10's language is total, and a run walk is not an
-expression. So its termination is argued separately and written in the
-source, four ways, two of which do not depend on the message at all -- the
-cap, and the frame, the latter holding because every iteration advances by at
-least one byte. An adversary choosing every byte cannot make it run longer
-than the buffer.
-
-**Recursion needed a decision rather than a guard.** A run's extent is the
-sum of its elements', and an element is a struct that may hold another run:
-mutual recursion through `size_bits`, the walk and `struct_extent`, bounded
-in principle by the schema's nesting and in practice by nothing, since the
-schema arrives in an image at run time. On a device the stack is the arena's
-neighbour, so the depth is a constant -- eight, against a corpus whose
-deepest nesting is three.
-
-**The first version of that bound had a public entrance.** The depth was
-threaded through the measurement and *not* through `situ_walk_offset_bits`,
-`situ_walk_read` or the evaluator's load callback -- each of which starts at
-zero, and each of which the measurement calls. An expression names a field;
-reading that field sums the members before it; one of those may be a run.
-Two structs referring to each other through that path would have recursed
-freely past a limit that looked enforced. A bound with a public entry point
-that restarts the count is not a bound, and this one read as complete.
-
-**Reaching the limit is a refusal, not a short answer.** The first version
-absorbed it into "the run ends here", which is the mistake this component
-exists not to make: an extent that stops early reads exactly like one that is
-right. A ten-deep schema now answers `refused` for the run and nothing else,
-where before it answered a length. `SITU_WALK_UNSUPPORTED` propagates; a
-frame that runs out still counts the elements that fit, those being different
-questions.
-
-**And the harness was measuring the wrong struct.** Every C differential
-walked struct 0, which is whichever the packer put first -- `beat`, not
-`beats`, so the container holding the run was never the thing under test. The
-drivers take the struct as an argument now. A check that always asks about
-the first of something is one nobody has pointed at anything.
+Moved to `doc/decision/26.109-the-loop-in-the-arena-and-the-bound-that-had-a-public-entrance.md`.
 
 ### 26.110 The variant, and the fifth thing that is not a number
 
-A variant's extent is a switch -- read the discriminant, take the arm it
-names, answer that arm's size -- and the C walker measures one now. Not the
-minimum, which made a dnsname label one byte long and walked thirty-nine of
-them through a thirty-eight byte buffer; not the worst case; and nought
-bytes rather than a refusal where the discriminant matches nothing, because
-that is a malformed message and saying so is `validate`'s job.
-
-The arms table is the first in the image that is not one row per placement:
-a variant owns several contiguous rows, so the search lands on one and walks
-back to the first.
-
-**The differential found the pattern's fifth instance, and this time the
-Python walker had it.** The two agreed about every extent on the first run --
-two bytes for the small arm, eight for the large, nought for an unmatched
-discriminant, with `tail` correctly placed in each -- and disagreed about the
-*value*: `read_scalar` read the selected arm's bytes as an integer, so a
-two-byte arm came back as 43707 and an eight-byte one as 4822678189205111.
-
-A variant is a shape the discriminant chooses, not a number. The arm is what
-holds a value and has its own placement to be read through. That makes the
-tally five constructs and the split three-to-two: a byte run, a delimited
-member and a variant have no single value; a varint and a text number have
-one.
-
-**The schema omits `[equalize]` on purpose**, and the reason generalises.
-Padding every arm to the largest is what buys back the offset axis for
-everything after a variant -- and it would also hide a walk that picked the
-wrong arm, because every answer would then be right by construction. A test
-whose construct is uniform cannot tell a correct selection from any other.
+Moved to `doc/decision/26.110-the-variant-and-the-fifth-thing-that-is-not-a-number.md`.
 
 ### 26.111 `validate` in C, and the difference between two refusals
 
-The walker could say where every member of a message is and what it holds,
-and not whether the message was a legal instance of the schema. Anything
-asking that still needed Python -- which is the dependency 0026 exists to
-remove, so this is the row that changes what the C walker *is* rather than
-what it can reach.
-
-**Whole or nothing had to be built rather than ported.** Every other probe
-renders per member and skips what it cannot do, each being a separate line.
-`validate` is one verdict about a whole struct, so a partial one reports OK
-for the rules it happened to be given -- the one wrong answer that cannot be
-told from a right one. Two refusals of the *struct* follow: the image's
-per-struct bit saying it carries every check, and any kind of check this
-build does not render.
-
-**The return value and the verdict are different questions**, and keeping
-them apart is the whole of the API's shape here. The verdict is about the
-message: OK, BOUNDS, CONSTRAINT. The return is about the walker: can it
-answer at all. Folding them together is exactly how "this build cannot say"
-becomes "well-formed", and it is the same distinction 26.108 found in the
-signed flag -- a caller cannot ask what the callee does not say.
-
-Two things the differential settled while it was being written. A **nested
-struct** is `validate` called through with the inner verdict returned as it
-stands rather than folded into CONSTRAINT; the first version refused nested
-structs wholesale, which would have left most real schemas unanswerable for
-a reason that was mine rather than the format's. And **the frame check
-belongs at the top** -- section 20.2's check, which the Python walk does
-when it acquires a view. Without it the two agreed about every well-formed
-message and disagreed about short ones, C answering for the members that
-happened to fit. That the disagreement appeared only on malformed input is
-the point: the shapes a validator exists for are the ones a happy-path test
-never reaches.
-
-Sixteen cases across four shapes -- constraints, enum membership, a nested
-struct's own rules, a text number's range -- each with a well-formed
-message, a rule broken, and a frame too short. `[since]` members, the span
-checks and gated regions are refused by name and are what remains.
+Moved to `doc/decision/26.111-validate-in-c-and-the-difference-between-two-refusals.md`.
 
 ### 26.112 The span checks, and `remaining` measured from the wrong end
 
@@ -6765,55 +6002,7 @@ Moved to `doc/decision/26.113-the-walker-folded.md`.
 
 ### 26.114 The ladder nobody had run
 
-The six rungs were built, in four backends, and **no schema in the repository
-declared a relation.** Rungs 3 to 6 existed only in the fixtures inside
-`test/unit/test_relations.py`, which put them outside every mechanism section
-22 calls the highest-value coverage: the example sweep, the generated cmocka
-suites, the fuzz harnesses and the four-backend differential had none of them
-ever been pointed at one. `example/dns` carries the exchange now -- RFC 1035
-makes ID and OPCODE the match and asks for a retry interval of two to five
-seconds, so none of it is invented -- and the capability map gained
-`layers: floor=view reach=drive`, which makes a schema's reach up the ladder a
-reviewable line rather than a property nobody would notice changing.
-
-**Including a header is what compiles it.** `<name>_frame.h` had never been
-compiled by anything, and the moment the checks suite included it, it did not
-compile: `framed_structs` returned every struct that was not a register, while
-`traverse.frameable` answers whether a whole one can be recognised in a prefix
-of a stream. Four structs in `test/schema/edges.situ` got a reader built out
-of a `_required` only a frameable struct has, and a variable-extent view was
-passed three arguments where it takes four. Both had shipped. This is the third
-time this repository has paid for "generating is not compiling", after the
-`edges.situ` C++ gap and the fuzz harness that named a macro only fixed structs
-have.
-
-**A check that hangs is worse than one that fails.** The reassembly check
-looped while the reader kept answering `SITU_OK`, which against a reader that
-always does is not a loop that ends. It was found by breaking the reader rather
-than by reading the code: the mutation that should have failed in a second ran
-until it was killed. CI reports that as a timeout with no name on it. The loop
-is bounded by the answer now -- three messages cannot arrive from a
-two-message stream, so seeing a third is the failure.
-
-**Five probes proved nothing on their first attempt**, and every one returned a
-clean result that read like evidence. A venv built to stand in for a machine
-without the oracle libraries also lacked pytest, so it reported 419 errors
-rather than the ten under test. A regex meant to break a C++ predicate named a
-parameter `reply` where the schema calls it `response`. Two harnesses picked
-the first `main.rs` or `main.cpp` in a file rather than the one that mentions
-the thing under test, and ran a program that could not have failed. One import
-named `situ` where the package is `situc`. Each was caught only because a
-specific failure was expected and did not arrive -- which is the argument for
-predicting the failure before running the probe, rather than reading whatever
-comes back as confirmation. The mutation harnesses select by content and assert
-that the mutation landed.
-
-**What is not covered, and why it is not a gap.** Rung 6 has no schema-derived
-suite: `drive` owns I/O, and a cmocka suite built out of buffers cannot execute
-it. It is driven from `test/unit/test_relations.py` in three backends instead,
-each given its clock as a parameter. The generated build stops at `converse`
-and says so, because a boundary that is not written down is read as an
-oversight by whoever finds it next.
+Moved to `doc/decision/26.114-the-ladder-nobody-had-run.md`.
 
 ### 26.115 One keyword doing two jobs, and the cast that lost a comparison
 
@@ -6841,190 +6030,15 @@ Moved to `doc/decision/26.120-the-standard-that-was-requested-and-never-enforced
 
 ### 26.121 The floor the generated code was never held to
 
-Finishing what 26.119 started, and the sweep it belongs to. Four backends
-declare a language version in section 22 -- C11, C++17, Python 3.11+, Rust
-2021 -- and by the end of 26.120 two of them were enforced and one, Rust, had
-been all along: every `rustc` invocation in the tree passes
-`--edition 2021`. Python was the one left, and it was unenforced twice over.
-
-**The shipped modules nothing held to the floor.** Both floor checks read
-`bin/situc`, `situc/**` and `tool/*`. That leaves out `runtime/python`,
-`walker` and `editor` -- and the Makefile records `mypy` having exactly those
-three omissions and fixing them one at a time, in a comment that is worth
-reading in full because it names the shape:
-
-    The shipped Python runtime is checked too, and was not: `mypy situc
-    tools tests` reads the compiler and its suite, and `runtime/python` is
-    neither -- so the module every generated module imports was the one
-    nothing checked.
-
-`walker` was added "for the same reason", and `editor` "named on arrival
-rather than after the same lesson a third time". The floor check never got
-that widening, so the module every generated module imports was held to no
-declared version at all. That is invariant 151.
-
-**And the generated code, which is the claim's actual subject.** "Python
-(3.11+)" is a promise about *output* -- the modules a user runs -- and
-nothing asked them anything. Thirty-three modules and some nineteen thousand
-lines, verified only by being imported on whatever interpreter is present,
-which here is 3.13. The backend could emit 3.12 grammar and every test in the
-repository would pass.
-
-**Both measure clean, and that is the argument for doing it now.** Ninety-one
-shipped modules and thirty-three generated ones, zero findings between them.
-A check added while a tree is clean costs one commit; the same check added
-after a violation lands costs the violation as well, and 26.119's incident
-ran six phases.
-
-**One list, in one place.** `test/unit/python_floor.py` holds the floor, the
-module list and the detector, because three checks now ask the same question
-and the way this goes wrong is that they stop agreeing -- which is precisely
-what happened between `mypy` and the floor check. Same rule as
-`every_schema.py` one directory over, and the same reason.
-
-**Two instruments, because each is blind where the other sees.**
-`ast.parse(feature_version=...)` catches grammar added since the floor and
-misses everything tokenizer-level; the PEP 701 scan catches exactly the
-tokenizer-level f-string changes and nothing else. `below_floor` runs both,
-and both now have controls: PEP 695 type parameters must be caught, `match`
-must not, since it arrived in 3.10 and is *below* the floor. A check keyed on
-"looks modern" fails that one.
-
-**Mutation-tested at both ends rather than trusted.** A same-quote f-string
-appended to `runtime/python/situ_runtime.py` fails the widened check by file
-and line -- which is the proof the three added trees are read rather than
-merely listed. The same construct appended to what the Python backend emits
-fails all thirty-three generated modules.
+Moved to `doc/decision/26.121-the-floor-the-generated-code-was-never-held-to.md`.
 
 ### 26.122 The tag whose width meant nothing
 
-Decision 0038, accepted and built. `example/packet` declared
-`codec aes_gcm_128 { authenticated; length_preserving; ... }` and `tag u8[16]`
-beside it, and nothing related the sixteen to the codec. `tag u8[1]` compiled,
-and so did `tag u8[64]`.
-
-**The framing in 14.8 was not quite right, and the difference decided the
-design.** That section says the codec vocabulary has nothing about size.
-`expansion` carries a number -- it says how a region's own extent changes under
-the transform. Where a codec appends its overhead, `expansion = +16` *is* the
-tag; where the tag is a separate field, as in `packet`, the codec is
-length-preserving, expansion is zero, and it says nothing about the sixteen
-bytes beside it. So an inference from expansion would have been right for one
-spelling and silently wrong for the other, which is why the sizes are declared
-rather than derived.
-
-`std/codecs.situ` had a comment saying exactly this and drawing the opposite
-conclusion: "the tag is a separate field in the schema, which is why these
-signatures do not carry its size". The observation was right and the "which is
-why" did not follow.
-
-**Truncation is the reason this is a check rather than a ban.** OSCORE uses an
-eight-byte tag on constrained links, so a rule refusing narrow tags would
-refuse a real protocol rather than a mistake. `[truncated]` is the author
-saying the loss is intended, and it excuses a narrower tag only: a tag *wider*
-than its codec produces is refused with no exemption, since no spelling gets
-more authentication out of a primitive than it produces. A nonce mismatch is
-refused either way -- a nonce is an input rather than a result, so a narrow one
-is not a truncation of anything, it is a different nonce.
-
-**What was deliberately left out is the part worth recording.** `key_bits` is
-not added. No construct in this language names a key, so the setting would have
-had nothing in any schema to check against -- which is precisely the shape
-`[nonce]`, `[trusted]` and `[covers]` had, and which 26.60 and 26.117 spent two
-passes removing. Adding a fourth would have re-created the defect those passes
-existed to delete. The width goes in when the construct that gives it something
-to check does.
-
-That constraint also shaped the rest: both settings are optional, because an
-extern codec's implementation belongs to somebody else and an author who does
-not know its tag width must still be able to declare the codec. Silence claims
-nothing, which is the rule the codec accumulator already stated for a
-declaration the compiler cannot verify.
-
-**Units are in the names.** `tag_bytes`, not `tag`. `expansion = +16` carries
-no unit and gets away with it because expansion is only ever bytes; a tag and a
-nonce are bytes while a key is conventionally quoted in bits, so the moment a
-third setting arrives two units are in play. A unit in the name cannot drift
-from one in a comment.
-
-**Every committed schema already agreed, which is what the check is worth.**
-All 33 parse unchanged with the widths declared: the four authenticated codecs
--- `aes_gcm_128` and `chacha20_poly1305` in `std/codecs.situ`, `aes_gcm_256` in
-`example/keystore`, and `packet`'s own -- carry a 16-byte tag and a 12-byte
-nonce, from NIST SP 800-38D and RFC 8439 rather than from this compiler. The
-check confirms what the schemas said rather than correcting them, and narrowing
-`packet`'s tag to eight bytes now fails by file and line.
-
-**Attributes: forty-nine now**, with `[truncated]` placed on a tag or checksum
-and nowhere else, named in the table on arrival rather than after a sweep finds
-it unplaced. Thirty-two are placed by the table, seven by checks of their own,
-four are refused as unimplemented, and six remain unplaced.
-
-**What 0038 does not settle**, and says so: key selection -- DTLS's epoch,
-QUIC's key-phase bit, WireGuard's receiver index -- and conversation keys wider
-than 64 bits. Both are named in 14.8, both are unblocked by this, and neither
-follows from it. Each needs its own record.
+Moved to `doc/decision/26.122-the-tag-whose-width-meant-nothing.md`.
 
 ### 26.123 The attribute that was parsed for eleven phases and read by none
 
-Decision 0039, accepted and built. `[size = N]` had been in
-`parser.ATTRIBUTE_NAMES` since the layout chapter and read by nothing;
-26.60 found it because the *advisor* was recommending it, refused it with
-`UNIMPLEMENTED_ATTRS`, and left the construct undefined. That was the honest
-holding position and not an answer, and it stayed the answer for two more
-sessions.
-
-**What the language could not say.** A fixed-footprint buffer whose meaningful
-content is a prefix of it. `u8 body[used]` keeps the relationship and costs
-every member after it its absolute offset; `u8 body[64]` keeps the offsets and
-forgets `used` entirely, so nothing checks `used <= 64` and the schema has
-stopped describing the format it started with. The author had to pick which
-half to throw away, and nothing recorded which.
-
-**The implementation was smaller than the design suggested, for one reason.**
-`data_sized` -- the shared decision about whether a member's extent comes from
-the data -- asks about `array_count` and `sized_by`, and never about the
-extent interval. So pinning the *footprint* while leaving those alone meant
-every accessor in four backends kept working unchanged: the length machinery
-was already reading the right thing. The layout gains `pinned_bits`, the
-extent becomes `Fixed(N)`, and members after it get their offsets back.
-
-**The differential earned its cost twice in one sitting.** Adding a pinned
-struct to `edges.situ` -- the file that exists to hold constructs no worked
-example has -- broke two tests immediately, and both were real:
-
-- **The four backends disagreed about a 28-byte buffer.** `validate` had the
-  pin check and the *accessor* did not, so a declared length of 127 inside a
-  16-byte pin came back as whatever each backend's own clamp allowed: 18 from
-  C, 91 from the walker. Both were wrong; the answer is 16. The clamp went
-  into `_length_expression` in each backend rather than at the accessor
-  sites, because there are four such sites per backend and the site that
-  matters is the one that gets missed.
-- **`validate` then needed the raw value back.** Clamping inside the shared
-  expression made the pin check read `min(declared, 16) > 16`, which is never
-  true -- a check that cannot fail, one commit after 26.118 spent a section on
-  exactly that. `_raw_length_expression` is the unclamped one and the check
-  asks for it by name.
-
-**And the walker cost an invariant.** The Python walker needed the same clamp,
-and `size_max_bits` already held the pin -- so clamping every length to its
-maximum looked like the same rule stated more generally. It broke `arp` and
-`ble` at once, because the compiled backends clamp to what is left in the view
-rather than to a declared bound. A `PINNED` flag in the image tells a pin from
-an ordinary maximum, and it uses a spare bit rather than a new field, so the
-format version did not move. That is invariant 152.
-
-The C walker got the same clamp without a test demanding it. It did not parse
-`size_max_bits` at all, and nothing exercised the pinned struct through it
-yet -- which is exactly the shape of invariant 145, a lesson recorded in one
-implementation being invisible to the next. Written in rather than waited for.
-
-**What the construct now costs a schema that uses it.** `edges.situ` carries
-one: `u8 body[used] [size = 16]` with `used [max = 16]`, and
-`require absolute_static(pinned.trailer)` holds -- which it could not have
-before. `validate` refuses a `used` above sixteen in all four backends and
-both walkers, and the accessor hands back at most sixteen bytes whatever the
-message claims.
+Moved to `doc/decision/26.123-the-attribute-that-was-parsed-for-eleven-phases-and-read-by-none.md`.
 
 ### 26.124 An argument parser, as an evaluation of the text machinery
 
@@ -7036,42 +6050,7 @@ Moved to `doc/decision/26.125-the-bound-that-was-stated-once-and-readable-nowher
 
 ### 26.126 The two defects the argv exercise left behind
 
-Both were found by 26.124 and both were the silently-nothing shape; neither
-was the use case's problem. Fixed as refusals rather than features, which is
-the smaller honest move in each case, and each refusal names the construct
-that would implement it properly if a schema ever needs one.
-
-**A string in a run condition was accepted, and the C did not compile.**
-`while (text != "--")` passed the front end; the C backend emitted the
-comparison against the string literal's address, through a `_get` accessor a
-delimited member does not have. gcc's own diagnostic named the function the
-condition language never wired in -- "did you mean `situ_arg_text_eq`?" --
-and no committed schema compares text in a condition, so the per-schema
-compile gate could never have fired: invariant 92's blind spot, exactly
-where 26.118 found it for the Lua operators.
-
-The refusal closes both halves at the same door. A string literal anywhere
-in a `while` predicate is refused by name, and so is a reference to a
-delimited or array member -- `_find_member` used to confirm the field
-existed and nothing asked whether it carries a *value*, which is 26.113's
-rule ("does this construct have a value at all?") arriving in the condition
-language. The dnsname shape -- integer fields against numbers -- is the
-control, untouched.
-
-**`at` on a variant arm member was accepted and ignored by all four
-backends.** The layout recorded `located='0'` faithfully; every backend's
-arm path then resolved the offset by summing what precedes the member and
-consulted nothing else -- C hard-coded `offset = 1u` with the expression
-nowhere in it. A schema saying "the positional's text starts at 0, dispatch
-byte included" parsed, did nothing, and said nothing about doing nothing.
-
-Refused rather than implemented, deliberately: an arm member re-addressed
-over its own discriminant is *overlap*, and overlap is a canonicity
-question -- two names for one byte is 14.5's malleability concern in
-miniature -- that deserves a decision record, not an emitter patch. The
-refusal converts four silent wrongs into one loud one, and implementing
-later is additive. A top-level `located` member is a working construct and
-the control holds it untouched.
+Moved to `doc/decision/26.126-the-two-defects-the-argv-exercise-left-behind.md`.
 
 ### 26.127 The refusal the survey promised
 
@@ -7079,99 +6058,11 @@ Moved to `doc/decision/26.127-the-refusal-the-survey-promised.md`.
 
 ### 26.128 The field that says which key
 
-Decision 0040, accepted and built. `sealed(codec, nonce = n, key = epoch)`
-names the field whose value selects the region's key -- the construct 14.8
-listed first among what real protocols need and situ could not say, and
-0038 unblocked without settling.
-
-**Sized by what the nonce argument turned out to be.** 26.127's reading --
-`nonce = field` is consumed by `wellformed` alone -- fixed the honest scope
-before any design: checks plus sayability, no ABI change, no backend
-touched. The selector gets the nonce's ordering rule for the nonce's reason
-(the key is picked before anything it decrypts is decoded), must carry a
-value (26.113's rule, so QUIC's key-phase bit passes and a byte run does
-not), and reaches no committed artifact yet -- whether nonce and key belong
-in the capability map and wire signature is 26.117's open question,
-answered once when it is answered.
-
-**The relaxation 26.127 anticipated does not happen, and the record says
-why rather than leaving the change of mind implicit.** Two regions naming
-one selector field see one value, so one key; two regions naming different
-fields can still hold one value. Distinctness of key is not a structural
-fact, and the nonce-reuse refusal stays unconditional. DTLS's rekey case --
-old-key and new-key records in one datagram -- is two messages, which situ
-already frames as two structs.
-
-**No coverage requirement on the selector, because a real protocol refuses
-it.** DTLS authenticates its epoch and QUIC its key-phase bit, and
-requiring that would have been the obvious rule -- but WireGuard's receiver
-index is deliberately outside the AEAD: it routes, it is not trusted.
-Where the selector sits is the layout's to record; whether an
-unauthenticated selector is acceptable is the protocol's threat model.
-
-**The vocabulary gap came out in the same pass.** `sealed(ae, wibble = x)`
-was accepted with the argument read by nothing -- the acceptance 26.117
-closed for attributes, one construct over. A sealed region's arguments are
-`nonce` and `key` now, and anything else is refused naming both.
-
-**`example/dtls` is the worked case, and its nonce is the reason it
-earns the directory.** RFC 5288 builds the 12-byte GCM nonce as a 4-byte
-out-of-band salt concatenated with the 8-byte explicit part on the wire.
-`nonce = explicit` names the on-wire half; declaring `nonce_bytes = 12` on
-the codec would refuse the 8-byte field, and declaring 8 would misstate
-the primitive. The codec stays silent on the width -- 0038's "silence
-claims nothing", met by the protocol that shows why the setting had to be
-optional.
+Moved to `doc/decision/26.128-the-field-that-says-which-key.md`.
 
 ### 26.129 The signature keeps only kept promises
 
-Decision 0041, accepted and built. The wire signature's charter -- "every
-line here is a promise to a receiver that is already deployed and cannot be
-recompiled" -- is enforced in both directions now: the four attributes 26.60
-held out of the placement table have places, and the two enforced
-associations 0040 left unrecorded are on the region lines they describe.
-
-**The four placements, by 26.60's method.** `trim` and `case_insensitive`
-sit on a delimited member, where text is scanned and compared;
-`nul_terminated` on a counted byte array, where something else already
-decides the extent; `must_be_zero` on a `reserved` member, where saying the
-default out loud stays legal and not meaningless. Everywhere else each was
-inert in every backend while the signature carried the fact. The unplaced
-set closes at `secret` and `non_canonical`, both genuinely read in any
-position -- the table 26.60 opened is finished.
-
-**The sweep found tcp's defect three times, not once.** 0041's draft named
-`tcp_pseudo_header.zero [must_be_zero]` -- a wire line promising a check the
-generated `validate` never made. Refusing the placement then caught
-`udp_pseudo_header.zero` and edges' versioned `pad` carrying the same false
-claim. All three now say `[must_eq = 0]`, which `validate` enforces, and
-their signatures changed from an unenforced fact to an enforced one -- the
-wire diff a reviewer should want to see, three times over.
-
-**`nonce=` and `key=` are on the sealed region's signature line**, carried
-through a `Placement` field the way `sized_by` is, because which field
-seeds the nonce and which selects the key is what those bytes mean and a
-receiver that disagrees about either cannot interoperate. packet and
-keystore gained `nonce=nonce`; dtls gained `nonce=explicit key=epoch`. The
-capability map is untouched: it prices capability, and neither association
-changes an axis.
-
-**Enforcement has a measurable price, and the suite billed it at once.**
-The moment `[must_eq = 0]` was real, the owned round-trip for tcp and udp
-stopped reaching its accept path -- a pseudo-random byte is zero once in
-256 draws, and 64 draws were 64 refusals, so the suite skipped with "needs
-committed vectors" exactly as it did for packet and tiff. Both have
-vectors now, laid out from RFC 9293's and RFC 768's field lists over
-TEST-NET addresses rather than by situ. A check that begins to bite is a
-corpus that stops arriving by accident; the vectors are what keep the
-accept path exercised on purpose.
-
-**In passing: the singular-directory pass had two stragglers.** The suite
-did not collect on master -- two `sys.path` inserts still said `tools/`, so
-`import style_gate` failed before a single test ran. The pass's own claim
-was "each project's gates run against the result", and the gate that would
-have said otherwise was the one broken. Fixed here because nothing lands
-over a suite that cannot collect.
+Moved to `doc/decision/26.129-the-signature-keeps-only-kept-promises.md`.
 
 ### 26.130 The key that was never allowed to be wrong, made wider
 
@@ -7187,213 +6078,19 @@ Moved to `doc/decision/26.132-the-floor-stated-and-the-clamp-that-was-checked-by
 
 ### 26.133 The session, folded
 
-26.117 through 26.132 are one session's log, and a reader should not have to
-read sixteen entries to learn what it settled. Decisions 0038 through 0044
-and invariants 146 through 153 carry the durable part; this names the shape.
-
-**One thing kept happening, and it is the session's whole lesson: a check
-that could not fail, or a claim that was never measured, reads exactly like
-one that works.** Nearly every finding was that shape.
-
-- **The version-claim family** (118, 119, 120, 121; invariants 147-151). A
-  language version is declared and the check meant to enforce it cannot.
-  `luac` is 5.4 and cannot refuse the Lua 5.2 decision 0021 protects; the
-  Python floor check runs a real 3.11 and skips on the 3.13 the code is
-  written on; `-std=c++17` selects a dialect and `-pedantic-errors` is what
-  makes it binding, so the C++ backend emitted a compound literal for
-  years; and the generated Python was held to no floor at all. Four
-  versions, one mistake: selecting a standard is not conforming to one, and
-  a guard that skips where the fault is produced has not run.
-- **The crypto survey's promises** (122, 127, 128, 130; decisions 0038,
-  0040, 0042). 14.8 listed the constructs real protocols need and situ
-  could not express, and the list is empty now -- codec tag and nonce sizes
-  (0038), key selection (0040), conversation keys wider than a word (0042).
-  On the way, the survey's own flagship claim -- "one nonce field feeding
-  two sealed regions is refused" -- turned out never to have been
-  implemented (127, invariant 153): a claim inside a measured survey is not
-  itself measured. Each construct's refusal, kept or added, rested on the
-  same argument: an exact bytes comparison, never a digest, because a
-  collision in the pairing layer is a silently wrong pairing.
-- **The wire signature made honest in both directions** (129, 131;
-  decision 0041). A line a deployed receiver relies on is a promise, so a
-  recorded-but-unenforced fact is a false one -- `[trim]` on a plain `u8`
-  in the signature over bytes nothing trims. The four held attributes got
-  places, the enforced associations got recorded, and the sweep found the
-  same false-claim shape in three committed schemas' `must_be_zero`.
-- **The consumers, answered** (124, 125, 126, 131, 132). The `suggestion/`
-  directory was the backlog: six evaluations from the other private
-  projects, asks with reproductions attached. The argv exercise (124) was
-  an instrument rather than a use case -- it found two silently-nothing
-  defects and stated where situ stops for a grammar -- and its one
-  buildable idea became value-domain constants (125). fuzznet's timing
-  division, netcfgd's version contract and `gen-tamper`, apt-emerge's
-  generator-mutation check, beerssh's floor, hydra's four: each answered in
-  the file that asked, because the directory is correspondence.
-
-**What is settled and what is proposed.** 0038 through 0042 are accepted and
-built; 0043 (`pad_to`) and 0044 (utf16 encoding) are proposed, each because
-it carries a wire-visible fork a consumer raised and did not have to resolve.
-The attribute placement table (opened at 26.60) is closed: every attribute
-is placed, read everywhere, or refused. 14.8's unexpressible list is empty.
-
-**The instrument that earned its keep, again.** The four-backend differential
-and the mutation-tested checks are what caught the wrong diagnoses -- a
-paren-balanced clamp drop that a first check could not fail, a byte-run guard
-that fired on a record run and did not compile, a constant that fit the
-buffer it was checked against. The session's method was the session's
-subject: a check is not evidence until it has been watched failing.
+Moved to `doc/decision/26.133-the-session-folded.md`.
 
 ### 26.134 pad_to, built across the stack
 
-Decision 0043, accepted and built: `pad_to(n)` pads to the next multiple of
-n bytes, the construct section 8.4 specified and the parser had always
-refused. `base::Pickle`, cpio and most RPC framings write it by hand as
-`reserved u8 [align_up(length, 4) - length];`; it is one member now, the map
-labels it `<pad>` rather than `<reserved0>`, and the wire signature carries
-`pad-to=n` because a peer padding to a different multiple disagrees about
-where the next field starts.
-
-**The size is the solver's, not the schema's.** A static pad folds to a
-constant; a dynamic one -- after a variable run -- is `align_up(offset, n) -
-offset`, computed by the same offset function every member after a variable
-one already gets. The reserved must_be_zero validation is reused wholesale:
-padding is `reserved` bytes with a computed length, so the only new emission
-is that a pad advances the running offset to a multiple rather than by a
-fixed size. `situ_align_up_u32` joins `situ_advance_u32` in each runtime, the
-image gains a `pad_to` field (format version 3), and both walkers align the
-same way.
-
-**The four-backend differential earned its keep, and the bug it caught is the
-lesson.** A pad added to `edges.situ` surfaced a validation disagreement --
-and it was not the pre-existing struct it first appeared to be, but the pad
-itself: with `u8 n` where `1 + n` is already a multiple of four, the pad is
-*zero* bytes, and Rust's fast path for a one-byte reserved read checked a
-byte the empty pad does not own. C, C++ and Python routed the pad through
-their run-validation and agreed; Rust's scalar shortcut was the odd one out.
-The pad is a *run* of 0..n-1 bytes and classifies as one now, so Rust takes
-the same path as the others.
-
-**Its own schema file, not a case in edges.** Adding the pad to `edges.situ`
-changed that schema's pseudo-random draws and the failure first read as a
-bug in an unrelated struct -- a false lead that cost a diagnosis. A dedicated
-`test/schema/padded.situ` draws its buffers against exactly the pad shapes,
-including the `u8`-driven zero-pad case on purpose rather than by a lucky
-draw, which is what makes the differential's pass mean something.
+Moved to `doc/decision/26.134-pad-to-built-across-the-stack.md`.
 
 ### 26.135 utf16, and the byte view a wide run never had
 
-Decision 0044, accepted and built: `[encoding = utf16le]` and
-`[encoding = utf16be]` join `ascii` and `utf8`. `base::Pickle` writes a
-UTF-16 string as `u32 length; u16 data[length]`, and the count is the point
--- for UTF-16 it counts *code units*, not bytes, and nothing on the wire says
-which, which is why the consumer's hand-written reader carries an overflow
-guard. The attribute states that `length` is code units, which no other
-construct says. **Bare `utf16` is refused**: a text encoding's byte order is
-a property of the text, not inherited from the field's `endian` scope, and a
-default would be a guess a byte-swapped string passes silently. The strict
-validator refuses a lone surrogate the way the utf8 check refuses an overlong
-form (8.8) -- decoded through each language's own UTF-16 decoder rather than a
-hand-rolled state machine, the same way utf8 already was.
-
-**The real work was not the encoding -- it was that a `u16` run had no byte
-view.** Every backend emits a byte-span accessor only for a `u8` run; a
-`u16[length]` run is ValueConverted, read through an indexed getter, with no
-pointer to hand a validator. So the encoding check reads the message bytes at
-the run's static offset directly -- `view.base + offset` with a byte length
-of `count * 2` (a literal for a fixed run, the same length expression every
-member after a variable one already computes) -- rather than through an
-accessor that does not exist. The image carries the encoding as a code
-(`pack.ENCODING_CODE`: ascii 0, utf8 1, utf16le 2, utf16be 3) that both
-walkers read, and the C walker keeps its own standalone `utf16_valid` for the
-reason it keeps its own `utf8_valid`: it links nothing.
-
-**Two gaps the first wide run in an example surfaced, both older than this
-record.** `pad_to` had no `unparse` case -- `padded.situ` lives in
-`test/schema/`, which the round-trip test does not cover, so the pickle
-example was the first to round-trip a `Pad`. And a ValueConverted run that is
-unwritable said nothing about why: three backends keyed their "no setter"
-note on the byte-span accessor a wide run does not have, so a `u16` run that
-was the *only* unwritable member in a schema left the explanation empty. Both
-are the shape 26.35 names -- an absent operation that does not say why it is
-absent -- and both were invisible until a schema exercised them.
-
-**The example is the Pickle string itself.** `example/pickle/pickle.situ` is
-`u32 length; u16 data[length] [encoding = utf16le]`, drawn against by the
-four-backend differential and both walkers: random `u16` draws are full of
-lone surrogates, so the pass means all six agree on which byte sequences are
-UTF-16 and which are not.
+Moved to `doc/decision/26.135-utf16-and-the-byte-view-a-wide-run-never-had.md`.
 
 ### 26.136 Nine drivers, and the five bugs they found
 
-Decision 0033's driver axis is built across all four backends: `epoll`,
-`poll`, `select`, `ppoll`, `blocking` and `io_uring` in C, `qt` in C++,
-`asyncio` in Python, `tokio` in Rust. The core did not learn a single new
-fact -- each is an additive artifact over `--layer drive`, refused on a
-backend it is not available for, naming both. That is the axis working as
-designed, and it is the least interesting thing here.
-
-**The completion shape was proven rather than assumed.** 0033 made the
-vtable completion-shaped on the argument that a readiness loop implements
-completion trivially while the reverse is impossible, and named `io_uring`
-as the driver that would test it. It does: the same submit vtable and the
-same `step`/`on_message` machine drive it with no change to the core. Its
-raw ring handling depends only on the kernel uapi header, so it compiles and
-runs where `liburing` is not installed, which is what let it be verified at
-all.
-
-**A host runtime may return its outcome, and the first one could not.** Qt
-delivers completion by callback, which read at the time as what a host
-runtime does. It is not: it is what *Qt* does, a C++ function that installs
-a notifier having no way to return something that has not happened. A
-coroutine and an `async fn` are precisely the runtime's way of saying
-"finishes later and yields a value", so asyncio and tokio return theirs.
-Only the per-event reports stay callbacks in all three, because no single
-return value can carry events that happen *during* an exchange.
-
-**Five pre-existing bugs fell out, and not one was found by the suite.**
-Every one surfaced because something finally consumed the layer:
-
-- Qt defines `slots` as an empty macro, and the C++ drive and converse rungs
-  emitted a constructor taking `slot *slots`. In a Qt translation unit the
-  parameter name is deleted and `slots_(slots)` becomes `slots_()`, a null
-  the constructor writes through. It compiled clean under `-Wall -Wextra`
-  and segfaulted at construction. Live for every Qt consumer of those rungs,
-  which is three of these projects, and it had never fired because nothing
-  here built C++ against Qt.
-- Rust's `step` dropped the expiry count on the call that gives up on the
-  last exchange. C writes it alongside SITU_ERR_TRUNCATED and Python returns
-  it beside a `None` deadline, both for the reason C's comment gives: a
-  caller that is never told waits for ever. Rust was the third backend with
-  it, and Python has carried a named regression test since it was fixed
-  there.
-- tokio's sink sent with `try_send`, which answers `WouldBlock` out of
-  tokio's readiness bookkeeping *without attempting the syscall*, re-armed
-  only by a runtime that cannot run inside a synchronous callback. Since
-  `step` spends a retry before it calls `submit`, a swallowed `WouldBlock`
-  cost the datagram and its retransmission together.
-- The Rust key builders cast an enum accessor's `Option` to an integer, so a
-  relation keyed on an enum did not compile -- `example/dns` among them.
-  Sweeping for the shape rather than the symptom found the same thing in the
-  `must` predicates and in a bound naming a sibling.
-
-**The pattern is worth more than the bugs.** A schema compiler's tests
-generate code and check what it says; they had not linked it against Qt, run
-it inside tokio, or keyed a relation on an enum. Writing a consumer is a
-different instrument, and it found in a day what the suite had not in the
-life of four backends. The differential's own lesson, one level up: a second
-implementation is what catches the first.
-
-**Two smaller lessons, both about evidence.** The tokio driver was reported
-green with its failures blamed on machine load; twelve runs on an idle box
-said otherwise, and the fix for the expiry count is what made the remaining
-failure legible enough to diagnose. And the `xfail(strict=True)` pinning the
-enum-key defect had been passing for the wrong reason -- its schema declared
-a `u4` with no `bit_order`, so generation refused before the compile the pin
-existed to watch ever ran. A vacuous pass wearing an xfail. Both pins that
-were left behind have since flipped to XPASS and been retired, which is what
-`strict=True` is for: a pin that outlives its bug asserts the wrong thing.
-
----
+Moved to `doc/decision/26.136-nine-drivers-and-the-five-bugs-they-found.md`.
 
 ### 26.137 Scope: what a protocol needs, situ implements
 
@@ -7413,86 +6110,7 @@ Moved to `doc/decision/26.140-nrzi-was-in-the-same-list-and-the-family-that-has-
 
 ### 26.141 `make fuzz` run, and what "no crash in 36 harnesses" is worth
 
-The target has existed and is documented at 26.x and in the table at 4343.
-Nothing records it having been run. It has been now: 36 harnesses built
-with clang under `-fsanitize=fuzzer,address` and run for 30 seconds each,
-**no crash**, exit 0.
-
-That is worth having and it is worth deflating, because the summary line
-the target prints is a count of harnesses rather than of tests that could
-have failed.
-
-**Coverage across the 36 spans 1 to 2510.** `edges` reached 2510 and
-`http` 1371; the median is 52; `register` and `kernels` reached 1. The
-first reading was that the low ones had failed to get past a magic or a
-length field -- random bytes cannot guess a four-byte magic, and the
-corpus starts empty because nothing seeds it, though `example/*.vectors`
-holds twelve files of accepted messages that could.
-
-**That reading was wrong, and testing it is what showed so.** Seeding
-`ntp`'s corpus from its vectors moved its final coverage not at all: 21
-seeded, 21 unseeded, starting from 18 rather than 0. `tiff`, chosen
-because a TIFF magic is exactly what random bytes cannot reach, did the
-same: 14 either way. Both saturate. An NTP header is forty-eight bytes of
-straight-line field reads with no length, no loop and no variant, and 21
-edges is all there is to cover.
-
-So the coverage spread measures how much branching a schema has, not how
-well the fuzzer did, and the seeding improvement this was heading toward
-is not warranted. Measured before it was built, which is the only reason
-it was not built.
-
-**What is real is smaller and is about the claim.** Two of the 36
-harnesses have an empty entry point -- `LLVMFuzzerTestOneInput` is
-`(void)data; (void)size; return 0;` -- because `std/kernels.situ` has no
-struct at all and `example/register/register.situ` has nothing a byte
-stream can acquire. They cannot crash, and the target counts them:
-"no crash in 36 harnesses" is 34 tests and two tautologies.
-
-**That was recorded as having no clean seam, and the deferral was wrong.**
-Three routes were named -- report the count, emit no harness, keep the
-source -- and the first was called a question about the generator's
-interface. It is not: `pack`, `gen-tests`, `gen-codec-tests` and
-`gen-derived` all print `wrote <file> (<count> <thing>)` already.
-`gen-fuzz` printing a bare filename was the odd one out, and adding the
-count is conformance rather than a decision.
-
-It prints `(0 fuzz target(s))` for `std/kernels.situ` and for
-`register.situ` now, and the number is counted from the emitted text
-rather than re-derived from the schema, so it cannot disagree with the
-file it describes. `test_gen_fuzz_says_how_many_targets_it_emitted` pins
-both ends and fails if the reported count stops coming from the artifact.
-
-Neither empty harness is a fault. `std/kernels.situ` declares no struct,
-and this generator excludes registers deliberately -- "a register is a bus
-transaction, not bytes off a wire" -- having already paid once for the
-opposite mistake, when `example/protobuf` was filtered out by a
-`size_bytes > 0` test and fuzzed nothing at coverage 1 for 16 million
-executions. What was missing was only that nobody was told.
-
-**And the Makefile half is closed too, by the rule this file already
-carries.** The generated `_fuzz.c` was deleted as a spent intermediate,
-so the summary could not read it. `test/generated/Makefile` already keeps
-a *named* `.SECONDARY:` -- named rather than bare, with a comment
-recording that a bare one catches every pattern rule and that this
-repository has met that rule three times -- and the fuzz sources join it.
-
-The summary now reads what it counts:
-
-    no crash in 34 harnesses; register kernels have no parseable struct
-    and test nothing
-
-**The first version of that count had the fault it was written to fix.**
-`grep -q ... 2>/dev/null` on an absent file is false, so a missing source
-would have counted as an empty harness, and every source missing would
-have reported all 36 as empty -- a confident, wrong number in place of a
-confident, wrong number. `fuzz` now depends on the sources so they exist,
-and the recipe refuses outright rather than counting when one does not:
-
-    build/gen/arp_fuzz.c is missing, so this count would call every
-    harness empty; refusing to report one
-
-Checked by deleting a source with rebuilds suppressed, which exits 1.
+Moved to `doc/decision/26.141-make-fuzz-run-and-what-no-crash-in-36-harnesses-is-worth.md`.
 
 ### 26.142 State between items, which three protocols have wanted this week
 
@@ -7508,42 +6126,7 @@ Moved to `doc/decision/26.144-what-is-open-and-what-was-tried-and-did-not-work.m
 
 ### 26.145 What stands behind the last thirty commits
 
-**Local evidence only, and it should be said plainly rather than inferred
-from 26.143.** No commit since 2026-08-14 has been executed by CI, so the
-thirty in this stretch -- the restored CRC oracle, SLIP and PPP framing,
-`\xNN`, six CRCs, three scramblers, NRZI, the SLIP example, the
-`DERIVED_*` consolidations, the attribution work, the copyright guard --
-rest on `make check` on one developer machine. That is 4118 passed and 38
-skipped, style and mypy clean, C built and run on the host and under
-aarch64 emulation, and 36 fuzz harnesses under libFuzzer and ASan with no
-crash.
-
-It is a good deal of evidence and it is one machine. The gap CI would
-close is named in 26.143 and is narrow -- Python 3.11, which nothing here
-has -- and two substitutes stand in its place. Nothing else in the
-workflow is absent locally: every differential oracle ran, so `tshark`,
-ImageMagick and the rest are present.
-
-**A green run says less than it used to, and the wording now says so.**
-`tool/style_gate.py` printed "N files conform" until 2026-08-30 and now
-prints "N file(s) pass: whitespace, and indentation except
-under-indentation, which is not checked", because the converter it
-compares against never *adds* indentation, so a line with too few tabs is
-invisible to it. Every earlier record in this document citing "files
-conform" was quoting a summary wider than the check behind it. Nothing
-those records assert is wrong; the guarantee attached to them is narrower
-than the sentence implied.
-
-**The habits that produced the findings, since they cost little and paid
-repeatedly.** Sabotage before trusting: break the thing, watch the check
-go red, restore -- which is how the CRC vectors, the scrambler periods,
-every `DERIVED_*` guard and the copyright guard were shown to discriminate
-rather than merely pass. A control inside a one-off sweep, classified
-before any real file is read, so that a clean result means something: the
-two population sweeps and the PEP 701 check each carry one, and each would
-have been quoted wrongly without it. And reading the artifact rather than
-a summary of it -- `git diff-tree` rather than `git show --stat`, the
-commit's file list rather than a rendering that also contains its message.
+Moved to `doc/decision/26.145-what-stands-behind-the-last-thirty-commits.md`.
 
 ### 26.146 USB's NRZI, and a gap that was filed as a decision
 
@@ -7555,142 +6138,11 @@ Moved to `doc/decision/26.147-a-named-code-s-overhead-is-the-code-s-and-three-de
 
 ### 26.148 USB's bit stuffing, and the whole of its line coding
 
-26.146 left this open by name: USB stuffs a zero after six consecutive ones,
-situ's bit stuffing was HDLC's five, and the two are a separate stage from
-the line code because stuffing changes the length and NRZI does not.
-
-**One algorithm, two constants, two names.** `_hdlc` became
-`_bit_stuffing`, the run is its argument, and `BIT_STUFFING` carries the run
-with the sentence saying what the insertion buys -- HDLC's five keeps the
-flag sequence 0x7E out of a frame, USB's six keeps the *line* moving. They
-are named apart for the reason the two NRZIs are: a decoder built on the
-wrong length is wrong from the first stuffed bit onward, with nothing at run
-time to notice.
-
-**And that is the opposite trade from SLIP and PPP**, which decision 0017's
-third amendment refused to merge. Those two share a shape -- escape-stuffed
-byte codes -- and differ in what they *do*: SLIP substitutes from a table
-and refuses an escape it was not told about, PPP transforms with an xor and
-therefore reverses escapes nobody enumerated. Sharing an implementation
-would have made one of them wrong. Here the implementation is genuinely
-identical and only a number differs, so one generator with an argument is
-the honest shape and two names is still the honest surface. The test for
-which case you are in is whether merging them would change any behaviour,
-not whether the descriptions rhyme.
-
-**The refactor moved nothing.** Regenerating `std/kernels.situ` and
-`std/codecs.situ` gave byte-identical output, 111,866 and 515 bytes --
-including HDLC's generated comment, which was rewritten as a per-code
-string and had to come back the same.
-
-**26.147's guard paid for itself one commit after it was written.** Adding
-the row to `STUFFING_BOUNDS` before the codec existed failed
-immediately with the three populations printed side by side, and adding the
-codec without the measurement row failed again. The point of that guard was
-that a stuffing code could join the build with nothing checking what it
-actually expands by; the first new code since is the proof it works.
-
-**Checking USB alone would have proved nothing.** A generator that ignored
-the run emits the same function twice, and each copy passes its own round
-trip. So the discriminating input is a run of exactly five ones followed by
-a zero, which is HDLC's trigger and not USB's:
-
-    11111000  ->  111110000   (hdlc, stuffed)
-    11111000  ->  11111000    (usb, untouched)
-    11111111  ->  111110111   (hdlc)
-    11111111  ->  111111011   (usb)
-
-The first pair differs in length and the second in content, so neither a
-length check nor a content check is carrying the result alone.
-
-**The pipeline says what the pair costs**, and it is a shape the tree did
-not have. `framed` is exact ratios all the way down; `usb_line` is a
-bounded expansion followed by a length-preserving one:
-
-    codec usb_line unbound expansion=ratio_bounded(7,6) seekable=none
-                   granularity=bit invertible deterministic error_propagating
-
-The bounded ratio survives the length-preserving stage, seekability is gone
-because stuffing took it, and `error_propagating` arrives from the NRZI
-half. None of that was declared.
-
-**The order is not free, and the reason is sharper than "the standard says
-so".** USB stuffs before it encodes. Stuffing the encoded stream instead
-would not be the same code applied later -- in the line stream a held level
-is a run of *identical* bits, which may be zeros as easily as ones, so a
-rule counting runs of ones leaves half the stuck-line cases unstuffed, and
-the run it did break would correspond to no run in the data a receiver
-recovers.
-
-**What USB has now.** `crc16_usb` and `usb3_scrambler` were already here.
-With `usb_bit_stuffing` and `nrzi_transition_on_zero` the low- and
-full-speed line path is expressible end to end -- CRC, stuffing, line code,
-in one schema and in the order the standard puts them.
-
-**Three sabotages, each watched going red**: USB's run set to five, so it is
-HDLC twice, caught by the discriminating input; the decoder's run left one
-behind the encoder's, caught by the round trip returning nothing; and the
-`usb` row deleted from the bounds table, caught by the population guard.
+Moved to `doc/decision/26.148-usb-s-bit-stuffing-and-the-whole-of-its-line-coding.md`.
 
 ### 26.149 The partial symbol three table codes encoded half of
 
-The lens that found 26.147 was: measure the object file rather than reading
-the declaration. It had paid three times in one afternoon, so it was pointed
-at the rest of the codec library -- every derived codec's declared expansion,
-measured against what its generated encoder actually writes.
-
-**Everything holds at a whole number of units.** Manchester at 2:1, base16
-and 4b5b at their exact ratios, base32 and base64 padding to whole groups,
-every shift register length-preserving, the interleaver too. The declarations
-are right and nothing had checked them.
-
-**What was not right is a length that is not a whole number of units.** The
-non-padded table codes walk bits, and their loop condition is
-`at + inputs <= bits`, so a trailing partial symbol falls out of the loop and
-is dropped:
-
-    situ_base16_encode(in, 7, out)   ->  8
-
-Seven bits in, one symbol encoded, three bits gone, and a return value that
-looks exactly like success. The generated comment above that function
-promised "the number of output bits written, which is exactly
-bits * 8 / 4" -- which for seven bits is 14. Manchester's *decoder* did the
-same to an odd trailing bit, and 4b5b's encoder to up to three.
-
-**It is invariant 154's shape and the tree already had the answer.**
-`interleave_16` refuses a partial block outright, with a comment saying a
-partial block has no defined permutation, and a partial symbol has no
-encoding for exactly the same reason. So the five affected functions refuse
-now -- base16 and base16_lower, code_4b5b, and both Manchesters' decode
-side -- and the generated comment states the refusal rather than promising a
-formula the code does not compute.
-
-**Zero is not ambiguous here, which is worth stating because it looks it.**
-The decode direction already returned 0 for a symbol the code does not
-define, so the convention was in place. In the encode direction 0 was
-previously only "nothing to do", and the two now share a value -- but a
-caller that passed a nonzero length and got 0 back was refused, and a caller
-that passed 0 had nothing to encode. The only length that could have
-produced 0 from real input was a sub-symbol one, which is the case being
-refused.
-
-**Manchester's encoder is untouched and provably so.** Its input symbol is
-one bit, so the guard would be dead code and is not emitted; the diff over
-the generated file is 56 lines added and 13 replaced, all of them in the
-five functions named above, with `std/codecs.situ` byte-identical.
-
-**Three sabotages, each watched going red**: the encode guard removed,
-caught at base16 encoding 17 bits as 32; the decode guard removed, caught at
-Manchester decoding 7 bits as 3; and the encode loop's stride doubled,
-caught by the ratio assertion rather than by any of the refusal ones.
-
-**And the guard is now general rather than about this bug.** It reads every
-`table` codec out of `std/kernels.situ`, measures the exact ones in bits and
-the padded ones in whole groups, and holds each to the ratio it declares --
-so a ninth table code is covered the day it is declared. The padded half is
-checked by the group formula rather than by a listed expectation: a group is
-the shortest run that is both a whole number of bytes and a whole number of
-symbols, which is what makes `ratio_padded` mean anything.
+Moved to `doc/decision/26.149-the-partial-symbol-three-table-codes-encoded-half-of.md`.
 
 ### 26.150 The axis the scrambler pair was built to demonstrate, measured
 
@@ -7706,109 +6158,11 @@ Moved to `doc/decision/26.152-ci-and-the-half-of-the-floor-gate-nobody-was-holdi
 
 ### 26.153 The first CI run in forty commits, and what it caught
 
-The billing block lifted, and `check` ran for the first time since
-2026-08-14. It went red in 48 seconds with every install step green and
-`make check` failing -- which is what 26.143 said this run would be worth:
-nothing about what broke in August, something about now.
-
-**Five errors, one shape**, in `test_relations.py` and `test_editor.py`:
-
-    Argument 2 to "acquire" has incompatible type "bytearray";
-    expected "bytes"  [arg-type]
-
-**The cause is not the Python version, which was the obvious guess and is
-wrong.** `pyproject.toml` already sets `python_version = "3.11"`, so mypy
-was targeting the floor here too, and running it with `--python-version
-3.11` explicitly reproduced nothing. It is the *mypy* version. mypy promoted
-`bytearray` to `bytes` for years and stopped; `strict` implies the stricter
-rule in a new enough one and did not in the 1.15 installed here, and the
-workflow installs the latest. Same tree, same command, two answers.
-
-**The annotations were genuinely too narrow, so the newer mypy was right.**
-`acquire` calls `len()` on its buffer and stores it; `open_document` calls
-`bytes(message)` on the first line. Both accept a `bytearray` and said they
-did not. And the `bytearray` in the editor test is load-bearing rather than
-incidental -- `test_the_document_outlives_the_buffer_it_was_read_from`
-mutates the buffer after opening the document and asserts the fields did not
-move, which is a test `bytes` cannot express at all.
-
-**Widening `View.buffer` cascaded to exactly three sites, and the cascade is
-the second finding.** Each is a function returning `bytes` that returned a
-slice of the buffer. Three sibling sites in the same two modules already
-wrote `bytes(view.buffer[...])` and three did not -- the same operation
-spelled two ways, where the three that did not were handing out a view of a
-caller's mutable buffer under an annotation promising an owned value.
-Nothing could see it while the two types were promoted to one. All six copy
-now, which is what the majority already did and what the annotation says.
-
-**The fix that matters is one line of configuration.** `strict_bytes = true`
-in `pyproject.toml`, so the position is the project's rather than a property
-of whichever mypy is on the machine. Proved both ways, with one `bytes(...)`
-removed again:
-
-    with strict_bytes:      Found 1 error in 1 file
-    without strict_bytes:   Success: no issues found in 183 source files
-
-That second line is what this repository had. A gate whose strictness is
-inherited from a floating tool is a gate whose answer changes without anybody
-editing it, in both directions -- and the direction that hurts is the one
-where CI is stricter than the machine the code is written on, because the
-author cannot reproduce the failure.
-
-**And `testpaths` named a directory that has never existed.** It was
-`["tests"]`; the directory is `test`. Bare `pytest` answered "No files were
-found in testpaths; searching recursively from the current directory
-instead" and walked `build/` and the caches, while `make test` passed
-explicit paths and never met it. **That is the fourth place the same wrong
-pair of names has turned up** -- `tools` and `tests` for `tool` and `test`.
-`python_floor`'s docstring records the Makefile's, 26.151 found the README's
-and `make help`'s, and this is `pyproject.toml`'s. The directories were never
-called that.
-
-**Named rather than taken with a red on the board, and taken once there was
-a green.** Every run annotated "Node.js 20 is deprecated ...
-actions/checkout@v4, actions/setup-python@v5 are being forced to run on
-Node.js 24" -- a warning today and a break when the runners drop it, but
-bumping both is its own change and belonged after a green rather than mixed
-into the commit trying to get one.
-
-Both are at v7 now, which is the current major rather than the minimum that
-clears the warning. The minimum is checkout v5 and setup-python v6, each
-being the release that moved to Node 24; taking those would be pinning to a
-version that gets annotated again. The majors in between were read rather
-than assumed: checkout v6 persists credentials to a separate file, which
-this workflow never reaches because it does not use the token after
-checkout, and v7 refuses to check out a fork PR under `pull_request_target`
-or `workflow_run`, neither of which is a trigger here. setup-python v7 is an
-ESM and dependency refresh. Nothing in `make check` reads the workflow, so
-the verification for this one is the run itself.
+Moved to `doc/decision/26.153-the-first-ci-run-in-forty-commits-and-what-it-caught.md`.
 
 ### 26.154 The first green in three weeks, and what it is worth
 
-`check` passed at 2026-08-31 23:26, 7m14s, every step: the first green run
-since `7ec7b01` on 2026-08-09. 26.143 predicted the shape of it and the
-prediction held -- it says nothing about what broke in August, whose logs
-have expired, and it says one thing about now, which is that Python 3.11 has
-finally run the suite it was declared for.
-
-Two numbers from it are worth keeping:
-
-- **`skipped: 40`, against a ceiling of 45.** The workflow refuses a run that
-  skips more than it should, and its comment records 34 "at the time of
-  writing". It is 40 now, on a runner with every toolchain installed, so the
-  headroom the guard was given is down to five. Raising it is a deliberate
-  act by that comment's own instruction; nobody should do it to make a build
-  pass. Recorded so the next person meets a number rather than a surprise.
-- **7m14s**, which is what a full run costs on a hosted runner: install,
-  `make check` including the aarch64 emulation, and the skip audit.
-
-**What the green establishes and what it does not.** It establishes that the
-tree parses, typechecks, tests and cross-builds on the declared floor -- the
-one axis no local machine here covers. It does not establish anything about
-the thirty-odd commits between 2026-08-14 and now individually: they were
-executed as a batch, so a defect any one of them introduced and a later one
-removed leaves no trace. That is the ordinary cost of a build that stopped
-running, and it is worth stating once rather than discovering later.
+Moved to `doc/decision/26.154-the-first-green-in-three-weeks-and-what-it-is-worth.md`.
 
 ### 26.155 The skip guard counted the wrong population
 
@@ -7832,108 +6186,11 @@ Moved to `doc/decision/26.159-a-form-the-vocabulary-could-not-see-and-a-lesson-t
 
 ### 26.160 One rule, four constructs, and it was written on one
 
-`wellformed.py` refuses an argument a *sealed* region does not read, and
-says why: "anything else would state what the generated code does not do".
-Its three neighbours -- `coded`, `indexed` and `tlv` -- accepted anything.
-Measured, before:
-
-    sealed   noncee                  refused
-    coded    bogus                   accepted
-    indexed  basse, offset_typ       accepted
-    tlv      duplicat_tags, wishful  accepted
-
-**`indexed` is where it costs.** `_index_base` scans the argument list for
-`base` and returns `IndexBase.REGION` when it does not find one, so
-`basse = page_type` measures every offset in the table from the region
-rather than from the named member -- a parser reading entirely the wrong
-bytes, one transposed character apart. Three readers each step past it:
-`_index_base` skips anything not named `base`, the layout reads
-`offset_type` and `count` by name and ignores the rest, and
-`check_attribute_places` never sees them at all, because it walks
-`member.attrs` and a region keeps its arguments in `.args`.
-
-`_index_base`'s own docstring records that this argument has been ignored
-before: "section 9.3 has written `base = table_start` since before there was
-a parser for it, and nothing read the argument at all". That fix taught it to
-read `base`, and left every other name unread.
-
-**`check_region_arguments` is table-driven over all four**, which is the
-generalisation the fourth copy would not have been.
-
-**Building the table was the work, because of what happened an hour
-earlier.** 26.159 records a vocabulary built by scanning for `argument("x")`
-that refused `symbol`, a form read as `arg.name == "symbol"`. So this one
-was assembled from every reader shape: the `.argument("x")` calls, the
-parser's structural dispatch for `tag_decode`, `value_size` and `known`, the
-helper lookups `_tlv_policy` and `_tlv_identity`, and the predicate forms --
-`any(arg.name == "ordering")` in `parse_tlv`, and `layout._region_argument`,
-**which is how `coded` turned out to take a nonce at all.** The wellformed
-check named only `sealed`; the layout helper is shared, and
-`coded body(ctr, nonce = iv)` solves with `sealed_nonce = iv` recorded.
-Refusing it would have been 26.159 repeated in the same session.
-
-Two of the nine tlv names, `ordering` and `length_type`, are read by code and
-written by no schema -- the shape `symbol` was in. They stay: a vocabulary
-narrower than its readers refuses valid input, which is the failure this
-table exists to prevent rather than cause.
-
-**The old test caught a loss in the generalisation, which is what old tests
-are for.** `sealed`'s message said "`nonce = field` and `key = field`",
-telling a reader the argument names a field rather than carrying a value.
-Replacing it with "reads `nonce`, `key`" dropped that, and
-`test_an_unknown_region_argument_is_refused` failed on the missing phrase.
-Each construct carries its own sentence now rather than a list of bare names.
-
-**Three sabotages, each watched going red**: the check not called; `coded`
-losing `nonce`, caught by the test that writes the working form rather than
-by any refusal case; and `indexed` losing `offset_type`, caught by
-`example/sqlite`, which is the committed schema that writes it.
+Moved to `doc/decision/26.160-one-rule-four-constructs-and-it-was-written-on-one.md`.
 
 ### 26.161 The arguments only the emitter reads, and their defaults
 
-26.156 closed the argument you wrote that nothing reads. This is the other
-half: the argument you did not write that something needed.
-
-**A signature and a generated implementation need different things**, and
-`shift_register` is where they diverge furthest. It derives every property
-it reports -- seekability, error propagation, invertibility -- from one word,
-`feedback`. Taps, width and seed are read nowhere but the emitter, which
-defaulted two of them and fell silent on the third:
-
-    no seed    generated with 0xFFFF, a different keystream
-    no width   generated a 16-bit register, where `taps = 0x1` is NRZI at
-               width 1 and something else entirely at 16
-    no taps    no implementation, and nothing naming the missing argument
-
-**No committed schema omits any of them**, so those defaults existed only to
-be wrong. Every other family's needs are already required where the signature
-is derived -- `_table` calls `_positive` for `input_bits`, `_linear_block`
-for `n` and `k`, `_stuffing` for `worst_case` and `per` -- which is why this
-family alone had the gap and why the table has one entry.
-
-**The check hangs off the `impl`, not the derivation**, and the two reasons
-agree. 13.1 makes a signature with no implementation the normal case for a
-protocol under design, and such a codec wants none of this; and putting it in
-`kernels.derive` would refuse the derivation tests that state nothing but
-`feedback`, which is exactly what those tests exist to check.
-
-**The test claimed to cover the guard and did not, and the sabotage is what
-showed it.** The first version asserted that a codec with no `impl` still
-parses -- but such a codec never enters the loop the check hangs off, so
-removing the `ImplKind.DERIVED` guard left the test green. It read as
-coverage of the guard and was coverage of nothing. The guard's real subject
-is an **`extern` binding**: the implementation is the caller's, situ emits
-none, and the emitter's arguments are as unwanted there as for a bare
-signature. Both cases are written now, and removing the guard fails.
-
-That is this session's shape arriving in the instrument again, and by now the
-count is worth stating: a check that cannot fail reads exactly like one that
-works, and tonight it turned up in a kernel argument, a table row, a skip
-ceiling, a toolchain report, a region vocabulary, a `make check` piped into
-`tail`, a `pgrep` matching itself, and a test asserting something it could
-not observe. The instruments are not safer than the code. **Sabotage is the
-only thing that tells the two apart**, and it has to be aimed at the specific
-line the test claims to hold, not at the feature.
+Moved to `doc/decision/26.161-the-arguments-only-the-emitter-reads-and-their-defaults.md`.
 
 ### 26.162 A caveat in the position of a reason, and the cache that hid a sabotage
 
@@ -7949,44 +6206,7 @@ Moved to `doc/decision/26.164-a-bound-that-parsed-changed-nothing-and-asked-for-
 
 ### 26.165 The cheapest number in the range, under the name of the dearest
 
-18.2 calls the cost column the advisor's differentiator, and the test module
-says so in its opening: "the tests below check the numbers, not just that a
-suggestion fired". **Checking a number is not measuring one.** `Cost` counts
-bytes on the wire and `worst` is the most a frame pays -- which is what
-`equalize-variant-arms` reports, 8 bytes for the arm that was smallest.
-
-`varint-to-fixed` computed both its numbers from the varint's *widest*
-encoding. `worst` was therefore the extra paid by a frame that was already
-paying the most, which is the **smallest** cost in the range. Measured on
-`v n; u32 seq` with `max_bits = 16`: frames run 5 to 7 bytes before the
-change and 8 after, so a frame carrying a small value pays three bytes. The
-rule said one.
-
-**The sharp case prints "nothing".** At `max_bits = 14` the fixed width is
-`u16` and the widest encoding is already two bytes, so both numbers came out
-zero and the suggestion read `cost: nothing`. Frames run 5 to 6 bytes before
-and 6 after: a frame carrying a small value pays a byte for a change priced
-as free. `Cost` refuses to do this for an unbounded region and says why in
-its own docstring -- reporting zero "would be a lie in the cheapest possible
-direction" -- and the same class was doing it two rules over.
-
-Two rules disagreed about what `worst` meant and **the name was the only
-thing that said so**, which is why neither test caught it: each asserted the
-number its own rule produced.
-
-`worst` is measurable without knowing any value distribution. Where the
-rewritten schema is fixed, the frame that was smallest before is the one that
-pays most, so the worst cost is the difference between the two minima --
-pinned now for all four priced rules. `typical` is not measurable that way and
-is not pinned: each rule averages over what it can see, arms for one and
-encoding widths for another, and those are different claims that happen to
-share a field.
-
-A suggestion makes three claims a reader acts on -- what to do, what it
-costs, what it buys. **Two of the three were checked by assertion rather than
-by measurement, and both had a defect** (26.163, 26.164 and this). The
-remaining one is the summary text, which is the only one where the assertion
-*is* the measurement.
+Moved to `doc/decision/26.165-the-cheapest-number-in-the-range-under-the-name-of-the-dearest.md`.
 
 ### 26.166 A heading, a verb, and a sample nobody could have checked
 
@@ -8010,56 +6230,7 @@ Moved to `doc/decision/26.170-the-specification-refuted-itself-fourteen-thousand
 
 ### 26.171 `make test` was credited with three things it has never run
 
-Section 20's build reference said
-
-    make test       pytest, mypy strict, lint, cmocka, cross
-
-and `test` is `test-py test-c`. The types, the lint and the cross build are
-`check`, which the reference did not mention at all. **A contributor who ran
-`make test` and believed that line had run neither mypy nor the linter** --
-which is how this tree spent eight commits with a red `typecheck` while its
-tests passed (26.167).
-
-**The README said it correctly the whole time**: "`make test` is pytest plus
-the generated C, which is the fast one to run while working. `make check` is
-what has to pass before a commit". Two documents in one tree described one
-target two ways, and nothing compared them to the Makefile or to each other.
-
-Three vocabularies are shared between the documents and the tree with nothing
-holding them, and each is now read from the tree rather than from a list
-written in a test -- a list in the test is a third copy, and then two of the
-three have to be right:
-
-- **`make check`'s prerequisites**, parsed out of the rule, must each be named
-  where the document describes it. That is what was wrong.
-- **Every `make X` a document invokes** must be a rule. Only inside a code
-  span or a fenced block: prose says "make it allocatable", and a pattern
-  that reads those the same way reports `it` as a missing target. The
-  reference's own bare `make` line, with its description in a column, reports
-  `build` unless a target is required to follow a single space.
-- **Every `require` predicate** in `PREDICATES` and `DEFERRED_PREDICATES`.
-
-**A fourth was written and thrown away, because it already existed.**
-`test_the_cli_section_lists_every_command` has held section 21's verb list to
-the argument parser since it caught that section naming a `--strict` that
-never existed. The duplicate was written before looking, which is the second
-time this session -- 26.163 was the first -- and both times the existing check
-was in a file the search did not reach. **Looking for the gate is part of
-writing one**, and the cost of not is a second copy that has to be kept
-right.
-
-**The predicate check passed its first sabotage**, which is why it is written
-the way it is. Searching project.md for `name(` finds every predicate,
-because each is discussed in prose somewhere -- so renaming a row in the table
-left it green, and so would deleting the table outright. It locates the block
-and reads that. Six sabotages now, all red: one per check, plus the renamed
-row, the deleted table, and a verb the reference invents.
-
-The pattern across 26.169 to here: **a vocabulary written twice is a copy, and
-the copy in prose is the one that goes stale**, because the code is exercised
-and the prose is only read. Where the tree holds the vocabulary once --
-`KERNEL_ARGUMENTS`, `PREDICATES`, the argument parser, the Makefile's own rule
--- the check reads it there and the document cannot drift without saying so.
+Moved to `doc/decision/26.171-make-test-was-credited-with-three-things-it-has-never-run.md`.
 
 ### 26.172 A struct's size was printed as its minimum, with nothing to say so
 
@@ -8067,81 +6238,11 @@ Moved to `doc/decision/26.172-a-struct-s-size-was-printed-as-its-minimum-with-no
 
 ### 26.173 The fix left the same defect one `if` away from itself
 
-26.172 made the map's struct line print `min..max` instead of the minimum.
-It has two branches, and only one was fixed. The other returned `size_bits`
-alone for any struct that is not whole bytes, so
-
-    struct s { bit a; bit rest[remaining]; }
-
--- one bit and an unbounded bit run -- printed `size=1bit`, which is the
-defect the commit was written to remove, surviving in the branch beside it.
-
-**Nothing disagreed, because nothing exercised it.** No bit-sized struct is
-committed anywhere in the tree: 158 structs and not one. A branch with no
-coverage reads exactly like one that works, and this is the fourth time this
-session that sentence has been the finding rather than the moral.
-
-Both bounds go through one `_extent` now -- bytes where the count is whole
-bytes, a `bit` count where it is not -- so `3bit`, `1bit..`, `4` and
-`8..65535` come out of the same two lines. The committed maps are unchanged
-by it, which is the check that it touched only the branch nothing reached.
-
-**It was found by asking the fix the question the fix answers.** After
-committing, the same lens went back over the new code: *what does this print
-where nothing measures it*. Three shapes were tried before one worked -- a
-variable bit array is refused because `n` is not in scope, a variant of
-bit-sized arms is refused because a variant must start on a byte boundary --
-and the third is legal, which is exactly the kind of construct no schema
-author writes and no committed example covers.
-
-**And the test written for it carried its own version of the fault.** The
-first draft asserted `... in struct_line(...) or True`, which passes on any
-input at all. Caught before it was committed, by reading the assertion rather
-than the result -- a green test is not evidence that it can be red.
+Moved to `doc/decision/26.173-the-fix-left-the-same-defect-one-if-away-from-itself.md`.
 
 ### 26.174 What a `file` target would actually change, measured
 
-The copyright holder asked whether situ should have a third target beside
-`buffer` and `mmio` -- `target file`, as a shorthand carrying the assumptions
-that follow from working on a file, with append and sparse support alongside
-it, motivated by making `situ-edit` write as well as read.
-
-Recorded in `doc/decision/0047-a-file-target.md`, which is `proposed`. The
-measurement behind it, over the seven file-format examples with five wire
-formats as a control:
-
-- **`effect` is `Pure` on all 130 file members and all 209 wire ones.**
-  Tree-wide it is 1075 `Pure`, 25 `EffectOnRead` and one `EffectOnWrite`, and
-  those 26 are the `mmio` register example. **Outside a register, nothing in
-  situ has ever had an effect.** A durable, externally visible write is
-  exactly `EffectOnWrite`, is true of a file as such, and cannot be said
-  today -- which is the one assumption a `file` target would carry that earns
-  its place.
-- **The editor does not need the target.** The 130 members already partition
-  into 107 writable in place, 22 whose write moves what follows, and one the
-  schema refuses to let anyone write, with `auth=Covered(t)` marking the
-  writes that invalidate a tag. Everything `situ-edit` decides per field, the
-  capability map decides now.
-- **`append` is not a default**: it flips 117 of the 130 addresses to
-  `Unstable`, and exactly one of the seven -- `sqlite` -- has an unbounded
-  top-level extent that needs it.
-- **Sparse has nowhere to land**: it makes a write's cost and fallibility
-  depend on where *within* a member it happens, and no axis varies a property
-  by position.
-
-**The first answer given was wrong and the record says so.** It argued that a
-target must be a capability distinction rather than a bundle of assumptions --
-and `mmio` is a bundle, as the compiler's own diagnostic says: "`target mmio`
-makes `volatile` implicit and `access_width` ...". It also read 9.8's "no
-`target file` for it to hang off" as a ruling against the target, when that
-argument is about where to hang `at expr` and concludes only that *that
-construct* does not follow the file line.
-
-**Incidental, and worth fixing or not on its own terms:** `at expr` is used by
-one committed schema. 9.8 names BMP's `pixel_offset`, TIFF's `ifd_offset` and
-DNS name compression as the three that wanted it; only `bmp` has it. The
-argument does not need all three to be committed -- its point is that they do
-not share a medium -- but a reader counting uses finds one.
+Moved to `doc/decision/26.174-what-a-file-target-would-actually-change-measured.md`.
 
 ### 26.175 The `file` target, built
 
@@ -8149,42 +6250,7 @@ Moved to `doc/decision/26.175-the-file-target-built.md`.
 
 ### 26.176 The axis moved and the header said nothing
 
-26.175 built `target file` and the check was green: the axis moves, the map
-prints `effect=EffectOnWrite`, `explain` blames the row. **Then the generated
-header was read**, and a file schema's C came out byte-identical to a
-buffer's -- the same accessors, the same comments, nothing anywhere saying a
-store lands in a file.
-
-That is the feature working at the lattice level and not arriving where
-somebody uses it. And the header already carries the argument against it, in
-`_invalidation_note`'s own docstring: "The C type system cannot enforce view
-invalidation, so the generated header has to say what does it -- otherwise
-the only record of the rule is in the compiler's head."
-
-**Durability is the case where that is most true**, because `target file`
-changes no generated code at all. The accessors are the same arithmetic over
-a mapping; there is no `volatile`, no bus transaction, nothing a compiler
-would emit differently. The header is therefore not one record of the rule
-among several -- it is **the only one** a C programmer reading this API will
-meet.
-
-So a `DURABILITY` banner, beside `INVALIDATION`, per struct, saying that a
-store outlives the process, that another reader may already have seen it, and
-that it is not a store to be repeated, reordered or elided on the caller's
-behalf -- and saying what situ does *not* claim: it writes the bytes and says
-nothing about `msync`.
-
-**Keyed on the axis, not on the directive.** What the header documents is
-what the lattice concluded, so the emitter asks the vector whether the effect
-is `EffectOnWrite` rather than asking the schema what its target was. The
-sabotage that matters is the second one: making the banner unconditional
-fails, because a buffer schema getting it would be a false statement about
-the caller's own memory.
-
-**Only the C backend.** `INVALIDATION` is a C-header convention and the other
-three emitters have none, so adding this to C alone follows the tree rather
-than splitting it. Recorded here so that a later reader asking why C says it
-and Rust does not finds the reason rather than the omission.
+Moved to `doc/decision/26.176-the-axis-moved-and-the-header-said-nothing.md`.
 
 ### 26.177 Every parameterised value in the image said "could not tell"
 
@@ -8212,47 +6278,7 @@ Moved to `doc/decision/26.182-the-diagram-was-drawn-to-the-minimum-not-to-the-st
 
 ### 26.183 The dissector read the located member wherever the walk had reached
 
-Three places print that something "cannot drift from the parser": `situc doc`,
-`situc gen-dissector`, and the CLI's own docstring for the second. 26.182
-found `doc`'s claim true of its offsets and false of its row width. This is
-the same sweep reaching the dissector.
-
-**The claim holds for every construct but one.** The dissector reads
-placements, and its one use of `size_bytes` -- the length guard
-`if tvb:len() < N then return 0` -- is the *correct* use of a minimum: a
-dissector should accept a frame at the struct's smallest legal size, and
-using the maximum would reject valid short frames. Not every use of the
-minimum is the defect 26.172 found.
-
-**`at expr` is the exception, and `dissector.py` mentioned `located` zero
-times.** A located member's `offset_bits` is `None` -- layout.py says so
-directly, "None for a located member: its offset is whatever the field says"
--- so it fell through to the running cursor and was dissected wherever the
-walk had got to. Then the cursor advanced past it, which section 9.8 forbids
-in as many words: it "joins no offset chain: it contributes nothing to the
-enclosing struct's extent, and the member declared after it sits where it
-would if the located member were not there".
-
-**It was right by coincidence.** In a typical BMP the two headers end at 54
-and `file.pixel_offset` is also 54, so the cursor and the declared offset
-agree and every test passed. They disagree exactly when the file has a colour
-table or a gap between the headers and the pixels -- which is the entire
-reason the field exists, and the reason 9.8 gives for the construct. **A
-feature that is correct whenever it is not needed passes every test written
-from the common case.**
-
-The C backend never had this: it has `_located_accessor` and dispatches on
-`placement.located`. So the schema, the map (`offset=DataPlaced`) and the
-accessors all agreed, and the fourth description -- the one whose whole
-argument is that a hand-written dissector is "a third description of the
-layout, and the one nobody remembers to update" -- was the one that had
-drifted.
-
-It reads the driver at its constant offset now (`situ_uint(tvb, 10, 4, true)`
-for BMP), dissects there, and leaves `at` alone. Where the driver is not at a
-constant offset it declines and says so, which is the answer `_key_read`
-already gives for a conversation key and for the same reason: a byte range
-that moves is not one to read from.
+Moved to `doc/decision/26.183-the-dissector-read-the-located-member-wherever-the-walk-had-reached.md`.
 
 ### 26.184 A packed expression read a nested field at the wrong base
 
@@ -8284,123 +6310,15 @@ Moved to `doc/decision/26.190-the-gate-that-compared-four-empty-sets.md`.
 
 ### 26.191 The third construct of a class the signature knew about
 
-The wire signature states a construct "whose contract is a list rather than an
-extent" on its own lines, and its docstring names the reason: a variant's arms
-and a tlv region's grammar decide which bytes a peer reads as what, and neither
-shows up in an offset or a width. **There are three such constructs and it
-carried two.** An `indexed` region's offset table -- section 9.3, decision 0024
--- was the one left out.
-
-So both of the table's own facts were invisible. Verified by sabotage, on the
-one schema in the tree that has an `indexed` region:
-
-    base = page_type -> region     signature byte-identical
-    offset_type = u16 -> u32       signature byte-identical
-
-The first moves every cell in every page. The second changes both how far the
-table runs and which bytes each offset is read out of. Both are the
-INTERPRETATION shape exactly: the table is where it was, holds the same
-numbers, and the bytes those numbers name are somewhere else. `--check` now
-calls each `breaking` and exits 1.
-
-**Two of the table's four facts are deliberately not repeated, and the reason
-is a property of the diff rather than of brevity.** The element type is the
-member line's type column and the count arrives as `sized-by=`; state either
-again and one change prints twice under two headings that disagree -- a member
-fact whose value moved is `backward`, an annotation's is `breaking`. What is
-left is the pair with nowhere else to live.
-
-**The corpus exercises `indexed` once.** `example/sqlite` exists because the
-construct had no real format behind it (26.143), and it is still the only one.
-A signature blind spot survives exactly as long as the sample that would have
-shown it, and one schema is how long this one lasted.
+Moved to `doc/decision/26.191-the-third-construct-of-a-class-the-signature-knew-about.md`.
 
 ### 26.192 Two sections under one tag, and the pool that shadowed the pool
 
-`--metadata` opened a string pool of its own and appended it as
-`SECTION_STRINGS` -- the same `strings = 4` the core pool had already been
-written under. `std/image.situ` declares each `image_section_tag` once, and
-both walkers read the directory into a table keyed by kind: `found[kind] =
-(offset, records, stride)` in `walker/image.py`, one field per tag in
-`walker/c/situ_walk.c`. **A second section under a tag does not sit beside the
-first, it replaces it.**
-
-So with `--metadata` the core pool was unreachable, and every core string
-resolved into the tail's pool at the same offset. Measured, not argued:
-
-    example/dns      tags [.. 4, 12, 13, 4]   offset 0 -> 'dns_header'   was 'reply_to'
-    example/packet   tags [.. 4, 12, 13, 4]   offset 0 -> 'header'       was 'aes_gcm_128'
-
-The second is the one that bites. A codec name is in the *core* pool for a
-stated reason -- "a walker cannot dispatch a transform it cannot identify" --
-and a walker asking which codec guards `packet.sealed` was handed the name of
-a struct. It would not have failed; it would have dispatched on the wrong
-string.
-
-**The tail interns into the core pool now, after the core has finished with
-it, so the merged pool begins with the core pool byte for byte.** Checked
-against the previous packer as a second module: **37 of 37 bare images
-byte-identical**, 35 metadata images changed. `--metadata` is additive in the
-sense the name claims, which it was not before.
-
-`FORMAT_VERSION` does not move, and should not. No tag, stride or record
-meaning changed. What changed is that an image now carries one strings section
-instead of two, the first of which no walker could read.
-
-**And `_assemble` refuses a repeated tag now.** The invariant was in the
-format all along and was enforced nowhere, which is why it was broken by an
-append. A duplicate raises `PackError` naming the tag rather than being found
-by whoever notices a wrong string.
-
-**Separately, a relation the planner could not encode vanished in silence.**
-`except RelationRefused: continue` dropped it with a comment saying the
-backends had already given the reason -- but `situc pack` runs no backend, so
-nothing in that command said anything. `Coverage.unencodable` exists precisely
-because an image is opaque. It carries the refusal now, and the pre-existing
-"non-empty unencodable means exit 1" rule makes it visible. No committed
-schema is affected; all 37 pack with `unencodable` empty.
+Moved to `doc/decision/26.192-two-sections-under-one-tag-and-the-pool-that-shadowed-the-pool.md`.
 
 ### 26.193 The image's own schema said version 2, and nothing had ever asked
 
-`std/image.situ` opens by naming what protects it: "`gen-fuzz` fuzzes the
-image parser, `situc wire` pins the format, `map --check` catches a layout
-change nobody meant, and the differential check compares four backends reading
-one image." Four mechanisms, and **the schema had said `format_version
-[must_eq = 2]` since version 2, through two bumps**, while
-
-    situc/pack.py        FORMAT_VERSION = 4     writes it
-    walker/image.py      FORMAT_VERSION = 4     refuses anything else
-    walker/c/situ_walk.c u16_at(image+4) != 4u  refuses anything else
-
-The consequence, generated and read rather than reasoned about: C's `validate`
-for `image_header` compiles to `if (situ_image_header_format_version_get(view)
-!= 2)`. **Every image the packer has ever produced fails its own schema's
-check.** And `situc wire` did its job perfectly -- `std/image.situ.wire` line
-74 records `must_eq=2`, faithfully pinning a version no image has ever
-carried.
-
-**None of the four could have caught it, and the reason is the same in each
-case.** All four are closed loops over the schema: the fuzzer, the signature,
-the map and the differential all ask whether the *generated code* agrees with
-the *schema*, and it did. The packer is hand-written Python that no generated
-code checks and that reads no constraint out of the schema it implements.
-
-**The round-trip test could not catch it either, and it looked like it
-should.** `test_the_image_schema_packs_and_reads_back` asserts `seen["version"]
-== packer.FORMAT_VERSION` -- reading the field the packer wrote and comparing
-it to the constant that wrote it. That agrees with itself whatever the schema
-says. Its neighbouring fixture goes further and states the promise outright:
-"Generated rather than committed, so that editing the schema and forgetting
-the packer fails here instead of drifting." It generates *accessors*, which
-read; the Python backend emits no constraint validator at all, so there was
-nothing in that module to fail.
-
-The schema now says 4, and one test reads the number out of all four files and
-compares them. The C walker's copy is read out of its source with a regular
-expression, because nothing imports it -- which is not a shortcut but the
-point: **a constant in a file no test loads is exactly where the fourth
-statement of a number goes unchecked.** Each of the four, changed on its own,
-turns it red.
+Moved to `doc/decision/26.193-the-image-s-own-schema-said-version-2-and-nothing-had-ever-asked.md`.
 
 ### 26.194 Half a gate nobody had watched fail
 
@@ -8408,79 +6326,7 @@ Moved to `doc/decision/26.194-half-a-gate-nobody-had-watched-fail.md`.
 
 ### 26.195 Two witnesses, one hand: the round trip that could not see ten fields
 
-Section 26.1's property is that `situc dump-ast` round-trips: "parsing,
-unparsing and reparsing must reach the same tree". The test spelled it
-
-    assert dump(again) == dump(first)
-
-and `situc/dump.py` imports its expression renderer from `situc/unparse.py`.
-**So the witness to the unparser's faithfulness was written by the same hand,
-and agreed with it wherever both were silent** -- which is the guidelines'
-"two documents agreeing are one witness", arrived at from the other end.
-
-Comparing the trees instead, over all 37 schemas, ten AST fields were dropped
-on the round trip:
-
-     40  CodecDecl.kernel / has_kernel      slip, smtp, std
-      5  CodecDecl.tag_bytes                dtls, keystore, packet, std
-      4  CodecDecl.nonce_bytes              keystore, packet, std
-      3  Field.repeat                       dnsname, ipv6ext, netlink
-      2  VarintDecl.declared_max_bytes      mqtt, sqlite
-      2  TagField.prefix                    tcp, udp
-      2  CodecDecl.pipeline                 std
-      1  Field.located                      bmp
-      1  CodecDecl.expansion_add            std
-
-and `unparse` **refused `test/schema/edges.situ` outright** -- `cannot unparse
-Invariant`, raised for years with nothing asking.
-
-Every one of them changes what the schema says. `at expr` is where the *data*
-puts a member; dropping it puts it back in sequence. A `while` run reprinted
-as a bare array ends at the frame instead of at its own condition. A tag's
-`prefix` is TCP's and UDP's pseudo-header, so the checksum covers different
-bytes. A pipeline codec re-rendered as a property body states the composed
-answer as though it had been written and drops the stages that produced it:
-`framed` came back with `expansion = +0` and no stages.
-
-**The measurement that settles which half was at fault.** Each fix sabotaged
-in turn, and both witnesses asked how many schemas notice:
-
-    sabotage       dump sees   tree sees
-    at expr                0           1
-    while                  0           1
-    tag prefix             0           2
-    max_bytes              0           3
-    kernel                 0           4
-    tag_bytes              0           4
-    nonce_bytes            0           3
-    pipeline               0           1
-
-**Zero and eight.** The dump is not a weak witness to this, it is no witness
-at all: it does not print these fields either, so it cannot disagree about
-them.
-
-**The corpus was the second half of it.** The round trip ran on `example/`
-alone while the two snapshot checks in the same file run on everything --
-`test/schema/edges.situ` "exists to carry the constructs no worked example
-has", and 26.35 already recorded that reading `example/` alone left its map
-and its wire signature stale and unread. The lesson had been learnt in this
-file, for two of its three tests.
-
-**Two docstrings in `unparse.py` state the property that was false.**
-`_codec_lines` says "Every property is written out, including the ones that
-were defaulted ... a round-tripped one that dropped a silent default would say
-something different from what it came from", while dropping the kernel, both
-AEAD sizes and the pipeline. And `_until_to_source` exists because this
-happened once before and was caught by something else entirely: "Absent
-entirely until an attribute-placement check found it: a delimited `decimal`
-field reprinted as a plain binary scalar, which parses, means something else,
-and says so nowhere." One of ten found by accident, and the accident is what
-wrote the comment.
-
-The comparison walks the dataclasses now and shares no code with `unparse`, so
-**a field added to the AST is compared whether or not anything learned to
-print it** -- which is the only version of this check that does not rot the
-same way.
+Moved to `doc/decision/26.195-two-witnesses-one-hand-the-round-trip-that-could-not-see-ten-fields.md`.
 
 ### 26.196 The one attribute whose whole purpose is to give up a guarantee
 
@@ -8488,53 +6334,7 @@ Moved to `doc/decision/26.196-the-one-attribute-whose-whole-purpose-is-to-give-u
 
 ### 26.197 The piece 26.188 said was owed
 
-26.188 closed with one member still unanswered: "Python emits nothing: its
-gate has no byte-run path at all ... The Python gate's byte-run accessor is
-the piece still owed." It is paid here, and the shape of the gap is worth
-recording because it is not the one that entry describes.
-
-Python's gate did have a run path. Its interior filter admitted
-`indexed_elements(placement) or not _is_run(placement)` -- **a run of values
-got in and a run of bytes did not**, because a byte run is a run whose
-elements are not indexed. So `dtls.record.sealed.fragment`, the entire
-encrypted payload of a DTLS record, reached neither branch and was emitted as
-nothing at all:
-
-    C       situ_record_sealed_fragment_len / _ptr
-    C++     ::situ::rt::bytes fragment() const
-    Rust    pub fn fragment(&self) -> &[u8]
-    Python  --
-
-The map is not silent about it. `example/dtls/dtls.situ.map` gives the member
-a full vector -- `size=Bounded(0, 16384) ... stage=VerifyGated
-auth=Covered(tag)` -- so this is the same disagreement as 26.196 with the
-sides swapped: there the map said a member was reachable and three backends
-gated it; here the map describes a member in full and one backend emits
-nothing for it at all.
-
-The bytes *are* the values for a byte run, so the answer is a slice -- the
-same one `_opaque` gives outside a gate, read through the gate's view because
-the length is plaintext at the same offsets (13.3). Executed rather than
-grepped: a five-byte payload written into a message and read back as
-`b"abcde"`, because an accessor that reaches the wrong bytes looks exactly
-like one that reaches the right ones.
-
-**Two smaller things fell out of it, and both were invisible before.**
-
-A `[secret]` run is a run, so it reached the interior list the moment byte
-runs did -- and it is already in the list of members that deliberately have
-none. Both write a note, so the member declined *twice*: one member, two
-findings, in a report whose whole job is to say what has no accessor. It is
-excluded from one of the two lists now, and a test counts the note.
-
-And the generated gate class would not type-check. `Gate._view` is the base
-`View`, so an interior member whose length is a field of the enclosing struct
--- `min(nonneg(leaf(self._view.length) - 24), ...)` -- reads an attribute
-`--strict` cannot see. **This was latent in the existing indexed-run branch,
-which builds the same expression**; no schema had exercised it, so the path
-had never been checked. A bare `_view: "<struct>"` annotation on the emitted
-gate narrows it, adds no attribute at run time, and needs neither a cast nor
-an ignore.
+Moved to `doc/decision/26.197-the-piece-26-188-said-was-owed.md`.
 
 ### 26.198 Five rows checked, one not, and the sixth is the one that drifted
 
@@ -8542,105 +6342,11 @@ Moved to `doc/decision/26.198-five-rows-checked-one-not-and-the-sixth-is-the-one
 
 ### 26.199 Two claims the falsifier never attacked, and never said so
 
-`codegen/c/codectests.py` exists to "generate the tests that would falsify a
-lying codec signature", and its docstring says "**Each declared property gets
-the cheap falsifying test** from the section 13.1 table". Its emitting loop is
-sharper still, about what a builder returning nothing means:
-
-> A builder with no test may still have something to say -- that the signature
-> claims nothing here, or that the claim cannot be checked mechanically. Both
-> are worth emitting: **silence would read as coverage**.
-
-Six builders, eight declarable properties. **`authenticated` and
-`error_propagating` had no builder at all**, so a codec claiming either got
-neither a test nor a note -- and `authenticated` is claimed by four extern
-codecs, which are the AEADs guarding every sealed region in the tree.
-
-**Neither is a test that was owed, and that is the finding.** `authenticated`
-is genuinely unfalsifiable at the tier-1 ABI, for two compounding reasons: the
-ABI passes bytes in and bytes out and names no key and no nonce -- deliberately,
-because "no construct here names a key" -- and a `length_preserving` codec has
-nowhere in its own output to put a tag, so the tag is a *field* and 13.5's
-answer for this row is already "see 14.2". All four are that combination.
-`error_propagating` is falsifiable here in principle and is measured that way
-for *derived* codecs (26.150); no tier-1 codec declares it, so a generated test
-would have no implementation to attack.
-
-So the fix is the note in each case, which is what the loop's own comment asks
-for. The third branch is worth having separately: where a codec's expansion
-does account for `tag_bytes`, the tag *is* in the output and `decode` of a
-modified one must refuse -- a cheap falsifier, unwritten because nothing in the
-corpus is that shape, and the note says to attack it by hand rather than
-reading like the case that cannot be attacked at all.
-
-**All four branches are watched, including the two with no subject in the
-corpus.** A note that fires for nothing is indistinguishable from one that
-never fires, so the tests use synthetic signatures -- and each of the four
-sabotages takes down exactly the tests that claim it.
-
-**The tree contains a codec whose `authenticated` is a lie, and says so.**
-`test/generated/codec_impl.c`'s `my_sealing_aead` is XOR with a constant: "It
-authenticates nothing, which is the one property here that is a lie. It is a
-lie the schema tells too." That is deliberate and correct -- 13.1 is that situ
-describes properties and never algorithms, and a test needing real AES-GCM
-would be a test of OpenSSL. It is also exactly the lie this harness was built
-to catch, and the reason it cannot is now written where the harness is read
-rather than only where the stub is.
+Moved to `doc/decision/26.199-two-claims-the-falsifier-never-attacked-and-never-said-so.md`.
 
 ### 26.200 One source line, two answers, and the editor picked one
 
-`test_lsp.py` opens by naming the two things worth testing, and the second is
-that hover's answers "are the ones `situc explain` and the blame chains already
-give, rather than a second, weaker computation of the same thing". **No test in
-it invoked `explain`.** Every reference to the CLI in that file is prose.
-
-It had already drifted once for exactly that reason, and the fix is commented
-beside `_render_blame`: the propagation table has carried a reason and a remedy
-since 11.3, "`situc explain` printed them and hover did not, so the editor gave
-a weaker answer than the CLI". Fixed by hand; nothing added that would catch it
-again.
-
-Comparing the two doors over the corpus found the claim true -- 547 members
-with a source span of their own, and hover omits nothing `explain` prints -- and
-found two other things on the way.
-
-**A struct declared once and reached twice has one span and several members.**
-`hover_at` kept the narrowest match and, among equals, the first, so it
-answered a question about a *line* with one of that line's answers, chosen by
-which struct happened to be declared first. In `example/ble` one line reads
-`advertising_event event_type;` and resolves to two members:
-
-    adv_report.event_type                       offset = AbsoluteStatic(0x00)
-    le_advertising_report.reports[].event_type  offset = FrameStatic(0x00)  <- weakened
-
-The editor showed the first: no weakening, no remedy, nothing to say another
-answer existed. **218 spans in the tree carry more than one member and 165 of
-them disagree about at least one axis**, up to six axes and fifteen members on
-one span. Hover names the other uses now and prints only the axes that differ,
-which is what the source text cannot show and what a second full vector would
-bury.
-
-**And a bullet meant two opposite things.** `_render_vector` listed the
-weakened axes as bullets and the rest after an `Unweakened:` header -- except
-when one list was empty, where the `elif` printed the *strongest* axes as
-bullets with no header. A member with nothing weakened and one with everything
-weakened rendered identically: thirteen bullets, no header. That is invariant
-154, and 137 members in the tree are the first case. A reader looking at a
-fully strong field saw a full list of consequences it does not have. A bullet
-means weakened now, always.
-
-**The evidence that this misleads is that it misled me.** Three successive
-attempts to compare the two doors mechanically parsed a hover card wrongly --
-counting all thirteen axes as weakened, then reading the `**Why:**` section's
-lines as vector lines, then comparing a card against a different member that
-shared its span. Each looked like a real disagreement and each was my parser.
-The gate that went in is containment rather than parsing -- every axis value,
-every reason and every remedy `explain` prints has to appear somewhere in the
-card -- because the two are different doors and should look different; what
-must not happen is hover knowing *less*.
-
-Sabotaged three ways, including the historical one: drop the remedy, and 34 of
-35 schemas go red.
+Moved to `doc/decision/26.200-one-source-line-two-answers-and-the-editor-picked-one.md`.
 
 ### 26.201 The dissector was the description nobody compared, and it was wrong twice
 
@@ -8652,90 +6358,11 @@ Moved to `doc/decision/26.202-pad-to-aligns-from-a-base-0043-does-not-name-and-n
 
 ### 26.203 Two grammars, one hand, and nine spellings neither knew
 
-`test_grammar_sync.py` holds `doc/grammar.ebnf` to `project.md` section 7, and
-its docstring is clear-eyed about why: "Two copies of a grammar disagree
-eventually. The file is only safe to keep if a reader knows which one is the
-bug." It was written after a commit added the `invariant` production to
-section 7 and forgot the extracted copy.
-
-**They did not disagree. They agreed, and both trailed the parser.** Nine
-spellings the compiler accepts were named in neither file:
-
-    file  append  pad_to  tag_bytes  nonce_bytes
-    max_bytes  systematic  error_propagating  ratio_padded
-
-plus `granularity = bit(N)` and `symbol(N)`, and the whole
-`seekable = linear | permuted | blockwise(N)` form -- `codec_prop` had
-`[ "not" ] "seekable"` and no way to say which. Every one of them is used by a
-committed schema, except `target file` and `append`, which no schema has
-adopted yet and which this session added.
-
-The guidelines' sentence is exactly this: **two documents agreeing are one
-witness if the same hand wrote both.** The test between them can only catch
-one of the two ways they rot, and it is the less likely way.
-
-**The third witness is the code**, and it is now a test. Four AST enums --
-`TargetKind`, `Granularity`, `Seekable`, `Expansion` -- are what the parser
-turns source text into inside an *enumerated* production, so every member of
-them is a spelling somebody can type and the grammar has to name it. Two are
-spelled differently from their value (`expansion = +16` for
-`Expansion.add`, `not seekable` for `Seekable.none`) and both are listed by
-name rather than skipped by a rule, so a member that stops being surface
-syntax has to be removed from the list rather than quietly passing a filter.
-
-**What is deliberately not gated is the attribute vocabulary.** `attr = ident
-[ "=" expr ]` is generic on purpose -- the grammar does not claim to enumerate
-attribute names, and `wellformed.py` is what checks a name is one situ knows.
-Measuring "32 of 49 attribute names are absent from the grammar" and calling
-it a gap was my own false positive, caught by reading the production rather
-than the count. The README's attribute table is where that vocabulary is held
-to `PLACED_ATTRS`, which is a different check in a different place because it
-is a different claim.
+Moved to `doc/decision/26.203-two-grammars-one-hand-and-nine-spellings-neither-knew.md`.
 
 ### 26.204 The oracle that existed to avoid situ-against-situ, and one family it never reached
 
-`test_differential_oracle.py` opens with the clearest statement of this
-session's whole subject, written before it:
-
-> Every other test of the generated code compares situ against situ -- four
-> backends against each other (which finds disagreement but not shared error),
-> the accessors against the capability map, the accessors against arbitrary
-> bytes. All of them are downstream of one schema written by one person
-> reading one specification. **This is the one that is not.**
-
-It grades its own evidence, too: `zlib.crc32` and `binascii.crc_hqx` are
-independent *implementations*, and a published check value is "weaker, and
-saying so matters: it comes from the same catalogue the kernel parameters were
-transcribed from, so it is not a second implementation". Fifteen polynomial
-codecs are oracled or excused by name, and
-`test_every_polynomial_codec_is_checked_or_excused` refuses the silence.
-
-**The table family had none of the three.** No independent implementation, no
-published value, no completeness guard -- and four of its eight members encode
-an RFC 4648 alphabet that the standard library implements. `base64` was
-compared only against situ's own derivation of the same table, which is one
-hand writing both sides. Where a derived codec is concerned that is exactly
-what `test/generated/Makefile` already says out loud: "Nothing supplies
-anything here -- both sides are generated, which is what a derived codec
-means."
-
-They are right. `base64`, `base64url`, `base32`, `base16` and `base16_lower`
-all agree with CPython, byte for byte, on RFC 4648's own vectors. That is the
-answer worth having, and it was not available before.
-
-**The first version of the test could not have told.** RFC 4648's published
-vectors are "f" through "foobar", and `base64` and `base64url` differ in
-exactly two symbols -- 62 and 63 -- which none of those inputs encodes to.
-Giving `base64url` the standard alphabet passed all seven. `bytes(range(256))`
-covers all 64 symbols, and the three alphabet swaps go red now.
-
-**A test whose vectors cannot distinguish the thing it names is a check that
-cannot fail**, and the only reason this one is not still in the tree is that
-the sabotage was run before the commit rather than after.
-
-Three table codecs stay unchecked and are named: the two Manchester line codes
-and FDDI's 4b/5b. Nothing in the standard library speaks them, and a
-hand-written vector for a line code would be this schema read twice.
+Moved to `doc/decision/26.204-the-oracle-that-existed-to-avoid-situ-against-situ-and-one-family-it-never-reached.md`.
 
 ### 26.205 The construct with one example and no outside witness
 
@@ -8791,66 +6418,7 @@ Moved to `doc/decision/26.217-two-documents-that-said-what-the-code-does-not-bot
 
 ### 26.218 The register, settled: five closed, and three that are not mine
 
-The copyright holder settled the open items. Five of 26.144's entries close;
-three do not, and the reason differs in each case.
-
-**Closed by decision.** 0045 and 0046 are accepted on the reasoning they
-already carried -- 0045 because a `random` content policy would state what
-the generated code cannot test, which is 14.5's rule and not a new one, and
-0046 because 26.137 is the standing answer that a protocol needing something
-makes it work. 14.7 has lost `random`. Neither is built; accepting a record
-is not doing its work, and both say so in their status.
-
-**Closed by evidence, not preference.** 0017's Rust question turned on a
-distinction the record had not drawn: "one implementation beats four nearly
-correct ones" is an argument about a *hand-written algorithm*, and a
-`derived` codec has no author -- it is generated from a kernel description
-the compiler already holds, so four renderings are four spellings of one
-description. That is situ's thesis rather than the failure the record guards
-against, and `ImplKind`'s two members are where the line falls: an `extern`
-implementation is somebody's C and binding it stays right. What makes it
-Rust's question alone is the `#![no_std]`, no-C-dependency promise a codec
-currently breaks, which C++ does not have because `situ.hpp` includes
-`situ.h` already.
-
-**Closed by the repository.** The plugin slot asked which of two histories
-happened -- designed and never built, or built and dropped. `git log --all
--S"derived for"` matches no commit and `ImplDecl` has never carried a field
-to qualify a binding by target, so: never built. Both documents said the
-slot "exists ... and is empty" and now say it is specified and
-unimplemented. **A question about the past is answerable and was left open
-for weeks as though it were a matter of judgement.**
-
-**Closed by a decision record, 0048.** The frame delimiter is the code's and
-`ratio_bounded` gains a constant term. A decoder finds the frame end by the
-delimiter, so an encoder that omitted it would produce output its own decoder
-cannot bound -- `decode(encode(x))` would not close within one buffer. And
-the emitted C already carries "plus the trailing delimiter" in the doc
-comment a caller reads: the emitter knows the constant and the header tells
-the truth, so this is a gap in what the signature can *express* rather than a
-disagreement about what a code does. No generated byte stream changes, which
-is the other half of why this branch and not the one that stops three
-encoders writing a byte.
-
-**Three stay open, and none of them is waiting on a preference.**
-
-- **`linear_block` knows one code.** Going further needs the generator
-  matrix expressible in a schema. That is a language addition -- work with a
-  design in front of it, not a decision that unblocks work.
-- **8b10b and CoAP.** 26.144 is right that answering them separately is how
-  a language grows two spellings for one idea, and the shared absence is
-  state carried between items, which situ holds inside codecs and nowhere in
-  the layout. Answering needs a record covering both and a design for where
-  that state lives. It is the one genuine design question left on the list.
-- **Which `copyright` file survives, and the switch-label style.** These are
-  not mine under any instruction that does not name them. A licensing
-  statement is a grant to other people and the guidelines are categorical
-  about not choosing between two of them; the style is a convention change,
-  which belongs to a deliberate pass signalled to the shared guidelines
-  rather than to the project that noticed it. Both resting states are
-  already deliberate and both are guarded -- `test_the_two_copyright_files_`
-  `agree` asserts the pair match rather than picking one, and `code-style.md`
-  records the 45 labels without standardising them.
+Moved to `doc/decision/26.218-the-register-settled-five-closed-and-three-that-are-not-mine.md`.
 
 ### 26.219 The refusal was not strictness, it was the only rule five can hold
 
@@ -8858,45 +6426,7 @@ Moved to `doc/decision/26.219-the-refusal-was-not-strictness-it-was-the-only-rul
 
 ### 26.220 The shift rule, built, and the width that is not the field's
 
-0049 decided that a shift is refused where the amount is not provably below
-the operand's width, and left it unbuilt. It is built now, in both places
-the decision names.
-
-**The width is 64 and it is not the field's own.** This is the part worth
-measuring rather than assuming: `u8 body[(code >> 2) + 1]` emits
-`situ_leaf_u64(situ_s_code_get(view)) >> 2`, so a layout expression is
-computed at 64 bits whatever the fields in it are; and a relation widens
-every operand to a signed 64-bit value before comparing, for the reason
-`_widen` already gives. One bound in both, and a rule keyed on each field's
-own width would have been wrong in the safe-looking direction -- accepting a
-shift of 16 on a `u8` that the generated code performs on a `uint64_t`.
-
-**64 is the boundary, not a number above it.** A shift *by* the width is
-undefined in C, not merely one past it, so `[max = 64]` is refused and
-`[max = 63]` is not. `expr.py` already carried a constant-folding guard
-saying "at most 64", which is off by one for a shift that reaches generated
-code -- that guard is about a fold whose result no scalar can hold and is
-left alone; the new rule is about the shift the backend performs.
-
-**The remedy is checked, not just suggested.** The diagnostic tells an
-author to bound the field, and `layout.constrain` folds `[max]`, `[min]` and
-`[must_eq]` into the interval that reaches the rule, so `[max = 63]` makes a
-`u8` amount pass. It is a case in the table rather than a sentence, because
-a refusal that suggests a fix nothing accepts sends the reader in a circle.
-A `u5` passes on its type alone, which is the same fact from the other end.
-
-**A relation refuses an expression as the amount rather than analysing it.**
-`a.hdr.index + 1` is bounded in fact and proving it needs interval machinery
-a relation is checked without. Unknown is unprovable, which is the direction
-where being wrong refuses a legal schema instead of emitting three programs.
-
-**And it caught one of this session's own tests, correctly.** 26.214's
-vocabulary case shifted by `a.hdr.chunks`, an unbounded `u8`, so the new
-rule refused it -- the case meant to exercise `<<` was exercising the
-refusal instead. It shifts by a literal now, and says why in the helper that
-builds it. The first attempt to give the shift cases their own fields added
-them to the shared `head`, which changed every offset in it and failed 127
-tests that had nothing to do with shifting; they have their own schema.
+Moved to `doc/decision/26.220-the-shift-rule-built-and-the-width-that-is-not-the-field-s.md`.
 
 ### 26.221 The ladder's one gate had never refused anything
 
@@ -8920,47 +6450,7 @@ Moved to `doc/decision/26.225-the-write-pass-never-wrote-a-negative-number.md`.
 
 ### 26.226 Two sweeps that found nothing, and the description that was right
 
-26.224 ended by naming the packer as the next place to look, on the ground
-that it sits upstream of every description. It is clean, and so is the seam
-beside it. Both are recorded because a session that reports only its hits
-misdescribes what it did.
-
-**The packer says what `resolve` computed.** Two representations of one
-layout by different code -- `layout`/`resolve` against `pack` plus
-`walker/image` -- compared field by field over the corpus: **670 placements,
-every field the image carries**, offsets, sizes, element and array counts,
-`since`, `repeat_cap`, `pad_to`, bit order, byte order, radix, and the
-signed, marker-governed and tag flags. No disagreement.
-
-Six differences turned out to be one deliberate clamp. `_u32` stores
-`min(value, NONE - 1)`, so a `size_max_bits` above 32 bits lands as
-`0xFFFFFFFE` -- `bmp`'s pixel run, `sqlite`'s payload and four others whose
-theoretical maxima are absurd. It is unobservable: the walker reads
-`size_max_bits` only where `pinned` is set, which is an explicit
-`[size = N]` and always small.
-
-The first two versions of that check reported dozens of disagreements and
-both were the instrument. One paired the image against `sorted(structs)`
-rather than against the image's own struct table; the other compared every
-*flattened* placement against a struct's *own* members. Invariant 157, twice
-in one sitting, and both times the shape of the output -- values shifted by a
-constant -- was what gave it away rather than any single line being obviously
-wrong.
-
-**The committed artefacts are current.** All 37 `.situ.map` and all 37
-`.situ.wire` files regenerate byte-identical. Those gates work.
-
-**And the dissector already had the bug the walker had.** `_bitmask` shifts
-by `skip` for lsb-first and by `span - skip - size` otherwise -- the choice
-the walker never made. Checked rather than assumed, because the previous
-entry's finding is exactly the kind that travels: the same fact, needed by
-five descriptions, is a fact four of them can each get wrong separately.
-This one was right, and is now pinned, because the path is reachable only
-from a schema written for it -- the tree's one `lsb_first` schema is a
-register, which gets no `Proto`.
-
-`0xAB` read from the low end is `low 3, high 21` in the generated C, in the
-walker since 26.224, and in the dissector all along.
+Moved to `doc/decision/26.226-two-sweeps-that-found-nothing-and-the-description-that-was-right.md`.
 
 ### 26.227 A rule stated twice, tested once, and implemented nowhere
 
@@ -8972,110 +6462,11 @@ Moved to `doc/decision/26.228-at-expr-measured-from-the-wrong-base.md`.
 
 ### 26.229 The construct seam, followed to three clean answers
 
-26.227 and 26.228 both came from one question -- which constructs does the
-corpus barely exercise -- so the rest of that list was worked through.
-Nothing more came out of it, which is worth the paragraph.
-
-**`indexed`'s offset base is packed correctly**, and the hypothesis that it
-was not was wrong in an instructive way. `_index_base` reads
-
-    {"region": 0, "message": 1}.get(str(base), 2)
-
-and `ast.IndexBase` is an `Enum`, so `str(IndexBase.REGION)` is
-`"IndexBase.REGION"` and the lookup should never match -- which would have
-recorded *member* for every table, in the unsafe direction 0024 is about.
-Measured: `region` packs 0, `message` 1, a member 2. The AST field holds the
-enum's *value*, a plain string, so `str()` is a no-op and the mapping works.
-**Checked before fixing, and the fix would have been a bug.** Third time this
-session a "defect" read off the code dissolved on execution.
-
-**The walker declines an indexed region, and says nothing about it.** It
-never reads the image's `INDEXES` section -- the constant is defined in
-`walker/image.py` and consumed nowhere -- so `sqlite`'s cell table produces
-no line at all in a listing, rather than a stated refusal. Honest in the
-sense that matters, since a wrong line is worse than a missing one; but the
-tree prefers a decline that names itself, and this one does not. Recorded
-rather than changed: adding a line moves the counts two differentials floor
-against, which is a cost the observation does not carry on its own.
-
-**The walker's relation arithmetic matches C, including the signs.**
-`report.relate` runs the bytecode VM rather than evaluating Python, and
-`vm._div` is `abs(a) // abs(b) * (1 if (a < 0) == (b < 0) else -1)` with
-`_mod` derived from it -- truncation toward zero, the same definition
-`expr.BINARY_OPS` carries and the reason 26.208 and 0049 exist. The one gap
-worth naming is that the walker's `relate` is asserted against written-out
-constants rather than against a compiled predicate, which is the weaker of
-the two available proofs and the one `test_walker` explicitly argues against
-elsewhere: "the four are five spellings of that module, so comparing against
-it would be asking one implementation whether it agrees with itself."
+Moved to `doc/decision/26.229-the-construct-seam-followed-to-three-clean-answers.md`.
 
 ### 26.230 Two constructs accepted, and what each is waiting on
 
-0050 and 0051 are accepted, not built. Both came from the copyright holder
-in one sitting, and they turned out to be the same question asked twice:
-**what may a schema say that the bytes do not.**
-
-**0050, external arguments.** A format whose shape follows a fact the
-message does not carry -- a negotiated cipher suite, a card class, a block
-size. `prefix(...)` was already the precedent that a caller may know
-something the message does not, and `const` already parsed with no way to
-set one from outside. The design crosses two axes, *when* the argument is
-known against *what* it may affect, and takes the cells that cost nothing:
-`--define` for a generation-time `const`, and `parameter u8 name;` as a
-zero-width member so that sizes, `at expr`, `[since]`, `require` and
-`invariant` read it through machinery that already exists. A parameter may
-decide meaning freely and may move a member only under `[stream]`, because
-a per-message argument cannot reach a Lua dissector and 0049 settled that
-four of five is not a rule.
-
-**0051, messages a schema carries.** A schema should be able to say "when
-these fields hold, this is what it means", so a dissector and `situ-edit`
-can be helpful about a format without format-specific callback code --
-which is a sixth description of the layout, in a place none of the five can
-check. Three separable gaps: no predicate over several members of one
-message, no identity for a failed check, and no notion of a message that is
-not a failure.
-
-**The holder's constraint is what made 0051 a design rather than a
-feature.** The first draft left "when does this run" open, and the answer
-returned was: flat, once, at the most useful time. situ already had exactly
-one such point -- `validate` is "one line about the whole struct", the
-caller invokes it, and it recurses into nested structs, so validating a
-file's top-level struct is "the end of processing the buffer" already
-spelled. Pinning `when` there makes the model flat *by construction*: no
-evaluation on an accessor call, so a getter stays arithmetic; no `when`
-reading another, so no order and no cascade; no `on_read` form, because
-that is the `effect` axis and means something else.
-
-Reading `_validate` to place it turned up the wrinkle that decides the API.
-It short-circuits -- "order matters because the first failure is the
-answer" -- which is right for a verdict and wrong for collecting messages,
-so the messages come from a sibling that does not stop and that a caller
-who wants none never links.
-
-**Two things worth carrying out of both records.**
-
-*The identity is the contract; the text is a default.* The `_SCALE` split,
-for the reason `_scale_macros` already gives about fixed point: the exact
-fact belongs in the header and the rendering needs a type -- here a locale,
-a log format and a flash budget -- situ cannot choose. It also answers
-localisation without inventing any.
-
-*And for once the Lua dissector is the description that gains most.* 0049
-and 0050 both turn on it being the one that cannot follow; Wireshark's
-expert info is 0051's construct exactly, and `gen-dissector` emits none
-today.
-
-**The hazard is stated rather than left to be discovered.** situ cannot
-check prose. A `note` that says something false about the format is shown
-with the compiler's authority behind it, and nothing in the tree can catch
-it -- the first construct where a schema asserts something no check can
-hold it to, which is 14.5's rule pointed the other way.
-
-Neither is built. 0050's `parameter` has no position, so the lattice needs
-an `offset` answer for it -- 26.209's question about an arm's offset is the
-nearest precedent -- and its view-constructor change is the same API-shape
-cost 0046 carries, which is an argument for landing those two together.
+Moved to `doc/decision/26.230-two-constructs-accepted-and-what-each-is-waiting-on.md`.
 
 ### 26.231 The walker names the check that refused, and nothing else changed
 
@@ -9111,52 +6502,7 @@ Moved to `doc/decision/26.238-one-constraint-two-spellings-two-generated-surface
 
 ### 26.239 The construct that seals names its algorithm; the one that summarises cannot
 
-0053, proposed, from respec's reader accepting a truncated image. Their
-diagnosis was right and this entry is what checking it turned up.
-
-**It is true of `tag` as well as `checksum`, which the report did not
-claim.** A tag over a sealed region generates `tag_covered()`,
-`tag_is_dirty()` and `tag_finalize()`, and a comment instructing the caller
-to *write the result through `tag_ptr()`*. Neither construct computes
-anything. `gen-tamper` does not either -- it takes a `situ_verify_fn` the
-caller supplies.
-
-**The asymmetry is in the AST and is an inheritance rather than a
-decision.** `Sealed` and `Coded` each carry a `codec` field and name their
-algorithm at the site -- `sealed(aes_gcm_256, nonce = nonce)`. `TagField`,
-which serves both `tag` and `checksum`, has no such field. `checksum` was
-defined as "`tag` with a non-cryptographic algorithm", and it inherited a
-shape designed around the one thing situ deliberately does not implement.
-
-**14.1 is right about the case it was written for and is being applied to a
-different one.** Situ declines to implement AEAD, and that is sound: no
-layout compiler should own constant-time behaviour or key handling. A CRC
-has no key, no secret-dependent branch, and **situ already generates it** --
-`std/kernels.situ` declares five polynomial codecs, each `impl ... derived`,
-and `gen-derived` emits a real table and function. Both halves exist and
-nothing joins them, so every caller writes the same three lines and respec's
-wrote none.
-
-**`derived` is the whole of the proposed restriction**, which is what makes
-this a wiring change rather than a reversal: tier 2 is already the set situ
-generates from a kernel description, so binding one to a checksum adds no
-implementation. A `tag` still may not name one, and 14.1 stands untouched
-for it.
-
-**The part that needed deciding rather than assuming is when it runs.**
-`validate` must not: it is a bounded constraint walk over a view, and a
-coverage running to EOF is a pass over the whole file. Folding it in would
-make a field check cost a file read and would reopen exactly the question
-0051 was written to close. So the check is a function the caller invokes at
-the flat model's one point, and `--refuse-ungenerated` is where a schema can
-insist it exists.
-
-**And respec's stated blocker was not the real one.** They believed the
-coverage could not be declared because their schema stops after the INFO
-chunk while the sum runs to EOF. `authenticated body { u8 rest[remaining]; }`
-under `target file` is exactly that region, accepted, with its interior
-deliberately undescribed. The half that was genuinely missing is the one
-above.
+Moved to `doc/decision/26.239-the-construct-that-seals-names-its-algorithm-the-one-that-summarises-cannot.md`.
 
 ### 26.240 A magic is one comparison now, in four backends and not the fifth
 
@@ -9168,111 +6514,11 @@ Moved to `doc/decision/26.241-the-image-carries-the-bytes-and-a-preamble-states-
 
 ### 26.242 A signature has no byte order, so the enum has no integer
 
-0052 is built. `enum signature : u8[2] { bmp = "BM", pe = "MZ" }` names
-spans, and a field typed by one is two bytes whose value must be an arm.
-
-**The width is on the backing type because that is what it describes.**
-How wide one value of this enum is. And a field typed by one is normalised
-into the run it denotes immediately after parsing, rather than teaching the
-solver a second way for a member to have a count -- every downstream reader
-already knows what `u8[2]` means, and a second mechanism is one half of
-them would have missed.
-
-**Membership turned out to be the pinned-run check asked of a set.** That
-is why this construct cost so much less than the two before it: one
-emitter per backend, one image section, one walker branch, all already
-written. A `[must_eq]` and a `preamble` pin one alternative; an enum pins
-one per arm. `default = pass` pins none, because it says unknown values are
-accepted and a check emitted anyway would refuse messages the schema
-admits.
-
-**No backend enumerates anything.** There is no integer to enumerate, and
-giving the arm one would hand it the byte order the construct exists to
-avoid -- `"BM"` is 0x424D or 0x4D42 depending on which way you read it, and
-a format reference writes signatures as text precisely because the
-question does not arise. So C emits `situ_m_bmp[2]` and `situ_m_is_known`,
-and the other three their own spelling of the same pair.
-
-**Four defects, and each was found by a different instrument.**
-
-*mypy*: `Env` gained a field and two positional constructions shifted
-silently. They are keyword calls now -- a six-field dataclass is not a
-shape anybody should have to count.
-
-*The compiler*: two pinned members in one Rust `validate` declared `WANT`
-twice in one scope. `let` would have shadowed happily; a `const` does not,
-so the check is a block now.
-
-*`-D warnings`*: a `pub use m as M;` alias nothing used. Dropped rather
-than allowed, since the module already carries the schema's name.
-
-*The corpus*: `situc wire` crashed on the new enum, because it reads
-`env.enums` and a byte-run enum is deliberately not there. It renders the
-arms as written now, which matters more in that file than anywhere -- the
-wire signature is the document a reader checks the bytes against, and a
-number in it would put back the byte order the construct removed.
-
-**`env.byte_enums` is separate from `env.enums` on purpose**, and the crash
-is the argument for it: every reader that wants an integer fails loudly
-instead of getting a plausible wrong one.
+Moved to `doc/decision/26.242-a-signature-has-no-byte-order-so-the-enum-has-no-integer.md`.
 
 ### 26.243 The checksum computes itself, in the two backends that can
 
-0053, built. `checksum u8 crc[4] covers(body) is crc32;` generates
-`crc_compute` and `crc_check`, and respec's scenario closes: a truncated or
-corrupted image is refused by the layer whose job is to say an image is not
-what it claims.
-
-**`SITU_ERR_CHECKSUM` rather than `SITU_ERR_TAG`**, which is the same
-distinction `stage` already draws one step further out. A tag that fails to
-verify is a hostile or corrupt message; a checksum mismatch is corruption or
-truncation. A receiver that cannot tell them apart logs a disk error as an
-attack.
-
-**Neither is called by `validate`.** A coverage may run to the end of the
-message, so folding it in would make a field check cost a file read and
-would reopen the question 0051 was written to close. The walker therefore
-agrees by doing nothing, which is correct rather than a gap.
-
-**Built for C and C++, refused by Rust and Python, and the split is the
-construct's shape rather than a staging decision.** `gen-derived` emits C.
-C has the implementation and C++ calls it across a linkage it already has;
-Rust and Python have no derived codec at all, so a binding there generates
-a call to a function no file in their language defines -- clean output,
-correct-looking, failing at the first call. That is 26.241's accessor bug
-one layer out, and 17.0 says refuse rather than surprise. **So it is
-deliberately not in the corpus**: the four-way differential builds every
-corpus schema in every backend, and two refuse this one by design.
-
-**Four things the work turned up, and three were mine.**
-
-*The byte order belongs to the codec's output, not the member.* Setting
-`Placement.endian` from the scope to give the backend somewhere to read it
-put `big` on a `u8[2]` in eight committed wire signatures -- describing an
-order a byte run does not have. It is `tag_codec_endian` now, and the
-member's own `endian` stays None. WOZ2 stores its CRC little-endian and PNG
-stores its big, so guessing would be right for one format and silently
-wrong for the other.
-
-*A probe that declares what the generated code owes is a test of the
-probe.* The first C probe declared `situ_crc32` itself, which would have
-hidden a header that failed to declare it.
-
-*And the fix for that went into the wrong backend.* Removing the hand
-declaration showed C was already fine -- the codec's own block declares it
--- so the emitter gained a second, redundant one. C++ was the backend with
-the gap, and its fix belonged in `_codec_prototypes`, whose docstring
-already said why: a linkage specification is not allowed in a block. **The
-sabotage is what found it**: removing the new declaration changed nothing,
-because the real one was thirty lines further up and had been there all
-along.
-
-*The runtimes police themselves.* `situ_err_str`'s switch is exhaustive
-under `-Werror=switch` and refused the new code until it was handled, and
-`test_the_failure_classes_match_the_runtimes` holds `project.md` section
-20.2 to the C enum -- so the document is the fifth mirror of the error
-vocabulary and fails when it falls behind. Both fired, neither needed
-looking for.
+Moved to `doc/decision/26.243-the-checksum-computes-itself-in-the-two-backends-that-can.md`.
 
 ### 26.244 Writing one real example found three bugs nothing else could
 
@@ -9284,62 +6530,7 @@ Moved to `doc/decision/26.245-every-crc-anybody-uses-and-not-the-sum-on-almost-e
 
 ### 26.246 Three languages, one polynomial
 
-`gen-derived` emitted C, so 0053's `checksum ... is <codec>` was honoured
-by two backends and refused by two. It has Rust and Python backends now,
-for the two families a checksum can name -- `polynomial` and
-`ones_complement`. The other five decline with a note, exactly as C does
-for a kernel it cannot generate.
-
-**The arithmetic moved before the second backend was written.**
-`kernel_math` holds the CRC table, the accumulator width, the reversal and
-the reflected start; three renderers read it. Writing the table twice is
-invariant 13's failure with a worse ending than usual -- two backends whose
-digests differ for a reason no test would name -- and this tree has already
-paid for four copies of a struct walk. The refactor was proved by
-regenerating the C and diffing: identical.
-
-**Where the implementation goes is a language question, not a taste one.**
-C leaves it to `gen-derived` and the linker, which is how C joins
-translation units. Rust and Python have no such culture: expecting a symbol
-from a module the generated file cannot name would invent a path
-convention the caller then has to satisfy. Those two emit the codec into
-the module that calls it, once per codec, and only where a checksum names
-one.
-
-**Rust's type system found something C hides.** An eight-bit reflected CRC
-shifts its register right by eight, and `u8 >> 8` is a compile-time
-overflow that rustc refuses. C emits the same shift and is correct, because
-`crc >> 8` on a `uint8_t` promotes to `int` and evaluates to zero. The
-expression reduces to one table lookup at that width in both directions,
-which is what all three now emit -- and it took a stricter language to make
-anybody notice that the term was always zero.
-
-**Python's divergence is the same shape from the other side.** A Python
-integer does not wrap, so `crc << 8` grows without bound and every width is
-masked, 64 included. In C and Rust the mask is a narrow-width correction
-and the machine word does the rest; in Python the mask *is* the word.
-
-**`[self_as]` is refused rather than computed, and that is the remaining
-limit.** A checksum inside its own coverage says its own bytes read as zero
-while the algorithm runs. A generated `compute` reads the span as it
-stands, so it would sum the stored value and be wrong for every message --
-and a wrong checksum is worse than an absent one, because it looks like a
-verdict. IPv4, ICMP and UDP are all that shape and keep the caller's
-arithmetic; PNG's CRC is outside what it covers and binds.
-
-**The oracle got stronger by the same change.** It compared `zlib`'s CRC
-over the span situ named, so situ supplied boundaries and something else
-supplied arithmetic -- which was enough to catch 26.244. Now the schema
-computes its own sum and `zlib` checks the whole answer: situ's table,
-situ's loop and situ's span against an implementation nobody here wrote.
-Inverting the reflection flag in the Python codec fails it.
-
-**And the verification that mattered was not the vectors.** Thirteen CRCs
-agreeing with a table this repository generated is one witness asked
-twice. What settles it is a bit-at-a-time reference written from the
-parameters in `std/kernels.situ` rather than from `crc_table`, agreeing
-with all thirteen over nine inputs -- with a deliberately wrong `xorout`
-shown to separate them, so the cross-check is known able to fail.
+Moved to `doc/decision/26.246-three-languages-one-polynomial.md`.
 
 ### 26.247 The hole becomes a parameter, and IPv4 computes its own checksum
 
@@ -9347,45 +6538,7 @@ Moved to `doc/decision/26.247-the-hole-becomes-a-parameter-and-ipv4-computes-its
 
 ### 26.248 Two spans, and the last two IP checksums bind
 
-`prefix(...)` names bytes the algorithm sums before the message's own --
-UDP's and TCP's twelve-byte pseudo-headers, built by the caller from a
-layer the schema does not describe (14.2a). A generated `compute` had a
-view and nothing else, so the clause was refused. It is threaded now, and
-all four IP checksums that can bind do.
-
-**The codec takes two spans rather than a seed.** `X_spans(a, alen, b,
-blen, hole_at, hole_len, fill)` walks the concatenation and indexes the
-hole against it, so one loop serves a CRC and a one's-complement sum alike.
-The obvious alternative was a seeded or chained form -- sum the prefix,
-carry the running value into the message -- and it is worse for a reason
-worth keeping: **it publishes intermediate state.** A CRC's running
-register is not its digest, the fold and the final xor have not happened,
-and an entry point handing that out invites a caller to treat it as an
-answer. Two spans is a wider signature and a narrower promise.
-
-The three entry points nest rather than duplicate: `X` calls `X_holed`
-calls `X_spans`, so there is one loop per codec however many shapes reach
-it.
-
-**Verified against sums nobody here wrote.** A hand-written RFC 1071
-reference gives UDP 0xe855 over a pseudo-header and an odd-length payload,
-and TCP 0xf383; situ agrees with both. The cases that matter are the last
-two of each probe: corrupting a byte of the **pseudo-header** -- which is
-not in the datagram at all -- must refuse, and a prefix of the wrong length
-must refuse rather than be summed. The first is the whole reason the clause
-exists; the second is the mistake a caller will actually make.
-
-**And the punctuation caught me.** `compute` takes `out` last, so its
-prefix parameters end with a comma; `check` takes nothing after, so they
-need one in front. Reusing one string and trimming produced
-`(situ_view_t view const uint8_t *prefix, ...,)` -- two errors in one line,
-from one convenience. The first schema to use it did not compile, which is
-the good ending; a generated signature that happened to parse would have
-been the bad one.
-
-**ICMP still does not bind, and now it is the only one.** Its declared
-coverage is eight bytes where RFC 792 sums the whole message (26.247), so
-what stops it is the schema rather than the construct.
+Moved to `doc/decision/26.248-two-spans-and-the-last-two-ip-checksums-bind.md`.
 
 ### 26.249 The example was wrong, and only computing found it
 
@@ -9409,156 +6562,23 @@ Moved to `doc/decision/26.253-remaining-reached-the-contract-and-not-the-code.md
 
 ### 26.254 One construct, six descriptions, and five of them wrong
 
-`chunk chunks[] while (remaining > 8)` is the shape a stream with no count
-and no sentinel has to use, and 26.253 fixed it in the four compiled
-backends. It was wrong in the other two, and wrong differently in each.
-
-**The dissector abstained, and its reason was false.** It printed
-`elements of no size this dissector can compute` for an element that is
-eight bytes. `traverse.extent_parts` returns None for two unrelated
-reasons -- a FIXED struct, because there is nothing to compute, and an
-unmeasurable one, because there is nothing to compute it from -- and the
-consumer read the first as the second. Invariant 154's case exactly: two
-states, one piece of evidence. The four compiled backends had the fixed
-arm already, C walking the same run with `SITU_CHUNK_SIZE_FIXED`, so this
-was the fifth description missing a decision the other four shared.
-
-**Then it abstained again, for the condition.** With the stride fixed the
-run still declined, because the dissector's `_over_fields` never gained
-the `extra` name table 26.253 gave the other four, so `remaining`
-resolved nowhere and the whole condition was refused. A gap in one
-description is invisible to a differential that compares only what both
-sides speak about.
-
-**And it blamed the size for it.** Those two refusals shared one message,
-so a condition situ cannot render reported an element whose size is a
-constant. A specific wrong cause sends the next person somewhere, which
-is worse than a vague one; they are separate messages now.
-
-**Both walkers took one element too many.** `_evaluate(sub,
-placement.repeat_code)` measured `remaining` from the element's START
-rather than from past it -- the only `_evaluate` in `walk.py` that did not
-say where `remaining` begins. A `while` is a post-condition, so the cursor
-has already passed the element the condition asks about. On a 40-byte
-frame it took four eight-byte elements where the other five take three,
-**swallowing the two members after the run**: `crc` and `marker` were
-absent from the report and the message was called malformed. The C walker
-had it too, passing `left` -- which correctly frames the element -- as
-`remaining` as well.
-
-**None of this was caught because nothing used it.** Six `while` runs
-exist in the corpus and every condition read a plain field of the element
-(`nla_len >= 4`, `kind == 0x11`, `separator == 0x2D`). The construct
-reached the wire contract and no test. So `edges.situ` gains `hops`, whose
-`trail` and `mark` are the assertion rather than decoration: an overrun by
-one element is exactly what eats them. `structs_of` gives every acquirable
-struct a section, so the four-way differential now probes `step count`,
-`trail` and `mark` on 48 buffers, and
-`test_the_walker_agrees_with_the_compiled_backends` compares the walker to
-C line by line. Sabotaged back to the pre-advance read, that test fails;
-with the fix it passes.
-
-**The probe that proves it has to be `remaining > 8`, not `> 0`.** Three
-chunks under `> 0` gives three either way, the walk's own bound stopping
-it regardless. This is 26.253's lesson arriving a second time, and it cost
-seven minutes here: the first fixture used `remaining`, which the
-dissector was refusing for the *condition*, so it could not tell a fixed
-element from a variable one in that backend at all. `while (length > 0)`
-on the same pair discriminates.
+Moved to `doc/decision/26.254-one-construct-six-descriptions-and-five-of-them-wrong.md`.
 
 ### 26.255 A byte has no byte order
 
-`_host_order` answered `placement.endian is NATIVE` and nothing else, so
-netlink's `ifa_family`, `ifa_prefixlen`, `ifa_flags` and `ifa_scope` -- four
-`u8` fields -- were drawn as opaque `ProtoField.bytes` under "the capture
-does not record which machine wrote these". One byte reads the same on
-every machine there has ever been.
-
-`endian native` is a fact about a MULTI-byte number. The width is not the
-whole test either: a byte-wide field straddling two bytes does draw from
-two, so the guard asks whether the field lies entirely inside one byte.
-Measured across every schema in the corpus, exactly one dissector changes.
+Moved to `doc/decision/26.255-a-byte-has-no-byte-order.md`.
 
 ### 26.256 A run that is not unrolled does not move the cursor
 
-`_uncomputable` exists because four branches declined a member by
-returning a comment and leaving `at` where it was, so everything after was
-placed with confidence at a wrong offset. The delimited-run-of-records
-branch was still doing it: it says honestly that it does not walk the run,
-and then let the walk continue.
-
-`edges.kv_block` is the one instance in the corpus, and it is the bad kind.
-`payload` was emitted as `subtree:add(kv_block_f.payload, tvb(at))` with
-`at` still 0 -- the whole frame, INCLUDING the `entries` run it follows,
-shown as the payload field. A wrong line is worse than a missing one, and
-this file says so three hundred lines above the branch that did it.
+Moved to `doc/decision/26.256-a-run-that-is-not-unrolled-does-not-move-the-cursor.md`.
 
 ### 26.257 The traceback respec reported, still available under another name
 
-26.253 resolved `remaining` and called the second fault the worse one:
-`UnknownName` is meant to be caught by a caller that then declines the
-member, "and on the `repeat_while` path nobody catches it." That half was
-not fixed, only the one name that had been reported.
-
-`situc wire` accepts `while (chunk.length > 0)` and records it in the
-contract; `situc build` dies with `situc.names.UnknownName: 'chunk.length'`
-for every backend -- a traceback where every other refusal situ gives is a
-diagnostic, which is respec's complaint verbatim.
-
-`_check_one_repeat` validates `path.rpartition(".")[2]`, the LAST component
-only, so a qualified path whose tail happens to be a real field of the
-element passes. A fully bogus name (`foo.bar`) is refused properly, and so
-is a genuinely nested one (`h.len`) -- dotted paths are not supported in a
-condition at all. **So the spellings that got past the check were exactly
-the spellings that crashed.** Six while-runs in the corpus, none dotted, so
-refusing them costs nothing.
+Moved to `doc/decision/26.257-the-traceback-respec-reported-still-available-under-another-name.md`.
 
 ### 26.258 Refused, and nothing refused
 
-`situ_<struct>_check(view, &which)` exists to name the member that
-refused -- "the id is the contract and the name is a macro, so nothing
-here costs a string (0051)". Its header promises `*which` is "one of the
-ids below on a refusal and 0xFFFFFFFF when nothing refused". For a
-fixed-width text number it returned refused AND wrote the sentinel, so
-one call's two outputs contradicted each other and the caller was handed
-an id that names no member.
-
-**The cause is a regex that decides what a refusal looks like.**
-`_REFUSES` matched `return SITU_ERR_<something>;`, and a digit check does
-not return a constant -- it propagates the accessor's own status with
-`return e;`. So the member was grouped as refusing nothing, was given no
-CHECK id, and the loop that writes `*which` before each refusal skipped
-it. `cpio_header` carries thirteen such fields and named none of them:
-`ino = "ZZZZZZZZ"` was refused as "nothing refused" while `namesize` out
-of range was named correctly, three lines apart in the same function.
-
-**Python already got this right**, which is what made it worth chasing:
-it raises `ConstraintError: cpio_header.ino is not 8 digits in base 16`.
-Two descriptions of one schema, one naming the member and one losing it.
-
-18 refusals across four schemas are named now -- cpio 13, edges 3, http
-and smtp one each -- and the ids renumber where they were previously
-absent, which is a generated-header change rather than a schema one.
-
-**The test asserts the population, not the case.** Over every schema in
-the corpus, every line in a `check()` body that returns a refusal must be
-preceded by `*which = `. Asserting cpio's thirteen would pass while the
-next refusal shape nobody has thought of arrives silently; this way it
-arrives as a failure. Reverting `_REFUSES` fails it, naming cpio and http.
-
-**What found it was reading the differential's own list of what it does
-not compare.** `codegen/differ.py` says the probed subset "is the thing
-to grow", and names a fixed-width text number's value as excluded -- so
-that is where four descriptions were free to disagree. They did not
-disagree about the value; they disagreed about how a bad one is reported,
-which is one layer up from where the sweep was aimed.
-
-**And one instrument error, the third of its kind in a day.** The first
-probe printed `which` in the same `printf` as the call that writes it,
-where the evaluation order is unspecified: it read the sentinel it had
-initialised and reported `which=0`, which is `MAGIC` -- a wrong member, in
-a finding about reporting the wrong member. A second program with a
-distinctive sentinel, reading after the call, gave the real answer.
+Moved to `doc/decision/26.258-refused-and-nothing-refused.md`.
 
 ### 26.259 One schema, one language building it and three raising
 
@@ -9570,66 +6590,7 @@ Moved to `doc/decision/26.260-a-reader-calling-the-function-its-own-header-decli
 
 ### 26.261 The axis was enumerated and the member was always data-sized
 
-`compose.py` exists to put constructs next to each other and see what four
-backends do with the pair, and it names the axis this needed:
-
-    **what precedes it** -- nothing, a variable-length run, or a
-    delimiter. This is the axis that decides whether the member's offset
-    is a constant, and 26.49 is eleven places that assumed it was.
-
-The axis was there. 26.259 still happened -- `u8 head[2]` behind a
-variable-length member, building in C and raising `offset is dynamic` in
-the other three -- because of one line:
-
-    FORMS = {"count": "[{read}]", "arith": "[{read} + 1]",
-             "remaining": "[remaining]"}
-
-**All three forms are sized by the DATA.** The member under test always
-carried a count read from the message, so the simplest member of all --
-a literal count, where everything visible about it is static and only
-its offset is not -- never occupied the position this file was built to
-test. That is exactly the shape a backend assumes is constant, which is
-why it was the shape that broke.
-
-`"fixed": "[2]"` takes the space from 6300 cells to 9000.
-
-**150 of the new cells, seed 23: 104 agreed, 46 did not.** And the
-element axis predicts which way, almost perfectly:
-
-    element   crash  build  disagree
-    rec          12      0         0
-    vrec          0     27         0
-    i32/u16       0      0         6
-    u8            0      1         0
-
-So four defects rather than forty-six. A fixed-count run of a FIXED
-record crashes the compiler; of a VARIABLE record it emits code that
-does not build -- `run_span` called by a later member's offset and never
-declared; a fixed-count run of WIDE scalars is read without a frame
-check; and a byte array in a variant arm has C calling an offset
-function it does not declare.
-
-**The wide-scalar one is memory-safety, not a wrong number.** C bounds
-its element read with `situ_in_bounds`; C++ emits a bare
-`situ_get_be32(raw_.base + offset + index * 4)`. Under
-AddressSanitizer that is a heap-buffer-overflow, zero bytes past a
-14-byte region, reached from a schema situ accepts and compiles
-silently. Python and Rust check the INDEX and not the frame, so they
-answer wrong values where C answers zero. The same generated file
-frame-checks `tail`, a scalar at the very same dynamic offset.
-
-**All forty-six reproduce at `cdf5eeb~1`**, before 26.259 and 26.260 --
-checked by copying this `compose.py` into a worktree of that commit and
-running four representatives. Nothing here is a regression; the form
-made pre-existing defects visible, which is what it is for.
-
-**`test_composed_schemas` still passes**, its fixed 25-cell sample
-having drawn none of them. That is the seed's luck rather than evidence,
-and it is worth stating plainly: the enumerated space now contains cells
-that are known to fail, and a future sample may draw one. The module's
-own argument is that this is the right trade -- "the point is not to run
-every cell but to have the cells *enumerated*, so a sample is a sample
-of something known rather than of whatever somebody thought of."
+Moved to `doc/decision/26.261-the-axis-was-enumerated-and-the-member-was-always-data-sized.md`.
 
 ### 26.262 An element the frame does not reach, and the instrument that cannot see it
 
@@ -9673,128 +6634,11 @@ Moved to `doc/decision/26.271-the-strict-reader-where-the-lax-one-belongs-and-tw
 
 ### 26.272 Generated code the size of hand-written, except where it was 3x
 
-Asked whether situ's accessors are bigger or smaller than hand-crafted
-ones, and measured rather than answered. IPv4's fixed header, every field
-read once, against a competent hand-written set -- named offsets, explicit
-byte order, no bounds checks. `.text` of the object, gcc x86-64:
-
-                        -Os              -O2
-    byte-aligned    situ 36  hand 36   situ 40  hand 40
-    bit-packed      situ 252 hand 77   situ 80  hand 82
-
-**The byte-aligned answer is the one the design predicts and it holds
-exactly.** `situ_ipv4_header_total_length_get` is one load and one bswap,
-which is what a person writes. Identical at both levels.
-
-**The bit-packed row was a defect, and `-Os` is where it lived.** At -O2
-situ is two bytes smaller than hand-written. At -Os gcc stops inlining
-`situ_bits_get_msb` once a function holds enough of them -- six here --
-and emits one out-of-line copy. The generated call passes literals,
-`situ_bits_get_msb(view.base, 51u, 13u)`, and out of line those become
-register arguments, so the byte-at-a-time loop that folds to two loads and
-a mask survives into the object and runs. Seven calls into a run-time
-loop, where hand-written code has fourteen instructions.
-
-    5e:  call 0 <situ_bits_get_msb>       x7
-    0000 <situ_bits_get_msb>:
-    19:  cmp %ecx,%edx ; 1d: movzbl (%rdi,%rcx,1) ... 2c: jmp 19
-
-Slower as well as bigger, and `-Os` is what `build-and-commit.md` mandates
-for these projects. Nine of the thirty-one example schemas emit a
-bit-field read: tcp, mqtt, rtc, dns, ipv4, telemetry, ntp, dnsname,
-message.
-
-`SITU_ALWAYS_INLINE` on the four bit helpers takes 252 to **78**, against
-77 by hand. C++ reads bit fields through the same four functions, so it
-inherits this; the walker does not, its offsets being run-time values by
-construction.
-
-**The cost, measured in the other direction, because a fix tested only
-where it helps is not tested.** The derived codecs call these in loops
-with a run-time offset, and inlining there grows twelve functions --
-`base16`, `manchester`, `4b5b`, the two stuffings -- by 3 to 54 bytes,
-8475 to 8799 total. Taken: those are per-symbol inner loops, so what is
-being bought with 324 bytes is a call removed from each iteration, and
-the accessor path is code every consumer of a bit-packed schema pays for
-without having written it.
-
-**The first version of the test passed with the fix reverted.** Four bit
-fields is under gcc's inlining threshold, so the fixture named the hazard
-and could not reach it -- a test over the safe path, green either way. It
-reads sixteen now, gcc declines at six, and the sabotage fails through the
-`nm` assertion rather than through a compile error. The assertion is on
-the symbol rather than on a byte count, since a count is a claim in a
-particular compiler's units.
+Moved to `doc/decision/26.272-generated-code-the-size-of-hand-written-except-where-it-was-3x.md`.
 
 ### 26.273 A bound the descriptions disagreed about, behind a subcommand split
 
-openmlx4 reported four subcommands giving three answers about one file:
-`map` and `wire` exit 0 on `[must_eq = (0 - b0 - b1 - b2) % 256]` while
-`build` and `verify` exit 1. They had been about to recommend `situc map
---check` as their gate and changed the recommendation to run `verify` too.
-
-**They were right, and the divergence was the visible end of a defect
-that is not about subcommands.** Two causes, and the second is the one
-worth the entry.
-
-**One: `invariant.OPERATORS` was `frozenset("+-*/")`.** `%` was missing
-rather than excluded -- `relation.OPERATORS` has carried both since it
-was written, and the docstring's exclusions are comparison and bit
-twiddling, neither of which `%` is. An unrenderable bound reaches
-`bound_refusal` and a renderable one does not, so `build` refused what
-`map` published a row for.
-
-**Two: a bound naming a sibling is rendered as TEXT by each backend, and
-`/` and `%` do not mean the same thing in all six.** C, C++ and Rust
-truncate toward zero; Python and Lua floor. Measured, on the two bytes
-`03 7f` against `[must_eq = (0 - b0) / 2 + 128]`:
-
-    C      situ_s_check(view)  -> SITU_OK
-    Python v.validate()        -> ConstraintError, wanting 126
-
-Six descriptions of one layout, built from one schema, disagreeing about
-which messages are valid. That is the property the compiler exists to
-hold, and it had been available since bounds learned to name a sibling.
-
-**`interval_of` has carried the refusal from the beginning.** "The left
-operand of `%` may be negative", with the note about C against Python and
-the remedy of `[min = N]`. It carried it for SIZE expressions, because a
-size is what asked. A bound reaches the same four backends by another
-route and had never asked -- **so the rule was live on one of the two
-paths that need it, and the path it was missing from is the one whose
-failure is silent.** A wrong size is a wrong length and something
-notices; a wrong bound is a message one description accepts and another
-rejects, with no run in which both are present.
-
-**Where the guard goes decided itself twice.** It is in the solver rather
-than in each backend's `_attr_checks` for 26.233's reason: `map` and
-`wire` call `solve` and not codegen, so an emitter-side guard leaves them
-publishing a diffable artefact for a schema that does not compile. And it
-is in `record_interval` rather than in `constrain`, which was the first
-attempt: `constrain` takes no `Walk` and so no field env, and hung one
-level out the check refused `[must_eq = "BM"]` -- a signature on a byte
-run, arithmetic-free -- in six committed schemas. `record_interval`
-returns early for anything that is not a scalar, which is exactly the
-population that can carry arithmetic.
-
-**What the peer could not have found, and what they could.** They had the
-symptom and no way to see the cause; the reasons were here. The reverse
-also held earlier in the same exchange -- their `--owned` BCD report is a
-defect this tree's own tests do not reach. Neither side could have
-produced the other's half.
-
-**The population assertion caught the operator addition arriving
-alone.** `test_the_builtin_cases_are_the_builtins` asserts
-`set(OPERATOR_CASES) == set(OPERATORS)`, so adding `%` to one set without
-a case in the other went red immediately. A set stated in one place and
-walked from another cannot grow on one side.
-
-Both fixes sabotaged separately, each failing through its own test and
-leaving the other green. The byte-sum check openmlx4 wanted is
-expressible with the subtraction lifted above zero --
-`[must_eq = (768 - b0 - b1 - b2) % 256]`, 768 because it must be
-congruent to 0 mod 256 and at least 765 -- and C and Python agree on all
-1260 byte quadruples tried, 12 of them accepted, so it discriminates.
+Moved to `doc/decision/26.273-a-bound-the-descriptions-disagreed-about-behind-a-subcommand-split.md`.
 
 ### 26.274 The conversion the accessor applies and the checker beside it skips
 
@@ -9806,204 +6650,15 @@ Moved to `doc/decision/26.275-a-round-trip-cannot-see-a-conversion-dropped-from-
 
 ### 26.276 A capability withheld for a reason that was false
 
-Pointing 26.275's lens deliberately -- wherever a value is stored in one
-encoding and read in another, the conversion and the check beside it are
-separate paths -- found a fifth instance immediately, and it is a
-different species from the four that produced the lens. Nothing was
-converted wrongly. **A conversion that never happens was described in
-prose as though it did**, and a capability was withheld on the strength
-of it.
-
-`declared_value_bounds` is the shared decision point all four backends
-render, and it excluded fixed point and BCD:
-
-    Fixed point and BCD are excluded because the getter's value is
-    scaled or decoded, so exporting the raw bound would hand a caller a
-    constant in the wrong domain -- worse than none.
-
-**Nothing scales anywhere.** Measured across all four for
-`q8_8 trim [max = 100]`: every getter returns the raw stored integer
-(`int16_t`, `std::int16_t`, `i16`, `int`), every `validate` compares the
-bound against it, and `_SCALE` and `_FRAC_BITS` are emitted beside them.
-Section 8.1 says so outright -- "neither generates floating point ... the
-caller does the arithmetic in whatever type it has" -- so the sentence
-contradicted the specification it was implementing.
-
-**And the BCD half stopped being true the same day.** Its bound is
-compared decoded in all four only since 26.274; before that Rust compared
-it against the packed nibbles. So the rationale was describing a real
-hazard, in the one type it applied to, which had just been fixed one
-entry earlier.
-
-**The claim lived in three places and had been copied twice** --
-`traverse.py`, `test_value_bounds.py`, `test_codegen_cpp.py` -- with two
-tests asserting the absence and citing the false reason as their
-docstring. That is the shape working-practice.md warns about: a
-correction has to go where a reader will next look for the claim, and
-here the two tests were the copies that would have outlived a fix to the
-source.
-
-**Held open rather than resolved, and that was right.** Two coherent
-answers existed -- bounds are raw, so the exclusion is unjustified; or
-bounds are scaled, so `validate` is wrong in all four backends -- and
-nothing in the tree decided between them, because **no committed schema
-puts a bound on a fixed-point field.** Only two test fixtures do. The one
-committed fixed-point schema reads it the other way: `rtc.situ` describes
-`trim_ppm` as running "-128 to just under +128 parts per million", which
-is the scaled figure. A person's natural reading and the compiler's
-behaviour disagreed, and neither was written down.
-
-Settled by the copyright holder: **bounds are raw**, and 8.1 now says
-which domain a bound on a converted type is in, with the `[max = 25600]`
-spelling for a schema that means 100 ppm. The macros are exported for
-both types, in the getter's own type, and the scaled variant was
-deliberately declined -- the caller has `_SCALE`, and a second constant
-is a second thing to be wrong.
-
-**What tests it is the executable half, and only for a converted type.**
-`test_value_bounds_agree_with_validate` has driven the module's own
-constants through its own `validate` at both boundaries since 26.125 --
-over a `u16`, for which a right-domain and a wrong-domain constant are
-the same number, so it could not have caught this. The two added beside
-it can: a fixed-point constant exported pre-scaled would be 25600 and
-fails, and a BCD constant exported as packed nibbles would be 0x12 = 18
-and fails. **A canary over the one type where the two domains coincide is
-a canary that cannot sing.**
+Moved to `doc/decision/26.276-a-capability-withheld-for-a-reason-that-was-false.md`.
 
 ### 26.277 The library situ installed and gave nobody a way to name
 
-Asked whether a consumer can import an example schema without knowing
-where situ is installed. Measured: **no**, and the reason was good while
-the consequence was not.
-
-`import "..."` resolves relative to the importing file, deliberately and
-with 17.0 cited: "there is no search path, so which file an import names
-does not depend on how the compiler was invoked." That rule is right and
-is unchanged. What sat behind it is that **`make install` puts
-`std/*.situ` in `$(PREFIX)/share/situc/std`, `debian/situc.install` ships
-it, and nothing anywhere tells a consumer where it went** -- no flag, no
-mention in `--help`, and `grep -rn "share/situc"` across `situc/`,
-`bin/situc` and the README returned nothing. The library was installed
-and reachable only by writing an absolute path that varies per machine
-into a schema.
-
-**17.0's objection does not reach this case, and that is the opening.**
-What it refuses is a search *path* -- a list, where "which of these won?"
-has no visible answer. One directory is not a list. `import std
-"kernels.situ";` reads from where situ put its own schemas, found the way
-`bin/situc` finds its own package, and an import still names exactly one
-file.
-
-**Neither form falls back to the other**, which is what makes the second
-spelling worth having rather than a convenience. A fallback would mean
-that dropping a file beside your own silently changes which file an
-existing import names -- the shadowing hazard `#include "..."` has, and
-the reason C keeps `<...>` separate. The test for it had to be written
-twice: the first sabotage did not change behaviour for its fixture, so it
-passed, and only a sabotage that actually implements the shadowing --
-prefer a local file where one exists -- made it fail. **A sabotage that
-cannot reach the code it is aimed at reports the same green as a working
-guard.**
-
-A word rather than angle brackets, per 0006, and because `<kernels.situ>`
-lexes as five tokens that the LSP and the unparser would both have to
-learn to reassemble -- context-sensitivity in a lexer that has none, to
-save a word. `std` is a soft keyword read the way `at` is.
-
-`situc --print-std-dir` is the same answer outside a schema, for a build
-system that wants to depend on a shipped schema or hand it to a tool that
-is not situc. It exits non-zero where the directory cannot be found
-rather than printing nothing and exiting 0, which a shell would read as
-an empty path and use.
-
-**Two instruments earned their keep on the way, and one nearly did
-not.**
-
-`test_it_names_only_the_flags_that_are_global` holds the parser's global
-flags against what 21 claims, so the new flag arriving without the
-section being updated went red immediately -- the population rule again.
-But it then failed through a `ValueError`, because it sliced the section
-from the literal phrase "Two global flags" and the fix had made it
-"Three". **A true failure reported through the wrong half of itself**: a
-reader would have gone looking for a broken index rather than a missing
-sentence. It anchors on "global flags" now.
-
-And fourteen unrelated tests failed in the same run, all at the linker,
-for a missing `build/host/runtime/libsitu.a`. That is 26.87 exactly --
-the Makefile's own comment says `test-py: runtime` exists because "on any
-tree where the archive did not already exist, ten tests failed at the
-linker" -- met by running pytest directly and bypassing the prerequisite,
-in a shared tree where the archive had gone. **Fourteen compile-and-run
-tests failing together, in a run that took fifty minutes instead of
-fourteen, is a fact about the machine before it is a fact about the
-code**, and reading one error message settled it faster than reading any
-diff would have.
+Moved to `doc/decision/26.277-the-library-situ-installed-and-gave-nobody-a-way-to-name.md`.
 
 ### 26.278 The examples ship, and become a library by being importable
 
-Instructed by the copyright holder: install the examples, split out the
-teaching ones, install the rest. "Why would we create them if not to use
-and inform a user?"
-
-**They were already importable and nobody had tried.** `import
-"ipv4.situ"` into a consumer's `tunnel` struct produces a full capability
-map, checksum coverage carried through onto `tunnel.inner`, directives
-not colliding. So this was never a rework -- only 27 of them did not
-ship, and none of them could be named.
-
-**The root moved from `<tree>/std` to the tree itself**, which it had
-been for about an hour. The reason is a wall worth recording, because
-every cheaper arrangement hits it: **an installed layout that categorises
-schemas cannot be mirrored by a source tree that does not, and one import
-spelling cannot mean two things.** Either the source tree is categorised
--- which is a 27-directory move touching 35 path-constructing references,
-and which decides the naming question the holder had explicitly deferred
--- or the install mirrors the source. Mirroring costs a `std/` in the
-spelling of a `std/` file and buys the property that matters: a schema
-that compiles here compiles against an installed situ, unchanged, and a
-later rename of these directories moves the import paths with them
-without touching the language.
-
-**The split is recorded rather than built into a path**, for the same
-reason. `example/designed.txt` lists the five schemas situ invented --
-`keystore`, `message`, `packet`, `register`, `telemetry` -- and the other
-26 are described. **The corpus names its own taxonomy**, which is why
-this needed no judgement: `keystore.situ` says "every other directory
-here is a public format somebody else specified ... or an exercise named
-for the capability it demonstrates", and `telemetry.situ` says "designed
-rather than described. The other examples document formats that already
-exist." The list is held to the tree by a partition assertion and to the
-schemas by a second test reading each one's opening comment, because a
-list of names is second-hand and the direction that costs somebody
-something is a designed schema borrowed as though it were specified.
-
-**And making them a library found what being a document had hidden.**
-Importing `example/ipv4/ipv4.situ` and `std/kernels.situ` together is
-refused: `codec internet_checksum is declared more than once`. Measured
-across the corpus:
-
-    6 of 31 examples redeclare a name std/ has
-        internet_checksum   icmp, ipv4, tcp, udp
-        crc32               png
-        aes_gcm_128         packet
-
-    5 names are declared by more than one example
-        header      dnsname, message, packet
-        msg_type    message, netlink, packet
-        packet      mqtt, packet
-        record      dtls, message
-
-Nothing is broken: 17.0a's namespace is flat by decision, and
-`check_unique_declarations` is doing exactly what it says. What the
-measurement shows is that **each example was written to be read alone**,
-and self-containment is correct for a document and wrong for a library
-member. One example imports fine; two may not.
-
-Left open, and it belongs with the naming: whether a library member
-should `import std "std/kernels.situ"` rather than restate a codec, or
-whether these want the `namespace` that decision 0012 already provides.
-The second is the larger answer and the one that scales past six
-collisions.
+Moved to `doc/decision/26.278-the-examples-ship-and-become-a-library-by-being-importable.md`.
 
 ### 26.279 Three breakages in `make test-c`, stacked behind each other
 
@@ -10015,156 +6670,11 @@ Moved to `doc/decision/26.280-a-guard-aimed-wider-than-its-subject-and-two-that-
 
 ### 26.281 Bounded recursion, and the one line that was doing the refusing
 
-0054 implemented as far as description goes. A struct that names itself
-and declares `[depth = N]` is accepted, laid out and mapped; one that does
-not is refused as before, now with the remedy in the diagnostic.
-
-**What "non-terminating" meant was one function re-entering itself.**
-Section 2 justified the ban for eight months on the grounds that size and
-capability computation do not terminate, and lifting the refusal to look
-showed exactly where:
-
-    layout_of -> place_members -> place_one -> element_extent
-              -> layout_of ...  RecursionError in Scope.narrow
-
-`layout_of` had no re-entry guard because nothing could re-enter it. One
-`in_progress` set and one early return is the whole of the solver change,
-and **the placeholder it returns needed no new machinery at all**: a
-self-reference is worth zero-to-unbounded, which is an ordinary
-variable-length nested member, and every backend already understands one.
-The feature that had been called non-terminating was four lines and a set.
-
-**The upper bound is honest rather than derived, and that is a limit
-worth stating.** 0054 says `depth` is what makes `size_max` a number, and
-for a *counted* recursion it is not sufficient: unrolling 32 levels of
-`node children[count]` with an unbounded `u16 count` gives a finite
-maximum that is astronomically large and no use to anybody sizing a
-buffer. A usable bound needs `[max]` on the count as well as `[depth]` on
-the type -- which is openmlx4's `size=20..17179869200` met from the other
-end, and the same answer: the number is the schema's silence becoming
-visible.
-
-**Describable is not generable, and the refusal says which is which.**
-All four backends emit for a recursive type and the C header does not
-compile -- `situ_node_children_extent` calls `situ_node_extent` above its
-declaration -- and a forward declaration would only convert that into
-run-time recursion in generated code that 20.1 promises has none, with
-`depth` and `limit` enforced nowhere. `situc build` refuses by name on
-26.69's precedent; `map`, `wire` and `verify` are correct, which is the
-specification path two consumers actually adopted.
-
-**Three tests asserted the old rule and one asserted the old wording,
-which is the guard working rather than a cost.** `test_direct_recursion_
-rejected` is `test_direct_recursion_is_rejected_without_a_declared_depth`
-now, with an acceptance case beside it: the old name said the refusal was
-unconditional, and it has stopped being.
-
-**And one failed for a reason worth keeping.** `test_every_documented_
-make_target_exists` refused 26.280 for naming another project's `schema`
-target in a `make` command, which is
-*fuzznet's* target quoted in their report and not one situ has. The guard
-cannot tell a foreign command from a claim about this tree, and it should
-not be taught to -- so the prose changed instead. **A document that
-quotes another project's commands will keep tripping a check that reads
-every backtick as a claim about here**, which is the voice rule arriving
-somewhere nobody had put it: their command in their voice still reads as
-this tree's to a regex.
-
-**What JSON gets from this, which is less than the question implied.**
-Recursion was never its main blocker. A JSON object is a string-keyed TLV
-and situ's `known` takes integer literals -- buildable -- but members
-identified by name with no order is what a text codec *means*, and 9.6's
-"discriminant strictly before the variant in layout order" is a statement
-about a world where order exists rather than a restriction to relax.
-netcfgd put it best and it is their sentence: the two projects' premises
-point opposite ways. What 0054 does serve is their case and not JSON's --
-a document of known types, 117 nodes and depth 7, where the recursion is
-in the codec rather than in the type described.
+Moved to `doc/decision/26.281-bounded-recursion-and-the-one-line-that-was-doing-the-refusing.md`.
 
 ### 26.282 A proxy that agreed with the thing for every schema in the corpus
 
-0054's generating half, for C. The routing bug that blocked it is the
-find worth keeping.
-
-**`_is_array` asked the resolver a question about the schema.**
-
-    return self.resolved.find(placement.path + "[]") is not None
-
-That is *"did the resolver absorb this element's members under `x[]`"*
-standing in for *"is this member a run"*. The two agree for every
-non-recursive element, which is why nothing had ever caught it. They come
-apart on a struct that names itself: absorbing a recursive element's
-members would not terminate, so the resolver correctly emits none -- and
-the proxy then answered "not an array" for `node children[count]`,
-routing a run to the single-nested-struct path. The header called a span
-nothing defined.
-
-**Replacing the proxy outright was wrong, and the suite said so in 25
-places.** `dnsname`, `netlink`, `ipv6ext` and `edges` have members that
-satisfy "has a count or a length field" and are single nested structs to
-the resolver, so asking the placement instead routed them to the run path
-and their `_view` helpers stopped being emitted. The resolver's answer is
-kept and the placement is asked only where the resolver cannot have one,
-which is the self-referencing case and nothing else. **A proxy that is
-wrong in one case is not a proxy to throw away** -- 26.5's rule says ask
-the object you mean, and the object here is "is it a run", which the
-resolver answers correctly everywhere it can answer at all.
-
-**What the depth buys, measured by running it.** The extent carries a
-depth and the run's span passes `depth + 1u` down, so nesting is bounded
-by the schema rather than by the message's length:
-
-    levels= 1  bytes=  3  extent=  3  whole
-    levels=31  bytes= 93  extent= 93  whole
-    levels=32  bytes= 96  extent= 96  whole
-    levels=40  bytes=120  extent= 96  SHORT (bounded)
-
-Without it a hostile message nests as deep as its own bytes allow -- for
-a three-byte node, a 64 KB message is 21845 frames -- and 20.1's
-"bounded stack" is what the bound is for.
-
-**At the limit the extent answers zero, which is a short answer and not a
-refusal**, and 26.113 is right that a limit folded into an answer
-produces wrong values indistinguishable from right ones. `extent` returns
-a length and has no error channel. So the refusal belongs in `validate`,
-and this is a stack backstop -- safe for the reason a text number's
-`_value` is safe: a validated frame never reaches it. **That is 26.271's
-bargain reached independently by a different route on the same feature.**
-
-**And two forward declarations, because no order exists.** `extent` calls
-the run's span and the span calls `extent` back. Every other struct in
-this compiler is emitted in containment order; a cycle has none, and a
-prototype is what C has for that.
-
-**The verify half was openmlx4's, and the crash was its smaller part.**
-`situc verify` caught every exception from the generated module and
-rendered it as "does not conform ... from an implementation that is not
-this schema". An `AttributeError` for an extent the Python backend does
-not emit is situc failing, and telling a reader their bytes are wrong
-sends them to their bytes -- where they went, for two probes, before
-doubting the compiler. It renders as a compiler fault now, in the summary
-line as well as the body, because the summary is what a CI log keeps.
-
-**Three mistakes in the fixing, each caught by something already here.**
-
-- The refusal base was imported at the top of `verify.py`, and `_module`
-  builds a *fresh* `situ_runtime` per call -- so the class is a different
-  object and `isinstance` was always false, turning every honest refusal
-  into "situc failed". The control test beside the new one caught it, and
-  it existed only because separating two verdicts is worth nothing unless
-  the other still reads correctly.
-- `broke` was added *between* `refusal` and `mismatches` in a dataclass,
-  silently reassigning every positional `Outcome(case, text, mismatches)`
-  in the file. Four verify tests went red for a reason unrelated to what
-  was being changed. It is the last field now, and says why.
-- The guard on documented make targets refused **this section** for
-  quoting another project's target. A sweep finds its own report, and the
-  fix is the prose rather than the guard.
-
-**And the docstring in `test_recursion.py` claimed verify worked while
-nothing in the file called it.** openmlx4 found that by using it. An
-untested claim in a docstring is a signal with no artifact, and it
-reached HEAD because the sentence was easier to write than the call.
+Moved to `doc/decision/26.282-a-proxy-that-agreed-with-the-thing-for-every-schema-in-the-corpus.md`.
 
 ### 26.283 The same bound in four descriptions, and the directive behind it
 
@@ -10212,69 +6722,7 @@ Moved to `doc/decision/26.293-two-reasons-one-gate-was-red-and-the-second-hid-th
 
 ### 26.294 A check that fits in one byte, and a corpus that does not
 
-`gen-checks` tested a pinned value only when the member was **exactly one
-byte wide**. The gate is two lines and neither carries a comment:
-
-    if placement.offset_bits % BITS_PER_BYTE or placement.size_bits != BITS_PER_BYTE:
-        continue
-
-Counted across the corpus, that is 20 of 60 `[must_eq]` and 39 of 62 enum
-members. What went untested is the characteristic field of each format --
-`bmp.signature`, `sqlite.magic` at 128 bits, `tiff.magic`,
-`image_header.magic`, `ethernet.ethertype`, `mqtt.packet.kind`,
-`arp.operation`.
-
-**And the drop was silent, with the mechanism for saying so two functions
-away.** `Suite.skip` exists and `generate` renders what it collects; the
-`must_eq` loop used it for an unfoldable value and fell through the width
-without a word. So `bmp_checks.c` did not contain the string `signature`
-anywhere: from the artifact, an untested BMP magic and a tested one are the
-same file. That is the standard `_declined` states one module over -- a file
-that quietly omits something is indistinguishable from one that never had
-it.
-
-**The width was never the hard part.** `_reserved_checks` had placed a value
-at any width since it was written, through `_placed_bytes`, which knows the
-member's byte order and bit order. Extracting that as `_break_to` and
-pointing the other two checks at it is the whole of the fix; the arithmetic
-was already in the file, in the one check that did not need it most.
-
-    _must_eq_is_enforced                17 -> 50
-    _rejects_a_value_no_member_names    32 -> 43
-    _must_be_zero_is_enforced           28 -> 28   (untouched)
-
-The enum check gained the same thing twice: it searched `range(256)` for a
-value no member names, beside a gate that had already excluded everything
-wider than a byte. It searches the member's own width now, and where an enum
-names every value its width can hold it says so rather than dropping the
-check -- four of those, all 2 and 3 bits, and each is a fact about the schema
-rather than a gap.
-
-**The refactor was proved inert before any behaviour moved**, which is what
-made the rest safe to read: extracting `_break_to`, then splitting the
-run-check body from its naming, left all 39 generated files byte-identical
-each time. Only then did the gate change.
-
-**And the control was missing, which is the finding this one was hiding.**
-The `must_eq` check never asserted that its fixture validates before
-breaking a field -- so a refusal proved nothing, since a fixture the schema
-already refuses refuses everything after it too. Adding the control turned
-`cpio_header` red at once, and correctly: thirteen `hex u32 ...[8]` text
-numbers sat at `0x00`, which is not a digit in any radix, so no check on
-that struct had ever had an honest control.
-
-`_baseline` writes the digit spelling now -- the smallest admitted value, in
-the field's own radix, zero-padded to its width -- which is the same gap the
-pinned runs had in 26.293, one construct over. **Twice in two days the
-fixture every constraint check rests on was invalid for a construct the
-baseline had never been told about**, and both times the check went on
-passing until something made it assert the fixture was good.
-
-**What the sabotages proved.** Making the wide poke write the DEMANDED value
-turns the new checks red and leaves the byte-wide ones green, which is what
-says the new coverage is real rather than emitted. The digit baseline needed
-no sabotage: the run before it existed failed exactly the two checks it
-fixes, on the artifact, which is better evidence than a fixture.
+Moved to `doc/decision/26.294-a-check-that-fits-in-one-byte-and-a-corpus-that-does-not.md`.
 
 ### 26.295 A directive is a claim about the file it is written in
 
@@ -10290,69 +6738,11 @@ Moved to `doc/decision/26.297-a-text-number-the-schema-declared-signed-and-nothi
 
 ### 26.298 The trim set was HTTP's, in a compiler that is not HTTP's
 
-`[trim]` removed space and horizontal tab, everywhere, in every schema.
-That is HTTP's OWS and SIP's LWS, and it was the right default and the
-wrong answer: **a format that CALLS CR and LF whitespace did not get them
-trimmed**, and JSON does, by RFC 8259 section 2.
-
-The constant was in five places -- the four backends and the walker -- and
-`report.py`'s own comment beside its copy said what a second copy costs. So
-the fix is not a better constant. `whitespace` already existed as a
-file-level directive, put there by `skip`; `traverse.whitespace_set` reads
-it and everything else asks that. One decision, six readers.
-
-**The image carries the set, in a section of its own.** Not a column on
-`image_placement`, because it is the SCHEMA's fact and not a member's -- and
-written unconditionally, because "this schema states nothing" and "this
-image predates the section" are different facts and a walker that could not
-tell them apart would have to guess for one of them. An image with no such
-section means OWS, which is what every schema written before the directive
-meant.
-
-**And the wire signature says which bytes.** A signature reading only `trim`
-cannot tell a reader whether a trailing newline is part of a value, and the
-answer used to be HTTP's whatever the format said.
+Moved to `doc/decision/26.298-the-trim-set-was-http-s-in-a-compiler-that-is-not-http-s.md`.
 
 ### 26.299 The gap named the construct that closed it
 
-`example/json` carried this in its bill, one line above the whitespace line
-26.292 corrected:
-
-> Escapes are the reader's to interpret -- situ frames the span and does
-> not decode it, and a `\"` inside the content ends this scan early. That
-> is the third thing this file cannot do and the one that is a genuine gap
-> rather than a language boundary: `[escape = "\\"]` exists for exactly
-> this and is asserted below.
-
-**The sentence names the attribute that fixes it and calls itself a gap in
-the same breath.** It was not a gap in situ; it was a gap in this schema,
-and the fix is `[escape = "\\"]` on `text.chars`.
-
-The measurement, because a short extent with no complaint is the answer this
-repository rates worst and it was being produced here:
-
-    {"a":"say \"hi\""}    18 bytes    extent 13    before
-    {"a":"say \"hi\""}    18 bytes    extent 18    now
-    ["a\"b"]               8 bytes    extent  6    before
-
-The rule is that the byte after the escape is content whatever it is, itself
-included, so `"back\\slash"` ends at its own closing quote rather than two
-bytes later. That case framed correctly before and still does, which is the
-half worth checking: a fix to the failing case that breaks the passing one
-is not a fix.
-
-What situ still does not do is DECODE one. `\u0061` is framed as six bytes
-and means `a` to a reader, which is the division of labour every other
-member in that file already follows -- and it weakens `canonical` a second
-way, which the map says.
-
-**Why it sat there.** A bill is written once, when a schema is written, and
-nothing brings it back together with the language as the language grows.
-Both lines corrected in two days were true when written and false by the
-time anybody read them, and neither was found by reading the bill -- 26.292
-came from implementing `skip` and this came from asking what else the file
-claimed it could not do. The question is cheap and the answer is not
-discoverable any other way.
+Moved to `doc/decision/26.299-the-gap-named-the-construct-that-closed-it.md`.
 
 ### 26.300 Two attributes in one file, one question, two answers
 
@@ -10372,24 +6762,7 @@ Moved to `doc/decision/26.303-a-reason-that-was-true-when-it-was-written.md`.
 
 ### 26.304 A private copy of a decision the layer owns
 
-`declared_depth` and `depth_limit` say in their own docstrings that the
-decision layer answers them once "so four backends and two walkers spell one
-rule rather than each deriving it". The C backend carried `_declared_depth`
-and `_depth_limit` as private methods, byte-for-byte the same logic -- and
-26.301's wrong number lived in exactly that code.
-
-Found mechanically rather than by reading: for every public function in
-`traverse.py`, which files name it. The rows worth looking at are the ones
-where **three of four backends** ask, and this pair was two of them.
-
-Deleted, and the proof is that the change is invisible: **every generated C
-file for all 39 schemas is byte-identical** before and after.
-
-Two others in the same sweep were checked and cleared, which is the half a
-sweep usually does not write down. Python guards a variant's arm without
-calling `arm_of`, and agrees with C including on a discriminant inside a
-nested struct. `containment_order` says "three backends need this" and three
-read it; Rust abstains because Rust has no declaration-order constraint.
+Moved to `doc/decision/26.304-a-private-copy-of-a-decision-the-layer-owns.md`.
 
 ### 26.305 The members nothing compared were the ones that underflow
 
@@ -10409,70 +6782,11 @@ Moved to `doc/decision/26.308-a-sweep-that-was-wrong-five-times-out-of-six.md`.
 
 ### 26.309 A differential that disagreed about a value nobody disputes
 
-The census in 26.308 named `endian native` at the widths nothing reaches as
-uncovered, so the next move was to write that schema. It found something on
-the first run, and not the thing it was written for.
-
-    c        big -6232767268286081968
-    cpp      big -6232767268286081968
-    rust     big -6232767268286081968
-    python   big 12213976805423469648
-
-Same bits: `12213976805423469648 - 2^64 = -6232767268286081968`. The
-four-way differ printed **every** scalar as a signed 64-bit word -- `(long
-long)` in C and C++, `as i64` in Rust -- and Python's accessor returns the
-unsigned value. Exact for every width but one, so a `u64` above 2^63 is a
-disagreement the tool reports about a value the four agree on.
-
-**The corpus could not have shown it: five `i64` in it and not one `u64`.**
-The one `u64` anywhere is in a comment.
-
-The ask carries the scalar's width and signedness now, and each driver
-prints accordingly. `test/schema/native.situ` keeps it covered, along with
-the two shapes native byte order has accessors of its own for -- `u24`
-through the bit extractor, `u64` through `situ_get_ne64`.
+Moved to `doc/decision/26.309-a-differential-that-disagreed-about-a-value-nobody-disputes.md`.
 
 ### 26.310 Five more copies of one rule, and a suite I had not run
 
-Making `invalidating_members` the shared answer (26.306) turned up consumers
-that each had their own. Two were found by reading; **three were found by
-`make test-c`, which I had not run** -- `test_codegen_c.py` passed and I
-reported the C side green, which is a population that does not include the
-hand-written C tests or the generated check and vector suites.
-
-    situc/codegen/c/emit.py        `_drivers`, `sized_by` only
-    situc/codegen/cpp/emit.py      none at all
-    situc/codegen/python/emit.py   none at all
-    situc/codegen/differ.py        `writes()`, `sized_by` only
-    situc/codegen/c/vectors.py     `sized_by` only -- round-trip vectors
-    situc/codegen/c/checks.py      a boundary-value witness, no notion at all
-    test/generated/*.c             hand-written, the two-argument check
-
-Each agreed with the emitter only while the emitter was wrong in the same
-way. The vectors generator's comment even cited the case that taught it
-(`le_advertising_report.num`), and `checks.py` already computed the
-arithmetic drivers for its span checks while calling the plain setter for
-them.
-
-**And one API regression, caught by the same suite.** Marking a nested
-driver in the struct that owns it dropped the ENCLOSING struct's setter:
-`situ_message_hdr_length_set` vanished. A dotted driver is marked in both
-now -- the nested struct, whose own setter has to invalidate, and the outer
-one, which reaches it through the outer view. Removing an accessor is not
-what a fix to 12.3 is for.
-
-**Two hand-written tests changed rather than broke**, and both had encoded
-the absence of the guarantee: one read through a view it had just written a
-length through, and one called `situ_view_check` with the message. The first
-is the same edit the Python suite needed, and `test_message.c` already had
-`test_reacquiring_after_a_shift_is_valid_again` two lines below it -- the
-rule stated on purpose, beside a test that broke it by accident.
-
-**The lesson is about the population, not the copies.** `test_codegen_c.py`
-compiles generated C; `make test-c` compiles generated C *and* the check
-suites, the vector suites, the fuzz harnesses and the hand-written tests.
-Reporting "the C suite is green" from the first is the vacuous pass with a
-true result: it inspected something, and not the thing that broke.
+Moved to `doc/decision/26.310-five-more-copies-of-one-rule-and-a-suite-i-had-not-run.md`.
 
 ### 26.311 Two gates in `make check` that nobody had run
 
@@ -10480,60 +6794,11 @@ Moved to `doc/decision/26.311-two-gates-in-make-check-that-nobody-had-run.md`.
 
 ### 26.312 The same omission, one document over
 
-26.300 put `[trim]`'s byte set on the member line of the wire signature,
-because `trim` alone "cannot tell a reader whether a trailing newline is
-part of a value". `situc doc` -- the human-facing description, the one
-somebody implements a format FROM -- said the same bare word, and said
-`whitespace + 1 byte` for a lead.
-
-    before   v      whitespace + 1 byte    w...  trim
-    after    v      space, tab + 1 byte    w...  trim: space, tab
-
-Named rather than hex, because the audience differs: a signature is diffed
-by a tool and `trim=20090d0a` is exact, while a document is read by a person
-and four hex numbers ask them to decode which one is a newline. JSON's four
-bytes now read `space, tab, CR, LF` and HTTP's two read `space, tab`, which
-is the difference between the two formats stated where a reader will look.
-
-**How it was found is the reusable part, and it is not a new lens.** It is
-the old one asked of a different artifact: after fixing a claim in one
-place, ask which other document makes the same claim. 26.300 fixed the
-signature and the schema comment; nobody asked what `doc` said, and `doc` is
-the one of the three a stranger reads.
+Moved to `doc/decision/26.312-the-same-omission-one-document-over.md`.
 
 ### 26.313 An empty sweep, recorded because it is one
 
-`[encoding = utf16be]` and `[encoding = utf16le]` came out of 26.308's
-census as constructs the corpus does not exercise, and the census had been
-three for three: signed text numbers, `import` and native-endian `u64` each
-carried a defect. This one does not.
-
-Swept across all six readers -- four backends and both walkers -- on cases
-chosen because random bytes never reach them:
-
-    plain BMP, both endiannesses      accepted by all six
-    a proper surrogate pair           accepted by all six
-    a lone HIGH surrogate             refused by all six
-    a lone LOW surrogate              refused by all six
-    the same, little-endian           refused by all six
-
-The little-endian rows are the ones worth having: the bytes `00 D8` are the
-code unit 0xD800, and a reader that forgot to swap sees 0x00D8 and accepts
-it. Nothing did.
-
-**Recorded rather than dropped, because an absence with no method behind it
-licenses nothing.** What was looked for is written above, and what the code
-does instead is that every backend emits `situ_utf16be_valid` or its
-sibling and both walkers carry `utf16_valid` with an endianness flag. So
-that family is swept, and the next fault in this area needs a different
-lens.
-
-**And pinned, in `edges.situ` rather than a new schema.** That file exists
-to carry "the constructs the worked examples happen not to have", which is
-this exactly -- and unlike `native.situ` one entry back, this one earns its
-place by holding a result rather than by having found a fix. The compiler
-refuses the byte form of the attribute by name, which is why no schema had
-stumbled into a `u16` run and why the six had never been asked to agree.
+Moved to `doc/decision/26.313-an-empty-sweep-recorded-because-it-is-one.md`.
 
 ### 26.314 `[secret]` erased in one backend of four
 
@@ -10565,41 +6830,7 @@ Moved to `doc/decision/26.320-the-gap-that-was-written-down-and-a-wild-pointer-b
 
 ### 26.321 The fix with no test, found by listing them
 
-Asked whether the session's findings were stored as regression tests, the
-answer came from listing them against the fixes rather than from memory --
-and one fix had none. The smoke input was raised from 32 bytes to 256
-because 13 of 181 structs have a SIZE_MIN above 31 and were being fed
-nothing (26.318); nothing asserted it, so putting `head -c 32` back would
-have passed every gate.
-
-`test_the_smoke_input_clears_every_size_floor` reads the size out of the
-Makefile and the floors out of the schemas, so a schema arriving with a
-larger minimum fails it rather than quietly dropping out of the smoke test.
-Reverted, it says which numbers disagree.
-
-**The general point is the method, not the miss.** A fix to a *test's* own
-configuration has nothing downstream to trip over -- no code changes
-behaviour, no gate goes red -- so it is exactly the kind that ships
-untested and stays that way. Twenty of the session's twenty-one tests were
-written beside the code they defend; the twenty-first existed only because
-somebody asked for the list.
-
-**What is stored, and what is not.** Twenty-two tests across five files,
-plus `secret_run` in `edges.situ`, and every defect this session found
-fails at least one of them when its fix is reverted -- each checked by
-reverting it. What is NOT stored is the sanitizer work: the ASan witnesses
-that demonstrated the eraser overrun, the harness's buffer blind spot and
-the C++ wild pointer were scratch programs, and `make check` builds nothing
-under a sanitizer. `make fuzz` does -- `-fsanitize=fuzzer,address` -- and
-needs clang with libFuzzer and runs for as long as it is told, so it is not
-part of the standing gate.
-
-That is a real limit rather than an oversight to close in passing: the
-substance of each finding is covered by a stored test that needs no
-sanitizer -- a canary past the frame in C, an asserted span size in C++, an
-asserted allocation in the harness -- and putting ASan into `make test-c`
-would change what every build costs, which is the copyright holder's call
-rather than a session's.
+Moved to `doc/decision/26.321-the-fix-with-no-test-found-by-listing-them.md`.
 
 ### 26.322 What the fuzzers found the moment they could see
 
@@ -10607,117 +6838,7 @@ Moved to `doc/decision/26.322-what-the-fuzzers-found-the-moment-they-could-see.m
 
 ### 26.323 CI had been red for five days, and nobody had looked
 
-Asked to wire `make fuzz` into CI, the first thing to establish is whether
-there is a CI to wire it into. `gh repo view` says the repository is
-PUBLIC, so Actions are free and the standing rule wants the workflow on
-rather than deactivated. It is on, and it has been failing.
-
-    runs in the last 100 (2026-09-04 to 2026-09-09): 86 failure, 14 success
-    most recent success: 2026-09-04 14:06
-
-**`make check` passes on the runner.** The step that fails is the one after
-it, "Refuse a skip this machine caused", and what it refuses is
-
-    check: 4 skip(s) this machine caused:
-    skipped: 44 (40 accounted for, 4 not)
-      SKIPPED [4] test_codegen_c.py:577: no struct this schema frames
-
-which is not a machine-caused skip at all: a schema that frames nothing has
-nothing for the frame backend to emit. The reason arrived on 2026-09-05 in
-`a25eb6b`, the day after the last green run, and the workflow's list of
-expected reasons never gained a line for it.
-
-**The guard is working exactly as designed and that is the point.** 26.155
-replaced a count with a classification and said so in the workflow: "Adding
-a line here is the deliberate act the old ceiling asked for, and it costs a
-reason rather than a number." A line was owed for five days and this is
-what the design does when nobody pays it -- fail, by name, on every push.
-The alternative it replaced would have absorbed four more skips silently.
-
-**What it cost is a session's worth of pushes onto a red badge.** Seven
-commits went in today without anybody reading the result, which is the
-failure mode the rule about deactivating dead workflows exists to prevent,
-arriving from the other side: not a badge that is red because nothing runs,
-but one that is red for a real reason nobody is reading.
-
-**`make fuzz` is now its own job**, beside `check` rather than inside it,
-because it needs clang with libFuzzer and takes minutes. Three things make
-it worth more than a smoke run:
-
-- **The corpus is cached**, so each run starts from what earlier runs
-  reached rather than rediscovering that a length field exists. It cannot
-  grow without bound -- libFuzzer keeps an input only when it reaches new
-  coverage -- and it is 23 MB after a day of local runs, 256 KB after one
-  cold CI run.
-- **A crash uploads the input that caused it.** Without that the report is
-  "something crashed" and the mutation is gone.
-- **The budget is 60 seconds a harness**, 37 of them, about forty minutes
-  against the check job's ten. It was 20 to begin with, which was a guess
-  made before anybody knew what the runner could do: it turned in 493
-  million executions on a cold corpus, roughly four times what this
-  project's own machine manages in the same wall clock. The budget was the
-  thing to spend rather than save, and the holder said so.
-
-Verified against a clean tree rather than assumed: `make fuzz` with a fresh
-`BUILD_ROOT` builds and runs all 37 from nothing, needs no cmocka and no
-archive, and puts its corpus where the cache step looks for it.
-
-**AND THE NEXT RUN FAILED ON A SKIP LINE OWED BY THIS SESSION.** The commit
-that paid the five-day-old line introduced another one the same day:
-`test_backends_refuse_the_same_members.py` skips a schema whose structs are
-all registers or have no floor, which is as much a property of the schema
-as the other eight, and no line was added for it. 44 of 48 accounted, four
-not, red again.
-
-**Which is the entry's own point arriving at its author.** The rule is not
-"remember to update the workflow when CI goes red"; it is that a skip and
-its line are one change. Written a commit apart they are two, and the
-second is owed from the moment the first lands -- for five days last time
-and for one push this time, the difference being only that somebody was
-watching.
-
-**The bound was missing too, and that is the same shape.** `make fuzz`
-stops itself, so the job needs no timeout for the case that works; it needs
-one for the case that does not, where a harness hangs inside a single input
-and holds a runner for the six hours GitHub allows by default.
-`timeout-minutes: 30`, against twelve minutes of fuzzing plus the builds.
-**Both jobs are bounded, and the numbers come from the runs rather than
-from taste.** `check` measured 8.7 to 10.3 minutes over nine runs and gets
-25; `fuzz` at 60 seconds a harness predicts about 40 and gets 55. The
-second bound can sit that close because a fuzz job's duration is its
-budget rather than its work -- four runs at 20 seconds took 14.5 to 14.8
-minutes, a spread of two percent.
-
-**Raising the budget forced the bound**, which is the sort of pair that
-gets missed: 60 seconds over 37 harnesses is 37 minutes of fuzzing, and
-the 30-minute timeout set an hour earlier would have killed the job every
-time. A number changed in one place and enforced in another.
-
-**And the caching was written up as working before it had worked once.**
-The sentence above said "restored by prefix" while the only evidence was
-that the step existed. Measured on the next run: `Cache not found for input
-keys: fuzz-corpus-<sha>, fuzz-corpus-`.
-
-**The miss was self-inflicted and the timestamps say so.** Run 2's restore
-ran at 21:40:14 and run 1's save landed at 21:42:08 -- two minutes later,
-because the second commit was pushed while the first run was still fuzzing.
-There was nothing to find. Both caches exist now, 261 KB and 256 KB on
-`master`.
-
-**Demonstrated, in two steps.** A `workflow_dispatch` run against the same
-commit -- no push, no overlap -- reports `Cache restored from key:
-fuzz-corpus-cea9217...`, an EXACT key hit, which shows the path, the scope
-and the mechanism work. The next ordinary commit then restored from
-`fuzz-corpus-cea9217...` as well: a DIFFERENT commit's cache, reached
-through the `restore-keys` prefix, which is the half that makes the corpus
-accumulate rather than merely persist.
-
-**The two steps were worth separating because the failures print the same
-line.** A prefix that never matches and a prefix that had nothing to match
-yet both say `Cache not found` -- the first meaning every run starts cold
-for ever, the second meaning somebody pushed twice inside a quarter of an
-hour. Only the second run tells them apart, and it was nearly not done: an
-exact hit reads easily as the whole answer.
+Moved to `doc/decision/26.323-ci-had-been-red-for-five-days-and-nobody-had-looked.md`.
 
 ### 26.324 The other reading of the layout, never fuzzed
 
@@ -10729,56 +6850,7 @@ Moved to `doc/decision/26.325-c-was-the-backend-nobody-fuzzed-and-it-had-two.md`
 
 ### 26.326 Two empty sweeps and a detector worth keeping
 
-26.325's arm accessor asked which arm and not whether the bytes were there.
-The family it belongs to is "an accessor that is conditionally present", so
-the other members were checked and both are sound.
-
-**Versioned members already carry the bound**, in the getter and the
-setter, in all four backends: `if (!situ_in_bounds(view, 3u, 4u))` beside
-`if (ver < 2u)`. **Setters at computed offsets carry it too** --
-`situ_framed_count_set` writes only inside `situ_in_bounds(view,
-situ_framed_count_offset(view), 2u)` -- and **arms have no setters at
-all**, so the write half of the arm question does not exist. Three lenses,
-three empty results, recorded because an absence of findings and an absence
-of looking print the same thing.
-
-**What came out of it is a detector.** An accessor with no bounds check is
-safe exactly when it stays inside `SIZE_MIN`, because that is the whole of
-what acquisition promises. So: every unguarded constant-offset reader in
-the generated C, against its own struct's minimum. 394 of them across the
-corpus, none past it.
-
-**The zero is a measurement because the control fires.** Removing the guard
-26.325 added puts exactly one back -- `situ_label_body_pointer_low_get
-needs 2, minimum 1` -- and nothing else.
-
-**The detector was wrong twice before it was right, both times about its
-own instrument rather than about the tree.** It counted `situ_base(view) +
-N` in a `_ptr` function as a read, and eighteen pointers at exactly the
-minimum came back as findings -- an address one past the fixed part is not
-a dereference. And `situ_get_ne16` was missing from the width table, so a
-two-byte native read was charged as eight.
-
-**Then it charged a member against the wrong struct.** Owner by longest
-matching prefix said `situ_image_relation_must_count_get` belonged to
-`image_relation_must`, whose minimum is 8, when it is `image_relation`'s
-`must_count` and the minimum is 24. Both structs exist and one name is a
-prefix of the other. The map is built the way the emitter builds the name
-now, which is the difference between asking the schema and guessing from a
-string.
-
-**And the scratch sweep could not see the schema that produced that.** It
-globbed `example/` and `test/schema/`; the test uses
-`every_schema.SCHEMAS`, which includes `std/`. The finding was a false
-positive, but it was a finding the narrower scope could not have made
-either way -- which is `evidence.md`'s point about choosing where to look
-before knowing who owns the answer.
-
-**What it cannot see is in its docstring**, because a detector whose limits
-are unwritten gets quoted for guarantees it never made: a read at a
-computed offset, a read through a returned pointer, and any guard spelled
-differently from the four it knows. It is a floor under one shape of
-mistake.
+Moved to `doc/decision/26.326-two-empty-sweeps-and-a-detector-worth-keeping.md`.
 
 ### 26.327 A vocabulary for text protocols, to be designed
 
@@ -10786,28 +6858,7 @@ Moved to `doc/decision/26.327-a-vocabulary-for-text-protocols-to-be-designed.md`
 
 ### 26.328 The harness that could not call the accessor it was for
 
-26.325 found an arm accessor reading past its frame in C, and found it with
-the C++ harness. The C one had been running over `dnsname` since phase 22
-and could not have: `own_entries` drops a dotted path, so an arm member
-never reached the walk and the harness named none of them. Zero arm calls
-across 37 harnesses.
-
-**The same gap as the sealed interiors** (26.318), one family over, and the
-same fix: a branch on `kind == "variant"` that walks `arm_members` and
-calls whichever of the four accessors that arm's shape gets -- a scalar's
-`_get`, a byte run's `_ptr` with its length, an indexed run's `_count` and
-indexed getter, a struct arm's `_view`. The conditions are `_arm_member`'s
-own, in its order, so the harness names an accessor exactly when the
-emitter wrote one. A fifth branch appearing there is a build failure in 37
-harnesses at once, which is a loud way to find out.
-
-70 arm reads now, and the control fires: with 26.325's bound removed the C
-harness reports the overread through `fuzz_label` in under a minute, where
-before it ran clean for ever.
-
-**The sweep with the new coverage found nothing else** -- 37 harnesses, no
-crash. Recorded because an empty sweep and a sweep that could not reach
-anything print the same thing, and this harness has now been both.
+Moved to `doc/decision/26.328-the-harness-that-could-not-call-the-accessor-it-was-for.md`.
 
 ### 26.329 A token set, and the line it did not cross
 
@@ -10867,43 +6918,7 @@ Moved to `doc/decision/26.343-a-tlv-region-s-items-and-the-image-that-could-not-
 
 ### 26.344 The C walker's `tlv` and `indexed` counts
 
-**Two walkers, one design, and one of them could not answer.** 26.342 and
-26.343 gave `walk.py` a `tlv` region's item count and an `indexed`
-region's entry count; this build had the INDEXES section loaded and the
-two TLV sections not loaded at all, so it answered nothing for either.
-That is the drift `test_walker_c` exists to prevent, and it lasted
-exactly as long as nothing asked.
-
-**They are new entry points rather than a wider `situ_walk_count`.** That
-function answers for a COUNTED run -- a declared count, or a `size_code`
-program -- and `python_elements` mirrors its refusals exactly, member for
-member. Folding these in would have moved the C population without moving
-the Python one, and the probe that compares them would have gone on
-passing because both sides ask `situ_walk_count`. So
-`situ_walk_tlv_count` and `situ_walk_index_count`, and a probe that asks
-both.
-
-**A `tlv` count is a walk and an `indexed` count is an evaluation**, which
-is the whole difference between them: nothing in a `tlv` region records a
-count, while an indexed table's size is a program the image carries. So
-the two walkers agree about the second by running the same bytecode, and
-about the first by two loops written to the same generated C.
-
-`OP_TAG` went in beside `OP_REMAINING` for the selector, and
-`situ_walk_eval` keeps its signature: it calls an `eval_tagged` with no
-tag, which refuses `OP_TAG` rather than substituting one. A selector
-evaluated without a tag would pick a rule, confidently, for an item
-nobody read.
-
-**A sabotage that did not apply looks exactly like a check that cannot
-fail.** One of the three here was written with two tabs where the source
-has one, so it never landed and the test passed -- reported as "the check
-does not fire" until the substitution was asserted. All three fire now
-and name their case: `three, all kinds`, `a fixed 4 in two bytes`, and
-`count=0` for the index count read from the wrong field.
-
-~~**Found and not fixed: `situ_walk_count` refuses a `while` run for a
-reason that is no longer true.**~~ **Done in 26.345.**
+Moved to `doc/decision/26.344-the-c-walker-s-tlv-and-indexed-counts.md`.
 
 ### 26.345 A stale sentence that read as a design limit
 
@@ -10911,36 +6926,7 @@ Moved to `doc/decision/26.345-a-stale-sentence-that-read-as-a-design-limit.md`.
 
 ### 26.346 A field that was `none` in every image ever written
 
-**`image_tlv.tag_varint` was a `u32` documented as an index into the
-varint table, and that table is keyed by PLACEMENT.** A `tlv` region's
-tag varint belongs to no placement -- it is the region's grammar rather
-than a member of it -- so `varint_index.get(...)` found nothing and the
-field was `none` in every image this tree has ever produced. 26.343
-carried the decoder parameters by value beside it and left the field
-where it was; this removes it.
-
-**It moved the format version, and the schema's own words say why.**
-`image_section.stride` is carried "so that a walker can skip a section
-whose records GREW under it, which is what makes a record extensible
-without a format version" -- growth being an append a reader stops
-short of. A field taken out of the MIDDLE is not growth: it moves
-`selector_code` from offset 12 to 8 and the tag parameters with it, so a
-v4 image read by a v5 walker would be read at the new offsets and answer
-confidently. Version 4 to 5, in the four places that state it and the
-test that holds them together.
-
-**The bump is checked rather than assumed.** A freshly packed image with
-its version byte set back to 4 is refused by name -- "image format
-version 4, this walker reads 5" -- and the C walker returns MALFORMED at
-the same check. Without that, removing the field would have been a
-silent misread of any image already on a device.
-
-**And it is the second dead thing this record has turned up.** The first
-was the whole section, written and loaded by nobody (26.341); this is a
-field inside it that could never have been used. Both survived because
-nothing read the record: an unused table is where an unusable field hides
-indefinitely, and neither the packer nor a walker had any reason to
-notice.
+Moved to `doc/decision/26.346-a-field-that-was-none-in-every-image-ever-written.md`.
 
 ### 26.330 Text encoding, scoped and named by the data
 
@@ -10972,114 +6958,11 @@ Moved to `doc/decision/26.352-the-fixed-count-half-and-the-two-faults-found-reac
 
 ### 26.353 `tonumber` is Lua's rule, not situ's, and the clamp was one symptom
 
-**Found by a draw that moved.** Adding two structs to `edges` changed
-which buffer the dissector differential drew for `text_driver`, and the
-new one begins `"  12"` -- a `decimal u32 n[4]` whose first two bytes are
-spaces. The dissector read 12 and the walker read 0, which put `tail`
-twenty-four bytes apart.
-
-**Five readings to one, and the tie was broken by asking a third
-party rather than by reconciling the two.** C's generated accessor says
-what the others do, in a comment written when it was built: `validate`
-refuses a frame whose digits are not digits, `situ_parse_uint` returns at
-the first byte that is not one without writing its output, and the value
-accessor keeps the zero it started with -- "the same bargain every other
-accessor makes with the bounds check it did not do". So 0 is the answer
-and the dissector was wrong.
-
-**And the bug was already half-fixed, which is the part worth keeping.**
-`situ_digits` clamps a negative result, and the comment above it records
-why: `tonumber` reads a leading minus, four bytes of `"-26"` gave a
-length of -26 and an offset of -48, and Wireshark raised. That fix
-treated the one symptom that had bitten. `tonumber` also skips leading
-and trailing space, so the same gap was still open one step over --
-**a list of special cases only ever grows by being bitten**, and each
-entry makes the list look more complete than it is.
-
-The fix is to stop asking `tonumber` what a number is. Every byte is
-checked against the base first and a non-digit answers 0, which is
-`situ_parse_uint`'s own rule rather than a second opinion about it.
-Measured in Lua against the bare call:
-
-    "  12" base 10   ->  0   tonumber says 12
-    "12  " base 10   ->  0   tonumber says 12
-    "-26 " base 10   ->  0   tonumber says -26
-    "0012" base 10   -> 12   tonumber says 12
-    "00FF" base 16   -> 255  tonumber says 255
-
-**It is pre-existing and the schema change only exposed it.** Checked by
-running the committed schema against the same buffer: the walker answers
-0 there too, so nothing about the new structs is involved. Sabotaged back
-to the bare call, `edges` fails and the other thirty-nine schemas pass.
-
-**The differential earned its keep by being asked a new question.** It
-had run green over this corpus for as long as it has existed, because no
-draw had put a space in front of a digit. That is not a weakness of the
-test -- it is what a fixed corpus of draws is: a sample, and a sample is
-evidence about the cases it holds. What changed the sample was unrelated
-work, which is the cheapest way it ever changes.
+Moved to `doc/decision/26.353-tonumber-is-lua-s-rule-not-situ-s-and-the-clamp-was-one-symptom.md`.
 
 ### 26.354 The C walker learns which arm a discriminant selects
 
-**Measured rather than guessed at, which is what made it the right next
-piece.** The C walker declined 32 of 388 struct-and-message pairs over
-the corpus, and nothing said why. Reporting `__LINE__` at each of its 47
-refusal sites, through a scratch copy, ranked them in one run:
-
-    12  a member whose byte order is `native`
-    10  a check kind this build does not render
-     8  a counted run whose element is neither a record nor sized
-     2  four bytecode operations the walk does not implement
-
-**Those are FIRE counts, and 26.355 had to correct what they were read
-as.** A refusal unwinds through several sites, and the apparatus that
-produced this table read stderr for the whole image rather than per
-struct -- so it attributed to one struct the refusal of whichever ran
-before it. The ranking above is right about which sites fire and wrong
-about how many structs each one is the CAUSE for. Asking one struct per
-run is what separates the two.
-
-**The second was `arm_selected` and nothing else.** `CHECK_ARM_SELECTED`
-was not defined in the C walker at all -- not in the known-kinds list,
-not handled -- so every struct holding a variant was unanswerable to it
-while the Python walk answered. Sixteen structs across the corpus. The
-arms section was already loaded and `variant_bits` already resolved an
-arm for SIZING; only the check was missing.
-
-**And the verdict it needs did not exist either.** An unmatched
-discriminant is VERSION and not CONSTRAINT -- a message this build cannot
-READ rather than one that breaks a rule, which is 14.5's distinction and
-the schema's. `situ_err_t` has carried the code all along and the four
-backends return it; the walker's own enum stopped at CONSTRAINT, and the
-test driver folded everything above BOUNDS into "2". **Adding the check
-without adding the code would have produced a wrong agreement at the one
-moment the two walkers finally had something to compare.** Sabotaged both
-ways afterwards, and they fail differently, which is the discrimination
-worth having: with the refusal removed C answers 0, with the rendering
-folded C answers 2, and the truth is 3.
-
-**The first draft was wrong in a way the corpus could not see.** Every
-arm has to fit the frame, whether or not it is a struct, and the draft
-returned early for an arm that was a plain run -- so `dnsname.label`
-declaring three bytes of text over one answered OK where the Python walk
-and the C backend both answer BOUNDS. The corpus comparison said zero
-disagreements throughout, honestly: its draws are 64 bytes long, and a
-short frame is precisely what this construct gets wrong. **A sample is
-evidence about the cases it holds**, and the case was found by writing
-eight vectors for one struct by hand.
-
-`dnsname.label` is the test because it documents itself and produces
-three of the four verdicts from one struct: `00` is a length and that
-many bytes of text, `11` a pointer, and `01` and `10` are reserved, which
-`default: error` refuses rather than guessing which of the two they
-resemble.
-
-**Where it leaves the two walkers**: 366 pairs compared and agreeing, 22
-declined, none disagreeing. No check kind is among the refusals any more
--- the pinned run was the last before this and `arm_selected` the last
-after it. What remains is one deliberate refusal and two structural gaps,
-named in the corpus test so the next reader starts from the measurement
-rather than from a guess.
+Moved to `doc/decision/26.354-the-c-walker-learns-which-arm-a-discriminant-selects.md`.
 
 ### 26.355 Two refusals left in the C walker, and one of them is the answer
 
@@ -11111,216 +6994,19 @@ Moved to `doc/decision/26.361-expansion-in-bits-and-two-of-the-three-sub-byte-co
 
 ### 26.362 `--define`, and why it edits the source rather than the tree
 
-**0050's cheap half, which the record calls most of the real cases.** A
-declared `const` can be set at generation: `situc map --define block=8192`.
-No lattice change, no new syntax, and the layout is as static afterwards
-as before -- `trailer` keeps an absolute offset either way and only the
-number moves. `const` has parsed and scoped since the beginning with no
-way to set one from outside, so even the easiest external argument had no
-spelling.
-
-**It splices the SOURCE, at the const value's own span, and that is the
-whole design decision.** The obvious implementation rewrites the parsed
-tree. It would have been silently wrong: every command re-parses its
-source, `build` alone several times for the backends and the relation and
-frame layers, so the rewritten tree is thrown away by the next
-`parse(source)` and what is generated disagrees with what was resolved --
-about a constant, which is the kind of disagreement nothing downstream
-trips over. Splicing at the span means every later parse sees it, the
-offsets come from the parse rather than from a pattern over text that
-looks like a declaration, and a diagnostic still points at a line
-somebody can read.
-
-**Every command that reads a schema takes it, and the test derives that
-population rather than listing it.** Sixteen of them. A flag half the
-commands honour is worse than one none of them do: `map` and `build`
-disagreeing about a constant puts a committed artifact out of step with
-the code beside it and nothing says why. The test walks the parser's own
-subcommands, so one added later joins the population without anybody
-remembering -- and with `map`'s flag removed it names `map`.
-
-**What it refuses**: a name the schema declares no const for, listing
-what it does declare; a value that is not an integer; and a `--define`
-with no `=`. A define nobody reads is a deployment that thinks it
-configured something.
-
-**What it is not** is `parameter`, the other half of 0050 -- a run-time
-argument, a member of zero width, and the half that has to answer what a
-moving member costs the descriptions that walk a cursor. Nothing here
-touches that.
-
-**One thing worth knowing rather than fixing.** A map generated under
-`--define` records the layout it was given and does not record the
-define, which is what 0050's "no artefact change" asks for. Two maps of
-one schema can therefore differ with nothing in either saying why, and
-`map --check` compares against whatever defines the checker passes. That
-is inherent to a generation-time constant rather than a defect, and the
-record's own answer for the run-time case is the opposite -- the wire
-signature names every `parameter` -- so the asymmetry is deliberate and
-worth a reader knowing before they meet it.
+Moved to `doc/decision/26.362-define-and-why-it-edits-the-source-rather-than-the-tree.md`.
 
 ### 26.363 Asking the two walkers WHY, and the BCD the C walk never had
 
-**0051's identity half, from the reader that had neither end of it.**
-`report.failed_check` has answered `(member, check)` since 26.231 and the
-generated C has named the member since 26.232; this walk answered neither,
-so there was nothing to hold it against. `situ_walk_failed_check` answers
-it now -- `validate` untouched, same signature and same short circuit,
-because the identity is a second question about the same call.
-
-**Recorded on the way out, twenty sites.** The same design 26.231 argued
-for: a second pass that re-ran the checks would be a second implementation
-of an order the schema owns, free to disagree with the first.
-
-**The completeness sweep was wrong, and the comparison is what said so.**
-A syntactic check over `*verdict = SITU_WALK_(BOUNDS|CONSTRAINT|VERSION)`
-reported every site covered. Three assignments are not of a literal -- two
-TERNARIES and one propagated `inner` -- and the regex could not see them,
-so the terminator check and a refused value read recorded nothing while the
-sweep said 20 of 20. The corpus comparison found 55 disagreements on its
-first run. **A proof over the shape of a line is a proof about lines that
-have that shape**, and the population it silently omitted is the one the
-independent reader found.
-
-**And the population was the wrong one twice.** The first sweep scanned
-`validate_deep` alone and reported every refusal covered; five more live in
-the arm helpers, which refuse too. Coextensiveness is the test, not
-plausibility: every refusal the WALK can make, not every refusal in the
-function being edited.
-
-**Then a guard wider than the other walker's.** C refused a message-sized
-run at a placement check where `report._validate` reaches `fits_frame` --
-Python's guard is the pair `fixed and not offset_known` and its comment
-says the two cases "do not overlap", while C knew only the offset half and
-had no name for `SIZE_FIXED` at all. Verdicts agreed throughout, which is
-why nothing had seen it.
-
-**The find worth the whole exercise: the C walker had no BCD.** It read a
-`bcd2 seconds` holding `0x3E` as 62 where the four backends, the Python
-walk and `situ_bcd_decode` all answer 44. Both walkers answered CONSTRAINT
-for the buffer that found it -- one because 62 breaks `[max = 59]`, the
-other at a `must_be_zero` two members later -- so the verdict comparison
-could not see it and the member comparison could not either. Only *which
-check* separated them.
-
-That is the third time packed decimal has hidden behind a comparison that
-could not reach it: 26.222 records `codegen/differ` skipping a BCD member
-outright, so C's side never mentioned one. A construct that keeps falling
-out of differentials is worth suspecting the differential over.
-
-**What is left apart is named**: `pickle_wstring` and `png.chunk`, where
-`size_bits` refuses on an overflowing count and the Python walk clamps.
-The C walker's own comment already called that "the half still apart", so
-the comparison rediscovered a divergence the tree had recorded -- which is
-the cheapest evidence that it is sensitive enough to be worth having.
-
-**Standing**: 197 refusals compared for their identity and agreeing, 4
-held out by name, 21 declined. The verdict comparison is unmoved at 380
-agreeing and none differing, which is the property that had to survive.
+Moved to `doc/decision/26.363-asking-the-two-walkers-why-and-the-bcd-the-c-walk-never-had.md`.
 
 ### 26.364 The editor says which field the schema refuses over
 
-**0051's first consumer, and the channel was already there.** 26.232
-closed with "the knowledge is now usable and nothing uses it yet -- and
-the consumers are the next one". `editor/document.py`'s `Field` carries a
-`note` that reaches every frontend, and a document that will not validate
-now says which member is why, without a frontend that knows the format.
-
-The CHECK's name rather than a sentence. A sentence a schema wrote is
-`when`'s and is not built; `max` is a rendering of an identity, which is
-0051's own split -- a consumer keys on the id and a person reads the word.
-
-**Appended rather than replacing.** A field can be unreadable AND be the
-one the schema refuses over, and a note that dropped either half answers a
-question nobody asked.
-
-**And it immediately found four check kinds with no name.** The note read
-`refused: bounds` for a pad outside its bounds, because `CHECK_NAMES` had
-no entry for `pad_length_max` -- nor for `pad_length_min`, `encoded_from`
-or `encoding_arm`. Each was added as a kind by whoever built the construct
-and none of them was named, so every refusal through one rendered as
-`bounds`.
-
-**Which is the same word a refusal with NO identity renders as**, and that
-is what made it invisible: an unnamed kind and an unrecorded refusal are
-the same string to a reader. The four had been that way since the day each
-construct landed -- `encoded_from` for a day, the pad checks for hours --
-and nothing in either differential could see it, because both compare
-answers rather than the words a reader would be shown.
-
-A population fixes it rather than vigilance: `report.ALL_CHECKS` is
-checked against `image_check` in `std/image.situ`, parsed from the schema
-rather than listed, so a kind added there joins the test without anybody
-remembering. With one name removed it names the kind.
-
-**What this consumer is not.** `situ verify` already reports an identity
-of a sort -- the Python backend's exception text, `"declared_fixed.label
-is not ascii"` -- and that is precisely the "text with no identity" 0051's
-alternatives rejected: it cannot be localised, every embedded target
-carries the strings, and a consumer has nothing stable to match on. Giving
-the generated code an ID is the half 0046-style work in three more
-backends, and it is not this.
+Moved to `doc/decision/26.364-the-editor-says-which-field-the-schema-refuses-over.md`.
 
 ### 26.365 Reading the diagnostics nobody produces
 
-**26.215 counted 93 unproduced `error(...)` sites and said which half
-rots: not the refusal but the WORDING.** A check that stops firing is
-noticed downstream; one that fires with a message that has stopped
-describing its own case is noticed by nobody, because the only reader is
-whoever typed the mistake and they have no second opinion.
-
-**A deliberately loose proxy, and its looseness was the point.** The
-sweep listed every diagnostic whose wording appears nowhere under
-`test/` -- 199, of which 47 are the parser's. A phrase-level search
-over-reports here by construction: a message split across two string
-literals, or reworded since the test was written, reads as unproduced. It
-over-reports in the direction that costs reading rather than the one that
-hands back a comfortable zero.
-
-**Both suspects were PRODUCED rather than assumed, and the first was
-wrong.** A top-level typo looked like it would report an incomplete set;
-running it showed a complete message. Reporting it would have been a
-defect that does not exist, and the cost of checking was one command.
-
-**The second was real and was mine.** `expansion = wibble` answered with
-a label naming `+N`, `unbounded` and the three ratios -- the five forms
-that existed before 0046 added `+N bits`. A schema author who asked the
-compiler what to write was told a set that had been wrong for a day.
-
-**Then the first suspect was right after all, by a lens that was not
-looking at it.** Having fixed one enumeration, the same question was put
-to every label in `situc` that lists alternatives: `buffer, mmio or
-file`, `big, little or native`, `strict or lenient`, `msb_first or
-lsb_first`, `error or pass`, `derived or extern`, the varint properties,
-`feedback = input or output`, the stuffing units, `after or before`.
-**Every one matched its table exactly.** The one that did not was
-`unknown declaration`, whose note named thirteen declarations of
-twenty-two -- missing `codec`, `impl`, `register`, `register_block`,
-`namespace`, `whitespace`, `strictness`, `endian_marker` and
-`varint_type`.
-
-That is the frame error worth keeping. The first probe asked whether the
-message named `tokens`, it did, and the message was recorded as complete:
-**one member present is not the set**, and a list is exactly the kind of
-claim that is right about whatever you happened to check.
-
-**The fix is not a longer list but a derived one.** The note is now
-spelled from the dispatch table it is raised beside, so a declaration
-added to the table joins the message with nobody remembering. The
-expansion-form label cannot be derived that way -- `+N` is not an enum
-value and the ratios carry `(a, b)` -- so it is pinned from both
-directions instead: every form in the test's table is parsed, and every
-member of `ast.Expansion` that is not `length_preserving` or `+N` must
-have an entry, so a seventh expansion fails as a message addressed to
-whoever added it.
-
-**And the first control passed with the bug reinstated.** Checking the
-forms against the rendered diagnostic found `+N bits` -- in the NOTE
-below the label, which glosses it. The refusal names the form somewhere
-and the list a reader is told to choose from was still five long. The
-assertion reads the label line only, and with the stale label it fails
-naming the missing form. A control has to fail through the check under
-test, and this one was being saved by the sentence underneath it.
+Moved to `doc/decision/26.365-reading-the-diagnostics-nobody-produces.md`.
 
 ### 26.366 One refusal, two doors, and a label that knew one of them
 
@@ -11364,54 +7050,7 @@ Moved to `doc/decision/26.374-the-span-a-byte-range-cannot-say.md`.
 
 ### 26.376 example/usb, and what three bytes took
 
-**The last item in 0046, and the packet the record was written for.** A USB
-token is a PID byte and eleven bits of address and endpoint under a five-bit
-CRC: three bytes, in which neither the check field nor the span it covers is
-a whole number of bytes. Every part of it was refused by something when 0046
-was accepted -- `place_tag` refused a sub-byte checksum, `covered_run`
-refused a span that is not whole bytes, `crc_width` refused the loop, and no
-codec had an entry point that counts bits.
-
-    SETUP addr=21 ep=14  ->  2D 15 EF
-    crc=0x1D  check=OK  validate=OK  dirty cleared
-    one flipped address bit -> SITU_ERR_CHECKSUM
-
-**Cited rather than recalled, which is 26.32's rule and the reason this
-example is the shape it is.** The eight-bit PIDs are
-`include/linux/usb/hcd.h:24-40` on this machine, each nibble beside its
-complement; the address is seven bits because `usb_pipedevice` masks `0x7f`
-(`include/linux/usb.h:1980`) and `devmap` is 128 wide (`usb.h:471`); the
-endpoint is four because `usb_pipeendpoint` masks `0xf` (`usb.h:1981`). The
-CRC-5 parameters are the catalogue's, as `std/kernels.situ` carries them.
-
-**What could not be cited was left out.** The SOF packet is the same eleven
-bits carrying a frame number instead of an address, and this machine has no
-header that says the frame number is eleven bits wide -- so the example is
-the token packet and says so, rather than asserting a width from memory. A
-worked example is a claim; the way to keep it true is to write down less.
-
-**`bit_order lsb_first` is the fact the example exists to carry.** USB sends
-a token least significant bit first and a reflected code consumes each byte
-the same way, so the two agree and situ accepts the schema. Written
-`msb_first` it is refused (26.374), which is a rule that did not exist a day
-ago and was written because this packet broke it.
-
-**Three vectors, and what makes them evidence.** The PID bytes are cited and
-the addresses chosen, so the only derived number is the CRC -- and it is not
-situ agreeing with itself: `crc5_usb` is held to the catalogue's check value
-over "123456789", and to its RESIDUE over a token and its own check bits,
-which is the one property a sub-byte span can be held to. The vectors are
-compiled into a cmocka suite by `make test-c` like every other example's.
-
-**The cost, stated plainly.** Three bytes needed: a sub-byte `place_tag`
-(26.371), a bit-valued coverage accessor and a `_store` (26.374), a
-bit-counting entry point in three languages (26.373), a left-aligned CRC
-loop (26.369), and a bit-order rule. On the way it found seven generators
-disagreeing about what an accessor is, a one-byte checksum reading
-`situ_get_be0`, and three of six readings assembling a straddling
-`lsb_first` field the other way round -- which 26.223 had recorded as a
-fault the corpus could not reach, and which stayed unreachable until a
-protocol needed the axis for its own reasons.
+Moved to `doc/decision/26.376-example-usb-and-what-three-bytes-took.md`.
 
 ### 26.377 `when`: the construct, and the two descriptions that carry it
 
@@ -11423,183 +7062,19 @@ Moved to `doc/decision/26.378-the-messages-an-image-carries-and-who-runs-them.md
 
 ### 26.379 Expert info, which is what a `when` already was
 
-**0051 said the dissector gains most and it was right.** Wireshark's expert
-info is a severity and a sentence attached to a packet, filterable -- which
-is `when` exactly -- and `situc gen-dissector` emitted none. It does now:
-one `ProtoExpert` per message, registered with the name the schema gave, and
-`subtree:add_proto_expert_info` for each predicate that holds.
-
-**The predicate needed no new machinery.** `_over_fields` has rewritten
-schema expressions into Lua reads since the dissector learned to size a
-member, and a `when` is an expression over one struct's own fields -- so it
-is `expr_to_source(expr, explicit=True)` with the struct prefix stripped,
-handed to the function every other expression here goes through. Where it
-declines, the message comes out as a comment naming what stopped it, the
-way every declined expression in that file does.
-
-**Three severities onto four levels, and `chat` is the one nothing maps
-onto.** That is the right way round: 0051 refuses a fourth severity to
-match a consumer, and a schema saying less than a display can show costs
-nothing. `refuse` is `expert.group.MALFORMED` because that is what it means
--- the message does not conform -- and the other two are `PROTOCOL`, being
-remarks about one that does.
-
-**The expert is registered whether or not the predicate can be read.** A
-name a person may type into a filter has to exist: a filter on a name that
-was never registered is an error in their filter, where one on a message
-this backend cannot evaluate is an honest silence.
-
-**The stub had to learn expert info, and where to put it.** `dissect.lua`
-keeps them in their own list rather than among the field rows, because the
-differential that runs every dissector over random bytes compares rows
-against `walker/report.listing` -- and a remark about the whole message is
-not a row. Field abbreviations are `struct.member` and always carry a dot,
-so a bare `expert` in the first column cannot be one, which is what lets the
-reader split the two out of one stream.
-
-**A message is prose, so the text is escaped.** A `when` carrying a quote
-emitted Lua that does not parse, and a dissector that fails to load is worse
-than one that divides -- 0021's rule, met by a construct that lets a person
-write anything.
-
-**Still to do**: the `messages` sibling in the four backends, which is what
-a `refuse` needs before it can change a verdict, and the identity on
-existing per-member constraints.
+Moved to `doc/decision/26.379-expert-info-which-is-what-a-when-already-was.md`.
 
 ### 26.380 The messages sibling, in C
 
-**0051's `messages` function, and the first of the four backends.** A
-struct that states a `when` gains
-
-    void situ_S_messages(situ_view_t view, uint32_t *ids, size_t cap,
-    		size_t *count);
-
-beside `validate` rather than inside it, for the reason the record gives:
-`validate` short-circuits because for a verdict the first failure is the
-answer, and a caller asking what a message SAYS wants all of it. A caller
-who wants none never links this.
-
-**`*count` is how many hold, not how many fitted.** The alternative makes
-truncation invisible: a caller with a one-element buffer would be told one
-message held when two did, with no way to find out. So the count is the
-answer and `cap` is what there was room for, and a caller that cares
-compares them. That is a two-halves-of-one-result shape -- the buffer and
-the count -- written so neither half can be quoted alone.
-
-**The id is always emitted and the text only under `--messages`.** The
-split fixed point already takes: the scale is a macro and the conversion is
-the caller's, because text needs a locale, a log format and a flash budget
-situ cannot choose for a target it has never seen. A default build carries
-no sentence at all, which is what the test asserts -- a string that leaked
-in would cost flash on every embedded target and nothing would report it.
-
-**The owner rule moved to `traverse`.** Which struct a `when` belongs to is
-now `traverse.messages`, beside `obligations`, and the dissector asks it
-too. The reason is `obligations`' own: the id a sibling emits, the expert
-info a dissector registers and the record an image packs are the same
-message keyed on its position in one list, and two backends numbering from
-two lists is how the dirty-bit disagreement happened.
-
-**A continuation line in generated C is indented with tabs.** The first
-version aligned the second line of the signature under the open paren,
-which is right inside a function and wrong at file scope -- there are no
-indent tabs for the spaces to follow, and `style_gate` said so about two
-lines of `edges.h` and `edges.c`. The generator's own existing wrapped
-signature uses two tabs; this now matches it.
-
-**Still to do**: the same sibling in C++, Rust and Python, then the
-`refuse` half -- which has to land in all five descriptions at once, since
-the walk is held to the four compiled backends over the same bytes -- and
-the identity on existing per-member constraints outside C.
+Moved to `doc/decision/26.380-the-messages-sibling-in-c.md`.
 
 ### 26.381 The other three backends, and one number in four spellings
 
-**C++, Rust and Python gained the same sibling**, each in its own idiom:
-a method and a class constant per id in C++, a method and an associated
-constant in Rust, a method and a class attribute in Python. `--messages`
-adds the default rendering in all three.
-
-**Python takes a list rather than a buffer and a count, and the departure
-is deliberate.** The truncation contract the other three state exists
-because a C caller supplies the memory; Python's caller does not, so there
-is nothing to truncate and a cap would be ceremony. What agrees across the
-four is the ids and their order, which is what 0051 makes the contract.
-
-**The id is the contract, so a test holds the four to one numbering.**
-`test_the_four_backends_number_a_message_the_same_way` reads the published
-constant out of each of the four and asserts the same integer. That is not
-a hypothetical risk: `traverse.obligations` carries the identical rule for
-dirty bits and exists because C and Python each numbered them from their
-own list and disagreed about a struct carrying a tag and an invariant. Four
-walks would repeat it, and nothing else would notice -- an id is a small
-integer and a wrong one reads exactly like a right one.
-
-**Rust compiles its `message_text` as a match over associated constants**,
-which is legal because a const path is a pattern, and it is run under
-`-D warnings` like everything else this backend emits.
-
-**Each sabotage was confirmed to land, and two did not the first time.**
-The C short-circuit sabotage matched nothing because the anchor was written
-with two tabs where the file has one; the numbering sabotage had to be
-aimed at ONE backend, since reversing the shared rule keeps all four in
-agreement and the test says nothing about which order is right. A test that
-compares descriptions is blind to a change made to the thing they all read,
-which is the property that makes it worth saying rather than assuming.
-
-**Still to do**: the `refuse` half, which has to land in all five
-descriptions at once because the walk is held to the four compiled backends
-over the same bytes, and the identity on existing per-member constraints
-outside C.
+Moved to `doc/decision/26.381-the-other-three-backends-and-one-number-in-four-spellings.md`.
 
 ### 26.382 A refusal, in all six descriptions at once
 
-**0051's last half, and it could not land anywhere on its own.** A
-`refuse` makes a message illegal, so `validate` says so -- and `validate`
-is what the four compiled backends, the Python walker and the C walker are
-all held to over the same bytes. One of them learning it first is a
-description disagreeing with five for a reason that is not a defect, which
-is why 26.378 recorded the gap with a test rather than closing it early.
-
-**Six, not five.** The walker is two implementations: `walker/report.py`
-and `walker/c/situ_walk.c`, which read the same image and are compared
-against each other per schema. The C walker already had the expression
-evaluator the predicate needs, so what it wanted was the section, the
-record layout and a loop -- and the loop sits exactly where the other five
-put theirs.
-
-**The order is the contract, not just the verdict.** A `when` is a
-predicate over the whole struct, so a member that is wrong is the more
-specific answer, and every description evaluates refusals LAST. Five
-agreeing about the verdict and not about the order would disagree on any
-frame that trips a member check and a message at once, and the code that
-comes back would depend on which description was asked.
-
-**`*count` has a sibling problem and `*which` has the same shape.** A
-CHECK id names a member and a `when` has none, so C writes the sentinel
-rather than a MSG id: the two are different spaces, and an id from one
-read as the other resolves to whichever member sits at that index. The
-sentinel goes on the line above the refusal, because that is `check`'s
-own contract -- and the gate that enforces it caught the first version,
-which returned without writing it.
-
-**`failed_check` gained a third answer rather than reusing one.**
-`BY_MESSAGE` is not `CANNOT_SAY`: the walk HAS the refusal and ran it.
-Saying "cannot say" would have made an answered question look like an
-unanswerable one, which is invariant 154's distinction pointed at a new
-case.
-
-**The packer had to move a block to make this decidable.** A struct whose
-`refuse` the VM cannot encode cannot answer `validate` either -- and the
-flag that says so is computed well before the messages were being packed.
-So the `when` compilation moved ahead of it: an unencodable refusal now
-clears that struct's `validatable` bit, and both walkers answer
-`cannot-say` rather than a verdict they cannot support. `validate` is the
-one probe that cannot be rendered by halves, and this is that rule
-reaching a construct written three days after it.
-
-**0051 is built.** What remains of it is the identity on existing
-per-member constraints outside C, which is 26.231's half rather than this
-record's construct.
+Moved to `doc/decision/26.382-a-refusal-in-all-six-descriptions-at-once.md`.
 
 ### 26.383 Which member refused, in C++ -- and what comparing two backends found
 
@@ -11607,100 +7082,11 @@ Moved to `doc/decision/26.383-which-member-refused-in-c-and-what-comparing-two-b
 
 ### 26.384 The same identity in Rust, and a fault the comparison found twice more
 
-**26.231's half in the third backend**, and it needed a restructure first.
-Rust built its checks in one flat loop over entries where C and C++ have a
-per-entry helper, so there was nothing to group by member. The loop's body
-moved into `_member_checks` with `continue` becoming `return`, and nothing
-else changed -- **proved by regenerating all 41 schemas and diffing: the
-modules are byte-identical.** That is the proof a mechanical change carries,
-and it is what made the rest safe to build on.
-
-**The method cannot be called `check`, and the reason is a real schema.**
-`cpio_header` has a member named `check`, so the accessor takes that name,
-and Rust has no overloading: the module had duplicate definitions and did
-not compile. It is `check_which`. The same hazard already reaches
-`validate`, `extent` and `required` in this backend and has never fired, no
-schema having such a member -- the difference is that this one fired on the
-first build of the corpus rather than waiting for somebody's schema.
-
-**Two more naming faults, both caught by rustc rather than by reading.**
-`_ident` escapes a keyword as `r#type`, which upper-cased is
-`CHECK_R#TYPE`; a constant is SCREAMING_SNAKE_CASE where no keyword can
-reach, so the escape is wrong there. And a reserved member's local name is
-`<reserved0>`, whose angle brackets rustc reads as chained comparisons.
-`c_name` -- what C and C++ already name theirs with -- answers both.
-
-**The comparison has now found the same fault in all three backends, which
-is what makes it worth more than any of them.** A member whose check
-PROPAGATES rather than naming a refusal was grouped as having no id, so
-`check` returned refused while leaving `*which` at the sentinel its own
-documentation calls "nothing refused":
-
-    C      return err;                       a nested member's status
-    C++    return e;                         the same, one language over
-    Rust   self.flags()?.validate()?;        the `?` IS the return
-
-Three spellings of one thing, and none was visible from inside its own
-backend: what is missing is a constant nobody named, so the header looks
-complete. Only a second description asking the same question found it --
-which is `evidence.md`'s corroboration rule earning its place, since the
-three were written separately and agree about everything else.
-
-**Python remains.** Its `validate` raises rather than returning a code, so
-the identity belongs on the exception, and 52 of its 342 raise statements
-span more than one line -- appending an argument means balancing
-parentheses forward from the `raise`, with an assertion that the balance
-closed.
+Moved to `doc/decision/26.384-the-same-identity-in-rust-and-a-fault-the-comparison-found-twice-more.md`.
 
 ### 26.385 The identity in Python, and the coincidence that passed a sabotage
 
-**26.231's half, finished.** All four backends now name the member
-`validate` refused over. Python's goes on the EXCEPTION -- `SituError`
-gains a keyword-only `which`, defaulting to a `NO_CHECK` the runtime
-exports -- because that is where a Python caller already has to look: the
-other three take an out-parameter and a Python caller does not pass one.
-
-**Editing a raise is text surgery, so it carries a proof rather than a
-convention.** The other three write `*which` on the line above the
-refusal; Python's refusal IS the raise, so the id becomes a keyword
-argument to it -- and 52 of this backend's 342 raises span more than one
-line. The tool accumulates each statement until it PARSES, inserts the
-argument, and asserts the result parses again as a `raise` whose call now
-carries that keyword. A paren count would have done instead, and would
-have been wrong inside any message carrying a bracket of its own.
-
-**The propagating case has now appeared in all four backends and Python's
-was the worst of them.** A nested member refuses by raising from its own
-`validate`, so the exception arrives carrying THE NESTED STRUCT'S id --
-not "no id", which is what the other three had, but a number that means
-something else. `outer` would have reported `flags`' numbering,
-confidently. It is relabelled in an `except SituError` that re-raises,
-which is the same act as C setting `*which` before `return err;`.
-
-Python also has a second spelling nobody would guess: `_ = self.ino`, a
-statement whose whole purpose is the exception it may raise, which reads
-as doing nothing at all. That is how a text number's digits are checked
-here, and cpio_header has eleven of them.
-
-**A sabotage passed, and that is the entry's real content.** Breaking the
-relabelling left `test_a_nested_refusal_is_relabelled_with_the_parent_s_id`
-green -- because the fixture put the nested member FIRST, so the parent's
-id for it and the nested struct's own id were both 0. The test was right
-by coincidence, which reads exactly like right, and only sabotaging what
-had just been built showed it. A member before the nested one separates
-them, and the fixture now asserts the two ids differ before relying on the
-difference.
-
-**What the comparison has now found, in one sentence per backend:**
-
-    C       return err;                    no id
-    C++     return e;                      no id
-    Rust    self.flags()?.validate()?;     no id
-    Python  raises from the nested validate    the WRONG id
-
-Four backends, written separately, each missing the same case in its own
-spelling -- and the fourth failing worse than the other three, because an
-absent identity is silent where a wrong one is confident.
+Moved to `doc/decision/26.385-the-identity-in-python-and-the-coincidence-that-passed-a-sabotage.md`.
 
 ### 26.386 `parameter`: the construct, and a guard that guarded nothing
 
@@ -11712,75 +7098,11 @@ Moved to `doc/decision/26.387-a-note-would-have-been-worse-than-a-refusal.md`.
 
 ### 26.388 The README rule, made mechanical -- and what it found
 
-**25.-1 says a keyword lands in the README too. A test now says so.**
-`test_the_readme_names_every_keyword` reads the DECLARATION and MEMBER
-keywords off `parser.py`'s own dispatch tables and `ATTRIBUTE_NAMES` off
-the parser, and requires each to appear in the README as code -- a fenced
-block or an inline span.
-
-**It paid on the first run, and not only for this session's work.** Six
-names were in the language and in no table:
-
-    namespace          a file-scope declaration
-    pad_random         a member kind (0045)
-    [non_canonical]    a weakening the lattice cannot derive
-    [require_aligned]  a member that must start on its natural boundary
-    [timeout_ms]       a relation's retransmission contract (26.98)
-    [retries]          the same
-
-Four of those predate this session by phases. A rule nobody could check
-had been followed for whatever was recent and not for anything older,
-which is what an unenforced convention looks like from the outside.
-
-**The scan is over code spans, not the whole file, and that is the whole
-design.** Matching anywhere would pass `[bits]` on "eight bits with no
-numeric reading" and `[version]` on "the version" -- a check inspecting
-the wrong thing rather than nothing, which reads identically from the
-output. And inline spans have to match ACROSS NEWLINES, because the README
-hard-wraps: a first version stopped at the line break and reported
-`preamble` missing while it was there, in a span that wrapped.
-
-**No held-out set, deliberately.** Every name the parser dispatches on is
-something a schema author can write, so the rule is right for all of them
--- and an exemption list here would be the first place a new keyword went
-to avoid the work. The gate carries a control instead: a name no parser
-dispatches on must come back missing, or three regexes over a file could
-report everything present.
+Moved to `doc/decision/26.388-the-readme-rule-made-mechanical-and-what-it-found.md`.
 
 ### 26.389 `situ verify` says what the schema says
 
-**0051's fifth consumer, and the last one that record names.** A vector's
-report now carries every `when` whose predicate holds:
-
-    warn: frame `warned`: oversized
-       --> says.vectors:3
-        = longer than any early reader was written to hold
-
-**Every severity, including on vectors that CONFORM.** A `warn` or a `note`
-is by definition about a well-formed message, so a report that spoke only
-about failures would never print one -- which is most of what the construct
-is for. The messages are collected right after the view is acquired and
-before `validate` runs, so a vector that `validate` refuses still carries
-the `refuse` message naming why.
-
-**The ids come from the module and the words from the schema**, which is
-0051's split doing exactly what it was designed for. The generated module
-answers WHICH messages hold; `situ verify` holds the schema, so it reads
-the severity and the sentence from there. Nothing asks for `--messages`:
-the module built in memory carries no strings at all, and the report
-carries the schema's own words.
-
-**The id is read back by POSITION, not by name.** `traverse.messages` is
-the one list all six descriptions number from, and a name lookup would
-agree today and stop agreeing the moment two structs state a `when` of the
-same name -- which nothing forbids, since the check that names must be
-unique is per schema rather than per struct.
-
-**Three controls, because the assertions are string matches on a report.**
-A vector holding no predicate must be spoken about by nothing; a schema
-with no `when` must produce no severity line at all; and changing the
-schema's sentence must change the report, which is what shows the words
-are not the module's.
+Moved to `doc/decision/26.389-situ-verify-says-what-the-schema-says.md`.
 
 ### 26.390 Refusing four backends left the fifth description emitting it
 
@@ -11820,56 +7142,7 @@ Moved to `doc/decision/26.398-a-field-and-a-method-of-one-name-where-the-field-i
 
 ### 26.399 A generated header that did not compile, found in passing
 
-**Not a parameter fault, and not this arc's** -- found by the worker
-building the C view, reproduced with no `parameter` anywhere, and fixed
-separately:
-
-```
-struct frame { u8 off; u8 pad[4]; u8 marker at off; }
-```
-
-`situc build --target c` SUCCEEDED, and the generated `situ_frame_check`
-called `situ_frame_marker_offset(view)` -- a function a located member
-never emits, so `cc` refused the output with *implicit declaration of
-function*. A build command reporting success and emitting code that does
-not compile.
-
-**How it survived is the corpus lesson again.** One schema in the tree
-places a member this way -- `example/bmp`'s `u8 pixels[info.image_size] at
-file.pixel_offset` -- and it is a NESTED path, which resolves to a
-constant offset and takes a different route. The uncovered shape is `at
-<bare local member>`, which no schema has. A construct the corpus does not
-carry is one no gate can fail on, which is what put the `parameter` struct
-on this arc's list in the first place.
-
-**Fixed, and the check is not merely restored -- it is retired, because it
-was never askable.** `situ_in_bounds(view, ...)` asks whether the FRAME
-contains the member, and a located member's offset is not measured from
-the frame; `check` takes a view and no message, so the question is not
-expressible in its signature. The accessor asks it instead, against the
-message, on every call -- which is what `offset = DataPlaced` in the map
-is telling a reader it costs. `check` now carries a note saying so, rather
-than a silent absence a reader would have to account for.
-
-**Running the family found an older second fault the report had not.**
-`u8 m at 2;` -- located at a CONSTANT -- reads nothing from the frame, so
-`view` was an unused parameter and `-Wunused-parameter` under `-Werror`
-refused it. The emitter had grown a `(void)view;` for this during the
-parameter work (26.397) and guarded it on the struct taking an argument,
-which was the conservative choice while that work was in flight and is
-exactly what left the older case broken: a schema with no parameter cannot
-reach the argument branch. The condition is the rendered text alone now --
-an expression that uses the view necessarily spells it.
-
-**Four shapes, and the sabotages separate them.** Disabling the
-check-skip fails all four; disabling `(void)view;` fails only the two
-constant ones. So the parametrisation is load-bearing rather than
-decorative, and the case that was reported is not the case that found the
-second fault.
-
-Zero churn on the corpus, measured the same way as 26.397 -- 41 schemas,
-164 generations, 328 files, identical against `HEAD` -- with the
-comparison controlled by perturbing one captured file.
+Moved to `doc/decision/26.399-a-generated-header-that-did-not-compile-found-in-passing.md`.
 
 ### 26.404 `situc explain` places a member that occupies nothing
 
@@ -11885,61 +7158,7 @@ Moved to `doc/decision/26.401-a-refusal-message-that-outlived-what-it-refused.md
 
 ### 26.403 Both walkers take the argument, and where each one puts it
 
-**The image carries it as `image_placement.text_flags` bit 6.** `flags` is
-full -- all eight bits spoken for -- and `text_flags` had 6 and 7 free,
-with `peek` already at bit 5 for exactly this reason: it is the
-placement's SECOND flag byte rather than a text number's alone, and `peek`
-is `parameter`'s nearest cousin, the other member that occupies nothing.
-So the record did not grow, the stride did not move, and `situc map
---check` and `situc wire --check` both report `std/image.situ.map` and
-`.wire` current -- verified here rather than taken from the report, and
-neither committed file is touched. Which also means the `[stream]`
-wire-compatibility question 26.391 leaves open does not arrive through the
-image.
-
-**The row still says `offset_bits` and `size_bits`, and that is why the
-flag cannot be inferred.** Layout answers `offset = 0` -- where `body`
-begins -- and `size = 8`, how wide the argument is. A walker without the
-flag spends that byte and reads the next member's first byte as the
-argument: the same fault as the accessors, arriving at the walker by the
-same route.
-
-**Python keys arguments by placement index; C keys them by ordinal, and
-that difference is a hole in one of them.** `acquire(image, buffer,
-struct, args=())` stores `{placement index: value}`, so another struct's
-parameter is simply not in the map. The C walker has no view -- every
-entry point takes `(image, message, len, shape)` -- so the arguments go on
-the `situ_walk_image` binding, keyed by ordinal, and in a schema with two
-parameterised top-level structs, acquiring for `one` and then reading
-`two` returned ONE's argument. A number, not an error.
-`situ_walk_image` records `arg_shape` beside the arguments now and
-`argument_of` refuses a mismatch.
-
-**Refused in four places and never defaulted**, including again at the
-point of use -- so a `View` built by hand, which the sub-view paths and
-the tests both do, cannot get a defaulted answer through the window
-either. Python raises a new `walk.Unsupplied` rather than a `Refused`, and
-C gets `SITU_WALK_ARGUMENT = 10`, because everything else in those modules
-answers a question about BYTES and this is the caller's omission. That is
-26.394's distinction: exit 2, not 1.
-
-**Two sabotages first failed through the compiler rather than through the
-check** -- `-Werror` on an unused static, then on a tautological compare
--- and were reworked until they failed through the check under test. That
-is the rule about a control having to be REACHED, met twice in one file.
-
-**And a `printf` trap cost two false readings.** `printf("%d %llu",
-(int)situ_walk_read(..., &v), v)` reads `v` before the call that fills it
-as readily as after, and both times it looked exactly like the walker
-returning a wrong value. The committed driver sequences the read into its
-own statement and says why.
-
-**One deliberate non-change, recorded rather than taken:** `parameter` is
-not in `pack.CONSTRUCTS` / `ENCODED`. That table lists side-table
-FAMILIES, and `peek` and `scaled` are flags and are not in it either -- so
-adding one flag and not the others would be the inconsistency rather than
-the fix. Whether the coverage report should count flags is a question for
-whoever owns that table.
+Moved to `doc/decision/26.403-both-walkers-take-the-argument-and-where-each-one-puts-it.md`.
 
 ### 26.402 The corpus struct costs more than 0050 says, and the tree has the precedent
 
@@ -12027,65 +7246,7 @@ Moved to `doc/decision/26.638-a-remaining-run-of-fixed-elements-counted-zero-in-
 
 ### 26.637 Fold: the sweep command that cannot answer zero, signalled
 
-Two sweeps in this session read as a leak and both were the sweep's own
-shell. `running-code.md` prescribes
-
-    ps -o pid,ppid,stat,etime,rss,cmd --ppid 1 | grep -i <name>
-
-after a run, and the pattern is in the command line of the shell doing
-the matching -- so a CLEAN sweep, which is the result the sweep exists
-to establish, reads back as one.
-
-Measured here, both read at the time as something left behind:
-
-    ps ... | awk '$3=="funk" && $2==1' | grep -icE "pytest|qemu|make"
-                                     counted 1,  alive 0
-    ps ... --ppid 1 | grep -iE "pytest|cc1"
-                                     counted 2,  alive 0
-
-**The second is why "subtract one" is not the remedy.** It answered TWO
-because the eval ran a pipeline whose shell and subshell both carried
-the pattern, so the inflation is a function of how many shells the
-command happens to spawn. Printing the rows and reading them caught
-both.
-
-And 26.634 has the same class pointed at situ's own output rather than
-at the process table: `situc build | grep -c "no builder"` printed 0,
-which read as "nothing refused" and meant "the pattern does not match a
-Python traceback" -- the generator was raising on the next line of the
-stream the count had filtered.
-
-**Signalled rather than fixed, and the entry is named**: the sweep
-section is shared by every tree, so which form it prescribes is a
-document decision. netcfgd had signalled the same thing on 2026-10-13
-with four instances of its own; situ's two are appended to that entry
-under *Signals from the projects* in `claude-guidelines`' `project.md`,
-in `9771f4e`. The guidelines were re-read at that commit and
-`~/.claude/tool/rules-seen` acknowledges it, so the marker returns the
-next time they move.
-
-#### Where this session stops
-
-**At `b34511c`, gated green and pushed**, with nothing uncommitted but
-another session's `tool/style_gate.py`. This paragraph said `b319cbf`
-and 94 per cent, and both moved: the holder said to continue with the
-weekly reset six hours off, so the deferred reader question was measured
-rather than handed over -- which turned it into 26.638's four-backend
-fix -- and the window then reached **97 per cent**, past the line where
-`CLAUDE.md` stops development. Nothing was started after that.
-
-What the last increment cost is worth knowing for the next one: one
-measurement (ten minutes), four emitters each one rule, three backends
-verified by running and one by reading, a constructed test because the
-differential cannot see the accessor, and one container gate. The
-remaining candidate of that shape -- the mixed-signedness loop bound --
-was measured as cosmetic for every count this corpus and this
-composition space can spell, so it is not the next thing to do.
-
-26.636 has the ten increments and what was measured; the open list above
-it is three decisions and one coverage gap. The next session's first
-move is `python3 tool/sweep.py --writer --all`, which is green, and the
-first thing worth BUILDING is the driver that asks a run for its count.
+Moved to `doc/decision/26.637-fold-the-sweep-command-that-cannot-answer-zero-signalled.md`.
 
 ### 26.636 Fold: rung 2 writes, 160 to 180 structs, and the lens that replaces guessing
 
@@ -12101,249 +7262,15 @@ Moved to `doc/decision/26.634-a-struct-argument-is-the-writer-s-parameter.md`.
 
 ### 26.633 A nested struct one byte wide is not a byte run
 
-Three refusals said *`flags` has no stated length, so nothing says when
-the writer should stop*. Its length is one byte and fixed.
-
-**The branch asked how wide an element is**, and a byte-wide element is
-exactly what a byte RUN has -- so `flags flags;` went down the run path,
-found no count there, and reached the fall-through refusal. The three are
-`message.header.flags`, `telemetry.reading.status` and
-`header.header.flags`, each a group of bits that closes a byte exactly,
-which is the commonest shape a protocol header has. A nested struct TWO
-bytes wide was never affected, which is why the family had three members
-and not thirty.
-
-What distinguishes the two is not a width: **it is whether the member
-names a struct of this schema and is one of it**, which is the question
-the branch asks now. The sixth branch in these increments keyed on a
-shape a member usually has rather than on what the member is, after the
-packed size field, the varint size field, the element-count ordering,
-`_len` on a run measured in elements, and `situ_at_len`.
-
-The composition is what the fix buys, and it is the ordinary one:
-`situ_flags_build` writes the byte and `situ_header_build` takes it as
-bytes, like every other nested member. `A8` is `1010 1000` -- urgent
-set, ack clear, priority five, and the reserved three bits zero because
-the schema says so -- and the header comes out
-`01 02 A8 00 10 00 03 11 22 33 44` with the reader finding the bits
-inside the byte again.
-
-**And the message's only corpus instances were all three of those
-misdiagnoses**, which is a new way for a claim to go quiet: the gate
-reported the row unemitted the moment the fault was fixed. What would
-still reach it is `u8 x[]` with nothing stating its length, and the
-parser refuses that outright -- *an array needs a size here* -- so it is
-listed as constructed, a net for a shape nobody has found, like the
-reserved fall-through 26.628 left in the same position.
-
-**179 of 242 structs build**, 36 of 45 schemas, 96 of 112 arms.
-
-#### What is left is mostly correct refusals
-
-80 refusals in 35 families before this, 77 after, and the top of the
-list is things a writer at this rung SHOULD decline: nine sealed
-regions, whose interior is written through the seal and needs a key that
-is rung 3's; eight tags whose schema names no codec, which situ cannot
-invent; seven coded regions, where the bytes are a codec's output; five
-registers, which are bus transactions rather than bytes in a buffer.
-
-Of the rest, one is a decision rather than a gap and belongs to the
-copyright holder: **four structs are refused as "entirely literal, so
-there is nothing to build"** -- json's `true`, `false` and `null` among
-them. The refusal is accurate and the rule behind it was deliberate:
-`_encode` of a constant is not a builder. But an adopter composing a
-JSON document then hand-writes those four bytes, which is the
-duplication this compiler exists to remove, and situ emits no constant
-for them to use either. Whether a struct with nothing for a caller to
-supply should get a builder is a question about what a builder IS, so it
-is recorded here rather than answered in passing.
+Moved to `doc/decision/26.633-a-nested-struct-one-byte-wide-is-not-a-byte-run.md`.
 
 ### 26.632 Escaping is forced, not invented -- and three copies of one cap
 
-Three refusals said a run *"escapes its delimiter, and escaping would
-write bytes other than the ones it was given"*. That is true and it is
-not a reason. **The caller hands over CONTENT and the wire form is the
-schema's**, which is the division every other member here already
-follows: a size field is computed, a pad is computed, a checksum is
-computed, and these bytes are encoded.
-
-What makes it not an invention is that the encoding is **forced**.
-`situ_scan_relaxed` takes the byte after an escape as content whatever it
-is, so exactly two kinds of byte must carry one:
-
-  - the delimiter, or the run reads back shorter than it was written;
-  - the escape byte itself, or it swallows the byte after it -- and a
-    content byte ending in one swallows the DELIMITER, leaving the member
-    unterminated, which is the fault `sexpr`'s own comment describes from
-    the reading side.
-
-**Nothing else is escaped**, and that is the line: a JSON encoder also
-escapes control bytes, and situ's `[escape = ...]` does not say so. It
-says which byte escapes, and the reader accepts any byte after it.
-
-So json's and sexpr's strings and `edges.escaped_run` build:
-`a"b` comes out `"a\"b"`, `ab\` comes out `"ab\\"`, and the reader's own
-scan finds its delimiter in both.
-
-**The sabotage separates the two rules, and only one of them is caught by
-`_validate`.** Dropping the escape-the-escape rule makes `ab\` fail the
-build -- the closing quote is escaped, the member is unterminated, and
-the struct's own validation refuses it. But `a\b` comes out `"a\b"`,
-which the reader accepts **at the same length** while meaning something
-else under the escape rule: `\b` is one escaped byte rather than two
-content ones. That half is invisible to every check situ has, which is
-the argument for the rule rather than for the validation, and the reason
-the test asserts bytes.
-
-#### The cap was three copies of one rule, all short by one
-
-`[max = N]` bounds the member's bytes, and the reader's scan window is
-`min(N, remaining)` -- so the delimiter has to land INSIDE the cap and
-the rule is "content and delimiter together". **This writer checked it in
-three places and every one read it as "content"**: a delimited run, an
-escaped run, and minimal digits. Each accepted exactly one length that
-`_validate` then refused.
-
-Measured, with `max 8` and `max 4`: seven content bytes build and eight
-return CONSTRAINT having agreed to them; three digits build and four do
-the same. A builder that reports CONSTRAINT for an input it accepted at
-plan time is the honest-but-useless state a refusal by name exists to
-avoid, and here it was produced by arithmetic rather than by a missing
-branch.
-
-**They are gone rather than corrected**, which is 26.628's answer to a
-pad's bounds and is this file's own stated rule: two checks of one schema
-is how they come to disagree, and these had. The view states the cap, the
-builder validates against the view before returning, and that catches
-every over-cap run by construction -- an over-long run is precisely one
-whose delimiter is not in the window. Behaviour measured identical with
-the checks in and out, at the boundary and either side of it.
-
-What the cap means is now visible in the escaped case:
-`edges.escaped_run` is `until "," max 64 [escape]`, so a comma in the
-content costs two of the sixty-four, and 62 bytes with one in them take
-the same budget as 63 without. That is the one place the three-way
-relationship -- content, encoding, cap -- can be seen at all, which is
-why the test is written over it.
-
-#### Two more things the loop had to get right
-
-The length is accumulated **against the room left** rather than summed
-and compared afterwards: a content length near `UINT32_MAX` doubles past
-it, and a wrapped total passes a capacity check it should fail.
-`situ_cap - situ_at - situ_need` cannot wrap, because the running total
-is at most the capacity by induction.
-
-And the null check goes **before** the loops rather than inside the copy,
-unlike every other caller-measured run here: those skip a `memcpy` at
-zero length, where these loops read bytes one at a time. A length with a
-null pointer is the caller's mistake and it gets BOUNDS, not a crash.
-
-**176 of 242 structs build**, 36 of 45 schemas, 96 of 112 arms.
+Moved to `doc/decision/26.632-escaping-is-forced-not-invented-and-three-copies-of-one-cap.md`.
 
 ### 26.631 Two writing primitives the runtime did not have
 
-Seven refusals were one family: the runtime could not write the bytes.
-Four were big-endian base-128 varints -- SQLite's record varints, and
-three in `edges` -- and three were text numbers the schema declares
-signed. Both are runtime gaps rather than generator ones, which is the
-distinction that decides where the fix goes: a second implementation in
-the generator is the fault `owned.py` paid for in BCD, where an encode
-and a decode were self-consistent and wrong together.
-
-**`situ_varint_be_put` is the decoder backwards, beside it.** The runtime
-had `situ_varint_be_get` and `situ_varint_be_len` and no encoder, so the
-length comes from that same `_len` -- the function the minimality check
-reads -- rather than from arithmetic done twice. SQLite's ninth byte is
-the case worth stating: `terminal_bits == 8` means it carries all eight
-of its bits and ends the value whatever its high bit says, which the
-decoder does unconditionally at `max_bytes - 1`, so the encoder must too.
-A value too wide is refused rather than truncated, because `_len` clamps
-its answer to `max_bytes` and the write would otherwise drop the high
-bits silently.
-
-Round-tripped at every boundary against the decoder, which is the only
-check that catches a sign or shift error: 0, 127, 128, 2^14-1, 2^56-1,
-2^56 and UINT64_MAX through SQLite's nine-byte form, and MIDI's
-four-byte one beside it. 2^56 comes out `80 C0 80 80 80 80 80 80 00`, and
-a cell with a 200-byte payload writes its size as `81 48` and a rowid of
-300 as `82 2C` -- SQLite's own spelling.
-
-**`situ_format_int` is `situ_parse_int` backwards**: `-` and never `+`,
-no `-0`, and `len` is the whole field including the sign, as
-`situ_format_uint`'s is including its leading zeros. The magnitude is
-`-(value + 1) + 1` rather than `-value`, which is undefined at
-INT64_MIN -- and INT16_MIN is in the test for the same reason, since a
-writer that negates the value rather than its predecessor is wrong at
-exactly one input.
-
-For `[minimal]` the sign is a byte of width on top of the magnitude's
-digits, counted in the generated code because that is where the digit
-count already lives. All six values round-trip through the reader's own
-getter and `_validate`.
-
-#### A varint can be the size field, and that is three for three
-
-`payload_size` was in the signature. SQLite's cell is
-`payload_size`, `rowid`, `payload[payload_size]`, so the caller was
-passing the size AND the payload's length -- two numbers for one fact,
-with nothing to stop a message disagreeing with itself.
-
-**The third branch in two days to take a value for a member the schema
-says the writer computes.** A packed field was the first (26.630), a
-varint the second, and the element-count branch ordering was the third.
-The cause is structural and worth stating where the next branch will be
-written: the size-field check sits AFTER every branch keyed on what a
-member IS, so each of those branches has to ask the question itself or
-silently win. Three instances is a pattern rather than three bugs.
-
-`VARINT` was also missing from `CALLER_SUPPLIED`, which came out when the
-signature guard dropped every varint rather than the computed one: a
-struct whose only caller-supplied member is a varint would have been
-reported as "entirely literal, so there is nothing to build".
-
-#### The guard that had to arrive with the signed support
-
-`_radix_refusal` returns before `_scalar_refusal`'s own `scaled` check,
-so a `scaled i64` written in digits was being refused for its SIGN.
-Handle the sign and it falls through to a writer that formats an
-integer: **1.5 written as 1**, which is `f32 x[2]` from the previous day
-in a second construct. The scaled check now lives in the radix table
-where it is reachable, and json's numbers and edges' `measured` say what
-is actually in the way.
-
-That is twice now that adding a capability would have un-refused
-something that needed a different refusal. The habit that catches it is
-reading the branch ORDER rather than the branch: a refusal table ordered
-by what a member lacks answers for whatever it reaches first.
-
-#### An out-parameter read in its own call, for the fourth time
-
-`printf("%d %llu", f(view, &size), size)` prints the value `size` had
-before the call, because the arguments are unsequenced. It has now
-happened four times in these increments, every time in a throwaway C
-probe, and every time the symptom was a plausible wrong number rather
-than a crash -- here `0 0` for a writer that was correct.
-
-The rule is in the probes as a comment now, where the next one gets
-written: **call it, then print it.** A probe is not a test and gets
-written fast, which is exactly why the same hazard keeps finding it.
-
-#### Three tests pinned refusals this removed, and one had moved twice
-
-`test_a_nested_struct_whose_extent_its_bytes_do_not_state_is_refused`
-asserted a misdiagnosis for a day, was corrected to pin the LEB128-only
-refusal, and that is gone as well. A message pinned twice is a message
-the test should not be pinning, so it checks the property underneath --
-a varint type has no `_required`, read from the artifact -- and that the
-planner reaches its varint branch at all.
-
-The BE128 refusal test became a statement about which encoder the writer
-calls and that it passes the declaration's own `max_bytes` and
-`terminal_bits`, the same properties `emit.py` hands the reader. And the
-signed digits case left the refusal table for a test that asserts bytes.
-
-**173 of 242 structs build**, 36 of 45 schemas, 96 of 112 arms.
+Moved to `doc/decision/26.631-two-writing-primitives-the-runtime-did-not-have.md`.
 
 ### 26.630 Running a size expression backwards, and the canonical IPv4 header
 
@@ -12371,116 +7298,11 @@ Moved to `doc/decision/26.625-every-refusal-carries-a-claim-and-the-gate-catches
 
 ### 26.624 `\r\n` is one delimiter, and the control I wrote first tested the bound
 
-Eleven members ended at a multi-byte delimiter and every one was a
-single, consumed, two-byte sequence -- `\r\n` in http, smtp and edges,
-`: ` in one. So there was nothing to decide: the single-byte and
-multi-byte forms are **one emitter**, because the one-byte case is the
-other with N = 1, and a second comparison written for it is a second
-thing to be wrong.
-
-Three sites use it: the scan that refuses a byte run containing its own
-delimiter, the boundary check in a struct run, and the write. All three
-now take the sequence.
-
-**A real HTTP request head builds, every byte from generated code:**
-
-    GET / HTTP/1.1\r\nHost: example.invalid\r\n\r\n
-
-41 bytes -- the line from `request_line_build`, the field handed over as
-bytes because a `header_field` ends at TWO delimiters and is refused for
-that, and **the blank line written by the run's own delimiter**. It
-acquires a view.
-
-**The control I wrote first tested the loop bound rather than the
-comparison**, and that is the part worth keeping. A sequence scan must
-accept a CR *not* followed by LF, since that is not the delimiter -- so
-the fixture is a version carrying one. My first was `HTTP/1.1\r`, with
-the CR last, and it passed with the needle cut to its first byte:
-`scan + 2 <= len` never reaches the final byte, so the bound excluded it
-either way. The fixture that discriminates is `HTTP\r1.1`, with the CR in
-the middle where the scan looks: correct, it is accepted; first byte
-only, it is refused.
-
-That is `evidence.md`'s *a control has to be reached* for the fourth time
-in two days, and the first three were upstream checks intercepting the
-case. This one was intercepted by **the loop bound of the very check
-under test** -- which is nearer to home and harder to see, because the
-sabotage and the interception live in the same four lines.
-
-**And a parametrized case was removed rather than reworded.** The table
-of delimiters the writer cannot place had a `\r\n` row asserting the
-refusal this entry deletes. There is no refusal left to assert, so the
-row is gone; what remains is one ambiguity the schema has -- several
-delimiters -- and two transformations of the caller's bytes, escaping and
-trimming.
-
-Re-measured, same method -- the 45 schemas `every_schema` holds: **141 of
-242 structs have a builder, in 34 of the 45 schemas**, up eight structs
-and two schemas. What leads the refusals now is a `while` run (14), a
-sealed region (9), the eight tags naming no codec, a codec (7), and a
-`u8` run whose length nothing states (7).
+Moved to `doc/decision/26.624-r-n-is-one-delimiter-and-the-control-i-wrote-first-tested-the-bound.md`.
 
 ### 26.623 A varint, and the fourth time a branch ordered by absence misread a member
 
-The largest refusal after the checksum named a construct that does not
-exist: **fifteen refusals said "is a nested `remaining_length`"**, and
-`remaining_length` is mqtt's varint type. A varint has no `scalar` and a
-`type_name` naming no struct, so it fell through to the nested-struct
-branch, which is reached by what a member LACKS.
-
-**That is the fourth misdiagnosis of this family in two days** -- after
-the `before` run told about its delimiter count (26.612), the nested
-field called a run (26.614), and the arm parameter chopped out of a local
-(26.617). Every one had a correct verdict and a reason about something
-else, and every one came from a branch ordered by absence. The remedy
-each time was to ask first what the member IS.
-
-**And a test of mine was holding this one in place.** 26.614's test
-asserted the refusal text *"nested `edge_varint`"* -- so the suite pinned
-the misdiagnosis, including the wrong half, and would have gone red if
-the message were corrected without the test. A test that pins a message
-pins whatever the message says. It now checks the refusal that applies.
-
-**Writing one needs no new arithmetic**: `situ_varint_put` encodes
-minimally and returns the bytes written or zero, and `situ_varint_len` is
-beside it. So the writer bounds the value by the schema's `max_bits`,
-calls the runtime, and advances by what it reports. Against LEB128's own
-vectors, with 321 being MQTT 2.2.3's worked example:
-
-    0          -> 00
-    127        -> 7F
-    128        -> 8001
-    321        -> C102
-    268435455  -> FFFFFF7F
-    268435456  -> SITU_ERR_CONSTRAINT
-
-The last is the standard's *"the receiver MUST close the network
-connection"* seen from the writing side: one past 28 bits is refused
-rather than written in five bytes.
-
-**Two of the corpus's four varint types stay refused**, and by name:
-sqlite's and edges' are BE128, which has a reader and a length function
-and **no encoder**. Writing one here would be a second implementation of
-a conversion whose first lives in the runtime -- `owned.py`'s BCD, where
-an encode and a decode were self-consistent and wrong together.
-
-**The parameter the writer needed was the fourth, so the four became
-one.** `plan` had grown `header`, `prefix`, `structs` and `arm`, and the
-varint declarations would have made a sixth positional argument. They are
-a `Shape` now, and what makes it more than tidiness is that every field
-is read from something the compilation already produced -- the emitted
-header for `_required` and `_compute`, the resolved schema for a nested
-type, the declarations for an encoding -- rather than derived a second
-way. An absent field means the writer refuses more rather than guesses,
-which is the direction 26.614 established.
-
-Re-measured, same method -- the 45 schemas `every_schema` holds: **133 of
-242 structs have a builder, in 32 of the 45 schemas.** Only one more
-struct than before, which is the honest result: the fifteen refusals were
-fifteen ARMS of one struct, and fixing what they said revealed the next
-real reason in fourteen of them. What leads now is a `while` run (14), a
-multi-byte delimiter (10), a sealed region (9), the eight tags naming no
-codec, and a codec (7).
+Moved to `doc/decision/26.623-a-varint-and-the-fourth-time-a-branch-ordered-by-absence-misread-a-member.md`.
 
 ### 26.622 A trailing checksum, computed where the caller has the whole message
 
@@ -12488,63 +7310,7 @@ Moved to `doc/decision/26.622-a-trailing-checksum-computed-where-the-caller-has-
 
 ### 26.621 The cut has no outlier to lead with, and that decides how it can be done
 
-26.608 measured this document at 88 per cent log and called that the
-number to act on. The holder's instruction was to cut it: keep each
-entry's rule and its load-bearing number, drop the narration, **one
-commit per pass rather than by attrition** -- the shape `evidence.md`
-took on 2026-09-04, from 3044 lines to 1989.
-
-**Measured before starting, and the measurement says the pass cannot be
-done the way the instruction asks.** 620 entries, 38,974 lines between
-them, **mean 62 and median 55**, longest 543:
-
-    top  50 entries     7,194 lines   18% of the entry text
-    top 100 entries    11,779 lines   30%
-    top 200 entries    19,099 lines   49%
-    top 400 entries    30,465 lines   78%
-
-So there is no fat tail. Cutting the fifty longest entries perfectly
-removes under a fifth of the text, and reaching three quarters of it
-means touching **four hundred entries**, each wanting a judgement about
-which of its numbers is load-bearing. That is not one session's work,
-and it is work whose quality depends on having written the entry: of the
-620, this session wrote eleven.
-
-**A twenty-entry nibble is the thing the instruction rules out**, and for
-a reason this document can check: `git log -S` on a rule's own words
-recovers the case from the commit that removed it, which works only while
-the removals are deliberate commits rather than a trickle nobody can
-name. So the choice is a real pass or none, and a real pass is a
-different piece of work from the one that was authorised.
-
-**And the measurement went wrong twice in the same way first**, which is
-worth more than the figures. Both earlier attempts charged
-`### Invariants to hold across all phases` -- 1,391 lines of standing
-rules, the most load-bearing prose in the file -- to the entry above it,
-reporting a 1,432-line `26.115` whose real length is 41. An entry's span
-ends at the next heading of ANY depth, not at the next entry heading,
-and a document with non-entry blocks inside its log section breaks the
-simpler rule silently. **Twice, after the first correction was recorded**
--- so the record of a measurement error is not a guard against repeating
-it, and the figures above are the first ones taken with the invariants
-block excluded.
-
-**What is left is a structural option, and it is not this session's to
-take.** Section 26 is 84 per cent of the file, and its entries are cited
-by number from everywhere -- which is exactly the justification
-`CLAUDE.md` gives `doc/decision/`: a single file cannot give a stable
-anchor per record, and a record that gets referenced needs one. Moving
-the log out of `project.md` would leave the design document readable in
-one window without any editorial judgement being spent, and it would
-cost a rewrite of every path that reads `project.md` -- the docs gate,
-the dangling-citation test, the conventions test -- plus a convention
-other projects would then look at. **The option, its cost, and whose it
-is: the copyright holder's**, per *Describing a thing thoroughly is a way
-of proposing it*.
-
-Until then the cut stays authorised and undone, and this entry is what a
-session picking it up should read first, so that the measurement is not
-taken a fourth time.
+Moved to `doc/decision/26.621-the-cut-has-no-outlier-to-lead-with-and-that-decides-how-it-can-be-done.md`.
 
 ### 26.620 Measuring an element is not validating it
 
@@ -12576,81 +7342,7 @@ Moved to `doc/decision/26.614-a-nested-struct-is-written-as-bytes-and-asked-its-
 
 ### 26.613 The frame reader hands out a message its schema forbids
 
-**hull reports, measured at `9d66b6d` and appended to
-`suggestion/hull.md` as finding 12**, that the frame layer's `next`
-neither applies a length field's `[max]` nor validates what it hands
-out. Their schema and their three outcomes, in their words:
-
-    struct message { u32 length [max = 1048576]; u8 body[length]; }
-
-    a length of 1048577, buffer exactly SIZE_MAX (1048580)
-        next = SITU_ERR_BOUNDS, a capacity error rather than a
-        malformed message
-    buffer 64 bytes larger
-        next = SITU_ERR_TRUNCATED, waiting for a body that should
-        never be read
-    that body then pushed whole
-        next = SITU_OK, and validate on the same view =
-        SITU_ERR_CONSTRAINT
-
-**Verified here from the generated code rather than from their probes**,
-by building that schema at `--layer frame` in this tree. `_required`
-reads the length with `situ_get_be32` into `situ_need_u32` and consults
-no bound; `_reader_next` calls `_required`, then `_view`, and never
-`_validate`. The number it would need is in the same header --
-`SITU_MESSAGE_LENGTH_VALUE_MAX 1048576u` -- and the check that uses it
-is in the `.c`, inside `_validate`.
-
-**The verdict is not in doubt and situ's own code says why.** The
-existing BOUNDS branch in `_reader_next` is justified in a comment: a
-whole message needing more than the buffer can hold *"never becomes true
-by waiting, so it is reported rather than left to spin on a stream that
-will never satisfy it."* A length beyond `[max]` is that same class --
-no amount of further reading makes it admissible -- so the principle for
-refusing it early is already written down beside the code that fails to.
-
-**What makes it a deliberate pass rather than a one-line fix is the
-contract.** `_required` currently has two outcomes, SITU_OK and
-SITU_ERR_TRUNCATED, and a caller reads `*need` on the second; refusing a
-length means a third, SITU_ERR_CONSTRAINT, with `*need` meaningless.
-Measured: **all four backends emit a `required`** -- `codegen/c`,
-`codegen/cpp`, `codegen/python` and `codegen/rust` each have one in
-`frame.py` and `emit.py` -- and `test_backends_refuse_the_same_members`
-holds them to each other. So changing one is a divergence the parity
-test exists to catch, and changing all four is a change to a public
-function in every language situ emits.
-
-**Two options, their cost, and whose they are.** Per
-*Describing a thing thoroughly is a way of proposing it*, this is
-recorded rather than chosen:
-
-  - **`_required` refuses the length**, which stops the spin and the
-    hand-out at the earliest point the fault is knowable, and costs the
-    third outcome in four backends.
-  - **`_reader_next` also calls `_validate`**, which closes the general
-    case rather than the length one -- any constraint, not just a bound
-    -- and costs a full validate per message on the framing path, which
-    is the hot path for a stream reader. It also changes what `next`
-    can return for a reason unrelated to framing.
-
-They are not alternatives: the first is about a value that can never
-become valid, the second about everything else. **Which to do, and
-whether to do the second at all, is the copyright holder's** -- it is a
-cost on every consumer of the frame layer, not a defect to be fixed by
-whoever happened to read the report.
-
-**Nothing waits on it.** hull states they check the length themselves as
-soon as it is whole and validate every view, so their reader is not
-exposed; the exposure is to a caller who follows the generated header's
-own instruction, *call `next` until it answers SITU_ERR_TRUNCATED*, and
-trusts what comes back.
-
-**The reporting is worth noting separately.** This is the third finding
-hull has produced by reading situ's generated output or its emitters
-rather than by using the result -- after 26.606's four and the `before`
-diagnosis in 26.612 -- and all three are things situ's own tests could
-not have asked, because each is a case where the code does exactly what
-some test asserts and the assertion is about the wrong question.
+Moved to `doc/decision/26.613-the-frame-reader-hands-out-a-message-its-schema-forbids.md`.
 
 ### 26.612 A run ended by its delimiter, and a count that counted the wrong thing
 
@@ -12674,113 +7366,7 @@ Moved to `doc/decision/26.608-this-document-is-88-per-cent-log-and-that-is-the-n
 
 ### 26.607 Three reproduced codegen faults, a rung nothing compiles, and 26.604 qualified
 
-hull sent a reduced reproduction for their finding 6 and two more findings,
-sections 10 and 11 of `suggestion/hull.md`. Chasing them found a third
-fault they had not seen, in situ's own corpus, and made an entry written
-earlier today wrong.
-
-**Finding 6, diagnosed from the generated source rather than guessed.**
-Their guess was right and here is the reading. For their `b1.situ` the
-Python module holds `class bytes(View)` at module level, and `class list`'s
-run-walker calls what it believes is the builtin:
-
-	if bytes(self._msg.buffer[self._at + at:self._at + at + 1]) == b')':
-
-`bytes` is the struct, `View.__init__` wants `(msg, at, length)`, and it
-gets one argument -- hence their TypeError.
-
-**The mechanism already exists for the other half and its population is
-annotations.** `emit.py`'s `_unshadow` emits `_situ_list = list` and
-rewrites annotations, and its comment explains why it is done at the point
-of writing: *a bare `list` in a user annotation means the STRUCT and the
-same word in a generated one means the builtin, and nothing in the text
-tells them apart.* A CALL is the same sentence and the pass does not reach
-it.
-
-**I tried a post-pass and the file's own comment is why it failed.** Having
-the AST looked like a discriminator the regex lacked, so the first attempt
-rewrote every `Call(Name(n))` where `n` is both a module-level class and a
-builtin. It broke immediately: `bytes(self._msg, self._at + start, size)`
-is a legitimate construction OF THE STRUCT, and in the AST it is the same
-node shape as `bytes(slice)`. **A parse does not know what the emitter
-meant any more than a regex does**, so the fix belongs at each emission
-point, spelled `_situ_bytes(...)` as `_situ_list` already is. Reverted
-rather than half-landed.
-
-**And the exposure is wider than one name.** Measured over the corpus by
-generating every schema's Python and reading the AST: this emitter calls
-**fifteen** builtins -- `len` 305, `max` 222, `min` 105, `bytes` 97,
-`bytearray` 93, then `IndexError`, `bool`, `type`, `range`, `any`,
-`object`, `list`, `frozenset`, `str`, `sum`. Three corpus schemas already
-shadow one:
-
-	json.situ       struct object   builtin called 4 times
-	sexpr.situ      struct list     builtin called 4 times
-	importer.situ   struct str      builtin called 2 times
-
-All three latent, because no vector reaches the colliding call -- hull's
-`bytes` had one. **Which settles the fix hull offered as an alternative:
-refusing the name is wrong.** `object` in a JSON schema and `list` in an
-s-expression schema are the names those formats have, and 26.562's C
-precedent does not transfer: there the colliding names were situ's own
-runtime vocabulary, `bounds` and `view`.
-
-**Finding 10, reproduced, and it is in `example/http`.** `--layer edit
---target c` emits a decode that assigns every scalar from its `_get`:
-
-	out->code = zz_status_line_code_get(view);
-
-A text-converted member's getter is `situ_err_t _get(view, uint32_t *out)`,
-because a decimal parse can fail. `http_edit.h` therefore does not compile,
-and neither does hull's canonical atom. Whether the decode should read the
-`_value` accessor beside it or propagate `_get`'s status is a convention
-question -- the decode returns `situ_err_t` and could do either, and
-discarding a parse failure into an owned copy is the half worth deciding
-deliberately.
-
-**A third fault, which nobody reported: `example/cpio`'s edit header emits
-a placeholder as an identifier.**
-
-	uint8_t <reserved0>;
-	out-><reserved0> = zz_cpio_entry_reserved0_get(view);
-
-Four errors. The ordinary header compiles, so the C backend has a spelling
-for a reserved member and the edit emitter is not using it.
-
-**Nothing compiles that rung, which is why both survived.**
-`test_codegen_c.py` sweeps every schema at `view` and again at `frame`.
-There is no edit-layer sweep, so two corpus schemas have been emitting C
-that does not compile.
-
-**And that makes 26.604 wrong where it was most confident.** That entry
-argued the four absent per-rung sweeps cost nothing, because `layers.reach`
-says 44 of 45 schemas reach only `view` and the one that reaches further is
-the schema nine driver tests compile at the top rung. The reasoning covers
-what a rung emits BEYOND `view` **where the schema has content for that
-rung** -- and `--layer edit` does not work that way: it emits a header for
-any struct needing backing, whatever the schema's reach. `http` and `cpio`
-both have `reach=view` and both emit a broken `_edit.h`.
-
-So the partition I asserted is true and answers a narrower question than
-the sentence around it claimed. The guard added there still holds and is
-still worth having; what was wrong is the paragraph saying the absent
-sweeps cost nothing. They cost two broken headers.
-
-**The gate is deliberately not added yet.** An edit-layer compile sweep is
-the obvious remedy and it would go red on `http` and `cpio` the moment it
-landed -- and `harmonization.md` is explicit that a red gate is when
-somebody reaches for an ignore rule, so the fix comes first and the sweep
-with it. Recorded here so the next pass has the population: build every
-corpus schema at `--layer edit --target c` and compile the header.
-
-**Finding 11 is hull's and is the holder's.** They asked for a canonical
-writer from the edit layer and found that no rung builds a message: C's
-`edit` emits 0031's owned decode, `edit.py` refuses a variant as *a shape
-rather than a length*, and nothing in `situc/codegen` builds, appends or
-resizes. README and 0032 both describe `edit` as *build or resize a message
-whose extent is not fixed*. Whether a builder belongs at that rung or the
-ladder's description should change is not something to settle while fixing
-a decode, and hull said so too.
+Moved to `doc/decision/26.607-three-reproduced-codegen-faults-a-rung-nothing-compiles-and-26-604-qualified.md`.
 
 ### 26.606 hull adopted situ and found four faults in situ's own example
 
@@ -12888,105 +7474,7 @@ Moved to `doc/decision/26.581-the-tool-told-the-reader-to-do-something-it-did-no
 
 ### 26.580 ID3v2.4, and the scalar kind it did not need
 
-`example/id3` describes the tag an MP3 carries: the header, the extended
-header, the frames, and the three encodings the real file uses. 85 tests in
-the corpus sweeps exercise it, the four-backend differential among them.
-
-**THE FINDING IS WHAT DID NOT GET BUILT.** ID3's defining oddity is the
-synchsafe integer -- 28 bits of length in four bytes, seven to a byte, so
-that no length can contain a run an MPEG decoder would read as a frame
-sync. The first reading of the format concluded situ could not express one
-and that a scalar kind had to be added beside `bcd`: `ScalarKind.SYNCHSAFE`
-with a groups count, a decode and an encode in the walker, the four
-backends, the capability map, the differ, the dissector. **Thirty-eight
-sites across fourteen files, scoped from `bcd`'s own footprint before
-anything was written.**
-
-It is four `u1`/`u7` pairs with the length an expression across them:
-
-	reserved u1  [must_be_zero];
-	u7       size_0;
-	...
-	u8  body[(size_0 << 21) | (size_1 << 14) | (size_2 << 7) | size_3];
-
-Every field lands at a static offset, the solver derives `Bounded(0,
-268435455)` from the expression unaided, and **the stuffing bits become a
-claim `validate` checks rather than a comment.** That last part is why this
-is better than the type would have been and not merely cheaper: a
-`synchsafe4` scalar would have masked the high bits silently, and nothing
-would refuse a tag that set one -- which 6.2 says is malformed and after
-which every byte means something else.
-
-**One `situc map` found that out.** The measurement cost a command and the
-feature would have cost a day, which is *Measure the feared cost before
-deliberating* pointed the other way: usually it dissolves a question about
-breakage, and here it dissolved a question about absence.
-
-**And it is the second time in this corpus.** mqtt's header records the
-same mistake made the same way -- a limitation written down that was not
-there, 26.56 -- for a member whose presence depends on a flag, which is a
-`variant` over one bit with `nothing` as its other arm. id3 uses that
-construct for the extended header. So the pair is now the argument:
-**probe the language before extending it, because a schema that records an
-absent limitation is worse than one that records nothing -- a reader
-designs around it.**
-
-**What the format did cost, honestly.** Three things the schema states
-rather than works around:
-
-- **The extended header's CRC cannot be a `checksum`.** It is an ordinary
-  CRC-32 stored as a 35-bit synchsafe integer, so the 32 bits the codec
-  produces sit in no contiguous span of the message. `checksum` binds a
-  codec to the bytes a tag occupies and there are none. Measured rather
-  than asserted: the real tag's `04 4b 7f 72 5e` is 0x497FF95E destuffed,
-  which is exactly `zlib.crc32` of the bytes from the end of the extended
-  header to the end of the tag -- 3.2's coverage, confirmed. So the limit
-  is narrow and stated: a checksum whose output is stored bit-stuffed.
-- **The frame identifier is a bound, not a set.** 4 says `A-Z0-9`;
-  `[min = 0x30, max = 0x5A]` also admits the seven punctuation characters
-  between `9` and `A`. The schema says so rather than claiming the set.
-- **The frame run carries netlink's caveat**, that situ's run ends after
-  the element failing its test. What bounds it is the frame, and the real
-  tag is the case that proves it: **it has no padding at all**, its last
-  frame ending at byte 209 with the audio at 210, so there is no zero byte
-  to stop the run and it stops anyway.
-
-Five positive controls, each refused through its own check: a stuffing bit
-set, a v2.3 major version, an extended header claiming 128 bytes, a frame
-identifier out of range, and a reserved frame flag set.
-
-**THE ORACLE WAS A CONSTANT, AND THE SABOTAGE IS WHAT SAID SO.** Excusing
-id3 in `UNORACLED` would have been false -- two independent readers are
-installed -- so it is oracled three-party: ffmpeg writes the tag, mutagen
-reads it, situ reads it, and situ is compared against mutagen. Its `why`
-claimed the synchsafe decode was on trial, because a group read in the
-wrong place shifts every frame after it.
-
-Shifting a frame size's third group by 8 rather than 7 **left the oracle
-green.** Every frame ffmpeg wrote was under 128 bytes, so each whole size
-sat in the lowest seven bits and `size_2` was always zero: the corpus could
-not reach the bits the claim was about. The tag's own size was over 127 and
-so the header's decode *was* covered, which is what made the gap
-invisible -- one of the two decodes was genuinely checked.
-
-A title long enough to need two groups fixes it, and the sabotage fails
-now. **Not a better assertion -- a corpus that reaches the hazard**, which
-is the distinction between a control that can fire and one that is
-reached.
-
-The first attempt at that used a long COMMENT and found something else:
-ffmpeg writes a comment as `TXXX`, whose content is a description and a
-value either side of a NUL, which ID3v2.4 gives in its 4.2.6 and is
-not the shape this schema
-describes. The oracle disagreed -- correctly -- about a frame the schema
-makes no claim about, so the corpus uses a title instead. Both readings
-had agreed about every boundary including the 200-byte frame, which is how
-it was clear the disagreement was the oracle's text decode and not the
-decode under test.
-
-And the padding is a checked claim rather than a comment: the run's last
-element is the first ten bytes of ffmpeg's padding, and the oracle asserts
-`validate` refuses it. netlink's caveat, held to.
+Moved to `doc/decision/26.580-id3v2-4-and-the-scalar-kind-it-did-not-need.md`.
 
 ### 26.579 situ-edit recomputed no checksum, and said so as though that were 14.1
 
@@ -13062,93 +7550,7 @@ Moved to `doc/decision/26.562-a-generated-name-the-runtime-already-had-and-a-wro
 
 ### 26.561 `access=Sequential` names a class and reads like a constant
 
-**Settled as 0060, and `raidcfgd` had pointed at the right axis.** Their
-ask was *say in the generated header which access pattern costs what. The
-map already says `access=Sequential`; it does not say "exponential in k".*
-The exponential half was 26.555; what was left turned out to be a real
-understatement rather than a wording preference.
-
-**Measured, C at `-O2`, a counted run of four-byte elements, calling
-`_at(i)` for every `i` against a cursor the consumer holds:**
-
-    n       _at(i) for every i      a cursor      ratio
-    16            0.0022 ms        0.0001 ms        18
-    64            0.0256 ms        0.0003 ms        73
-    256           0.4017 ms        0.0014 ms       288
-    1024          6.5589 ms        0.0056 ms      1177
-
-**6.56 ms to read a four-kilobyte message.** `_at(index)` walks from the
-start every time, so reaching element N is O(N) and a loop over every
-element is O(N^2). The axis says *cannot reach element N directly*, which
-is true, and a reader takes it for a constant factor.
-
-**The member chain is a DIFFERENT axis with the same shape, and separating
-them is half the answer.** Reaching member k past variable-length members
-is `offset=Dynamic`, not `access=Sequential`. Measured on a struct of k
-`str` members, every member once:
-
-    k      every member via _offset    one pass via _extent_from    ratio
-    8             0.00036 ms                  0.00005 ms              7
-    64            0.02415 ms                  0.00037 ms             65
-
-Identical totals at every k, which is how the two routes were shown to
-agree rather than merely to differ in speed. So the chain has a public
-one-pass route and a run has none -- which is why `raidcfgd` found the
-chain's cost and wrote the run's cursor by hand.
-
-**What the map can say and what it cannot.** `Sequential` is a property of
-the FORMAT: element N is not directly reachable. That a loop over all N is
-quadratic is a property of the loop the CONSUMER writes, and a capability
-vector does not describe the caller. So the number goes in the generated
-header beside the accessor that has the property, and the class stays in
-the map. A walked element accessor now carries `O(index)`, the `O(n^2)`
-consequence, and the cursor to write instead, in all four backends; an
-indexed one says nothing, because for a fixed-size element the sentence is
-noise.
-
-**Two things recorded for the holder rather than taken, both with their
-cost measured.** `offset=Dynamic(k)` would put the chain's length in the
-map, which is where 18.1 promises a performance change shows up as a
-reviewable diff -- today inserting a variable member lengthens every later
-chain with no diff at all. It is about 120 committed map lines, a
-numeric-strength rule whose direction is inverted from `Aligned(n)`, and
-the normative table in two places. And a run wants an element CURSOR, which
-is a new public API in four backends rather than a correction.
-
-**And no capability says whether the generated code achieves the bound,
-which is the conclusion this whole question invites.** 26.555's 3^k chain
-and today's linear one carry the same vector on every axis. That half is a
-gate -- `test_offset_chains_are_linear.py` -- and 0060 says so in as many
-words, because a reader who takes a green map for a fast decoder has been
-misled by a document that was accurate.
-
-**The controls cost two rounds and the second one is the lesson.** Each
-backend's mark sabotaged on its own fails naming that backend; the indexed
-case's guard sabotaged makes the note unconditional and fails the vacuity
-test. Rust passed both times until the sabotage was looked at: its emitter
-carried `O(n^2)` twice, once in a Python comment explaining the note and
-once in the emitted line, and `replace(..., 1)` hit the comment. **The
-count said the edit landed and the edit established nothing.** The comment
-is reworded so the literal mark appears once, which removes the ambiguity
-for the next instrument rather than for this one.
-
-**And the note itself failed a gate, which is worth recording because the
-change is documentation and the gate is a documentation tool.** The C++
-wording named the element class as `::situ::item(raw).extent()`, and
-Doxygen reads a backticked qualified call as an explicit link request:
-*explicit link request to 'situ::adv_report(raw)' could not be resolved*,
-on `ble`, `mqtt` and `edges`. The bare `::situ::item` is an automatic link
-with the same problem, so the class is not named at all now -- a reader
-needs `extent()` and the accessor's signature already says what it hands
-back. **A prose change has a compiler too**, and in this tree it runs over
-every schema in the corpus.
-
-**Nothing else moves**: 42 committed maps and 42 wires regenerate
-byte-identical, and the four generated outputs still compile -- C and C++
-under `-Wall -Wextra -Werror`, Rust under `-D warnings`, Python imported.
-The first attempt at that check captured `2>&1` and reported 21 maps
-differing; the difference was a `situc map` warning on stderr, in the
-instrument rather than the tree.
+Moved to `doc/decision/26.561-access-sequential-names-a-class-and-reads-like-a-constant.md`.
 
 ### 26.560 Six branches stated the rule and two did not
 
@@ -13236,89 +7638,7 @@ Moved to `doc/decision/26.540-the-one-open-item-was-built-25-days-ago-over-an-em
 
 ### 26.539 A cap on a `remaining` run, and the unit nobody asked about
 
-**`u8 content[remaining] max 470` (0059), built.** `fuzznet` reported the
-gap from a record body whose real bound lives in the ENCLOSING record, so
-a body-only schema has no field to size it from and could only say
-`[remaining]`, which reads Unbounded.
-
-They asked for `[max = 470]`, and situc refused it correctly -- `[min]`,
-`[max]` and `[must_eq]` are claims about a VALUE that `validate`
-compares, an array has no single value, and 14.5's rule is what keeps one
-attribute from meaning two things. **The refusal message already named
-the spelling the language uses**, a size cap being syntax after the run
-form as in `until D max N`, so the language did not need a new idea. It
-needed the clause it was already pointing at.
-
-**The holder settled the half the record could not: a declared cap
-REFUSES a longer frame rather than truncating the read.** Such a cap
-restates a bound the enclosing format guarantees, so a frame exceeding it
-is malformed rather than something to read part of. The cost is stated in
-0059 rather than discovered later -- a schema that UNDER-states its cap
-now rejects valid messages.
-
-**The decision nobody asked about, and the one worth carrying: the cap
-counts ELEMENTS, not bytes.** `u8 name[n]` counts elements and the cap
-sits exactly where that count sits, so `max 470` is 470 elements;
-`until D max N` counts BYTES because a scan counts bytes. **The two are
-the same number for the `u8` run either form is usually written on**,
-which is precisely why it had to be settled deliberately: every fixture
-anyone would reach for agrees, and the disagreement waits for the first
-`u16` run. A question whose test cases all agree is not a question
-anybody discovers by testing.
-
-Thirteen sites, listed in 0059. The shape is 26.144's checklist and it
-held: the AST field, the parser clause, the layout extent, four backends,
-the unparser (which drops a field it does not render -- what `Sealed.until`
-paid for two entries ago), the image, and both walkers. `traverse.frame_cap`
-is the shared predicate, so the four backends ask one question rather than
-four -- which is this section's most expensive recurring defect answered
-before it could happen rather than after.
-
-**`layout` refuses a cap on a run something already bounds**, which is
-14.5 applied to a clause rather than to an attribute: a counted run is
-bounded by its count and a delimited one by `until D max N`, so a third
-spelling would state what nothing reads.
-
-**Nine sabotages, and two of them were wrong before they were right.**
-
-The first pass over the four backends confirmed nothing for two of them:
-the marker it grepped for -- `frame_cap(struct) is not None` -- is absent
-by construction in the C++ and Python emitters, which spell it
-`capped = frame_cap(struct)` and then test `capped`. The sed matched
-nothing, the file was untouched, and the test passed. **It was the
-RESTORE check that caught it, not the landing check** -- the landing
-check had the wrong polarity for a marker that was never there, and a
-harness that only verified the sabotage applied would have reported two
-green backends as controlled.
-
-The C walker's first sabotage went red through the C compiler's
-`-Werror` rather than through the verdict comparison, so the check under
-test never ran. The second inverted the flag and went red on the table's
-FIRST entry, every uncapped member now refusing -- right check, wrong
-fixture, which proves the guard is reached and not that the new case
-discriminates. **The third disables the guard only where it should
-fire**, and fails on exactly the 6-byte message of exactly the new entry.
-Three attempts for one control, each of them a green-looking result that
-established something other than what it appeared to.
-
-**The four backends are sabotaged one at a time on purpose.** A single
-control over all four passes while three of them are wrong, which is what
-this section has spent fourteen entries on.
-
-Boundaries on both sides everywhere: 471 bytes accepted and 472 refused
-in the four backends and the Python walker, 5 and 6 in the C-versus-Python
-verdict table. A guard tested only on the bad side passes just as well
-when it refuses everything.
-
-**And the nine green tests could not see the defect the gate did.** The
-Python walker's guard named its local `held`, which is already a local
-further down the same function holding a list of `(check, against)` pairs.
-Every test passed -- Python does not care -- and mypy narrowed the whole
-scope to `Placement` and reported nine errors on lines this change never
-touched. **A name is not a type error until something checks types**, and
-the sabotages could not have found it either: the guard was correct, and
-what was wrong was what the name did to the rest of the function. It is
-`capped` now, which is what the C++ and Python emitters already call it.
+Moved to `doc/decision/26.539-a-cap-on-a-remaining-run-and-the-unit-nobody-asked-about.md`.
 
 ### 26.538 `peek` in the C walker, and the comparison that never ran
 
@@ -13330,66 +7650,7 @@ Moved to `doc/decision/26.537-the-region-s-extent-back-where-the-arithmetic-is-n
 
 ### 26.536 The register's field: built, measured, and not kept
 
-**Answered NO, with the code written rather than reasoned about.**
-26.144 asked whether a member should record the PLACEMENT its region
-resolves to, computed per layout where the prefix is known, instead of
-a bare name. It can be done. It buys too little to keep, and three red
-gates is what established that.
-
-**26.534's blocking claim was wrong and is corrected.** That entry said
-the resolution cannot be qualified at all; it is right about
-`tag_covers` and wrong in general. `absorb_nested` rewrites a nested
-struct's paths into the parent during `place_members`, so a pass in
-`_layout_of` sees final paths for every placement --
-`outer_body.nested.body` already spelled from the parent. `tag_covers`
-has no such moment, being set in `resolve_coverage`, which the parent
-deliberately skips for a nested tag. **The obstacle was specific to one
-field and was generalised without checking the other.**
-
-**What sank it is that the two consumers ask different questions.**
-`pack._region_owners` wants the region that OWNS some bytes, `coded`
-included -- and a `coded` region does not stamp itself into `regions`,
-by design, so no name records one. Wiring pack to the field put
-`nest.body.inner.deep` under `nest.body` instead of the `coded inner`
-that gates it. Two derivations that agree on most shapes are still two
-questions, and consolidating them would have been this family's
-fifteenth instance rather than its cure.
-
-**And the surviving consumer needs a walk the field cannot shortcut.**
-Three structs nested three deep, each with an `authenticated body`,
-give a member `regions = ('body', 'body', 'body')`: it is inside all
-three and all three tags stale when it is written. Resolving each name
-against the containing scopes picks the innermost every time, so the
-two outer tags vanish -- under-claiming, which this function's own
-comment calls worse than the bug. Telling the cases apart is exactly
-`reaches`' ancestor walk: `outer_body.nested` is NOT inside
-`outer_body.body` while `top.held` IS inside `top.body`, and only
-walking the steps between says which. A field filled BY that walk is a
-cache, not a replacement, and nothing here is slow.
-
-**Three red gates, and the corpus was silent for all three.** 1429
-coverage rows and 1036 image rows stayed byte-identical at every stage,
-because no corpus schema nests a `coded` region inside a `sealed` one
-and none nests three same-named regions. Both cases live in unit
-fixtures -- 26.525's and this file's own -- and both are what caught
-it. **The lesson that this corpus is a weak detector for region shapes
-is written three times this week, and its silence was still read as a
-result.**
-
-**Two traps worth keeping, whatever happens to the field.** A sabotage
-that swapped `max(` for `min(` left the file the SAME SIZE, and Python
-invalidates a `.pyc` on source size and mtime -- so the cached
-bytecode was reused within the second and two consecutive readings of
-one input disagreed. Four commands went on reasoning about a
-contradiction that was a stale cache. And a surgical cut that removed
-`by_path` and the old `reaches` also took the loop that BUILDS
-`covering`, stripping coverage from 272 rows.
-
-**What remains is the register item, answered.** The name stays
-relative because inlining needs it to be, the resolution stays at the
-point of use because the two uses differ, and the four resolvers are
-four questions rather than one spelled four ways -- which 26.533's
-sweep had already found to be true of the three it examined.
+Moved to `doc/decision/26.536-the-register-s-field-built-measured-and-not-kept.md`.
 
 ### 26.535 `sealed ... until`, and a trap predicted then hit anyway
 
@@ -13517,226 +7778,15 @@ Moved to `doc/decision/26.505-six-open-items-swept-five-of-them-already-closed.m
 
 ### 26.504 A hand-written vector would have agreed with the bug
 
-**`example/dns` described RFC 1035 exactly and refused traffic every
-current resolver emits.** `reserved u3 [must_be_zero]` is that RFC's Z
-field, three bits reserved for future use. The future arrived: RFC 2535
-took two of them and RFC 4035 section 4.9.3 settled them as AD and CD, and
-`dig` sets AD by default. So BIND's flags are 0x0120, those three bits
-carry 010, and `situc verify` answered
-
-    ConstraintError: dns_header.<reserved0> is reserved [must_be_zero]
-
-correctly, about a message nothing is wrong with.
-
-**The whole of 23's independent-source rule is in how this was found.** A
-vector written by hand would have been written from RFC 1035 -- the same
-document the schema was written from -- and it would have set the Z field
-to zero and passed. The bug is not reachable from the specification at
-all: it is only reachable from bytes, because only an implementation knows
-which year it is. **Two readings of one document are one witness however
-carefully either is made**, and that is the argument for the rule stated
-as a case rather than as a principle.
-
-**What changed is scope, not the argument.** 14.5 rejects reserved bits
-because an ignored bit is a malleability surface and DNS is a known covert
-channel, and that reasoning is untouched -- it applies to a bit nobody has
-assigned a meaning to, which is one here rather than three. AD and CD are
-fields a receiver READS, so refusing them was never malleability control;
-it was refusing the protocol. `require canonical(dns_header)` survives for
-the same reason: a named bit carrying its own value is not a second
-spelling of anything.
-
-**Nothing moved.** Every member keeps its offset, the packed byte is still
-eight bits, `require size(dns_header) == 12` still holds, and the wire
-signature records three lines at the same bit positions where there was
-one. It is a WIDENING -- the schema accepts what it used to refuse and
-refuses nothing it used to accept -- which is the rare direction for a
-contract change and the reason this one is cheap.
-
-**And the corpus came from a permission this machine does not grant.**
-Packet capture is refused here, which had been recorded as "no independent
-source for dns" and was wrong: a UDP relay between `dig` and the resolver
-on 127.0.0.1 records both datagrams in userspace, and `localhost` is
-answered without forwarding so nothing goes on the network. The same shape
-had already worked for `example/dtls` against two OpenSSL processes.
-**A missing PERMISSION is not a missing SOURCE**, and the difference is
-one relay.
-
-Worth keeping because the wrong classification was made confidently and
-twice: nine schemas were sorted as unclosable, the list was reported, and
-the list was repeated unchanged when the question came round again.
-`evidence.md` names that -- a frame that has just been right is the hardest
-one to drop -- and what broke it was asking what the DTLS entry had
-actually done rather than re-reading the classification.
-
-**The reply carried the other half.** Its answer section names its owner
-`C0 0C`, a pointer whose low fourteen bits are 12, which is where the
-question's name starts in that message. So `example/dnsname` holds a real
-resolver's compressed name beside the same name written out: both
-spellings of one name, from one exchange, which is exactly what the
-`non_canonical` attribute on that run asserts and what nothing in the tree
-had demonstrated.
+Moved to `doc/decision/26.504-a-hand-written-vector-would-have-agreed-with-the-bug.md`.
 
 ### 26.503 A green suite is not a green gate, and a skip is not a gap
 
-Two findings about the gates rather than the code, from a session that ran
-the suite five times and `make check` never.
-
-**`make test` is `test-py test-c`. `make check` is `style typecheck lint
-test cross-test`.** So a session that runs the suite has run two of five,
-and the three it skipped are the ones that answer different questions:
-`typecheck` reads the source mypy-strict, `lint` and `style` read its
-shape, and `cross-test` runs the generated accessors on aarch64 under
-emulation. 24.0 already says `check` is "what has to pass before a
-commit"; what this records is what the other four commits cost.
-
-**A dead branch shipped, in four commits, behind a green suite.**
-`_element_guard` was written once and copied into all four backends, and
-its `count is None` arm cannot be taken in C, whose `_count_expression`
-returns `str` where the other three return `str | None`. mypy strict said
-`Statement is unreachable`; the suite said nothing, because there is
-nothing to say -- a branch that cannot be taken breaks no test. It was
-fixed in `81695c6`, and the emitted code is byte-identical either way,
-which is precisely why no behavioural gate could have found it.
-
-**The shape: a type checker and a test suite fail on different axes**, so
-one standing in for the other is a population error rather than a
-shortcut. The floor gates of 22 already record this from the other side --
-`sys.monitoring` is syntactically valid, so only the type checker could
-refuse it -- and this is the same division met while writing ordinary
-code. Run `check`, not `test`.
-
-**And a skip is not a gap, which took getting wrong to notice.** Reading
-the suite's 64 skips by reason, three stood out as checks that inspect
-nothing: `test_future_examples_*`, parametrised over examples marked
-`// STATUS: needs phase N.`, of which there are none. They were reported
-as inert.
-
-They are not. `test_every_example_builds` asserts
-`FUTURE == []` and `len(CURRENT) >= 12` -- the partition, not the cell --
-and its docstring names what pins the phase-gating machinery while the
-group is empty. That is `evidence.md`'s remedy for an empty population,
-already in place, and an empty parametrisation sitting beside an assertion
-that the population IS empty is covered rather than silent.
-
-**What made the misreading easy is that the skip line looks identical
-either way.** `got empty parameter set ['path']` is pytest's, not this
-tree's, so it carries no reason and cannot say whether the emptiness is
-asserted somewhere. The question to ask of an empty parametrisation is
-therefore not "what does this test cover" but **"what asserts that this
-population is empty"** -- and if nothing does, that is the finding rather
-than the skip.
+Moved to `doc/decision/26.503-a-green-suite-is-not-a-green-gate-and-a-skip-is-not-a-gap.md`.
 
 ### 26.502 Nine corpora, and what committing them found
 
-**`gen-tests` emits nothing for a schema with no committed vectors, and
-twenty-seven schemas were in that state.** Eight are not, now, and the
-rule that governed every one of them is 23's: a `<name>.vectors` beside a
-schema is bytes SOME OTHER IMPLEMENTATION wrote. A corpus situ produced
-would be the known-answer test `evidence.md` calls the same failure
-wearing a lab coat.
-
-| schema | who wrote the bytes |
-|---|---|
-| `png` | the first eight bytes of a real PNG on this machine |
-| `json` | Python's `json`, for `true`, `false` and `null` |
-| `mqtt` | paho-mqtt's own packet writer, through a stand-in socket |
-| `modbus` | pymodbus 3.8.6, `pdu.encode()` and `FramerSocket` |
-| `protobuf` | `protoc --encode=User` over the example's own `.proto` |
-| `http` | `http.client` for the request, `http.server` for the reply |
-| `smtp` | `smtplib.SMTP.putcmd` |
-| `dtls` | OpenSSL 3.5.7, both ends of a relayed DTLS 1.2 session |
-| `padded` | nobody -- see below |
-
-**A corpus can be present and still not reach the thing under test.**
-`json` had twenty-two vectors and skipped anyway, because every one is for
-`value` and `situc build --owned` owns the three fixed-size literals
-instead. The skip said "its constraints need committed vectors to
-exercise" and the committed vectors were there, for a struct the test
-cannot use. **Asking whether a corpus EXISTS is not asking whether it
-covers what is being checked**, and only the driver's own `names` list
-answers the second.
-
-**A committed vector the decoder REFUSES produced the same skip as no
-vector at all**, under a message naming the wrong remedy. That is the one
-state that can go quiet after somebody has done this work: corrupt a byte
-of `png.vectors` and the count moves from `refused=64` to `refused=1`,
-which is a disagreement between a vector and a decoder rather than an
-absence of either. It fails now, and the skip is kept for the case it was
-written for. Without that, every closure recorded here could have rotted
-back into a skip silently.
-
-**Committing a corpus for a delimited schema found a defect in
-`gen-tests`.** Its round trip reads every settable field and writes it
-back, and it decided which those are by skipping reserved, nested,
-located, covered and data-sized members. A run the DELIMITER sizes is none
-of those -- `traverse.data_sized` asks whether the extent comes from an
-expression over the data, and a scan is not one -- so `command.verb`
-looked like a scalar and the harness called `situ_command_verb_get`, which
-the header does not declare. It has `_ptr`, `_len`, `_span`, `_eq` and
-`_which`.
-
-It was invisible because **no schema with a delimited member had committed
-vectors**, which is the shape worth keeping: a generator's blind spot can
-be held open by the absence of the very corpus that would close it, and
-adding the corpus is what makes the generator wrong out loud.
-`test_generated_c_calls_only_accessors_the_headers_declare` caught it,
-which is the test written for exactly this -- a build failure `make test`
-finds three quarters of an hour later and the fast gate reads past.
-
-**`padded` is the honest exception and its header says so.** It describes
-no format anybody else implements, so there is no second implementation to
-take bytes from; its vector is computed by hand from 8.4, which is a
-second reading of the rule rather than a second implementation of it, and
-the weaker evidence. It leans on the schema's own
-`require size(aligned_header) == 8`, which fails the build before the
-vector is reached. Saying which kind of evidence a corpus is costs a
-paragraph and is the difference between a fixture and a claim.
-
-**`smtp` carries only the commands that take an argument**, and that is the
-schema's own documented boundary rather than a discovery: `command.verb`
-scans `until " "`, and `DATA`, `QUIT` and `RSET` have no space. Running
-`situc verify` over all five is the note beside `struct command` behaving
-as written -- three conform, two are refused with *command.verb has no
-b' ': the frame stops first*. The two were left out rather than wished in.
-
-**`dtls` needed a way round a missing permission.** Packet capture is not
-allowed here, so the bytes were taken in userspace: a UDP relay between
-`openssl s_client` and `openssl s_server`, cipher forced to
-AES128-GCM-SHA256 so the AEAD is the one the schema names. The record
-closes exactly -- `length` 0x2B, thirteen of header, eight of explicit
-nonce, `length - 24` of ciphertext, sixteen of tag, 56 bytes. Its interior
-is not read and cannot be, `require verify_gated(record.sealed)` being the
-whole point.
-
-**And recording it left an orphan, which is this workspace's own rule
-failing in the direction it warns about.** The server ran under `timeout`
-and was killed THROUGH it, so the SIGKILL landed on the wrapper and
-openssl was reparented to init, still holding its port. `running-code.md`
-records that shape for containers; a `timeout` around any process that
-outlives the signal is the same thing. It was found by the sweep that
-section asks for afterwards and killed by name, `/proc/<pid>/cmdline`
-re-read before signalling.
-
-**What is left is nineteen, and none of it is a gate gone quiet.** Checked
-per schema rather than counted: three have no struct to carry bytes at all
-(`std/codecs.situ` and `std/kernels.situ` declare none, and a `register`
-is a bus transaction); six are situ's own inventions, where no other
-implementation exists by construction -- `telemetry`'s first line says
-"designed rather than described"; one is `image`, whose agreement with the
-packer `test_pack.py` already holds more precisely than a corpus would;
-and nine are real formats with no independent source ON THIS MACHINE --
-no DNS library, no capture permission, no stored `.pcap`, no Lisp, and
-`pickle` is Chromium's rather than Python's. Those nine close the day a
-library or a capture appears, and nothing about them is wrong.
-
-**Measured 2026-09-24 and 2026-09-25**, by `pytest test/unit -q -rs`
-grouped by reason: the suite went from 75 skips to 64 across four runs,
-`commits no golden vectors` from 27 to 19, and the three
-`no draw validated` rows to none. Each run was predicted before it was
-started and matched after it, which is the only reason the counts are
-quoted at all -- rule 7's objection is to a number nobody re-derives, and
-the command that re-derives this one is in this sentence.
+Moved to `doc/decision/26.502-nine-corpora-and-what-committing-them-found.md`.
 
 ### 26.501 Two mechanisms for one problem, composing into a third
 
@@ -13760,262 +7810,19 @@ Moved to `doc/decision/26.497-a-subscript-is-invisible-to-the-walker-every-gate-
 
 ### 26.496 Rust renders Reed-Solomon, and the blocker had already gone
 
-**Rust generated 40 of the 42 derived codecs in `std/kernels.situ`; it
-generates all 42 now.** The two it declined were the Reed-Solomon pair.
-C and Python already generated both.
-
-**Nothing about Reed-Solomon was ported.** The encoder and decoder are
-one statement tree in `codegen/kernel_program.py`; what was missing was
-a renderer. `_RustRenderer` is 165 lines against C's 160 and Python's
-88, and holds no more of the algorithm than either -- which is the claim
-26.462 made for the arrangement, now tested by a third backend rather
-than argued.
-
-**The recorded blocker did not survive measurement, and the reason it
-went is this session's own earlier fix.** 26.457 and this project's
-notes both carried "`no_std` and no-panic indexing" as the obstacle,
-sized at seven unprovable subscripts. That record predates 9319ca9,
-which moved Berlekamp-Massey's `degree > half` guard from after the loop
-to inside it. With the guard where it belongs the invariant holds, and
-asserting `degree <= at` **inside the Rust** never fired across 20,000
-decodes -- with a sabotage of the degree update firing it immediately,
-so the assertion was alive.
-
-**Plain `[i]` everywhere, and `.get(i).copied().unwrap_or(0)` is the
-wrong instrument for four reasons rather than one.** `kernel_program`
-says every index is provably in range and a renderer may rely on it. The
-fallback never sees a bad index anyway -- the underflow is in the
-SUBTRACTION, which evaluates first, so a sabotaged build panics on
-"attempt to subtract with overflow" in debug and on the index in
-release. Eight of the 31 index sites are assignment TARGETS, and a
-sabotage substituting the fallback fails to compile at all:
-`error[E0070]: invalid left-hand side of assignment`. And substituting
-zero in an error-correcting decoder is a MISCORRECTION, which this
-program ranks as worse than a refusal.
-
-**Three things Rust needed that neither sibling did.** `mut` is earned
--- `unused_mut` is a hard error under `-D warnings`, five of nineteen
-declarations must not carry it, and the set is walked out of the tree
-rather than listed, because a list is a thing to be wrong.
-Parenthesisation follows Python's split and not C's: C brackets every
-`Binary` on the grounds that its precedence table is not worth
-checking, and doing that here produced **22 hard `unused_parens`**. And
-`position` is `[usize; half]` rather than `[u8; half]`, because it holds
-indices; that removes three casts and one mixed-type subtraction Rust
-would reject outright where C promotes silently.
-
-**One behavioural divergence, decided rather than defaulted.** `parity`
-is the caller's slice. C writes through a bare pointer and a short
-buffer overflows silently; Rust's `&mut [u8]` panics, which aborts in
-`no_std`. The generated code now guards it and returns 0 -- which
-already means *the caller passed something wrong* in this program --
-rather than inventing a second code or letting the panic stand.
-
-**Verified against a witness that is not situ.** 3,120 encode/decode
-cases across both codecs and corruption from 0 to t+2, one PRNG and one
-draw order in both languages: **byte-identical to the generated Python,
-`diff` empty**, run at `-Os` with `-C overflow-checks=yes`, which never
-fired. Then 300 parity blocks against `reedsolo` at `prim=0x11D`: all
-300 agree. The first link proves the renderer; only the second proves
-the code, and 26.462 is explicit about why -- two backends rendering one
-program agree by construction.
-
-**The gate that would have caught the 22 parenthesis errors did not
-exist, and now does.** Every test compiling DERIVED Rust used
-`-A warnings`; every test using `-D warnings` compiled ACCESSOR Rust.
-Disjoint sets -- while `test_codegen_rust.py` says in as many words that
-the flag matters *"because a great deal of CI does and generated code
-that only compiles without it is generated code that fails for the
-user"*. Measured before writing it: the module was already clean, so the
-gate cost nothing on the day and exists for the next renderer. Sabotaged
-by making every binding `mut`, it goes red through `unused_mut`.
-
-**Two coverage sentences are now wrong and I cannot reconcile the
-older one.** 26.457's *"Coverage is 40 of 42 and stops there
-deliberately"* is falsified outright. 26.462's *"Coverage is 41 of 42"*
-does not match anything measurable today -- C, Rust and Python each
-generate 42 of the 42 kernel-bearing codecs, and before this change
-Rust generated 40 while the other two generated 42, so no backend was
-ever at 41. Rather than guess what the figure counted, the measurement
-is recorded and the sentence left for whoever wrote it: **the method is
-`_for_kernel(decl, "situ") is not None` per backend over
-`std/kernels.situ`'s codecs**, which is the emitters' own question.
+Moved to `doc/decision/26.496-rust-renders-reed-solomon-and-the-blocker-had-already-gone.md`.
 
 ### 26.495 Keyword collisions are handled; the lens that found 26.490 is not
 
-**An empty sweep, recorded because it says where the next fault is
-not.** A field named after a target language's own keyword survives in
-all four backends, checked by compiling rather than by reading:
-
-    C++     class int new delete template operator   g++ -fsyntax-only rc=0
-    Rust    match fn impl type move ref unsafe       rustc --emit=metadata rc=0
-    Python  class def lambda None import global pass import succeeds
-
-Each backend has its own answer and each is deliberate. C and C++ share
-`CPP_KEYWORDS` and append an underscore. Rust emits raw identifiers --
-*"the whole reason they exist"*. Python asks `keyword.iskeyword` rather
-than restating a list, *"because the interpreter that will read this file
-is the authority on what it can parse"*, and leaves SOFT keywords alone
-on purpose, since `match` and `type` parse fine as names and mangling
-them would rename a member for nothing.
-
-**So the interesting question is why 26.490 exists at all beside that.**
-Both are name collisions in generated code and only one is handled,
-because they have different sources. A keyword is a name the LANGUAGE
-reserves -- knowable in advance, listable, and every backend lists it. The
-collision in 26.490 is between a generated LOCAL and the getter the same
-expression calls: `const std::uint32_t n = ... leaf_u(n()) + 1`. That name
-comes from the EMITTER, and no list of the language's words can contain
-it, because the language never reserved `n`.
-
-**Which is why the fix shapes differ too.** A keyword collision is fixed
-by a table. `26.490`'s is fixed the way `cpp/names.py check_collisions`
-already fixes a class name a member has taken: detect and rename. A
-lookup cannot solve a collision whose other half is chosen by the
-generator.
-
-**Three harness failures, all mine, before this sweep said anything.**
-`mod match;` in my own `lib.rs` is invalid Rust, so the first run blamed
-the generated file for an error on line 2 of a file I wrote. The second
-failed on `rustc` having nowhere to put a temp dir. The third needed
-`runtime/python` on `PYTHONPATH`. **Every one exited non-zero with a
-plausible-looking message**, and the only thing that separated them from
-findings was reading where the error pointed. That is the third time in
-this arc that a harness error nearly became a defect report, and the
-remedy has not changed: read the error, not the status.
+Moved to `doc/decision/26.495-keyword-collisions-are-handled-the-lens-that-found-26-490-is-not.md`.
 
 ### 26.494 A ranking that had to be total, and was not
 
-**26.492's crash is fixed and its open question is untouched, which is
-the whole shape of the change.** `_weakest_seekable` ranked three of
-`Seekable`'s four members and is used as a total function, so composing
-a `blockwise` stage reached `order.index` and raised
-`ValueError: tuple.index(x): x not in tuple` -- an uncaught Python
-traceback out of `situc map`, no span, no diagnostic. It now says:
-
-    error: `both` composes `inter`, whose `seekable = blockwise` has no
-           place in the ordering
-      = `seekable` composes to the weakest stage, and where `blockwise`
-        sits between `permuted` and `none` is not settled
-
-**Refused rather than ranked, and that is the point rather than
-timidity.** Where `blockwise` belongs between `permuted` and `none` is a
-question about what the value MEANS, and nothing in the compiler reads
-it -- `Seekable.BLOCKWISE` has no reference outside its own definition.
-Giving it a rank here would settle an open language question silently,
-inside a helper, in the one place nobody would look for the decision. A
-refusal naming the stage removes the crash and leaves the question where
-it belongs.
-
-**Scoped to a pipeline, deliberately.** A standalone
-`seekable = blockwise` is accepted today and stays accepted: the crash
-is composition's and so is the ordering question, and widening the
-refusal to the VALUE would decide the same thing from the other side
-while refusing schemas that compile now. There is a test for each half,
-and the standalone one is the one that would catch an over-broad fix.
-
-**The control is the test that passes in both states.** Same schema, one
-word changed -- `permuted` for `blockwise` -- composing to `PERMUTED`
-before and after. A refusal keyed on something broader would take it too
-and the defect test would still be green.
-
-**`not_yet_implemented` was the tempting helper and the wrong one.** It
-exists for exactly this shape and requires a phase number, which
-`project.md` does not give for this value; supplying one would have been
-an invented fact in a diagnostic a user reads. `error()` says what is
-true without claiming a schedule.
+Moved to `doc/decision/26.494-a-ranking-that-had-to-be-total-and-was-not.md`.
 
 ### 26.491 A line code that declares itself authenticated, and is believed
 
-**`authenticated` is not in `DERIVED_PROPERTIES`, so no kernel can
-contradict it.** Every other declarable property on a kernel-bearing
-codec is computed and a disagreement is refused. This one is trusted --
-and a codec WITH a kernel is exactly the case where trust is not the
-model.
-
-    codec manch {
-        authenticated;
-        kernel = table(input_bits = 1, output_bits = 2,
-                       code = manchester_802_3);
-    }
-    struct msg { u8 kind; u8 nonce[12]; tag u8[16];
-                 sealed(manch, nonce = nonce) { u32 secret_seq; } }
-
-`situc map` rc=0:
-
-    codec manch unbound ... granularity=bit(1) authenticated invertible
-    struct msg ... stage=VerifyGated auth=Covered(tag)
-
-and `situc build` rc=0, emitting
-`situ_msg_sealed_open(situ_view_t view, int verified, ...)` -- a real
-verify gate. **A Manchester line code has no key, no MAC and nothing in
-its output but the code**, and the lattice carries `VerifyGated` out into
-generated C on its word.
-
-**The gate that should stop it is `wellformed.py:3542`,
-`if not codec.authenticated`.** Its sibling at `:3555` -- a derived impl
-may not seal -- does stop it, but only when an `impl` is declared. With
-none, `impl is None` and the check is skipped, and `std/codecs.situ:16`
-calls a signature with no binding *"the normal case for a protocol under
-design"*.
-
-**Amendment: the consequence is narrower than this entry first put it,
-and one third of the claim is withdrawn.**
-
-**The generated code is IDENTICAL.** `situ_msg_sealed_open` for the
-Manchester codec and for a real extern AEAD are byte-for-byte the same
-function -- 187 bytes each, `diff` empty:
-
-    static inline situ_err_t situ_msg_sealed_open(situ_view_t view,
-                                                  int verified, ...)
-    {
-        if (!verified) { return SITU_ERR_TAG; }
-        out->view = view;
-        return SITU_OK;
-    }
-
-**`verified` is the caller's parameter and situ reads no tag.** It
-performs no cryptography for either codec. So what the generated code
-guarantees is a reachability property of the API surface -- no interior
-accessor without a gate object, and the only producer refuses on zero --
-and that is true and unchanged.
-
-**What the hole costs is the one refusal that protects what `verified`
-MEANS.** `wellformed.py:3532` says it in its own words: *"the caller
-passes `verified`, nothing checked anything, and the type system carries
-a promise the cryptography never made."* A kernel codec walks past
-exactly that. The map then prints `stage=VerifyGated auth=Covered(tag)`
-over a line code and the generated prose says parsing before
-authenticating *"does not compile"*. **Nobody forges anything; an
-assertion is made that nothing is positioned to keep.**
-
-**And `tag_bytes`/`nonce_bytes` are withdrawn from this finding.** They
-are outside `DERIVED_PROPERTIES`, and **no kernel could contradict them
-anyway**: none of the seven families is a MAC or an AEAD, so `Derived`
-has no left-hand side for a tag width. They also reach no generated code
--- three schemas differing only in those declarations produce
-byte-identical `.c` and headers differing only in the include guard --
-and the cross-check that matters, declared width against the `tag u8[N]`
-field, fires in all three directions.
-
-**That asymmetry is what makes `authenticated` the real one.** All seven
-families imply **not** authenticated, so *"this kernel implies `not
-authenticated`"* is a sentence `Derived` could carry and does not. A tag
-width is a gap with nothing behind it; this is a gap with a fact behind
-it that nobody wired up.
-
-**Two smaller things came with it.** `_authenticated_note`
-(`c/codectests.py:541`) emits a comment claiming *"`tag_bytes` is checked
-against that field by the compiler"* for a codec that declares none and
-is not length-preserving -- two false clauses, in a note whose stated job
-is that *"silence would read as coverage"*. And with no `impl` at all,
-`gen-codec-tests` emits `no suite` and not even that note, so the claim
-passes the falsification harness in silence.
-
-**Nothing in the tree does this**: 42 schemas, 54 kernel-bearing codecs,
-6 `authenticated` codecs, intersection empty. And `grep -rn
-DERIVED_PROPERTIES test/` returns nothing, so no gate asserts the tuple
-covers what it should -- which is why an omission is invisible.
+Moved to `doc/decision/26.491-a-line-code-that-declares-itself-authenticated-and-is-believed.md`.
 
 ### 26.492 `seekable = blockwise` does not merely misprice, it crashes
 
@@ -14023,45 +7830,7 @@ Moved to `doc/decision/26.492-seekable-blockwise-does-not-merely-misprice-it-cra
 
 ### 26.493 Four axes blind at the default, and the base rates behind them
 
-**26.489 recorded `deterministic` as the vacuous axis. It is four**, and
-`length_preserving` is the one that matters most: it is a load-bearing
-claim about offsets, and it is silently discarded over a CRC kernel that
-adds 32 bits.
-
-    not deterministic  + table       rc=0   declaration dropped
-    not seekable       + table       rc=0   dropped, kernel's LINEAR used
-    seekable = none    + table       rc=0   dropped
-    granularity = stream + table     rc=0   dropped, kernel's bit(1) used
-    length_preserving  + polynomial  rc=0   dropped, kernel's +4 used
-
-Against seven live controls on the same axes, all rc=1. And the
-declaration IS recorded -- `not seekable; seekable = linear;` is refused
-with *"seekable is given twice"* -- so it is the check that cannot see
-it, not the parser discarding it.
-
-**The base rates are the part worth keeping.** 379 `raise error(` sites;
-of the 154 in `wellformed.py` all were read and 42 executed against
-purpose-written schemas -- **40 alive, 2 dead**. Ten codec properties,
-all ten reproduced: **six alive, four vacuous at the default**. And the
-enum axis: 27 classes, 145 members, 23 flagged by a reference sweep and
-**all 23 false positives** once parameterised construction
-(`{x.value: x for x in Enum}`) and `.value` consumers were accounted for.
-
-**That 23-of-23 is the instrument lesson.** A sweep counting
-`EnumClass.MEMBER` references cannot see a member built from schema text
-by a table keyed on `.value`, nor one compared as a string after
-`layout.py` stores `member.unknown.value`. Two corrections, each killing
-a batch, before anything survived -- and what survived did so on a
-reproduced crash rather than on the sweep's say-so.
-
-**One control handed to this sweep did not hold up, and the correction is
-recorded rather than buried.** `c/emit.py:6791`'s assert message misstates
-its guarantee -- `_has_length` and `_struct_extent` are different
-predicates -- but 1,102 reaches across the corpus and a purpose-built
-fixture never made it fail. It is **undecided, leaning alive**, not the
-confirmed-bad control it was offered as. 26.488's claim stands
-separately: that assert fires once `_fits_check` declines, which is a
-state the tree does not reach today.
+Moved to `doc/decision/26.493-four-axes-blind-at-the-default-and-the-base-rates-behind-them.md`.
 
 ### 26.490 Five ordinary field names produce C++ that does not compile
 
@@ -14101,207 +7870,19 @@ Moved to `doc/decision/26.482-the-encoder-s-worst-case-inverted-into-a-decode-bu
 
 ### 26.481 Two ordinals a later insertion falsified, and one overclaim
 
-**Three comment claims in `std/kernels.situ` were wrong; two of them were
-wrong by arithmetic nobody performed and one by a universal nobody
-tested.** Every CRC comment in the file was checked by computing the value
-from the declared parameters rather than by recalling a catalogue.
-
-  - **`crc24_ble` called itself "the first entry here whose width is not a
-    C word".** It is the fourth. In file order the widths that are not
-    8, 16, 32 or 64 run 5, 7, 15, 24, 40.
-  - **`crc40_gsm` called itself "the second".** It is the fifth.
-  - **`crc32_bzip2` claimed "a different answer for every input" against
-    reflected CRC-32.** They agree on the empty input, where both are
-    zero: all-ones reverses to itself and `xorout` cancels it either way,
-    so reflection has nothing to act on. Confirmed here, and no collision
-    in any of the 256 one-byte inputs.
-
-**Both ordinals were true on the day and neither line was ever edited.**
-`ca4b9e3` (2026-08-02) wrote them when 24 and 40 genuinely were the only
-two; `2cc3407` (2026-09-14) added `crc5_usb`, `crc7_mmc` and `crc15_can`
-*above* them and falsified both without touching either. Nothing failed,
-because nothing compares a comment to the file it sits in.
-
-**So the fix is to delete the ordinals rather than correct them.** An
-ordinal about the file's own shape is falsified by an insertion anywhere
-above it, silently, by somebody who never read the line -- which is
-exactly what happened, and correcting "first" to "fourth" only resets the
-clock. What replaced them is the property that made the ordinal worth
-stating: `crc24_ble`'s width is not a C word, `crc40_gsm`'s is the one
-above thirty-two. Both survive an insertion.
-
-**The universal beside them was kept, and the difference is the point.**
-"Every other reflected CRC in this file starts all-ones or all-zeros" is
-also a claim about the file's shape, and it stays -- checked, and true of
-all eight others. A universal is falsified by a counter-example that
-arrives *with* the thing that breaks it, so the next codec to violate it
-makes the sentence wrong in front of whoever added it. An ordinal is
-falsified by an insertion that has nothing to do with it. **The two
-failure modes are not comparable, and only one of them has a reader.**
-
-**What the verification could not reach is enumerated rather than
-passed.** 23 claims in the file are not settleable by computing a CRC --
-catalogue provenance, standards attributions, statements about generated
-register widths, and the CCSDS parameters -- and they are listed in the
-sweep rather than counted as clean. A separate note: the file's assertion
-that CRC-5/USB is the catalogue's only `confirmed` entry of its three
-appears verbatim in `test_differential_oracle.py` as well, so the two are
-one witness, not two.
-
-**One control worth copying.** The check routine was proved able to be
-wrong before anything was believed: with reflection removed it returns
-`0xFC891918` rather than `0xCBF43926`, so a run agreeing with the
-catalogue is agreement rather than a constant. The sixteen values in
-`CRC_CHECK_VALUES` were transcribed from the catalogue by hand and all
-sixteen match computation from the declarations -- independent in the one
-way that matters, since a mistyped parameter breaks the agreement. It is
-not evidence that a declaration names the right catalogue entry.
+Moved to `doc/decision/26.481-two-ordinals-a-later-insertion-falsified-and-one-overclaim.md`.
 
 ### 26.480 An accepted record the tree overruled by building the thing
 
-**0002 is `Status: accepted`, says "No `CMakeLists.txt` is written", and
-declares that it supersedes section 24. There is a `CMakeLists.txt`, it is
-126 lines, and `test/unit/test_cmake.py` exercises it against a real cmake
--- 3.31.6 on this machine, so the gate runs rather than skips.** Section 24
-has meanwhile been rewritten to assert CMake as current reality and names
-0002 nowhere.
-
-**The order is the finding.** 0002 is dated 2026-07-26. `dd7d74f` added the
-CMake entry point on 2026-07-31, five days later, and its message says why:
-
-> "Both CMake and GNU Make, maintained in parallel, as separate and
-> independently usable entry points" has been section 24's opening line for
-> a long time, and `git log --all` had never seen a `CMakeLists.txt`.
-
-That session read section 24, found a promise the tree did not keep, and
-kept it. It had no reason to think section 24 was not authoritative,
-because **nothing in section 24 said it had been superseded.** 0002
-recorded the supersession in 0002. The text it superseded was left
-unmarked, and the next reader to arrive followed it.
-
-**So the defect is not that somebody ignored a record.** It is the shape
-this document already knows from the other direction: a claim lives in more
-than one place, and the correction has to go where a reader will next look
-for it. A supersession written only into the superseding record is a
-correction filed where nobody who needs it is reading.
-
-**0002's own reconsideration trigger has fired, and not in the way it
-imagined.** The record says to reconsider "when someone outside this
-repository needs CMake". `suggestion/hydra.md` is such a project and says
-so in its own words -- *Hydra's build is CMake plus Qt's own `moc`, with no
-other code generation and no Python.* But what hydra asked for is not the
-CMake entry point. Their largest objection is the build-time Python
-dependency, and the remedy they name is documentation:
-
-> The alternative -- commit the generated `.h`/`.c` and regenerate by hand
-> -- is viable but wants a documented, blessed workflow, including how
-> `situc map --check` fits into CI when the generator is not run at build
-> time.
-
-`situ_generate()` is the opposite of that: it runs the compiler as a build
-step, which is the thing hydra said it would rather avoid. So the consumer
-exists, the trigger has fired, and the artifact it fired for is not the
-artifact that was built.
-
-**Three further statements are stale behind 0002 and are listed rather than
-fixed**, because each cites the record: the decision index row at section 5
-still reads "GNU Make only; CMake deferred"; the phase-0 acceptance
-criterion says CMake "is deferred and recorded in
-`doc/decision/0002-build-system.md`, so the acceptance criterion above
-stands against `make test` alone until CMake lands"; and CMake has landed.
-
-**Not resolved here, and the reason is not caution.** A record is not
-edited once accepted -- a later one supersedes it and says so -- so the
-only instrument is a new record, and writing it decides something real:
-whether CMake is a supported entry point carrying a maintenance
-commitment, or an artifact built against a superseded requirement that
-should go. Both branches are live. The second is cheaper than it looks --
-one file and one test -- and the first is what the tree currently behaves
-as if it had chosen, without anybody having chosen it. That is the
-holder's, and the evidence above is assembled so it can be taken once
-rather than rediscovered per session.
+Moved to `doc/decision/26.480-an-accepted-record-the-tree-overruled-by-building-the-thing.md`.
 
 ### 26.479 The floor above the reach, in a line the map publishes
 
-**`situc map` prints `# layers: floor=edit reach=view` for a schema whose
-only above-`view` construct is an unbounded codec.** Measured on a
-four-line schema -- a `u16` and one `coded body(squeeze)` with
-`expansion = unbounded`:
-
-    # layers: floor=edit reach=view
-
-Read against `layers.reach`'s own docstring -- *the highest rung this
-schema has content for* -- that line is false. Rung 2 is exactly what
-emits storage for an unbounded expansion, per 0032's own table, so the
-schema plainly has content for `edit`. `reach()` never looks: it asks
-only whether a relation exists, and returns one of `view`, `relate` or
-`drive`. Three of the six rungs can never be the reach, and
-`FUTURE_LAYERS` is empty, so all six are built.
-
-**The code matches 0032 and 0032's gloss does not match 0032's rule.**
-The record says "the highest rung this schema has content for" and then
-gives the rule as *a `relation` gives it `relate`; a declared retry
-policy gives it `drive`* -- two sources, named exhaustively. The
-implementation is that rule exactly. So this is not code drifting from a
-record; it is a definition sentence wider than the rule beneath it, and
-the artifact prints the definition's shape.
-
-**Nothing is wrong today, and that is why it is recorded rather than
-fixed.** Nothing compares the two scalars: no code indexes `LAYERS` with
-`reach`, and the floor is separately enforced -- `cli.py` refuses a build
-below it, naming the construct. A consumer who read `reach=view` and
-concluded that `frame` emits nothing for them would be wrong, since
-`framed_structs` has content for nearly every struct with a frameable
-one; but no consumer does that, and `reach` is advisory by 0032's own
-words -- *building below the reach is ordinary*.
-
-**It is the holder's, because every available fix is a change to a
-committed artifact.** Widening `reach` to see allocation or framing
-rewrites the `layers:` line in every committed map that has one, under
-`map --check`; narrowing the docstring to the rule leaves an artifact
-whose two scalars are not comparable and does not say so. 0032 is
-accepted. Flagged rather than resolved, per the rule that a document and
-its code disagreeing is not a discrepancy to spend in either direction.
+Moved to `doc/decision/26.479-the-floor-above-the-reach-in-a-line-the-map-publishes.md`.
 
 ### 26.478 A count that was right twice, over two different populations
 
-**README said six projects had evaluated situ and `project.md` said
-five, and neither was wrong when written.** Both were dated 2026-08-05.
-The README's six counts every project that produced a verdict; the
-`project.md` five counts those that wrote it up in `suggestion/`, and
-`hydra` is the difference -- its file is there and says in its own words
-that the verdict lives in hydra's `project.md`. Two denominators, not a
-contradiction, and a session reconciling them to one number would have
-destroyed a real distinction.
-
-**Three evaluations have landed since, all yes**, which is what made the
-README's line stale: `ossacli` 2026-09-05, `openmlx4` 2026-09-06,
-`raidcfgd` 2026-09-17. Nine now, and the README says nine.
-
-**Their verdicts are relayed, not summarised.** The line now reads *five
-said yes* where it read *two adopted*. Adoption is a claim about the
-current state of five trees that this tree cannot check; a verdict is
-what each file states in its own first paragraph and a reader can
-confirm by opening it. The weaker word is the honest one, and it is also
-the one that stops rotting -- a verdict written in 2026 stays written,
-where an adoption can be reversed without anybody here hearing.
-
-**26.66 and item 104 were left as history, and 104 needed two words.**
-26.66 is an episode with a date in its title and reads correctly. Item
-104 opened *Five sibling projects evaluated situ* in the present tense,
-which is the shape `evidence.md` names as the one that rots: a countable
-claim about the tree's own shape. It now says *had evaluated situ when
-this was written*. The lesson underneath -- that three noes produced
-more change than the adoptions did -- is untouched and was never the
-thing that went stale.
-
-**The instrument note, because it cost a measurement.** `git log -S"Six
-projects evaluated it"` returned nothing, and the claim is in the file:
-the phrase wraps at column 75, so `Six` and `projects` are on different
-lines. An empty `-S` result over prose is not evidence of absence until
-the pattern has been checked against the wrapping. `git log -S"projects
-evaluated it against real trees"` -- one line, no wrap -- dated it in one
-command.
+Moved to `doc/decision/26.478-a-count-that-was-right-twice-over-two-different-populations.md`.
 
 ### 26.477 Three claims in accepted records, corrected the tree's own way
 
@@ -14309,58 +7890,7 @@ Moved to `doc/decision/26.477-three-claims-in-accepted-records-corrected-the-tre
 
 ### 26.476 The conformance row that promised a test nobody generated
 
-**13.1's table said `seekable = permuted` gets "the position map is a
-bijection over a full block", and `codectests.py` contained zero
-occurrences of the word.** `_seekable_test` returned early unless the
-codec was `LINEAR`, so `interleave_16` -- the only permuted codec in the
-tree -- got `invertible`, `deterministic` and `length` and nothing about
-the property its signature is about. A conformance table is a list of
-guarantees, and one row of it was a guarantee nobody made.
-
-**It is generated now, and the case for it is one sabotage.** Making
-`interleave_16` the identity in BOTH directions is what a port that
-quietly stopped permuting produces:
-
-    sabotage                    invertible  deterministic  length  permuted
-    identity, both directions   OK          OK             OK      FAIL
-    encode duplicates a source  FAIL        OK             OK      FAIL
-    encode drops block offset   FAIL        OK             OK      FAIL
-
-The identity row is the whole argument: it is a bijection, it round
-trips, it preserves length, and every existing check passes it.
-
-**Three assertions, because a map can fail to be a bijection three
-ways**: nothing leaves its own block, no output position is written
-twice -- which over a full block is onto as well as one-to-one -- and at
-least one position moves.
-
-**What it does NOT catch is in the table row now.** A DIFFERENT
-permutation of the right shape passes. The test asserts the property the
-signature states, not the specific map; the map is the kernel's and
-`gen-derived`'s vectors are where that lives. `evidence.md` asks that a
-gate's limits be pinned in the same breath as the gate, so the row says
-it rather than leaving a reader to assume more.
-
-**The block width comes from the kernel, not the granularity, and that
-distinction is the one that would have made this silently do nothing.**
-`_step` already returns rows*columns for a `permutation` kernel -- 16
-for `interleave_16`. `granularity_size` is None there, because
-`kernels.py` derives `granularity = byte` for a permutation, so a
-granularity-based lookup yields None and the test is never emitted: a
-gate over an empty population, wearing the appearance of coverage.
-
-**Two ABIs, one body.** A tier-1 codec takes a capacity and an
-out-parameter and returns a status; a derived one takes three arguments
-and returns a count. The bijection being asserted is the same, so the
-body is shared and only the call differs.
-
-**And the sabotage had to be forced to land twice.** The first attempt
-patched a regex that matched nothing and the assertion caught it; the
-second matched encode and decode with one pattern and found only one,
-because the decoder is the inverse and reads differently. Both times the
-binary would have run the UNMODIFIED codec and reported OK --
-`evidence.md`'s "a sabotage that did not apply and a check that cannot
-fail are indistinguishable from the output", met twice in five minutes.
+Moved to `doc/decision/26.476-the-conformance-row-that-promised-a-test-nobody-generated.md`.
 
 ### 26.475 A derived codec reached the clause that said it could not
 
@@ -14372,56 +7902,7 @@ Moved to `doc/decision/26.474-the-wire-signature-recorded-a-spelling-not-a-value
 
 ### 26.473 One name for two widths, declined
 
-**Settled by the copyright holder 2026-09-22: a variant arm keeps its own
-name, and two arms may not share one.** A protocol that switches a field
-between `u8` and `u16` on an earlier flag writes two arms with two names
-and the caller branches, which is what situ does today:
-
-    variant len switch (wide) {
-        case 0: u8  narrow;
-        case 1: u16 broad;
-        default: error;
-    }
-
-`case 0: u8 value; case 1: u16 value;` is refused -- "field `value` is
-declared more than once" -- and stays refused until a real need arrives.
-
-**The reason is the TYPE rather than the branch, and the first statement
-of it had that backwards.** The obvious objection to a merged accessor is
-that it forces a runtime check; measured, that check is already there and
-is deliberate. `situ_frame_len_narrow_get` opens with
-`if (situ_frame_wide_get(view) != 0u) return SITU_ERR_VERSION;`, and
-`c/emit.py` records why: "A caller who has already dispatched pays for the
-branch twice, which is the price of an accessor that cannot be used
-wrongly."
-
-So a merged accessor would add no dynamism that is not already paid. What
-it would add is a return type covering both widths -- and C, which is the
-language situ caters for first, cannot express a type that depends on a
-value. One `value_get` would have to return the wider one, so every read
-of the narrow arm becomes a widened read, and the member's `repr` goes
-from `MemoryIdentical` to `ValueConverted` for both arms. The map would
-stop being true of the narrow case in order to make one accessor
-possible, which is the trade situ exists to refuse.
-
-**C++ would absorb it and that does not decide anything.** An overload or
-a template hides the widening at the call site in one backend out of
-four, and the capability map is backend-independent by construction -- so
-a convenience only one language can spell would either fracture the map
-or be recorded in it as a loss all four pay.
-
-**What the current form costs, stated so the next reader can weigh it.**
-It is per FIELD: a message that widens six fields on one flag needs six
-variants and twelve names, and a caller branches at each. Nothing
-composes them into "this message is the wide flavour". That is the real
-friction and the shape a future need would take -- a whole-message
-dispatch rather than a merged field.
-
-**The alternative not taken, recorded so it is not re-derived.** A reader
-over the variant -- one call returning the widened value and which arm it
-came from -- keeps the layout truthful and moves the convenience into the
-API rather than into the type. It is the shape to reach for if this comes
-back, and it is not built.
+Moved to `doc/decision/26.473-one-name-for-two-widths-declined.md`.
 
 ### 26.472 A keyword in no grammar, and the gate that could not see it
 
@@ -14541,41 +8022,7 @@ Moved to `doc/decision/26.444-before-became-until-inside-a-variant-arm-and-nowhe
 
 ### 26.443 The paren depth limit: recorded, NOT fixed, and why
 
-**Measured by bisection: 69 nested parentheses parse, 70 raise
-`RecursionError` from `situc/parser.py` in `parse_expr`.** It is a
-traceback rather than a diagnostic, which is the same class as 26.437
-through 26.442 -- and it is the one of the family being left alone.
-
-    u8 d[((((( ... 70 deep ... 1 ... )))))];
-
-`parse_expr` descends one frame per precedence level per paren, so the
-budget is about twelve Python frames per `(`. Nothing else in the parser
-is this shallow: unary `~` chains 500 deep, 800-term binary chains, 200
-nested `positional` blocks and 150 nested `authenticated` regions all
-parse.
-
-**Why it is not fixed, which is a judgement and belongs written down.**
-Every available fix either narrows the language or rewrites the parser:
-
-  - A depth cap with a real diagnostic has to fire BELOW 70 to beat the
-    interpreter, so it turns "parses" into "refused" for anything from
-    the cap to 69. That is a language change to defend against input
-    nobody writes.
-  - Raising the interpreter's recursion limit trades a clean
-    `RecursionError` for a possible segfault, which is worse.
-  - Making the precedence climb iterative is the honest fix and is a
-    parser refactor, which is its own piece of work and not one to do at
-    the end of a session spent elsewhere.
-
-**And the bar this file sets is whether acting on it changes anybody's
-code, build or decision.** A hand-written schema does not reach 70; a
-generator emitting one would be a finding about the generator. So it is
-recorded as a known limit with its exact threshold, which is what lets
-the next person recognise it in one line instead of bisecting it again.
-
-**The threshold is a property of this interpreter**, not of situ: it
-moves with the recursion limit and the frame cost of the Python running
-it. Re-measure before quoting the 70.
+Moved to `doc/decision/26.443-the-paren-depth-limit-recorded-not-fixed-and-why.md`.
 
 ### 26.442 A constraint the image cannot carry, and the one description that died
 
@@ -14639,130 +8086,7 @@ Moved to `doc/decision/26.428-the-delimited-run-emitter-never-learned-about-recu
 
 ### 26.427 S-expressions describe in twenty lines, and an f-expr is not a format
 
-**Asked by the copyright holder, who stores data in both**, so this is a
-question about a format in use rather than an exercise. `example/sexpr`
-is the answer to the first half and this entry is the answer to the
-second.
-
-**S-expressions cost twenty lines, because `example/json` already paid.**
-`peek` (0057) so an arm owns the byte it was chosen by, recursion through
-a variant arm (0054 as amended), a run of structs with a delimiter, and
-`before` for a separator that belongs to neither side. Every construct
-this schema needs was bought by the harder one, and the second recursive
-text format in the tree is a fifth the size of the first. **That is what
-a language paying off looks like**, and it is worth recording because the
-JSON entry recorded only the cost.
-
-**The subset is stated rather than implied**, which is json.situ's rule:
-the core reader grammar is described and the reader MACROS are not --
-`;` and `#| |#` comments, `#(...)` vectors, `#\a` characters,
-quasiquote. `'x` and `(a . b)` frame exactly and mean nothing: the quote
-is a symbol to this schema and so is the dot. Framing is not
-interpreting.
-
-**A second omission, found the same way and worth the same warning.**
-The symbol terminator was `before ' ' | ')'` -- whitespace or a CLOSING
-paren -- and an opening paren also ends a symbol. `(a(b))` is valid, has
-no whitespace in it, and measured five bytes of six: the symbol scan
-swallowed `a(b`. Every spaced form was already exact, which is what made
-it invisible. It is `before ' ' | '(' | ')'` now, and C and Python agree
-on all nine probe documents byte for byte.
-
-**The wrong shape is recorded beside the right one, because it was
-correct wherever it was easy to check.** The first version gave every
-element its own trailing byte, which conflates the separator between
-forms with the terminator that ends a list, so a nested list spent a
-paren twice. It measured `(a b c)` exactly, and `((((a))))` exactly, and
-`(a (b))` one byte short -- **right on flat lists and on pure nesting,
-wrong only where nesting had a sibling beside it.** Eight cells across
-two shapes are what separated the two, and a fixture carrying only
-`((((a))))` would have proved the wrong schema correct.
-
-**Bounded depth is the one place the description is narrower than the
-language by construction.** `[depth = 64]` is required; Lisp's grammar
-admits arbitrary nesting and a walk spends real stack per level.
-Measured: forty levels of parens refuses with `SITU_ERR_DEPTH` rather
-than reading past its own frame, which is the right answer and is not the
-grammar's answer.
-
-**AN F-EXPRESSION IS NOT A DIFFERENT FORMAT.** An operative is a combiner
-that receives its operands unevaluated together with the dynamic
-environment -- a property of an interpreter's calling convention, not of
-bytes. On disk an f-expr form is s-expression text and `example/sexpr`
-describes it exactly. What makes it operative happens in the evaluator,
-where situ has nothing to say and no construct that could say it. A
-schema can carry a FLAG recording the distinction and situ will describe
-the flag precisely while staying silent about what it means. Written into
-the schema's header as well, so the question is answered where it will be
-asked.
-
-**THE STANDING REQUIREMENT, and it is not built.** The holder's software
-uses both as dynamic data stores, and situ will eventually need to do
-simple OPERATIONS on these files rather than only describe them. What the
-capability map already says about that is in the schema's footer and is
-the honest starting point:
-
-- `access=Sequential`, `offset=Scanned`, `size=Unbounded` -- a lookup is
-  a scan. There is no length prefix and nothing says where a member
-  begins, so the n'th form costs the n-1 before it. That is the format's
-  property, not the description's.
-- `mutate=Shifting`, `address=Unstable` -- an edit moves everything after
-  it. In-place is available only where the replacement is the same
-  length, which for text is common and for a symbol rarely is.
-
-So "simple operations" on this format is not the same question as on a
-fixed-layout one. Measured against the generated C rather than reasoned
-about:
-
-**READS ARE COMPLETE AND WORK TODAY.** `situ_list_items_count`,
-`situ_list_items_at`, `situ_sexpr_kind_get`, `situ_sexpr_extent` and the
-three `as_*` arm views are a whole walker. Run over `(a bb (c d) "e")`
-it indexes all four forms, names each one's kind and measures its extent,
-and refuses index 4. `access=Sequential` means a lookup COSTS a scan, not
-that it is unavailable -- the accessor is generated and counts from the
-front. Worth knowing because the axis name reads like a refusal and is a
-price.
-
-An extent includes the form's LEAD: `[1]` of that document is `" bb"` at
-three bytes, not `"bb"` at two. A lead belongs to the form it precedes,
-which is the same rule the trailing-whitespace edge comes from.
-
-**WRITES ARE NOT GENERATED AT ALL, AND THE HEADER SAYS WHY.**
-`situ_text_chars_ptr` returns `const uint8_t *`, and above it:
-
-    /* No setter: mutate is Shifting.
-     *   caused by: a member that ends at a delimiter
-     *   remedy:    `until D max N` bounds the scan, which makes the
-     *              member statically allocatable
-
-**That remedy was tried and it is about allocation, not mutation.**
-Bounding both scans at `max 64` moves `size=Unbounded` to
-`size=Bounded(1, 64)`, gives `symbol` a `1..64` extent and
-`address=FrameStable` -- and `mutate` stays `Shifting`, no setter
-appears, and the same comment is still there. The length lives in the
-DATA, and a bound on it is still not the schema fixing it. Only a member
-whose width the schema states -- `u8 name[16]` -- is writable, and
-s-expression text is not that.
-
-**So the honest gap is narrower and more interesting than "no writes":
-an equal-length replace is SAFE and situ declines it.** The caller knows
-the length of what it is writing; `situ_text_chars_len` tells it the
-length of what is there; and overwriting N bytes with N bytes moves
-nothing. situ refuses because `mutate=Shifting` is a property of the
-MEMBER rather than of the operation, so the const pointer is the same
-answer whether the replacement fits or not.
-
-That is the well-scoped candidate for the standing requirement: a checked
-`replace(view, bytes, len)` that refuses unless `len` equals the member's
-current length. It needs no new layout construct, it cannot shift
-anything by construction, and it is the operation a data store performs
-most -- updating a value to the same width. An insert, a delete or a
-longer replacement remains a tail rewrite, which situ has no construct
-for and which is a language decision rather than a backend one.
-
-**Recorded rather than designed. Whether the equal-length replace is
-wanted, and whether a tail rewrite belongs in a layout language at all,
-is the holder's to decide.**
+Moved to `doc/decision/26.427-s-expressions-describe-in-twenty-lines-and-an-f-expr-is-not-a-format.md`.
 
 ### 26.426 EVERY value constraint on a varint is accepted, promised, and checked by nobody
 
@@ -14806,40 +8130,7 @@ Moved to `doc/decision/26.415-arm-constraints-gated-rather-than-suppressed.md`.
 
 ### 26.416 The feature's own bounds hazard, in three flavours
 
-**Emitting the check is what made it reachable.** A struct's `SIZE_MIN` is
-its SHORTEST arm, so a fixed-size arm longer than that ends past a frame
-the view accepted. An ordinary pinned member is covered by the fits
-check, and a `sized_by` arm by the arm-fits check; a FIXED-size arm past
-the minimum is the cell neither reaches, and nothing had ever looked
-there because the check was not emitted.
-
-Found by the Rust worker, who reproduced it and did NOT fix it -- patching
-Rust alone would have made Rust answer bounds where C read garbage, which
-is the divergence the four-way differential exists to catch. Then measured
-in each backend, and the three failure modes are not equally loud:
-
-    Rust    panics on the slice                     loud
-    C       reads past the buffer                   loud only under ASan
-    C++     reads past the buffer                   loud only under ASan
-    Python  clamps, and answers from the WRONG      silent
-            bytes
-
-**Python's is the one worth remembering.** It does not overread, so there
-is no crash to find: a two-byte VIEW inside a longer buffer read the two
-bytes AFTER the frame and answered OK. The verdict came from bytes the
-caller had declared were not part of the message -- the shape 26.32 rates
-worst, and the only one of the four with nothing to announce it.
-
-All four now answer the bounds error, and C's is pinned by a test that
-builds under `-fsanitize=address` against an exact-length `malloc`, so
-the sanitizer can see the read at all. Sabotaging the guard reproduces
-`heap-buffer-overflow ... in situ_S_check`.
-
-**And a vacuous test of my own, caught by reading.** The first C test
-handed its probe to `compile_generated`, which passes `-c`: the probe was
-compiled, never linked, never executed, and every assertion in its `main`
-was inert. It passed. It builds, links and runs now, and its exit code
-names which case answered wrongly.
+Moved to `doc/decision/26.416-the-feature-s-own-bounds-hazard-in-three-flavours.md`.
 
 ### 26.414 A constraint on a non-struct variant arm is enforced by nobody
 
@@ -14863,158 +8154,7 @@ Moved to `doc/decision/26.410-the-fourth-shape-and-why-the-half-fix-had-to-be-re
 
 ### 26.409 The construct is in the corpus, and what it took to get there
 
-**`edges.situ` carries a `parameter` now**, which is what that file is
-for: a construct the corpus does not hold is one no gate can fail on.
-
-**The cost of its absence, measured rather than argued.** Between 0050's
-view work landing and this struct arriving, the C backend alone had FOUR
-shapes where a parameter reached a function that did not take it --
-`required`'s fixed-size branch, the offset functions' missing `(void)`,
-the nested sub-view accessor, and a variant arm. Three were found in one
-afternoon, by hand, by people constructing fixtures. None could have been
-found by a gate. `_argument_tail`'s docstring named two unplumbed shapes
-and said no schema in this tree reaches either, which was true and was
-offered as reassurance; the list doubled the first time anybody looked.
-
-**Both spellings, deliberately.** `payload[block]` resolves through
-`sized_by`; `trailer[block + 1]` goes through the expression renderer.
-They are different code paths in every backend, and every backend that
-built this feature got one and missed the other -- so a fixture carrying
-only the bare form is a proof about half the code. A `u16` after both
-means a wrong width for either shows up as a wrong BYTE rather than as a
-length nobody reads back.
-
-**Getting it in took four generators changed first, and that was not
-0050's estimate.** The record said the corpus struct "lands with the
-backends". Measured, it lands with every generator that SWEEPS the
-corpus: `c/checks` and `c/fuzz` through the conventions sweep, `differ`
-through `fourway`, and the three `derived` emitters through the
-refuse-the-same-members sweep. Six, of which three needed a per-struct
-skip and three needed their refusal deleted as unnecessary (26.405,
-26.407). The number moved from four to six to three across this arc, each
-time because somebody re-derived it instead of quoting it.
-
-**The map and the wire signature name it rather than placing it**, which
-is the committed contract working: `parameter -  u8  block [stream]` and
-`negotiated.block  parameter`, against `payload` at `@0x0000`. Both
-artifacts were regenerated and the wire diff reports the change as
-compatible.
-
-**One assertion in the tree was waiting for this and is now live.**
-`test_every_fuzzable_struct_reaches_the_harness` requires an argued
-struct to carry a "No harness" note instead of a `fuzz_` entry; until
-now no corpus schema could exercise that branch, so it was a population
-assertion rather than a measurement (26.407). It measures something as
-of this commit.
-
-**And it went red within the hour, which is the point.** `c/tamper` kept
-its whole-schema refusal on the stated ground that nothing sweeps it over
-the corpus -- measured against `test_tamper.py` and `test/generated/`,
-and missing `test_cli.py::test_every_subcommand_runs_on_every_schema`,
-which runs EVERY subcommand over every schema. The struct landed and that
-sweep failed. Tamper skips the argued struct now, refusing only what the
-skip would empty, which is what its three siblings already do.
-
-**That is the third time in this arc a "which generators sweep the
-corpus" count has been wrong** -- four, then six, then three, then a
-seventh nobody had counted -- and every correction came from measuring
-again rather than from anybody re-reading the claim. The struct is what
-turned the last one from a claim into a red test.
-
-**A fixture that cannot make a generator act does not test it.** Moving
-tamper into the skipping cell failed three tests whose fixture had no
-`tag`, and tamper emits nothing at all for a struct without one: it had
-been "passing" for tamper only while tamper declined the file outright.
-The shared fixture carries an `authenticated` region and a tag now. The
-same shape as a gate over an empty file list, one level up -- the test
-ran, and there was nothing for it to run against.
-
-**And then it found two real defects in the PYTHON view**, which had been
-built, tested, gated and committed a day earlier:
-
-- **`at` assigned an attribute the class declared nowhere.** `view.<name>
-  = <name>`, and nothing else. `mypy --strict` runs over every generated
-  module in this suite and says *"negotiated" has no attribute "block"* --
-  a hard failure, available from the moment any corpus schema declared a
-  parameter, and not before. Rust says it with `pub n: u8` and C++ with a
-  data member; Python's way is an annotation, and it is the same
-  statement.
-- **`required` took no argument at all**, while its body reads
-  `probe.<name>` -- so it raised `AttributeError` naming a field the
-  class does declare. The probe is built directly rather than through
-  `at`, because `at`'s minimum-length check would refuse the very short
-  buffer `required` is measuring, so the one thing `at` does for free had
-  to be done again here.
-
-The second was predicted, in writing, by the worker converting the
-per-layer generators: it could not run the Python stream reader end to
-end and said so under *what I did not verify*, naming this as the cause.
-**A worker's honest "I could not check this" is a finding**, and it was
-right.
-
-**And a seventh, in a gate rather than in a backend.**
-`test_every_writable_member_has_a_setter` reads each member's MUTATE axis
-and requires a setter from every backend for anything `InPlaceFixed`. A
-parameter's vector answers `InPlaceFixed` -- describing a byte that is not
-there -- so the gate demanded a setter that no backend emits and none can,
-one storing at the offset of the member AFTER it (26.398).
-
-The check was the thing at fault, and the file's own name says why: it is
-*the map is writable where it says*, and the rendered map says
-`negotiated.block   parameter` with no axes at all. It names the member
-and places nothing, so it promises nothing to hold a backend to. The gate
-was reading the vector underneath instead of the promise the map makes.
-That is 26.404 again -- `situc explain` had the same reading and gained a
-sentence saying what its axes describe -- and it is *suspect the check
-before the code* paying out: changing four backends to satisfy it would
-have been a defect propagated rather than fixed.
-
-**An eighth, and the guard that caught it was written for exactly this.**
-`walk.Unsupplied` is deliberately NOT a `Refused` -- everything else in
-that module answers a question about BYTES and this is the caller's
-omission -- and the two-walker identity sweep catches `(Refused,
-Unplaceable)`. So the new exception fell through and aborted the whole
-`edges` comparison rather than skipping one struct.
-
-What said so was `test_the_identity_comparison_asked_something`:
-*only 117 refusals were compared ... it was 197 when written*. Its
-docstring gives the reason it exists -- "a comparison that quietly
-stopped having anything to compare would pass exactly as loudly as one
-that agreed" -- and losing 80 comparisons is precisely the silence it
-was built against. **A population guard earned its keep on a shrink
-nobody predicted.**
-
-The walker's own author could not have found it: their tests exercise
-`Unsupplied` directly and pass, and no corpus schema declared a parameter
-for the sweep to trip over. Same shape as the two Python faults -- code
-that passed its own gates, with the gap reachable only once the corpus
-carried the construct.
-
-It is an explicit skip now. Comparing the two walkers under a SUPPLIED
-argument is the better test and is its own piece of work, since the C
-driver takes its arguments as trailing argv and both sides would have to
-agree how one is passed -- recorded beside the differ's version of the
-same question rather than decided in passing.
-
-**There were two such sites, and the second was found by consequence
-rather than by looking.** `_verdict_pair` catches `(AssertionError,
-IndexError, Refused, Unplaceable)` and `Unsupplied` escaped that too.
-The general shape is worth more than either instance: **adding an
-exception type to a module means auditing every `except` clause that
-catches its siblings** -- and `Unsupplied` was added deliberately NOT to
-be a `Refused`, so every such clause in the tree predates it and none
-mentions it.
-
-Swept for the rest afterwards rather than waiting for a third to fail:
-the corpus sweeps that reach a walker are these two and
-`test_dissector`, which goes through `report.listing` -- already taught
-to answer `needs-arguments` by the walker's own author. The remaining
-`except Refused` sites are inside `walk.py` and `report.py`, where
-`Unsupplied` propagating is the intended behaviour.
-
-That makes EIGHT defects this construct's absence was hiding -- four in C
-(26.408), two in Python, two in gates -- against a corpus struct that
-took an afternoon to make landable.
+Moved to `doc/decision/26.409-the-construct-is-in-the-corpus-and-what-it-took-to-get-there.md`.
 
 ### 26.405 Three refusals that were never needed, and a tripwire that proved it
 
@@ -15022,37 +8162,7 @@ Moved to `doc/decision/26.405-three-refusals-that-were-never-needed-and-a-tripwi
 
 ### 26.406 Two written lists of one fact, and they had already drifted
 
-**`test_wellformed.py` enumerated the refusing generators twice**, 130
-lines apart: a `REFUSING` set added on 2026-09-17 that reads the source
-and compares, and an older `GENERATORS` list that imports each one and
-watches it raise. Two written enumerations of one fact are two things to
-keep true.
-
-**They had drifted before anybody noticed.** `differ` called
-`refuse_parameters` and was in `GENERATORS` not at all -- so the test
-that proves a refuser actually refuses had never run against it. The
-source-scan set is what exposed that, which is the argument for deriving
-a population rather than carrying one, made by the carried one being
-wrong.
-
-**The fix is one written list and two questions asked of it.** `REFUSING`
-holds module names; the scan compares against it, and the parametrize
-reads it. What stays separate is `SHAPES` -- how each generator's
-`generate` is called -- because a signature is not something a scan can
-answer, and a call shape does not change when a generator stops
-refusing, so those rows are allowed to outlive a refusal.
-
-**A parametrize over a name it cannot call is not a test that passed.**
-So a guard asserts `SHAPES` covers `REFUSING`: without it, adding a
-refuser with no call shape would have produced a `KeyError` at collection
-or, worse, a silently absent case. Sabotaged by adding a module in
-neither -- three tests fired, and the guard is the one that says what to
-do about it.
-
-Found by the worker sent to remove the `derived` refusals, reading the
-file it had been told not to touch in order to report what its change
-would break. **The instruction not to edit a shared file is what made it
-read that file carefully**, which is not why the instruction was given.
+Moved to `doc/decision/26.406-two-written-lists-of-one-fact-and-they-had-already-drifted.md`.
 
 ## 27. Questions, and how they were settled
 
