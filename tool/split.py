@@ -58,17 +58,34 @@ def slug(title: str) -> str:
 	return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", bare.lower())).strip("-")
 
 
-def first_seen(heading: str) -> str:
-	"""When this entry was written, from the commit that added its heading.
+def first_seen() -> dict[str, str]:
+	"""When each entry was written, from the commit that added its heading.
 
 	Asked of git rather than stored, because the entry never carried a
 	date: the document is one file and its history is per commit.
+
+	**One pass for all of them**, not a pickaxe per entry. `git log -S`
+	over 848 revisions of a 2.7 MB file costs 6.2 seconds each, which is
+	52 minutes for the 505 still to move; reading the diffs once and
+	taking each heading's first ADDITION is 11 seconds for all 655.
+	First addition, so a heading edited later -- struck through, or
+	reworded -- keeps the date it was written rather than the date it was
+	corrected.
 	"""
 	got = subprocess.run(
-		["git", "log", "--reverse", "--format=%as", "-S", heading, "--", "project.md"],
+		["git", "log", "--reverse", "-p", "-U0", "--format=@%as",
+		 "--", "project.md"],
 		capture_output=True, text=True, cwd=ROOT)
-	dates = [l for l in got.stdout.splitlines() if l.strip()]
-	return dates[0] if dates else "unknown"
+	dates: dict[str, str] = {}
+	when = "unknown"
+	for line in got.stdout.splitlines():
+		if line.startswith("@"):
+			when = line[1:]
+		elif line.startswith("+### "):
+			match = re.search(r"26\.\d+", line)
+			if match and match.group(0) not in dates:
+				dates[match.group(0)] = when
+	return dates
 
 
 def main() -> int:
@@ -116,6 +133,7 @@ def main() -> int:
 			return 1
 		wanted.append(name)
 
+	dates = first_seen()
 	doomed: set[int] = set()
 	writes: list[tuple[Path, str]] = []
 	pointers: dict[int, list[str]] = {}
@@ -134,7 +152,7 @@ def main() -> int:
 			f"# {name}: {title}",
 			"",
 			"Status: recorded",
-			f"Date: {first_seen(lines[start])}",
+			f"Date: {dates.get(name, 'unknown')}",
 			f"Source: `project.md` section 26, where it was written",
 			"",
 			*body,
