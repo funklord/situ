@@ -42,6 +42,21 @@ Rules for the implementer:
    propagation is expensive to unwind later.
 5. Everything in `doc/decision/` is append-only. One file per decision,
    numbered, with the alternatives considered.
+
+   **Two numbering schemes live there, and the second is deliberate.** A
+   DECISION is `NNNN-slug.md` in one sequence, 0001 upward. A FINDING
+   moved out of section 26 keeps its own number: `26.NNN-slug.md`. Set by
+   the copyright holder 2026-10-17, and the reason is the citations --
+   section 26 is cited about 4,000 times, **2,652 of them from source**,
+   `codegen/c/emit.py` alone citing 109. Renumbering into the `NNNN`
+   sequence would invalidate every one of those sites, in code comments
+   nobody would think to grep.
+
+   `harmonization.md`'s settled inventory spells a record `NNNN-slug.md`,
+   so this diverges from it, with the measurement above as the technical
+   reason. Signalled to `claude-guidelines`' signal list rather than left
+   as one tree's habit, because the next tree to move findings into
+   records meets the same question.
 6. **Where this document can be checked against the code, it is.** Five things
    here are held to the implementation by a test that fails when they drift:
 
