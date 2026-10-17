@@ -938,6 +938,20 @@ def _register_items() -> list[tuple[str, str]]:
 	start = text.index("### 26.144 ")
 	body  = text[start:text.index("\n### ", start + 10)]
 
+	# **Follow the pointer.** The cited entries moved to their own records
+	# (26.656), so what stands here is a heading over `Moved to <path>`
+	# and the register itself is in the record. Reading the stub parsed
+	# zero bullets and the gate said `only 0 register items parsed` --
+	# which is this file's own assertion doing its job, since a parser
+	# that finds nothing otherwise reports perfect agreement.
+	#
+	# Written to work on either side of the move rather than switched to
+	# the new path: the entry is cited from here by NUMBER, and the number
+	# is what survives both.
+	moved = re.search(r"Moved to `([^`]+)`", body)
+	if moved:
+		body = (ROOT / moved.group(1)).read_text(encoding="utf-8")
+
 	found = []
 	for raw in re.split(r"\n- ", body)[1:]:
 		item = re.sub(r"~~.*?~~", "", raw, flags=re.S)
