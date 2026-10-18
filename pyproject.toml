@@ -12,6 +12,21 @@
 testpaths       = ["test"]
 pythonpath      = ["."]
 filterwarnings  = ["error"]
+# Keep a run's temporary tree only where something failed, which is the one
+# case anybody wants to look at it. The default keeps the last THREE runs,
+# and prunes at the START of a run -- so a run that is interrupted is never
+# retired on schedule while the numbering advances anyway.
+#
+# Measured here rather than assumed: a full `make check` leaves 2.4 GiB of
+# generated code and compiled binaries per schema per backend, so the
+# default holds about 7 GiB of working set on a filesystem with 22 GiB
+# free. It was cleared by hand three times -- 8.5, 4.7 and 4.7 GiB -- and
+# the count was the policy working correctly each time. The size is what
+# makes it matter, which is why the fix is the policy and not a sweep.
+#
+# Needs pytest 7.3 or newer for the option to exist at all; this tree is on
+# 8.3.5 and `python_floor` holds the language version separately.
+tmp_path_retention_policy = "failed"
 
 [tool.mypy]
 python_version         = "3.11"

@@ -7172,6 +7172,14 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.657 The temporary trees, and the policy rather than the sweep
+
+Moved to `doc/decision/26.657-the-temporary-trees-and-the-policy-rather-than-the-sweep.md`.
+
+### 26.656 The move, and three checks that did not cover what I cited
+
+Moved to `doc/decision/26.656-the-move-and-three-checks-that-did-not-cover-what-i-cited.md`.
+
 ### 26.655 The cut, pass one: the tool, its proof, and the rate
 
 Moved to `doc/decision/26.655-the-cut-pass-one-the-tool-its-proof-and-the-rate.md`.
