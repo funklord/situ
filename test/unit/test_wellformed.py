@@ -2192,17 +2192,29 @@ def test_a_scaled_text_number_refuses_a_fixed_width() -> None:
 		"struct s { scaled i64 v[8]; }")
 
 
-def test_a_scaled_text_number_refuses_minimal_for_now() -> None:
-	"""Refused rather than half-implemented.
+def test_a_scaled_text_number_refuses_minimal() -> None:
+	"""Refused rather than half-implemented, and no longer "for now".
 
 	`situ_digits_minimal` forbids a leading zero, so run unchanged here it
 	refuses `0.5`. And the rule it would be replaced by is not canonicality
 	either: `10` and `1e1` are one value and no local rule separates them.
+
+	**The name said `for_now` and the diagnostic said "does not yet", both
+	of which 0063 settled.** The one format that asks for this construct is
+	JSON, whose canonicalisation RFC 8785 defines through an IEEE-754
+	double -- which a scaled number deliberately does not have -- and which
+	requires a JSON string above 2^53, so 99 per cent of an `i64`
+	significand's range has no canonical JSON number form at all. The
+	refusal is permanent until a format asks with a rule situ can state
+	exactly, which is a decision rather than a deferral.
 	"""
 	rendered_text = rendered(
 		'struct s { scaled i64 v until "," [minimal]; u8 r[remaining]; }')
-	assert "`[minimal]` does not yet have a meaning here" in rendered_text
+	assert "`[minimal]` is refused on one" in rendered_text
 	assert "`10` and `1e1`" in rendered_text
+	# The settled half, which is what 0063 added: a reader who meets this
+	# should not go looking for the open question it used to name.
+	assert "(0063)" in rendered_text
 
 
 def test_minimal_still_works_on_an_integer_text_number() -> None:

@@ -234,6 +234,15 @@ struct text {
 // are one value with three spellings, and `[minimal]` cannot buy it back:
 // on a byte run that attribute means "no leading zeroes", and on a number
 // with an exponent there is no single shortest spelling to demand.
+//
+// 0063 settles that it stays refused rather than waiting on a rule. This
+// member is the construct's only asker, and JSON is the format whose
+// canonicalisation is published: RFC 8785 section 3.2.2.3 defines it
+// through an IEEE-754 double, which a `scaled` number deliberately does
+// not have, and appendix D requires a JSON string above 2^53 -- so 99 per
+// cent of this `i64` significand's range has no canonical JSON NUMBER
+// form at all. `Canonical` here would be a claim wrong for most of what
+// the member can read.
 struct number {
 	scaled i64  value  before ',' | ']' | '}' [trim];
 }

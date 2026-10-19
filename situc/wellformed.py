@@ -293,17 +293,27 @@ def _check_one_text_number(member: ast.Field) -> None:
 
 	if member.scaled and any(attr.name == "minimal" for attr in member.attrs):
 		raise error(
-			f"`{member.name}` is scaled, and `[minimal]` does not yet have "
-			"a meaning here",
+			f"`{member.name}` is scaled, and `[minimal]` is refused on one",
 			next(attr.span for attr in member.attrs
 			     if attr.name == "minimal"),
 			label = "not read on a scaled number",
 			notes = ["on an integer it forbids a leading zero, and the "
 			         "check that does it would refuse `0.5` -- so it is "
 			         "refused rather than run for the wrong construct",
-			         "what a canonical spelling IS here is open: `1.0` and "
-			         "`1` are settled, and `10` and `1e1` are two spellings "
-			         "of one value that no local rule separates (0056)"],
+			         "`10` and `1e1` are two spellings of one value that no "
+			         "local rule separates, so the narrowing is not "
+			         "canonicality (0056)",
+			         # It said "is open" and it is settled. 0063 consulted
+			         # the one published answer the one asking format has:
+			         # RFC 8785 canonicalises through an IEEE-754 double,
+			         # which this construct deliberately lacks, and requires
+			         # a JSON string above 2^53 -- 99 per cent of an `i64`
+			         # significand's range has no canonical JSON number form
+			         # at all, so `Canonical` here would be a claim that is
+			         # wrong for most of what the member can read.
+			         "and there is no spelling to demand: the only published "
+			         "canonicalisation for a decimal goes through a float "
+			         "this construct does not have (0063)"],
 		)
 
 	if member.scaled and fixed:
