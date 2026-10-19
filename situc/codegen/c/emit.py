@@ -44,34 +44,63 @@ from situc.invariant import derived as derived_by
 from situc.invariant import expression as invariant_expression
 from situc import traverse
 from situc.traverse import (
-	fixed_span_bits,
+	Check,
 	NOT_A_MEMBER,
-	Check, arm_members, arm_of, byte_span, classify_check,
-	containment_order,
-	pinned_runs,
+	RESERVED_STATED,
+	arm_members,
+	arm_of,
+	bit_addressed_tag,
 	bit_extractor,
-	declared_value_bounds, pinned_bytes,
-	bit_addressed_tag, coded_spans, covered_bit_span, covered_run,
-	frame_cap,
+	bound_cannot_fail,
+	byte_span,
+	classify_check,
+	coded_spans,
+	containment_order,
+	covered_bit_span,
+	covered_run,
 	covered_run_refusal,
-	data_sized, dynamic_frame_owner,
-	declared_depth, depth_limit, invalidating_members, is_own_member,
-	is_recursive,
-	must_be_terminated,
-	local_name, offset_plan, own_members, recursion_cycle,
-	length_is_transform_output,
-	fields_named,
-	readable_names,
-	region_extent,
-	decode_counts_bits, decodes_here,
+	data_sized,
+	declared_depth,
+	declared_value_bounds,
 	declares_its_own_length,
-	decode_bound, decode_ratio,
-	extent_parts, extern_symbol, frameable,
-	element_bytes, has_computable_extent, index_entry_bytes,
-	indexed_elements, is_run, walk_order, enforceable_max, bound_cannot_fail,
-	is_counted_run, matched_values, pad_alignment, preceding_parts,
-	obligation, obligations,
+	decode_bound,
+	decode_counts_bits,
+	decode_ratio,
+	decodes_here,
+	depth_limit,
+	dynamic_frame_owner,
+	element_bytes,
+	enforceable_max,
+	extent_parts,
+	extern_symbol,
+	fields_named,
+	fixed_span_bits,
+	frame_cap,
+	frameable,
+	has_computable_extent,
+	index_entry_bytes,
+	indexed_elements,
+	invalidating_members,
+	is_counted_run,
+	is_own_member,
+	is_recursive,
+	is_run,
+	length_is_transform_output,
+	local_name,
+	matched_values,
+	must_be_terminated,
+	obligation,
+	obligations,
+	offset_plan,
 	own_members,
+	pad_alignment,
+	pinned_bytes,
+	pinned_runs,
+	preceding_parts,
+	readable_names,
+	recursion_cycle,
+	region_extent,
+	walk_order,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
@@ -9879,7 +9908,7 @@ class Emitter:
 
 		if placement.kind == "reserved":
 			policy = _reserved_policy(placement.attrs)
-			if policy in ("must_be_zero", "must_be_one"):
+			if policy in RESERVED_STATED:
 				expect = "0" if policy == "must_be_zero" else _all_ones(scalar.bits)
 				read   = self._load_expression(scalar, placement, "situ_base(view)")
 				lines.extend([
@@ -10728,7 +10757,7 @@ class Emitter:
 		it, so the loop is inside the view by the time it runs.
 		"""
 		policy = _reserved_policy(placement.attrs)
-		if policy not in ("must_be_zero", "must_be_one"):
+		if policy not in RESERVED_STATED:
 			return []
 		if scalar.is_bit_packed or scalar.bits % BITS_PER_BYTE != 0:
 			return []

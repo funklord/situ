@@ -44,33 +44,62 @@ from situc.invariant import expression as invariant_expression
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
 from situc.traverse import (
-	bit_addressed_tag, covered_bit_span,
-	fixed_span_bits,
-	codec_entry_point, declared_depth, depth_limit, is_recursive,
-	declared_value_bounds, pinned_bytes, pinned_runs,
-	is_own_member,
-	Check, Member, arm_members, arm_of, byte_span, coded_spans, covered_run,
+	Check,
+	Member,
+	RESERVED_STATED,
+	arm_members,
+	arm_of,
+	bit_addressed_tag,
+	bound_cannot_fail,
+	byte_span,
+	classify,
+	classify_check,
+	codec_entry_point,
+	coded_spans,
+	covered_bit_span,
+	covered_run,
 	data_sized,
-	decode_bound, decode_ratio,
-	dynamic_frame_owner, offset_plan,
-	length_is_transform_output,
+	declared_depth,
+	declared_value_bounds,
+	declares_its_own_length,
+	decode_bound,
+	decode_counts_bits,
+	decode_ratio,
+	decodes_here,
+	depth_limit,
+	dynamic_frame_owner,
+	element_bytes,
+	enforceable_max,
+	extent_parts,
+	extern_symbol,
 	fields_named,
-	readable_names,
+	fixed_span_bits,
 	frame_cap,
+	frameable,
+	has_computable_extent,
+	index_entry_bytes,
+	indexed_elements,
+	is_counted_run,
+	is_own_member,
+	is_recursive,
+	is_run,
+	length_is_transform_output,
+	local_name,
+	matched_values,
+	must_be_terminated,
+	obligation,
+	obligations,
+	offset_plan,
+	own_entries,
+	own_members,
+	pad_alignment,
+	pinned_bytes,
+	pinned_runs,
+	preceding_parts,
+	readable_names,
+	recursion_cycle,
 	region_decodes,
 	region_extent,
-	decode_counts_bits,
-	decodes_here, classify, classify_check, declares_its_own_length,
-	extent_parts, frameable,
-	extern_symbol, has_computable_extent, index_entry_bytes, indexed_elements,
-	is_run,
-	local_name,
-	bound_cannot_fail, element_bytes, enforceable_max, is_counted_run,
-	matched_values, obligation,
-	pad_alignment,
-	preceding_parts,
-	obligations, own_entries, own_members, recursion_cycle,
-	must_be_terminated,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -7901,7 +7930,7 @@ class Emitter:
 		"""
 		policy = _reserved_policy(placement.attrs)
 		scalar = placement.scalar
-		if policy not in ("must_be_zero", "must_be_one") or scalar is None:
+		if policy not in RESERVED_STATED or scalar is None:
 			return []
 		if scalar.is_bit_packed or scalar.bits % BITS_PER_BYTE != 0:
 			return []
@@ -8248,7 +8277,7 @@ class Emitter:
 				out.extend(self._reserved_checks(struct, placement))
 				return out
 			policy = _reserved_policy(placement.attrs)
-			if policy in ("must_be_zero", "must_be_one"):
+			if policy in RESERVED_STATED:
 				want = 0 if policy == "must_be_zero" else (1 << scalar.bits) - 1
 				out.extend([
 					f"\t\tif {self._raw_load(placement, scalar, offset)} != {want} {{",
@@ -8350,10 +8379,8 @@ def _storage_width(bits: int) -> int:
 	return 64
 
 
-def _reserved_policy(attrs: tuple[ast.Attr, ...]) -> str | None:
-	for attr in attrs:
-		if attr.name in ("must_be_zero", "must_be_one"):
-			return str(attr.name)
-		if attr.name in ("preserve", "unknown"):
-			return None
-	return "must_be_zero"
+#: Which reserved policy `validate` must check (26.658). One function in
+#: `traverse` because this had four copies, each spelling the policy names
+#: as literals where the frozensets hold them -- identical when they were
+#: replaced, and waiting on a new stated policy to diverge silently.
+_reserved_policy = traverse.reserved_constraint

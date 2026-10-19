@@ -2464,6 +2464,35 @@ def reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:
 	return "must_be_zero"
 
 
+def reserved_constraint(attrs: tuple[ast.Attr, ...]) -> str | None:
+	"""Which reserved policy `validate` must CHECK, or None where none.
+
+	`reserved_policy`'s sibling, and the difference is the question it
+	answers: that one says what the policy IS, this one what a check has
+	to enforce, so `preserve` and `unknown` fold into None -- those bits
+	are carried, not checked.
+
+	Both conventions existed and the second had FOUR copies: the C++,
+	Python and Rust emitters and the C check builder, each spelling the
+	policy names as literals where the frozensets above hold them. They
+	were byte-identical when this replaced them, measured, so nothing had
+	drifted yet.
+
+	**What they were waiting for is a new stated policy.** Adding one to
+	`RESERVED_STATED` is a one-line change that the sets pick up and a
+	literal does not, and the failure is silent in the worst direction:
+	an unrecognised policy falls through to the default, so a field the
+	schema says must hold ones would be zero-filled by a writer and
+	checked for zero by a validator (26.658).
+	"""
+	for attr in attrs:
+		if attr.name in RESERVED_STATED:
+			return attr.name
+		if attr.name in RESERVED_OPEN:
+			return None
+	return "must_be_zero"
+
+
 def pinned_bytes(placement: Placement) -> int | None:
 	"""The footprint `[size = N]` pinned, in bytes, or None where none is.
 

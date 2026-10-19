@@ -42,8 +42,8 @@ from situc.types import ScalarKind
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (bit_extractor, own_entries, pinned_runs,
-                            reserved_policy)
+from situc.traverse import (RESERVED_OPEN, bit_extractor, own_entries,
+                            pinned_runs, reserved_policy)
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -85,7 +85,7 @@ def _can_own(placement: Placement, resolved: ResolvedSchema) -> bool:
 	# owned struct drops them by construction -- it holds fields, not the
 	# buffer -- so the round-trip this mode promises cannot be made.
 	if placement.kind == "reserved" \
-			and _reserved_policy(placement.attrs) in ("preserve", "unknown"):
+			and _reserved_policy(placement.attrs) in RESERVED_OPEN:
 		return False
 
 	# A nested struct is owned only if it is itself ownable, which is the

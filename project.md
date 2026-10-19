@@ -7172,6 +7172,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.658 The reserved policy, spelled once, and the copy nobody counted
+
+Moved to `doc/decision/26.658-the-reserved-policy-spelled-once-and-the-copy-that-was-not-counted.md`.
+
 ### 26.657 The temporary trees, and the policy rather than the sweep
 
 Moved to `doc/decision/26.657-the-temporary-trees-and-the-policy-rather-than-the-sweep.md`.

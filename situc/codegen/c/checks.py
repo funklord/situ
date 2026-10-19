@@ -41,9 +41,17 @@ from situc.propagate import Resolved
 from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
-	covered_run, invalidating_members,
-	Obligation, data_sized, enclosing_arm, has_computable_extent,
-	indexed_elements, obligations, own_members, local_name,
+	Obligation,
+	covered_run,
+	data_sized,
+	enclosing_arm,
+	has_computable_extent,
+	indexed_elements,
+	invalidating_members,
+	local_name,
+	obligations,
+	own_members,
+	reserved_constraint,
 )
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -2033,15 +2041,15 @@ def _ctype(scalar: object) -> str:
 
 
 def _reserved_policy(placement: Placement) -> str | None:
-	"""`must_be_zero` (the default) or `must_be_one`, for a reserved field."""
+	"""`must_be_zero` (the default) or `must_be_one`, for a reserved field.
+
+	The policy itself is `traverse.reserved_constraint`, which three other
+	backends also read; what stays here is the question this builder asks
+	of a NON-reserved member, which is not a constraint either (26.658).
+	"""
 	if placement.kind != "reserved":
 		return None
-	for attr in placement.attrs:
-		if attr.name in ("must_be_zero", "must_be_one"):
-			return attr.name
-		if attr.name in ("preserve", "unknown"):
-			return None		# not a constraint: the bits are carried, not checked
-	return "must_be_zero"
+	return reserved_constraint(placement.attrs)
 
 
 def _required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
