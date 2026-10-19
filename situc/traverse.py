@@ -2395,6 +2395,34 @@ def pinned_runs(placement: Placement) -> tuple[bytes, ...] | None:
 	return None
 
 
+def stated_scalar(placement: Placement, env: Env) -> int | None:
+	"""The value `must_eq` pins on a scalar, or None where none is pinned.
+
+	`pinned_runs`' sibling for a scalar, and both answer the same question:
+	what does the schema STATE these bytes are. A writer puts a stated
+	value down rather than asking a caller for it -- which is what the
+	builder's `LITERAL` role does, and what the owned encoder did for a
+	`preamble` and not for a `must_eq` (26.660).
+
+	Deliberately narrower than `checks._required_pattern`, which answers
+	what a BASELINE message may hold: that folds in `min` and an enum's
+	smallest member, neither of which the schema states. A writer that
+	wrote the smallest satisfying value would be choosing, not recording.
+	"""
+	from situc.expr import evaluate
+
+	for attr in placement.attrs:
+		if attr.name != "must_eq" or attr.value is None:
+			continue
+		if isinstance(attr.value, ast.StringLiteral):
+			return None		# a byte run: `pinned_runs` answers for it
+		try:
+			return int(evaluate(attr.value, env))
+		except Exception:	# noqa: BLE001 - not foldable, so not stated
+			return None
+	return None
+
+
 def pad_alignment(placement: Placement) -> int | None:
 	"""`pad_to(n)`'s n, or None where the member is not padding (0043).
 

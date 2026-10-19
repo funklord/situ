@@ -43,7 +43,7 @@ from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (RESERVED_OPEN, bit_extractor, own_entries,
-                            pinned_runs, reserved_policy)
+                            pinned_runs, reserved_policy, stated_scalar)
 from situc import __version__
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -430,6 +430,55 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 
 			lines.extend(_reserved_write(placement))
 			continue
+
+		# A FIELD whose bytes the schema states is written FROM the schema,
+		# like the preamble above and like the builder's `LITERAL` role.
+		# `pinned_runs` answers for both spellings -- `preamble u8[8] =
+		# "..."` and `u8 word[4] [must_eq = "..."]` -- and this asked it
+		# only of the reserved one, the question sitting inside the
+		# `kind == "reserved"` branch above. So a `must_eq` field copied
+		# whatever the caller had put there and checked nothing, and
+		# `_encode` could ship a message its own `_decode` refuses:
+		# measured, "flse" into a run the schema says is "true", with
+		# `SITU_OK` out and `SITU_ERR_CONSTRAINT` back (26.660).
+		#
+		# One `in->` fewer, so the `(void)in` cast arrives on its own for a
+		# struct of nothing but stated bytes: that test reads the emitted
+		# text rather than the member kinds, which is why it needs no
+		# widening here.
+		stated = pinned_runs(placement)
+		if placement.kind == "field" and stated is not None \
+				and len(stated) == 1:
+			body = ", ".join(f"0x{byte:02X}u" for byte in stated[0])
+			lines.extend([
+				"\t{",
+				f"\t\tstatic const uint8_t want[] = {{ {body} }};",
+				"",
+				f"\t\tmemcpy(data + {offset}u, want, sizeof want);",
+				"\t}",
+			])
+			continue
+
+		# The scalar spelling of the same fact, which had the same defect:
+		# `u16 magic [must_eq = 4660]` copied `in->magic`.
+		#
+		# **Not a marker-governed field**, and the reason is a defect this
+		# change uncovered rather than caused. This emitter bakes one byte
+		# order: `tiff_header [endian = from(byte_order)]` decodes `magic`
+		# with a static `situ_get_be16` and encodes it with `situ_put_be16`,
+		# so a little-endian TIFF hands back 10752 and validates anyway,
+		# `_validate` being the VIEW's and reading the marker properly.
+		# The round trip could not see it because the same wrong order ran
+		# both ways -- two errors agreeing -- and writing the correct 42
+		# broke that symmetry rather than the format. Left to its own
+		# finding, which is larger than this one (26.660).
+		if placement.scalar is not None and placement.array_count is None \
+				and placement.marker is None:
+			stated_number = stated_scalar(placement, resolved.layout.env)
+			if stated_number is not None:
+				lines.extend(_write(placement, prefix,
+				                    f"(uint64_t){stated_number}u"))
+				continue
 
 		if placement.scalar is None:
 			inner = resolved.structs.get(placement.type_name or "")
