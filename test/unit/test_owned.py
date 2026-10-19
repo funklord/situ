@@ -86,6 +86,96 @@ def test_owned_code_compiles_under_the_same_warnings(
 	assert built.returncode == 0, built.stderr
 
 
+def test_a_marker_decides_the_order_the_owned_form_reads(tmp_path: Path) -> None:
+	"""`endian = from(marker)` is decided by bytes, so neither side may
+	pick an order when the code is generated.
+
+	**The round trip beside this one cannot see a byte-order error**, and
+	that is why this test exists rather than a parametrised case. The
+	owned emitter baked big-endian for a marker-governed field: it decoded
+	tiff's `magic` with a static `situ_get_be16` and encoded it with
+	`situ_put_be16`, so the same wrong order ran both ways, the two errors
+	cancelled, and decode-then-encode returned the same bytes while
+	`out->magic` was 10752 instead of 42 (26.661).
+
+	`_decode` validated the message anyway, because it delegates its
+	constraints to the view's `_validate` -- which reads the marker
+	correctly. So every symmetric check agreed and the value was wrong.
+
+	This asks the asymmetric question: decode a LITTLE-endian document and
+	look at the number. 42 is tiff's own magic, and `II` is its
+	little-endian marker, so the vector is a real header rather than a
+	shape invented for the test.
+	"""
+	if COMPILER is None:
+		pytest.skip("no C compiler")
+
+	path = next(p for p in Path(__file__).resolve().parents[2].rglob("tiff.situ")
+	            if "build" not in p.parts)
+	names, where = build(path, tmp_path)
+	assert "tiff_header" in names, "the struct this test is about is not owned"
+
+	(where / "probe.c").write_text("""
+#include "tiff_owned.h"
+#include <stdio.h>
+
+int main(void)
+{
+	/* `II`, magic 42 little-endian, ifd_offset 8 little-endian. */
+	const uint8_t little[8] = { 0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00 };
+	/* `MM`, the same header big-endian. */
+	const uint8_t big[8]    = { 0x4D, 0x4D, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08 };
+	situ_tiff_header_t held;
+	uint8_t out[8];
+	int at;
+
+	if (situ_tiff_header_decode(little, sizeof little, &held) != SITU_OK) {
+		printf("little refused\\n");
+		return 1;
+	}
+	if (held.magic != 42u || held.ifd_offset != 8u) {
+		printf("little read magic=%u ifd=%u\\n",
+		       (unsigned)held.magic, (unsigned)held.ifd_offset);
+		return 2;
+	}
+	if (situ_tiff_header_encode(&held, out, sizeof out) != SITU_OK) {
+		printf("little encode refused\\n");
+		return 3;
+	}
+	for (at = 0; at < 8; ++at) {
+		if (out[at] != little[at]) {
+			printf("little re-encode differs at %d\\n", at);
+			return 4;
+		}
+	}
+
+	if (situ_tiff_header_decode(big, sizeof big, &held) != SITU_OK) {
+		printf("big refused\\n");
+		return 5;
+	}
+	if (held.magic != 42u || held.ifd_offset != 8u) {
+		printf("big read magic=%u ifd=%u\\n",
+		       (unsigned)held.magic, (unsigned)held.ifd_offset);
+		return 6;
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{where}", f"-I{RUNTIME}",
+		 str(where / "probe.c"), str(where / "tiff.c"),
+		 str(where / "tiff_owned.c"), str(RUNTIME / "situ.c"),
+		 "-o", str(where / "probe")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+
+	ran = subprocess.run([str(where / "probe")], capture_output=True, text=True)
+	assert ran.returncode == 0, (
+		f"the owned form reads a marker-governed field wrongly "
+		f"(check {ran.returncode}): {ran.stdout.strip()}")
+
+
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_decode_then_encode_returns_the_same_bytes(
 		path: Path, tmp_path: Path) -> None:

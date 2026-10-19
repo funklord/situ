@@ -7172,6 +7172,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.661 A marker decides the order, and the owned form had baked one
+
+Moved to `doc/decision/26.661-a-marker-decides-the-order-and-the-owned-form-had-baked-one.md`.
+
 ### 26.660 The literal-only builder, and a writer that could ship what its reader refuses
 
 Moved to `doc/decision/26.660-the-literal-only-builder-and-a-writer-that-could-ship-what-its-reader-refuses.md`.

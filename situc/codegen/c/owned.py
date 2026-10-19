@@ -140,7 +140,40 @@ def _ctype(placement: Placement, prefix: str, enums: Mapping[str, object]) -> st
 	return f"int{width}_t" if scalar.signed else f"uint{width}_t"
 
 
-def _read(placement: Placement, prefix: str) -> str:
+def _marker_is_little(struct: ResolvedStruct, placement: Placement,
+		prefix: str) -> str | None:
+	"""The runtime test for a marker-governed field's order, over `data`.
+
+	`endian = from(marker)` is decided by bytes in the MESSAGE, so neither
+	side of this file may pick an order at generation time. It did: both
+	`_read` and `_write` fall back to big-endian where `placement.endian`
+	is None, which is exactly the marker-governed case, so a little-endian
+	TIFF decoded `magic` as 10752 and validated anyway -- `_decode`
+	delegating its constraints to the view's `_validate`, which reads the
+	marker properly (26.660).
+
+	**The round trip could not see it**, the same wrong order running both
+	ways and the two errors cancelling, which is why this needed a
+	byte-level test of its own rather than the existing suite.
+
+	The test is the view's, spelled over `data` instead of a view: the
+	marker's own bytes are read big-endian, because which order they are
+	in is the thing being asked.
+	"""
+	if placement.marker is None:
+		return None
+	governing = next((entry.placement for entry in own_entries(struct)
+	                  if entry.placement.name == placement.marker), None)
+	if governing is None or governing.scalar is None \
+			or governing.offset_bits is None:
+		return None
+	at = governing.offset_bits // BITS_PER_BYTE
+	return (f"situ_get_be{governing.scalar.bits}(data + {at}u) == "
+	        f"{macro(prefix, struct.name, governing.name)}_LITTLE")
+
+
+def _read(placement: Placement, prefix: str,
+		struct: ResolvedStruct | None = None) -> str:
 	"""The expression that lifts one scalar out of `data`.
 
 	BCD is the one representation where the bits and the value differ by
@@ -179,15 +212,25 @@ def _read(placement: Placement, prefix: str) -> str:
 	elif scalar.bits == 8:
 		raw = f"data[{offset}u]"
 	else:
-		end = "le" if placement.endian is ast.Endian.LITTLE else "be"
-		raw = f"situ_get_{end}{scalar.bits}(data + {offset}u)"
+		# The order the MARKER says, resolved at runtime, where one
+		# governs this field; otherwise the schema's own (26.660).
+		little = (_marker_is_little(struct, placement, prefix)
+		          if struct is not None else None)
+		if little is not None:
+			raw = (f"({little}"
+			       f" ? situ_get_le{scalar.bits}(data + {offset}u)"
+			       f" : situ_get_be{scalar.bits}(data + {offset}u))")
+		else:
+			end = "le" if placement.endian is ast.Endian.LITTLE else "be"
+			raw = f"situ_get_{end}{scalar.bits}(data + {offset}u)"
 
 	if scalar.is_bcd:
 		return f"situ_bcd_decode((uint64_t){raw}, {scalar.digits}u)"
 	return raw
 
 
-def _write(placement: Placement, prefix: str, value: str) -> list[str]:
+def _write(placement: Placement, prefix: str, value: str,
+		struct: ResolvedStruct | None = None) -> list[str]:
 	"""The statements that put one scalar back into `data`."""
 	scalar = placement.scalar
 	assert scalar is not None and placement.offset_bits is not None
@@ -217,8 +260,23 @@ def _write(placement: Placement, prefix: str, value: str) -> list[str]:
 	# `-Wsign-conversion` is right to want it written down. Four of the
 	# twenty-seven examples have a signed field, and all four failed to
 	# compile until this cast existed.
-	end   = "le" if placement.endian is ast.Endian.LITTLE else "be"
 	width = storage_width(scalar.bits)
+	# The same question on the way out, and it has to answer the same way:
+	# an encode that picks an order the decode did not would turn a
+	# self-consistent misreading into a round trip that corrupts, which is
+	# the hazard the two comments above already name for bit order.
+	little = (_marker_is_little(struct, placement, prefix)
+	          if struct is not None else None)
+	if little is not None:
+		return [f"\tif ({little}) {{",
+		        f"\t\tsitu_put_le{scalar.bits}(data + {offset}u, "
+		        f"(uint{width}_t){value});",
+		        "\t} else {",
+		        f"\t\tsitu_put_be{scalar.bits}(data + {offset}u, "
+		        f"(uint{width}_t){value});",
+		        "\t}"]
+
+	end = "le" if placement.endian is ast.Endian.LITTLE else "be"
 	return [f"\tsitu_put_{end}{scalar.bits}(data + {offset}u, "
 	        f"(uint{width}_t){value});"]
 
@@ -355,7 +413,8 @@ def _decode_body(struct: ResolvedStruct, prefix: str,
 			continue
 
 		held = _ctype(placement, prefix, enums)
-		lines.append(f"\tout->{name} = ({held})({_read(placement, prefix)});")
+		lines.append(f"\tout->{name} = ({held})"
+		             f"({_read(placement, prefix, struct)});")
 
 	return lines
 
@@ -462,22 +521,16 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 		# The scalar spelling of the same fact, which had the same defect:
 		# `u16 magic [must_eq = 4660]` copied `in->magic`.
 		#
-		# **Not a marker-governed field**, and the reason is a defect this
-		# change uncovered rather than caused. This emitter bakes one byte
-		# order: `tiff_header [endian = from(byte_order)]` decodes `magic`
-		# with a static `situ_get_be16` and encodes it with `situ_put_be16`,
-		# so a little-endian TIFF hands back 10752 and validates anyway,
-		# `_validate` being the VIEW's and reading the marker properly.
-		# The round trip could not see it because the same wrong order ran
-		# both ways -- two errors agreeing -- and writing the correct 42
-		# broke that symmetry rather than the format. Left to its own
-		# finding, which is larger than this one (26.660).
-		if placement.scalar is not None and placement.array_count is None \
-				and placement.marker is None:
+		# A marker-governed field was excluded here for one commit, because
+		# writing the correct value exposed that this emitter baked ONE
+		# byte order -- and `_write` asks the marker now, so the exclusion
+		# is gone with its reason. tiff's `magic` is the case: stated, and
+		# governed by `byte_order` (26.661).
+		if placement.scalar is not None and placement.array_count is None:
 			stated_number = stated_scalar(placement, resolved.layout.env)
 			if stated_number is not None:
 				lines.extend(_write(placement, prefix,
-				                    f"(uint64_t){stated_number}u"))
+				                    f"(uint64_t){stated_number}u", struct))
 				continue
 
 		if placement.scalar is None:
@@ -523,7 +576,7 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 			lines.append("\t}")
 			continue
 
-		lines.extend(_write(placement, prefix, f"in->{name}"))
+		lines.extend(_write(placement, prefix, f"in->{name}", struct))
 
 	return lines
 
