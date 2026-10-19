@@ -16,6 +16,7 @@
 codec crc5_usb derived expansion=+5 bits seekable=linear granularity=block systematic deterministic
 codec crc7_mmc derived expansion=+7 bits seekable=linear granularity=block systematic deterministic
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
+codec extended_hamming derived expansion=ratio_exact(8,4) seekable=linear granularity=bit(4) systematic invertible deterministic
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
 codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec sealed_stuffing trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte authenticated invertible deterministic
@@ -79,6 +80,11 @@ struct constrained size=1..5 repr=ValueConverted atomic=NonAtomic stage=ParseTim
   constrained.magic                      offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=ParseTime
   constrained.how                        offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord stage=ParseTime
   constrained.pad                        offset=AbsoluteStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord stage=ParseTime
+
+struct corrected_nibble size=9 atomic=NonAtomic
+  corrected_nibble.head                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  corrected_nibble.body                  offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  corrected_nibble.body.payload          offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
 struct covered_tail size=8..12 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic
   covered_tail.n                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

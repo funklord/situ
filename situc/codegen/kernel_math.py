@@ -221,3 +221,97 @@ def rs_generator_coefficients(nroots: int, first_root: int, exp: list[int],
 		poly = shifted
 
 	return poly
+
+
+#: A linear block code's check rows, by name, with the dimensions they are
+#: the rows OF.
+#:
+#: The dimensions are part of the entry because the emitters used to gate on
+#: the name alone: `linear_block(n = 15, k = 11, code = hamming_7_4)` passed
+#: that gate and generated Hamming(7, 4)'s tables -- a seven-bit codeword
+#: under a signature saying `ratio_exact(15, 11)`, which is the one case
+#: section 13.1 calls dishonest rather than merely absent. A named code is a
+#: code at its own dimensions or nothing.
+NAMED_LINEAR: dict[str, tuple[int, int, tuple[int, ...]]] = {
+	# The standard systematic generator: data bits d0..d3 at positions 0..3
+	# and the three check bits after them, each covering the data bits its
+	# row names. From the code's definition rather than a transcription.
+	"hamming_7_4": (7, 4, (0b1101, 0b1011, 0b0111)),
+}
+
+
+class LinearCode:
+	"""The tables a (n, k) linear block code implies, computed once.
+
+	Every backend needs the same two: the codeword for each message, and
+	the bit each syndrome accuses. Three carried a copy of this arithmetic
+	and the dimensions written into it seven times each, which is the
+	fifth-copy hazard this module's docstring is about -- and here it
+	bounded the family to one code, because the copies said `3`, `4`, `7`
+	and `0x0F` rather than `n` and `k`.
+	"""
+
+	__slots__ = ("n", "k", "rows", "encode", "syndrome")
+
+	def __init__(self, n: int, k: int, rows: tuple[int, ...]) -> None:
+		self.n = n
+		self.k = k
+		self.rows = rows
+		self.encode = [self.codeword(message) for message in range(1 << k)]
+
+		#: Syndrome to the position it accuses; `n` means no error. Built
+		#: from the single-bit errors rather than from a rule, so it holds
+		#: for any rows and not only for a Hamming layout.
+		self.syndrome = [n] * (1 << (n - k))
+		for position in range(n):
+			self.syndrome[self.check(1 << position)] = position
+
+	def codeword(self, message: int) -> int:
+		"""The message in the low `k` bits, the check bits above it."""
+		word = message
+		for row, mask in enumerate(self.rows):
+			word |= (bin(message & mask).count("1") & 1) << (self.k + row)
+		return word
+
+	def check(self, word: int) -> int:
+		"""The syndrome of a codeword: zero exactly when it is one."""
+		value = 0
+		for row, mask in enumerate(self.rows):
+			parity = bin(word & mask & ((1 << self.k) - 1)).count("1") & 1
+			parity ^= (word >> (self.k + row)) & 1
+			value |= parity << row
+		return value
+
+	def corrects_one_bit(self) -> bool:
+		"""Whether every single-bit error accuses its own position.
+
+		Which is the property the generated decoder acts on, so it is
+		checked rather than assumed: it holds exactly when the columns of
+		the check matrix are distinct and non-zero, and a schema is free
+		to state rows for which it does not. A detect-only code with a
+		corrector generated for it would silently flip a good bit.
+		"""
+		columns = [self.check(1 << position) for position in range(self.n)]
+		return 0 not in columns and len(set(columns)) == self.n
+
+
+def linear_code(n: int, k: int, rows: tuple[int, ...] | None,
+		named: str | None) -> LinearCode | None:
+	"""The code a kernel describes, or `None` where none is generated.
+
+	Rows given outright win; a named code supplies them at its own
+	dimensions and nowhere else. Bounded to a byte-wide codeword because
+	that is what the generated `encode`/`decode` signatures take, and to
+	rows that actually correct, because the decoder corrects.
+	"""
+	if rows is None:
+		entry = NAMED_LINEAR.get(named or "")
+		if entry is None or entry[0] != n or entry[1] != k:
+			return None
+		rows = entry[2]
+
+	if not 0 < k < n or n > 8:
+		return None
+
+	code = LinearCode(n, k, rows)
+	return code if code.corrects_one_bit() else None

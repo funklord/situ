@@ -2253,6 +2253,80 @@ def test_hamming_miscorrects_a_double_error_and_says_nothing(
 	assert got != 0x5, "a double error was corrected, which d_min 3 forbids"
 
 
+#: Hamming(7,4) again, with the matrix stated rather than the code named.
+#: The two must generate the same thing, which is the whole claim of the
+#: `parity` form: a named code is rows this build keeps, and rows given
+#: outright are the same rows arriving another way.
+OUTRIGHT = """codec hamming_7_4 { kernel = linear_block(n = 7, k = 4,
+	parity = 0b1101, parity = 0b1011, parity = 0b0111); }
+impl hamming_7_4 derived;
+"""
+
+#: Extended Hamming(8, 4): the three rows above and an overall parity row.
+#: A different (n, k), a four-bit syndrome, and a code this build has no
+#: name for -- so it generates only because the schema says what it is.
+EXTENDED = """codec extended { kernel = linear_block(n = 8, k = 4,
+	parity = 0b1101, parity = 0b1011, parity = 0b0111, parity = 0b1111); }
+impl extended derived;
+"""
+
+
+def test_a_matrix_given_outright_generates_what_the_name_does() -> None:
+	"""The same code by two routes, in all three backends.
+
+	Asserting the relationship rather than either side: a table checked
+	against a transcription of itself proves a transcription, where two
+	descriptions of one code agreeing proves the description is read. The
+	comment text differs by the codec's name and nothing else does, so
+	the comparison is on the lines that carry numbers.
+
+	It would have passed before the `parity` form existed, for the worst
+	reason -- `OUTRIGHT` generated nothing at all, so both sides would
+	have been the same empty absence. Hence the second assertion, which
+	is what makes the first one evidence.
+	"""
+	def numbers(schema: str, backend: Any) -> list[str]:
+		out = backend.generate(parse_text(schema), "unit")
+		return [line for line in out.split("\n")
+		        if "0x" in line and "," in line]
+
+	for backend in (derived, py_derived, rs_derived):
+		named    = numbers(THREE, backend)
+		outright = numbers(OUTRIGHT, backend)
+
+		assert any("0x7F" in line for line in named), (
+			f"{backend.__name__}: the named code generated no table, so "
+			f"the comparison below would hold over nothing")
+		assert outright == named, (
+			f"{backend.__name__}: a matrix given outright generated "
+			f"different numbers from the same matrix named")
+
+
+def test_an_extended_code_corrects_every_single_bit_error(
+		tmp_path: Path) -> None:
+	"""(8, 4), exhaustively: 16 messages by 8 positions, and the 16 clean
+	words.
+
+	The point is the dimensions rather than the code. Every table, mask,
+	loop bound and literal in three emitters carried `3`, `4`, `7` and
+	`0x0F` written in, so a second (n, k) is what tells a generalisation
+	that compiles from one that works.
+	"""
+	source  = py_derived.generate(parse_text(EXTENDED), "unit")
+	encode, = _generated(source, tmp_path, "extended_encode")
+	decode  = _generated(source, tmp_path, "extended_decode")[0]
+
+	for message in range(16):
+		word = encode(message)
+		assert word & 0x0F == message, "not systematic"
+		assert decode(word) == (message, False), (
+			"a clean word reported an error")
+
+		for bit in range(8):
+			assert decode(word ^ (1 << bit)) == (message, True), (
+				f"message {message}, bit {bit} not corrected")
+
+
 #: The interleaver at 4x4 is its own inverse, so `encode` and `decode`
 #: cannot be told apart by a round trip or by any square fixture. A
 #: non-square one is the only case where the plausible wrong answer --

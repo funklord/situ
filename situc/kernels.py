@@ -134,7 +134,14 @@ KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
 		# Reed-Solomon and BCH: `field` is what selects them.
 		"field", "n", "k", "first_root", "primitive"}),
 	ast.KernelFamily.LINEAR:      frozenset({
-		"n", "k", "standard_form", "code"}),
+		"n", "k", "standard_form", "code",
+		# One `parity` per check row, giving the matrix outright rather
+		# than by name -- the same form `table` takes for `symbol`, and
+		# read the same way, by filtering `kernel.args` rather than by
+		# `argument("parity")`. A matrix IS numbers, the way a CRC's
+		# polynomial is, so a code nobody has written down generates as
+		# well as Hamming does (26.144 item 11).
+		"parity"}),
 	ast.KernelFamily.SHIFT:       frozenset({
 		"taps", "width", "seed", "feedback", "complement_feedback"}),
 	ast.KernelFamily.ONES_COMPLEMENT: frozenset({"width", "complement"}),
@@ -491,6 +498,14 @@ def _linear_block(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 			notes = ["`n` is the codeword length and `k` the message length"],
 		)
 
+	# Given outright, the matrix decides `systematic` rather than the flag
+	# doing it: `parity` rows are the P of a standard-form generator
+	# [I | P], so the data bits sit verbatim at computable positions by
+	# construction. That is the property the docstring above calls worth
+	# deriving rather than trusting, and a schema that states the matrix is
+	# a schema that need not be trusted about it.
+	rows = parity_rows(kernel, n, k, decl)
+
 	# The unit is the message block, `k` bits, since that is the smallest
 	# amount that can be encoded independently. Not error-propagating: damage
 	# is contained to the codeword it lands in, which is what a block code is
@@ -502,10 +517,68 @@ def _linear_block(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:
 		granularity      = (ast.Granularity.BIT if k < 8
 		                    else ast.Granularity.SYMBOL),
 		granularity_size = k,
-		systematic       = kernel.flag("standard_form"),
+		systematic       = rows is not None or kernel.flag("standard_form"),
 		invertible       = True,
 		deterministic    = True,
 	)
+
+
+def parity_rows(kernel: ast.Kernel, n: int, k: int,
+		decl: ast.CodecDecl) -> tuple[int, ...] | None:
+	"""The check rows a schema gave outright, or `None` where it gave none.
+
+	`(n - k)` of them, each a mask over the `k` data bits saying which of
+	them that row covers. Read by filtering `kernel.args`, because the form
+	repeats one argument rather than taking a list -- `table`'s `symbol` is
+	the same shape, and the sweep that built `KERNEL_ARGUMENTS` once missed
+	it for exactly that reason.
+
+	Wrong is an error rather than a silent `None`, which is the whole of
+	26.161: a `shift_register` with no `taps` generated nothing and named no
+	missing argument, and half a matrix is the same mistake with a count in
+	front of it. An author who wrote one `parity` row meant to write them
+	all.
+	"""
+	rows = [arg for arg in kernel.args if arg.name == "parity"]
+	if not rows:
+		return None
+
+	def refuse(what: str, label: str, notes: list[str]) -> None:
+		raise error(f"`{decl.name}` {what}", kernel.span,
+		            label = label, notes = notes)
+
+	values = [arg.value.value for arg in rows
+	          if isinstance(arg.value, ast.IntLiteral)]
+	if len(values) != len(rows):
+		refuse("gives a `parity` row that is not a literal",
+		       "expected `parity = N`",
+		       ["a check row is a mask over the data bits, so it is a "
+		        "number rather than an expression"])
+
+	if len(values) != n - k:
+		refuse(f"gives {len(values)} `parity` row(s) for {n - k} check bits",
+		       f"expected {n - k} of them",
+		       [f"a ({n}, {k}) code has {n} - {k} check bits, and each one "
+		        f"is a row saying which data bits it covers"])
+
+	for value, arg in zip(values, rows):
+		if value <= 0 or value >> k:
+			refuse(f"gives `parity = {value}`, which is not a row over "
+			       f"{k} data bits",
+			       f"expected 1 .. {(1 << k) - 1}",
+			       ["zero covers nothing, so the check bit it computes is "
+			        "always zero and the codeword carries a bit that says "
+			        "nothing"] if value <= 0 else
+			       [f"a row is a mask over the {k} data bits, so it cannot "
+			        f"name a bit the message does not have"])
+
+	if len(set(values)) != len(values):
+		refuse("gives the same `parity` row twice",
+		       "expected distinct rows",
+		       ["two check bits over the same data bits are the same check "
+		        "twice, so the second corrects nothing the first did not"])
+
+	return tuple(values)
 
 
 def _shift_register(decl: ast.CodecDecl, kernel: ast.Kernel) -> Derived:

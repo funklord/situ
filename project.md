@@ -2693,7 +2693,7 @@ design.
 | **table** | input symbol -> output symbol map, optionally padded to whole groups | Manchester, 4b5b, base16/32/64 (not NRZI, 8b10b, Gray or BCD -- see 26.140) | `ratio_exact` from symbol widths, or `ratio_padded` with `granularity = block(g)` where the code pads; `seekable = linear`; `deterministic`; not `systematic` |
 | **polynomial** | generator polynomial over GF(2) or GF(2^m), plus init/reflect/xorout | CRC (all variants), Reed-Solomon. BCH takes the same route and none is written | `expansion = +N`; `systematic` for appended-parity forms; `seekable = linear`; parity recompute scope = block |
 
-| **linear block** | generator or parity-check matrix over GF(2) | Hamming(7,4). Any other `(n,k)` derives a correct `ratio_exact` and generates nothing; a matrix in the schema is the language addition that would change that (26.144). Not LDPC, for the reason below the table | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form; `seekable = blockwise(n)` |
+| **linear block** | parity-check matrix over GF(2): a named code, or one `parity` row per check bit | Hamming(7,4) by name; any `(n,k)` from its matrix, bounded to a codeword that fits the byte the generated pair takes and to rows that locate a single error. Not LDPC, for the reason below the table | `ratio_exact(n,k)`; `systematic` iff the matrix is in standard form, which rows given outright are by construction; `seekable = blockwise(n)` |
 | **shift register** | taps, feedback source, initial state, and whether the feedback is complemented | additive and multiplicative scramblers, NRZI in both conventions. **Not convolutional codes, and not Miller** -- see below the table, which is a sharper refusal than the other rows' | `length_preserving`, always; `seekable = linear` iff feedback is from input only; `not seekable` and `error_propagating` if feedback is from output. `complement_feedback` moves none of them |
 | **permutation** | index mapping, closed form or table | block interleavers. A bare `span` derives the properties and generates nothing, which is what a convolutional interleaver would get: a bank of delay lines is not an index map within a block | `length_preserving`; `seekable = permuted`; `deterministic` |
 | **stuffing** | trigger predicate plus insertion rule | HDLC bit stuffing, COBS, SLIP, byte stuffing | `expansion = ratio_bounded`; `not seekable`; interior addressing lost |
@@ -2715,10 +2715,18 @@ other side -- there it is about trusting a supplier's properties, here it is
 about who owns the buffer.
 
 **One of the four is a trap rather than a gap, and that is the difference
-worth keeping.** A `linear_block` with an unimplemented `(n,k)` derives a
+worth keeping.** A `linear_block` whose matrix nothing states derives a
 *correct* `ratio_exact` and generates nothing; a `permutation` with a bare
 `span` does the same. Both are honest: the signature is right and the author
-is told there is no implementation. A convolutional code declared as a shift
+is told there is no implementation.
+
+**The dishonest case existed here and was found by closing the gap.** The
+emitters gated on the code's NAME and read the dimensions from nowhere, so
+`linear_block(n = 15, k = 11, code = hamming_7_4)` passed the gate and
+generated Hamming(7, 4)'s tables -- a seven-bit codeword under a signature
+saying `ratio_exact(15, 11)`, which is the one thing this paragraph says
+does not happen. A named code is a code at its own dimensions now, and
+anything else declines with the reason. A convolutional code declared as a shift
 register is not honest, because this family derives `length_preserving`
 unconditionally and has no argument that can say otherwise -- so a rate-1/2
 encoder would claim its output is the size of its input, and a consumer
@@ -7171,6 +7179,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.662 A matrix the schema states, and an item parked on a wrong premise
+
+Moved to `doc/decision/26.662-a-matrix-the-schema-states-and-an-item-parked-on-a-wrong-premise.md`.
 
 ### 26.661 A marker decides the order, and the owned form had baked one
 

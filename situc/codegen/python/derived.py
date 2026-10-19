@@ -219,7 +219,7 @@ def _smtp_dot(decl: ast.CodecDecl, prefix: str) -> list[str]:
 
 
 def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
-	"""Hamming(7,4): a nibble in, a byte out.
+	"""Any (n, k) whose codeword is a byte: `k` bits in, a byte out.
 
 	Unlike every other family here it is not `(in, len, out)` -- it is a
 	symbol map with a correction step. Python returns the corrected flag
@@ -229,83 +229,75 @@ def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	entry is unreachable from the error branch, so a double-bit error is
 	miscorrected and still reports True. d_min is 3, so that is the code
 	behaving as it must, and the flag means "the syndrome was nonzero".
-	"""
-	from situc.codegen.c.derived import (DERIVED_LINEAR, _HAMMING_PARITY,
-	                                     _named_code)
 
-	if _named_code(decl) not in DERIVED_LINEAR:
+	The tables and the decision to generate at all are `c.derived`'s, as
+	for `_symbol_map`: this renders and derives nothing, so the three
+	backends cannot produce different codewords for one matrix.
+	"""
+	from situc.codegen.c.derived import _linear_code
+
+	code = _linear_code(decl)
+	if code is None:
 		return None
 
 	name = _ident(prefix, decl.name)
-
-	syndrome = [7] * 8
-	for position in range(7):
-		codeword = 1 << position
-		value = 0
-		for row, mask in enumerate(_HAMMING_PARITY):
-			parity = bin((codeword & 0xF) & mask).count("1") & 1
-			parity ^= (codeword >> (4 + row)) & 1
-			value |= parity << row
-		syndrome[value] = position
-
-	table = []
-	for nibble in range(16):
-		word = nibble
-		for row, mask in enumerate(_HAMMING_PARITY):
-			word |= (bin(nibble & mask).count("1") & 1) << (4 + row)
-		table.append(word)
-
-	masks = ", ".join(f"0x{mask:02X}" for mask in _HAMMING_PARITY)
+	upper = name.upper()
+	data = (1 << code.k) - 1
+	word = (1 << code.n) - 1
+	checks = code.n - code.k
+	masks = ", ".join(f"0x{mask:02X}" for mask in code.rows)
 
 	return [
 		"",
 		"",
-		f"#: `{decl.name}`: Hamming(7,4), systematic. The low nibble of a",
-		"#: codeword is the data; the three high bits are parity.",
-		f"{name.upper()}_ENCODE_TABLE = (",
-		"\t" + ", ".join(f"0x{value:02X}" for value in table) + ",",
+		f"#: `{decl.name}`: a ({code.n}, {code.k}) block code,"
+		f" systematic. The low {code.k} bits of a",
+		f"#: codeword are the data; the {checks} above them are check"
+		f" bits.",
+		f"{upper}_ENCODE_TABLE = (",
+		"\t" + ", ".join(f"0x{value:02X}" for value in code.encode) + ",",
 		")",
 		"",
-		"#: Syndrome to the bit it accuses; 7 means no error.",
-		f"{name.upper()}_SYNDROME = ("
-		+ ", ".join(str(value) for value in syndrome) + ",)",
+		f"#: Syndrome to the bit it accuses; {code.n} means no error.",
+		f"{upper}_SYNDROME = ("
+		+ ", ".join(str(value) for value in code.syndrome) + ",)",
 		"",
-		f"_MASKS_{name.upper()} = ({masks},)",
+		f"_MASKS_{upper} = ({masks},)",
 		"",
 		"",
-		f"def {name}_encode(nibble: int) -> int:",
-		f"\treturn {name.upper()}_ENCODE_TABLE[nibble & 0x0F]",
+		f"def {name}_encode(message: int) -> int:",
+		f"\treturn {upper}_ENCODE_TABLE[message & 0x{data:02X}]",
 		"",
 		"",
 		f"def {name}_decode(codeword: int) -> tuple[int, bool]:",
-		'\t"""The nibble, and whether a bit was corrected.',
+		'\t"""The message, and whether a bit was corrected.',
 		"",
 		"\tA DOUBLE error is miscorrected and still reports True: d_min is",
 		"\t3, so this code corrects one bit and cannot report `detected",
 		'\tbut not correctable`."""',
-		"\tvalue = codeword & 0x7F",
+		f"\tvalue = codeword & 0x{word:02X}",
 		"\tcheck = 0",
 		"",
-		"\tfor row in range(3):",
-		f"\t\tbits   = value & _MASKS_{name.upper()}[row]",
+		f"\tfor row in range({checks}):",
+		f"\t\tbits   = value & _MASKS_{upper}[row]",
 		"\t\tparity = 0",
 		"",
 		"\t\twhile bits:",
 		"\t\t\tparity ^= bits & 1",
 		"\t\t\tbits  >>= 1",
 		"",
-		"\t\tparity ^= (value >> (4 + row)) & 1",
+		f"\t\tparity ^= (value >> ({code.k} + row)) & 1",
 		"\t\tcheck  |= parity << row",
 		"",
 		"\tif check == 0:",
-		"\t\treturn value & 0x0F, False",
+		f"\t\treturn value & 0x{data:02X}, False",
 		"",
-		f"\tat = {name.upper()}_SYNDROME[check]",
+		f"\tat = {upper}_SYNDROME[check]",
 		"",
-		"\tif at < 7:",
+		f"\tif at < {code.n}:",
 		"\t\tvalue ^= 1 << at",
 		"",
-		"\treturn value & 0x0F, True",
+		f"\treturn value & 0x{data:02X}, True",
 	]
 
 

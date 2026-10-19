@@ -944,7 +944,7 @@ framing code in practical use, which is what bounds the design:
 |---|---|---|
 | `table` | input symbol to output symbol, optionally padded to whole groups | both Manchesters, 4b5b, base16/32/64 |
 | `polynomial` | a generator polynomial over GF(2) or GF(2^m), plus init, reflection and xorout | every CRC variant, Reed-Solomon |
-| `linear_block` | a generator or parity-check matrix over GF(2) | Hamming(7,4); another `(n,k)` gets a correct signature and no code |
+| `linear_block` | a parity-check matrix over GF(2), named or stated as one `parity` row per check bit | Hamming(7,4) by name, any `(n,k)` whose codeword is a byte from its matrix |
 | `shift_register` | taps, a feedback source, an initial state, and whether the feedback is complemented | additive and multiplicative scramblers, both NRZI conventions |
 | `permutation` | an index mapping | block interleavers |
 | `stuffing` | a trigger predicate and an insertion rule | COBS, bit stuffing, SLIP, PPP, SMTP dot-stuffing |

@@ -1661,6 +1661,34 @@ struct split_coverage {
 	checksum u8   sum[2] covers(first, second) is summing;
 }
 
+// A linear block code whose matrix the SCHEMA states, rather than naming a
+// code the compiler keeps the rows for. Extended Hamming(8, 4): the three
+// Hamming rows and an overall parity row, which is a different (n, k) from
+// the one code this tree knew and a four-bit syndrome rather than three.
+//
+// Here because it is a construct no worked example carries, which is this
+// file's whole job -- and because the generalisation it exercises is the
+// kind that passes a unit test and fails a compile: the emitters had the
+// dimensions written into them seven times each as `3`, `4`, `7` and
+// `0x0F`, so every table, mask, loop bound and literal in three languages
+// had to start following `n` and `k`. The four compile and type-check
+// gates read every schema here, which is worth more than an assertion
+// about generated text (26.144 item 11).
+//
+// `standard_form` is not written and is not missing: the rows ARE the P of
+// a standard-form generator, so `systematic` is derived from them. The flag
+// is for a code described without its matrix.
+codec extended_hamming {
+	kernel = linear_block(n = 8, k = 4, parity = 0b1101, parity = 0b1011,
+	                      parity = 0b0111, parity = 0b1111);
+}
+impl extended_hamming derived;
+
+struct corrected_nibble {
+	u8    head;
+	coded body(extended_hamming) { u8 payload[4]; }
+}
+
 // CRC-7/MMC: a NON-reflected code narrower than the byte it consumes, which
 // runs left-aligned at the top of one -- the polynomial, the table and the
 // initial value shifted up, the result shifted back before the final xor.

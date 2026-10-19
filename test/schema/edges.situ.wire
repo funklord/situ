@@ -90,6 +90,10 @@ struct constrained size=1..5 version=rev
   @0x0003   1         dialect    how  since=3
   @0x0004   1         u8         pad  since=3 must_eq=0
 
+struct corrected_nibble size=9
+  @0x0000   1         u8         head
+  @0x0001   8         extended_hamming body  codec=extended_hamming
+
 struct covered_tail size=8..12
   @0x0000   1         u8         n  max=4
   @0x0001   0..4      u8         pad  sized-by=n

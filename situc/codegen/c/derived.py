@@ -29,8 +29,10 @@ from situc import ast
 from situc.codegen.c.names import ident, macro
 from situc.traverse import DERIVED_STUFFING as DERIVED_STUFFING
 from situc.traverse import table_is_padded
-from situc.codegen.kernel_math import (WORD_WIDTHS, accumulator,
-                                       gf_tables,
+from situc.kernels import parity_rows
+from situc.codegen.kernel_math import (WORD_WIDTHS, LinearCode, accumulator,
+                                       gf_tables, linear_code,
+                                       NAMED_LINEAR,
                                        rs_generator_coefficients,
                                        crc_register, crc_shift, crc_start,
                                        crc_table, crc_width, number, reverse)
@@ -125,7 +127,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	return "\n".join(lines) + "\n"
 
 
-#: Linear block codes this build derives an implementation for.
+#: Linear block codes this build knows by name.
 #:
 #: One entry, and named anyway. It was the literal `"hamming_7_4"` written
 #: twice -- the prototype gate in `_byte_declarations` and the dispatch in
@@ -133,7 +135,12 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 #: silent gap in `stuffing`, in the same two places. A second code added to
 #: one of them would declare a function nothing defined, or define one
 #: nothing declared, and neither is visible in the diff that causes it.
-DERIVED_LINEAR = ("hamming_7_4",)
+#:
+#: It is the catalogue of NAMES now rather than of codes this build
+#: generates, and the two stopped being the same thing when a schema could
+#: state the matrix itself: a code given outright is generated and is in no
+#: catalogue, which is why both gates ask `_linear_code` rather than this.
+DERIVED_LINEAR = tuple(sorted(NAMED_LINEAR))
 
 #: Stuffing codes this build derives an implementation for.
 #:
@@ -310,6 +317,52 @@ def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None
 	return (ident(prefix, decl.name, "encode"), ident(prefix, decl.name, "decode"))
 
 
+def _why_no_matrix(decl: ast.CodecDecl) -> str | None:
+	"""Why a described (n, k) code generates nothing, where the reason is
+	about the matrix rather than about an unknown name.
+
+	Three of them, and the catalogue sentence answers none: a name is a
+	code at its own dimensions only, a codeword has to fit the byte the
+	generated pair takes, and a corrector cannot be generated for rows
+	that locate nothing. Saying "not one of them" to any of these sends
+	the author looking for a code they already named.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	n = number(decl, "n")
+	k = number(decl, "k")
+	if not n or not k:
+		return None
+
+	named = _named_code(decl)
+	entry = NAMED_LINEAR.get(named or "")
+	if entry is not None and (entry[0], entry[1]) != (n, k):
+		return (f"`{named}` is a ({entry[0]}, {entry[1]}) code and this "
+		        f"kernel says ({n}, {k}). A named code supplies its matrix "
+		        f"at its own dimensions and nowhere else; state the rows "
+		        f"outright, one `parity` per check bit, for a code of "
+		        f"another size.")
+
+	rows = parity_rows(kernel, n, k, decl)
+	if rows is None:
+		return None
+
+	if n > 8:
+		return (f"A ({n}, {k}) codeword is wider than the byte the generated "
+		        f"`encode` and `decode` take, so the matrix is read and "
+		        f"checked and no code comes out.")
+
+	if not LinearCode(n, k, rows).corrects_one_bit():
+		return ("These rows detect an error without locating one: two "
+		        "single-bit errors share a syndrome, or one changes nothing "
+		        "the check bits see. The generated decoder corrects, so it "
+		        "is not generated for a matrix that cannot say which bit "
+		        "to flip.")
+
+	return None
+
+
 def _what_is_generated(decl: ast.CodecDecl) -> list[str]:
 	"""Which descriptions of this family DO generate, where that is a list.
 
@@ -346,6 +399,11 @@ def _what_is_generated(decl: ast.CodecDecl) -> list[str]:
 			       "the code cannot."),
 		]
 
+	if kernel.family is ast.KernelFamily.LINEAR:
+		reason = _why_no_matrix(decl)
+		if reason is not None:
+			return [" *", *_wrap(reason)]
+
 	catalogue = {
 		ast.KernelFamily.STUFFING: ("stuffing codes", DERIVED_STUFFING),
 		ast.KernelFamily.TABLE:    ("table codes", tuple(sorted(NAMED_CODES))),
@@ -365,6 +423,10 @@ def _what_is_generated(decl: ast.CodecDecl) -> list[str]:
 		lines.extend(_wrap("This kernel names no code. A table is selected by "
 		                   "`code`, or given outright as one `symbol` per "
 		                   "input symbol."))
+	elif kernel.family is ast.KernelFamily.LINEAR:
+		lines.extend(_wrap("This kernel names no code. A matrix is selected "
+		                   "by `code`, or given outright as one `parity` per "
+		                   "check bit."))
 	else:
 		lines.extend(_wrap(f"This kernel names no code, and a "
 		                   f"{what[:-6]} code is what selects one."))
@@ -1026,14 +1088,16 @@ def _byte_declarations(decl: ast.CodecDecl, prefix: str) -> list[str]:
 		]
 
 	if kernel.family is ast.KernelFamily.LINEAR:
-		if _named_code(decl) not in DERIVED_LINEAR:
+		code = _linear_code(decl)
+		if code is None:
 			return []
 		return [
 			"",
-			f"/* `{decl.name}`: Hamming(7, 4) in standard form. One nibble in,",
-			" * one seven-bit codeword out, and single-error correction on the",
-			" * way back -- which is what a linear block code is for. */",
-			f"uint8_t {ident(prefix, decl.name, 'encode')}(uint8_t nibble);",
+			f"/* `{decl.name}`: a ({code.n}, {code.k}) block code in standard",
+			f" * form. {code.k} bits in, a {code.n}-bit codeword out, and",
+			" * single-error correction on the way back -- which is what a",
+			" * linear block code is for. */",
+			f"uint8_t {ident(prefix, decl.name, 'encode')}(uint8_t message);",
 			f"uint8_t {ident(prefix, decl.name, 'decode')}"
 			"(uint8_t codeword, int *corrected);",
 		]
@@ -1157,79 +1221,83 @@ def _permutation(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 
 # ---------------------------------------------------------------------------
-# Linear block: Hamming(7, 4)
+# Linear block codes
 # ---------------------------------------------------------------------------
 
-# The standard systematic generator. Data bits d0..d3 occupy positions 0..3 of
-# the codeword and the three parity bits follow, each covering the subset of
-# the data bits its row names. Taken from the code's definition rather than
-# from a table somebody transcribed.
-_HAMMING_PARITY = (0b1101, 0b1011, 0b0111)
+
+def _linear_code(decl: ast.CodecDecl) -> LinearCode | None:
+	"""The code this kernel describes, tables and all.
+
+	`kernel_math` owns the arithmetic and `kernels.parity_rows` owns the
+	form, so this reads a schema and decides nothing: rows given outright,
+	or a named code at its own dimensions.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	n = number(decl, "n")
+	k = number(decl, "k")
+	if not n or not k:
+		return None
+
+	return linear_code(n, k, parity_rows(kernel, n, k, decl),
+	                   _named_code(decl))
 
 
 def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
-	"""Hamming(7, 4), with the syndrome table computed from the parity rows.
+	"""Any (n, k) whose codeword is a byte, with the tables computed.
 
-	Systematic, so the four data bits sit verbatim in the low positions and a
+	Systematic, so the data bits sit verbatim in the low positions and a
 	reader that trusts the codeword can take them without decoding at all --
-	which is exactly what the `systematic` property promises, and what makes it
-	worth deriving rather than declaring.
+	which is exactly what the `systematic` property promises, and what makes
+	it worth deriving rather than declaring.
+
+	It generated one code until 26.144's item 11, which had been parked as a
+	language addition: the matrix had to be expressible in a schema, and
+	`table`'s `symbol` argument had been giving a map outright all along. It
+	needed an argument in the family's own grain and no grammar at all.
 	"""
-	if _named_code(decl) not in DERIVED_LINEAR:
+	code = _linear_code(decl)
+	if code is None:
 		return None
 
 	name = ident(prefix, decl.name)
-
-	# Syndrome -> the bit position it accuses, or 7 for "no error".
-	syndrome = [7] * 8
-	for position in range(7):
-		codeword = 1 << position
-		value = 0
-		for row, mask in enumerate(_HAMMING_PARITY):
-			bits = (codeword & 0xF) & mask
-			parity = bin(bits).count("1") & 1
-			parity ^= (codeword >> (4 + row)) & 1
-			value |= parity << row
-		syndrome[value] = position
-
-	encode = []
-	for nibble in range(16):
-		word = nibble
-		for row, mask in enumerate(_HAMMING_PARITY):
-			word |= (bin(nibble & mask).count("1") & 1) << (4 + row)
-		encode.append(word)
+	data = (1 << code.k) - 1
+	word = (1 << code.n) - 1
+	checks = code.n - code.k
 
 	return [
 		"",
-		f"/* {decl.name}: Hamming(7, 4), systematic.",
+		f"/* {decl.name}: a ({code.n}, {code.k}) block code, systematic.",
 		" *",
-		" * The four data bits sit verbatim in the low positions, which is what",
-		" * `systematic` promises: a reader that trusts the codeword can take",
-		" * them without decoding. The three parity bits correct any single-bit",
-		" * error, which is what the syndrome table below is for.",
+		f" * The {code.k} data bits sit verbatim in the low positions, which",
+		" * is what `systematic` promises: a reader that trusts the codeword",
+		f" * can take them without decoding. The {checks} check bits correct",
+		" * any single-bit error, which is what the syndrome table is for.",
 		" */",
-		f"static const uint8_t {name}_encode_table[16] = {{",
-		"\t" + ", ".join(f"0x{word:02X}u" for word in encode),
+		f"static const uint8_t {name}_encode_table[{1 << code.k}] = {{",
+		"\t" + ", ".join(f"0x{value:02X}u" for value in code.encode),
 		"};",
 		"",
-		f"/* Syndrome to the bit it accuses; 7 means no error. */",
-		f"static const uint8_t {name}_syndrome[8] = {{",
-		"\t" + ", ".join(f"{position}u" for position in syndrome),
+		f"/* Syndrome to the bit it accuses; {code.n} means no error. */",
+		f"static const uint8_t {name}_syndrome[{1 << checks}] = {{",
+		"\t" + ", ".join(f"{position}u" for position in code.syndrome),
 		"};",
 		"",
-		f"uint8_t {name}_encode(uint8_t nibble)",
+		f"uint8_t {name}_encode(uint8_t message)",
 		"{",
-		f"\treturn {name}_encode_table[nibble & 0x0Fu];",
+		f"\treturn {name}_encode_table[message & 0x{data:02X}u];",
 		"}",
 		"",
 		f"uint8_t {name}_decode(uint8_t codeword, int *corrected)",
 		"{",
-		"\tuint8_t value = (uint8_t)(codeword & 0x7Fu);",
+		f"\tuint8_t value = (uint8_t)(codeword & 0x{word:02X}u);",
 		"\tuint8_t check = 0u;",
 		"\tuint8_t row;",
 		"",
-		"\tfor (row = 0u; row < 3u; row++) {",
-		"\t\tstatic const uint8_t masks[3] = { 0x0Du, 0x0Bu, 0x07u };",
+		f"\tfor (row = 0u; row < {checks}u; row++) {{",
+		f"\t\tstatic const uint8_t masks[{checks}] = {{ "
+		+ ", ".join(f"0x{mask:02X}u" for mask in code.rows) + " };",
 		"\t\tuint8_t bits = (uint8_t)(value & masks[row]);",
 		"\t\tuint8_t parity = 0u;",
 		"",
@@ -1237,14 +1305,14 @@ def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\t\t\tparity ^= (uint8_t)(bits & 1u);",
 		"\t\t\tbits = (uint8_t)(bits >> 1);",
 		"\t\t}",
-		"\t\tparity ^= (uint8_t)((value >> (4u + row)) & 1u);",
+		f"\t\tparity ^= (uint8_t)((value >> ({code.k}u + row)) & 1u);",
 		"\t\tcheck = (uint8_t)(check | (uint8_t)(parity << row));",
 		"\t}",
 		"",
 		"\tif (check != 0u) {",
 		f"\t\tuint8_t at = {name}_syndrome[check];",
 		"",
-		"\t\tif (at < 7u) {",
+		f"\t\tif (at < {code.n}u) {{",
 		"\t\t\tvalue = (uint8_t)(value ^ (uint8_t)(1u << at));",
 		"\t\t\tif (corrected != NULL) {",
 		"\t\t\t\t*corrected = 1;",
@@ -1254,10 +1322,9 @@ def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\t\t*corrected = 0;",
 		"\t}",
 		"",
-		"\treturn (uint8_t)(value & 0x0Fu);",
+		f"\treturn (uint8_t)(value & 0x{data:02X}u);",
 		"}",
 	]
-
 
 # ---------------------------------------------------------------------------
 # Shift register: scramblers

@@ -220,16 +220,17 @@ def _smtp_dot(decl: ast.CodecDecl, prefix: str) -> list[str]:
 
 
 def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
-	"""Hamming(7,4), whose shape is unlike every other family here.
+	"""Any (n, k) block code whose codeword is a byte.
 
-	A nibble in, a byte out -- not `(in, len, out)` -- because it is a
+	`k` bits in, a byte out -- not `(in, len, out)` -- because it is a
 	symbol map with a correction step rather than a stream transform.
 	Rust returns the corrected flag in a tuple where C takes an
 	out-parameter, there being no null pointer to make optional.
 
-	The tables are computed by C's generator from `_HAMMING_PARITY` and
-	imported rather than transcribed: a 16-entry table copied is a table
-	nobody checks.
+	The tables come from `c.derived._linear_code` rather than being
+	transcribed: a 16-entry table copied is a table nobody checks, and a
+	second copy of the arithmetic is two backends whose codewords could
+	differ for a reason no test would name.
 
 	Single-error CORRECTING and not detecting: the syndrome's "no error"
 	entry is unreachable from the error branch, so a double-bit error is
@@ -237,61 +238,49 @@ def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	behaving as it must, and the flag means "the syndrome was nonzero"
 	rather than anything stronger.
 	"""
-	from situc.codegen.c.derived import DERIVED_LINEAR, _HAMMING_PARITY
-	from situc.codegen.c.derived import _named_code
+	from situc.codegen.c.derived import _linear_code
 
-	if _named_code(decl) not in DERIVED_LINEAR:
+	code = _linear_code(decl)
+	if code is None:
 		return None
 
 	name = _ident(prefix, decl.name)
-
-	syndrome = [7] * 8
-	for position in range(7):
-		codeword = 1 << position
-		value = 0
-		for row, mask in enumerate(_HAMMING_PARITY):
-			parity = bin((codeword & 0xF) & mask).count("1") & 1
-			parity ^= (codeword >> (4 + row)) & 1
-			value |= parity << row
-		syndrome[value] = position
-
-	table = []
-	for nibble in range(16):
-		word = nibble
-		for row, mask in enumerate(_HAMMING_PARITY):
-			word |= (bin(nibble & mask).count("1") & 1) << (4 + row)
-		table.append(word)
-
-	masks = ", ".join(f"0x{mask:02X}" for mask in _HAMMING_PARITY)
+	upper = name.upper()
+	data = (1 << code.k) - 1
+	word = (1 << code.n) - 1
+	checks = code.n - code.k
+	masks = ", ".join(f"0x{mask:02X}" for mask in code.rows)
 
 	return [
 		"",
-		f"/// `{decl.name}`: Hamming(7,4), systematic. The low nibble of a",
-		"/// codeword is the data; the three high bits are parity.",
-		f"const {name.upper()}_ENCODE_TABLE: [u8; 16] = [",
-		"\t" + ", ".join(f"0x{value:02X}" for value in table),
+		f"/// `{decl.name}`: a ({code.n}, {code.k}) block code,"
+		f" systematic. The low {code.k} bits of a",
+		f"/// codeword are the data; the {checks} above them are check"
+		f" bits.",
+		f"const {upper}_ENCODE_TABLE: [u8; {1 << code.k}] = [",
+		"\t" + ", ".join(f"0x{value:02X}" for value in code.encode),
 		"];",
 		"",
-		"/// Syndrome to the bit it accuses; 7 means no error.",
-		f"const {name.upper()}_SYNDROME: [u8; 8] = [",
-		"\t" + ", ".join(str(value) for value in syndrome),
+		f"/// Syndrome to the bit it accuses; {code.n} means no error.",
+		f"const {upper}_SYNDROME: [u8; {1 << checks}] = [",
+		"\t" + ", ".join(str(value) for value in code.syndrome),
 		"];",
 		"",
-		f"pub fn {name}_encode(nibble: u8) -> u8 {{",
-		f"\t{name.upper()}_ENCODE_TABLE[(nibble & 0x0F) as usize]",
+		f"pub fn {name}_encode(message: u8) -> u8 {{",
+		f"\t{upper}_ENCODE_TABLE[(message & 0x{data:02X}) as usize]",
 		"}",
 		"",
-		"/// Returns the nibble and whether a bit was corrected. A DOUBLE",
+		"/// Returns the message and whether a bit was corrected. A DOUBLE",
 		"/// error is miscorrected and still reports true: d_min is 3, so",
 		"/// this code corrects one bit and cannot report `detected but",
 		"/// not correctable`.",
 		f"pub fn {name}_decode(codeword: u8) -> (u8, bool) {{",
-		f"\tconst MASKS: [u8; 3] = [{masks}];",
+		f"\tconst MASKS: [u8; {checks}] = [{masks}];",
 		"",
-		"\tlet mut value = codeword & 0x7F;",
+		f"\tlet mut value = codeword & 0x{word:02X};",
 		"\tlet mut check = 0u8;",
 		"",
-		"\tfor row in 0..3 {",
+		f"\tfor row in 0..{checks} {{",
 		"\t\tlet mut bits = value & MASKS[row];",
 		"\t\tlet mut parity = 0u8;",
 		"",
@@ -300,21 +289,21 @@ def _linear_block(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 		"\t\t\tbits >>= 1;",
 		"\t\t}",
 		"",
-		"\t\tparity ^= (value >> (4 + row)) & 1;",
+		f"\t\tparity ^= (value >> ({code.k} + row)) & 1;",
 		"\t\tcheck |= parity << row;",
 		"\t}",
 		"",
 		"\tif check == 0 {",
-		"\t\treturn (value & 0x0F, false);",
+		f"\t\treturn (value & 0x{data:02X}, false);",
 		"\t}",
 		"",
-		f"\tlet at = {name.upper()}_SYNDROME[check as usize];",
+		f"\tlet at = {upper}_SYNDROME[check as usize];",
 		"",
-		"\tif at < 7 {",
+		f"\tif at < {code.n} {{",
 		"\t\tvalue ^= 1 << at;",
 		"\t}",
 		"",
-		"\t(value & 0x0F, true)",
+		f"\t(value & 0x{data:02X}, true)",
 		"}",
 	]
 
