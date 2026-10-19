@@ -439,9 +439,10 @@ at every tab width.
 
 ## Switch labels sit at the switch's own indentation
 
-Measured across `walker/`, `runtime/` and `editor/`: 53 `case` and `default`
-labels, every one of them at the same tab count as its `switch`, and none a
-level deeper. The bodies are one deeper than the labels.
+A `case` or `default:` label sits at the same tab count as its `switch`, and
+the body one deeper. The criterion is the comparison rather than a census: for
+every label, the label's leading tab count equals that of the `switch`
+enclosing it.
 
 ```c
 switch (kind) {
@@ -450,6 +451,18 @@ case CHECK_MUST_EQ:
 	break;
 }
 ```
+
+The hand-written C is under `runtime/c/` and `walker/c/`; what the compiler
+builds and what `situc` emits follow the generator, and the editor and the
+tooling are Python. So the recount is
+
+	git ls-files '*.c' '*.h' '*.cpp' '*.hpp' | grep -vE '^(build/|test/generated/)'
+
+and then each label's leading tabs against its own `switch`. Re-measured
+2026-10-19: every label in the tree obeys it. The count that used to stand
+here is gone deliberately -- it was stated in two places, which disagreed with
+each other and with the tree, and what a reader needs is the rule and the way
+to recount it rather than a number that rots twice.
 
 Written down because the tree is uniform and nothing was holding it so.
 `tool/style_gate.py` models the *other* convention -- its comment says
@@ -465,8 +478,8 @@ gate's model rather than the surrounding code writes the other style, the gate
 accepts it, and the tree has two. Neither is wrong in C; having both is.
 
 This records what is there rather than choosing it. If the other style is
-wanted, that is a convention change and belongs to a deliberate pass -- 45
-lines and the gate's own model are what such a pass would have to weigh.
+wanted, that is a convention change and belongs to a deliberate pass, and the
+gate's own model is what such a pass would have to weigh.
 
 ## ASCII, and the two things this project adds to it
 
