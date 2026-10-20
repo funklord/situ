@@ -58,7 +58,11 @@ TAG_BYTES	= 28
 KERNEL_TABLE_BYTES	= 1024
 VARINT_BYTES	= 12
 TLV_BYTES	= 16
-TLV_RULE_BYTES	= 24
+#: `image_tlv_rule`. 28 rather than 24 since a value size could be an
+#: expression over the tag's own parts: the row gained the offset of
+#: that arm's program. The reader takes the row by stride, so a
+#: shorter one still reads.
+TLV_RULE_BYTES	= 28
 INDEX_BYTES	= 16
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
@@ -790,9 +794,10 @@ def _policy(name: str | None) -> int:
 	        "first": 4, "last": 5}.get(name, 0)
 
 
-#: `image_tlv_rule.rule_kind`: section 9.5's four ways for a value to say
+#: `image_tlv_rule.rule_kind`: section 9.5's five ways for a value to say
 #: where it ends, the last of them by refusing.
-TLV_RULE_KIND = {"fixed": 0, "prefixed": 1, "self_delimiting": 2, "error": 3}
+TLV_RULE_KIND = {"fixed": 0, "prefixed": 1, "self_delimiting": 2, "error": 3,
+                 "computed": 4}
 
 
 def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
@@ -812,27 +817,39 @@ def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
 
 
 def _compile_over_tag(program: "Program", expr: ast.Expr,
-		consts: dict[str, int]) -> None:
-	"""Compile a `tlv` selector, whose one free name is `tag` (9.5).
+		consts: dict[str, int],
+		parts: dict[str, ast.Expr] | None = None) -> None:
+	"""Compile a `tlv` selector or value size over `tag` (9.5).
 
 	`Program.compile` resolves a bare name through a path resolver, and a
 	selector's `tag` is not a path -- it is the item being measured. So the
 	name is rewritten to `Op.TAG` here and everything else is the ordinary
 	compiler, which is what keeps the arithmetic one implementation.
+
+	`parts` names the tag's decoded parts, which a computed value size
+	reads. Each is itself an expression over `tag` and nothing else --
+	`wellformed` holds them to that -- so a part compiles by compiling what
+	it was declared as, and the image needs no part slots and no new
+	opcode. `length + 13` becomes `(tag & 0x0F) + 13`, which this compiler
+	already knew how to emit.
 	"""
 	if isinstance(expr, ast.NameRef) and expr.name == "tag":
 		program.emit(Op.TAG)
+		return
+	if parts is not None and isinstance(expr, ast.NameRef) \
+			and expr.name in parts:
+		_compile_over_tag(program, parts[expr.name], consts, parts)
 		return
 	if isinstance(expr, ast.Binary):
 		op = BINARY.get(expr.op)
 		if op is None:
 			raise PackError(f"binary `{expr.op}` in a tlv selector")
-		_compile_over_tag(program, expr.left, consts)
-		_compile_over_tag(program, expr.right, consts)
+		_compile_over_tag(program, expr.left, consts, parts)
+		_compile_over_tag(program, expr.right, consts, parts)
 		program.emit(op)
 		return
 	if isinstance(expr, ast.Unary):
-		_compile_over_tag(program, expr.operand, consts)
+		_compile_over_tag(program, expr.operand, consts, parts)
 		found = UNARY.get(expr.op, ...)
 		if found is ...:
 			raise PackError(f"unary `{expr.op}` in a tlv selector")
@@ -1363,6 +1380,10 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 	# how far its VALUE reached, so no walker could count items in one. The
 	# record carried the tag varint and two policies and stopped there.
 	tlv_selector_at: dict[str, int] = {}
+	#: (placement path, rule label) -> where that rule's size program starts.
+	#: Keyed by the label as well, because each arm sizes its own way and
+	#: `default` is `None`.
+	tlv_size_at: dict[tuple[str, int | None], int] = {}
 	for owner, placement in rows:
 		grammar = placement.tlv_grammar
 		if grammar is None:
@@ -1393,6 +1414,29 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		program.emit(Op.END)
 		tlv_selector_at[placement.path] = start
 		coverage.expressions += 1
+
+		# And one program per computed value size, which the rule row
+		# points at. Compiled over `tag` with the parts inlined, so the
+		# walker needs no part slots: see `_compile_over_tag`.
+		parts = {one.name: one.value for one in grammar.tag_decode
+		         if one.value is not None}
+		# `size_rule` rather than `rule`, which this scope already binds to
+		# a `RegionExtent`: the note further down names that shadowing as
+		# what once made a loop here a type error rather than a wrong
+		# image, and this loop walked into it.
+		for size_rule in grammar.rules:
+			if size_rule.kind != "computed" or size_rule.value is None:
+				continue
+			start = len(program.code)
+			try:
+				_compile_over_tag(program, size_rule.value, consts, parts)
+			except PackError as why:
+				del program.code[start:]
+				coverage.unencodable[placement.path] = str(why)
+				continue
+			program.emit(Op.END)
+			tlv_size_at[(placement.path, size_rule.label)] = start
+			coverage.expressions += 1
 
 	# -- the side tables, and the core strings a walk needs to function --
 	strings = _Pool()
@@ -2564,11 +2608,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				len_bytes, len_terminal, len_flags = _varint_params(
 					varint_decls.get(value_rule.length_type or ""))
 				tlv_rules_blob += _struct.pack(
-					"<IqBBxxIBBBx", at,
+					"<IqBBxxIBBBxI", at,
 					0 if value_rule.label is None else value_rule.label,
 					rule_kind, 1 if value_rule.label is None else 0,
 					_u32(value_rule.size),
-					len_bytes, len_terminal, len_flags)
+					len_bytes, len_terminal, len_flags,
+					_u32(tlv_size_at.get((placement.path, value_rule.label))))
 		if placement.index_table is not None:
 			entry_bytes = traverse.index_entry_bytes(placement)
 			index_blob += _struct.pack(

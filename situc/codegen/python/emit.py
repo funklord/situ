@@ -1548,7 +1548,7 @@ class Emitter:
 		name = py_name(local_name(struct, placement))
 
 		item  = self._tlv_item_name(placement)
-		lines = self._tlv_read(placement, grammar, name)
+		lines = self._tlv_read(struct, placement, grammar, name)
 		lines.extend(self._tlv_cursor(name, start, item))
 		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
@@ -1605,8 +1605,8 @@ class Emitter:
 		holder = placement.path.partition(".")[0]
 		return f"{py_name(holder)}_{py_name(placement.name)}_item"
 
-	def _tlv_read(self, placement: Placement, grammar: TlvGrammar,
-			name: str) -> list[str]:
+	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		item     = self._tlv_item_name(placement)
 		max_tag  = self._tlv_tag_bytes(placement)
@@ -1635,7 +1635,8 @@ class Emitter:
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		                                    placement.endian))
 		lines.extend([
 			"",
 			"\t\tif size > len(data) - at:",
@@ -1653,7 +1654,8 @@ class Emitter:
 		])
 		return lines
 
-	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
+	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
@@ -1670,7 +1672,8 @@ class Emitter:
 				continue
 			lines.append(f"\t\t{'if' if first else 'elif'} chosen"
 			             f" == {rule.label}:")
-			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			                                endian))
 			first = False
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
@@ -1684,13 +1687,27 @@ class Emitter:
 				'\t\t\t\tf"wire type {chosen} is not one this schema sizes")',
 			])
 		else:
-			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, default,
+			                                max_tag, endian))
 		return lines
 
-	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			rule: ValueRule, max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\tsize = {rule.size}"]
+
+		if rule.kind == "computed":
+			# The tag's own parts are the leaves, recomputed here as the
+			# dispatch above recomputes the selector. Bounded leaves and one
+			# clamp (14.2b), matching the other three: a part is whatever the
+			# tag said.
+			assert rule.source is not None
+			rendered = self._over_fields(
+				struct, rule.source, "self", bounded=True,
+				extra = {part.name: f"({part.source})"
+				         for part in grammar.tag_decode})
+			return [f"\t\t\tsize = nonneg({rendered})"]
 		if rule.kind == "error":
 			return ["\t\t\traise ConstraintError(",
 			        '\t\t\t\tf"wire type {chosen} is not one this schema sizes")']

@@ -2943,10 +2943,18 @@ class Emitter:
 		        "\t}"]
 
 	def _over_fields(self, struct: ResolvedStruct, source: str,
-			bounded: bool = False) -> str:
+			bounded: bool = False,
+			extra: dict[str, str] | None = None) -> str:
 		"""`bounded` holds every leaf to `SITU_LEAF_MAX` and widens it to
 		`std::int64_t`, which a size expression asks for. C's copy carries
-		the reasoning: signed throughout, and inside 64 bits."""
+		the reasoning: signed throughout, and inside 64 bits.
+
+		`extra` names leaves the caller supplies as C++ expressions rather
+		than as fields of `struct`, which a tlv value size needs: its leaves
+		are the tag's decoded parts, held on the item rather than read from
+		the buffer. Only where the caller says so, for C's reason -- a name
+		that resolves everywhere is a name that resolves where it should
+		not."""
 		def leaf(text: str, signed: bool = False) -> str:
 			if not bounded:
 				return text
@@ -2990,6 +2998,8 @@ class Emitter:
 		          if name not in by_name}
 
 		def read(name: str) -> str:
+			if extra is not None and name in extra:
+				return leaf(extra[name])
 			if name in consts:
 				return str(consts[name])
 			held = by_name[name]
@@ -3042,7 +3052,8 @@ class Emitter:
 			return leaf(f"this->{c_name(name)}()",
 			            held.scalar is not None and held.scalar.signed)
 
-		return expand_calls(over_fields([*by_name, *consts], source, read),
+		return expand_calls(over_fields([*by_name, *consts, *(extra or {})],
+		                                source, read),
 		                    c_spelling)
 
 	def _nested_text_values(self, struct: ResolvedStruct) -> list[str]:
@@ -4328,7 +4339,7 @@ class Emitter:
 		item  = f"{name}_item"
 
 		lines = self._tlv_item_type(placement, grammar, item)
-		lines.extend(self._tlv_read(placement, grammar, item, name))
+		lines.extend(self._tlv_read(struct, placement, grammar, item, name))
 		lines.extend(self._tlv_cursor(item, name, start))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
@@ -4363,8 +4374,8 @@ class Emitter:
 			"\t};",
 		]
 
-	def _tlv_read(self, placement: Placement, grammar: TlvGrammar,
-			item: str, name: str) -> list[str]:
+	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar, item: str, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		max_tag  = self._tlv_tag_bytes(placement)
 		assigned = ["view", "at", "tag"] + [c_name(part.name)
@@ -4403,7 +4414,8 @@ class Emitter:
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		                                    placement.endian))
 		lines.extend([
 			"",
 			"\t\tif (size > raw_.limit - at) {",
@@ -4418,7 +4430,8 @@ class Emitter:
 		])
 		return lines
 
-	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
+	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
@@ -4430,7 +4443,8 @@ class Emitter:
 			if rule.label is None:
 				continue
 			lines.append(f"\t\tcase {rule.label}u:")
-			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			                                endian))
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
 		               None)
@@ -4442,14 +4456,29 @@ class Emitter:
 				"\t\t\treturn ::situ::rt::err::constraint;",
 			])
 		else:
-			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, default,
+			                                max_tag, endian))
 		lines.append("\t\t}")
 		return lines
 
-	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			rule: ValueRule, max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\tsize = {rule.size}u;", "\t\t\tbreak;"]
+
+		if rule.kind == "computed":
+			# The tag's own parts are the leaves, read where the dispatch
+			# reads them. Bounded leaves, signed arithmetic, one clamp
+			# (14.2b): a part is whatever the tag said.
+			assert rule.source is not None
+			rendered = self._over_fields(
+				struct, rule.source, bounded=True,
+				extra = {part.name: f"out.{c_name(part.name)}"
+				         for part in grammar.tag_decode})
+			return [f"\t\t\tsize = static_cast<std::uint32_t>"
+			        f"(::situ::rt::nonneg({rendered}));",
+			        "\t\t\tbreak;"]
 		if rule.kind == "error":
 			return ["\t\t\treturn ::situ::rt::err::constraint;"]
 		if rule.kind == "self_delimiting":

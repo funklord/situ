@@ -2565,6 +2565,54 @@ def test_they_agree_about_a_tlv_region_s_item_count(tmp_path: Path) -> None:
 			== [expected], label
 
 
+#: The fifth way a value says where it ends: a count the tag's own parts
+#: give, which `example/protobuf` has none of.
+TAG_SIZED_C = (
+	"target buffer;\n"
+	"endian big;\n"
+	"bit_order msb_first;\n"
+	"struct tagged {\n"
+	"\tu8 head;\n"
+	"\ttlv options (\n"
+	"\t\ttag_type = u8,\n"
+	"\t\ttag_decode = { delta = tag >> 4, length = tag & 0x0F },\n"
+	"\t\ttag_identity = delta,\n"
+	"\t\tvalue_size = switch (delta) { default: length },\n"
+	"\t);\n"
+	"}\n")
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_they_agree_about_a_tag_sized_value(tmp_path: Path) -> None:
+	"""The fifth rule in this build too, which is a sixth reader of it.
+
+	This file exists because two walkers must not drift, and a rule kind is
+	exactly where they can: each holds its own copy of the numbering, and a
+	kind one knows and the other does not reads as "the count stops here"
+	rather than as an error. So the kind added to `walk.py` is added here,
+	and the vectors are the five-reader test's.
+
+	`0x30` is a length of zero -- an item that is only its tag -- and the
+	walk still advances, because the tag moved first.
+	"""
+	blob  = packed_text(TAG_SIZED_C)
+	shape = shape_named_text(TAG_SIZED_C, "tagged")
+
+	# One answer per member, so `head` is the `refused` in front: it is a
+	# field rather than a region and neither walker counts it.
+	for label, message, expected in (
+			("nothing but the head",  b"\xAA",                   "tlv=0"),
+			("one option, one byte",  b"\xAA\x31\x77",           "tlv=1"),
+			("two options",           b"\xAA\x31\x77\x52\x01\x02", "tlv=2"),
+			("an empty value",        b"\xAA\x30",               "tlv=1"),
+			("a length past the frame",
+			                          b"\xAA\x3F\x01",           "tlv=0")):
+		assert c_region_counts(tmp_path, blob, message, shape) \
+			== python_region_counts(blob, message, shape), label
+		assert c_region_counts(tmp_path, blob, message, shape) \
+			== ["refused", expected], label
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 def test_they_agree_about_an_index_table_s_entry_count(
 		tmp_path: Path) -> None:

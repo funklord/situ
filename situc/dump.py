@@ -426,6 +426,8 @@ def _tlv_grammar(region: ast.Tlv, depth: int) -> list[str]:
 def _value_rule(rule: ast.ValueRule) -> str:
 	if isinstance(rule, ast.FixedValue):
 		return f"{rule.size} bytes"
+	if isinstance(rule, ast.ComputedValue):
+		return f"{expr_to_source(rule.expr)} bytes"
 	if isinstance(rule, ast.PrefixedValue):
 		return f"prefixed({rule.length_type})"
 	if isinstance(rule, ast.SelfDelimiting):

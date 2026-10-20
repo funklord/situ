@@ -640,6 +640,31 @@ class PrefixedValue(ValueRule):
 
 
 @dataclass(frozen=True)
+class ComputedValue(ValueRule):
+	"""`length`, or `length + 13`: a byte count the tag's own parts give.
+
+	The fourth way a value says where it ends, and the one the four forms
+	above could not express: a length packed into the tag byte beside the
+	type. CoAP is the worked case -- a four-bit delta and a four-bit length
+	in one byte -- and nothing else here can size a value from what the tag
+	decoded to.
+
+	It is an expression rather than a bare part name because a member's
+	extent already is one: `u8 body[n + 13]` is accepted over a field read
+	a moment earlier, and the parts are in scope at exactly the point this
+	dispatch runs. One decision, taken once, spelled the same way in both
+	places.
+
+	Every name in it is a part `tag_decode` produced, which `wellformed`
+	holds it to -- the parts are what decide where the value ends, so a
+	name that is not one of them is a value that has not been read.
+	"""
+
+	span: Span
+	expr: "Expr"
+
+
+@dataclass(frozen=True)
 class RejectValue(ValueRule):
 	"""`error`: a wire type this schema does not describe.
 

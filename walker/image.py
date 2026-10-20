@@ -435,7 +435,7 @@ class Image:
 	#: 9.5's four ways for a value to say where it ends, the last of them by
 	#: refusing.
 	tlv_rules: dict[int, list[tuple[int, int, int, int,
-	                                tuple[int, int, bool]]]] = \
+	                                tuple[int, int, bool], int]]] = \
 		field(default_factory=dict)
 	#: placement index -> (entry_bits, count_code, measured_from) for an
 	#: `indexed` region's offset table (section 9.3, decision 0024).
@@ -671,13 +671,22 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 
 	if TLV_RULES in found:
 		at, records, stride = found[TLV_RULES]
+		# Read by stride, as the struct rows are: the row grew a `size_code`
+		# when a value size could be an expression over the tag's own parts,
+		# and an image written before that carries the shorter row. `NONE`
+		# for the kinds that need no program, which is all four of the
+		# others.
+		# `row_format` rather than `row`, which this function binds further
+		# down to a slice of the blob.
+		row_format = "<IqBBxxIBBBxI" if stride >= 28 else "<IqBBxxIBBBx"
 		for i in range(records):
+			fields = _struct.unpack_from(row_format, blob, at + i * stride)
 			(where, label, kind, default, size,
-			 len_bytes, len_terminal, len_flags) = _struct.unpack_from(
-				"<IqBBxxIBBBx", blob, at + i * stride)
+			 len_bytes, len_terminal, len_flags) = fields[:8]
+			size_code = fields[8] if len(fields) > 8 else NONE
 			image.tlv_rules.setdefault(where, []).append(
 				(label, kind, default, size,
-				 (len_bytes, len_terminal, bool(len_flags & 2))))
+				 (len_bytes, len_terminal, bool(len_flags & 2)), size_code))
 
 	if INDEXES in found:
 		at, records, stride = found[INDEXES]

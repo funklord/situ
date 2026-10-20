@@ -17,6 +17,8 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from situc import ast, kernels, namespaces, wellformed
+from situc.expr import Env, evaluate
+from situc.invariant import paths_in
 from situc.types import BITS_PER_BYTE
 from situc.diagnostics import Source, Span, error, not_yet_implemented
 from situc.lexer import Token, TokenKind, tokenize
@@ -2038,12 +2040,15 @@ class Parser:
 		                     self.parse_value_rule())
 
 	def parse_value_rule(self) -> ast.ValueRule:
-		"""How the value is sized, once this arm is selected (section 9.5)."""
-		token = self.current
+		"""How the value is sized, once this arm is selected (section 9.5).
 
-		if token.kind is TokenKind.INT:
-			self.advance()
-			return ast.FixedValue(self.span_from(token), token.value)
+		The three keywords first, then an expression -- which is how a bare
+		count still reaches `FixedValue`: `8` folds to one, and so does
+		`4 * 2`, which the literal-only form used to refuse at the operator.
+		An expression naming a tag part is the computed form, and anything
+		else is a name `wellformed` refuses by name.
+		"""
+		token = self.current
 
 		if token.is_ident("self_delimiting"):
 			self.advance()
@@ -2060,13 +2065,28 @@ class Parser:
 			self.expect_symbol(")", "after the length type")
 			return ast.PrefixedValue(self.span_from(token), length.text)
 
-		raise error(
-			f"expected a value size, found {token.describe()}",
-			token.span,
-			label = "expected a value size here",
-			notes = ["one of: a byte count, `self_delimiting`,"
-			         " `prefixed(<length type>)`, or `error`"],
-		)
+		if token.kind is not TokenKind.INT \
+				and token.kind is not TokenKind.IDENT \
+				and not token.is_symbol("("):
+			raise error(
+				f"expected a value size, found {token.describe()}",
+				token.span,
+				label = "expected a value size here",
+				notes = ["one of: a byte count, an expression over the tag's"
+				         " own parts, `self_delimiting`,"
+				         " `prefixed(<length type>)`, or `error`"],
+			)
+
+		expr = self.parse_expr()
+
+		# A count the schema wrote as arithmetic over nothing is a count:
+		# fold it, so `8` and `4 * 2` arrive as the same node and every pass
+		# that reads a `FixedValue` goes on seeing one.
+		if not paths_in(expr):
+			return ast.FixedValue(self.span_from(token),
+			                      evaluate(expr, Env()))
+
+		return ast.ComputedValue(self.span_from(token), expr)
 
 	def parse_known_tags(self) -> tuple[ast.KnownTag, ...]:
 		"""`{ 1 : { name = user_id, wire = 0, type = pb_varint }, ... }`"""

@@ -781,12 +781,21 @@ def _tlv(placement: Placement) -> list[str]:
 
 
 def _value_rule(rule: ValueRule) -> str:
-	"""One of section 9.5's four ways for a value to say where it ends."""
+	"""One of section 9.5's five ways for a value to say where it ends.
+
+	The arithmetic of a computed size is part of the signature, not a
+	detail under it: `length` and `length + 13` are different wire formats
+	and the kind word is the same for both, so a signature printing only
+	`computed` would call a changed extent unchanged -- which is what this
+	file exists to refuse.
+	"""
 	parts = [rule.kind]
 	if rule.size is not None:
 		parts.append(str(rule.size))
 	if rule.length_type is not None:
 		parts.append(rule.length_type)
+	if rule.source is not None:
+		parts.append(rule.source)
 	return " ".join(parts)
 
 

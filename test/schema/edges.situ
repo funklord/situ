@@ -1661,6 +1661,31 @@ struct split_coverage {
 	checksum u8   sum[2] covers(first, second) is summing;
 }
 
+// A tlv whose value length is in its own tag byte -- CoAP's option header,
+// and the fifth way section 9.5 lets a value say where it ends. The other
+// four are a literal, `self_delimiting`, `prefixed(T)` and `error`, and not
+// one of them can read a count out of the tag just decoded.
+//
+// Here because `test/unit/ebnf.py` derives every schema in this tree and
+// sees nothing a corpus schema does not write: `[remaining] max N` and
+// `sealed ... until` were both in the grammar as WORDS and missing in their
+// new POSITIONS, and nothing caught either until a schema used them
+// (26.542). This is the only tlv outside `example/protobuf`, which carries
+// no computed size.
+//
+// `length` names a part of the tag and nothing else can be named: the parts
+// are what decide where the value ends, so a size that read a member would
+// be reading something this item has not reached.
+struct tagged_options {
+	u8 head;
+	tlv options (
+		tag_type = u8,
+		tag_decode = { delta = tag >> 4, length = tag & 0x0F },
+		tag_identity = delta,
+		value_size = switch (delta) { default: length },
+	);
+}
+
 // A linear block code whose matrix the SCHEMA states, rather than naming a
 // code the compiler keeps the rows for. Extended Hamming(8, 4): the three
 // Hamming rows and an overall parity row, which is a different (n, k) from

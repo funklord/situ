@@ -995,7 +995,7 @@ class Emitter:
 		name = c_name(local_name(struct, placement))
 		item = _pascal(struct.name) + _pascal(name) + "Item"
 
-		lines = list(self._tlv_read(placement, grammar, item, name))
+		lines = list(self._tlv_read(struct, placement, grammar, item, name))
 		lines.extend(self._tlv_cursor(item, name, start))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
@@ -1035,8 +1035,8 @@ class Emitter:
 		bits = declared.max_bits if declared is not None else 64
 		return (bits + 6) // 7
 
-	def _tlv_read(self, placement: Placement, grammar: TlvGrammar,
-			item: str, name: str) -> list[str]:
+	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
+			grammar: TlvGrammar, item: str, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		max_tag = self._tlv_tag_bytes(placement)
 		decoded = [f"\t\t\t{_ident(part.name)}: ({part.source}) as u32,"
@@ -1068,7 +1068,8 @@ class Emitter:
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		                                    placement.endian))
 		lines.extend([
 			"",
 			"\t\tif size > self.bytes.len() - at {",
@@ -1087,7 +1088,8 @@ class Emitter:
 		])
 		return lines
 
-	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
+	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
@@ -1102,7 +1104,8 @@ class Emitter:
 			if rule.label is None:
 				continue
 			lines.append(f"\t\t\t{rule.label} => {{")
-			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			                                endian))
 			lines.append("\t\t\t}")
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
@@ -1115,14 +1118,27 @@ class Emitter:
 				"\t\t\t\treturn Err(Error::Constraint);",
 			])
 		else:
-			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, default,
+			                                max_tag, endian))
 		lines.extend(["\t\t\t}", "\t\t}"])
 		return lines
 
-	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			rule: ValueRule, max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\t\tsize = {rule.size};"]
+
+		if rule.kind == "computed":
+			# The tag's own parts are the leaves, recomputed here as the
+			# dispatch above recomputes the selector. Bounded leaves, signed
+			# arithmetic, one clamp (14.2b): a part is whatever the tag said.
+			assert rule.source is not None
+			rendered = self._over_fields(
+				struct, rule.source, "self", cast="i64", bounded=True,
+				extra = {part.name: f"({part.source})"
+				         for part in grammar.tag_decode})
+			return [f"\t\t\t\tsize = situ_rt::nonneg({rendered}) as usize;"]
 		if rule.kind == "error":
 			return ["\t\t\t\treturn Err(Error::Constraint);"]
 		if rule.kind == "self_delimiting":

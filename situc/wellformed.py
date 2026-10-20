@@ -769,6 +769,31 @@ def _check_value_size(region: ast.Tlv, varints: set[str]) -> None:
 			)
 
 	for case in sizes.cases:
+		if isinstance(case.rule, ast.ComputedValue):
+			known = ", ".join(f"`{part.name}`" for part in region.tag_decode)
+			for name in paths_in(case.rule.expr):
+				if region.part(name) is not None:
+					continue
+				raise error(
+					f"`{name}` is not in scope in a value size",
+					case.rule.span,
+					label = f"`{name}` is not a part of the decoded tag",
+					notes = [
+						f"`tag_decode` produces {known}" if known else
+						"this region declares no `tag_decode`, so there is"
+						" no part to size a value from",
+						"the parts are what decide where the value ends, so"
+						" a size names them and nothing read later",
+						# The four other forms, because a bare name is also
+						# what a misspelled keyword looks like: `self_delim`
+						# reaches here and the reader wants the list rather
+						# than a sentence about tag parts.
+						"one of: an expression over the tag's own parts,"
+						" a byte count, `self_delimiting`,"
+						" `prefixed(<length type>)`, or `error`",
+					],
+				)
+
 		if isinstance(case.rule, ast.PrefixedValue) \
 				and case.rule.length_type not in varints \
 				and not is_scalar_name(case.rule.length_type):

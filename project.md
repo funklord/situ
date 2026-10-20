@@ -621,7 +621,7 @@ attr          = ident [ "=" expr ] ;
    tags are named -- and the rest are ordinary attributes. They were kept as
    verbatim source text for a long time, which is why this was `attr { ","
    attr }` and the only thing anything read out of a `switch` was its labels. *)
-tlv_args      = tlv_arg { "," tlv_arg } ;
+tlv_args      = tlv_arg { "," tlv_arg } [ "," ] ;
 tlv_arg       = "tag_decode" "=" tag_decode
               | "tag_identity" "=" ident    (* decision 0023 *)
               | "value_size" "=" value_size
@@ -632,10 +632,13 @@ tag_part      = ident "=" expr ;      (* over `tag`, the raw tag, alone *)
 value_size    = "switch" "(" ident ")" "{" value_case { "," value_case }
                 [ "," ] "}" ;
 value_case    = ( "case" digits | "default" ) ":" value_rule ;
-value_rule    = digits                (* a literal byte count *)
-              | "self_delimiting"     (* the value carries its own extent *)
+value_rule    = "self_delimiting"     (* the value carries its own extent *)
               | "prefixed" "(" ident ")"
-              | "error" ;             (* a wire type this schema refuses *)
+              | "error"               (* a wire type this schema refuses *)
+              | expr ;                (* a byte count over the tag's parts,
+                                       * a literal among them. Last, because
+                                       * the three keywords above are idents
+                                       * and an expression would take them *)
 known_tags    = "{" known_tag { "," known_tag } [ "," ] "}" ;
 known_tag     = digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
 known_attr    = "name" "=" ident
@@ -1653,6 +1656,34 @@ tlv options (
 `self_delimiting` is only legal for value types that carry their own extent
 (varints, nul-terminated byte runs). Everything else must be sized by a literal,
 a `prefixed(...)` form, or an expression.
+
+**The expression form is over the tag's own decoded parts**, which is CoAP's
+option header -- a four-bit delta and a four-bit length in one byte:
+
+```situ
+tlv options (
+    tag_type     = u8,
+    tag_decode   = { delta = tag >> 4, length = tag & 0x0F },
+    tag_identity = delta,
+    value_size   = switch (delta) { default: length },
+);
+```
+
+The parts are the only names in scope, and that is the same rule the
+dispatch's selector follows: they are computed from the tag just read and
+decide where the value ends, so a size naming a member would be naming
+something the item has not reached. A literal is the degenerate case and
+stays one -- `4` and `2 * 2` fold to a count, and only an expression that
+names a part is the fifth rule.
+
+**It was specified before any code existed and implemented 26.663.** The
+sentence above has said "or an expression" since the scaffolding commit of
+2026-07-26, and the four forms the parser knew were a literal,
+`self_delimiting`, `prefixed(T)` and `error`. So a CoAP option was
+inexpressible for a reason 26.142 recorded as a language question and this
+document had already answered: *the document wins over the code*, which
+made implementing it the only available reading rather than a decision
+anybody had to take.
 
 `duplicate_tags = allowed` sets `canonical := NonCanonical` unless an ordering
 rule is also declared, because the same content then has multiple valid
@@ -7179,6 +7210,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.663 Two absences, one item, and a sentence nobody read
+
+Moved to `doc/decision/26.663-two-absences-one-item-and-a-sentence-nobody-read.md`.
 
 ### 26.662 A matrix the schema states, and an item parked on a wrong premise
 

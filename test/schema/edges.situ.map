@@ -483,6 +483,10 @@ struct stuffed_seal size=18.. access=Sequential mutate=Immutable address=Unstabl
   stuffed_seal.body.inner                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential stage=VerifyGated auth=Covered(seal_sig)
   stuffed_seal.seal_sig                  offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
 
+struct tagged_options size=1.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
+  tagged_options.head                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  tagged_options.options                 offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+
 struct text_driver size=6..14 mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic
   text_driver.n                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=TextConverted atomic=NonAtomic
   text_driver.d                          offset=AbsoluteStatic(0x04) size=Bounded(0, 8) align=Aligned(4) repr=ValueConverted atomic=AtomicWord mutate=Shifting

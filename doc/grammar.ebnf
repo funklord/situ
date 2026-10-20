@@ -321,7 +321,10 @@ endian_from	= "endian" "=" "from" "(" ident ")" ;
 impl_decl	= "impl" ident ( "derived" | "extern" string ) ";" ;
 
 (* A tlv region's item grammar (section 9.5). *)
-tlv_args	= tlv_arg { "," tlv_arg } ;
+tlv_args	= tlv_arg { "," tlv_arg } [ "," ] ;	(* the parser has always
+			 * taken the trailing comma its three sibling lists below
+			 * describe, and no corpus schema wrote one until a tag-sized
+			 * value did *)
 tlv_arg		= "tag_decode" "=" tag_decode
 	| "tag_identity" "=" ident
 	| "value_size" "=" value_size
@@ -332,7 +335,9 @@ tag_part	= ident "=" expr ;
 value_size	= "switch" "(" ident ")" "{" value_case { "," value_case }
 		  [ "," ] "}" ;
 value_case	= ( "case" digits | "default" ) ":" value_rule ;
-value_rule	= digits | "self_delimiting" | "prefixed" "(" ident ")" | "error" ;
+value_rule	= "self_delimiting" | "prefixed" "(" ident ")" | "error"
+	| expr ;		(* a byte count over the tag's parts, a literal among
+			 * them. Last: the keywords above are idents too *)
 known_tags	= "{" known_tag { "," known_tag } [ "," ] "}" ;
 known_tag	= digits ":" ( ident | "{" known_attr { "," known_attr } "}" ) ;
 known_attr	= "name" "=" ident

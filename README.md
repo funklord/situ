@@ -662,6 +662,22 @@ tlv fields (
 );
 ```
 
+A value's extent is one of five things: a literal count,
+`self_delimiting` for a type that carries its own, `prefixed(T)` for a
+length that sits before the value on the wire, `error` for a wire type the
+schema refuses, or **an expression over the tag's own decoded parts** --
+which is CoAP's option header, where the length is the second nibble of the
+byte just read:
+
+```situ
+tlv options (
+	tag_type     = u8,
+	tag_decode   = { delta = tag >> 4, length = tag & 0x0F },
+	tag_identity = delta,
+	value_size   = switch (delta) { default: length },
+);
+```
+
 `indexed (base = region)` is the other shape a struct cannot describe:
 members reached through an offset table rather than laid out in order, which
 is what a page format like SQLite's does. `opaque name [n]` is the honest

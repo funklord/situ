@@ -78,14 +78,24 @@ class ValueRule:
 	"""How one item's value extent is found, for one wire type.
 
 	`label` is None for the dispatch's `default`. `kind` is one of "fixed",
-	"prefixed", "self_delimiting" or "error", which are section 9.5's four
-	ways for a value to say where it ends -- the last of them by refusing.
+	"computed", "prefixed", "self_delimiting" or "error", which are section
+	9.5's five ways for a value to say where it ends -- the last of them by
+	refusing.
+
+	"computed" carries `source` and `value` for the reason `TagPart` above
+	does, and it is the same pair for the same split: a code backend
+	rewrites the leaf names and splices the arithmetic, and a WALKER
+	compiles the node, because it evaluates bytecode over an image and can
+	splice nothing. The leaves here are the tag's own parts rather than
+	`tag` itself.
 	"""
 
 	label: int | None
 	kind: str
 	size: int | None		= None
 	length_type: str | None		= None
+	source: str | None		= None
+	value: "ast.Expr | None"	= None
 
 
 @dataclass(frozen=True)
@@ -3536,6 +3546,11 @@ def _tlv_grammar(member: ast.Tlv) -> TlvGrammar:
 def _value_rule(case: ast.ValueCase) -> ValueRule:
 	if isinstance(case.rule, ast.FixedValue):
 		return ValueRule(case.label, "fixed", size=case.rule.size)
+	if isinstance(case.rule, ast.ComputedValue):
+		return ValueRule(case.label, "computed",
+		                 source=unparse.expr_to_source(case.rule.expr,
+		                                               explicit=True),
+		                 value=case.rule.expr)
 	if isinstance(case.rule, ast.PrefixedValue):
 		return ValueRule(case.label, "prefixed",
 		                 length_type=case.rule.length_type)

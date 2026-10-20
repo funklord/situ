@@ -46,6 +46,7 @@
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
 #define TLV_READS       15u	/* to the tag's decode parameters */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
+#define TLV_RULE_COMPUTED_READS 28u	/* to a computed size's program */
 #define SKIP_READS       5u	/* `<IB3x`: placement, one byte of the set */
 #define PINNED_READS    32u	/* `<IB27s`: placement, length, octets */
 #define PINNED_OCTETS   27u
@@ -2427,6 +2428,10 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
 #define TLV_PREFIXED        1u
 #define TLV_SELF_DELIMITING 2u
 #define TLV_ERROR           3u
+/* A size the tag's own parts give, carried as a program over `tag` with
+ * the parts inlined -- so it runs on the evaluator the selector runs on
+ * and needs no opcode of its own. */
+#define TLV_COMPUTED        4u
 
 /* The tag a `tlv` selector is evaluated over, carried to `ctx_load`'s
  * neighbour. */
@@ -2528,6 +2533,34 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			                || size == 0u) {
 				break;
 			}
+		} else if (rule_kind == TLV_COMPUTED) {
+			/* The row carries the program's offset, and a row written
+			 * before it did carries nothing: read by stride, as the
+			 * loader does, and stop rather than guess where the value
+			 * ends. */
+			int64_t computed = 0;
+			if (image->tlv_rule_stride < TLV_RULE_COMPUTED_READS) {
+				break;
+			}
+			const uint32_t size_code = u32_at(found + 24);
+			if (size_code == SITU_WALK_NONE) {
+				break;
+			}
+			err = eval_tagged(image, size_code, ctx_load, &ctx,
+			                  (int64_t)(len - at), 1, tag, &computed);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			/* Clamped at both ends, as the four backends clamp it
+			 * (14.2b): a negative size is not a short item, and the
+			 * bound below takes the rest. */
+			if (computed < 0) {
+				computed = 0;
+			}
+			if (computed > (int64_t)0xFFFFFFFF) {
+				computed = (int64_t)0xFFFFFFFF;
+			}
+			size = (uint32_t)computed;
 		} else if (rule_kind == TLV_PREFIXED) {
 			uint64_t length = 0u;
 			if (decode_varint(message, len, at, len_bytes, len_terminal,

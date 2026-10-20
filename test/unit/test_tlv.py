@@ -363,11 +363,71 @@ def test_an_identity_naming_no_part_is_refused() -> None:
 
 
 def test_a_value_rule_that_is_not_one_is_refused() -> None:
+	"""Two doors, because a value size became an expression.
+
+	A bare name used to be refused by the PARSER, which knew only four
+	forms. It is a legal expression now, so the parser accepts it and the
+	refusal moved to `wellformed`, which can see what `tag_decode`
+	produced -- and names it, where the parser could only list the forms.
+	Both messages carry the list, because a bare name is also what a
+	misspelled `self_delimiting` looks like.
+
+	The second case is the parser's door, still shut: a string is not an
+	expression and never names a part, so nothing downstream could give a
+	better answer than the form list.
+	"""
 	report = rendered(one_region(
 		"\t\ttag_type = pb_varint,\n"
 		"\t\ttag_decode = { wire = tag & 0x7 },\n"
 		"\t\tvalue_size = switch (wire) { case 0: whatever },\n"
 		"\t\tunknown = error"))
 
+	assert "`whatever` is not in scope in a value size" in report
+	assert "`whatever` is not a part of the decoded tag" in report
+	assert "`wire`" in report, "the message does not name the part there is"
+	assert "`prefixed(<length type>)`" in report
+
+	report = rendered(one_region(
+		"\t\ttag_type = pb_varint,\n"
+		"\t\ttag_decode = { wire = tag & 0x7 },\n"
+		"\t\tvalue_size = switch (wire) { case 0: \"four\" },\n"
+		"\t\tunknown = error"))
+
 	assert "expected a value size" in report
 	assert "`prefixed(<length type>)`" in report
+
+
+def test_a_value_size_may_be_the_tag_s_own_part() -> None:
+	"""CoAP's option header: the length is the second nibble of the tag.
+
+	The fifth way a value says where it ends, and the one the other four
+	could not express -- a literal is the same count for every item,
+	`prefixed(T)` reads a length that sits BEFORE the value on the wire,
+	`self_delimiting` needs a type that carries its own extent, and
+	`error` refuses. None of them can read a count out of the tag just
+	decoded.
+
+	A literal still arrives as `FixedValue`, which is what keeps every
+	pass that reads one reading one: `4` and `2 * 2` fold, and only an
+	expression naming a part is the new node.
+	"""
+	source = one_region(
+		"\t\ttag_type = u8,\n"
+		"\t\ttag_decode = { delta = tag >> 4, length = tag & 0x0F },\n"
+		"\t\ttag_identity = delta,\n"
+		"\t\tvalue_size = switch (delta) { case 1: 4, case 2: 2 * 2,\n"
+		"\t\t                             default: length + 13 },\n"
+		"\t\tunknown = error")
+	sizes = region(source).value_size
+	assert sizes is not None
+
+	kinds = [type(case.rule).__name__ for case in sizes.cases]
+	assert kinds == ["FixedValue", "FixedValue", "ComputedValue"], kinds
+
+	# Narrowed rather than ignored: `ValueRule` is the base and carries no
+	# `size`, so an ignore here would have hidden a rule that stopped being
+	# a count as readily as it quiets mypy.
+	for case in sizes.cases[:2]:
+		assert isinstance(case.rule, ast.FixedValue)
+		assert case.rule.size == 4, \
+			"arithmetic over nothing is a count, not a computed size"

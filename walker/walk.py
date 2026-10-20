@@ -1531,6 +1531,10 @@ def while_count(view: View, index: int) -> int:
 #: written twice on purpose -- this package imports nothing from `situc` --
 #: and `test_the_tlv_rule_kinds_match_the_packer` is what stops it drifting.
 TLV_FIXED, TLV_PREFIXED, TLV_SELF_DELIMITING, TLV_ERROR = 0, 1, 2, 3
+#: A size the tag's own parts give, carried as a program over `tag` with the
+#: parts inlined -- so it runs on the same VM the selector does and needs no
+#: opcode of its own.
+TLV_COMPUTED = 4
 
 
 def tlv_count(view: View, index: int) -> int:
@@ -1583,10 +1587,28 @@ def tlv_count(view: View, index: int) -> int:
 		             next((one for one in rules if one[2]), None))
 		if found is None:
 			break
-		_label, kind, _default, fixed, length_rule = found
+		_label, kind, _default, fixed, length_rule, size_code = found
 
 		if kind == TLV_FIXED:
 			size = fixed if fixed != NONE else 0
+		elif kind == TLV_COMPUTED:
+			# The same VM call the selector just made, on this arm's own
+			# program: the parts are inlined, so `tag` is the only input and
+			# the generated code's arithmetic is this arithmetic.
+			if size_code == NONE:
+				break
+			size = vm.run(
+				view.image.code, size_code,
+				load_field = lambda i: _value_of(view, i),
+				size_of    = lambda i: size_bits(view, i) // BITS_PER_BYTE,
+				offset_of  = lambda i: offset_bits(view, i) // BITS_PER_BYTE,
+				count_of   = lambda i: _count(view, i),
+				remaining  = max(0, view.limit - at),
+				tag        = tag)
+			# The four backends clamp a computed size at both ends (14.2b)
+			# and so does this: a negative size is not a short item, and
+			# the bound below takes the rest.
+			size = min(max(size, 0), 0xFFFFFFFF)
 		elif kind == TLV_SELF_DELIMITING:
 			# The value IS a varint, so its own bytes say where it stops --
 			# and it is read with the TAG varint's parameters, which is what

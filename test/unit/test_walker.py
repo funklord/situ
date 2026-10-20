@@ -236,7 +236,7 @@ def test_the_tlv_rule_kinds_match_the_packer() -> None:
 	"""One more table written twice, and the same reason as the opcodes.
 
 	`image_tlv_rule.rule_kind` is a small integer and the walker must not
-	import `situc` (0026), so 9.5's four ways for a value to say where it
+	import `situc` (0026), so 9.5's five ways for a value to say where it
 	ends are numbered in both files. This reads both.
 	"""
 	from walker import walk as walking
@@ -246,6 +246,7 @@ def test_the_tlv_rule_kinds_match_the_packer() -> None:
 		"prefixed":         walking.TLV_PREFIXED,
 		"self_delimiting":  walking.TLV_SELF_DELIMITING,
 		"error":            walking.TLV_ERROR,
+		"computed":         walking.TLV_COMPUTED,
 	}
 
 
@@ -1814,6 +1815,84 @@ def test_a_tlv_region_is_counted_the_same_in_all_five(tmp_path: Path) -> None:
 			found = _by_member(answers(argv, packet, tmp_path))
 			assert found.get(("proto_message", "fields")) \
 				== f"fields count={expected}", f"{backend}, on {label}"
+
+
+#: A length packed into the tag beside the type, which is CoAP's option
+#: header and the shape none of the other four value rules can size: the
+#: count is in the second nibble of the byte just read.
+TAG_SIZED = (
+	"target buffer;\n"
+	"endian big;\n"
+	"bit_order msb_first;\n"
+	"struct tagged {\n"
+	# Named `length` ON PURPOSE, the same as the tag part below. The parts
+	# are the only names in scope in a value size, so this member is
+	# unreachable there -- and every packet below sets it to 0xAA, which as
+	# a byte count is past the frame. A column that resolved the name to
+	# the member rather than to the part counts zero for every case.
+	"\tu8 length;\n"
+	"\ttlv options (\n"
+	"\t\ttag_type = u8,\n"
+	"\t\ttag_decode = { delta = tag >> 4, length = tag & 0x0F },\n"
+	"\t\ttag_identity = delta,\n"
+	"\t\tvalue_size = switch (delta) { default: length },\n"
+	"\t);\n"
+	"}\n")
+
+
+@pytest.mark.skipif(not COMPLETE, reason="a backend is missing")
+def test_a_tag_sized_value_is_counted_the_same_in_all_five(
+		tmp_path: Path) -> None:
+	"""The fifth way a value says where it ends, across all five columns.
+
+	Hand-built rather than drawn, for the reason the protobuf case above
+	is: a random buffer reaches counts of 0 and 1 and exercises the loop
+	rather than the rule. Here the length nibble is what decides each
+	answer, so a column that ignored it would count differently.
+
+	The struct's first member is named `length` too, which is the control
+	for whose name wins: the part's. As a byte count 0xAA is past every
+	frame here, so a column reading the member would answer zero
+	throughout.
+
+	`0x30` is the case worth naming: a length of zero, which is an item
+	that occupies only its tag. It is legal here although `wellformed`
+	refuses a literal `0` -- that refusal is about a schema sizing EVERY
+	item of a wire type at nothing, and this is one message saying its
+	option carries no value. The walk still advances, because the tag
+	moved `at` before the size was added.
+	"""
+	path = tmp_path / "tagged.situ"
+	path.write_text(TAG_SIZED, encoding="ascii")
+
+	command = build(tmp_path, path)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	image = load(packed(TAG_SIZED))
+
+	cases = {
+		"nothing but the head":  (b"\xAA",                           0),
+		"one option, one byte":  (b"\xAA\x31\x77",                   1),
+		"two options":           (b"\xAA\x31\x77\x52\x01\x02",       2),
+		"an empty value":        (b"\xAA\x30",                       1),
+		"an empty value, then one":
+		                         (b"\xAA\x30\x31\x77",               2),
+		# 15 bytes declared and one present: the bound every column
+		# applies after the size is computed.
+		"a length past the frame":
+		                         (b"\xAA\x3F\x01",                   0),
+	}
+
+	for label, (packet, expected) in cases.items():
+		walked = _by_member(report.listing(image, packet))
+		assert walked.get(("tagged", "options")) \
+			== f"options count={expected}", f"the walk, on {label}"
+
+		for backend, argv in command.items():
+			found = _by_member(answers(argv, packet, tmp_path))
+			assert found.get(("tagged", "options")) \
+				== f"options count={expected}", f"{backend}, on {label}"
 
 
 # ---------------------------------------------------------------------------

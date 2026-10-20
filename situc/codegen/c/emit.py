@@ -2373,7 +2373,8 @@ class Emitter:
 			"",
 		]
 
-		lines.extend(self._tlv_value_extent(grammar, max_tag, placement.endian))
+		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
+		                                    placement.endian))
 		lines.extend([
 			"",
 			"\tif (size > view.limit - at) {",
@@ -2389,8 +2390,8 @@ class Emitter:
 		])
 		return lines
 
-	def _tlv_value_extent(self, grammar: TlvGrammar, max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			max_tag: int, endian: ast.Endian | None) -> list[str]:
 		"""Where the value ends, dispatched exactly as the schema dispatches it.
 
 		The simple form has no dispatch: one `length_type` sizes every value,
@@ -2405,7 +2406,8 @@ class Emitter:
 			if rule.label is None:
 				continue
 			lines.append(f"\tcase {rule.label}u:")
-			lines.extend(self._tlv_one_rule(rule, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
+			                                endian))
 
 		default = next((rule for rule in grammar.rules if rule.label is None), None)
 		lines.append("\tdefault:")
@@ -2416,15 +2418,30 @@ class Emitter:
 				"\t\treturn SITU_ERR_CONSTRAINT;",
 			])
 		else:
-			lines.extend(self._tlv_one_rule(default, max_tag, endian))
+			lines.extend(self._tlv_one_rule(struct, grammar, default, max_tag,
+			                                endian))
 		lines.append("\t}")
 		return lines
 
-	def _tlv_one_rule(self, rule: ValueRule, max_tag: int,
+	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			rule: ValueRule, max_tag: int,
 			endian: ast.Endian | None) -> list[str]:
 		"""One arm of the dispatch, sizing a value the way section 9.5 says."""
 		if rule.kind == "fixed":
 			return [f"\t\tsize = {rule.size}u;", "\t\tbreak;"]
+
+		if rule.kind == "computed":
+			# The tag's own parts are the leaves, already stored on `out`.
+			# Bounded leaves, signed arithmetic, one clamp (14.2b): a part is
+			# whatever the tag said, so `length + 13` on a lying tag would
+			# otherwise wrap and size the value small enough to fit.
+			assert rule.source is not None
+			rendered = self._over_fields(
+				struct, rule.source, "out", bounded=True,
+				extra = {part.name: f"out->{c_name(part.name)}"
+				         for part in grammar.tag_decode})
+			return [f"\t\tsize = (uint32_t)situ_nonneg_u32({rendered});",
+			        "\t\tbreak;"]
 
 		if rule.kind == "error":
 			return ["\t\treturn SITU_ERR_CONSTRAINT;"]
