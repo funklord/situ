@@ -32,7 +32,7 @@ from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
-	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
+	BITS_PER_BYTE, Arm, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (
 	UnknownName, expand_calls, over_fields, python_spelling,
@@ -1549,7 +1549,7 @@ class Emitter:
 
 		item  = self._tlv_item_name(placement)
 		lines = self._tlv_read(struct, placement, grammar, name)
-		lines.extend(self._tlv_cursor(name, start, item))
+		lines.extend(self._tlv_cursor(grammar, name, start, item))
 		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
 
@@ -1566,10 +1566,13 @@ class Emitter:
 		"""
 		fields = (["at", "next", "tag"]
 		          + [part.name for part in grammar.tag_decode]
+		          + [part.name for part in grammar.tag_running]
 		          + ["value_at", "value_len"])
 		width  = max(len(name) for name in fields)
 		listed = ", ".join(f'"{name}"' for name in fields)
 		noted  = {part.name: part.source for part in grammar.tag_decode}
+		noted.update({part.name: f"carried: {part.source}"
+		              for part in grammar.tag_running})
 
 		return [
 			"",
@@ -1605,6 +1608,19 @@ class Emitter:
 		holder = placement.path.partition(".")[0]
 		return f"{py_name(holder)}_{py_name(placement.name)}_item"
 
+	def _tlv_carried(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			part: TagPart) -> str:
+		"""One carried value, over `previous` and this item's own parts.
+
+		The parts are recomputed here as the dispatch recomputes the
+		selector, so the expression reads `tag` through them. Bounded
+		leaves and one clamp (14.2b), matching the other three.
+		"""
+		leaves = {one.name: f"({one.source})" for one in grammar.tag_decode}
+		leaves["previous"] = f"{part.name}_in"
+		return "nonneg(" + self._over_fields(
+			struct, part.source, "self", bounded=True, extra=leaves) + ")"
+
 	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
@@ -1612,10 +1628,15 @@ class Emitter:
 		max_tag  = self._tlv_tag_bytes(placement)
 		decoded  = [f"\t\t\t{part.name} = ({part.source}),"
 		            for part in grammar.tag_decode]
+		carried  = "".join(f", {part.name}_in: int"
+		                   for part in grammar.tag_running)
+		decoded += [f"\t\t\t{part.name} = "
+		            f"{self._tlv_carried(struct, grammar, part)},"
+		            for part in grammar.tag_running]
 
 		lines = [
 			"",
-			f"\tdef _{name}_read(self, at: int) -> \"{item}\":",
+			f"\tdef _{name}_read(self, at: int{carried}) -> \"{item}\":",
 			f'\t\t"""The item at `at`.',
 			"",
 			"\t\tRaises BoundsError where the region ends or an item runs past",
@@ -1757,7 +1778,8 @@ class Emitter:
 			f"{indent}at = at + {width}",
 		]
 
-	def _tlv_cursor(self, name: str, start: str, item: str) -> list[str]:
+	def _tlv_cursor(self, grammar: TlvGrammar, name: str, start: str,
+			item: str) -> list[str]:
 		"""The cursor, the generator over it, and the value's bytes.
 
 		Annotated, like everything else this backend emits. These were not,
@@ -1765,16 +1787,25 @@ class Emitter:
 		type hint is worth writing -- got `no-untyped-def` on the walk and
 		`no-untyped-call` at every use of it (26.35).
 		"""
+		seeds  = "".join(", 0" for _ in grammar.tag_running)
+		onward = "".join(f", item.{part.name}"
+		                 for part in grammar.tag_running)
+		# No trailing tabs on the blank line: the generated module is held
+		# to this tree's own whitespace rules, and a docstring built by
+		# joining indented fragments is where one gets left behind.
+		seeded = ('\n\n\t\tThe carried values start at zero, which is what'
+		          ' makes the first\n\t\titem\'s own delta its first number.'
+		          if grammar.tag_running else "")
 		return [
 			"",
 			f"\tdef {name}_first(self) -> {item}:",
 			f'\t\t"""The first item. Raises BoundsError if the region is'
-			f' empty."""',
-			f"\t\treturn self._{name}_read({start})",
+			f' empty.{seeded}"""',
+			f"\t\treturn self._{name}_read({start}{seeds})",
 			"",
 			f"\tdef {name}_next(self, item: {item}) -> {item}:",
 			f'\t\t"""The item after this one."""',
-			f"\t\treturn self._{name}_read(item.next)",
+			f"\t\treturn self._{name}_read(item.next{onward})",
 			"",
 			f"\tdef {name}_value(self, item: {item}) -> memoryview:",
 			f'\t\t"""This item\'s value. Zero copy, like every other read'

@@ -469,7 +469,8 @@ struct tagged_options size=1..
   @0x0001   0..       tlv        options
   options tlv decode delta: tag >> 4
   options tlv decode length: tag & 0x0F
-  options tlv identity: delta
+  options tlv running number: previous + delta
+  options tlv identity: number
   options tlv select: delta
   options tlv size default: computed length
   options tlv duplicates: error

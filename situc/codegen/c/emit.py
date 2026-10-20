@@ -35,7 +35,7 @@ from situc.codegen.c.names import (
 from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
 from situc.layout import (
-	BITS_PER_BYTE, IndexTable, Placement, TlvGrammar, ValueRule,
+	BITS_PER_BYTE, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (UnknownName, c_spelling, expand_calls,
                          over_fields, render_delimiter)
@@ -2276,7 +2276,8 @@ class Emitter:
 
 		lines = self._tlv_item_type(struct, placement, grammar, item)
 		lines.extend(self._tlv_read(struct, placement, grammar, item, local))
-		lines.extend(self._tlv_cursor(struct, placement, item, local))
+		lines.extend(self._tlv_cursor(struct, placement, grammar, item,
+		                              local))
 		lines.extend(self._tlv_by_name(struct, placement, grammar, item, local))
 		return lines
 
@@ -2312,6 +2313,9 @@ class Emitter:
 		"""
 		parts = [f"\tuint32_t    {c_name(part.name)};"
 		         f"\t/* {part.source} */" for part in grammar.tag_decode]
+		parts += [f"\tuint32_t    {c_name(part.name)};"
+		          f"\t/* carried: {part.source} */"
+		          for part in grammar.tag_running]
 
 		return [
 			f"/* One item of `{placement.name}`, and where the next one starts.",
@@ -2331,6 +2335,20 @@ class Emitter:
 			"",
 		]
 
+	def _tlv_carried(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			part: TagPart) -> str:
+		"""One carried value, over `previous` and this item's own parts.
+
+		Bounded leaves and one clamp (14.2b), as a size expression is: the
+		parts come off a tag the message chose, and a sum over a region's
+		worth of them is exactly where a 32-bit accumulator would wrap.
+		"""
+		leaves = {one.name: f"out->{c_name(one.name)}"
+		          for one in grammar.tag_decode}
+		leaves["previous"] = f"{c_name(part.name)}_in"
+		return "situ_nonneg_u32(" + self._over_fields(
+			struct, part.source, "out", bounded=True, extra=leaves) + ")"
+
 	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, item: str, local: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
@@ -2340,20 +2358,42 @@ class Emitter:
 		# The parts are named by the schema, so how wide the column has to be
 		# is not knowable until here.
 		assigned = ["view", "at", "tag"] + [c_name(part.name)
-		                                    for part in grammar.tag_decode]
+		                                    for part in grammar.tag_decode] \
+		                                 + [c_name(part.name)
+		                                    for part in grammar.tag_running]
 		width    = max(len(name) for name in assigned)
 		stored   = [f"\tout->{name.ljust(width)} = {value};" for name, value in
 		            (("view", "view"), ("at", "at"), ("tag", "tag"))]
 		stored  += [f"\tout->{c_name(part.name).ljust(width)}"
 		            f" = (uint32_t)({part.source});"
 		            for part in grammar.tag_decode]
+		# The carried values, after the parts, because each reads them. The
+		# parts are locals rather than `out->` reads here only in the sense
+		# that `out` is already written: order is the dependency.
+		stored  += [f"\tout->{c_name(part.name).ljust(width)}"
+		            f" = (uint32_t){self._tlv_carried(struct, grammar, part)};"
+		            for part in grammar.tag_running]
+
+		carried = "".join(f"uint32_t {c_name(part.name)}_in, "
+		                  for part in grammar.tag_running)
+		carries = [
+			" *",
+			*[f" * `{c_name(part.name)}_in` is `{part.name}` for the item"
+			  f" before this one, and 0" for part in grammar.tag_running],
+			*[f" * before the first: the value is carried rather than read,"
+			  f" so an item" for part in grammar.tag_running[:1]],
+			*[" * reached by offset alone cannot have one."
+			  for part in grammar.tag_running[:1]],
+		] if grammar.tag_running else []
 
 		lines = [
 			f"/* Read the item at `at`. SITU_ERR_BOUNDS where the region ends or",
 			" * an item runs past it; SITU_ERR_CONSTRAINT for a wire type this",
-			" * schema does not describe. */",
+			" * schema does not describe.",
+			*carries,
+			" */",
 			f"static inline situ_err_t {read}(situ_view_t view, uint32_t at,",
-			f"\t\t{item} *out)",
+			f"\t\t{carried}{item} *out)",
 			"{",
 			"\tuint64_t tag  = 0;",
 			"\tuint32_t used = 0u;",
@@ -2517,7 +2557,7 @@ class Emitter:
 		return f"(uint32_t)situ_get_{order}{suffix}(situ_base(view) + at)"
 
 	def _tlv_cursor(self, struct: ResolvedStruct, placement: Placement,
-			item: str, local: str) -> list[str]:
+			grammar: TlvGrammar, item: str, local: str) -> list[str]:
 		"""`first` and `next`: the region walked from its own start."""
 		read  = ident(self.prefix, struct.name, local, "read")
 		first = ident(self.prefix, struct.name, local, "first")
@@ -2525,18 +2565,39 @@ class Emitter:
 		count = ident(self.prefix, struct.name, local, "count")
 		base  = self._base_expression(struct, placement, gated=False)
 
+		# A carried value starts at zero and is handed on by `next`. The
+		# seed is what makes the walk the only way to a number: a caller
+		# with an offset and no chain has nothing to pass.
+		seeds  = "".join("0u, " for _ in grammar.tag_running)
+		onward = "".join(f"item->{c_name(part.name)}, "
+		                 for part in grammar.tag_running)
+		carried_note = ([" *",
+		                 " * The carried values start at zero here, which is"
+		                 " what makes the",
+		                 " * first item's own delta its first number."]
+		                if grammar.tag_running else [])
+
 		return [
-			f"/* The first item, or SITU_ERR_BOUNDS if the region is empty. */",
+			f"/* The first item, or SITU_ERR_BOUNDS if the region is empty.",
+			*carried_note,
+			" */",
 			f"static inline situ_err_t {first}(situ_view_t view, {item} *out)",
 			"{",
-			f"\treturn {read}(view, {base}, out);",
+			f"\treturn {read}(view, {base}, {seeds}out);",
 			"}",
 			"",
 			f"/* The item after this one. The cursor carries its own view, so",
 			" * walking needs nothing the caller has to keep in step. */",
 			f"static inline situ_err_t {nxt}({item} *item)",
 			"{",
-			f"\treturn {read}(item->view, item->next, item);",
+			*([f"\t{item} held = *item;",
+			   "",
+			   f"\treturn {read}(held.view, held.next, "
+			   + "".join(f"held.{c_name(part.name)}, "
+			             for part in grammar.tag_running)
+			   + "item);"]
+			  if grammar.tag_running else
+			  [f"\treturn {read}(item->view, item->next, item);"]),
 			"}",
 			"",
 			f"/* How many items are present. A walk, like everything else here:",

@@ -129,6 +129,24 @@ class Probe(Enum):
 	TAG       = "tag"
 	#: `name count=<n>`
 	COUNT     = "count"
+	#: `name:<identity> numbers=<a,b,c>` -- every item's identity in order,
+	#: where a `tlv` region's identity is a value carried from one item to
+	#: the next.
+	#:
+	#: The label carries the identity's name because every comparison of
+	#: these outputs keys ONE line per member -- `_by_member` in the walker
+	#: suite, and the write replay through it -- so a second line under the
+	#: member's own name is not a second question, it silently replaces the
+	#: first. Measured: the walker answered `options count=2` where C's
+	#: dict had been overwritten with `options numbers=4,9,` and the two
+	#: were reported as disagreeing about a count neither had got wrong.
+	#:
+	#: A count cannot see one: the accumulator changes which item a `known`
+	#: key finds and not how many there are, so a backend seeding it wrong,
+	#: or carrying the delta instead of the sum, answers every count
+	#: correctly. The asks are narrow on purpose -- only a region with a
+	#: `tag_running` value, because that is the half with no witness.
+	IDENTITIES = "identities"
 	#: `name little=<0|1>` -- an endian marker, whose answer every field it
 	#: governs depends on.
 	MARKER    = "marker"
@@ -564,6 +582,13 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			# Every count is a walk over numbers the message chose: a run's
 			# elements, a `tlv` region's items, an `indexed` region's table.
 			found.append(Ask(Probe.COUNT, local))
+			grammar = placement.tlv_grammar
+			if (grammar is not None and grammar.tag_running
+					and grammar.identity is not None
+					and any(one.name == grammar.identity
+					        for one in grammar.tag_running)):
+				found.append(Ask(Probe.IDENTITIES, local,
+				                 inner = grammar.identity))
 
 	return found
 
@@ -1342,6 +1367,20 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 	if ask.probe is Probe.COUNT:
 		return [f'\t\t\tprintf("{ask.local} count=%u\\n",'
 		        f' {call.format("count")}(view));']
+	if ask.probe is Probe.IDENTITIES:
+		item = ident(prefix, struct, ask.local, "item_t")
+		return ["\t\t\t{",
+		        f"\t\t\t\t{item} item;",
+		        f"\t\t\t\tsitu_err_t walked ="
+		        f" {call.format('first')}(view, &item);",
+		        "",
+		        f'\t\t\t\tprintf("{ask.local}:{ask.inner} numbers=");',
+		        "\t\t\t\twhile (walked == SITU_OK) {",
+		        f'\t\t\t\t\tprintf("%u,", item.{c_name(ask.inner)});',
+		        f"\t\t\t\t\twalked = {call.format('next')}(&item);",
+		        "\t\t\t\t}",
+		        '\t\t\t\tprintf("\\n");',
+		        "\t\t\t}"]
 	if ask.probe is Probe.TAG:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst uint8_t *held = {call.format('ptr')}(view);",
@@ -1733,6 +1772,18 @@ def _cpp_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.COUNT:
 		return [f'\t\t\tstd::printf("{ask.local} count=%u\\n",'
 		        f" view.{call}_count());"]
+	if ask.probe is Probe.IDENTITIES:
+		return ["\t\t\t{",
+		        f"\t\t\t\tdecltype(view)::{call}_item item{{}};",
+		        f"\t\t\t\t::situ::rt::err e = view.{call}_first(item);",
+		        "",
+		        f'\t\t\t\tstd::printf("{ask.local}:{ask.inner} numbers=");',
+		        "\t\t\t\twhile (e == ::situ::rt::err::ok) {",
+		        f'\t\t\t\t\tstd::printf("%u,", item.{c_name(ask.inner)});',
+		        f"\t\t\t\t\te = view.{call}_next(item);",
+		        "\t\t\t\t}",
+		        '\t\t\t\tstd::printf("\\n");',
+		        "\t\t\t}"]
 	if ask.probe is Probe.TAG:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst auto held = view.{call}();",
@@ -2045,6 +2096,19 @@ def _rust_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.COUNT:
 		return [f'\t\t\t\tprintln!("{ask.local} count={{}}",'
 		        f" view.{rust_ident(ask.local + '_count')}());"]
+	if ask.probe is Probe.IDENTITIES:
+		first = rust_ident(ask.local + "_first")
+		nxt   = rust_ident(ask.local + "_next")
+		return ["\t\t\t\t{",
+		        f"\t\t\t\t\tlet mut held = view.{first}();",
+		        f'\t\t\t\t\tprint!("{ask.local}:{ask.inner} numbers=");',
+		        "\t\t\t\t\twhile let Ok(item) = held {",
+		        f'\t\t\t\t\t\tprint!("{{}},",'
+		        f" item.{rust_ident(ask.inner)});",
+		        f"\t\t\t\t\t\theld = view.{nxt}(&item);",
+		        "\t\t\t\t\t}",
+		        '\t\t\t\t\tprintln!();',
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.TAG:
 		return ["\t\t\t\t{",
 		        f"\t\t\t\t\tlet held = view.{call}();",
@@ -2294,6 +2358,10 @@ def _python_ask(ask: Ask) -> list[str]:
 		        "\t\t% (len(held), -1 if len(held) == 0 else held[0]))"]
 	if ask.probe is Probe.COUNT:
 		return [f'print("{ask.local} count=%d" % view.{call}_count)']
+	if ask.probe is Probe.IDENTITIES:
+		return [f'print("{ask.local}:{ask.inner} numbers=%s"',
+		        f'\t% "".join("%d," % item.{ask.inner}'
+		        f" for item in view.{call}()))"]
 	if ask.probe is Probe.TAG:
 		return [f"held = view.{call}",
 		        f'print("{ask.local} present=%d bytes=%d first=%d"',

@@ -120,6 +120,11 @@ class TlvGrammar:
 	"""
 
 	tag_decode: tuple[TagPart, ...]		= ()
+	#: `tag_running = { number = previous + delta }`: values carried from
+	#: one item to the next, each reading its own `previous`. The leaves of
+	#: `source` are `previous` and the decoded parts, so a backend rewrites
+	#: two namespaces here rather than one.
+	tag_running: tuple[TagPart, ...]	= ()
 	#: Which decoded part the value dispatch selects on. None for the simple
 	#: form, whose every value is sized the same way.
 	selector: str | None			= None
@@ -3533,6 +3538,11 @@ def _tlv_grammar(member: ast.Tlv) -> TlvGrammar:
 		                            unparse.expr_to_source(part.value),
 		                            part.value)
 		                    for part in member.tag_decode),
+		tag_running = tuple(TagPart(part.name,
+		                            unparse.expr_to_source(part.value,
+		                                                   explicit=True),
+		                            part.value)
+		                    for part in member.tag_running),
 		selector    = member.value_size.selector if member.value_size else None,
 		rules       = tuple(_value_rule(case) for case in
 		                    (member.value_size.cases if member.value_size else ())),

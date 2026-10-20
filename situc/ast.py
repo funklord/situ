@@ -769,6 +769,15 @@ class Tlv(Member):
 	value_size: ValueSize | None	= None
 	#: The tags this schema names, in the order written.
 	known: tuple[KnownTag, ...]	= ()
+	#: `tag_running = { number = previous + delta }`: a value carried from
+	#: one item to the next. Each definition's `previous` is its own value
+	#: for the item before, and zero before the first -- which is CoAP's
+	#: option number, the running sum of every delta ahead of it.
+	#:
+	#: The parts above are computed from the tag and nothing else, so no
+	#: item can say what it is NUMBERED; that is the layout half of 26.142,
+	#: and the state situ carried inside codecs and nowhere here.
+	tag_running: tuple[TagPart, ...] = ()
 	#: `tag_identity = field`: which decoded part a `known` key matches.
 	#: See doc/decision/0023-tlv-tag-identity.md. None where it was not
 	#: written, which `identity_part` resolves and `wellformed` refuses where
@@ -785,9 +794,18 @@ class Tlv(Member):
 		"""
 		if self.identity is not None:
 			return self.identity
-		if len(self.tag_decode) == 1:
+		if len(self.tag_decode) == 1 and not self.tag_running:
 			return self.tag_decode[0].name
+		# A running value is declared to BE the identity or it is not the
+		# identity: inferring it from a single part would quietly key a
+		# lookup on the delta where the number was meant, which is the
+		# wrong-part fault 0023 exists for arriving by inference.
 		return None
+
+	def running(self, name: str) -> TagPart | None:
+		"""The accumulator of that name, or None."""
+		return next((one for one in self.tag_running if one.name == name),
+		            None)
 
 	def part(self, name: str) -> TagPart | None:
 		return next((part for part in self.tag_decode if part.name == name), None)

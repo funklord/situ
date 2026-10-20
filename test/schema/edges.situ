@@ -1676,12 +1676,26 @@ struct split_coverage {
 // `length` names a part of the tag and nothing else can be named: the parts
 // are what decide where the value ends, so a size that read a member would
 // be reading something this item has not reached.
+//
+// `tag_running` is the other half of the same protocol and the layout half
+// of 26.142: an option's NUMBER is the running sum of every delta ahead of
+// it, so the identity a `known` key matches is carried from item to item
+// rather than read from one. `previous` is this value for the item before,
+// zero before the first, and the four backends take it as a parameter --
+// which is what says an item reached by offset alone cannot have a number.
+//
+// Note what a tag byte may be here: `tag_type = u8` is read as a leb128
+// varint by every backend, so a tag with its high bit set consumes the byte
+// after it. Deltas above 7 are therefore misread -- a defect of the tag
+// reader rather than of this region, recorded in section 26 -- and the
+// vectors that exercise this region keep below it.
 struct tagged_options {
 	u8 head;
 	tlv options (
 		tag_type = u8,
 		tag_decode = { delta = tag >> 4, length = tag & 0x0F },
-		tag_identity = delta,
+		tag_running = { number = previous + delta },
+		tag_identity = number,
 		value_size = switch (delta) { default: length },
 	);
 }

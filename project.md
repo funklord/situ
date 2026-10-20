@@ -623,6 +623,9 @@ attr          = ident [ "=" expr ] ;
    attr }` and the only thing anything read out of a `switch` was its labels. *)
 tlv_args      = tlv_arg { "," tlv_arg } [ "," ] ;
 tlv_arg       = "tag_decode" "=" tag_decode
+              | "tag_running" "=" tag_decode   (* same shape, other
+                                       * scope: `previous` and the
+                                       * decoded parts *)
               | "tag_identity" "=" ident    (* decision 0023 *)
               | "value_size" "=" value_size
               | "known"      "=" known_tags
@@ -1675,6 +1678,49 @@ decide where the value ends, so a size naming a member would be naming
 something the item has not reached. A literal is the degenerate case and
 stays one -- `4` and `2 * 2` fold to a count, and only an expression that
 names a part is the fifth rule.
+
+**A value may be carried from one item to the next**, which is what CoAP's
+option NUMBER is: the running sum of every delta ahead of it.
+
+```situ
+tlv options (
+    tag_type     = u8,
+    tag_decode   = { delta = tag >> 4, length = tag & 0x0F },
+    tag_running  = { number = previous + delta },
+    tag_identity = number,
+    value_size   = switch (delta) { default: length },
+);
+```
+
+`previous` is that value for the item before, and zero before the first --
+scoped to the definition it appears in, so two accumulators cannot mean each
+other's and nothing has to be said about the order they are evaluated in. In
+scope beside it are the tag's decoded parts and nothing else: not the raw
+tag, which the decode is for; not another accumulator, for the ordering
+question that would open; and nothing read later, which is the rule
+`tag_decode` is already held to.
+
+**A carried value may be the identity and may not size a value.** The parts
+are bounded by the tag's width and a sum over a region's worth of them is
+bounded by the item count, so an extent computed from one would have no
+bound the solver could carry. `tag_identity` is what it is for: a `known`
+key then matches the number rather than the delta, and the four backends
+take the carried value as a parameter to `read` -- which is what says an
+item reached by offset alone cannot have a number.
+
+**And a single part stops being the identity by inference once a value is
+carried.** 0023 infers the identity from a lone decoded part, which is right
+while the tag is the only source of one; a region that also carries a number
+has two candidates that rule cannot tell apart, and keying a lookup on the
+delta finds an item whose number is something else. It is refused where a
+`known` map makes the choice decide what an accessor finds.
+
+**The state situ carries is no longer only inside codecs.** 26.142's
+sentence -- "situ carries state inside codecs and nowhere in the layout" --
+named the boundary that made 8b10b and CoAP look like one question. A
+`shift_register` holds a register and `stuffing` with `unit = stream` holds
+line position; this is the first thing in the layout that holds anything,
+and it holds exactly one value per name per region.
 
 **It was specified before any code existed and implemented 26.663.** The
 sentence above has said "or an expression" since the scaffolding commit of
@@ -7210,6 +7256,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.664 A `u8` tag is read as a ten-byte varint
+
+Moved to `doc/decision/26.664-a-u8-tag-is-read-as-a-ten-byte-varint.md`.
 
 ### 26.663 Two absences, one item, and a sentence nobody read
 

@@ -33,7 +33,7 @@ from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
-	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
+	BITS_PER_BYTE, Arm, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (
 	UnknownName, expand_calls, over_fields, render_delimiter, rust_spelling,
@@ -996,7 +996,7 @@ class Emitter:
 		item = _pascal(struct.name) + _pascal(name) + "Item"
 
 		lines = list(self._tlv_read(struct, placement, grammar, item, name))
-		lines.extend(self._tlv_cursor(item, name, start))
+		lines.extend(self._tlv_cursor(grammar, item, name, start))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -1011,6 +1011,9 @@ class Emitter:
 		item  = _pascal(struct.name) + _pascal(name) + "Item"
 		parts = [f"\tpub {_ident(part.name)}: u32,\t// {part.source}"
 		         for part in grammar.tag_decode]
+		parts += [f"\tpub {_ident(part.name)}: u32,"
+		          f"\t// carried: {part.source}"
+		          for part in grammar.tag_running]
 
 		return [
 			"",
@@ -1035,12 +1038,31 @@ class Emitter:
 		bits = declared.max_bits if declared is not None else 64
 		return (bits + 6) // 7
 
+	def _tlv_carried(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			part: TagPart) -> str:
+		"""One carried value, over `previous` and this item's own parts.
+
+		Bounded leaves, signed arithmetic, one clamp (14.2b), matching the
+		other three: a sum over a region's worth of deltas is where a
+		32-bit accumulator would wrap.
+		"""
+		leaves = {one.name: f"({one.source})" for one in grammar.tag_decode}
+		leaves["previous"] = f"{_ident(part.name)}_in"
+		return "situ_rt::nonneg(" + self._over_fields(
+			struct, part.source, "self", cast="i64", bounded=True,
+			extra=leaves) + ")"
+
 	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, item: str, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		max_tag = self._tlv_tag_bytes(placement)
 		decoded = [f"\t\t\t{_ident(part.name)}: ({part.source}) as u32,"
 		           for part in grammar.tag_decode]
+		carried = "".join(f", {_ident(part.name)}_in: u32"
+		                  for part in grammar.tag_running)
+		decoded += [f"\t\t\t{_ident(part.name)}: "
+		            f"{self._tlv_carried(struct, grammar, part)} as u32,"
+		            for part in grammar.tag_running]
 
 		# `at` only moves a second time where a length prefix sits between the
 		# tag and the value. Declaring it `mut` regardless is an unused-mut
@@ -1054,7 +1076,8 @@ class Emitter:
 			f"\t/// Read the item at `at`. `Error::Bounds` where the region",
 			"\t/// ends or an item runs past it; `Error::Constraint` for a wire",
 			"\t/// type this schema does not describe.",
-			f"\tpub fn {name}_read(&self, at: usize) -> Result<{item}> {{",
+			f"\tpub fn {name}_read(&self, at: usize{carried})"
+			f" -> Result<{item}> {{",
 			"\t\tif at >= self.bytes.len() {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
@@ -1183,18 +1206,27 @@ class Emitter:
 			f"{indent}at += {width};",
 		]
 
-	def _tlv_cursor(self, item: str, name: str, start: str) -> list[str]:
+	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
+			start: str) -> list[str]:
 		"""`first`, `next`, `count`, and the value's bytes."""
+		seeds  = "".join(", 0" for _ in grammar.tag_running)
+		onward = "".join(f", item.{_ident(part.name)}"
+		                 for part in grammar.tag_running)
 		return [
 			"",
 			"\t/// The first item, or `Error::Bounds` if the region is empty.",
+			*(["\t///",
+			   "\t/// The carried values start at zero, which is what makes"
+			   " the first",
+			   "\t/// item's own delta its first number."]
+			  if grammar.tag_running else []),
 			f"\tpub fn {name}_first(&self) -> Result<{item}> {{",
-			f"\t\tself.{name}_read({start})",
+			f"\t\tself.{name}_read({start}{seeds})",
 			"\t}",
 			"",
 			"\t/// The item after this one.",
 			f"\tpub fn {name}_next(&self, item: &{item}) -> Result<{item}> {{",
-			f"\t\tself.{name}_read(item.next)",
+			f"\t\tself.{name}_read(item.next{onward})",
 			"\t}",
 			"",
 			"\t/// This item's value. A slice rather than an offset pair, which",

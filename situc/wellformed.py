@@ -653,6 +653,7 @@ def check_tlv_grammar(schema: ast.Schema) -> None:
 def _check_one_tlv(region: ast.Tlv, varints: set[str]) -> None:
 	_check_tag_decode(region)
 	_check_identity(region)
+	_check_tag_running(region)
 	_check_value_size(region, varints)
 	_check_known_tags(region)
 
@@ -666,10 +667,12 @@ def _check_identity(region: ast.Tlv) -> None:
 	that one -- which is what invariant 9 refuses to take a silent default on.
 	See doc/decision/0023-tlv-tag-identity.md.
 	"""
-	names = [part.name for part in region.tag_decode]
+	names   = [part.name for part in region.tag_decode]
+	running = [part.name for part in region.tag_running]
 
 	if region.identity is not None:
-		if region.part(region.identity) is None:
+		if region.part(region.identity) is None \
+				and region.running(region.identity) is None:
 			raise error(
 				f"`tag_identity` names `{region.identity}`, which the tag does"
 				f" not decode",
@@ -678,9 +681,30 @@ def _check_identity(region: ast.Tlv) -> None:
 				notes = [f"`tag_decode` produces {', '.join(f'`{n}`' for n in names)}"
 				         if names else
 				         "this region declares no `tag_decode` at all, so a"
-				         " `known` key matches the raw tag"],
+				         " `known` key matches the raw tag"]
+				        + ([f"`tag_running` carries "
+				            f"{', '.join(f'`{n}`' for n in running)}, which an"
+				            f" identity may also name"] if running else []),
 			)
 		return
+
+	# A region that carries a running value and does not say which thing
+	# names an item is refused rather than inferred, even with one part: the
+	# delta and the number are both single names and keying on the wrong one
+	# finds an item that is not the one asked for.
+	if region.tag_running and region.known:
+		listed = ", ".join(f"`{name}`" for name in names + running)
+		raise error(
+			f"`{region.name}` does not say which value names an item",
+			region.span,
+			label = "a running value, and a `known` map",
+			notes = [f"the names available are {listed}",
+			         "add `tag_identity = <name>` to say which one a `known`"
+			         " key matches",
+			         "a delta and the number it accumulates into are both"
+			         " single values, and keying on the delta finds an item"
+			         " whose number is something else"],
+		)
 
 	if len(names) > 1 and region.known:
 		listed = ", ".join(f"`{name}`" for name in names)
@@ -718,6 +742,63 @@ def _check_tag_decode(region: ast.Tlv) -> None:
 				         " the raw tag just read",
 				         "nothing else has been read yet: the parts are what"
 				         " decide where the value ends"],
+			)
+
+
+def _check_tag_running(region: ast.Tlv) -> None:
+	"""A carried value reads its own `previous` and the tag's parts.
+
+	`previous` is this definition's own value for the item before, and zero
+	before the first -- scoped to the definition it appears in, so two
+	accumulators cannot mean each other's and nothing has to be said about
+	the order they are evaluated in.
+
+	Not `tag`: the parts are what the decode is for, and a second place to
+	take the tag apart is a second description of one thing. Not another
+	accumulator, for the ordering question that would open. Nothing read
+	later either, which is the rule `tag_decode` is already held to -- an
+	item's own value has not been reached when its number is computed.
+	"""
+	parts = [part.name for part in region.tag_decode]
+	seen: dict[str, ast.TagPart] = {}
+
+	for carried in region.tag_running:
+		if carried.name in seen:
+			raise _redeclaration("running value", carried.name,
+			                     seen[carried.name], carried,
+			                     ["a value is carried once: two definitions"
+			                      " give one name two meanings"])
+		seen[carried.name] = carried
+
+		if region.part(carried.name) is not None:
+			raise error(
+				f"`{carried.name}` is both a decoded part and a carried"
+				f" value",
+				carried.span,
+				label = "one name, two values",
+				notes = ["a part is computed from this item's tag and a"
+				         " carried value from every item before it, so a"
+				         " reader of the name could mean either"],
+			)
+
+		for name in paths_in(carried.value):
+			if name == "previous" or name in parts:
+				continue
+			listed = ", ".join(f"`{one}`" for one in parts)
+			raise error(
+				f"`{name}` is not in scope in a running value",
+				carried.value.span,
+				label = f"`{name}` is neither `previous` nor a decoded part",
+				notes = [
+					"`previous` is this value for the item before, and zero"
+					" before the first",
+					f"`tag_decode` produces {listed}" if parts else
+					"this region declares no `tag_decode`, so only"
+					" `previous` is in scope",
+					"a running value is accumulated as the region is"
+					" walked, so nothing an item has not reached can be in"
+					" it",
+				],
 			)
 
 
@@ -774,6 +855,26 @@ def _check_value_size(region: ast.Tlv, varints: set[str]) -> None:
 			for name in paths_in(case.rule.expr):
 				if region.part(name) is not None:
 					continue
+				if region.running(name) is not None:
+					# A carried value grows with the region, so its bound is
+					# the item count rather than the tag's width -- and an
+					# extent computed from it would have no bound the solver
+					# could carry. The identity is where it belongs.
+					raise error(
+						f"`{name}` is a carried value and cannot size a"
+						f" value",
+						case.rule.span,
+						label = "a running value here",
+						notes = [
+							"a value size is an expression over the tag's"
+							" own parts, which are bounded by the tag's"
+							" width",
+							"a carried value accumulates over the whole"
+							" region, so nothing bounds it but the item"
+							" count",
+							"`tag_identity` is what a carried value is for",
+						],
+					)
 				raise error(
 					f"`{name}` is not in scope in a value size",
 					case.rule.span,
@@ -2552,12 +2653,13 @@ REGION_ARGUMENTS: dict[type, tuple[tuple[str, ...], str]] = {
 	ast.Indexed: (("base", "offset_type", "count"),
 	              "an indexed region takes `base = region | message | member` "
 	              "(0024), `offset_type = <scalar>` and `count = <expr>`"),
-	ast.Tlv:     (("tag_type", "tag_decode", "tag_identity", "value_size",
-	               "known", "unknown", "duplicate_tags", "ordering",
-	               "length_type"),
+	ast.Tlv:     (("tag_type", "tag_decode", "tag_running", "tag_identity",
+	               "value_size", "known", "unknown", "duplicate_tags",
+	               "ordering", "length_type"),
 	              "a tlv region takes `tag_type`, `tag_decode`, "
-	              "`tag_identity`, `value_size`, `known`, `unknown`, "
-	              "`duplicate_tags`, `ordering` and `length_type` (9.5)"),
+	              "`tag_running`, `tag_identity`, `value_size`, `known`, "
+	              "`unknown`, `duplicate_tags`, `ordering` and "
+	              "`length_type` (9.5)"),
 }
 
 

@@ -405,6 +405,9 @@ def _tlv_grammar(region: ast.Tlv, depth: int) -> list[str]:
 	"""
 	lines = [_indent(depth, f"tag part {part.name} = {expr_to_source(part.value)}")
 	         for part in region.tag_decode]
+	lines += [_indent(depth, f"tag running {part.name} = "
+	                  f"{expr_to_source(part.value)}")
+	          for part in region.tag_running]
 
 	if region.value_size is not None:
 		lines.append(_indent(depth, f"value_size switch {region.value_size.selector}"))

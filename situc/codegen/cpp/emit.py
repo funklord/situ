@@ -36,7 +36,7 @@ from situc.codegen.doc import extractable
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
 from situc.layout import (
-	BITS_PER_BYTE, Arm, IndexTable, Placement, TlvGrammar, ValueRule,
+	BITS_PER_BYTE, Arm, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
 )
 from situc.names import (
 	UnknownName, c_spelling, expand_calls, over_fields, render_delimiter,
@@ -4340,7 +4340,7 @@ class Emitter:
 
 		lines = self._tlv_item_type(placement, grammar, item)
 		lines.extend(self._tlv_read(struct, placement, grammar, item, name))
-		lines.extend(self._tlv_cursor(item, name, start))
+		lines.extend(self._tlv_cursor(grammar, item, name, start))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -4355,6 +4355,9 @@ class Emitter:
 		"""One item's extent and what its tag decoded to."""
 		parts = [f"\t\tstd::uint32_t {c_name(part.name)};"
 		         f"\t/* {part.source} */" for part in grammar.tag_decode]
+		parts += [f"\t\tstd::uint32_t {c_name(part.name)};"
+		          f"\t/* carried: {part.source} */"
+		          for part in grammar.tag_running]
 
 		return [
 			"",
@@ -4374,18 +4377,38 @@ class Emitter:
 			"\t};",
 		]
 
+	def _tlv_carried(self, struct: ResolvedStruct, grammar: TlvGrammar,
+			part: TagPart) -> str:
+		"""One carried value, over `previous` and this item's own parts.
+
+		Bounded leaves and one clamp (14.2b): the parts come off a tag the
+		message chose, and a sum over a region's worth of them is where a
+		32-bit accumulator would wrap. C's copy carries the reasoning.
+		"""
+		leaves = {one.name: f"out.{c_name(one.name)}"
+		          for one in grammar.tag_decode}
+		leaves["previous"] = f"{c_name(part.name)}_in"
+		return "::situ::rt::nonneg(" + self._over_fields(
+			struct, part.source, bounded=True, extra=leaves) + ")"
+
 	def _tlv_read(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, item: str, name: str) -> list[str]:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		max_tag  = self._tlv_tag_bytes(placement)
 		assigned = ["view", "at", "tag"] + [c_name(part.name)
-		                                    for part in grammar.tag_decode]
+		                                    for part in grammar.tag_decode] \
+		                                 + [c_name(part.name)
+		                                    for part in grammar.tag_running]
 		width    = max(len(each) for each in assigned)
 		stored   = [f"\t\tout.{each.ljust(width)} = {value};" for each, value in
 		            (("view", "this->raw()"), ("at", "at"), ("tag", "tag"))]
 		stored  += [f"\t\tout.{c_name(part.name).ljust(width)}"
 		            f" = static_cast<std::uint32_t>({part.source});"
 		            for part in grammar.tag_decode]
+		stored  += [f"\t\tout.{c_name(part.name).ljust(width)}"
+		            f" = static_cast<std::uint32_t>"
+		            f"({self._tlv_carried(struct, grammar, part)});"
+		            for part in grammar.tag_running]
 
 		lines = [
 			"",
@@ -4393,7 +4416,9 @@ class Emitter:
 			"\t * item runs past it; `constraint` for a wire type this schema",
 			"\t * does not describe. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}_read(std::uint32_t at,"
-			f" {item} &out) const noexcept",
+			+ "".join(f" std::uint32_t {c_name(part.name)}_in,"
+			          for part in grammar.tag_running)
+			+ f" {item} &out) const noexcept",
 			"\t{",
 			"\t\tstd::uint64_t tag  = 0;",
 			"\t\tstd::uint32_t used = 0;",
@@ -4540,22 +4565,35 @@ class Emitter:
 			f"{indent}}}",
 		]
 
-	def _tlv_cursor(self, item: str, name: str, start: str) -> list[str]:
+	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
+			start: str) -> list[str]:
 		"""`first`, `next` and `count`: the region walked from its own start."""
+		seeds  = "".join("0, " for _ in grammar.tag_running)
+		onward = "".join(f"held.{c_name(part.name)}, "
+		                 for part in grammar.tag_running)
 		return [
 			"",
-			"\t/* The first item, or `bounds` if the region is empty. */",
+			"\t/* The first item, or `bounds` if the region is empty.",
+			*(["\t *",
+			   "\t * The carried values start at zero, which is what makes"
+			   " the first",
+			   "\t * item's own delta its first number. */"]
+			  if grammar.tag_running else ["\t */"]),
 			f"\t[[nodiscard]] ::situ::rt::err {name}_first({item} &out)"
 			" const noexcept",
 			"\t{",
-			f"\t\treturn {name}_read({start}, out);",
+			f"\t\treturn {name}_read({start}, {seeds}out);",
 			"\t}",
 			"",
 			"\t/* The item after this one. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}_next({item} &item)"
 			" const noexcept",
 			"\t{",
-			f"\t\treturn {name}_read(item.next, item);",
+			*([f"\t\tconst {item} held = item;",
+			   "",
+			   f"\t\treturn {name}_read(held.next, {onward}item);"]
+			  if grammar.tag_running else
+			  [f"\t\treturn {name}_read(item.next, item);"]),
 			"\t}",
 			"",
 			"\t/* How many items are present. A walk: nothing in the region",

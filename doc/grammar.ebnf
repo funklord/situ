@@ -326,6 +326,9 @@ tlv_args	= tlv_arg { "," tlv_arg } [ "," ] ;	(* the parser has always
 			 * describe, and no corpus schema wrote one until a tag-sized
 			 * value did *)
 tlv_arg		= "tag_decode" "=" tag_decode
+	| "tag_running" "=" tag_decode	(* the same braced shape; what
+			 * differs is the scope, which is `previous` and the
+			 * decoded parts rather than the raw tag *)
 	| "tag_identity" "=" ident
 	| "value_size" "=" value_size
 	| "known"      "=" known_tags

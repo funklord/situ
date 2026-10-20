@@ -397,6 +397,97 @@ def test_a_value_rule_that_is_not_one_is_refused() -> None:
 	assert "`prefixed(<length type>)`" in report
 
 
+def test_a_carried_value_accumulates_across_items() -> None:
+	"""CoAP's option number: the running sum of every delta ahead of it.
+
+	The layout half of 26.142. situ carried state inside codecs -- a
+	`shift_register`'s register, `stuffing`'s line position -- and none in
+	the layout, so no item could say what it was NUMBERED.
+
+	`previous` is this value for the item before and zero before the first,
+	scoped to the definition it appears in so that two accumulators cannot
+	mean each other's.
+	"""
+	carried = region(one_region(
+		"\t\ttag_type = u8,\n"
+		"\t\ttag_decode = { delta = tag >> 4, length = tag & 0x0F },\n"
+		"\t\ttag_running = { number = previous + delta },\n"
+		"\t\ttag_identity = number,\n"
+		"\t\tvalue_size = switch (delta) { default: length },\n"
+		"\t\tunknown = error")).tag_running
+
+	assert [part.name for part in carried] == ["number"]
+	assert carried[0].value is not None
+	# The identity may name it, which is what a `known` key then matches.
+	assert region(one_region(
+		"\t\ttag_type = u8,\n"
+		"\t\ttag_decode = { delta = tag >> 4 },\n"
+		"\t\ttag_running = { number = previous + delta },\n"
+		"\t\ttag_identity = number,\n"
+		"\t\tunknown = error")).identity_part() == "number"
+
+
+def test_a_single_part_is_not_the_identity_once_a_value_is_carried() -> None:
+	"""Inference stops where a delta and its sum are both single names.
+
+	`identity_part` infers the identity from a lone decoded part, which is
+	0023's rule and right while the tag is the only source of one. A region
+	that also carries a number has two candidates that look identical to
+	that rule -- and keying a `known` lookup on the delta finds an item
+	whose number is something else entirely, which is exactly the silent
+	wrong answer 0023 exists to refuse.
+	"""
+	one = one_region(
+		"\t\ttag_type = u8,\n"
+		"\t\ttag_decode = { delta = tag >> 4 },\n"
+		"\t\ttag_running = { number = previous + delta },\n"
+		"\t\tunknown = error")
+	assert region(one).identity_part() is None
+
+	# With a `known` map it is refused rather than left open, because that
+	# is where the choice decides what an accessor finds.
+	report = rendered(one_region(
+		"\t\ttag_type = u8,\n"
+		"\t\ttag_decode = { delta = tag >> 4 },\n"
+		"\t\ttag_running = { number = previous + delta },\n"
+		"\t\tknown = { 11 : { name = content_format, type = u8 } },\n"
+		"\t\tunknown = error"))
+	assert "does not say which value names an item" in report
+	assert "`delta`, `number`" in report
+
+
+def test_a_carried_value_reads_previous_and_the_parts_and_nothing_else(
+		) -> None:
+	"""Four refusals, each naming what it found.
+
+	Not the raw tag: the decode is what takes it apart, and a second place
+	to do that is a second description of one thing. Not another
+	accumulator, for the evaluation-order question it would open. Not a
+	name that is also a part, because a reader of it could mean either.
+	And not a value size, because a sum over a region's worth of deltas has
+	no bound the solver could carry.
+	"""
+	def refused(running: str, size: str = "length") -> str:
+		return rendered(one_region(
+			"\t\ttag_type = u8,\n"
+			"\t\ttag_decode = { delta = tag >> 4, length = tag & 0x0F },\n"
+			f"\t\ttag_running = {running},\n"
+			"\t\ttag_identity = number,\n"
+			f"\t\tvalue_size = switch (delta) {{ default: {size} }},\n"
+			"\t\tunknown = error"))
+
+	assert "`tag` is not in scope in a running value" in \
+		refused("{ number = previous + tag }")
+	assert "`a` is not in scope in a running value" in \
+		refused("{ a = previous + delta, number = previous + a }")
+	assert "`delta` is both a decoded part and a carried value" in \
+		refused("{ delta = previous + length, number = previous + 1 }")
+	assert "`number` is a carried value and cannot size a value" in \
+		refused("{ number = previous + delta }", size="number")
+	assert "declared more than once" in \
+		refused("{ number = previous + delta, number = previous + 1 }")
+
+
 def test_a_value_size_may_be_the_tag_s_own_part() -> None:
 	"""CoAP's option header: the length is the second nibble of the tag.
 

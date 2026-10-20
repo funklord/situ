@@ -754,6 +754,11 @@ def _tlv(placement: Placement) -> list[str]:
 		# order they were written in is not a fact about any message.
 		for part in sorted(grammar.tag_decode, key=lambda p: p.name):
 			lines.append(f"  {name} tlv decode {part.name}: {part.source}")
+		# A carried value, with its arithmetic: `previous + delta` and
+		# `previous + delta + 1` number every item differently, and the
+		# name alone is the same either way.
+		for part in sorted(grammar.tag_running, key=lambda p: p.name):
+			lines.append(f"  {name} tlv running {part.name}: {part.source}")
 		# Which decoded part a `known` key matches (0023). Matching the other
 		# one finds an item, and not the one asked for.
 		if grammar.identity is not None:

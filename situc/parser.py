@@ -283,6 +283,7 @@ class Parser:
 		# A tlv region's item grammar, filled in as its argument list is read
 		# and collected when the region node is built.
 		self._tag_decode: tuple[ast.TagPart, ...] = ()
+		self._tag_running: tuple[ast.TagPart, ...] = ()
 		self._value_size: ast.ValueSize | None    = None
 		self._known: tuple[ast.KnownTag, ...]     = ()
 		# A `register_block` lowers to several declarations; the rest are
@@ -1883,9 +1884,10 @@ class Parser:
 		name  = self.expect_ident("a region name")
 		self.expect_symbol("(", "before the tlv arguments")
 
-		self._tag_decode = ()
-		self._value_size = None
-		self._known      = ()
+		self._tag_decode  = ()
+		self._tag_running = ()
+		self._value_size  = None
+		self._known       = ()
 		args: list[ast.Attr] = []
 		while not self.current.is_symbol(")"):
 			args.append(self.parse_tlv_argument())
@@ -1910,6 +1912,7 @@ class Parser:
 			wire_types = tuple(case.label for case in sizes.cases
 			                   if case.label is not None) if sizes else (),
 			tag_decode = self._tag_decode,
+			tag_running = self._tag_running,
 			value_size = sizes,
 			known      = self._known,
 			identity   = self._tlv_identity(args),
@@ -1955,6 +1958,15 @@ class Parser:
 			return ast.Attr(self.span_from(name), name.text, None,
 			                raw=self._verbatim(start))
 
+		if name.text == "tag_running":
+			# The same `{ name = expr }` shape as `tag_decode`, because it
+			# is the same thing one step on: a value named here and computed
+			# from what is in scope. What differs is the scope, and that is
+			# `wellformed`'s to say.
+			self._tag_running = self.parse_tag_decode(what="tag running")
+			return ast.Attr(self.span_from(name), name.text, None,
+			                raw=self._verbatim(start))
+
 		if name.text == "value_size":
 			self._value_size = self.parse_value_size()
 			return ast.Attr(self.span_from(name), name.text, None,
@@ -1978,25 +1990,30 @@ class Parser:
 		"""The source text from `start` to the cursor, as written."""
 		return self.source.text[start.span.start : self.tokens[self.pos - 1].span.end]
 
-	def parse_tag_decode(self) -> tuple[ast.TagPart, ...]:
+	def parse_tag_decode(self, what: str = "tag decode"
+			) -> tuple[ast.TagPart, ...]:
 		"""`{ field = tag >> 3, wire = tag & 0x7 }`
 
 		Each part is an expression over the raw tag. Nothing checks here that
 		it names only `tag` -- that is `wellformed`'s, which can say what else
 		was in scope.
+
+		`what` is the thing being opened, because `tag_running` has the same
+		shape and a refusal naming the wrong one sends the reader to the
+		wrong line.
 		"""
-		self.expect_symbol("{", "to open the tag decode")
+		self.expect_symbol("{", f"to open the {what}")
 
 		parts: list[ast.TagPart] = []
 		while not self.current.is_symbol("}"):
-			name = self.expect_ident("a tag part name")
-			self.expect_symbol("=", "after the tag part name")
+			name = self.expect_ident(f"a {what} name")
+			self.expect_symbol("=", f"after the {what} name")
 			parts.append(ast.TagPart(self.span_from(name), name.text,
 			                         self.parse_expr()))
 			if self.accept_symbol(",") is None:
 				break
 
-		self.expect_symbol("}", "to close the tag decode")
+		self.expect_symbol("}", f"to close the {what}")
 		return tuple(parts)
 
 	def parse_value_size(self) -> ast.ValueSize:

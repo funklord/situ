@@ -678,6 +678,19 @@ tlv options (
 );
 ```
 
+An item's identity may be **carried** rather than read, which is CoAP's
+option number -- the running sum of every delta ahead of it:
+
+```situ
+tag_running  = { number = previous + delta },
+tag_identity = number,
+```
+
+`previous` is that value for the item before and zero before the first, so a
+`known` key matches the number rather than the delta. It is the only state
+situ keeps in a layout rather than inside a codec, and the generated `read`
+takes it as a parameter: an item reached by offset alone cannot have one.
+
 `indexed (base = region)` is the other shape a struct cannot describe:
 members reached through an offset table rather than laid out in order, which
 is what a page format like SQLite's does. `opaque name [n]` is the honest
