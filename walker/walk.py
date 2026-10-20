@@ -1344,6 +1344,27 @@ def varint(view: View, index: int) -> tuple[int, int]:
 	return decode_varint(view, start, *rules)
 
 
+def decode_number(view: View, start: int, max_bytes: int,
+		terminal_bits: int, big: bool, fixed: bool = False) -> tuple[int, int]:
+	"""A tag or a length, as the image says it is encoded.
+
+	`fixed` is a scalar of `max_bytes` bytes rather than a varint, which is
+	what `tag_type = u8` and `prefixed(u8)` are. Without it the image's
+	fallback made both a ten-byte leb128, so a `u8` tag at or above 0x80
+	consumed the byte after it and every offset past that item was wrong
+	(26.664). The generated backends had the same fallback and the same
+	fix; this is the pair of walkers' half.
+	"""
+	if not fixed:
+		return decode_varint(view, start, max_bytes, terminal_bits, big)
+
+	if view.limit - start < max_bytes:
+		raise Refused(f"a {max_bytes}-byte number at {start} runs past the"
+		              f" frame")
+	held = view.buffer[start:start + max_bytes]
+	return max_bytes, int.from_bytes(held, "big" if big else "little")
+
+
 def decode_varint(view: View, start: int, max_bytes: int,
 		terminal_bits: int, big: bool) -> tuple[int, int]:
 	"""`varint`'s loop, over parameters rather than a placement.
@@ -1556,7 +1577,7 @@ def tlv_count(view: View, index: int) -> int:
 	rules   = view.image.tlv_rules.get(index)
 	if grammar is None or not rules:
 		raise Refused(f"placement {index} has no tlv grammar in this image")
-	selector_code, tag_bytes, tag_terminal, tag_big = grammar
+	selector_code, tag_bytes, tag_terminal, tag_big, tag_fixed = grammar
 	if selector_code == NONE:
 		raise Refused(f"placement {index} has no tlv selector in this image")
 
@@ -1565,8 +1586,8 @@ def tlv_count(view: View, index: int) -> int:
 
 	while at < view.limit:
 		try:
-			used, tag = decode_varint(view, at, tag_bytes, tag_terminal,
-			                          tag_big)
+			used, tag = decode_number(view, at, tag_bytes, tag_terminal,
+			                          tag_big, tag_fixed)
 		except Refused:
 			break
 		if used == 0:
@@ -1617,15 +1638,16 @@ def tlv_count(view: View, index: int) -> int:
 			# being ten bytes of leb128 where `terminal_bits` is not
 			# consulted at all; a `be128` tag would have separated them.
 			try:
-				size, _held = decode_varint(view, at, tag_bytes,
-				                            tag_terminal, tag_big)
+				size, _held = decode_number(view, at, tag_bytes,
+				                            tag_terminal, tag_big,
+				                            tag_fixed)
 			except Refused:
 				break
 			if size == 0:
 				break
 		elif kind == TLV_PREFIXED:
 			try:
-				used, length = decode_varint(view, at, *length_rule)
+				used, length = decode_number(view, at, *length_rule)
 			except Refused:
 				break
 			if used == 0:

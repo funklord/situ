@@ -36,6 +36,7 @@ from situc.diagnostics import SituError
 from situc.expr import evaluate
 from situc.invariant import paths_in
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.types import lookup
 from situc.relation import Refused as RelationRefused
 from situc.relation import plan as plan_relation
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -800,6 +801,16 @@ TLV_RULE_KIND = {"fixed": 0, "prefixed": 1, "self_delimiting": 2, "error": 3,
                  "computed": 4}
 
 
+#: `tag_flags` and `len_flags` bit 0: the number is a FIXED-WIDTH scalar of
+#: `bytes` bytes rather than a varint, read in the order bit 1 gives.
+#:
+#: Added because the fallback was silent in both directions (26.664): a
+#: name that is not a declared varint got `(10, 7, 0)` here, so the walkers
+#: read a `u8` tag as a ten-byte leb128 and a tag byte at or above 0x80
+#: consumed the one after it. `prefixed(u8)` had it too.
+TLV_FIXED_WIDTH = 1
+
+
 def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
 	"""A varint's decoder parameters: max bytes, terminal bits, flags.
 
@@ -814,6 +825,39 @@ def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
 	big = decl.encoding is ast.VarintEncoding.BE128
 	return (min(decl.max_bytes, 255), min(decl.terminal_bits, 255),
 	        2 if big else 0)
+
+
+def _tlv_tag_name(placement: "Placement") -> str | None:
+	"""What the region said its tag is read as.
+
+	The placement records a varint's NAME and a scalar's WIDTH, so the
+	scalar's own spelling has to come back from the width -- which is
+	enough, because every scalar of a width reads the same way.
+	"""
+	if placement.tlv_tag_bits is None:
+		return placement.tlv_tag_varint
+	return f"u{placement.tlv_tag_bits}"
+
+
+def _number_params(decl: "ast.VarintDecl | None", name: str | None,
+		endian: "ast.Endian | None") -> tuple[int, int, int]:
+	"""The parameters for a tag or a length: a varint's, or a scalar's.
+
+	A declared varint goes to `_varint_params`. Anything else that NAMES a
+	scalar is a fixed-width read of that many bytes, flagged so the walkers
+	do not take it for a varint -- which is what they did, for every `u8`
+	tag and every `prefixed(u8)` length in the tree.
+	"""
+	if decl is not None:
+		return _varint_params(decl)
+
+	scalar = lookup(name) if name else None
+	if scalar is None:
+		return _varint_params(None)
+
+	big = endian is not ast.Endian.LITTLE
+	return ((scalar.bits + 7) // BITS_PER_BYTE, 0,
+	        TLV_FIXED_WIDTH | (2 if big else 0))
 
 
 def _compile_over_tag(program: "Program", expr: ast.Expr,
@@ -2583,8 +2627,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 		if placement.tlv_grammar is not None:
 			regions = (1 if placement.tlv_ordered else 0)
-			tag_bytes, tag_terminal, tag_flags = _varint_params(
-				varint_decls.get(placement.tlv_tag_varint or ""))
+			tag_bytes, tag_terminal, tag_flags = _number_params(
+				varint_decls.get(placement.tlv_tag_varint or ""),
+				_tlv_tag_name(placement), placement.endian)
 			tlvs_blob += _struct.pack(
 				"<IBBBxIBBBx", at,
 				regions,
@@ -2605,8 +2650,9 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					coverage.unencodable[placement.path] = (
 						f"a tlv value rule of kind `{value_rule.kind}`")
 					continue
-				len_bytes, len_terminal, len_flags = _varint_params(
-					varint_decls.get(value_rule.length_type or ""))
+				len_bytes, len_terminal, len_flags = _number_params(
+					varint_decls.get(value_rule.length_type or ""),
+					value_rule.length_type, placement.endian)
 				tlv_rules_blob += _struct.pack(
 					"<IqBBxxIBBBxI", at,
 					0 if value_rule.label is None else value_rule.label,

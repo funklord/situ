@@ -1684,11 +1684,11 @@ struct split_coverage {
 // zero before the first, and the four backends take it as a parameter --
 // which is what says an item reached by offset alone cannot have a number.
 //
-// Note what a tag byte may be here: `tag_type = u8` is read as a leb128
-// varint by every backend, so a tag with its high bit set consumes the byte
-// after it. Deltas above 7 are therefore misread -- a defect of the tag
-// reader rather than of this region, recorded in section 26 -- and the
-// vectors that exercise this region keep below it.
+// `tag_type = u8` is read as a byte, which it had not been: the width came
+// from a declared varint type, a scalar has none, and every backend fell
+// back to a 64-bit leb128 -- so a tag at or above 0x80 consumed the byte
+// after it and a CoAP delta of 8 was misread (26.664, 26.665). This region
+// is the tree's only scalar tag type and the vectors reach above 0x80 now.
 struct tagged_options {
 	u8 head;
 	tlv options (

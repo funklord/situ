@@ -2302,6 +2302,34 @@ class Emitter:
 		bits = declared.max_bits if declared is not None else 64
 		return (bits + 6) // 7
 
+	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+		"""The tag, read as the type the schema named.
+
+		A declared varint by its own encoding; a SCALAR as that scalar, in
+		the region's byte order. The second case read a 64-bit leb128 until
+		26.664 -- the width came from a varint declaration and a scalar has
+		none -- so `tag_type = u8` consumed two bytes for any tag at or
+		above 0x80, which is every CoAP option delta of 8 or more.
+		"""
+		bits = placement.tlv_tag_bits
+		if bits is None:
+			return [
+				f"\tused = situ_varint_get(situ_base(view) + at,"
+				f" view.limit - at, {max_tag}u, &tag);",
+				"\tif (used == 0u) {",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			]
+
+		width = (bits + 7) // BITS_PER_BYTE
+		return [
+			f"\tif (view.limit - at < {width}u) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\ttag  = (uint64_t){self._fixed_length_read(width, placement.endian)};",
+			f"\tused = {width}u;",
+		]
+
 	def _tlv_item_type(self, struct: ResolvedStruct, placement: Placement,
 			grammar: TlvGrammar, item: str) -> list[str]:
 		"""The cursor: one item's extent, and what its tag decoded to.
@@ -2403,10 +2431,7 @@ class Emitter:
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"",
-			f"\tused = situ_varint_get(situ_base(view) + at, view.limit - at, {max_tag}u, &tag);",
-			"\tif (used == 0u) {",
-			"\t\treturn SITU_ERR_BOUNDS;",
-			"\t}",
+			*self._tlv_tag_read(placement, max_tag),
 			"",
 			*stored,
 			"\tat = at + used;",

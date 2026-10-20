@@ -1608,6 +1608,32 @@ class Emitter:
 		holder = placement.path.partition(".")[0]
 		return f"{py_name(holder)}_{py_name(placement.name)}_item"
 
+	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+		"""The tag, read as the type the schema named (26.664).
+
+		A declared varint by its own encoding; a scalar as that scalar, in
+		the region's byte order. C's copy carries the reasoning.
+		"""
+		bits = placement.tlv_tag_bits
+		if bits is None:
+			return [
+				f"\t\tread = varint_get(data, at, {max_tag})",
+				"\t\tif read is None:",
+				f'\t\t\traise BoundsError(f"the tag at {{at}} runs past'
+				f' the region")',
+				"\t\ttag, used = read",
+			]
+
+		width = (bits + 7) // BITS_PER_BYTE
+		order = _byte_order(placement.endian)
+		return [
+			f"\t\tif len(data) - at < {width}:",
+			f'\t\t\traise BoundsError(f"the tag at {{at}} runs past the'
+			f' region")',
+			f"\t\ttag  = int.from_bytes(data[at:at + {width}], {order})",
+			f"\t\tused = {width}",
+		]
+
 	def _tlv_carried(self, struct: ResolvedStruct, grammar: TlvGrammar,
 			part: TagPart) -> str:
 		"""One carried value, over `previous` and this item's own parts.
@@ -1647,10 +1673,7 @@ class Emitter:
 			f'\t\t\traise BoundsError(f"no item at {{at}}: the region ends at'
 			f' {{len(data)}}")',
 			"",
-			f"\t\tread = varint_get(data, at, {max_tag})",
-			"\t\tif read is None:",
-			f'\t\t\traise BoundsError(f"the tag at {{at}} runs past the region")',
-			"\t\ttag, used = read",
+			*self._tlv_tag_read(placement, max_tag),
 			"\t\tstart = at",
 			"\t\tat = at + used",
 			"",

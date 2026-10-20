@@ -4350,6 +4350,37 @@ class Emitter:
 		bits = declared.max_bits if declared is not None else 64
 		return (bits + 6) // 7
 
+	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+		"""The tag, read as the type the schema named (26.664).
+
+		A declared varint by its own encoding; a scalar as that scalar, in
+		the region's byte order. C's copy carries the reasoning.
+		"""
+		bits = placement.tlv_tag_bits
+		if bits is None:
+			return [
+				f"\t\tused = situ_varint_get(situ_base(raw_) + at,"
+				f" raw_.limit - at, {max_tag}u, &tag);",
+				"\t\tif (used == 0u) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
+
+		width  = (bits + 7) // 8
+		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
+		order  = _order_suffix(placement.endian)
+		read   = ("static_cast<std::uint64_t>(situ_base(raw_)[at])"
+		          if suffix is None else
+		          f"static_cast<std::uint64_t>"
+		          f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
+		return [
+			f"\t\tif (raw_.limit - at < {width}u) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+			f"\t\ttag  = {read};",
+			f"\t\tused = {width}u;",
+		]
+
 	def _tlv_item_type(self, placement: Placement, grammar: TlvGrammar,
 			item: str) -> list[str]:
 		"""One item's extent and what its tag decoded to."""
@@ -4428,11 +4459,7 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
-			f"\t\tused = situ_varint_get(situ_base(raw_) + at, raw_.limit - at,"
-			f" {max_tag}u, &tag);",
-			"\t\tif (used == 0u) {",
-			"\t\t\treturn ::situ::rt::err::bounds;",
-			"\t\t}",
+			*self._tlv_tag_read(placement, max_tag),
 			"",
 			*stored,
 			"\t\tat += used;",

@@ -20,7 +20,9 @@ import pytest
 
 from situc import ast
 from situc.diagnostics import SituError
+from situc.layout import Placement, solve
 from situc.parser import parse_text
+from situc.resolve import resolve
 
 PREAMBLE = """target buffer;
 endian little;
@@ -395,6 +397,69 @@ def test_a_value_rule_that_is_not_one_is_refused() -> None:
 
 	assert "expected a value size" in report
 	assert "`prefixed(<length type>)`" in report
+
+
+def test_a_tag_type_is_a_varint_or_a_scalar_and_nothing_else() -> None:
+	"""The silent fallback, shut (26.664).
+
+	`tag_type` was unchecked: the width every backend reads a tag with
+	comes from a DECLARED varint type, so a name that is not one -- a
+	scalar, or a typo, or nothing at all -- fell back to a 64-bit leb128.
+	`tag_type = u8` therefore read a tag at or above 0x80 as the first byte
+	of a multi-byte varint and consumed the one after it, and
+	`tag_type = nonesuch` did the same thing while naming nothing.
+
+	A scalar is accepted because 9.5's simple form has shown `tag_type =
+	u8` since the scaffolding commit; what is refused is the third case
+	that used to be indistinguishable from it.
+	"""
+	for good in ("u8", "u16", "pb_varint"):
+		assert region(one_region(
+			f"\t\ttag_type = {good},\n"
+			"\t\ttag_decode = { kind = tag >> 4 },\n"
+			"\t\ttag_identity = kind,\n"
+			"\t\tvalue_size = switch (kind) { default: 1 },\n"
+			"\t\tunknown = error")) is not None, good
+
+	report = rendered(one_region(
+		"\t\ttag_type = pb_varnt,\n"
+		"\t\ttag_decode = { kind = tag >> 4 },\n"
+		"\t\ttag_identity = kind,\n"
+		"\t\tvalue_size = switch (kind) { default: 1 },\n"
+		"\t\tunknown = error"))
+
+	assert "`pb_varnt` is not a type a tag can be read as" in report
+	assert "did you mean `pb_varint`?" in report, \
+		"the near miss is not named"
+
+
+def test_a_scalar_tag_carries_its_width_and_a_varint_does_not() -> None:
+	"""Which of the two a tag is, as the layout records it.
+
+	The width is what the backends read the tag with, and it had nowhere
+	to come from for a scalar: `tlv_tag_varint` is a name and resolves to
+	no declaration, so every backend computed ten bytes of leb128 from a
+	64-bit default.
+	"""
+	def placement(tag: str) -> Placement:
+		schema   = parse_text(one_region(
+			f"\t\ttag_type = {tag},\n"
+			"\t\ttag_decode = { kind = tag >> 4 },\n"
+			"\t\ttag_identity = kind,\n"
+			"\t\tvalue_size = switch (kind) { default: 1 },\n"
+			"\t\tunknown = error"))
+		resolved = resolve(schema, solve(schema))
+		return next(one for struct in resolved.structs.values()
+		            for one in struct.layout.placements
+		            if one.kind == "tlv")
+
+	assert placement("u8").tlv_tag_bits == 8
+	assert placement("u16").tlv_tag_bits == 16
+	assert placement("pb_varint").tlv_tag_bits is None
+	assert placement("pb_varint").tlv_tag_varint == "pb_varint"
+	# And the region's own byte order, which was None and left each
+	# backend to its own default (26.665).
+	assert placement("u16").endian is not None
 
 
 def test_a_carried_value_accumulates_across_items() -> None:

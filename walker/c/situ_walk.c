@@ -792,6 +792,40 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
                                    uint32_t terminal_bits, int big,
                                    uint32_t *consumed, uint64_t *value);
 
+/* `tag_flags` and `len_flags` bit 0: a fixed-width scalar rather than a
+ * varint, which is what `tag_type = u8` and `prefixed(u8)` are. The image
+ * said `(10, 7, 0)` for both until 26.664, so this walker read a one-byte
+ * tag as a ten-byte leb128 and a tag at or above 0x80 consumed the byte
+ * after it. */
+#define TLV_FIXED_WIDTH 1u
+
+/* A tag or a length, as the image says it is encoded. */
+static situ_walk_err decode_number(const uint8_t *message, uint32_t len,
+                                   uint32_t at, uint32_t max_bytes,
+                                   uint32_t terminal_bits, int big,
+                                   int fixed,
+                                   uint32_t *consumed, uint64_t *value)
+{
+	if (!fixed) {
+		return decode_varint(message, len, at, max_bytes, terminal_bits,
+		                     big, consumed, value);
+	}
+
+	if (max_bytes == 0u || max_bytes > 8u || len - at < max_bytes) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	uint64_t held = 0u;
+	for (uint32_t i = 0u; i < max_bytes; i++) {
+		const uint32_t shift = big ? (max_bytes - 1u - i) : i;
+		held |= (uint64_t)message[at + i] << (shift * 8u);
+	}
+
+	*consumed = max_bytes;
+	*value    = held;
+	return SITU_WALK_OK;
+}
+
 situ_walk_err situ_walk_varint(const situ_walk_image *image,
                                const uint8_t *message, uint32_t len,
                                uint32_t index, uint32_t at,
@@ -2452,6 +2486,7 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 	const uint32_t tag_bytes    = row[12];
 	const uint32_t tag_terminal = row[13];
 	const int      tag_big      = (row[14] & 2u) != 0;
+	const int      tag_fixed    = (row[14] & TLV_FIXED_WIDTH) != 0;
 	if (selector == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;
 	}
@@ -2477,8 +2512,8 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 	while (at < len) {
 		uint32_t used = 0u;
 		uint64_t tag  = 0u;
-		if (decode_varint(message, len, at, tag_bytes, tag_terminal,
-		                  tag_big, &used, &tag) != SITU_WALK_OK
+		if (decode_number(message, len, at, tag_bytes, tag_terminal,
+		                  tag_big, tag_fixed, &used, &tag) != SITU_WALK_OK
 		                || used == 0u) {
 			break;
 		}
@@ -2520,6 +2555,7 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 		const uint32_t len_bytes    = found[20];
 		const uint32_t len_terminal = found[21];
 		const int      len_big      = (found[22] & 2u) != 0;
+		const int      len_fixed    = (found[22] & TLV_FIXED_WIDTH) != 0;
 		uint32_t       size = 0u;
 
 		if (rule_kind == TLV_FIXED) {
@@ -2528,8 +2564,9 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			/* The value IS a varint, read with the TAG varint's parameters
 			 * -- which is what the generated C does. */
 			uint64_t held = 0u;
-			if (decode_varint(message, len, at, tag_bytes, tag_terminal,
-			                  tag_big, &size, &held) != SITU_WALK_OK
+			if (decode_number(message, len, at, tag_bytes, tag_terminal,
+			                  tag_big, tag_fixed, &size, &held)
+			                != SITU_WALK_OK
 			                || size == 0u) {
 				break;
 			}
@@ -2563,8 +2600,9 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			size = (uint32_t)computed;
 		} else if (rule_kind == TLV_PREFIXED) {
 			uint64_t length = 0u;
-			if (decode_varint(message, len, at, len_bytes, len_terminal,
-			                  len_big, &used, &length) != SITU_WALK_OK
+			if (decode_number(message, len, at, len_bytes, len_terminal,
+			                  len_big, len_fixed, &used, &length)
+			                != SITU_WALK_OK
 			                || used == 0u) {
 				break;
 			}

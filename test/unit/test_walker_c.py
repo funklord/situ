@@ -2605,6 +2605,12 @@ def test_they_agree_about_a_tag_sized_value(tmp_path: Path) -> None:
 			("one option, one byte",  b"\xAA\x31\x77",           "tlv=1"),
 			("two options",           b"\xAA\x31\x77\x52\x01\x02", "tlv=2"),
 			("an empty value",        b"\xAA\x30",               "tlv=1"),
+			# A tag with its high bit set, which is a delta of 8 or more --
+			# every vector here kept below that while a `u8` tag was read as
+			# a leb128, and this one is why (26.664): as a varint `0x82`
+			# consumes `0x01` too and the item ends a byte late.
+			("a delta above seven",   b"\xAA\x82\x01\x02",       "tlv=1"),
+			("then another after it", b"\xAA\x82\x01\x02\x30",   "tlv=2"),
 			("a length past the frame",
 			                          b"\xAA\x3F\x01",           "tlv=0")):
 		assert c_region_counts(tmp_path, blob, message, shape) \

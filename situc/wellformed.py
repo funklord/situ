@@ -651,11 +651,55 @@ def check_tlv_grammar(schema: ast.Schema) -> None:
 
 
 def _check_one_tlv(region: ast.Tlv, varints: set[str]) -> None:
+	_check_tag_type(region, varints)
 	_check_tag_decode(region)
 	_check_identity(region)
 	_check_tag_running(region)
 	_check_value_size(region, varints)
 	_check_known_tags(region)
+
+
+def _check_tag_type(region: ast.Tlv, varints: set[str]) -> None:
+	"""The tag is read as a declared varint or as a scalar, and as nothing
+	else.
+
+	Unchecked until 26.664, and the fallback was silent: every backend asks
+	the schema for a varint declaration of this name and, finding none,
+	reads the tag as a 64-bit leb128. So `tag_type = u8` -- the spelling
+	9.5's simple form has shown since the scaffolding commit -- read a tag
+	byte at or above 0x80 as the first byte of a multi-byte varint and
+	consumed the one after it, and `tag_type = nonesuch` did the same thing
+	while naming nothing at all.
+	"""
+	tag_type = region.argument("tag_type")
+	if tag_type is None:
+		return		# the simple form may key on the raw bytes
+
+	name = tag_type.name if isinstance(tag_type, ast.NameRef) else None
+	if name is None:
+		raise error(
+			"`tag_type` names the type a tag is read as",
+			tag_type.span,
+			label = "expected a type name here",
+			notes = ["a declared `varint_type`, or a scalar such as `u8`"],
+		)
+
+	if name in varints or is_scalar_name(name):
+		return
+
+	near  = difflib.get_close_matches(name, sorted(varints), n = 1)
+	notes = [f"did you mean `{near[0]}`?"] if near else []
+	raise error(
+		f"`{name}` is not a type a tag can be read as",
+		tag_type.span,
+		label = "neither a declared varint type nor a scalar",
+		notes = notes + [
+			f"declared varint types: {', '.join(sorted(varints))}"
+			if varints else "this schema declares no `varint_type`",
+			"a scalar tag is read as that scalar -- `u8` is one byte -- and"
+			" a varint tag by its own encoding",
+		],
+	)
 
 
 def _check_identity(region: ast.Tlv) -> None:

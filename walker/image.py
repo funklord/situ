@@ -429,7 +429,7 @@ class Image:
 	#: (section 9.5). The section existed and nothing loaded it, and it
 	#: carried no selector to load: an image said how to read an item's TAG
 	#: and nothing about how far its VALUE reaches.
-	tlvs: dict[int, tuple[int, int, int, bool]] = field(default_factory=dict)
+	tlvs: dict[int, tuple[int, int, int, bool, bool]] = field(default_factory=dict)
 	#: placement index -> [(label, kind, is_default, size, length_varint)],
 	#: in declaration order, which is the order a selector is matched in.
 	#: 9.5's four ways for a value to say where it ends, the last of them by
@@ -667,7 +667,8 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			 tag_bytes, tag_terminal, tag_flags) = _struct.unpack_from(
 				"<IBBBxIBBBx", blob, at + i * stride)
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
-			                     bool(tag_flags & 2))
+			                     bool(tag_flags & 2),
+			                     bool(tag_flags & 1))
 
 	if TLV_RULES in found:
 		at, records, stride = found[TLV_RULES]

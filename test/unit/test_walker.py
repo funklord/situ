@@ -1878,6 +1878,12 @@ def test_a_tag_sized_value_is_counted_the_same_in_all_five(
 		"an empty value":        (b"\xAA\x30",                       1),
 		"an empty value, then one":
 		                         (b"\xAA\x30\x31\x77",               2),
+		# A tag with its high bit set. Every vector here kept below 0x80
+		# while a `u8` tag was read as a leb128 (26.664), which is exactly
+		# the range where a one-byte varint and a one-byte scalar agree --
+		# so the five columns agreed about a tag none of them read.
+		"a delta above seven":   (b"\xAA\x82\x01\x02",               1),
+		"and one after it":      (b"\xAA\x82\x01\x02\x30",           2),
 		# 15 bytes declared and one present: the bound every column
 		# applies after the size is computed.
 		"a length past the frame":

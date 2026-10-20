@@ -1038,6 +1038,30 @@ class Emitter:
 		bits = declared.max_bits if declared is not None else 64
 		return (bits + 6) // 7
 
+	def _tlv_tag_read(self, placement: Placement, max_tag: int) -> list[str]:
+		"""The tag, read as the type the schema named (26.664).
+
+		A declared varint by its own encoding; a scalar as that scalar, in
+		the region's byte order. C's copy carries the reasoning.
+		"""
+		bits = placement.tlv_tag_bits
+		if bits is None:
+			return [
+				f"\t\tlet (tag, used) = situ_rt::varint_get(self.bytes, at,"
+				f" {max_tag})",
+				"\t\t\t.ok_or(Error::Bounds)?;",
+			]
+
+		width  = (bits + 7) // 8
+		reader = _reader(placement.endian)
+		return [
+			f"\t\tif self.bytes.len() - at < {width} {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			f"\t\tlet tag = situ_rt::{reader}(self.bytes, at, {width});",
+			f"\t\tlet used = {width};",
+		]
+
 	def _tlv_carried(self, struct: ResolvedStruct, grammar: TlvGrammar,
 			part: TagPart) -> str:
 		"""One carried value, over `previous` and this item's own parts.
@@ -1082,9 +1106,7 @@ class Emitter:
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"",
-			f"\t\tlet (tag, used) = situ_rt::varint_get(self.bytes, at,"
-			f" {max_tag})",
-			"\t\t\t.ok_or(Error::Bounds)?;",
+			*self._tlv_tag_read(placement, max_tag),
 			"\t\tlet start = at;",
 			f"\t\t{binding} = at + used;",
 			"\t\tlet size;",

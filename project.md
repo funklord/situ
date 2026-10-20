@@ -1722,6 +1722,15 @@ named the boundary that made 8b10b and CoAP look like one question. A
 line position; this is the first thing in the layout that holds anything,
 and it holds exactly one value per name per region.
 
+**A scalar tag type is read as that scalar.** `tag_type = u8` is one byte
+read as a byte and `tag_type = u16` two in the region's byte order; a
+declared `varint_type` is read by its own encoding. The width came from a
+varint declaration alone until 26.664, so a scalar fell back to a 64-bit
+leb128 and a tag at or above `0x80` consumed the byte after it -- which is
+every CoAP option delta of 8 or more. A `tag_type` that names neither a
+declared varint nor a scalar is refused, where it used to take the same
+silent fallback.
+
 **It was specified before any code existed and implemented 26.663.** The
 sentence above has said "or an expression" since the scaffolding commit of
 2026-07-26, and the four forms the parser knew were a literal,
@@ -7256,6 +7265,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.665 A tlv region had no byte order, and four backends disagreed
+
+Moved to `doc/decision/26.665-a-tlv-region-had-no-byte-order-and-four-backends-disagreed.md`.
 
 ### 26.664 A `u8` tag is read as a ten-byte varint
 

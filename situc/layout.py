@@ -305,6 +305,16 @@ class Placement:
 	# encodings. A non-minimal tag is a cause of non-canonicity in its own
 	# right, independent of anything the items do.
 	tlv_tag_varint: str | None	= None
+	#: A SCALAR tag type's width in bits -- `tag_type = u8` is one byte read
+	#: as a byte, not a leb128 bounded at one. None where the tag is a
+	#: declared varint type, which is the other half of the same argument.
+	#:
+	#: Carried because every backend asked the schema for a varint
+	#: declaration, found none for a scalar, and fell back to a 64-bit
+	#: leb128: a tag byte at or above 0x80 then consumed the byte after it
+	#: (26.664). The simple form in 9.5 has said `tag_type = u8` since the
+	#: scaffolding commit.
+	tlv_tag_bits: int | None	= None
 	tlv_tag_minimal: bool		= True
 	tlv_wire_types: tuple[int, ...]	= ()
 	# How the region's items are found. Empty until the front end read the
@@ -1799,6 +1809,10 @@ class Solver:
 		tag_type   = member.argument("tag_type")
 		tag_varint = (self.varints.get(tag_type.name)
 		              if isinstance(tag_type, ast.NameRef) else None)
+		tag_scalar = (lookup(tag_type.name)
+		              if tag_varint is None and isinstance(tag_type,
+		                                                   ast.NameRef)
+		              else None)
 
 		layout.placements.append(Placement(
 			path          = f"{prefix}.{member.name}",
@@ -1809,7 +1823,15 @@ class Solver:
 			size_bits     = 0,
 			size_max_bits = None,
 			scalar        = None,
-			endian        = None,
+			# The region's own byte order, which its tag and its length
+			# prefixes are read in. This was None, and the four backends
+			# disagree about what None means -- Python's helper answers
+			# "little" for it and Rust's answers big-endian, each
+			# documented as a default for a field that HAS no order. So a
+			# `u16` tag or a `prefixed(u16)` length would have been read
+			# two ways by four backends, invisibly while every such read
+			# in the tree is one byte wide (26.665).
+			endian        = scope.endian,
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			attrs         = member.attrs,
@@ -1817,6 +1839,7 @@ class Solver:
 			tlv_duplicates = member.duplicates.value,
 			tlv_ordered   = member.ordered,
 			tlv_tag_varint = tag_varint.name if tag_varint else None,
+			tlv_tag_bits  = tag_scalar.bits if tag_scalar else None,
 			tlv_tag_minimal = tag_varint.minimal if tag_varint else True,
 			tlv_wire_types = member.wire_types,
 			tlv_grammar   = _tlv_grammar(member),
