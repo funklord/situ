@@ -1112,6 +1112,33 @@ Unbounded -- honest, since the bound really is external, but the schema cannot
 carry it. If a `[max]` on a `remaining` field named the worst case without
 changing the offset, a body-only schema could state its cap.
 
+> **Built, and the refusal you met was sending you to the wrong spelling
+> (26.539, 26.669).** The cap exists as a clause rather than an attribute:
+>
+>     u8  content[remaining] max 470;
+>
+> -- no brackets, the same word in the same position as `until D max N`.
+> Measured on your shape: `struct node_body size=1..471` with
+> `content offset=AbsoluteStatic(0x01) size=Bounded(0, 470)`, which is
+> exactly "the worst case named without changing the offset".
+>
+> **And your two held-back layouts are schemas today.** The disclosure
+> below -- `salt[16]` then `field[remaining]`, bounded at
+> `FZN_DISCLOSE_MAX_FIELD` -- compiles as `size=16..400` with
+> `field Bounded(0, 384)`. It was left in C because the cap was unsayable
+> and the cap is sayable.
+>
+> **The refusal is fixed rather than explained**, because what you met was
+> not a missing feature: the message said a size cap "is spelled `max N`
+> after `until`", and `until` is a DELIMITED run. Yours reach the end of
+> the frame, so the one spelling that would have worked was the one it did
+> not name -- 26.137's rule again, a refusal read as "nothing works". It
+> names `[remaining]` for a frame-length run now, and for a counted run it
+> names the count's own field (`put [max = N] on n`), which was a third
+> audience the one message was sending to `until` as well. The test that
+> covers this asserted only "means nothing here" while its docstring
+> claimed the message "names the spelling"; it checks the claim now.
+
 ## 3. `inline` is a reserved word
 
 Minor, and correct of you to refuse: our catalog content-kind enum wanted an
@@ -1182,6 +1209,20 @@ remaining-minus-trailing-fixed, or -- since the codec already knows its own
 tag length -- a `sealed{}` region that reserves the declared tag from the
 tail the way it reserves it from the front.
 
+> **Still open, re-measured 2026-10-21 (26.669).** `u8 commitment[32]; u8
+> ciphertext[remaining]; u8 tag[16];` is refused as it was -- "`[remaining]`
+> must be the last member of its frame" -- and the cap added since does not
+> reach it: `max N` bounds how large the run may be and does not move where
+> it ends. So this is a real gap and distinct from your limit 2, which is
+> built.
+>
+> Recorded rather than designed, because the two shapes you offer are not
+> equivalent and choosing between them is situ's holder's: a run sized as
+> remaining-minus-trailing-fixed is a layout form any schema could use,
+> while a `sealed{}` that reserves its tag from the tail is a codec
+> property the region already knows -- narrower, and it would say the thing
+> once rather than at every call site.
+
 ## Disclosure: limit 2 again, so we did not write a schema
 
 Our committed field is `salt[16]` then `field[remaining]`, with `field`
@@ -1189,6 +1230,17 @@ bounded at `FZN_DISCLOSE_MAX_FIELD`. That bound sits on a `remaining` array
 and situc refuses `[max]` there -- the same refusal our tree body and
 catalog content already reported. The layout is expressible; the cap is not,
 so a schema would state less than our constant does, and we left it in C.
+
+> **Write it: the cap is `max N` after `[remaining]`, no brackets (26.669).**
+> Measured on exactly this shape --
+>
+>     struct disclosure {
+>         u8 salt[16];
+>         u8 field[remaining] max 384;
+>     }
+>
+> -- which maps as `size=16..400`, `salt` at `AbsoluteStatic(0x00)` and
+> `field Bounded(0, 384)`. The schema now states what your constant does.
 
 ## The record slot converted, and showed the length-tie you cannot state
 

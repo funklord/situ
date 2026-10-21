@@ -7277,6 +7277,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.669 A refusal that named one of three spellings
+
+Moved to `doc/decision/26.669-a-refusal-that-named-one-of-three-spellings.md`.
+
 ### 26.668 The adopter path is three gates, and none substitutes
 
 Moved to `doc/decision/26.668-the-adopter-path-is-three-gates.md`.

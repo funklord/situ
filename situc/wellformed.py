@@ -2537,8 +2537,32 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 		if getattr(member, "array", None) is not None:
 			if _is_byte_run_equality(member, attr):
 				return None
-			return ("a scalar field -- an array has no single value to bound, "
-			        "and a size cap is spelled `max N` after `until`")
+			# Which spelling to point at depends on which run this is, and
+			# naming only one sends the other's author away. `[remaining]
+			# max N` was added by 26.539; this message went on naming
+			# `until` alone, so `fuzznet` -- whose record bodies are
+			# `content[remaining]` with a cap that lives in the enclosing
+			# record -- read it as "no cap is sayable here" and recorded
+			# the gap. That is 26.137's rule again: a refusal that does not
+			# say what WOULD have worked is read as "nothing works"
+			# (26.669).
+			size = getattr(member.array, "size", None)
+			if isinstance(size, ast.Remaining):
+				return ("a scalar field -- an array has no single value to "
+				        "bound, and a run that reaches the end of the frame "
+				        "caps itself with `max N` after `[remaining]`")
+			if size is not None:
+				# A counted array is bounded through its COUNT, and the
+				# message used to send this author to `until` as well --
+				# a third spelling that is not theirs either. `u8 n
+				# [max = 4]` gives `body` `Bounded(0, 4)`, measured.
+				named = paths_in(size)
+				where = f"`{named[0]}`" if named else "the count"
+				return ("a scalar field -- an array has no single value to "
+				        f"bound, and a counted run is bounded through its "
+				        f"count: put `[max = N]` on {where}")
+			return ("a scalar field -- an array has no single value to "
+			        "bound, and a size cap is spelled `max N` after `until`")
 		if getattr(member, "until", None) is not None:
 			return ("a scalar field -- a delimited run's cap is spelled "
 			        "`max N` after `until`, which is syntax rather than this")

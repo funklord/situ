@@ -92,13 +92,45 @@ def test_a_cap_where_something_already_bounds_the_run_is_refused() -> None:
 	assert "already bounded" in str(raised.value)
 
 
-def test_the_attribute_form_is_still_refused() -> None:
-	"""The refusal fuzznet met, unchanged: it names the spelling instead."""
+def test_the_attribute_form_is_refused_and_names_this_run_s_spelling(
+		) -> None:
+	"""The refusal fuzznet met, and what it sent them to.
+
+	This asserted `means nothing here` and said in its docstring that the
+	message "names the spelling instead" -- which was the intent and not
+	the fact. The message named `max N` after `until`, and `until` is a
+	DELIMITED run: fuzznet's are `content[remaining]` record bodies whose
+	cap lives in the enclosing record, so the one spelling that would have
+	worked for them was the one it did not mention, and their report
+	records the cap as unsayable (26.669).
+
+	So the assertion now checks the claim the docstring makes. Three runs,
+	three caps, and a message that names the right one each time: the
+	frame-length run caps itself after `[remaining]`, the counted run is
+	bounded through its count and the message names the count's own field,
+	and a delimited run keeps `max N` after `until`.
+	"""
 	with pytest.raises(SituError) as raised:
 		solve(parse_text(
 			PREAMBLE + "struct b { u8 k; u8 c[remaining] [max = 470]; }\n"))
 
-	assert "means nothing here" in str(raised.value)
+	text = raised.value.diagnostic.render()
+	assert "means nothing here" in text
+	assert "`max N` after `[remaining]`" in text, \
+		"the refusal does not name the spelling that works for this run"
+	assert "after `until`" not in text, \
+		"a frame-length run is sent to a delimited run's spelling"
+
+	# The counted run, which is neither: bounded through its count, and the
+	# message names the field rather than describing it.
+	with pytest.raises(SituError) as counted:
+		solve(parse_text(
+			PREAMBLE + "struct b { u8 n; u8 c[n] [max = 4]; }\n"))
+
+	text = counted.value.diagnostic.render()
+	assert "bounded through its count" in text
+	assert "put `[max = N]` on `n`" in text, \
+		"the refusal does not name the field the cap belongs on"
 
 
 def test_the_cap_survives_a_round_trip() -> None:
