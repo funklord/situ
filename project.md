@@ -7277,6 +7277,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.670 An escaped span frames, and where decoding would live
+
+Moved to `doc/decision/26.670-an-escaped-span-frames-and-where-decoding-would-live.md`.
+
 ### 26.669 A refusal that named one of three spellings
 
 Moved to `doc/decision/26.669-a-refusal-that-named-one-of-three-spellings.md`.

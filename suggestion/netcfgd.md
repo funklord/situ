@@ -546,6 +546,48 @@ turn `U+00E9` into two bytes, and if situ's answer is "the reader does that",
 then the generated reader and the hand-written one differ by the part that has
 the CVEs in it.
 
+> **It frames, measured 2026-10-21 -- and the sentence you quote was
+> already stale when you quoted it.** That line was `example/json`'s own
+> bill describing a gap in the SCHEMA rather than in situ, and 26.299
+> closed it by putting `[escape = "\\"]` on `text.chars`: the extent of
+> `{"a":"say \"hi\""}` went from 13 of 18 bytes to 18. So the failure you
+> describe -- a scan ending at the first `\"` -- does not happen, and your
+> protocol's hottest member frames correctly however many quotes an
+> operator's file holds.
+>
+> Your real question answers **framing**. Over `"a\"b"` the span comes back
+> as `a\"b`, four bytes with the escape still in them, and
+> `test_an_escaped_span_is_framed_and_not_decoded` pins that on the BYTES
+> now. It was unpinned: the existing coverage asserted the scan's length,
+> its terminated flag and `validate`, all of which a decoding reader would
+> satisfy while handing back something else. Sabotaging it to expect the
+> decoded form fails it, so the distinction is held rather than described.
+>
+> **Where decoding lives in situ's model, which is not "the reader does
+> it".** A transform over a span is a codec, and a `coded` region generates
+>
+>     situ_err_t situ_S_body_decode(situ_view_t view, uint8_t *out,
+>                                   uint32_t cap, uint32_t *len);
+>
+> -- into a caller's buffer, with a capacity check that reports rather than
+> truncating, and no allocation. Escape-stuffing is one of the seven kernel
+> families, and your single-character escapes (`\"`, `\\`, `\n`, `\t` and
+> the rest) are exactly that shape. What is missing for them is a CODE, not
+> a mechanism -- the same gap `linear_block` had until a schema could state
+> its matrix outright (0064).
+>
+> **The numeric escape is the part your CVE point is really about, and it
+> is not stuffing in any form.** Six bytes in, one to three UTF-8 bytes
+> out, with surrogate pairs to join: that is a different kernel or a tier-1
+> `extern`, and tier-1 is where situ puts a decoder whose work needs a
+> buffer. So on today's situ the division is: situ frames, situ can decode
+> the stuffed half through a codec once one is named, and the `\u` half
+> stays yours or becomes a kernel.
+>
+> Whether situ ships a JSON-string codec is its holder's and is recorded
+> (26.670). What is decided is the first half of your question, and the
+> answer is that framing works and is now asserted on the bytes.
+
 ## An idea, offered as one, about the named-member gap
 
 Not a request -- section 6 of the earlier addendum still stands, and netcfgd
