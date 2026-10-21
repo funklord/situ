@@ -2339,6 +2339,13 @@ class Solver:
 			# None for a located member: its offset is whatever the field
 			# says, and the cursor position where it was *written* is a
 			# different number that reads like an answer.
+			#
+			# A literal `at 26` is NOT an exception to that, which was
+			# tried and reverted: `offset_bits` is struct-relative
+			# everywhere else and `at` is measured from the MESSAGE (9.8),
+			# so filling it in from the literal reports a message offset
+			# where every reader expects a struct one. What `ossacli`
+			# reported is real and the answer is not here -- see 26.667.
 			offset_bits    = (None if getattr(member, "located", None) is not None
 			                  else cursor.lo if cursor.is_exact else None),
 			size_bits      = total.lo,

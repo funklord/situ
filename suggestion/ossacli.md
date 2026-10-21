@@ -84,6 +84,31 @@ data-dependent placement only, the surprise is worth a word in the docs
 either way -- a format described from a datasheet full of absolute
 offsets is the case where somebody reaches for it.
 
+> **Answered 2026-10-21, and the answer is a third thing (26.667).** It is
+> not a gap and `at` is not only for data-dependent placement: `at expr` is
+> measured from the start of the MESSAGE (9.8), so a view cannot resolve it
+> however constant the expression is, and every generated accessor takes a
+> `situ_msg_t *` and bounds-checks on each call. The two numbers coincide
+> only for a struct read at message offset zero, which is why the padded
+> form looks like the same layout and reports more.
+>
+> The first reading was built before being refused: filling `offset_bits`
+> in from the folded literal gives exactly the `AbsoluteStatic(0x1A)` you
+> expected, with the alignments too -- and reports a message offset where
+> every other reader of that field expects a struct one. It is reverted,
+> with seven lines of comment at the site so the next person meets the
+> reason rather than the surprise.
+>
+> Section 9.8 now states the relativity and what it costs, which is the
+> word in the docs you asked for. What remains is the holder's and is
+> recorded: whether the offset axis should have a value for a
+> message-relative CONSTANT, which would keep the per-call check and drop
+> the `address = Unstable` a literal does not earn.
+>
+> Your second note needed no answer and gets one anyway: `offsetof` is not
+> a builtin and `offset` is, and the refusal naming all six is the
+> behaviour we would want.
+
 **`offsetof` is not the builtin.** It is `offset`. Not a defect: the
 error named all six builtins and cited project.md section 10, and I had
 the right spelling on the next try. Recorded only because a C programmer

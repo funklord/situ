@@ -1962,6 +1962,17 @@ BMP's `pixel_offset`, TIFF's `ifd_offset`, and DNS name compression's pointer
 protocol, so the capability does not follow the file/protocol line and there is
 no `target file` for it to hang off.
 
+**Measured from the message, which is what its capability reads off.** A
+located member's offset is `DataPlaced` even where the expression is a
+literal, and a schema written as a datasheet reads -- `u32 board_id at 26` --
+therefore reports less than the same layout padded out with `u8 gap[n]`,
+which is `AbsoluteStatic(0x1A)`. That is not the construct under-reporting
+itself: `at 26` is 26 bytes from the MESSAGE, a view cannot resolve it, and
+every generated accessor takes the message and bounds-checks on each call.
+The two numbers coincide only for a struct read at message offset zero.
+Reported from `ossacli`, and 26.667 has the question it raises -- whether
+the offset axis should distinguish a message-relative constant at all.
+
 **It is a reference, not a member in the ordinary sense.** It joins no offset
 chain: it contributes nothing to the enclosing struct's extent, and the member
 declared after it sits where it would if the located member were not there. A
@@ -7265,6 +7276,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.667 What `at <literal>` is, and the offset axis has no value for it
+
+Moved to `doc/decision/26.667-what-at-a-literal-is-and-the-offset-axis-has-no-value-for-it.md`.
 
 ### 26.666 The CoAP example, and the three faults it found
 
