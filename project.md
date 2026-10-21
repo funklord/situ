@@ -7277,6 +7277,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.668 The adopter path is three gates, and none substitutes
+
+Moved to `doc/decision/26.668-the-adopter-path-is-three-gates.md`.
+
 ### 26.667 What `at <literal>` is, and the offset axis has no value for it
 
 Moved to `doc/decision/26.667-what-at-a-literal-is-and-the-offset-axis-has-no-value-for-it.md`.

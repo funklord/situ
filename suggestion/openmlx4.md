@@ -547,3 +547,46 @@ layouts checkable on a machine where the mstflint differential cannot
 run.
 
 Whether it takes more than that depends on question 1.
+
+> **Both gates work, and tested fully from your position 2026-10-21 --
+> and there are three rather than two.** A five-field NV schema was
+> written outside situ's tree, its map and signature committed beside
+> it, and all three gates driven through `bin/situc` the way a Makefile
+> would. Each fault below is invisible to the other two:
+>
+>     a field order swapped, both artifacts regenerated
+>         map --check  passes     wire --check passes     verify FAILS
+>     `[max = 7]` added to a field
+>         verify passes           map --check passes      wire --check FAILS
+>     a member renamed
+>         verify passes           map --check FAILS       wire --check FAILS
+>
+> **The middle one is the reason to add the third gate.** `map --check`
+> does not report a value domain -- a bound is not a capability -- so
+> the pair you name is silent about a narrowed or widened `[max]`, and
+> for NV parameters written to a card's flash a bound IS the contract.
+> `situc wire --check` is where a sender's constraints live and it
+> catches exactly that. Measured, not reasoned: `[max = 7]` and
+> `[must_eq = 1]` both move the signature and neither moves the map.
+>
+> `map --check` behaves as you would want on the control you used
+> yourself: swapping two adjacent one-bit members produces a unified
+> diff naming both bit offsets and exits 1, and exits 0 with
+> `nvcfg.situ.map is current` otherwise. `verify` caught a mistake
+> while this was being written -- a hand-computed `8A` where the
+> expectation said `boot_retry_cnt = 5` -- and said
+> `boot_retry_cnt is 2, and the vector expects 5`, which is the gate
+> earning its place from outside the schema.
+>
+> It is `test_the_adopter_gates_are_three_and_none_substitutes` now, so
+> the claim that no two of them substitute is held rather than asserted.
+>
+> The third gate was not missing from the documentation -- `README.md`'s
+> smaller-bargain section already lists all three in this order, and says
+> `verify` is the one the other two cannot do. What it did not say, and
+> now does, is which of the first two sees a BOUND. That is the sentence
+> your ask would have needed, so it is the one that was added.
+>
+> One thing in situ did say otherwise and is corrected: a docstring in
+> `test_examples.py` had called `map --check` "phase 9" for the 77 days
+> since it landed.

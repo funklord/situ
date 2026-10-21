@@ -453,6 +453,133 @@ frame  refused  00 00 0A
 """
 
 
+#: An adopter's schema: five NV fields at declared bit offsets, which is
+#: the shape `suggestion/openmlx4.md` reports for a ConnectX-3's settable
+#: parameters.
+ADOPTED = (
+	"target buffer;\n"
+	"endian big;\n"
+	"bit_order msb_first;\n"
+	"\n"
+	"struct nvcfg {\n"
+	"\tu1  sriov_en;\n"
+	"\tu5  boot_retry_cnt;\n"
+	"\tu2  reserved_0;\n"
+	"\tu8  legacy_boot_protocol;\n"
+	"\tu4  boot_vlan;\n"
+	"\tu4  num_of_vfs_high;\n"
+	"}\n"
+	"\n"
+	"require absolute_static(nvcfg.sriov_en);\n")
+
+#: `94` is `1 00101 00`: the first bit set, the next five holding 5, the
+#: reserved pair zero. Hand-computed, and wrong the first time it was
+#: written here -- `8A` was the guess and `verify` answered
+#: `boot_retry_cnt is 2, and the vector expects 5`, which is the gate
+#: doing the only job it has.
+ADOPTED_VECTORS = (
+	"nvcfg known 94 01 30\n"
+	"\tsriov_en             = 1\n"
+	"\tboot_retry_cnt       = 5\n"
+	"\tlegacy_boot_protocol = 1\n"
+	"\tboot_vlan            = 3\n")
+
+
+def test_the_adopter_gates_are_three_and_none_substitutes(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""`map --check`, `wire --check` and `verify`, and what each alone
+	misses.
+
+	`suggestion/openmlx4.md` asks for two of these in its own `make check`
+	and says why: "Both gates, because `map` alone accepts schemas the
+	compiler refuses". Each is tested on its own already. What no test
+	asserted is the claim behind the ask -- that they are not substitutes
+	-- and measuring it turned up a third gate the ask leaves out.
+
+	Three faults, one per gate, each invisible to the other two:
+
+	    a field order swapped, both artifacts regenerated
+	        map --check  passes: the map is current
+	        wire --check passes: the signature is current
+	        verify       FAILS:  the bytes a card wrote do not move
+
+	    `[max = 7]` added to a field
+	        verify       passes: a bound changes no byte
+	        map --check  passes: a value domain is not a capability
+	        wire --check FAILS:  it is a constraint a sender must satisfy
+
+	    a member renamed
+	        verify       passes: the vectors do not name it
+	        wire --check FAILS, and so does map --check
+
+	The second is the one worth the test. An adopter running the two gates
+	openmlx4 names would not see a narrowed bound at all, and for NV
+	parameters written to a card's flash a bound is the contract.
+
+	Driven through `main` in a directory that is not this repository's
+	corpus, because that is the position an adopter is in: a schema, two
+	committed artifacts, vectors from their own hardware, and three
+	commands in a Makefile.
+	"""
+	schema  = tmp_path / "nvcfg.situ"
+	vectors = tmp_path / "nvcfg.vectors"
+	chart   = tmp_path / "nvcfg.situ.map"
+	signed  = tmp_path / "nvcfg.situ.wire"
+	schema.write_text(ADOPTED, encoding="ascii")
+	vectors.write_text(ADOPTED_VECTORS, encoding="ascii")
+
+	def commit() -> None:
+		"""What an adopter commits beside the schema."""
+		assert main(["map", str(schema)]) == 0
+		chart.write_text(capsys.readouterr().out, encoding="ascii")
+		assert main(["wire", str(schema)]) == 0
+		signed.write_text(capsys.readouterr().out, encoding="ascii")
+
+	def gates() -> tuple[int, int, int]:
+		"""The three, in the order a Makefile would run them."""
+		mapped = main(["map", str(schema), "--check"])
+		capsys.readouterr()
+		wired = main(["wire", str(schema), "--check"])
+		capsys.readouterr()
+		checked = main(["verify", str(schema), str(vectors)])
+		capsys.readouterr()
+		return mapped, wired, checked
+
+	# The control, without which the failures below could be anything.
+	commit()
+	assert gates() == (0, 0, 0), "all three pass on what was committed"
+
+	# One: the schema is wrong and both artifacts agree with it. Two
+	# adjacent one-bit fields swapped is openmlx4's own control, which
+	# produced 19,984 mismatches against their bit primitives.
+	swapped = ADOPTED.replace("\tu1  sriov_en;\n\tu5  boot_retry_cnt;\n",
+	                          "\tu5  boot_retry_cnt;\n\tu1  sriov_en;\n")
+	assert swapped != ADOPTED
+	schema.write_text(swapped, encoding="ascii")
+	commit()
+	assert gates() == (0, 0, 1), \
+		"only the bytes can say the schema was reordered"
+
+	# Two: a narrowed value domain. The map does not report one -- it is
+	# not a capability -- so the pair openmlx4 asks for is silent, and the
+	# signature is where a sender's contract lives.
+	schema.write_text(ADOPTED, encoding="ascii")
+	commit()
+	bounded = ADOPTED.replace("\tu4  boot_vlan;\n",
+	                          "\tu4  boot_vlan [max = 7];\n")
+	assert bounded != ADOPTED
+	schema.write_text(bounded, encoding="ascii")
+	assert gates() == (0, 1, 0), \
+		"a bound is in the signature and in neither of the others"
+
+	# Three: a rename, which no byte reveals and both artifacts do.
+	schema.write_text(ADOPTED.replace("reserved_0", "pad_0"),
+	                  encoding="ascii")
+	mapped, wired, checked = gates()
+	assert (mapped, wired) == (1, 1) and checked == 0, \
+		"a renamed member is a reviewable diff and not a wrong reading"
+
+
 def test_verify_reports_what_the_schema_says(tmp_path: Path,
 		capsys: pytest.CaptureFixture[str]) -> None:
 	"""0051's fifth consumer, and the last one that record names.

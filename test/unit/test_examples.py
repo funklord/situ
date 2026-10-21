@@ -174,9 +174,17 @@ def test_committed_map_is_current(path: Path) -> None:
 
 	This is the snapshot test that makes a capability regression appear as a
 	reviewable diff at the moment of editing, rather than as a performance
-	surprise months later (project.md section 18.1). The `situc map --check`
-	CLI that does the same thing for a user's own schemas is phase 9; this
-	covers the repository's own examples until then.
+	surprise months later (project.md section 18.1).
+
+	It said for 77 days that the `situc map --check` CLI doing the same for
+	a user's own schemas "is phase 9" and that this covered the repository
+	until then. That CLI landed 2026-08-05, in the same commit as `verify`,
+	and this docstring was the only thing in the tree still saying
+	otherwise -- which is the shelf-life rule in `evidence.md` met in the
+	file whose whole job is to hold a snapshot current. What this test does
+	that the CLI does not is run without anybody remembering to: it covers
+	every schema in the corpus, and `--check` covers the one it is pointed
+	at.
 	"""
 	committed = path.with_suffix(".situ.map")
 	assert committed.exists(), (

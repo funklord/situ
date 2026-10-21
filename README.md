@@ -1460,6 +1460,15 @@ your existing implementation produced and asks whether the schema actually
 describes them, which is the check that catches a schema that was wrong from
 the day it was written.
 
+**Run all three, and `wire --check` is the one not to drop.** They are not
+substitutes, which is measured rather than claimed: a field order swapped
+with both artifacts regenerated passes the first two and fails only
+`verify`; a `[max]` added to a field passes `verify` and `map --check` and
+fails only `wire --check`, because a value domain is not a capability and
+the map does not report one. A project whose fields are bounded parameters
+-- a register, an NV setting, anything a device may reject -- is a project
+whose contract lives in the signature.
+
 `verify` generates nothing and compiles nothing -- the accessors are built and
 run in memory -- so the only thing that enters your tree is the schema and two
 text files a reviewer can read.
