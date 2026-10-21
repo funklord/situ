@@ -1652,7 +1652,12 @@ class Emitter:
 		"""Read the item at `at`: its tag, its parts, and where its value ends."""
 		item     = self._tlv_item_name(placement)
 		max_tag  = self._tlv_tag_bytes(placement)
-		decoded  = [f"\t\t\t{part.name} = ({part.source}),"
+		# `_pythonic`, because the schema's operators are C's: `/` is
+		# integer division there and float division here, so a part with
+		# `n / 13` in it came out 0.846 and the dispatch compared it
+		# against 0. The same translation the size expressions get, and
+		# this splice was the one path that bypassed it (26.666).
+		decoded  = [f"\t\t\t{part.name} = ({_pythonic(part.source)}),"
 		            for part in grammar.tag_decode]
 		carried  = "".join(f", {part.name}_in: int"
 		                   for part in grammar.tag_running)
@@ -1708,7 +1713,8 @@ class Emitter:
 
 		selector = next((part for part in grammar.tag_decode
 		                 if part.name == grammar.selector), None)
-		lines = [f"\t\tchosen = ({selector.source if selector else 'tag'})"]
+		lines = [f"\t\tchosen = "
+		         f"({_pythonic(selector.source) if selector else 'tag'})"]
 
 		first = True
 		for rule in grammar.rules:
@@ -1749,6 +1755,10 @@ class Emitter:
 			assert rule.source is not None
 			rendered = self._over_fields(
 				struct, rule.source, "self", bounded=True,
+				# Raw here on purpose: `_over_fields` translates the
+				# whole rendered string afterwards, so a part spliced in
+				# as a leaf is translated with it. Translating twice
+				# would turn `//` into `////`.
 				extra = {part.name: f"({part.source})"
 				         for part in grammar.tag_decode})
 			return [f"\t\t\tsize = nonneg({rendered})"]

@@ -1303,21 +1303,27 @@ def test_the_comparison_covers_enough_to_be_a_differential() -> None:
 	# THE POPULATION, so the floors cannot decay as the corpus grows. A
 	# new schema fails here, and the message says to re-measure -- which is
 	# the only moment anybody does.
-	assert len(SCHEMAS) == 45, (
+	assert len(SCHEMAS) == 46, (
 		f"the corpus holds {len(SCHEMAS)} schemas and the floors below were "
-		f"measured over 45. Re-measure and re-pin all three: a floor left "
+		f"measured over 46. Re-measure and re-pin all three: a floor left "
 		f"at an older total goes slack by exactly what the new schemas "
 		f"contribute, which is how this one came to permit a 40% loss")
 
-	assert compared >= 3800, (
+	# RE-MEASURED 2026-10-21 over 46, `example/coap` having joined: 3896
+	# compared of 4883 shown, and 5954 walked. The share is 79% rather than
+	# 80 and the floor moved with it -- a schema whose options the walker
+	# counts and the dissector shows row by row moves the two sides by
+	# different amounts, which is the reason there are three floors and not
+	# one.
+	assert compared >= 3850, (
 		f"the two descriptions are compared over {compared} member-answers, "
-		f"down from 3837; the dissector shows {shown} rows and the walker "
+		f"down from 3896; the dissector shows {shown} rows and the walker "
 		f"renders {walked} member lines")
-	assert compared * 100 >= shown * 79, (
+	assert compared * 100 >= shown * 78, (
 		f"{compared} of the dissector's {shown} rows are compared against "
-		f"the walker, down from 80%")
-	assert walked >= 5750, (
-		f"the walker renders {walked} member lines, down from 5810; the "
+		f"the walker, down from 79%")
+	assert walked >= 5890, (
+		f"the walker renders {walked} member lines, down from 5954; the "
 		"share above can be met by the dissector showing less")
 
 

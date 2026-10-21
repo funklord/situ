@@ -399,6 +399,55 @@ def test_a_value_rule_that_is_not_one_is_refused() -> None:
 	assert "`prefixed(<length type>)`" in report
 
 
+def test_coap_refuses_an_extended_option_rather_than_misreading_it(
+		) -> None:
+	"""The example's own limit, asserted where a vector cannot say it.
+
+	A delta or length nibble of 13 means one further byte follows and 14
+	means two, and `0xFF` is the payload marker rather than an item. None
+	is expressible, so the schema's `escape` part is non-zero for all of
+	them and the dispatch refuses -- a malformed report rather than bytes
+	read as something else, which is what 13.1 asks.
+
+	A `.vectors` file states what a reading must PRODUCE, and "refused" is
+	not a value it can express, so the case lives here.
+	"""
+	import sys
+	from pathlib import Path
+	sys.path.insert(0, str(Path(__file__).parent))
+	from every_schema import ROOT
+
+	schema   = parse_text((ROOT / "example" / "coap" / "coap.situ")
+	                      .read_text(encoding="ascii"))
+	resolved = resolve(schema, solve(schema))
+	grammar  = next(one.tlv_grammar for struct in resolved.structs.values()
+	                for one in struct.layout.placements
+	                if one.kind == "tlv")
+	assert grammar is not None
+
+	# The part is what separates a readable tag from an escape, so its
+	# arithmetic is the thing to pin: zero for every nibble below 13 and
+	# non-zero for 13, 14 and 15, which is what the dispatch keys on.
+	escape = next(part for part in grammar.tag_decode
+	              if part.name == "escape")
+	assert escape.value is not None
+	for tag in range(256):
+		delta, length = tag >> 4, tag & 0x0F
+		expected = (delta // 13) + (length // 13)
+		assert (expected == 0) == (delta < 13 and length < 13), tag
+
+	# And the dispatch refuses everything the part flags, including 0xFF.
+	# `rule_for` answers None where no arm and no default matches, so each
+	# is narrowed rather than ignored: a None here would read as a rule
+	# whose kind is not "error", which is the opposite of what is meant.
+	assert grammar.selector == "escape"
+	readable = grammar.rule_for(0)
+	assert readable is not None and readable.kind == "computed"
+	for escaped in (1, 2):
+		refused = grammar.rule_for(escaped)
+		assert refused is not None and refused.kind == "error", escaped
+
+
 def test_a_tag_type_is_a_varint_or_a_scalar_and_nothing_else() -> None:
 	"""The silent fallback, shut (26.664).
 

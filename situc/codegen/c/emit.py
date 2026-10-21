@@ -2055,6 +2055,20 @@ class Emitter:
 			return lines
 
 		if placement.kind == "tlv":
+			# The offset function first, where the region is dynamically
+			# placed: `first` reads from it, and the branch below that
+			# emits it is past this return. A `tlv` region behind a
+			# variable-length member -- CoAP's options, after a token
+			# whose length the header declares -- named
+			# `situ_coap_options_offset` and nothing defined it, which is
+			# the fault the comment below this already describes for
+			# every other kind (26.667).
+			if placement.offset_bits is None:
+				blocker = self._offset_blocker(struct, placement)
+				if blocker is not None:
+					return lines + self._unresolvable_offset(placement,
+					                                         blocker)
+				lines.extend(self._offset_function(struct, placement))
 			lines.extend(self._tlv_region(struct, placement))
 			return lines
 

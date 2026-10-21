@@ -1,0 +1,50 @@
+# situ wire signature v2
+# schema: coap.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+enum message_kind : u2 unknown=error
+  confirmable=0 non_confirmable=1 acknowledgement=2 reset=3
+
+struct coap size=4..
+  @0x0000   2bit      u2         version  msb_first must_eq=1
+  @0x0000:2 2bit      message_kind kind  msb_first
+  @0x0000:4 4bit      u4         token_length  msb_first max=8
+  @0x0001   1         u8         code
+  @0x0002   2         u16        message_id  big
+  @0x0004   0..8      u8         token  sized-by=token_length
+  ~         0..       tlv        options
+  options tlv decode delta: tag >> 4
+  options tlv decode escape: (tag >> 4) / 13 + (tag & 0x0F) / 13
+  options tlv decode length: tag & 0x0F
+  options tlv running number: previous + delta
+  options tlv identity: number
+  options tlv select: escape
+  options tlv size 0: computed length
+  options tlv size default: error
+  options tlv known 3: uri_host type=u8
+  options tlv known 6: observe type=u8
+  options tlv known 7: uri_port type=u16
+  options tlv known 11: uri_path type=u8
+  options tlv known 12: content_format type=u16
+  options tlv known 14: max_age type=u8
+  options tlv known 15: uri_query type=u8
+  options tlv known 17: accept type=u16
+  options tlv duplicates: allowed
+  options tlv unknown: preserve

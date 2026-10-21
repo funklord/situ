@@ -7266,6 +7266,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.666 The CoAP example, and the three faults it found
+
+Moved to `doc/decision/26.666-the-coap-example-and-the-three-faults-it-found.md`.
+
 ### 26.665 A tlv region had no byte order, and four backends disagreed
 
 Moved to `doc/decision/26.665-a-tlv-region-had-no-byte-order-and-four-backends-disagreed.md`.

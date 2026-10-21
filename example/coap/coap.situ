@@ -1,0 +1,98 @@
+// CoAP (RFC 7252), the fixed header, the token and the options.
+//
+// The protocol 26.142 could not describe at all. Its options need two things
+// situ did not have: a value sized by a part of its own tag -- the length is
+// the second nibble of the tag byte -- and a value carried from one item to
+// the next, because an option's NUMBER is the running sum of every delta
+// ahead of it rather than anything one item holds. Decisions 0065 and 0066
+// are those two, and this is what they were for.
+//
+// What this does NOT describe, and refuses rather than guessing at:
+//
+//   - the extended delta and length escapes. A nibble of 13 means one more
+//     byte follows and 14 means two, biased by 13 and 269 (RFC 7252 3.1),
+//     and a value whose size is read from bytes AFTER the tag is not one of
+//     section 9.5's five rules. The `escape` part below is zero exactly
+//     where both nibbles are readable, and the dispatch refuses otherwise.
+//   - the payload marker. `0xFF` ends the options and the payload follows,
+//     which is a sentinel in the item stream rather than an item; it
+//     decodes as both nibbles 15 and is refused by the same part.
+//
+// So a message carrying either is reported as malformed rather than read
+// wrongly, which is what 13.1 asks of a description that cannot go all the
+// way.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+enum message_kind : u2 {
+	confirmable     = 0,
+	non_confirmable = 1,
+	acknowledgement = 2,
+	reset           = 3,
+}
+
+struct coap {
+	u2            version [must_eq = 1];
+	message_kind  kind;
+	// 9 to 15 are "message format error" in RFC 7252 3, so the bound is the
+	// protocol's rather than the type's -- a `u4` holds 15.
+	u4            token_length [max = 8];
+	// The response code, as `class.detail`: 0.01 GET, 2.05 Content, 4.04 Not
+	// Found. Kept whole because the two halves are read together far more
+	// often than apart, and `code >> 5` is what a caller writes.
+	u8            code;
+	u16           message_id;
+	u8            token[token_length];
+
+	tlv options (
+		tag_type     = u8,
+		tag_decode   = {
+			delta  = tag >> 4,
+			length = tag & 0x0F,
+			// Zero while BOTH nibbles are below 13, which is the range
+			// this description can read. 13 means one extension byte
+			// follows and 14 means two, biased by 13 and 269 (RFC 7252
+			// 3.1), and 15 in both nibbles is the payload marker 0xFF --
+			// none of which is expressible here, so each is refused
+			// rather than guessed at. Integer division because the
+			// expression language has comparisons in constraints only
+			// (section 10): `n / 13` is 0 below 13 and 1 above it for
+			// every value a nibble can hold.
+			escape = ((tag >> 4) / 13) + ((tag & 0x0F) / 13),
+		},
+		tag_running  = { number = previous + delta },
+		tag_identity = number,
+		value_size   = switch (escape) { case 0: length, default: error },
+		known = {
+			 3 : { name = uri_host,       type = u8 },
+			 6 : { name = observe,        type = u8 },
+			 7 : { name = uri_port,       type = u16 },
+			11 : { name = uri_path,       type = u8 },
+			12 : { name = content_format, type = u16 },
+			14 : { name = max_age,        type = u8 },
+			15 : { name = uri_query,      type = u8 },
+			17 : { name = accept,         type = u16 },
+		},
+		duplicate_tags = allowed,
+		unknown = preserve
+	);
+}
+
+// What a CoAP message is, in capability terms. Each of these is a true
+// statement the schema exists to record rather than a wish: `assert` is for
+// the ones that do not hold.
+//
+// The options region is sequential and unaddressable because an option's
+// extent is in its own tag -- and its NUMBER is in no byte at all, being the
+// running sum of the deltas ahead of it, which is why a lookup walks.
+assert random_access(coap.options);
+assert stable_address(coap.options);
+
+// These hold, and are the useful half. The four header fields are at fixed
+// offsets whatever the message carries, which is what lets a reader classify
+// a datagram before deciding whether to walk it at all.
+require absolute_static(coap.code);
+require absolute_static(coap.message_id);
+require memory_identical(coap.token);

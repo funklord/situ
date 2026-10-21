@@ -1,0 +1,69 @@
+# Golden vectors for the CoAP example (RFC 7252).
+#
+# Hand-built from the RFC's own field layout rather than captured, because
+# the point of each one is a construct rather than a conversation: the
+# running option number, a value sized by its own tag, and a token whose
+# length the header declares. Every byte is named in the comment above it.
+#
+# The option numbers are what to watch. CoAP sends a DELTA from the
+# previous option's number, so `temp` at delta 11 is option 11 (Uri-Path)
+# and `a=1` at delta 4 after it is option 15 (Uri-Query) -- the second
+# number is in no byte of the message and is the running sum (0066).
+#
+# An enum expectation is spelled as the generated header spells it --
+# `SITU_MESSAGE_KIND_RESET` -- because `gen-tests` drops that into cmocka
+# and `situc verify` reads the same macro table, so the two commands cannot
+# disagree about a corpus while agreeing about a schema.
+
+# GET /temp, confirmable, a two-byte token.
+#   42        version 1, confirmable, token length 2
+#   01        0.01 GET
+#   7D 34     message id
+#   12 34     token
+#   B4        option delta 11 (Uri-Path), length 4
+#   74 65 6D 70   "temp"
+coap get_temp 42 01 7D 34 12 34 B4 74 65 6D 70
+	version      = 1
+	kind         = SITU_MESSAGE_KIND_CONFIRMABLE
+	token_length = 2
+	code         = 0x01
+	message_id   = 0x7D34
+
+# 2.05 Content with a Content-Format of 0 (text/plain), acknowledging the
+# same message id and echoing the token.
+#   62        version 1, acknowledgement, token length 2
+#   45        2.05 Content
+#   C1 00     option delta 12 (Content-Format), length 1, value 0
+coap content 62 45 7D 34 12 34 C1 00
+	version      = 1
+	kind         = SITU_MESSAGE_KIND_ACKNOWLEDGEMENT
+	code         = 0x45
+	message_id   = 0x7D34
+
+# Two options, which is the vector the running total exists for: delta 11
+# then delta 4, so the numbers are 11 and 15 and only the first is a byte
+# anybody can point at.
+#   43        option delta 4 (Uri-Query from 11), length 3
+#   61 3D 31  "a=1"
+coap two_options 42 01 7D 34 12 34 B4 74 65 6D 70 43 61 3D 31
+	version      = 1
+	token_length = 2
+	message_id   = 0x7D34
+
+# A reset, which carries no token and no options: the shortest legal CoAP
+# message, and the one that proves the four-byte minimum is reachable.
+#   70        version 1, reset, token length 0
+#   00        code 0.00
+coap reset 70 00 7D 34
+	version      = 1
+	kind         = SITU_MESSAGE_KIND_RESET
+	token_length = 0
+	code         = 0x00
+	message_id   = 0x7D34
+
+# Eight token bytes, the most RFC 7252 allows -- `token_length` is a `u4`
+# and the bound is the protocol's rather than the type's.
+coap long_token 48 01 7D 34 00 11 22 33 44 55 66 77
+	version      = 1
+	token_length = 8
+	code         = 0x01

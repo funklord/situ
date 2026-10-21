@@ -691,6 +691,14 @@ tag_identity = number,
 situ keeps in a layout rather than inside a codec, and the generated `read`
 takes it as a parameter: an item reached by offset alone cannot have one.
 
+`example/coap/coap.situ` is the protocol both of those were built for. It
+describes the header, the token and the options, and **refuses** the extended
+delta and length escapes rather than guessing: a nibble of 13 or 14 means the
+size is in bytes after the tag, which is not one of the five value rules, and
+`0xFF` is the payload marker rather than an item. One decoded part catches all
+three, which is what `switch (escape) { case 0: length, default: error }` is
+doing.
+
 `indexed (base = region)` is the other shape a struct cannot describe:
 members reached through an offset table rather than laid out in order, which
 is what a page format like SQLite's does. `opaque name [n]` is the honest

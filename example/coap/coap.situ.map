@@ -1,0 +1,21 @@
+# situ capability map v1
+# schema: coap.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct coap size=4.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  coap.version                           offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  coap.kind                              offset=AbsoluteStatic(0x00:2) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  coap.token_length                      offset=AbsoluteStatic(0x00:4) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  coap.code                              offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  coap.message_id                        offset=AbsoluteStatic(0x02) size=Fixed(2) align=Aligned(2) repr=ValueConverted atomic=AtomicWord
+  coap.token                             offset=AbsoluteStatic(0x04) size=Bounded(0, 8) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  coap.options                           offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical

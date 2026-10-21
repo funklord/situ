@@ -1388,6 +1388,21 @@ UNORACLED = {
 	# produce a corpus for it. `randpkt` writes eighteen packet types and none
 	# of these is one; a hand-written vector would be the schema read twice,
 	# which `test_the_corpus_is_not_this_project_s_opinion` refuses.
+	# Measured rather than assumed, which the entries below this one are
+	# not: `tshark -V` was run over every committed vector and agrees about
+	# every field, option numbers included -- Type 11 Uri-Path and Type 15
+	# Uri-Query for a message whose second delta is 4, which is the
+	# accumulated number (0066) read back by somebody else's dissector.
+	#
+	# It is still not a corpus. The bytes were hand-built from RFC 7252 in
+	# this repository, so comparing two readings of them checks this
+	# project's reading and not its opinion about what CoAP looks like --
+	# which is the distinction this file exists to hold. If a generator
+	# ever appears, the dissector is already there and the oracle is a
+	# small function.
+	"coap":      "tshark dissects CoAP and agrees about every committed "
+	             "vector; nothing here can WRITE one, so the bytes are "
+	             "ours",
 	"ntp":       "tshark dissects NTP; randpkt cannot write one",
 	"dtls":      "as ntp",
 	"ble":       "as ntp",

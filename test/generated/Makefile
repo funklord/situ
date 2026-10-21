@@ -54,7 +54,7 @@ SCHEMAS		:= test/schema/header.situ test/schema/edges.situ \
 		   test/schema/native.situ \
 		   test/schema/shared.situ test/schema/importer.situ \
 		   example/arp/arp.situ example/ble/ble.situ example/bmp/bmp.situ \
-		   example/cpio/cpio.situ \
+		   example/coap/coap.situ example/cpio/cpio.situ \
 		   example/dns/dns.situ example/dnsname/dnsname.situ example/dtls/dtls.situ example/ethernet/ethernet.situ example/http/http.situ \
 		   example/icmp/icmp.situ example/ipv6ext/ipv6ext.situ example/ipv4/ipv4.situ \
 		   example/id3/id3.situ \
