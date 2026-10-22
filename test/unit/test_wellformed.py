@@ -1058,8 +1058,115 @@ def test_a_codec_that_states_no_size_checks_nothing() -> None:
 
 def test_truncated_outside_a_tag_is_refused() -> None:
 	"""Its place, so it cannot sit where `check_codec_sizes` never reads it."""
-	assert "a `tag` or `checksum`" in rendered(
-		BUFFER + "struct b { u8 a [truncated]; }\n")
+	text = rendered(BUFFER + "struct b { u8 a [truncated]; }\n")
+	assert "belongs on a `tag`" in text
+	assert "byte-identical to the schema without it" in text
+
+
+# -- a checksum is the width of its code, 26.674 ---------------------------
+
+#: A derived CRC states its width through its kernel rather than through
+#: `tag_bytes`, which is how every codec in `std/kernels.situ` states it and
+#: is the case the width check could not see at all until 26.674.
+def crc(width: int, poly: int, name: str = "code") -> str:
+	return (BUFFER + f"codec {name} {{\n\tkernel = polynomial(width = "
+	        f"{width}, poly = {poly:#x}, init = 0x00);\n}}\n\n"
+	        f"impl {name} derived;\n\n")
+
+
+def checked(field: str, width: int = 7, poly: int = 0x09,
+		name: str = "code") -> str:
+	return (crc(width, poly, name) + "struct s {\n"
+	        "\tauthenticated a {\n\t\tu8 body[4];\n\t}\n\t"
+	        + field + "\n}\n")
+
+
+def test_a_checksum_matching_its_kernel_is_accepted() -> None:
+	"""The control, and the case the corpus is in.
+
+	MMC's seven-bit CRC in a `u7` is an exact match, and the eleven
+	comparable check fields in the corpus are all exact. A width check that
+	refused this would be refusing `test/schema/edges.situ`'s `mmc_command`,
+	which is verified against a real CMD0 (26.372).
+	"""
+	parse_text(checked("checksum u7 crc covers(a) is code;"), path="s.situ")
+
+
+def test_a_checksum_narrower_than_its_kernel_is_refused() -> None:
+	"""Seven bits for a 32-bit CRC compiled, and generated a check that
+	cannot pass: every backend compared the whole computed value against the
+	narrow stored one (26.674).
+
+	The width check could not see it twice over -- it read the codec off the
+	covered region, where only `sealed` carries one, and its width in bytes,
+	where `7 % 8` answers "cannot tell".
+	"""
+	text = rendered(checked("checksum u7 crc covers(a) is code;",
+	                        width = 32, poly = 0x04C11DB7))
+	assert "is 7 bits and `code` produces 32" in text
+	assert "narrower than the check it holds" in text
+	assert "crc7_mmc" in text, "the remedy has to name a kernel this wide"
+
+
+def test_a_byte_wide_checksum_narrower_than_its_kernel_is_refused() -> None:
+	"""The same fault with a whole-byte field, which is the shape an adopter
+	writes. Phrased in bytes because both widths are whole bytes."""
+	text = rendered(checked("checksum u8 crc[1] covers(a) is code;",
+	                        width = 32, poly = 0x04C11DB7))
+	assert "is 1 bytes and `code` produces 4" in text
+
+
+def test_a_checksum_wider_than_its_kernel_is_refused() -> None:
+	"""No exemption in this direction for a checksum either: the extra bits
+	hold nothing the code computed."""
+	text = rendered(checked("checksum u8 crc[4] covers(a) is code;"))
+	assert "is 4 bytes and `code` produces 7" not in text, (
+		"a seven-bit code's width is not a byte count")
+	assert "is 32 bits and `code` produces 7" in text
+	assert "authenticate nothing" in text
+
+
+def test_truncated_on_a_checksum_is_refused() -> None:
+	"""`[truncated]` is a tag's. A codec compares the tag it is handed and
+	applies its own convention; a checksum's comparison is generated, so
+	truncating one asks situ which end of the value a format keeps -- a
+	choice undetectable at runtime, which section 17.0 refuses to guess.
+
+	It was accepted and read by nothing in codegen, which is how four
+	backends came to compare a 32-bit CRC against one stored byte.
+	"""
+	text = rendered(checked("checksum u8 crc[1] covers(a) is code "
+	                        "[truncated];", width = 32, poly = 0x04C11DB7))
+	assert "belongs on a `tag`" in text
+	assert "section 17.0" in text
+	assert "byte-identical" not in text, (
+		"removing it does not make this schema compile, so the general "
+		"note about neutral removal must not be the one shown")
+
+
+def test_a_truncated_tag_is_still_accepted() -> None:
+	"""The other half of the family is untouched. OSCORE's eight bytes stay
+	sayable, because the codec does that comparison and knows its own
+	truncation."""
+	parse_text(sealed("tag u8[8] [truncated];"), path="s.situ")
+
+
+def test_a_checksum_cannot_name_a_codec_that_states_no_width() -> None:
+	"""Why the width check is now total for a checksum, where 0038 had to
+	accept silence for a tag.
+
+	A checksum situ computes has to be one situ generates, so its codec is
+	`derived` (0053) -- and a derived kernel states its width, which is how
+	`_codec_output_bits` reads it. An extern codec, whose output width
+	belongs to somebody else and is 0038's silent case, cannot be a
+	checksum's at all. So there is no route left to the unsatisfiable
+	comparison that 26.674 found, rather than a narrower one.
+	"""
+	quiet = (BUFFER + "codec code {\n\tauthenticated;\n}\n\n"
+	         'impl code extern "x";\n\n'
+	         "struct s {\n\tauthenticated a {\n\t\tu8 body[4];\n\t}\n"
+	         "\tchecksum u8 crc[1] covers(a) is code;\n}\n")
+	assert "is not a derived codec" in rendered(quiet)
 
 
 def test_a_codec_size_must_be_a_literal() -> None:

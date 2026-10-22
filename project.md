@@ -3623,6 +3623,16 @@ construct here names a key and the setting would be read by nothing. The three
 constructs below are unblocked by it rather than settled by it: each needs its
 own record.
 
+**`[truncated]` is a tag's and is refused on a `checksum` (0067).** The
+comparison is where the two differ: for an authenticated region situ
+generates none, handing the caller a `verified` flag and the tag's bytes so
+that the codec applies its own convention, while a checksum's comparison is
+generated here -- so truncating one would ask situ which end of the value a
+format keeps, and 17.0 does not guess that. A checksum field is therefore
+exactly the width of its code, read from the kernel rather than from
+`tag_bytes`, which is how all thirteen in `std/kernels.situ` state it. 0067
+narrows 0038's placement rule rather than reversing it.
+
 **~~Three more, each a construct real protocols need and this cannot
 express.~~ All three are sayable now, and the lead outlived every one of
 its own bullets.** Two were closed by their own records -- key selection
@@ -7315,6 +7325,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.674 A checksum field is the width of its code
+
+Moved to `doc/decision/0067-a-checksum-field-is-the-width-of-its-code.md`.
 
 ### 26.673 A truncated checksum cannot verify, in any of the four backends
 

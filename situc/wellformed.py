@@ -2365,13 +2365,28 @@ def _attribute_place(struct: ast.StructDecl, member: ast.Member,
 			        "contradicts it")
 
 	# A tag narrower than its codec produces, said out loud (0038). Only a
-	# `tag` or `checksum` has a width a codec has an opinion about, and
+	# tag field has a width a codec has an opinion about, and
 	# `check_codec_sizes` reads it from nowhere else -- so anywhere else it
 	# would be the silent nothing 14.5 refuses.
+	#
+	# A `checksum` is a tag field and is refused anyway, because the two
+	# halves of the family verify differently: a codec compares the tag it
+	# is given and applies its own truncation, while a checksum's
+	# comparison is generated here. Granting the attribute without the
+	# convention is what left all four backends comparing a whole value
+	# against a narrow one (26.674).
 	if attr.name == "truncated":
-		return None if isinstance(member, ast.TagField) else (
-			"a `tag` or `checksum`, saying its width is deliberately less "
-			"than the one its codec produces")
+		if not isinstance(member, ast.TagField):
+			return ("a `tag`, saying its width is deliberately less than "
+			        "the one its codec produces")
+		if member.kind is ast.TagKind.CHECKSUM:
+			return ("a `tag`, whose codec compares what it is handed and "
+			        "knows its own truncation; a `checksum` is compared by "
+			        "generated code, which would have to guess which end "
+			        "of the value a format keeps -- section 17.0 refuses "
+			        "to guess where the wrong choice is undetectable at "
+			        "runtime (26.674)")
+		return None
 
 	if attr.name == "self_as":
 		return None if isinstance(member, ast.TagField) else (
@@ -3564,6 +3579,27 @@ def _region_word(member: ast.Member) -> str:
 	        ast.Indexed: "an indexed", ast.Tlv: "a tlv"}[type(member)]
 
 
+def _place_consequence(name: str, member: ast.Member) -> str:
+	"""What removing a misplaced attribute would do, which is usually nothing.
+
+	`[truncated]` on a `checksum` is the exception and has to be said: the
+	width it was excusing is refused either way, so deleting it does not
+	give a schema that compiles. Sending a reader to make the edit that
+	does not fix it is 26.470's fault in a smaller place.
+
+	Keyed on the member as well as the name, because the same attribute on a
+	plain field IS neutral -- keying on the name alone moved the wrong note
+	onto that case while fixing this one (26.674).
+	"""
+	if name == "truncated" and isinstance(member, ast.TagField) \
+			and member.kind is ast.TagKind.CHECKSUM:
+		return ("nothing reads it in this position, and removing it does "
+		        "not make the schema compile on its own -- the width it "
+		        "was excusing is checked either way")
+	return ("nothing reads it in this position, so the generated code is "
+	        "byte-identical to the schema without it")
+
+
 def check_attribute_places(schema: ast.Schema) -> None:
 	"""An attribute has to sit where something reads it (14.5, 17.0)."""
 	structs = frozenset(held.name for held in schema.structs())
@@ -3581,9 +3617,7 @@ def check_attribute_places(schema: ast.Schema) -> None:
 					f"`[{attr.name}]` means nothing here",
 					attr.span,
 					label = f"belongs on {where}",
-					notes = ["nothing reads it in this position, so the "
-					         "generated code is byte-identical to the schema "
-					         "without it",
+					notes = [_place_consequence(attr.name, member),
 					         "remove it, or move it where it is read: a schema "
 					         "that states what the generated code does not "
 					         "enforce is worse than one that states nothing "
@@ -4492,6 +4526,61 @@ def _declared_byte_width(member: ast.Member) -> int | None:
 	return (bits // 8) * count
 
 
+def _declared_field_bits(member: ast.Member) -> int | None:
+	"""A member's declared width in BITS, counting a literal array.
+
+	`_declared_byte_width` is the byte-valued form and answers `None` for a
+	sub-byte field. That is right for a nonce, which is a byte string, and
+	wrong for a check field: USB's five-bit CRC and MMC's seven-bit one are
+	exact matches for their kernels, so a comparison in bytes cannot express
+	them and skips them instead (26.674).
+	"""
+	from situc.parser import evaluate_literal
+
+	bits = _declared_bits(member)
+	if bits is None:
+		return None
+
+	array = getattr(member, "array", None)
+	if array is None:
+		return bits
+
+	count = evaluate_literal(array.size) if array.size is not None else None
+	if count is None or count < 0:
+		return None
+	return bits * count
+
+
+def _codec_output_bits(codec: ast.CodecDecl) -> int | None:
+	"""How wide the value this codec produces is, where the codec says.
+
+	Two sources, and they are not interchangeable. `tag_bytes` is declared,
+	and belongs to a codec whose tag is separate from its output: an AEAD is
+	length-preserving and says so, which is why `example/packet` declares
+	sixteen. `expansion_add` is in bits since 0046 and *is* the width for a
+	codec that appends its check -- a five-bit CRC adds five.
+
+	Reading only the first left every CRC unchecked. Not one codec in
+	`std/kernels.situ` declares `tag_bytes`, and all thirteen publish a
+	width through their kernel (26.674).
+	"""
+	if codec.tag_bytes is not None:
+		return codec.tag_bytes * 8
+	if codec.expansion is ast.Expansion.FIXED_ADD and codec.expansion_add:
+		return codec.expansion_add
+	return None
+
+
+def _width_phrase(bits: int) -> str:
+	"""Bytes where the width is whole bytes, bits where it is not.
+
+	A reader of a 16-byte AEAD tag thinks in bytes and a reader of a
+	seven-bit CRC thinks in bits, so the diagnostic follows the field rather
+	than picking one unit for both.
+	"""
+	return f"{bits // 8} bytes" if bits % 8 == 0 else f"{bits} bits"
+
+
 def check_codec_sizes(schema: ast.Schema) -> None:
 	"""A declared tag or nonce is the width its codec says (decision 0038).
 
@@ -4512,14 +4601,26 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 		by_name = {region.name: region for region in regions}
 
 		for tag in tag_fields(struct.members):
-			width = _declared_byte_width(tag)
-			if width is None:
+			bits = _declared_field_bits(tag)
+			if bits is None:
 				continue
-			for name in coverage_of(tag, regions):
-				region = by_name.get(name)
-				codec  = codecs.get(getattr(region, "codec", "") or "")
-				if codec is not None and codec.tag_bytes is not None:
-					_check_tag_width(tag, width, codec)
+
+			# The field's own `is <codec>` first, because that is where a
+			# `checksum` names its algorithm. Reading only the covered
+			# region's checked nothing for any checksum in the corpus:
+			# `authenticated` carries no codec at all, so the whole check
+			# fired only for a tag over a `sealed` region (26.674).
+			named: list[str | None] = [tag.codec] if tag.codec else [
+				getattr(by_name.get(name), "codec", None)
+				for name in coverage_of(tag, regions)]
+
+			for name in named:
+				codec = codecs.get(name or "")
+				if codec is None:
+					continue
+				produced = _codec_output_bits(codec)
+				if produced is not None:
+					_check_tag_width(tag, bits, codec, produced)
 
 		for region in regions:
 			if not isinstance(region, ast.Sealed):
@@ -4581,20 +4682,26 @@ def _nonce_field(struct: ast.StructDecl, region: ast.Member,
 	return None
 
 
-def _check_tag_width(tag: ast.TagField, width: int,
-		codec: ast.CodecDecl) -> None:
-	assert codec.tag_bytes is not None
-	if width == codec.tag_bytes:
+def _check_tag_width(tag: ast.TagField, bits: int, codec: ast.CodecDecl,
+		produced: int) -> None:
+	if bits == produced:
 		return
 
 	truncated = any(attr.name == "truncated" for attr in tag.attrs)
+	check     = tag.kind is ast.TagKind.CHECKSUM
 
-	if width > codec.tag_bytes:
+	# Both sides in bytes where both are whole bytes, so a 16-byte AEAD tag
+	# reads the way its author wrote it and a seven-bit CRC reads in bits.
+	if bits % 8 == 0 and produced % 8 == 0:
+		held, makes = f"{bits // 8} bytes", str(produced // 8)
+	else:
+		held, makes = f"{bits} bits", str(produced)
+
+	if bits > produced:
 		# No exemption. Nothing an author could write makes a primitive
 		# produce more authentication than it produces.
 		raise error(
-			f"`{tag.name}` is {width} bytes and `{codec.name}` produces "
-			f"{codec.tag_bytes}",
+			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
 			tag.span,
 			label = f"wider than the tag `{codec.name}` produces",
 			notes = ["a tag cannot be wider than what computes it: the extra "
@@ -4603,10 +4710,35 @@ def _check_tag_width(tag: ast.TagField, width: int,
 			         "(decision 0038)"],
 		)
 
+	if check:
+		# A narrow check field is a narrow CODE rather than a chopped wide
+		# one, which is why `std/kernels.situ` carries thirteen widths and
+		# why 0046 made sub-byte ones declarable at their true width.
+		#
+		# `[truncated]` is not offered here, and that is section 17.0 rather
+		# than a new rule: which end of a CRC a truncation keeps is a
+		# per-format convention, a wrong choice is undetectable at runtime,
+		# and situ does not guess those. Every backend guessed until 26.674
+		# -- by comparing the whole computed value against the narrow stored
+		# one, a check no message can pass.
+		raise error(
+			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
+			tag.span,
+			label = "narrower than the check it holds",
+			notes = ["a check field is the width of its code: `std/kernels."
+			         "situ` carries crc5_usb, crc7_mmc, crc15_can, crc24_ble "
+			         "and crc40_gsm for exactly this reason",
+			         "name the kernel that is this wide, or widen the field "
+			         "to the one this codec produces",
+			         "`[truncated]` is a tag's, where the codec compares what "
+			         "it is given and knows its own convention; which end of "
+			         "a CRC a truncation keeps is undetectable at runtime, so "
+			         "section 17.0 refuses to guess it (26.674)"],
+		)
+
 	if not truncated:
 		raise error(
-			f"`{tag.name}` is {width} bytes and `{codec.name}` produces "
-			f"{codec.tag_bytes}",
+			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
 			tag.span,
 			label = "narrower than the tag it holds",
 			notes = ["a truncated tag is legitimate -- OSCORE uses eight "
