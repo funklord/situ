@@ -7316,6 +7316,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.673 A truncated checksum cannot verify, in any of the four backends
+
+Moved to `doc/decision/26.673-a-truncated-checksum-cannot-verify-in-any-backend.md`.
+
 ### 26.672 The bills are dated, and the population is nine rather than 63
 
 Moved to `doc/decision/26.672-the-bills-are-dated-and-the-population-is-nine.md`.
