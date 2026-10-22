@@ -84,3 +84,4 @@ require absolute_static(header.id);
 // many encodings, which is exactly what `canonical` is for -- and nothing in
 // the *layout* says so, so the lattice cannot derive it and the map would
 // otherwise claim Canonical, which is false. Section 11.5.
+// (verified 2026-10-22)

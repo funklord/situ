@@ -130,6 +130,7 @@ struct read_request {
 // 6.5 and 6.6. One address, one value. For a coil the value is 0x0000 or
 // 0xFF00 and nothing else, which is a constraint over two values that
 // `[must_eq]` cannot state -- it takes one -- so it is the caller's.
+// (verified 2026-10-22)
 struct write_single {
 	u16  address;
 	u16  value;

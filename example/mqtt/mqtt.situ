@@ -45,6 +45,7 @@
 // another -- a variant switches on a field it can name, and an arm's members
 // cannot see the struct the arm is in. That one is recorded in
 // `publish_body`, where it arises.
+// (verified 2026-10-22)
 //
 // The second half of the boundary is not a limitation but a modelling choice,
 // and it is written down because a reader would otherwise wonder. MQTT 5.0
@@ -137,6 +138,7 @@ struct mqtt_string {
 // the data sizes, and a bit-packed field cannot: its byte is not known until
 // parse time, which the compiler says in those words. A server that means to
 // read *any* protocol name reads the length itself and stops here.
+// (verified 2026-10-22)
 struct connect_body {
 	u16  protocol_name_length  [must_eq = 4];
 

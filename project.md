@@ -5557,6 +5557,45 @@ so a rule added here would be drift by construction, and a rule about *this
 project's* ladder has no business in a gate three other trees run. A
 project-specific convention gets a project-specific check.
 
+### 25.3 A bill carries the date it was verified
+
+**Set by the copyright holder 2026-10-22.** A *bill* is a comment in a
+schema claiming the language cannot express something. It carries the date
+somebody last checked it, on its own line at the end of the paragraph
+making the claim:
+
+    // operator whose operands are a field and a literal of a different kind.
+    // (verified 2026-10-22)
+
+The date means **verified on**, so it is not written without re-deriving
+the claim. `verified 20` is the lookup path, and is distinguishable from a
+decision citation or a source line:
+
+    grep -rn 'verified 20' --include='*.situ' example/ std/
+
+**Anchor where you can, because an anchor outlives a date.** A bill that
+names a decision record, a refusal the compiler emits by name, or a line
+in the source it was measured from says where to re-derive rather than
+only when somebody last did. Six of the nine do.
+
+**Date a claim that the language cannot do something. Do not date a claim
+about what a construct does.** A bill is falsified silently by a language
+addition -- the schema goes on compiling and nothing brings a reader back
+to the sentence -- while a claim about a construct's behaviour is
+falsified loudly, because every schema using it stops building. So
+`example/ipv6ext`'s "what `while` asks and what `until` cannot" is not a
+bill and is not dated, and a format fact never is.
+
+**And when the language gains a construct, re-read the bills that asked
+for it.** Not the corpus and not a sample: a bill that asks for something
+names what it wants, so the files to check are findable the moment the
+thing they asked for lands. 26.672 has the pass that set this, and the
+stale bill that was sitting next to its own refutation while an audit
+verified the refutation.
+
+There is no gate. A stale bill reads exactly like a sound one, so the only
+detector is re-derivation, and an age nag over nine lines would saturate.
+
 ---
 
 ## 26. Implementation plan
@@ -7276,6 +7315,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.672 The bills are dated, and the population is nine rather than 63
+
+Moved to `doc/decision/26.672-the-bills-are-dated-and-the-population-is-nine.md`.
 
 ### 26.671 A schema's bill is a dated claim about the compiler
 

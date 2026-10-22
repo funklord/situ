@@ -45,6 +45,7 @@ impl crc16_ccitt derived;
 // byte-valued, so `traverse.region_extent` declines one and any coded
 // region using it defers. As a checksum FIELD nothing is appended and the
 // question does not arise.
+// (verified 2026-10-22)
 //
 // Parameters and check values are the CRC RevEng catalogue's, which is
 // where every other set in this file came from. The check value catches a

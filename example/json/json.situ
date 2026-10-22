@@ -234,6 +234,7 @@ struct text {
 // are one value with three spellings, and `[minimal]` cannot buy it back:
 // on a byte run that attribute means "no leading zeroes", and on a number
 // with an exponent there is no single shortest spelling to demand.
+// (verified 2026-10-22)
 //
 // 0063 settles that it stays refused rather than waiting on a rule. This
 // member is the construct's only asker, and JSON is the format whose

@@ -191,6 +191,7 @@ struct id3_extended_header {
 // the five stuffing bits are checked -- and because the alternative, a
 // `checksum` over a span the codec does not fill, would be a false claim
 // that four backends would generate a wrong `_compute` from.
+// (verified 2026-10-22)
 //
 // MEASURED, so that neither half of that is a guess. The real tag stores
 // `04 4b 7f 72 5e`, which is 0x497FF95E once the five stuffing bits come

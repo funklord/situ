@@ -53,6 +53,7 @@ enum advertising_event : u8 {
 // own constants are `ADDR_LE_DEV_PUBLIC` and `ADDR_LE_DEV_RANDOM`, so nothing
 // is lost. `situc` refuses the collision now rather than emitting a header
 // that does not compile (26.36).
+// (verified 2026-10-22)
 enum address_kind : u8 {
 	public_device   = 0x00,
 	random_device   = 0x01,

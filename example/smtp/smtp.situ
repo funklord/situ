@@ -65,8 +65,11 @@ struct command {
 //
 // The separator after it is the whole of SMTP's multiline framing: `-` means
 // another line follows, a space means this was the last. Both bytes are in
-// the layout and readable. What situ cannot do is *use* the separator to
-// decide how many lines there are -- see the note at the end.
+// the layout and readable. What situ could not do, when this file was
+// written, was *use* the separator to decide how many lines there are.
+// `while` (8.6.6) does it now; the note at the end is left standing as the
+// record of a construct being asked for and declined, which is the half of
+// this example worth more than the schema.
 struct reply_line {
 	decimal  u16  code[3];
 	u8            separator;

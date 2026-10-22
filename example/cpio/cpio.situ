@@ -148,6 +148,7 @@ assert in_place(cpio_entry.name);
 // read, and the expression language is arithmetic over numbers -- there is no
 // comparison against a byte string in it, and adding one would mean an
 // operator whose operands are a field and a literal of a different kind.
+// (verified 2026-10-22)
 //
 // So an archive is a caller's loop over `cpio_entry`, and the entry is what
 // this schema describes. The same shape as `example/dnsname`, where the label
