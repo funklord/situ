@@ -4697,21 +4697,38 @@ def _check_tag_width(tag: ast.TagField, bits: int, codec: ast.CodecDecl,
 	else:
 		held, makes = f"{bits} bits", str(produced)
 
+	if bits > produced and check:
+		# Refused on the MEASUREMENT rather than on tidiness, which is what
+		# 0067 first left open and 26.677 settled. The generated check
+		# compares the whole field against the narrower value the code
+		# produces -- `(uint32_t)situ_base(view)[crc_at] == want` for a
+		# crc7 in a `u8` -- so the spare bits decide the verdict and
+		# nothing in the schema says what they are. Measured: crc7 of
+		# `12 34` is 0x20, the check passes with the eighth bit clear and
+		# returns SITU_ERR_CHECKSUM with it set, for the same code over the
+		# same bytes.
+		#
+		# So this is not the padding advisory's territory, where two
+		# encodings mean one value. It is `validate` depending on bytes the
+		# schema does not describe, which is the thing situ exists not to
+		# do.
+		raise error(
+			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
+			tag.span,
+			label = "wider than the code it holds",
+			notes = ["the generated check compares the whole field against "
+			         "the narrower value, so the spare bits decide the "
+			         "verdict and the schema does not say what they are",
+			         "declare them: `test/schema/edges.situ`'s "
+			         "`mmc_command` is a `u7` beside a "
+			         "`reserved u1 [must_be_zero]`, which is the stop bit "
+			         "MMC actually has",
+			         "or name the kernel that is this wide (26.677)"],
+		)
+
 	if bits > produced:
 		# A tag cannot be wider than what computes it: no spelling gets more
 		# authentication out of a primitive than it produces.
-		#
-		# A CHECKSUM can, and this arm is deliberately not extended to one.
-		# A narrow code in a wider field is ordinary -- the value is
-		# zero-extended and the comparison is still exact -- and three
-		# fixtures in this tree store a crc5 or crc7 in a `u8`. Nothing is
-		# undetectable about it the way a truncation's direction is, so
-		# there is no 17.0 argument for refusing it and it is left as the
-		# open half of 0067. Activating this arm for checksums, which it had
-		# never reached before the codec resolution was fixed, is what the
-		# full gate caught after four targeted suites passed (0067).
-		if check:
-			return
 		raise error(
 			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
 			tag.span,

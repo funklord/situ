@@ -97,11 +97,14 @@ def test_a_one_byte_checksum_reads_the_byte_rather_than_a_word(
 	length read beside it already say so; this was the third site and the
 	only one no schema reached, because nothing in the tree had a one-byte
 	checksum until CRC-7 arrived (26.370)."""
-	body = ("codec crc7 { kernel = polynomial(width = 7, poly = 0x09); }\n"
-	        "impl crc7 derived;\n"
+	# A crc8 rather than the crc7 this was written with: 26.677 refuses a
+	# check field wider than its code, and the subject here is a field that
+	# is ONE BYTE, which an eight-bit code gives honestly.
+	body = ("codec crc8 { kernel = polynomial(width = 8, poly = 0x07); }\n"
+	        "impl crc8 derived;\n"
 	        "struct S {\n"
 	        "\tauthenticated body { u8 a; u8 b; }\n"
-	        "\tchecksum u8 c[1] covers(body) is crc7;\n}\n")
+	        "\tchecksum u8 c[1] covers(body) is crc8;\n}\n")
 	compile_generated(tmp_path, body)
 
 	header, _ = emit(body)

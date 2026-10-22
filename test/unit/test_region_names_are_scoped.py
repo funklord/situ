@@ -191,9 +191,15 @@ codec crc5_usb {
 }
 impl crc5_usb derived;
 
+// A byte-wide code for `filler`'s byte-wide field (26.677). This struct is
+// here to put a region named `body` next door, and its codec is incidental
+// -- the sub-byte one that matters is `wrong_order`'s below.
+codec crc8 { kernel = polynomial(width = 8, poly = 0x07); }
+impl crc8 derived;
+
 struct filler {
 	authenticated body { u8 pad; }
-	checksum u8 fsig[1] covers(body) is crc5_usb;
+	checksum u8 fsig[1] covers(body) is crc8;
 }
 
 struct wrong_order [allow_straddle, bit_order = msb_first] {

@@ -37,15 +37,23 @@ thirty-two.
 produces.** Narrower is refused with no exemption, and the diagnostic names
 the narrow kernels.
 
-**Wider is accepted, and this is where a checksum differs from a tag.** A
-narrow code in a wider field is ordinary -- the value is zero-extended and
-the comparison stays exact -- so there is nothing undetectable about it the
-way a truncation's direction is, and no 17.0 argument for refusing it. A
-tag keeps its refusal in that direction, because extra bytes there
-authenticate nothing rather than holding a smaller number.
+**Wider is refused too, settled in 26.677.** This record said twice that
+it should be accepted -- first that a field is "exactly as wide" as its
+code, then, after the full gate disproved that, that a narrow code in a
+wider field is "ordinary ... the value is zero-extended and the comparison
+stays exact". The second claim was wrong on measurement: the generated
+check compares the WHOLE field against the narrower value, so the spare
+bits decide the verdict and nothing in the schema says what they are. A
+crc7 in a `u8` passes with the eighth bit clear and reports CHECKSUM with
+it set, for the same code over the same bytes.
 
-This record first said "exactly as wide", and the full gate disproved it:
-see *What the gate caught* below.
+A tag's refusal in that direction stands on its own reason, which is
+unchanged: extra bytes there authenticate nothing rather than holding a
+smaller number.
+
+So a check field is exactly as wide as its code after all, and the route
+to that was two wrong answers in opposite directions. *What the gate
+caught* below is the first; 26.677 is the second.
 
 **`[truncated]` is a tag's attribute and is refused on a checksum.** The
 two halves of the family verify differently, which is the whole of the
@@ -151,14 +159,12 @@ corrupt.
 
 ## Open, and the holder's
 
-**Whether a checksum field wider than its code should be refused.** It is
-accepted here because three fixtures rely on it and because the reading is
-unambiguous, but the spare bits are unchecked: `u8` holding a `crc7` works
-only while the eighth bit reads zero, and nothing says it does.
-`edges.situ`'s `mmc_command` is the properly-written version of the same
-layout -- `u7` beside a `reserved u1 [must_be_zero]` -- which suggests the
-wider form is sloppiness that 0046 already gave the remedy for. Refusing it
-is a restriction nobody asked for, so it is raised rather than taken.
+**~~Whether a checksum field wider than its code should be refused.~~**
+Closed by the holder 2026-10-22 and recorded in 26.677: refused, because
+the spare bits decide the verdict and the schema does not describe them.
+The suspicion in this paragraph was right and the argument for leaving it
+was not -- "three fixtures rely on it" counted call sites instead of
+reading them, and all three turned out to be incidental.
 
 **Whether a truncated checksum should be expressible at all.** The case for no
 is that `std/kernels.situ` carries thirteen widths precisely so a format's

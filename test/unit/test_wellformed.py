@@ -1116,25 +1116,28 @@ def test_a_byte_wide_checksum_narrower_than_its_kernel_is_refused() -> None:
 	assert "is 1 bytes and `code` produces 4" in text
 
 
-def test_a_checksum_wider_than_its_kernel_is_accepted() -> None:
-	"""The direction a checksum differs from a tag in, and the case the fix
-	for 0067 first broke.
+def test_a_checksum_wider_than_its_kernel_is_refused() -> None:
+	"""The question 0067 left open, closed on a measurement (26.677).
 
-	A narrow code in a wider field is ordinary: the value is zero-extended
-	and the comparison stays exact, which is nothing like a truncation whose
-	direction nobody can detect. Three fixtures in this tree store a crc5 or
-	a crc7 in a `u8`, and refusing them is what the full gate caught after
-	four targeted suites had passed -- the arm had never reached a checksum
-	before the codec resolution was fixed, so extending the check activated
-	it by accident.
+	It was accepted at first on the reasoning that a narrow code in a wider
+	field is zero-extended and compares exactly. It does not: the generated
+	check compares the WHOLE field against the narrower value, so the spare
+	bits decide the verdict and nothing in the schema says what they are.
+	Measured in C -- crc7 of `12 34` is 0x20, and the check passes with the
+	eighth bit clear and returns SITU_ERR_CHECKSUM with it set, for the same
+	code over the same bytes.
 
-	A tag is the other way and keeps its refusal: extra bytes there
-	authenticate nothing.
+	Two messages whose declared content is identical therefore get different
+	verdicts, decided by a bit the schema never describes. The remedy is the
+	one 0046 already built: name the narrow code and declare the spare bits,
+	as `edges.situ`'s `mmc_command` does with MMC's stop bit.
 	"""
-	# One byte holding a seven-bit code, which is the three fixtures' shape,
-	# and a four-byte field holding it, which is the same thing further out.
-	parse_text(checked("checksum u8 crc[1] covers(a) is code;"), path="s.situ")
-	parse_text(checked("checksum u8 crc[4] covers(a) is code;"), path="s.situ")
+	for field in ("checksum u8 crc[1] covers(a) is code;",
+	              "checksum u8 crc[4] covers(a) is code;"):
+		text = rendered(checked(field))
+		assert "wider than the code it holds" in text
+		assert "the spare bits decide the verdict" in text
+		assert "must_be_zero" in text, "the remedy has to name the spelling"
 
 
 def test_a_tag_wider_than_its_codec_is_still_refused() -> None:
