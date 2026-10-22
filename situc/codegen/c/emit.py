@@ -5247,6 +5247,97 @@ class Emitter:
 			*self._span_entries(span, base, deep),
 		]
 
+	def _run_fits(self, struct: "ResolvedStruct", placement: Placement,
+			local: str, base: str, count: str,
+			nested: str | None) -> list[str]:
+		"""Whether every element the count declares is inside the frame.
+
+		A separate walk, and a separate function, because `_span` cannot
+		carry a verdict: it is summed into the enclosing struct's `_extent`,
+		so an unsatisfiable value there wraps when added -- 4294967298 in
+		Python and 2 in C against a pinned 27, which is how the first
+		attempt at this was caught (26.676). `_span` keeps its one meaning
+		and this answers the other question.
+
+		**A zero extent is not the frame's doing.** It is a `[depth]` cap or
+		a degenerate element, and `check`'s nesting guard already refuses
+		the first -- before this, in the same function. So the walk stopping
+		there means "cannot tell from here", which is reported as fitting
+		and left to that guard. Treating it as a short frame is what made
+		the first attempt refuse `[depth]`-capped messages with the wrong
+		error.
+
+		Asked by `check` and by nothing else, which is what keeps the other
+		three consumers of a run's span untouched: the indexed accessor
+		walks for itself, and the following member's offset and the
+		enclosing extent want the span and no verdict.
+		"""
+		extent = self._element_extent_call(
+			self.resolved.structs.get(nested or ""))
+		if extent is None:
+			return []
+
+		deep = self._recursive(nested or "")
+		name = ident(self.prefix, struct.name, local, "fits")
+		size = (f"{ident(self.prefix, nested or '', 'extent')}_at"
+		        "(element, depth + 1u)" if deep else
+		        f"{ident(self.prefix, nested or '', 'extent')}(element)")
+		body = [
+			"",
+			f"/* Whether every one of `{placement.path}`'s declared elements"
+			" is inside",
+			" * the frame. `check` asks this; a run's span cannot answer it,"
+			" being",
+			" * summed into the enclosing extent (26.676).",
+			" *",
+			" * A zero extent is a `[depth]` cap or a degenerate element"
+			" rather than a",
+			" * short frame, so the walk stopping there answers yes and"
+			" leaves the",
+			" * message to the nesting guard above. */",
+			f"static inline int {name}"
+			+ ("_at(situ_view_t view, uint32_t depth)" if deep
+			   else "(situ_view_t view)"),
+			"{",
+			f"	const uint32_t total = {count};",
+			f"	uint32_t at = {base};",
+			"	uint32_t n  = 0u;",
+			"",
+			"	while (n < total) {",
+			"		situ_view_t element;",
+			"		uint32_t    size;",
+			"",
+			"		if (at >= view.limit) {",
+			"			return 0;",
+			"		}",
+			"		if (situ_view_sub(view, at,"
+			" situ_remaining_u32(view.limit, at), &element)",
+			"				!= SITU_OK) {",
+			"			return 0;",
+			"		}",
+			f"		size = {size};",
+			"		if (size == 0u) {",
+			"			return 1;",
+			"		}",
+			"		if (size > situ_remaining_u32(view.limit, at)) {",
+			"			return 0;",
+			"		}",
+			"		at = at + size;",
+			"		n  = n + 1u;",
+			"	}",
+			"	return 1;",
+			"}",
+		]
+		if not deep:
+			return body
+		return body + [
+			"",
+			f"static inline int {name}(situ_view_t view)",
+			"{",
+			f"	return {name}_at(view, 0u);",
+			"}",
+		]
+
 	def _span_entries(self, span: str, base: str, deep: bool) -> list[str]:
 		"""The entry points over a run's `_from` walk.
 
@@ -7001,6 +7092,30 @@ class Emitter:
 			"\t}",
 		]
 
+		# A counted run of variable-size elements needs a second question.
+		# The test above compares what is LEFT against how far the run
+		# REACHED, and a walk that gave up early reaches less -- so nine
+		# bytes whose one element declared 203 compared 8 against 0 and
+		# passed (26.676). `_fits` walks the declared count and says
+		# whether every element was inside the frame.
+		if (element is not None and self._is_counted_run(placement)
+				and has_computable_extent(self.resolved.structs, element)
+				and self._element_extent_call(element) is not None):
+			fits = ident(self.prefix, struct.name,
+			             local_name(struct, placement), "fits")
+			lines += [
+				f"\t/* {placement.path}: and every element the count"
+				" declares is in",
+				"\t * the frame, which the comparison above cannot see -- it"
+				" holds",
+				"\t * the frame against how far the walk REACHED, and a walk"
+				" that",
+				"\t * gave up early reaches less (26.676). */",
+				f"\tif (!{fits}(view)) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			]
+
 		# And against the pin, which the frame check does not cover: it
 		# compares with what is left in the *view*, and anything after this
 		# member makes that larger than the member itself (0039).
@@ -8141,6 +8256,8 @@ class Emitter:
 			span_name = ident(self.prefix, struct.name, local, "span")
 			lines.extend(self._span_entries(
 				span_name, base, self._recursive(nested or "")))
+			lines.extend(self._run_fits(struct, placement, local, base,
+			                            count, nested))
 			return lines
 
 		lines.extend([

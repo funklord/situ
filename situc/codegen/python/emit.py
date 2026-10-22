@@ -4591,6 +4591,53 @@ class Emitter:
 			"			n  += 1",
 			"",
 			"		return n if count_only else at - start",
+			# Whether every declared element is inside the frame, which
+			# `validate` asks and a span cannot answer: a span is summed
+			# into the enclosing extent, so an unsatisfiable value there
+			# overflows past it -- 4294967298 against a pinned 27, which is
+			# how the first attempt at this was caught (26.676). A zero
+			# extent is a `[depth]` cap or a degenerate element rather than
+			# a short frame, so stopping there answers True and leaves the
+			# message to the nesting guard.
+			*([] if count is None else [
+				"",
+				f"	def {name}_fits(self"
+				+ (", depth: int = 0) -> bool:" if is_recursive(
+					self.resolved.structs, placement.type_name or "")
+				   else ") -> bool:"),
+				f'		"""Whether every one of `{name}`\'s declared'
+				' elements is',
+				"		inside the frame. A span cannot answer it, being"
+				" summed into",
+				"		the enclosing extent (26.676); a zero extent is a"
+				" `[depth]`",
+				"		cap or a degenerate element rather than a short"
+				" frame, so",
+				"		stopping there answers True and leaves it to the"
+				' nesting guard."""',
+				"		self._check()",
+				f"		total = {count}",
+				f"		at    = self.{name}_offset",
+				"		n     = 0",
+				"",
+				"		while n < total:",
+				"			if at >= self._len:",
+				"				return False",
+				f"			_element = {inner}(self._msg, self._at + at,"
+				" self._len - at)",
+				("			size    = _element._extent"
+				 if not is_recursive(self.resolved.structs,
+				                     placement.type_name or "") else
+				 "			size    = _element._extent_at(depth + 1)"),
+				"			if size == 0:",
+				"				return True",
+				"			if size > self._len - at:",
+				"				return False",
+				"			at += size",
+				"			n  += 1",
+				"",
+				"		return True",
+			]),
 			*( ["",
 			    "	@property",
 			    f"	def {name}_span(self) -> int:",
@@ -5849,6 +5896,23 @@ class Emitter:
 			f'\t\t\traise BoundsError("{placement.path}: declared length'
 			' does not fit")',
 		]
+
+		# And every element the count declares, which the test above cannot
+		# see: it holds the frame against how far the walk REACHED, and a
+		# walk that gave up early reaches less (26.676).
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is not None
+				and is_counted_run(self.resolved.structs, placement)
+				and has_computable_extent(self.resolved.structs, element)):
+			member = local_name(struct, placement)
+			lines += [
+				f"\t\t# {placement.path}: and every element the count",
+				"\t\t# declares is in the frame, which the comparison above",
+				"\t\t# cannot see (26.676).",
+				f"\t\tif not self.{member}_fits():",
+				f'\t\t\traise BoundsError("{placement.path}: the frame does'
+				' not hold every declared element")',
+			]
 
 		# And within the pin, which the frame check does not cover: it
 		# compares with what is left in the buffer, and anything after this

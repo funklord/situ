@@ -3194,6 +3194,25 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 		]
+
+		# And whether every element the count declares is inside the frame,
+		# which the test above cannot see: it holds the frame against how
+		# far the walk REACHED, and a walk that gave up early reaches less
+		# (26.676).
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is not None
+				and is_counted_run(self.resolved.structs, placement)
+				and has_computable_extent(self.resolved.structs, element)):
+			member = bare_name(local_name(struct, placement))
+			lines += [
+				f"\t\t/* {placement.path}: and every element the count",
+				"\t\t * declares is in the frame, which the comparison above",
+				"\t\t * cannot see -- it holds the frame against how far the",
+				"\t\t * walk REACHED (26.676). */",
+				f"\t\tif (!{member}_fits()) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
 		pinned = pinned_bytes(placement)
 		if pinned is not None:
 			lines += [
@@ -3936,6 +3955,74 @@ class Emitter:
 				"\t\t}",
 				"\t\treturn at - start;",
 				"\t}",
+				# Whether every declared element is inside the frame, which
+				# `check` asks and a span cannot answer -- a span is summed
+				# into the enclosing extent, so an unsatisfiable value there
+				# wraps when added (26.676). A zero extent is a `[depth]`
+				# cap or a degenerate element rather than a short frame, so
+				# the walk stopping there answers yes and leaves the message
+				# to the nesting guard.
+				*([] if count is None else [
+					"",
+					f"\t/* Whether every one of `{name}`'s declared elements"
+					" is inside",
+					"\t * the frame. `check` asks this; a span cannot answer"
+					" it, being",
+					"\t * summed into the enclosing extent (26.676). A zero"
+					" extent is a",
+					"\t * `[depth]` cap or a degenerate element rather than a"
+					" short",
+					"\t * frame, so stopping there answers yes and leaves it"
+					" to the",
+					"\t * nesting guard. */",
+					f"\t[[nodiscard]] bool {name}_fits"
+					+ ("(std::uint32_t depth) const noexcept"
+					   if is_recursive(self.resolved.structs,
+					                   placement.type_name or "")
+					   else "() const noexcept"),
+					"\t{",
+					f"\t\tconst std::uint32_t total = {name}_count();",
+					f"\t\tstd::uint32_t at = {name}_offset();",
+					"\t\tstd::uint32_t n  = 0;",
+					"",
+					"\t\twhile (n < total) {",
+					"\t\t\tsitu_view_t raw;",
+					"",
+					"\t\t\tif (at >= raw_.limit) {",
+					"\t\t\t\treturn false;",
+					"\t\t\t}",
+					"\t\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\t\t\t\tsitu_remaining_u32(raw_.limit, at), &raw)"
+					" != SITU_OK) {",
+					"\t\t\t\treturn false;",
+					"\t\t\t}",
+					f"\t\t\tconst {inner} element(raw);",
+					("\t\t\tconst std::uint32_t size = element.extent();"
+					 if not is_recursive(self.resolved.structs,
+					                     placement.type_name or "") else
+					 "\t\t\tconst std::uint32_t size ="
+					 " element.extent_at(depth + 1);"),
+					"",
+					"\t\t\tif (size == 0) {",
+					"\t\t\t\treturn true;",
+					"\t\t\t}",
+					"\t\t\tif (size > situ_remaining_u32(raw_.limit, at)) {",
+					"\t\t\t\treturn false;",
+					"\t\t\t}",
+					"\t\t\tat += size;",
+					"\t\t\tn  += 1;",
+					"\t\t}",
+					"\t\treturn true;",
+					"\t}",
+					*([] if not is_recursive(self.resolved.structs,
+					                         placement.type_name or "") else [
+						"",
+						f"\t[[nodiscard]] bool {name}_fits() const noexcept",
+						"\t{",
+						f"\t\treturn {name}_fits(0u);",
+						"\t}",
+					]),
+				]),
 				*( ["",
 				    f"\t[[nodiscard]] std::uint32_t {name}_span()"
 				    " const noexcept",

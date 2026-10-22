@@ -6097,6 +6097,23 @@ class Emitter:
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 		]
+
+		# And every element the count declares, which the test above cannot
+		# see: it holds the frame against how far the walk REACHED, and a
+		# walk that gave up early reaches less (26.676).
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is not None
+				and is_counted_run(self.resolved.structs, placement)
+				and has_computable_extent(self.resolved.structs, element)):
+			member = _ident(local_name(struct, placement) + "_fits")
+			lines += [
+				f"\t\t// {placement.path}: and every element the count",
+				"\t\t// declares is in the frame, which the comparison above",
+				"\t\t// cannot see (26.676).",
+				f"\t\tif !self.{member}() {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+			]
 		pinned = pinned_bytes(placement)
 		if pinned is not None:
 			lines += [
@@ -6945,6 +6962,66 @@ class Emitter:
 				"\t\t}",
 				"\t\tat - start",
 				"\t}",
+				# Whether every declared element is inside the frame, which
+				# `check` asks and a span cannot answer: a span is summed
+				# into the enclosing extent, so an unsatisfiable value there
+				# wraps when added (26.676). A zero extent is a `[depth]`
+				# cap or a degenerate element rather than a short frame, so
+				# stopping there answers yes and leaves the message to the
+				# nesting guard.
+				*([] if not bound else [
+					"",
+					f"\t/// Whether every one of `{base}`'s declared elements"
+					" is inside",
+					"\t/// the frame. `check` asks this; a span cannot"
+					" answer it, being",
+					"\t/// summed into the enclosing extent (26.676). A zero"
+					" extent is",
+					"\t/// a `[depth]` cap or a degenerate element rather"
+					" than a short",
+					"\t/// frame, so stopping there answers yes and leaves"
+					" it to the",
+					"\t/// nesting guard.",
+					f"\tpub fn {_ident(base + '_fits')}"
+					+ ("_at(&self, depth: usize) -> bool {"
+					   if is_recursive(self.resolved.structs,
+					                   placement.type_name or "")
+					   else "(&self) -> bool {"),
+					f"\t\tlet total = self.{_ident(base + '_count')}();",
+					f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
+					"\t\tlet mut n  = 0usize;",
+					"",
+					"\t\twhile n < total {",
+					"\t\t\tif at >= self.bytes.len() {",
+					"\t\t\t\treturn false;",
+					"\t\t\t}",
+					f"\t\t\tlet element = {inner} {{"
+					" bytes: &self.bytes[at..] };",
+					("\t\t\tlet size    = element.extent();"
+					 if not is_recursive(self.resolved.structs,
+					                     placement.type_name or "") else
+					 "\t\t\tlet size    = element.extent_at(depth + 1);"),
+					"",
+					"\t\t\tif size == 0 {",
+					"\t\t\t\treturn true;",
+					"\t\t\t}",
+					"\t\t\tif size > situ_rt::remaining(self.bytes.len(),"
+					" at) {",
+					"\t\t\t\treturn false;",
+					"\t\t\t}",
+					"\t\t\tat += size;",
+					"\t\t\tn  += 1;",
+					"\t\t}",
+					"\t\ttrue",
+					"\t}",
+					*([] if not is_recursive(self.resolved.structs,
+					                         placement.type_name or "") else [
+						"",
+						f"\tpub fn {_ident(base + '_fits')}(&self) -> bool {{",
+						f"\t\tself.{_ident(base + '_fits_at')}(0)",
+						"\t}",
+					]),
+				]),
 				*( ["",
 				    f"\tpub fn {_ident(base + '_span')}(&self) -> usize {{",
 				    f"\t\tself.{_ident(base + '_span_from')}"
