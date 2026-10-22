@@ -3134,6 +3134,38 @@ class Emitter:
 			return None
 		return f"situ_in_bounds(raw(), {start}, {bytes_}u)"
 
+	def _run_fits_call(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`check`'s call to a counted run's `_fits`, or nothing.
+
+		Keyed on the same shape the definition is, so the two cannot drift.
+		A LITERAL count declares no length of its own and reaches none of
+		the branches below, so the predicate was emitted for `pieces.two`
+		and never called -- found by the walker disagreeing (26.676).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is None
+				or not is_counted_run(self.resolved.structs, placement)
+				or not has_computable_extent(self.resolved.structs, element)):
+			return []
+		# The same question the DEFINITION is gated on, and not a broader
+		# one. `is_counted_run` admits a `[remaining]` run -- mqtt's
+		# `subscription filters[remaining]` -- which has no declared count
+		# to fall short of, so the predicate is not emitted for it and the
+		# call named a function nothing defined (26.676).
+		if self._count_expression(struct, placement) is None:
+			return []
+		member = bare_name(local_name(struct, placement))
+		return [
+			f"\t\t/* {placement.path}: every element the count declares is",
+			"\t\t * in the frame. No span check can see this -- a span is"
+			" how",
+			"\t\t * far the run REACHED (26.676). */",
+			f"\t\tif (!{member}_fits()) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+		]
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -3146,6 +3178,10 @@ class Emitter:
 		"""
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
+
+		# Computed first and prepended to whatever the branches below
+		# decide: a literal count reaches none of them (26.676).
+		run_fits = self._run_fits_call(struct, placement)
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -3161,7 +3197,7 @@ class Emitter:
 		# the walker read it correctly (26.446). A false refusal, which
 		# blocks a schema outright rather than answering it wrongly.
 		if placement.located is not None:
-			return []
+			return run_fits
 
 		# The other half of the same sentence: a member *placed* after a
 		# variable-length region has an offset the message chose, so whether
@@ -3173,8 +3209,8 @@ class Emitter:
 			fits = (None if not extent
 			        else self._fits(struct, placement, extent))
 			if fits is None:
-				return []
-			return [
+				return run_fits
+			return run_fits + [
 				f"\t\t/* {placement.path}: its offset is a sum of lengths the",
 				"\t\t * message chose, so the frame is not known to contain"
 				" it. */",
@@ -3186,7 +3222,7 @@ class Emitter:
 		declared = self._raw_length_expression(struct, placement)
 		start    = self._offset_expression(struct, placement)
 		if declared is None or start is None:
-			return []
+			return run_fits
 		lines = [
 			f"\t\t/* {placement.path}: the length the message declares has to",
 			"\t\t * fit the frame it is in. */",
@@ -3223,7 +3259,7 @@ class Emitter:
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
 			]
-		return lines
+		return run_fits + lines
 
 	def _discriminant_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

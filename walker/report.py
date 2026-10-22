@@ -29,7 +29,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
-                         _evaluate, _read_at, offset_bits, record_run_count,
+                         _evaluate, _read_at, counted_run_fits,
+                         offset_bits, record_run_count,
                          chosen_arm, scan, size_bits, sized_run_count,
                          struct_extent, tlv_count, varint, while_count)
 
@@ -1026,6 +1027,21 @@ def _validate(image: Image, view: View, struct_index: int,
 		       for check, _ in image.constraints.get(index, ())):
 			if view.at * 8 + at + wide > view.limit * 8:
 				return fail(ERR_BOUNDS, index, FITS_FRAME)
+
+		# And every element a counted run declares, which no span check can
+		# see: a span is how far the run REACHED, and a walk that gave up
+		# early reaches less -- so nine bytes whose one element declared 203
+		# compared 8 against 0 and validated clean (26.676).
+		#
+		# OUTSIDE the `FITS_FRAME` branch, and that is the point: `segments`
+		# carries no such constraint, so asking there left the walker
+		# answering OK where every backend refused. Which runs carry
+		# `FITS_FRAME` is the packer's to say and is a different question
+		# from which runs are counted runs of variable-size elements --
+		# `counted_run_fits` decides the second for itself and answers True
+		# for everything else, so this is asked of every member.
+		if not counted_run_fits(view, index):
+			return fail(ERR_BOUNDS, index, FITS_FRAME)
 
 		# A nested member is `validate` called through, and its error is
 		# returned as it stands: C propagates the inner code rather than

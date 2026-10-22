@@ -5272,9 +5272,8 @@ class Emitter:
 		walks for itself, and the following member's offset and the
 		enclosing extent want the span and no verdict.
 		"""
-		extent = self._element_extent_call(
-			self.resolved.structs.get(nested or ""))
-		if extent is None:
+		element = self.resolved.structs.get(nested or "")
+		if element is None or self._element_extent_call(element) is None:
 			return []
 
 		deep = self._recursive(nested or "")
@@ -6991,6 +6990,44 @@ class Emitter:
 			" * expansion, keeps the members after it addressable. */",
 		]
 
+	def _run_fits_call(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`check`'s call to a counted run's `_fits` predicate, or nothing.
+
+		Emitted for the same shape `_run_fits` defines, so the definition
+		and the call cannot drift apart: a counted run of elements with a
+		computable extent. The predicate was emitted for `pieces.two` and
+		never called, because a LITERAL count declares no length of its own
+		and reaches none of `_fits_check`'s branches -- found by the walker
+		disagreeing rather than by reading, which is the third enumeration
+		this entry has cost (26.676).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is None or not self._is_counted_run(placement)
+				or not has_computable_extent(self.resolved.structs, element)
+				or self._element_extent_call(element) is None):
+			return []
+		# The same question the DEFINITION is gated on. `_is_counted_run`
+		# admits a `[remaining]` run, which has no declared count to fall
+		# short of, so the predicate is not emitted for one and the call
+		# would name a function nothing defines (26.676).
+		if self._count_expression(struct, placement) is None:
+			return []
+
+		name = ident(self.prefix, struct.name,
+		             local_name(struct, placement), "fits")
+		return [
+			f"\t/* {placement.path}: every element the count declares is in"
+			" the",
+			"\t * frame. No span check can see this -- a span is how far the"
+			" run",
+			"\t * REACHED, and a walk that gave up early reaches less"
+			" (26.676). */",
+			f"\tif (!{name}(view)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -7007,6 +7044,16 @@ class Emitter:
 		if "." in placement.path[len(struct.name) + 1:]:
 			return []
 
+		# Whether every element a counted run declares is inside the frame,
+		# computed FIRST and prepended to whatever the branches below
+		# decide. A literal count reaches none of them -- `pieces.two` is
+		# `piece two[2]`, which declares no length of its own and is not
+		# fixed-size, so it got no check at all: the predicate was emitted
+		# and never called, while the walker asked and refused. The
+		# disagreement is what found it, and agreement over one layout is
+		# the invariant six descriptions exist to keep (26.676).
+		run_fits = self._run_fits_call(struct, placement)
+
 		# The other half of the same sentence, one step further on. A member
 		# *placed* after a variable-length region has an offset that is a sum
 		# of lengths the message chose, so "does the frame contain it" is a
@@ -7016,14 +7063,14 @@ class Emitter:
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)
 			if extent is None or placement.offset_bits is not None:
-				return []
+				return run_fits
 			# And only where the offset exists. `validate` called the offset
 			# function of a member the emitter had just declined to place, so
 			# a schema with a counted run of variable elements produced a
 			# header that names a function nothing defines -- the same
 			# mistake the accessor block above documents, one function along.
 			if self._offset_blocker(struct, placement) is not None:
-				return []
+				return run_fits
 			# A LOCATED member is the third way into that same fault, and it
 			# is not about a blocker: `at off` has no `_offset` function by
 			# design, because its offset is the MESSAGE's rather than this
@@ -7040,7 +7087,7 @@ class Emitter:
 			# signature. Its accessor asks it instead, on every call, which
 			# is what `offset = DataPlaced` in the map costs.
 			if placement.located is not None:
-				return [
+				return run_fits + [
 					f"\t/* {placement.path}: located at `{placement.located}`"
 					" from the start of",
 					"\t * the MESSAGE, so whether the frame contains it is not"
@@ -7050,7 +7097,7 @@ class Emitter:
 					"\t * accessor bounds-checks against the message on every"
 					" call. */",
 				]
-			return [
+			return run_fits + [
 				f"\t/* {placement.path}: its offset is a sum of lengths the"
 				" message",
 				"\t * chose, so the frame is not known to contain it. The"
@@ -7074,7 +7121,7 @@ class Emitter:
 		element = self.resolved.structs.get(placement.type_name or "")
 		if (element is not None and self._is_counted_run(placement)
 				and not has_computable_extent(self.resolved.structs, element)):
-			return [
+			return run_fits + [
 				f"\t/* {placement.path}: no extent this backend can compute,",
 				f"\t * one `{placement.type_name}` being as long as the view it",
 				"\t * was handed. The accessor is declined above; there is no",
@@ -7092,29 +7139,6 @@ class Emitter:
 			"\t}",
 		]
 
-		# A counted run of variable-size elements needs a second question.
-		# The test above compares what is LEFT against how far the run
-		# REACHED, and a walk that gave up early reaches less -- so nine
-		# bytes whose one element declared 203 compared 8 against 0 and
-		# passed (26.676). `_fits` walks the declared count and says
-		# whether every element was inside the frame.
-		if (element is not None and self._is_counted_run(placement)
-				and has_computable_extent(self.resolved.structs, element)
-				and self._element_extent_call(element) is not None):
-			fits = ident(self.prefix, struct.name,
-			             local_name(struct, placement), "fits")
-			lines += [
-				f"\t/* {placement.path}: and every element the count"
-				" declares is in",
-				"\t * the frame, which the comparison above cannot see -- it"
-				" holds",
-				"\t * the frame against how far the walk REACHED, and a walk"
-				" that",
-				"\t * gave up early reaches less (26.676). */",
-				f"\tif (!{fits}(view)) {{",
-				"\t\treturn SITU_ERR_BOUNDS;",
-				"\t}",
-			]
 
 		# And against the pin, which the frame check does not cover: it
 		# compares with what is left in the *view*, and anything after this
@@ -7132,7 +7156,7 @@ class Emitter:
 				"\t}",
 			]
 
-		return lines
+		return run_fits + lines
 
 	def _fixed_extent(self, placement: Placement) -> int | None:
 		"""How many bytes this member occupies, where that is a constant.

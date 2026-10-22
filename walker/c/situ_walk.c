@@ -3651,6 +3651,99 @@ situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
 	return validate_deep(image, message, len, shape, 0u, verdict, why);
 }
 
+/* Whether every element a counted run declares is inside the frame.
+ *
+ * The sixth implementation of this verdict, and the fifth and sixth were the
+ * ones nobody enumerated: a run's SPAN is how far it reached, which is what
+ * places the member after it, and a walk that gave up early reaches less. So
+ * nine bytes whose one element declared 203 compared 8 against 0 and
+ * validated clean, here and in all four backends (26.676).
+ *
+ * A separate walk rather than a flag on the span, for the reason the
+ * generated code gives: a span is summed into the enclosing struct's extent,
+ * so a value meaning "does not fit" wraps when added.
+ *
+ * A ZERO extent answers yes. It is a `[depth]`/`[limit]` cap or a degenerate
+ * element rather than a short frame, and a message past the cap is refused by
+ * the nesting answer instead -- which is why this cannot simply ask whether
+ * the walk placed `count` elements.
+ */
+static situ_walk_err counted_run_fits(const situ_walk_image *image,
+                                      const uint8_t *message, uint32_t len,
+                                      uint32_t shape, uint32_t index,
+                                      uint32_t depth, int *fits)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	uint32_t from = 0u;
+	uint32_t at;
+	int64_t  count = 0;
+	int64_t  i;
+
+	*fits = 1;
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (held.size_code == SITU_WALK_NONE
+	    || held.type_struct == SITU_WALK_NONE
+	    || held.element_bits != SITU_WALK_NONE) {
+		return SITU_WALK_OK;
+	}
+
+	err = offset_bits_deep(image, message, len, shape, index, depth, &from);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	from /= 8u;
+
+	{
+		walk_ctx ctx = {image, message, len, shape, depth};
+
+		err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+		                     (int64_t)(len > from ? len - from : 0u), &count);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+	}
+	if (count < 0) {
+		count = 0;
+	}
+
+	at = from;
+	for (i = 0; i < count; i++) {
+		uint32_t extent = 0u;
+
+		if (at >= len) {
+			*fits = 0;
+			return SITU_WALK_OK;
+		}
+		err = struct_extent(image, message + at, len - at,
+		                    held.type_struct, depth + 1u, &extent);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			/* This build cannot measure the element, which is what the
+			 * walk propagates rather than reporting as a short run.
+			 * Nothing to say about the frame either. */
+			return SITU_WALK_OK;
+		}
+		if (err != SITU_WALK_OK) {
+			/* The frame does not reach it, which IS the frame's doing and
+			 * is what this exists to report -- `walk.py` treats the same
+			 * failure the same way. */
+			*fits = 0;
+			return SITU_WALK_OK;
+		}
+		if (extent == 0u) {
+			return SITU_WALK_OK;
+		}
+		if (extent > len - at) {
+			*fits = 0;
+			return SITU_WALK_OK;
+		}
+		at += extent;
+	}
+	return SITU_WALK_OK;
+}
+
 static situ_walk_err validate_deep(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
@@ -4071,6 +4164,33 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				}
 			}
 			break;
+		}
+
+		/* AND EVERY ELEMENT A COUNTED RUN DECLARES, which no span check
+		 * can see: a span is how far the run reached, and a walk that gave
+		 * up early reaches less -- so nine bytes whose one element
+		 * declared 203 compared 8 against 0 and validated clean (26.676).
+		 *
+		 * Outside the `CHECK_FITS_FRAME` loop above, and that is the
+		 * point: `segments` carries no such constraint, so asking there
+		 * left this walker answering OK where every backend refused.
+		 * Which runs carry that check is the packer's to say and is a
+		 * different question from which runs are counted runs of
+		 * variable-size elements; `counted_run_fits` decides the second
+		 * for itself and answers yes for everything else. */
+		{
+			int fits = 1;
+
+			err = counted_run_fits(image, message, len, shape, index,
+			                       depth, &fits);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (!fits) {
+				record(why, index, CHECK_FITS_FRAME);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
 		}
 
 		/* The checks that read a *span* rather than a value, over the bytes

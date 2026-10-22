@@ -116,3 +116,55 @@ def test_the_rust_backend_does_not_grow_more_of_them() -> None:
 		f"the Rust count is {total}, below the pinned {RUST_PINNED}. Good "
 		f"news needs the floor lowered to keep the test honest: set "
 		f"RUST_PINNED to {total}")
+
+
+def test_every_emitted_predicate_is_called_and_every_call_defined() -> None:
+	"""A generated function and its call site must agree (26.676).
+
+	This fault bit twice, in opposite directions, within an hour:
+
+	- `situ_pieces_two_fits` was EMITTED AND NEVER CALLED. A literal count
+	  declares no length of its own, so `pieces.two` reached none of the
+	  branches that emit the call, and a dead `static inline` in a header
+	  raises no warning. The walker refusing where C accepted is what found
+	  it -- nothing in the four backends could have.
+	- then `filters_fits` was CALLED AND NEVER DEFINED, because the call's
+	  condition admitted mqtt's `subscription filters[remaining]` while the
+	  definition's did not. C++ failed to compile, which is the loud half of
+	  the same mistake.
+
+	So the two conditions are one now, and this holds them there. It is the
+	cheap static form of a question the suites answer expensively: the
+	compile gates catch a missing definition and nothing catches a missing
+	call.
+	"""
+	called_without = []
+	never_called   = []
+	for path in SCHEMAS:
+		for backend in ("c", "cpp", "rust", "python"):
+			text    = generated(path, backend)
+			called  = set(re.findall(r"(\w+_fits)\s*\(", text))
+			defined = set(re.findall(r"(?:int|bool|fn|def)\s+(\w+_fits)",
+			                         text))
+			# C splits definitions into the header and calls into the
+			# source, so the two halves are read together there.
+			if backend == "c":
+				schema   = load_schema(path)
+				resolved = resolve(schema, solve(schema))
+				built    = generate_c(schema, resolved, "u")
+				whole    = built.header + built.source
+				called   = set(re.findall(r"(\w+_fits)\s*\(", whole))
+				defined  = set(re.findall(r"int\s+(\w+_fits)", whole))
+			plain = {n for n in called if not n.endswith("_fits_at")}
+			called_without += [(path.name, backend, n)
+			                   for n in sorted(plain - defined)]
+			never_called   += [(path.name, backend, n)
+			                   for n in sorted(defined - called)]
+
+	assert not called_without, (
+		f"a predicate is called and never defined: {called_without[:6]} -- "
+		f"the call's condition is broader than the definition's (26.676)")
+	assert not never_called, (
+		f"a predicate is defined and never called: {never_called[:6]} -- "
+		f"the definition's condition is broader than the call's, which no "
+		f"compiler warns about (26.676)")

@@ -1684,6 +1684,70 @@ def tlv_count(view: View, index: int) -> int:
 	return count
 
 
+def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
+	"""Whether every element a counted run declares is inside the frame.
+
+	The sixth implementation of the verdict 26.676 is about, and the fifth
+	and sixth were the ones nobody enumerated: `content_bits` returns how
+	far the run REACHED, which is what places the member after it, and a
+	walk that gave up early reaches less. So nine bytes whose one element
+	declared 203 compared 8 against 0 and validated clean, here and in all
+	four backends.
+
+	A separate walk rather than a flag on the span, for the reason the
+	generated code gives: a span is summed into the enclosing struct's
+	extent, so a value that says "does not fit" wraps when added.
+
+	**A zero extent answers True.** It is a `[depth]`/`[limit]` cap or a
+	degenerate element rather than a short frame, and a message past the
+	cap is refused by the nesting answer instead -- which is why this
+	cannot simply ask whether the walk placed `count` elements.
+	"""
+	placement = view.image.placements[index]
+	if (placement.size_code == NONE or placement.type_struct == NONE
+			or placement.element_bits != NONE):
+		return True
+
+	count = _evaluate(view, placement.size_code,
+	                  lambda: offset_bits(view, index) // BITS_PER_BYTE)
+	count = min(max(count, 0), 0xFFFFFFFF)
+	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+
+	for _ in range(count):
+		if at >= view.limit:
+			return False
+		inner = View(view.image, view.buffer, placement.type_struct,
+		             at, view.limit)
+		try:
+			size = struct_extent(inner, depth + 1)
+		except TooDeep:
+			# The ceiling is a statement about this walker rather than
+			# about the message, which is `content_bits`' distinction and
+			# is re-raised there. Here it means the same as a zero extent:
+			# nothing further can be measured, so this cannot say.
+			return True
+		except Unplaceable:
+			# Nothing can place this element, so no backend emits a check
+			# for it either -- the generated predicate is emitted only
+			# where the element has a computable extent. Inventing a
+			# refusal here would be the walker answering a question the
+			# other five do not ask.
+			return True
+		except Refused:
+			# The frame does not reach this element, which IS the frame's
+			# doing and is what this predicate exists to report. Returning
+			# True here left the walker answering OK for `oob_run` where
+			# every backend refused -- `walk.py`'s own loop treats the same
+			# exception as a reason to stop walking.
+			return False
+		if size == 0:
+			return True
+		if size > view.limit - at:
+			return False
+		at += size
+	return True
+
+
 def record_run_count(view: View, index: int, depth: int = 0) -> int:
 	"""How many records a run of them holds: `T x[] until "D"` (8.6.3).
 
