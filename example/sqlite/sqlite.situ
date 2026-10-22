@@ -163,30 +163,40 @@ require random_access(btree_leaf_page.cells);
 assert stable_address(btree_leaf_page.cells);
 
 // ---------------------------------------------------------------------------
-// What this example asked for and did not get.
+// What this example asked for and got, and the bill that said otherwise.
 //
-// The elements are `u8 cells[]` rather than a `cell` struct, and that is not a
-// modelling choice. A SQLite table leaf cell is
+// This section used to say the cell was inexpressible -- "situ cannot
+// describe it today, for two independent reasons" -- and every sentence of
+// it was false by the time anybody read it back. The two reasons were that
+// `varint_type` had one encoding and that nothing could be sized by a
+// varint; the third claim was that `cells_at` is therefore not emitted and
+// that "no backend can read one".
 //
-//     varint payload_size; varint rowid; u8 payload[payload_size];
+// Measured 2026-10-22, against this file and the artifacts beside it:
 //
-// and situ cannot describe it today, for two independent reasons:
+//   - `sqlite_varint` above declares `encoding = be128` with
+//     `max_bytes = 9`, and the ninth byte's eight bits fall out of the
+//     arithmetic rather than needing a second flag -- `ast.VarintDecl`
+//     names SQLite's ninth byte as the worked case.
+//   - `struct table_leaf_cell` is twenty-odd lines above this, with
+//     `u8 payload[payload_size]` sized by a varint, and the committed
+//     `.situ.map` places all three of its members.
+//   - `btree_leaf_page.cells` is `table_leaf_cell cells[]`, not
+//     `u8 cells[]`.
+//   - All four backends read a varint: C emits `_get`, `_value` and
+//     `_len`, and the other three their own spellings.
+//   - `cells_at` IS emitted.
 //
-//   1. A SQLite varint is big-endian base-128, up to nine bytes, with the
-//      ninth byte contributing eight bits rather than seven. `varint_type`
-//      has one encoding and it is `leb128`, which is the other byte order.
-//      Declaring it `leb128` would be a lie about the wire.
+// So the example got what it asked for, in pieces, and the bill was never
+// re-derived. That is the hazard worth leaving a note about rather than
+// deleting: **a schema's bill is a dated claim about the compiler, and
+// nothing in the ordinary course of work brings a reader back to it.**
+// `example/json` carried the same shape -- a sentence naming the attribute
+// that would fix it while calling itself a gap (26.299) -- and a consumer
+// quoted this project's stale sentence back to it as the reason for not
+// adopting (26.670, 26.671).
 //
-//   2. A varint field has no accessor in any backend, and nothing may be
-//      sized by one: `u8 payload[payload_size]` is refused with "no fields
-//      are in scope at this point". So even with the right encoding, a cell's
-//      extent would not be computable.
-//
-// The consequence is visible in the generated header: `cells_count` and
-// `cells_offset` are emitted and `cells_at` is not, because an entry gives
-// where a cell starts and nothing says how far it runs. That is the honest
-// output, and the note above it says so.
-//
-// Neither gap is about `indexed`. Both are about varints, which section 9.7
-// calls impossible to describe protobuf without -- situ has them as a type
-// that the lattice reasons about, and no backend can read one.
+// What is still honestly missing is above and not here: overflow pages,
+// where a payload larger than the page carries a four-byte page number
+// after the local part and continues elsewhere. That is a second frame
+// reached by a pointer, and this schema says nothing about it.

@@ -7277,6 +7277,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.671 A schema's bill is a dated claim about the compiler
+
+Moved to `doc/decision/26.671-a-schema-s-bill-is-a-dated-claim-about-the-compiler.md`.
+
 ### 26.670 An escaped span frames, and where decoding would live
 
 Moved to `doc/decision/26.670-an-escaped-span-frames-and-where-decoding-would-live.md`.
