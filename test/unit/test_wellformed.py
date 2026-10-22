@@ -1116,13 +1116,32 @@ def test_a_byte_wide_checksum_narrower_than_its_kernel_is_refused() -> None:
 	assert "is 1 bytes and `code` produces 4" in text
 
 
-def test_a_checksum_wider_than_its_kernel_is_refused() -> None:
-	"""No exemption in this direction for a checksum either: the extra bits
-	hold nothing the code computed."""
-	text = rendered(checked("checksum u8 crc[4] covers(a) is code;"))
-	assert "is 4 bytes and `code` produces 7" not in text, (
-		"a seven-bit code's width is not a byte count")
-	assert "is 32 bits and `code` produces 7" in text
+def test_a_checksum_wider_than_its_kernel_is_accepted() -> None:
+	"""The direction a checksum differs from a tag in, and the case the fix
+	for 0067 first broke.
+
+	A narrow code in a wider field is ordinary: the value is zero-extended
+	and the comparison stays exact, which is nothing like a truncation whose
+	direction nobody can detect. Three fixtures in this tree store a crc5 or
+	a crc7 in a `u8`, and refusing them is what the full gate caught after
+	four targeted suites had passed -- the arm had never reached a checksum
+	before the codec resolution was fixed, so extending the check activated
+	it by accident.
+
+	A tag is the other way and keeps its refusal: extra bytes there
+	authenticate nothing.
+	"""
+	# One byte holding a seven-bit code, which is the three fixtures' shape,
+	# and a four-byte field holding it, which is the same thing further out.
+	parse_text(checked("checksum u8 crc[1] covers(a) is code;"), path="s.situ")
+	parse_text(checked("checksum u8 crc[4] covers(a) is code;"), path="s.situ")
+
+
+def test_a_tag_wider_than_its_codec_is_still_refused() -> None:
+	"""The control for the arm above, so that excusing a checksum does not
+	quietly excuse a tag."""
+	text = rendered(sealed("tag u8[32];"))
+	assert "is 32 bytes and `ae` produces 16" in text
 	assert "authenticate nothing" in text
 
 

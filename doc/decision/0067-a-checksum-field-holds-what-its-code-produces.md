@@ -1,4 +1,4 @@
-# 0067: A checksum field is the width of its code
+# 0067: A checksum field holds what its code produces
 
 Status: proposed
 Date: 2026-10-22
@@ -33,9 +33,19 @@ thirty-two.
 
 ## Decision
 
-**A `checksum` field is exactly as wide as the value its codec produces.**
-Wider is refused as before; narrower is refused with no exemption, and the
-diagnostic names the narrow kernels.
+**A `checksum` field has to be wide enough to hold the value its codec
+produces.** Narrower is refused with no exemption, and the diagnostic names
+the narrow kernels.
+
+**Wider is accepted, and this is where a checksum differs from a tag.** A
+narrow code in a wider field is ordinary -- the value is zero-extended and
+the comparison stays exact -- so there is nothing undetectable about it the
+way a truncation's direction is, and no 17.0 argument for refusing it. A
+tag keeps its refusal in that direction, because extra bytes there
+authenticate nothing rather than holding a smaller number.
+
+This record first said "exactly as wide", and the full gate disproved it:
+see *What the gate caught* below.
 
 **`[truncated]` is a tag's attribute and is refused on a checksum.** The
 two halves of the family verify differently, which is the whole of the
@@ -63,11 +73,14 @@ declaration left every CRC in the standard library unchecked.
 
 ## Consequences
 
-- **No corpus schema changes.** The eleven comparable check fields across
+- **No `.situ` schema changes.** The eleven comparable check fields across
   `example/` and `test/schema/` were already exact, both sub-byte ones
   included -- USB's five-bit CRC in a `u5` and MMC's seven-bit one in a
-  `u7`, the latter verified against a real CMD0 in 26.372. The rule is the
-  corpus written down.
+  `u7`, the latter verified against a real CMD0 in 26.372. One fixture
+  embedded in a Python test changed: a Reed-Solomon (255,223) case read
+  `checksum u8 c[2]` where that code's parity is 32 symbols, and the field
+  is `c[32]` now. Its subject is whether a backend names a kernel it
+  declines to write, which the width never entered.
 - **No backend changes, and this corrects 26.673.** That record said
   nothing in the layout carries "the stored width is less than the codec's,
   so compare only that much", which framed the fault as a missing concept
@@ -88,6 +101,33 @@ declaration left every CRC in the standard library unchecked.
   that compiles, since the width is checked either way, so the placement
   diagnostic says so instead of claiming the output would be identical
   without it.
+
+## What the gate caught
+
+**Four targeted suites passed and the full gate failed four tests.** The
+first rule was "exactly as wide", which refused three committed fixtures
+storing a `crc5_usb` or a `crc7` in a `u8` -- and refused them through an
+arm nobody wrote for this change. "A tag cannot be wider than what computes
+it" was already there and had **never reached a checksum**, because the
+resolution bug meant the whole check never ran for one. Fixing the
+resolution activated a years-old rule against a population it had never
+been tested on.
+
+That is the general shape and it is worth more than the instance: **making
+a dormant check run is not a small change to the check, it is a first
+exposure of every arm it has.** The arms were written for the one
+configuration that reached them and are untested against the rest, so the
+population to re-measure is not the one the fix is aimed at.
+
+**The census missed all three because it read `.situ` files**, and these
+fixtures live in Python string literals -- a count inheriting its detector,
+in `evidence.md`'s words. Re-measured the right way by parsing every
+embedded fixture and catching the error: 86 parse clean and none is refused
+by the width check. That detector has its own limit, which is worth stating
+rather than leaving to be found: 70 fixtures are refused earlier for other
+reasons, and the parser stops at the first error, so a fixture with both an
+earlier fault and a width fault reads as the earlier one. The gate remains
+the backstop it just proved itself to be.
 
 ## Alternatives rejected
 
@@ -111,7 +151,16 @@ corrupt.
 
 ## Open, and the holder's
 
-Whether a truncated checksum should be expressible at all. The case for no
+**Whether a checksum field wider than its code should be refused.** It is
+accepted here because three fixtures rely on it and because the reading is
+unambiguous, but the spare bits are unchecked: `u8` holding a `crc7` works
+only while the eighth bit reads zero, and nothing says it does.
+`edges.situ`'s `mmc_command` is the properly-written version of the same
+layout -- `u7` beside a `reserved u1 [must_be_zero]` -- which suggests the
+wider form is sloppiness that 0046 already gave the remedy for. Refusing it
+is a restriction nobody asked for, so it is raised rather than taken.
+
+**Whether a truncated checksum should be expressible at all.** The case for no
 is that `std/kernels.situ` carries thirteen widths precisely so a format's
 narrow check field is declared at its true width, that 0046 added sub-byte
 fields for exactly that, and that a chopped CRC-32 detects errors worse

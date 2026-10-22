@@ -265,7 +265,11 @@ codec rs_255_223 {
 impl rs_255_223 derived;
 struct S {
 	authenticated body { u8 a; u8 b; }
-	checksum u8 c[2] covers(body) is rs_255_223;
+	/* 255 - 223 symbols of parity, which is what this code produces and
+	   what a field holding it has to be wide enough for (0067). It read
+	   `c[2]` while nothing compared the two, and the subject here is
+	   whether a backend names a kernel it declines to write. */
+	checksum u8 c[32] covers(body) is rs_255_223;
 }
 """),
 	("crc16", """endian big;

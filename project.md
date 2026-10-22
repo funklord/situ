@@ -7326,9 +7326,9 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
-### 26.674 A checksum field is the width of its code
+### 26.674 A checksum field holds what its code produces
 
-Moved to `doc/decision/0067-a-checksum-field-is-the-width-of-its-code.md`.
+Moved to `doc/decision/0067-a-checksum-field-holds-what-its-code-produces.md`.
 
 ### 26.673 A truncated checksum cannot verify, in any of the four backends
 

@@ -4698,8 +4698,20 @@ def _check_tag_width(tag: ast.TagField, bits: int, codec: ast.CodecDecl,
 		held, makes = f"{bits} bits", str(produced)
 
 	if bits > produced:
-		# No exemption. Nothing an author could write makes a primitive
-		# produce more authentication than it produces.
+		# A tag cannot be wider than what computes it: no spelling gets more
+		# authentication out of a primitive than it produces.
+		#
+		# A CHECKSUM can, and this arm is deliberately not extended to one.
+		# A narrow code in a wider field is ordinary -- the value is
+		# zero-extended and the comparison is still exact -- and three
+		# fixtures in this tree store a crc5 or crc7 in a `u8`. Nothing is
+		# undetectable about it the way a truncation's direction is, so
+		# there is no 17.0 argument for refusing it and it is left as the
+		# open half of 0067. Activating this arm for checksums, which it had
+		# never reached before the codec resolution was fixed, is what the
+		# full gate caught after four targeted suites passed (0067).
+		if check:
+			return
 		raise error(
 			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
 			tag.span,
@@ -4725,9 +4737,10 @@ def _check_tag_width(tag: ast.TagField, bits: int, codec: ast.CodecDecl,
 			f"`{tag.name}` is {held} and `{codec.name}` produces {makes}",
 			tag.span,
 			label = "narrower than the check it holds",
-			notes = ["a check field is the width of its code: `std/kernels."
-			         "situ` carries crc5_usb, crc7_mmc, crc15_can, crc24_ble "
-			         "and crc40_gsm for exactly this reason",
+			notes = ["a check field has to be wide enough to hold what the "
+			         "code produces: `std/kernels.situ` carries crc5_usb, "
+			         "crc7_mmc, crc15_can, crc24_ble and crc40_gsm so that a "
+			         "narrow check field is a narrow CODE",
 			         "name the kernel that is this wide, or widen the field "
 			         "to the one this codec produces",
 			         "`[truncated]` is a tag's, where the codec compares what "
