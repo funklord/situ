@@ -31,24 +31,24 @@ clean on the same bytes, the three reasons nothing here caught it, and the
 two tests added. Fixed in the C++ emitter; the same arithmetic was swept
 out of the C emitter too, and Rust's remaining sites are pinned by a floor.
 
-## 2. Truncated element runs are accepted -- FIXED
+## 2. Truncated element runs are accepted -- CONFIRMED, still open
 
-Confirmed here, and it was not only C++: C, C++ and Rust all returned OK
-from `validate()` for their `validate_oob` input, and Python did too.
+Confirmed here, and it is not only C++: C, C++ and Rust all return OK from
+`validate()` for their `validate_oob` input, and Python does too.
 
-**This was the more serious of the two for a network parser**: item 1 was a
-read past the end inside the gate, and this was the gate returning the
-wrong answer -- a caller who does everything right being told a hostile
-message is well-formed.
+**This is the more serious of the two for a network parser**: item 1 was a
+read past the end inside the gate, and this is the gate returning the wrong
+answer -- a caller who does everything right being told a hostile message
+is well-formed. **Until it is closed, read `validate() == ok` as "the bytes
+are structurally reachable" rather than "the declared runs fit".**
 
-A run whose declared count cannot be walked inside the frame now returns a
-span no frame can satisfy, so `check` reports `bounds`. All four refuse it
-and all four agree on the element extent, which they did not before:
-C said 4, Rust said 0, C++ read out of bounds getting there.
-`doc/decision/26.676-*.md` has the mechanism, the second wrap it turned up
-in the same walk, and why the one worry that held the fix back -- `_span`
-also placing whatever follows the run -- dissolved rather than being traded
-off.
+A one-line-per-backend fix was tried and reverted: the full gate failed ten
+tests, because a run's span is SUMMED into the enclosing struct's extent --
+so an unsatisfiable sentinel wraps, which is the same class of bug -- and
+because the walk cannot tell a frame that is too small from a message that
+nests too deeply. `doc/decision/26.676-*.md` has both, the two candidate
+designs with their costs, and the second wrap it turned up in the same
+walk, which was independent and is kept.
 
 ## 3-6. Not yet re-run here
 

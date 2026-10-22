@@ -300,6 +300,20 @@ struct negotiated size=5..516
   carried case 2: flag u8
   carried case default: error
 
+struct oob_element size=7..4294967557
+  @0x0000   1         u8         n
+  @0x0001   0..255    u8         body  sized-by=n
+  ~         2         u16        fixed  big
+  ~         4..4294967299 oob_inner  tail  big
+
+struct oob_inner size=4..4294967299
+  @0x0000   4         u32        len  big
+  @0x0004   0..4294967295 u8         payload  sized-by=len
+
+struct oob_run size=1..1095216727036
+  @0x0000   1         u8         k
+  @0x0001   0..1095216727035 oob_element elements  sized-by=k
+
 struct outer_body size=8
   @0x0000   2         u16        outer_value  big
   @0x0002   4         inner_body nested  big
