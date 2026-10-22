@@ -7326,6 +7326,14 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.676 `validate` accepts a run the frame cannot hold
+
+Moved to `doc/decision/26.676-validate-accepts-a-run-the-frame-cannot-hold.md`.
+
+### 26.675 `validate()` read past the buffer, and why nothing caught it
+
+Moved to `doc/decision/26.675-validate-read-past-the-buffer-and-why-nothing-caught-it.md`.
+
 ### 26.674 A checksum field holds what its code produces
 
 Moved to `doc/decision/0067-a-checksum-field-holds-what-its-code-produces.md`.

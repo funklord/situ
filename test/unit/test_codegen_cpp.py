@@ -503,7 +503,10 @@ def test_a_dynamic_offset_sums_what_precedes_it() -> None:
 
 	assert "std::uint32_t recs_offset() const noexcept" in header
 	assert "std::uint32_t at = 0;" in header
-	assert "at += 3;" in header
+	# Saturating, not `at += 3`: clamping each term is not clamping the
+	# sum, and the old spelling was asserted here while it was the thing
+	# that carried an offset past the limit (26.675).
+	assert "at = situ_advance_u32(at, 3u, raw_.limit);" in header
 
 
 def test_an_element_is_bounded_by_the_count_not_just_the_view() -> None:
@@ -519,7 +522,7 @@ def test_an_element_is_bounded_by_the_count_not_just_the_view() -> None:
 def test_remaining_runs_to_the_limit() -> None:
 	header = emit("struct s { u8 head; u8 rest[remaining]; }")
 
-	assert "(raw_.limit - (1))" in header
+	assert "situ_remaining_u32(raw_.limit, 1)" in header
 
 
 # -- the stage gate ---------------------------------------------------------
@@ -2326,7 +2329,8 @@ def test_a_be128_field_uses_the_big_endian_reader() -> None:
 	refusal one commit ago -- invariant 11, and the shelf life was a day."""
 	header = emit(BE128 + "struct S { sq n; u16 after; }")
 
-	assert "situ_varint_be_get(situ_base(raw_) + at, raw_.limit - at, 9u, 8u, &raw)" in header
+	assert ("situ_varint_be_get(situ_base(raw_) + at, "
+	        "situ_remaining_u32(raw_.limit, at), 9u, 8u, &raw)") in header
 	assert "is not an encoding this" not in header
 
 
@@ -3987,3 +3991,92 @@ def test_a_view_reads_the_bytes_its_argument_names(
 	                     text=True, check=False)
 	assert run.returncode == 0, \
 		f"the argument did not reach the bytes:\n{run.stdout}"
+
+
+#: bbq-predictor's reproduction, reduced (26.675). The composition is the
+#: point: a dynamic member, then a FIXED one, then a nested struct whose
+#: extent is read from the bytes -- all inside a run, because the run's walk
+#: is what calls the element's extent.
+OOB_RUN = ("struct pc { u32 len; u8 d[len]; }\n"
+           "struct el { u8 n; u8 a[n]; u16 x; pc c; }\n"
+           "struct top { u8 k; el e[k]; }")
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_validate_does_not_read_past_the_buffer_on_a_hostile_length(
+		tmp_path: Path) -> None:
+	"""`validate()` read five bytes past a nine-byte buffer (26.675).
+
+	The function whose job is to decide whether bytes are acceptable was the
+	one reading out of bounds, which is the worst place for it: a server
+	calls it precisely because it does not trust the input.
+
+	Two faults compounded. The offset chain clamped the dynamic term and
+	then did a bare `at += 2`, so a hostile `n` saturated the middle term at
+	the limit and the fixed term carried `at` past it -- clamping each term
+	is not clamping the sum. Then the sub-view was brace-initialised with
+	`raw_.limit - at`, which wrapped to about four billion, and every
+	`situ_in_bounds` below it passed against that limit.
+
+	The C backend was clean on the same input throughout, because it builds
+	sub-views through `situ_view_sub` and clamps every term. This asserts
+	the C++ behaviour directly rather than the spelling; the spelling is
+	`test_a_generated_length_never_wraps.py`'s, and the four-way agreement
+	is the differential's once `edges.situ` carries the shape.
+	"""
+	result = compiles(tmp_path, OOB_RUN, extra="""
+#include <cstdlib>
+#include <cstring>
+#include "unit.hpp"
+
+int main()
+{
+	/* k = 1, and the element's n = 200 runs `a` past the end. On the heap,
+	   so a read past it is a fault the sanitizer sees rather than slack in
+	   somebody's stack frame. */
+	auto *b = static_cast<std::uint8_t *>(std::malloc(9));
+
+	if (b == nullptr)
+		return 1;
+	b[0] = 1; b[1] = 200;
+	std::memset(b + 2, 1, 7);
+
+	situ::rt::message m(b, 9);
+	situ::top t;
+	const auto got = situ::top::at(m, 0, 9, t);
+	int rc = 0;
+
+	if (got == situ::rt::err::ok) {
+		/* The read happened in here. The verdict is asserted too, since
+		   26.676 made it one: a run whose declared count does not fit is
+		   malformed, and `validate` used to answer ok. */
+		if (t.validate() != situ::rt::err::bounds)
+			rc = 3;
+	} else {
+		rc = 2;
+	}
+	std::free(b);
+	return rc;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-fsanitize=address,undefined",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode != 3, (
+		"validate() accepted a run whose one element declares 203 bytes of "
+		"a 9-byte frame (26.676)")
+	assert run.returncode == 0, (
+		f"validate() read outside the buffer: {run.stderr}")
+	assert "AddressSanitizer" not in run.stderr, run.stderr

@@ -2329,7 +2329,7 @@ class Emitter:
 		if bits is None:
 			return [
 				f"\tused = situ_varint_get(situ_base(view) + at,"
-				f" view.limit - at, {max_tag}u, &tag);",
+				f" situ_remaining_u32(view.limit, at), {max_tag}u, &tag);",
 				"\tif (used == 0u) {",
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
@@ -2337,7 +2337,7 @@ class Emitter:
 
 		width = (bits + 7) // BITS_PER_BYTE
 		return [
-			f"\tif (view.limit - at < {width}u) {{",
+			f"\tif (situ_remaining_u32(view.limit, at) < {width}u) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			f"\ttag  = (uint64_t){self._fixed_length_read(width, placement.endian)};",
@@ -2456,7 +2456,7 @@ class Emitter:
 		                                    placement.endian))
 		lines.extend([
 			"",
-			"\tif (size > view.limit - at) {",
+			"\tif (size > situ_remaining_u32(view.limit, at)) {",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 			"",
@@ -2531,7 +2531,7 @@ class Emitter:
 			return [
 				"\t\t{",
 				"\t\t\tuint64_t carried = 0;",
-				f"\t\t\tused = situ_varint_get(situ_base(view) + at, view.limit - at,"
+				f"\t\t\tused = situ_varint_get(situ_base(view) + at, situ_remaining_u32(view.limit, at),"
 				f" {max_tag}u, &carried);",
 				"\t\t\tif (used == 0u) {",
 				"\t\t\t\treturn SITU_ERR_BOUNDS;",
@@ -2562,12 +2562,12 @@ class Emitter:
 				f"{indent}{{",
 				f"{indent}\tuint64_t length = 0;",
 				f"{indent}\tused = situ_varint_get(situ_base(view) + at,"
-				f" view.limit - at, {width}u, &length);",
+				f" situ_remaining_u32(view.limit, at), {width}u, &length);",
 				f"{indent}\tif (used == 0u) {{",
 				f"{indent}\t\treturn SITU_ERR_BOUNDS;",
 				f"{indent}\t}}",
 				f"{indent}\tat = at + used;",
-				f"{indent}\tif (length > (uint64_t)(view.limit - at)) {{",
+				f"{indent}\tif (length > (uint64_t)(situ_remaining_u32(view.limit, at))) {{",
 				f"{indent}\t\treturn SITU_ERR_BOUNDS;",
 				f"{indent}\t}}",
 				f"{indent}\tsize = (uint32_t)length;",
@@ -2578,7 +2578,7 @@ class Emitter:
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
 		return [
 			f"{indent}{{",
-			f"{indent}\tif (view.limit - at < {width}u) {{",
+			f"{indent}\tif (situ_remaining_u32(view.limit, at) < {width}u) {{",
 			f"{indent}\t\treturn SITU_ERR_BOUNDS;",
 			f"{indent}\t}}",
 			f"{indent}\tsize = {self._fixed_length_read(width, endian)};",
@@ -2927,7 +2927,7 @@ class Emitter:
 			"\t\tif (start > view.limit) {",
 			"\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t}",
-			"\t\tif (situ_view_sub(view, start, view.limit - start, &probe)",
+			"\t\tif (situ_view_sub(view, start, situ_remaining_u32(view.limit, start), &probe)",
 			"\t\t\t\t!= SITU_OK) {",
 			"\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t}",
@@ -3281,7 +3281,7 @@ class Emitter:
 				lines.extend([
 					"\tsitu_view_t whole;",
 					"",
-					f"\tif (situ_view_sub(view, {base}, view.limit - ({base}),"
+					f"\tif (situ_view_sub(view, {base}, situ_remaining_u32(view.limit, {base}),"
 					" &whole) != SITU_OK) {",
 					"\t\treturn SITU_ERR_BOUNDS;",
 					"\t}",
@@ -3498,10 +3498,14 @@ class Emitter:
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries -- eight bits
 		# and no continuation flag where there is no spare bit for one.
+		# Saturating: this is a LENGTH handed to a reader, and a wrapped
+		# one tells it there are four billion bytes to decode from an
+		# offset past the end (26.675).
+		room = f"situ_remaining_u32({held}.limit, at)"
 		read = (f"situ_varint_be_get(situ_base({held}) + at,"
-		        f" {held}.limit - at,"
+		        f" {room},"
 		        f" {width}u, {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(situ_base({held}) + at, {held}.limit - at,"
+		        f"situ_varint_get(situ_base({held}) + at, {room},"
 		        f" {width}u, &raw)")
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
@@ -4036,7 +4040,7 @@ class Emitter:
 		saturated exactly AT the bound and `validate` returned OK for a
 		message twice as deep as the format allows.
 
-		Taking `view.limit - at` instead makes the descent independent of
+		Taking `situ_remaining_u32(view.limit, at)` instead makes the descent independent of
 		the quantity being judged. The extent is still used to step to the
 		next sibling, and a zero there stops the walk -- after that element
 		has been probed, which is the case that matters: an element whose
@@ -4138,7 +4142,7 @@ class Emitter:
 				"\t\t\tuint32_t    found;",
 				"\t\t\tuint32_t    size;",
 				"",
-				"\t\t\tif (situ_view_sub(view, at, view.limit - at,"
+				"\t\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at),"
 				" &element)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
@@ -4148,7 +4152,7 @@ class Emitter:
 				"\t\t\t\tdeepest = found;",
 				"\t\t\t}",
 				f"\t\t\tsize = {step};",
-				"\t\t\tif (size == 0u || size > view.limit - at) {",
+				"\t\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"\t\t\tat = at + size;",
@@ -4447,7 +4451,7 @@ class Emitter:
 			# The lengths below are read OUT OF the fixed prefix, so the
 			# prefix has to be here before any of them is touched. It was
 			# not checked: a walk hands this function whatever remains of
-			# the frame -- `situ_view_sub(view, at, view.limit - at, ...)`
+			# the frame -- `situ_view_sub(view, at, situ_remaining_u32(view.limit, at), ...)`
 			# succeeds for any size -- and `adv_report`, whose extent adds
 			# `base[8]` to a constant 10, read seven bytes past a five-byte
 			# element. libFuzzer found it in a second (26.322).
@@ -4980,12 +4984,12 @@ class Emitter:
 			"\t\tsitu_view_t element;",
 			"\t\tuint32_t    size;",
 			"",
-			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			f"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
 			" != SITU_OK) {",
 			"\t\t\tbreak;",
 			"\t\t}",
 			f"\t\tsize = {extent};",
-			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 			"\t\t\t/* A zero-extent element would walk here forever, and one",
 			"\t\t\t * running past the limit was never in this frame. */",
 			"\t\t\tbreak;",
@@ -5461,12 +5465,12 @@ class Emitter:
 			f"{len(delim)}u) == 0u) {{",
 			"\t\t\tbreak;",
 			"\t\t}",
-			f"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			f"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
 			" != SITU_OK) {",
 			"\t\t\tbreak;",
 			"\t\t}",
 			f"\t\tsize = {extent};",
-			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 			"\t\t\t/* A zero-extent element would walk here forever, and one",
 			"\t\t\t * running past the limit was never in this frame. */",
 			"\t\t\tbreak;",
@@ -7896,12 +7900,12 @@ class Emitter:
 			"\t\tsitu_view_t element;",
 			"\t\tuint32_t    size;",
 			"",
-			"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+			"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
 			" != SITU_OK) {",
 			"\t\t\tbreak;",
 			"\t\t}",
 			f"\t\tsize = {ident(self.prefix, nested, 'extent')}(element);",
-			"\t\tif (size == 0u || at + size > view.limit) {",
+			"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 			"\t\t\tbreak;",
 			"\t\t}",
 			"\t\tat = at + size;",
@@ -7967,7 +7971,7 @@ class Emitter:
 				"\tif (base >= view.limit) {",
 				"\t\treturn 0u;",
 				"\t}",
-				f"\treturn (view.limit - base) / {size};",
+				f"\treturn (situ_remaining_u32(view.limit, base)) / {size};",
 				"}",
 			])
 		elif walked:
@@ -8048,7 +8052,7 @@ class Emitter:
 				f" * O(index). A loop calling this for every element is",
 				" * O(n^2), and there is no cursor here to replace it with --",
 				" * hold `at` yourself, take each element with",
-				" * `situ_view_sub(view, at, view.limit - at, &element)` and",
+				" * `situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)` and",
 				f" * advance by `{ident(self.prefix, nested or '', 'extent')}"
 				"(element)`.",
 				" */",
@@ -8067,12 +8071,12 @@ class Emitter:
 				"\t\tsitu_view_t element;",
 				"\t\tuint32_t    size;",
 				"",
-				"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+				"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
 				" != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
 				f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}(element);",
-				"\t\tif (size == 0u || at + size > view.limit) {",
+				"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 				"\t\t\t/* A zero-extent element would walk here forever, and"
 				" one",
 				"\t\t\t * running past the limit was never in this frame. */",
@@ -8117,7 +8121,7 @@ class Emitter:
 				"\t\tsitu_view_t element;",
 				"\t\tuint32_t    size;",
 				"",
-				"\t\tif (situ_view_sub(view, at, view.limit - at, &element)"
+				"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit, at), &element)"
 				" != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
@@ -8125,11 +8129,30 @@ class Emitter:
 				 "(element);" if not self._recursive(nested or "") else
 				 f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}"
 				 "_at(element, depth + 1u);"),
-				"\t\tif (size == 0u || at + size > view.limit) {",
+				"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 				"\t\t\tbreak;",
 				"\t\t}",
 				"\t\tat = at + size;",
 				"\t\tn  = n + 1u;",
+				"\t}",
+				"",
+				"\t/* A run whose declared count does not fit is malformed,",
+				"\t * and the honest span is one no frame can satisfy. The",
+				"\t * walk breaks safely on an element that overruns and used",
+				"\t * to return the bytes that DID fit, which told `check` the",
+				"\t * run was shorter than it claims: `validate` then answered",
+				"\t * OK for nine bytes whose one element declared 203, which",
+				"\t * is the gate giving the wrong answer rather than reading",
+				"\t * out of bounds (26.676).",
+				"\t *",
+				"\t * It is 26.556's answer in a second place: a bound that",
+				"\t * cannot be satisfied is the honest reading of a length",
+				"\t * nobody can have sent. It also places a member after the",
+				"\t * run past the limit, where `situ_advance_u32` clamps it",
+				"\t * and the accessor refuses -- which is right too, since a",
+				"\t * member after a run that does not fit is not there. */",
+				f"\tif (n < {count}) {{",
+				"\t\treturn UINT32_MAX;",
 				"\t}",
 				"\treturn at - start;",
 				"}",

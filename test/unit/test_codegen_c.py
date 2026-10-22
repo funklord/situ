@@ -2504,10 +2504,18 @@ def test_only_a_run_element_gets_one() -> None:
 def test_the_walk_cannot_run_forever() -> None:
 	"""A record whose members are all delimited and all empty occupies no
 	bytes. A walk that advanced by that would not terminate on input somebody
-	chose, which is a denial of service rather than a wrong answer."""
+	chose, which is a denial of service rather than a wrong answer.
+
+	The overrun half is spelled `size > remaining` rather than
+	`at + size > limit`: the sum wraps where `size` comes from a `u32` length
+	field, and a wrapped sum is smaller than the truth, which admits the
+	element it was meant to reject (26.676). The non-termination this test is
+	about is the `size == 0` half and is unchanged.
+	"""
 	header, _ = emit(BLOCK)
 
-	assert "if (size == 0u || at + size > view.limit)" in header
+	assert ("if (size == 0u || "
+	        "size > situ_remaining_u32(view.limit, at))") in header
 
 
 def test_the_terminator_belongs_to_the_run() -> None:
@@ -4505,7 +4513,7 @@ def test_the_tag_width_comes_from_the_varint_type() -> None:
 	header, _ = emit(narrow, preamble=TLV_PREAMBLE
 		+ "varint_type small { encoding = leb128; max_bits = 16; }\n")
 
-	assert "view.limit - at, 3u, &tag)" in header
+	assert "situ_remaining_u32(view.limit, at), 3u, &tag)" in header
 
 
 def test_a_region_that_does_not_size_its_values_says_so() -> None:
@@ -4691,7 +4699,8 @@ def test_a_be128_field_uses_the_big_endian_reader() -> None:
 	plausible number and not the one on the wire."""
 	header, _ = emit(BE128 + "struct S { sq n; }")
 
-	assert "situ_varint_be_get(situ_base(view) + at, view.limit - at, 9u, 8u, &raw)" \
+	assert ("situ_varint_be_get(situ_base(view) + at, "
+	        "situ_remaining_u32(view.limit, at), 9u, 8u, &raw)") \
 		in header
 
 

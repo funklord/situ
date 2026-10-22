@@ -1955,3 +1955,40 @@ struct capped_tail {
 	u8  kind;
 	u8  content[remaining] max 470;
 }
+
+// A fixed-width member BETWEEN a dynamic one and a nested struct whose
+// extent is read from the bytes -- the composition bbq-predictor's C++
+// parser read out of bounds on (26.675).
+//
+// It is the composition that matters rather than any one member. The
+// generated offset chain for `tail` is `at += 1`, a CLAMPED advance past
+// `body`, then `at += 2`; a hostile `n` saturates the middle term at the
+// limit and the fixed 2 then carries `at` past it, because clamping each
+// term is not clamping the sum. The sub-view built from `limit - at`
+// wrapped to about four billion and every bounds check below it passed.
+//
+// Nothing in the corpus had it. Across 43 schemas the emitted pattern
+// appeared once, in an offset accessor rather than in an extent chain, so
+// the four-way differential, `make fuzz` and the walkers could not reach
+// the path however many bytes they were given. This file exists for
+// exactly that -- a construct nothing exercises is a construct whose
+// generated code has never run -- and the shape it was missing was a
+// memory-safety one.
+//
+// Inside a run, because the run's walk is what calls the element's extent.
+struct oob_inner {
+	u32  len;
+	u8   payload[len];
+}
+
+struct oob_element {
+	u8          n;
+	u8          body[n];
+	u16         fixed;
+	oob_inner   tail;
+}
+
+struct oob_run {
+	u8           k;
+	oob_element  elements[k];
+}

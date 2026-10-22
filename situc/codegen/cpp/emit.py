@@ -1703,8 +1703,16 @@ class Emitter:
 		lines = ["\t\tstd::uint32_t at = 0;"]
 		for other in parts:
 			if isinstance(other, int):
+				# Clamped even though a constant term is not a length the
+				# message chose, because the HAZARD IS THE SUM rather than
+				# the term: `situ_advance_u32` keeps `at <= limit` as an
+				# invariant, and a bare `at += 2` breaks it at exactly the
+				# point where the term before it saturated. That is how
+				# `at` reached 11 in a 9-byte view (26.675). C has always
+				# clamped every term and says so at its own call site.
 				if other:
-					lines.append(f"\t\tat += {other};")
+					lines.append(f"\t\tat = situ_advance_u32(at, {other}u,"
+					             " raw_.limit);")
 				continue
 			pad = pad_alignment(other)
 			if pad is not None:
@@ -2212,13 +2220,13 @@ class Emitter:
 			"",
 			f"\t\twhile (at < raw_.limit{cap}) {{",
 			"\t\t\tsitu_view_t raw;",
-			"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)"
+			"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)"
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
 			f"\t\t\tconst std::uint32_t size = {step};",
-			"\t\t\tif (size == 0u || at + size > raw_.limit) {",
+			"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			]
@@ -2407,7 +2415,7 @@ class Emitter:
 			"\t\t\t}",
 			"",
 			"\t\t\tsitu_view_t raw;",
-			"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)"
+			"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)"
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
@@ -2416,7 +2424,7 @@ class Emitter:
 			 if depth is None else
 			 f"\t\t\tconst std::uint32_t size = "
 			 f"::{self.namespace}::{inner}(raw).extent_at({depth} + 1);"),
-			"\t\t\tif (size == 0u || at + size > raw_.limit) {",
+			"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)) {",
 			"\t\t\t\t/* A zero-extent element would walk here forever, and",
 			"\t\t\t\t * one running past the limit was never in this frame. */",
 			"\t\t\t\tbreak;",
@@ -3498,7 +3506,7 @@ class Emitter:
 
 		if placement.sized_by == "remaining":
 			start = self._offset_expression(struct, placement)
-			return None if start is None else f"(raw_.limit - ({start}))"
+			return None if start is None else f"(situ_remaining_u32(raw_.limit, {start}))"
 		if placement.sized_by is None:
 			return None
 
@@ -3617,7 +3625,7 @@ class Emitter:
 				# Derived from the frame rather than from a leaf, and
 				# guarded above. Nothing for the clamp to do.
 				return (f"({at}_offset() < raw_.limit"
-				        f" ? (raw_.limit - {at}_offset()) / "
+				        f" ? (situ_remaining_u32(raw_.limit, {at}_offset())) / "
 				        f"{placement.type_name}::size_bytes : 0u)", False)
 
 		driver = self.resolved.find(f"{struct.name}.{placement.sized_by}")
@@ -3787,7 +3795,7 @@ class Emitter:
 				"\t\twhile (at < raw_.limit) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)",
+				"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -3795,7 +3803,7 @@ class Emitter:
 				f"\t\t\tconst {inner} element(raw);",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
-				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
+				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
 				"\t\t\t\t/* A zero-extent element would walk here forever,",
 				"\t\t\t\t * and one past the limit was never in this frame. */",
 				"\t\t\t\tbreak;",
@@ -3839,7 +3847,7 @@ class Emitter:
 				"\t * O(index). A loop calling this for every element is",
 				"\t * O(n^2), and there is no cursor here to replace it with",
 				"\t * -- hold `at` yourself, take each element with",
-				"\t * `situ_view_sub(raw(), at, raw().limit - at, &raw)` and",
+				"\t * `situ_view_sub(raw(), at, situ_remaining_u32(raw().limit, at), &raw)` and",
 				# The element class is deliberately NOT named here.
 				# `{inner}(raw).extent()` backticked is an explicit link
 				# request Doxygen cannot resolve, and the bare `::situ::name`
@@ -3863,7 +3871,7 @@ class Emitter:
 				"\t\twhile (at < raw_.limit) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)",
+				"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -3871,7 +3879,7 @@ class Emitter:
 				f"\t\t\tconst {inner} element(raw);",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
-				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
+				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
 				"\t\t\t\t/* A zero-extent element would walk here forever,",
 				"\t\t\t\t * and one past the limit was never in this frame. */",
 				"\t\t\t\tbreak;",
@@ -3909,7 +3917,7 @@ class Emitter:
 				f"\t\twhile ({bound}at < raw_.limit) {{",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, raw_.limit - at, &raw)",
+				"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -3920,12 +3928,27 @@ class Emitter:
 				 else "\t\t\tconst std::uint32_t size ="
 				      " element.extent_at(depth + 1);"),
 				"",
-				"\t\t\tif (size == 0 || at + size > raw_.limit) {",
+				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"\t\t\tat += size;",
 				"\t\t\tn  += 1;",
 				"\t\t}",
+				*([] if count is None else [
+					"",
+					"\t\t/* A run whose declared count does not fit is",
+					"\t\t * malformed, and the honest span is one no frame",
+					"\t\t * can satisfy. Returning the bytes that DID fit",
+					"\t\t * told `check` the run was shorter than it claims,",
+					"\t\t * so `validate` answered OK for nine bytes whose",
+					"\t\t * one element declared 203 (26.676). A run sized",
+					"\t\t * by bytes rather than by a count has nothing to",
+					"\t\t * fall short of, which is why this is conditional",
+					"\t\t * on the same `count` the loop bound is. */",
+					f"\t\tif (n < {name}_count()) {{",
+					"\t\t\treturn UINT32_MAX;",
+					"\t\t}",
+				]),
 				"\t\treturn at - start;",
 				"\t}",
 				*( ["",
@@ -4298,7 +4321,7 @@ class Emitter:
 			"\t\tif (start > raw_.limit) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			"\t\tif (situ_view_sub(this->raw(), start, raw_.limit - start, &raw)",
+			"\t\tif (situ_view_sub(this->raw(), start, situ_remaining_u32(raw_.limit, start), &raw)",
 			"\t\t\t\t!= SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -4360,7 +4383,7 @@ class Emitter:
 		if bits is None:
 			return [
 				f"\t\tused = situ_varint_get(situ_base(raw_) + at,"
-				f" raw_.limit - at, {max_tag}u, &tag);",
+				f" situ_remaining_u32(raw_.limit, at), {max_tag}u, &tag);",
 				"\t\tif (used == 0u) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
@@ -4374,7 +4397,7 @@ class Emitter:
 		          f"static_cast<std::uint64_t>"
 		          f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
 		return [
-			f"\t\tif (raw_.limit - at < {width}u) {{",
+			f"\t\tif (situ_remaining_u32(raw_.limit, at) < {width}u) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			f"\t\ttag  = {read};",
@@ -4470,7 +4493,7 @@ class Emitter:
 		                                    placement.endian))
 		lines.extend([
 			"",
-			"\t\tif (size > raw_.limit - at) {",
+			"\t\tif (size > situ_remaining_u32(raw_.limit, at)) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
@@ -4537,7 +4560,7 @@ class Emitter:
 			return [
 				"\t\t\t{",
 				"\t\t\t\tstd::uint64_t carried = 0;",
-				f"\t\t\t\tused = situ_varint_get(situ_base(raw_) + at, raw_.limit - at,"
+				f"\t\t\t\tused = situ_varint_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at),"
 				f" {max_tag}u, &carried);",
 				"\t\t\t\tif (used == 0u) {",
 				"\t\t\t\t\treturn ::situ::rt::err::bounds;",
@@ -4561,14 +4584,14 @@ class Emitter:
 			return [
 				f"{indent}{{",
 				f"{indent}\tstd::uint64_t length = 0;",
-				f"{indent}\tused = situ_varint_get(situ_base(raw_) + at, raw_.limit - at,"
+				f"{indent}\tused = situ_varint_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at),"
 				f" {width}u, &length);",
 				f"{indent}\tif (used == 0u) {{",
 				f"{indent}\t\treturn ::situ::rt::err::bounds;",
 				f"{indent}\t}}",
 				f"{indent}\tat += used;",
 				f"{indent}\tif (length > static_cast<std::uint64_t>"
-				f"(raw_.limit - at)) {{",
+				f"(situ_remaining_u32(raw_.limit, at))) {{",
 				f"{indent}\t\treturn ::situ::rt::err::bounds;",
 				f"{indent}\t}}",
 				f"{indent}\tsize = static_cast<std::uint32_t>(length);",
@@ -4584,7 +4607,7 @@ class Emitter:
 		               f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
 		return [
 			f"{indent}{{",
-			f"{indent}\tif (raw_.limit - at < {width}u) {{",
+			f"{indent}\tif (situ_remaining_u32(raw_.limit, at) < {width}u) {{",
 			f"{indent}\t\treturn ::situ::rt::err::bounds;",
 			f"{indent}\t}}",
 			f"{indent}\tsize = {read};",
@@ -6041,9 +6064,9 @@ class Emitter:
 
 		# The two encodings differ in which end the groups come from, and the
 		# big-endian one in what its last permitted byte carries.
-		read = (f"situ_varint_be_get(situ_base(raw_) + at, raw_.limit - at, {width}u,"
+		read = (f"situ_varint_be_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at), {width}u,"
 		        f" {declared.terminal_bits}u, &raw)" if big else
-		        f"situ_varint_get(situ_base(raw_) + at, raw_.limit - at, {width}u, &raw)")
+		        f"situ_varint_get(situ_base(raw_) + at, situ_remaining_u32(raw_.limit, at), {width}u, &raw)")
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
 		           "situ_varint_len(raw)")
@@ -6515,27 +6538,43 @@ class Emitter:
 				"",
 				f"\t/* {placement.path}. No one size, so its extent is read from",
 				"\t * the bytes -- and so is where the member after it starts. */",
+				# Through `situ_view_sub` rather than a brace, which is
+				# the whole of 26.675: a brace-initialised view is a limit
+				# NOBODY checks, so `situ_remaining_u32(raw_.limit, at)` with `at` past the
+				# limit wrapped to about four billion and every
+				# `situ_in_bounds` below it passed. The C backend has always
+				# done it this way and is clean on the same input.
+				#
+				# The arithmetic is saturating too, so the two defences are
+				# independent: the subtraction cannot wrap, and if it did,
+				# the sub-view would refuse the extent anyway.
 				*([] if not deep else [
 					f"\t[[nodiscard]] std::uint32_t {name}_extent_at"
 					"(std::uint32_t depth) const noexcept",
 					"\t{",
-					f"\t\treturn {nested}(situ_view_t{{ situ_base(raw_)"
-					f" + ({start}),",
-					f"\t\t\traw_.limit - ({start}), raw().generation, raw().owner }})"
-					".extent_at(depth + 1);",
+					"\t\tsitu_view_t whole;",
+					f"\t\tconst std::uint32_t at = {start};",
+					"",
+					"\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
+					" != SITU_OK) {",
+					"\t\t\treturn 0u;",
+					"\t\t}",
+					f"\t\treturn {nested}(whole).extent_at(depth + 1);",
 					"\t}",
 				]),
 				*([] if deep else [
 					f"\t[[nodiscard]] std::uint32_t {name}_extent_from"
 					"(std::uint32_t at) const noexcept",
 					"\t{",
-					f"\t\treturn {nested}(situ_view_t{{ situ_base(raw_) + at,",
-					# A plain string, so the brace is single: `}}` is an
-					# f-string's escape and this line has nothing to
-					# interpolate. Splitting the original f-string here is
-					# what put a literal `}}` in the header.
-					"\t\t\traw_.limit - at, raw().generation,"
-					" raw().owner }).extent();",
+					"\t\tsitu_view_t whole;",
+					"",
+					"\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
+					" != SITU_OK) {",
+					"\t\t\treturn 0u;",
+					"\t\t}",
+					f"\t\treturn {nested}(whole).extent();",
 					"\t}",
 				]),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
@@ -7710,7 +7749,7 @@ class Emitter:
 					"",
 					f"\t\t\tif ({reach}) {{",
 					f"\t\t\t\tconst {inner} element(situ_view_t{{",
-					"\t\t\t\t\tsitu_base(raw_) + at, raw_.limit - at,",
+					"\t\t\t\t\tsitu_base(raw_) + at, situ_remaining_u32(raw_.limit, at),",
 					"\t\t\t\t\traw().generation, raw().owner });",
 					"\t\t\t\tconst std::uint32_t found ="
 					" element.nesting_at(depth + 1);",
@@ -7731,7 +7770,7 @@ class Emitter:
 				"\t\t\tfor (std::uint32_t i = 0; i < n"
 				" && at < raw_.limit; i++) {",
 				f"\t\t\t\tconst {inner} element(situ_view_t{{",
-				"\t\t\t\t\tsitu_base(raw_) + at, raw_.limit - at,",
+				"\t\t\t\t\tsitu_base(raw_) + at, situ_remaining_u32(raw_.limit, at),",
 				"\t\t\t\t\traw().generation, raw().owner });",
 				"\t\t\t\tconst std::uint32_t found ="
 				" element.nesting_at(depth + 1);",
@@ -7740,7 +7779,7 @@ class Emitter:
 				"\t\t\t\tif (found > deepest) {",
 				"\t\t\t\t\tdeepest = found;",
 				"\t\t\t\t}",
-				"\t\t\t\tif (size == 0u || size > raw_.limit - at) {",
+				"\t\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)) {",
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 				"\t\t\t\tat = at + size;",

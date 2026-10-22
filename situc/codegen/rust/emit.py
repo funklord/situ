@@ -1117,7 +1117,7 @@ class Emitter:
 		                                    placement.endian))
 		lines.extend([
 			"",
-			"\t\tif size > self.bytes.len() - at {",
+			"\t\tif size > situ_rt::remaining(self.bytes.len(), at) {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"",
@@ -1364,11 +1364,16 @@ class Emitter:
 				steps.append(f"\t\tat = situ_rt::align_up(at, {step.size}, "
 				             "self.bytes.len());")
 			elif step.placement is None:
-				steps.append(f"\t\tat += {step.size};")
+				# The sum is the hazard, not the term: clamping keeps
+				# `at <= len` as an invariant, and a bare add breaks it
+				# where the term before it saturated (26.675).
+				steps.append(f"\t\tat = situ_rt::advance(at, {step.size}, "
+				             "self.bytes.len());")
 			else:
 				length = self._length_expression(struct, step.placement,
 				                                 running="at")
-				steps.append(f"\t\tat += {length};")
+				steps.append(f"\t\tat = situ_rt::advance(at, {length}, "
+				             "self.bytes.len());")
 
 		# The record steps become struct fields at the end rather than
 		# assignments as they are reached: a Rust struct is built whole, so the
@@ -1395,11 +1400,15 @@ class Emitter:
 				body.append(f"\t\tat = situ_rt::align_up(at, {step.size}, "
 				            "self.bytes.len());")
 			elif step.placement is None:
-				body.append(f"\t\tat += {step.size};")
+				# Clamped, for the reason the sibling above gives: the sum
+				# is the hazard rather than the term (26.675).
+				body.append(f"\t\tat = situ_rt::advance(at, {step.size}, "
+				            "self.bytes.len());")
 			else:
 				length = self._length_expression(struct, step.placement,
 				                                 running="at")
-				body.append(f"\t\tat += {length};")
+				body.append(f"\t\tat = situ_rt::advance(at, {length}, "
+				            "self.bytes.len());")
 
 		name   = _pascal(struct.name) + "Offsets"
 		fields = [f"\tpub {_ident(c_name(local_name(struct, held)))}: usize,"
@@ -4844,7 +4853,7 @@ class Emitter:
 			f"\t\twhile at < self.bytes.len(){cap} {{",
 			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
 			f"\t\t\tlet size = {step};",
-			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+			"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			]
@@ -4960,7 +4969,7 @@ class Emitter:
 			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
 			("\t\t\tlet size = element.extent();" if depth is None else
 			 f"\t\t\tlet size = element.extent_at({depth} + 1);"),
-			"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+			"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 			"\t\t\t\t// A zero-extent element would loop here forever, and",
 			"\t\t\t\t// one past the end was never in this frame.",
 			"\t\t\t\tbreak;",
@@ -6304,8 +6313,14 @@ class Emitter:
 		lines = ["\t\tlet mut at = 0usize;"]
 		for other in parts:
 			if isinstance(other, int):
+				# And the constant term was left plain when the dynamic one
+				# below was fixed, which is the same incompleteness the
+				# comment there describes, one step further in. The sum is
+				# what has to stay inside the frame: a clamped term followed
+				# by a bare `+= 2` is how `at` passed the limit (26.675).
 				if other:
-					lines.append(f"\t\tat += {other};")
+					lines.append(f"\t\tat = situ_rt::advance(at, {other}, "
+					             "self.bytes.len());")
 				continue
 			length = self._length_expression(struct, other, running="at")
 			if length is None:
@@ -6823,7 +6838,7 @@ class Emitter:
 			   f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
 			   "\t\t\tlet size    = element.extent();",
 			   "",
-			   "\t\t\tif size == 0 || at + size > self.bytes.len() {",
+			   "\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 			   "\t\t\t\t// A zero-extent element would walk here forever,",
 			   "\t\t\t\t// and one past the end was never in this frame.",
 			   "\t\t\t\tbreak;",
@@ -6877,7 +6892,7 @@ class Emitter:
 				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
 				"\t\t\tlet size    = element.extent();",
 				"",
-				"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+				"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 				"\t\t\t\t// A zero-extent element would walk here forever,",
 				"\t\t\t\t// and one past the end was never in this frame.",
 				"\t\t\t\tbreak;",
@@ -6922,12 +6937,24 @@ class Emitter:
 				                     placement.type_name or "") else
 				 "\t\t\tlet size    = element.extent_at(depth + 1);"),
 				"",
-				"\t\t\tif size == 0 || at + size > self.bytes.len() {",
+				"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"\t\t\tat += size;",
 				*([] if not bound else ["\t\t\tn  += 1;"]),
 				"\t\t}",
+				*([] if not bound else [
+					"",
+					"\t\t// A run whose declared count does not fit is",
+					"\t\t// malformed, and the honest span is one no frame",
+					"\t\t// can satisfy. Returning the bytes that DID fit",
+					"\t\t// told the check the run was shorter than it",
+					"\t\t// claims, so `validate` answered Ok for nine bytes",
+					"\t\t// whose one element declared 203 (26.676).",
+					f"\t\tif n < self.{_ident(base + '_count')}() {{",
+					"\t\t\treturn u32::MAX as usize;",
+					"\t\t}",
+				]),
 				"\t\tat - start",
 				"\t}",
 				*( ["",
@@ -7892,7 +7919,7 @@ class Emitter:
 				"\t\t\t\t\tdeepest = found;",
 				"\t\t\t\t}",
 				"\t\t\t\tlet size = element.extent();",
-				"\t\t\t\tif size == 0 || size > self.bytes.len() - at {",
+				"\t\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 				"\t\t\t\t\tbreak;",
 				"\t\t\t\t}",
 				"\t\t\t\tat += size;",

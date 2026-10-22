@@ -157,6 +157,19 @@ impl Dirty {
 #[inline]
 /// Advance an offset by a length the message chose, and stop at the end.
 ///
+/// How many bytes remain in `limit` beyond `at`, saturating at zero.
+///
+/// The counterpart to `advance`, and what a walk's "does this element fit"
+/// question wants: `at + size > limit` wraps where `size` comes from a `u32`
+/// length field -- `extent` for a struct with a `u32 len` is `4 + len`, which
+/// can approach the whole range -- and a wrapped sum is SMALLER than the
+/// truth, which is the direction that turns an overlong element into one that
+/// fits. `size > remaining(limit, at)` asks the same question and cannot
+/// wrap (26.676).
+pub fn remaining(limit: usize, at: usize) -> usize {
+	limit.saturating_sub(at)
+}
+
 /// A member placed after a variable-length region has an offset that is a sum
 /// of lengths an attacker fills in: `example/packet` with `hdr.length =
 /// 0xffff` puts its tag 65581 bytes into a 62-byte message. Rust's answer to
