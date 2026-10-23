@@ -4319,6 +4319,33 @@ class Emitter:
 				f"static inline uint32_t {deep}_at(situ_view_t view,"
 				" uint32_t depth);",
 			])
+			# And the verdict pair, for the same reason one step along.
+			# `form`'s `check` calls `list`'s `validate` -- a variant arm is
+			# a struct and validating the arm is validating that struct --
+			# and `list` is emitted after `form`, so the call was ahead of
+			# its declaration. hull reported it from its own frontend
+			# protocol: a three-line schema importing `canonical.situ` and
+			# using `form` produced a header that would not compile, an
+			# implicit declaration and then a conflicting type (26.679).
+			#
+			# `canonical.situ` on its own compiles, which is what says it is
+			# the emission order rather than the pair: a schema that IMPORTS
+			# the cycle emits the pair in the other order.
+			#
+			# `static inline` to match the definitions, which is the form a
+			# recursive struct's verdict takes -- a non-recursive one is
+			# declared non-static here and defined in the `.c`.
+			peer_struct = self.resolved.structs.get(peer)
+			if peer_struct is not None:
+				tail = self._argument_tail(peer_struct)
+				lines.extend([
+					f"static inline situ_err_t "
+					f"{ident(self.prefix, peer, 'validate')}"
+					f"(situ_view_t view{tail});",
+					f"static inline situ_err_t "
+					f"{ident(self.prefix, peer, 'check')}"
+					f"(situ_view_t view, uint32_t *which{tail});",
+				])
 		return lines + self._predicate_prototypes(struct, cycle)
 
 	def _predicate_prototypes(self, struct: ResolvedStruct,
@@ -4794,7 +4821,18 @@ class Emitter:
 			body.extend([
 				"\t\tsitu_view_t element;",
 				"",
-				f"\t\te = {required}(data + at, have - at, &part);",
+				# The guard above covers reading the LENGTH; this covers
+				# using it. `at` has since been advanced by a length the
+				# message chose, so `have - at` underflows and `data + at`
+				# is past the end -- with `n = 8` in a two-byte message the
+				# varint reader walked from outside the buffer (26.678).
+				# Saturating as well, so the two defences are independent.
+				"\t\tif (have < at) {",
+				"\t\t\t*need = at;",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				f"\t\te = {required}(data + at,"
+				" situ_remaining_u32(have, at), &part);",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
@@ -4837,7 +4875,18 @@ class Emitter:
 				f"\t\tif (n >= {count}) {{",
 				"\t\t\tbreak;",
 				"\t\t}",
-				f"\t\te = {required}(data + at, have - at, &part);",
+				# The guard above covers reading the LENGTH; this covers
+				# using it. `at` has since been advanced by a length the
+				# message chose, so `have - at` underflows and `data + at`
+				# is past the end -- with `n = 8` in a two-byte message the
+				# varint reader walked from outside the buffer (26.678).
+				# Saturating as well, so the two defences are independent.
+				"\t\tif (have < at) {",
+				"\t\t\t*need = at;",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				f"\t\te = {required}(data + at,"
+				" situ_remaining_u32(have, at), &part);",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t/* The element is short, so its own lower bound is"
 				" part of",
@@ -4876,7 +4925,18 @@ class Emitter:
 				"\t\t\tbreak;",
 				"\t\t}",
 				"",
-				f"\t\te = {required}(data + at, have - at, &part);",
+				# The guard above covers reading the LENGTH; this covers
+				# using it. `at` has since been advanced by a length the
+				# message chose, so `have - at` underflows and `data + at`
+				# is past the end -- with `n = 8` in a two-byte message the
+				# varint reader walked from outside the buffer (26.678).
+				# Saturating as well, so the two defences are independent.
+				"\t\tif (have < at) {",
+				"\t\t\t*need = at;",
+				"\t\t\treturn SITU_ERR_TRUNCATED;",
+				"\t\t}",
+				f"\t\te = {required}(data + at,"
+				" situ_remaining_u32(have, at), &part);",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",

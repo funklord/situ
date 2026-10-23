@@ -5449,6 +5449,12 @@ class Emitter:
 
 		inner = _pascal(element.name)
 		read  = [
+			# `at` has been advanced by a length the message chose, so
+			# the slice panics where C and C++ read past the end --
+			# 26.27's three behaviours, on the framing path (26.678).
+			"\t\t\tif have < at {",
+			"\t\t\t\treturn situ_rt::Framing::Need(at);",
+			"\t\t\t}",
 			f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
 			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
@@ -5506,6 +5512,9 @@ class Emitter:
 			body.extend([
 				f"\t\t\tif seen >= {count} {{",
 				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tif have < at {",
+				"\t\t\t\treturn situ_rt::Framing::Need(at);",
 				"\t\t\t}",
 				f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
 				"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",

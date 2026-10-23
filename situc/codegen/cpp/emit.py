@@ -2690,8 +2690,20 @@ class Emitter:
 		call  = (f"\t\t\tconst ::situ::rt::err e = ::{self.namespace}::{inner}"
 		         "::required(")
 		read  = [
+			# The guard above covers reading the LENGTH; this covers using
+			# it. `at` has since been advanced by a length the message
+			# chose, so `have - at` underflows and `situ_base(raw_) + at`
+			# is past the end: with `n = 8` in a two-byte message the
+			# varint reader walked from outside the buffer (26.678).
+			#
+			# Saturating too, so the two defences are independent -- the
+			# subtraction cannot wrap even if a later edit moves the guard.
+			"\t\t\tif (have < at) {",
+			"\t\t\t\tneed = at;",
+			"\t\t\t\treturn ::situ::rt::err::truncated;",
+			"\t\t\t}",
 			call + "situ_base(raw_) + at,",
-			"\t\t\t\thave - at, part);",
+			"\t\t\t\tsitu_remaining_u32(have, at), part);",
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -2743,8 +2755,12 @@ class Emitter:
 				f"\t\t\tif (n >= {count}) {{",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
+				"\t\t\tif (have < at) {",
+				"\t\t\t\tneed = at;",
+				"\t\t\t\treturn ::situ::rt::err::truncated;",
+				"\t\t\t}",
 				call + "situ_base(raw_) + at,",
-				"\t\t\t\thave - at, part);",
+				"\t\t\t\tsitu_remaining_u32(have, at), part);",
 				"\t\t\tif (e != ::situ::rt::err::ok) {",
 				"\t\t\t\t/* The element is short, so its own lower bound is"
 				" part",
@@ -4373,7 +4389,7 @@ class Emitter:
 				"\t\tif (e != ::situ::rt::err::ok) {",
 				"\t\t\treturn e;",
 				"\t\t}",
-				f"\t\treturn ::situ::{inner}::at(owner, found,",
+				f"\t\treturn ::{self.namespace}::{inner}::at(owner, found,",
 				f"\t\t\t{inner}::size_bytes, out);",
 				"\t}",
 			]
@@ -4415,7 +4431,7 @@ class Emitter:
 				"\t\t\t\t!= SITU_OK) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
-				f"\t\tout = ::situ::{inner}(raw);",
+				f"\t\tout = ::{self.namespace}::{inner}(raw);",
 				"\t\treturn ::situ::rt::err::ok;",
 			]
 
@@ -4434,10 +4450,10 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			f"\t\tif (situ_view_sub(this->raw(), start,",
-			f"\t\t\t\t::situ::{inner}(raw).extent(), &raw) != SITU_OK) {{",
+			f"\t\t\t\t::{self.namespace}::{inner}(raw).extent(), &raw) != SITU_OK) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tout = ::situ::{inner}(raw);",
+			f"\t\tout = ::{self.namespace}::{inner}(raw);",
 			"\t\treturn ::situ::rt::err::ok;",
 		]
 
@@ -7147,7 +7163,7 @@ class Emitter:
 			" over the",
 			"\t * span below.",
 			"\t *",
-			f"\t * Build one with the `::situ::{shown}` accessors in this"
+			f"\t * Build one with the `::{self.namespace}::{shown}` accessors in this"
 			" header, in a",
 			"\t * buffer of your own, and pass it to"
 			f" `{c_name(placement.name)}_compute` and",
@@ -7807,7 +7823,7 @@ class Emitter:
 			" &raw) != SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tout = ::situ::{inner}(raw);",
+			f"\t\tout = ::{self.namespace}::{inner}(raw);",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		]
@@ -8835,7 +8851,7 @@ class Emitter:
 			"\t\t * what knows them. A different arm is nothing to check;",
 			"\t\t * this arm not fitting the frame is malformed. */",
 			"\t\t{",
-			f"\t\t\t::situ::{class_name(inner)} arm;",
+			f"\t\t\t::{self.namespace}::{class_name(inner)} arm;",
 			f"\t\t\tconst ::situ::rt::err got = {name}(arm);",
 			"",
 			"\t\t\tif (got == ::situ::rt::err::ok) {",

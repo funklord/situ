@@ -5428,6 +5428,12 @@ class Emitter:
 
 		inner = py_name(element.name)
 		read  = [
+			# Python's slice is forgiving where Rust panics and C reads
+			# past the end, so without this it answers from an empty
+			# slice and the four disagree (26.678).
+			"\t\t\tif have < at:",
+			'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
+				'f"{have} here", at)',
 			"\t\t\ttry:",
 			f"\t\t\t\tpart = {inner}.required(data[at:])",
 			"\t\t\texcept TruncatedError as short:",
@@ -5473,6 +5479,9 @@ class Emitter:
 			body.extend([
 				f"\t\t\tif seen >= {count}:",
 				"\t\t\t\tbreak",
+				"\t\t\tif have < at:",
+				'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
+					'f"{have} here", at)',
 				"\t\t\ttry:",
 				f"\t\t\t\tpart = {inner}.required(data[at:])",
 				"\t\t\texcept TruncatedError as short:",

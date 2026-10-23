@@ -3530,7 +3530,12 @@ def test_a_record_run_is_framed_through_its_elements() -> None:
 	                 'struct s { u16 n; f fields[] until "\\r\\n"; }')
 
 	assert "a run of records ends at a terminator" not in header
-	assert "situ_f_required(data + at, have - at, &part)" in header
+	# Saturating, and guarded: `at` has been advanced by a length the
+	# message chose, so `have - at` underflowed and the element was
+	# asked to frame from a pointer past the end (26.678).
+	assert "if (have < at) {" in header
+	assert ("situ_f_required(data + at, "
+	        "situ_remaining_u32(have, at), &part)") in header
 	assert "if (situ_scan(data + at, 2u, situ_s_fields_delim, 2u) == 0u) {" \
 		in header
 

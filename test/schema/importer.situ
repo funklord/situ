@@ -17,4 +17,8 @@ struct record {
 	// Reproduced without any `import` and recorded separately (26.569).
 	stamp  taken;
 	str    name;
+	// The imported mutual cycle, so the compile gates, the
+	// differential and both walkers read one across an import
+	// (26.679).
+	branch tree;
 }
