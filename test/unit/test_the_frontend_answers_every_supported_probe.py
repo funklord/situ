@@ -65,6 +65,11 @@ WITNESS: dict[str, tuple[str, str, str]] = {
 	"gated":           ("example/dtls/dtls.situ", "record", "sealed"),
 	"delimited":       ("example/http/http.situ", "header_field", "name"),
 	"varint":          ("example/mqtt/mqtt.situ", "packet", "length"),
+	# The corpus's only run of varints, and it is a fixture rather than a
+	# real format's member: `edges.situ` has had a varint DRIVER since
+	# varints landed and never a varint as the ELEMENT, which is why all
+	# six readers measured one element and agreed (26.683).
+	"varint_run":      ("test/schema/edges.situ", "varint_run", "v"),
 	"while_count":     ("example/dnsname/dnsname.situ", "name", "labels"),
 	"nested":          ("example/bmp/bmp.situ", "bitmap_file", "file"),
 	"tag":             ("example/dtls/dtls.situ", "record", "tag"),

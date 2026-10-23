@@ -85,6 +85,11 @@ SUFFIXES = frozenset({
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",
 	"next", "of_host", "offset", "raw_len", "read", "self_span", "span",
 	"span_from", "spans", "t",
+	# A run of varints reaches as far as its elements' own lengths sum to,
+	# and `required` needs the MINIMUM of that -- one byte per element not
+	# yet there -- because the span itself shrinks on a truncated element
+	# and a framing function may never read a shrinking quantity (26.683).
+	"span_min",
 	"terminated", "terminated_from", "valid", "value",
 	# The exported value domain (26.125): a member named x makes x_value_min
 	# and x_value_max class constants, so a schema field of either name would

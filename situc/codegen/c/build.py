@@ -75,6 +75,7 @@ ARMTAG  = "armtag"	# a discriminant the chosen arm decides
 BITS    = "bits"	# one field of a byte several members share
 TAG     = "tag"		# a checksum, computed once the message is whole
 VARINT  = "varint"	# a value whose width is its own bytes'
+VARRUN  = "varrun"	# a run of varints, each as wide as its own value
 WIDE    = "wide"	# a run whose elements are wider than a byte
 PAD     = "pad"		# padding to an alignment, whose length is the cursor's
 OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
@@ -86,7 +87,8 @@ ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
 #: the "nothing to build" check three, so a struct of nested members was
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
-                             BITS, WIDE, OPAQUE, HIDDEN, VARINT, ARG})
+                             BITS, WIDE, OPAQUE, HIDDEN, VARINT, VARRUN,
+                             ARG})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
@@ -933,6 +935,21 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				return [], f"`{traverse.local_name(struct, held)}` names " \
 				           f"the varint type `{held.varint}`, and no " \
 				           "declaration for it was supplied"
+			# A RUN of them is a different part: the caller hands over
+			# values and a count, and the writer chooses each width. Left
+			# to fall through, the run became a VARINT part taking one
+			# `uint64_t` while the size field that measures it synthesised
+			# a walk over `situ_edge_varint_required` -- a struct name
+			# taken from the varint TYPE, which nothing defines. The
+			# signature came from one branch and the body from another
+			# (26.683).
+			if traverse.is_varint_run(held):
+				parts.append(Part(VARRUN, held, local,
+				                  value=declared.max_bits,
+				                  minimal=declared.transform
+				                  is ast.VarintTransform.ZIGZAG))
+				parts[-1].declared = declared
+				continue
 			parts.append(Part(VARINT, held, local,
 			                  value=declared.max_bits,
 			                  minimal=declared.transform
@@ -1177,12 +1194,21 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
 			run = measures[held.name]
 			part = _value_part(SIZE, held, local, sizes=run)
-			if not run.element_bits and run.type_name:
+			if not run.element_bits and run.type_name \
+					and not traverse.is_varint_run(run):
 				# ble's `num` and edges' `count` are documented element
 				# counts -- "a LITERAL count of elements that have no
 				# single size" -- so a struct run's size field is not the
 				# byte length a span's is, and writing that would be a
 				# message nothing can read.
+				#
+				# A RUN OF VARINTS is excluded because its `type_name` is
+				# the varint type rather than a struct: `inner` sent the
+				# size field down the walk branch, which emits the
+				# element's `_required`, `_view` and `_validate` -- three
+				# functions a varint type does not have. Its count is the
+				# one the caller passed, which the branch below uses
+				# (26.683).
 				part.inner = ident(prefix, run.type_name)
 			part.solved = solved.get(held.name)
 			parts.append(part)
@@ -1425,6 +1451,14 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			            f"*{part.local}")
 			if not part.bytes:
 				args.append(f"uint32_t {part.local}_count")
+		elif part.role == VARRUN:
+			# VALUES and a count of them, not bytes and a length: a varint
+			# is as wide as its own value, so the caller cannot have
+			# encoded them and the writer is what chooses each width
+			# (26.683).
+			args.append(f"const {'int64_t' if part.minimal else 'uint64_t'} "
+			            f"*{part.local}")
+			args.append(f"uint32_t {part.local}_count")
 		elif part.role == ARG:
 			# First, in member order, because that is where the schema
 			# declares it and this writer's whole contract is "one member
@@ -2021,6 +2055,20 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				*_value(part, f"{run}_count", local),
 				"",
 			]
+		elif part.role == SIZE and part.sizes is not None \
+				and traverse.is_varint_run(part.sizes):
+			# How many varints, not how many bytes. A varint run's size
+			# field counts ELEMENTS -- there is no stride, so a byte
+			# length could not be divided back into a count -- and the
+			# count is the one the caller handed over with the values
+			# (26.683).
+			run = _settled(parts, part.sizes, struct)
+			lines += [
+				f"\t/* {local}: how many `{part.sizes.varint}` elements "
+				f"`{run}` holds. */",
+				*_value(part, f"{run}_count", local),
+				"",
+			]
 		elif part.role == SIZE and part.inner:
 			# The count is not known from a length the caller passed: it is
 			# what the walk finds, so the walk happens HERE, at the field
@@ -2361,6 +2409,50 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"\t\t\treturn SITU_ERR_BOUNDS;",
 				"\t\t}",
 				f"\t\t{AT} += {USED};",
+				"\t}",
+				"",
+			]
+		elif part.role == VARRUN:
+			most = (1 << part.value) - 1
+			assert part.declared is not None
+			big  = part.declared.encoding is ast.VarintEncoding.BE128
+			call = "situ_varint_be_put" if big else "situ_varint_put"
+			one  = (f"situ_zigzag_encode({part.local}[{SCAN}])"
+			        if part.minimal else f"(uint64_t){part.local}[{SCAN}]")
+			lines += [
+				f"\t/* {local}: a run of `{part.placement.varint}`, each as",
+				"\t * wide as its own value. The writer chooses the widths,",
+				"\t * so the caller passes values and a count rather than",
+				"\t * bytes and a length -- and the size field above holds",
+				"\t * that count.",
+				"\t *",
+				"\t * Written one at a time because there is no stride to",
+				f"\t * multiply: `access` of a run of varints is Sequential,",
+				"\t * which is what the reader's own `_at` pays for too. */",
+				f"\tif ({part.local}_count != 0u && {part.local} == NULL) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+				"\t{",
+				f"\t\tuint32_t {SCAN};",
+				"",
+				f"\t\tfor ({SCAN} = 0u; {SCAN} < {part.local}_count;"
+				f" {SCAN}++) {{",
+				f"\t\t\tconst uint32_t {USED} = {call}({OUT} + {AT},",
+				(f"\t\t\t                        {CAP} - {AT}, {one},"
+				 if big else
+				 f"\t\t\t                        {CAP} - {AT}, {one});"),
+				*([f"\t\t\t                        "
+				   f"{part.declared.max_bytes}u, "
+				   f"{part.declared.terminal_bits}u);"] if big else []),
+				"",
+				*([f"\t\t\tif ((uint64_t){one} > {most}u) {{",
+				   "\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t\t\t}"] if part.value < 64 else []),
+				f"\t\t\tif ({USED} == 0u) {{",
+				"\t\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t\t}",
+				f"\t\t\t{AT} += {USED};",
+				"\t\t}",
 				"\t}",
 				"",
 			]

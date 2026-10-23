@@ -568,6 +568,11 @@ struct varint_driver size=5..36893488147419103243
   ~         2..36893488147419103232 u16        d  big sized-by=n+1
   ~         2         u16        tail  big
 
+struct varint_run size=3..2298
+  @0x0000   1         u8         n
+  @0x0001   0..2295   edge_varint v  sized-by=n varint=edge_varint
+  ~         2         u16        tail  big
+
 struct versioned size=3..9 version=ver
   @0x0000   1         u8         ver
   @0x0001   2         u16        length  big

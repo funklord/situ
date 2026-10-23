@@ -1917,15 +1917,29 @@ VALIDATED = {
 	# directions, and this table is where they would have met (26.558).
 	#
 	# The first two are VALID frames on the far side of where C used to
-	# stop. The third is a frame whose tail exceeds the cap and every one
-	# of the six readers accepts it: where the capped member's offset is
-	# data-decided, the bound available to compare against is the struct's
-	# whole maximum, which an earlier `u16 len` makes 65,541. Pinned as a
-	# limit rather than left to be discovered, and recorded for the holder.
+	# stop, and the third is the boundary: a tail of five against a cap of
+	# four.
+	#
+	# **The third was pinned here as ACCEPTED, with a comment saying every
+	# one of the six readers took it and that the limit was recorded for
+	# the holder.** It was this table's own record of a defect -- the cap
+	# compared against the struct's whole maximum, which an earlier `u16
+	# len` makes 65,541 -- and bbq-predictor then reported that defect from
+	# a tree that had hit it for real, as `u8 t[remaining] max 2` accepting
+	# four bytes. 26.681 fixes it: the run's own length is checked against
+	# its cap, so all six refuse the frame and the expectation is `1`.
+	#
+	# Worth keeping as a lesson about pinning. A number pinned with
+	# "recorded for the holder" is a finding that has been written into a
+	# test rather than reported, and the test then PASSES for as long as
+	# the defect survives -- which made this row evidence of agreement
+	# where it was evidence of a shared fault. The pair either side of it
+	# is what a cap check wants: four bytes accepted, five refused, so a
+	# guard that refuses everything fails the row above.
 	"a `[remaining]` cap after a member the data sizes": (
 		"struct hdr { u16 len; u8 v[len]; u8 tail[remaining] max 4; }",
 		[("000000000000", "0"), ("00014100000000", "0"),
-		 ("00000000000000", "0")]),
+		 ("00000000000000", "1")]),
 }
 
 
