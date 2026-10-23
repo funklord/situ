@@ -378,6 +378,13 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 	if placement.radix and placement.radix_digits \
 			and index not in view.image.delimiters:
 		return placement.radix_digits * BITS_PER_BYTE
+	# A delimited run of RECORDS, which had no branch here at all: the
+	# span fell through to the single-element path below and came back
+	# one element wide with no terminator, so a nested `[A]` measured two
+	# bytes where it is three and the enclosing walk stopped an element
+	# early (26.680).
+	if index in view.image.delimiters and placement.type_struct != NONE:
+		return record_run_bits(view, index, depth)
 	if index in view.image.delimiters and placement.type_struct == NONE:
 		content, terminated, took = scan(view, index)
 		# The delimiter is part of the member only when it is there. An
@@ -1756,8 +1763,17 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 	return True
 
 
-def record_run_count(view: View, index: int, depth: int = 0) -> int:
-	"""How many records a run of them holds: `T x[] until "D"` (8.6.3).
+def _record_run_walk(view: View, index: int,
+		depth: int = 0) -> tuple[int, int]:
+	"""One walk of a delimited run of records, answering both questions.
+
+	`(count, span_bytes)`. Two callers and one loop, because the count and
+	the span must agree about where the run ends and two loops over one
+	rule drift apart -- which is exactly how 26.680 happened: this loop was
+	right and the span was computed somewhere else that had never heard of
+	a terminator.
+
+	`T x[] until "D"` (8.6.3).
 
 	`until` asks about the position BEFORE each element -- is the terminator
 	standing where the next one would start -- which is the whole difference
@@ -1785,6 +1801,7 @@ def record_run_count(view: View, index: int, depth: int = 0) -> int:
 	# no room for the terminator to stand, so there is nothing to ask.
 	room  = max(len(one) for one in delims)
 	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	start = at
 	count = 0
 
 	while at + room <= view.limit:
@@ -1804,7 +1821,35 @@ def record_run_count(view: View, index: int, depth: int = 0) -> int:
 			break
 		at    += extent
 		count += 1
-	return count
+	# The terminator belongs to this member, as a delimiter does, and where
+	# the run ran out of buffer instead there is none to count -- C's rule
+	# at its own emission site, in those words.
+	took = next((len(one) for one in delims
+	             if view.buffer[at:at + len(one)] == one), 0)
+	return count, (at - start) + took
+
+
+def record_run_count(view: View, index: int, depth: int = 0) -> int:
+	"""How many records a delimited run holds. See `_record_run_walk`."""
+	return _record_run_walk(view, index, depth)[0]
+
+
+def record_run_bits(view: View, index: int, depth: int = 0) -> int:
+	"""How far a delimited run of records REACHES, in bits.
+
+	`content_bits` had no branch for this shape at all, so the span fell
+	through to the single-element path and a run measured one element with
+	no terminator. A nested `[A]` came back two bytes where it is three,
+	which moved the enclosing walk onto the inner run's own terminator and
+	stopped it an element early: `[[A]A]` counted 1 where every backend
+	counts 2 (26.680).
+
+	The same walk as the count, because two loops over one rule drift --
+	which is this walker's own lesson about `while` and the counted run,
+	and was the shape of the bug it is fixing: `record_run_count` had the
+	loop right and nothing else used it.
+	"""
+	return _record_run_walk(view, index, depth)[1] * BITS_PER_BYTE
 
 
 def sized_run_count(view: View, index: int, depth: int = 0) -> int:

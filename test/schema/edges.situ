@@ -1992,3 +1992,30 @@ struct oob_run {
 	u8           k;
 	oob_element  elements[k];
 }
+
+// A delimited run whose element is a RECURSIVE variant, which 26.680 says
+// belongs here once the two readers agree -- and they do.
+//
+// `content_bits` had no branch for a delimited run of RECORDS at all, so
+// the span fell through to the single-element path: a nested `[A]` measured
+// two bytes where it is three, the enclosing walk landed on the inner run's
+// own terminator, and `[[A]A]` counted one element where every backend
+// counts two. The count loop next door was right the whole time and nothing
+// else used it, which is why one walk answers both questions now.
+//
+// Three of this entry's attributions were wrong before the ablations ran:
+// the delimiter, the depth cap and the import were each read off one
+// reproduction and each cleared. What the shape needs is a delimited run of
+// a recursive variant and nothing else.
+struct nest_item [depth = 8] {
+	peek u8  tag;
+	variant body switch (tag) {
+		case '[':  nest_group  as_group;
+		default:   u8          as_byte;
+	}
+}
+
+struct nest_group [depth = 8] {
+	u8         open;
+	nest_item  items[]  until "]";
+}

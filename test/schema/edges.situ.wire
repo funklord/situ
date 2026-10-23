@@ -300,6 +300,17 @@ struct negotiated size=5..516
   carried case 2: flag u8
   carried case default: error
 
+struct nest_group size=2..
+  @0x0000   1         u8         open
+  @0x0001   until:5d  nest_item  items
+
+struct nest_item size=1..
+  @0x0000   1         u8         tag  peek
+  @0x0000   1..       variant    body
+  body switch: tag
+  body case 91: as_group nest_group
+  body case default: as_byte u8
+
 struct oob_element size=7..4294967557
   @0x0000   1         u8         n
   @0x0001   0..255    u8         body  sized-by=n

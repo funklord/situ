@@ -183,9 +183,9 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #:
 #: The fourth cell is the one this exists for. See the test below.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                27,
+	("scalar", "not-struct", ""):                28,
 	("no-scalar", "struct", "fixed"):            49,
-	("no-scalar", "struct", "unmeasurable"):     24,
+	("no-scalar", "struct", "unmeasurable"):     25,
 	("no-scalar", "not-struct", ""):              1,
 }
 
@@ -197,6 +197,17 @@ ARM_SHAPES = {
 #: `default: error` and is now a seventh arm holding a variable struct.
 #: The counts are numbers and the cells are the population; a schema that
 #: adds a cell still fails here, which is what this is for.
+#:
+#: Two cells moved by ONE each when `edges.situ` gained `nest_item`/
+#: `nest_group` for 26.680 -- one variant, with a variable-struct arm and a
+#: scalar arm, which is one of each existing shape and no new cell.
+#:
+#: By one and not two, and the difference is worth keeping: this census
+#: walks SCHEMAS, so a struct that arrives by `import` is counted in the
+#: importing file as well as the defining one. The same pair put in
+#: `shared.situ` briefly moved these cells by two for that reason. An
+#: imported variant's arms are counted twice and that is the census being
+#: right, since both schemas generate them.
 
 #: The whole of the last cell, by path. One member, and the condition that
 #: declines it is written about the *other* fact.

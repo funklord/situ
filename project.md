@@ -7326,9 +7326,9 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
-### 26.680 A recursive variant under a depth cap counts differently
+### 26.680 A delimited run of records had no span, so a nested one lost an element
 
-Moved to `doc/decision/26.680-a-recursive-variant-under-a-depth-cap-counts-differently.md`.
+Moved to `doc/decision/26.680-a-delimited-run-of-records-had-no-span.md`.
 
 ### 26.679 A cycle across an import emitted its call ahead of its declaration
 
