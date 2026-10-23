@@ -7368,6 +7368,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.685 The framing total was used as the element offset
+
+**Open.** Moved to
+`doc/decision/26.685-the-framing-total-was-used-as-the-element-offset.md`.
+
 ### 26.684 `framed` reads an extent, and an extent shrinks
 
 **Open.** Moved to

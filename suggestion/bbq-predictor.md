@@ -91,6 +91,21 @@ delegation, and it is the same shape as `_span` versus `_span_min`: a
 framing function may never read a quantity that gets smaller as bytes go
 missing.
 
+**And a second framing fault, found by the same probe and not reported by
+you.** `required`'s running total starts at the sum of EVERY fixed
+member, including the ones after the run being measured, and that total
+is then passed as the element's OFFSET. So a counted run followed by any
+fixed member -- a trailer, a checksum -- frames short: `withtail { u8 n;
+one d[n]; u16 t; }` answers complete at five bytes of six, and a reader
+resynchronises one byte into the next message. All four backends share
+the arithmetic and neither walker implements `required`, so nothing could
+have seen it. `doc/decision/26.685-*.md`, measured and open.
+
+**So the standing advice is narrower than "framing is unreliable inside a
+variant":** `validate()` is sound, and `required()`/`framed()` are wrong
+for a struct with a nested variable struct (26.684) or with a run
+followed by fixed members (26.685). Keep your exact-length checks.
+
 ## 3-6. Three fixed, the sixth outstanding
 
 Reproductions in 26.675's appendix. Re-measured in situ's tree rather
