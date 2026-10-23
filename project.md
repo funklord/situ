@@ -827,6 +827,48 @@ this is exactly the construct users reach for without understanding the cost:
   the reason "non-minimal varint encodings accepted".
 - `access` of an array of varints is `Sequential`, never `Random`
 
+**The array form is implemented, as of 26.683**, and that sentence is what
+says what it costs: `uvar v[n]` emits a count, a span, a minimum span and
+an `_at` that walks, in all four backends and both walkers. It had been
+documented and unimplemented, which is worse than either -- six readers
+agreed about it by all being wrong the same way.
+
+**Two gaps remain beside it, both in what the IMAGE carries about a varint
+rather than in the construct.** The packer writes three fields and one
+flags byte per varint member (`pack.py`, `SECTION_VARINTS`), and the flags
+byte states `minimal` and `be128` and nothing else:
+
+- **`transform = zigzag` is not in the image**, so both walkers answer a
+  `svar`'s RAW encoding where all four backends answer the decoded value.
+  Measured 2026-10-23 on a two-element run: the walkers said 1 and 6, the
+  backends -1 and 3. It applies to a single `svar` as much as to a run,
+  and predates the run by as long as the transform has existed.
+- **`minimal` reaches the image and not the walkers**: `image.py` reads
+  the flags byte for `be128` only, so a padded encoding is a
+  `SITU_ERR_CONSTRAINT` in all four backends and an accepted value in
+  both walkers.
+
+Neither is exercised, which is why neither has been seen: the corpus
+declares exactly one varint type, `edges.edge_varint`, and it is `be128`
+with neither attribute. So the four-way differential and the two-walker
+differential both pass over a divergence that is certain. Adding a corpus
+fixture for either one fails immediately, by construction, which is the
+right order -- but it needs the image's flags byte widened first, and two
+bits of it are free.
+
+**And `uvar v[remaining]` crashes the compiler** -- `AssertionError` in
+`propagate._parameterise`, on `assert placement.size_max_bits is not
+None`, with no diagnostic. Measured 2026-10-23 and confirmed identical in
+a worktree pinned at `b186326`, so it predates the array work rather than
+following from it. A bare `[remaining]` states BYTES rather than a count
+of elements, which is a question the construct has to answer before it can
+be compiled: either the run fills the remaining bytes (well defined -- walk
+until the frame ends) or the form is refused. Both walkers decline it
+already, asking `_sizes_in_bytes` before walking, so whichever answer is
+chosen they are ready for it. An assertion is not either answer, and
+section 17.0 is about exactly this: a construct situ cannot decide is one
+it refuses with a reason.
+
 **Two encodings, and what a declared `max_bytes` means.** `be128` is the same
 shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
 SQLite's record varints. A format may also cap the encoded length below what
@@ -7325,6 +7367,26 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.684 `framed` reads an extent, and an extent shrinks
+
+**Open.** Moved to
+`doc/decision/26.684-framed-reads-an-extent-and-an-extent-shrinks.md`.
+
+### 26.683 A run of varints was one varint, in all six readers
+
+Moved to
+`doc/decision/26.683-a-run-of-varints-was-one-varint-in-all-six-readers.md`.
+
+### 26.682 A delegated check was found only one component deep
+
+Moved to
+`doc/decision/26.682-a-delegated-check-was-found-only-one-component-deep.md`.
+
+### 26.681 A declared cap was not checked after a dynamic member
+
+Moved to
+`doc/decision/26.681-a-declared-cap-was-not-checked-after-a-dynamic-member.md`.
 
 ### 26.680 A delimited run of records had no span, so a nested one lost an element
 

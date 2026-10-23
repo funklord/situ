@@ -43,7 +43,7 @@ clean on the same bytes, the three reasons nothing here caught it, and the
 two tests added. Fixed in the C++ emitter; the same arithmetic was swept
 out of the C emitter too, and Rust's remaining sites are pinned by a floor.
 
-## 2. Truncated element runs are accepted -- CONFIRMED, still open
+## 2. Truncated element runs are accepted -- `validate` FIXED, `framed` OPEN
 
 Confirmed here, and it is not only C++: C, C++ and Rust all return OK from
 `validate()` for their `validate_oob` input, and Python does too.
@@ -54,26 +54,76 @@ answer -- a caller who does everything right being told a hostile message
 is well-formed. **Until it is closed, read `validate() == ok` as "the bytes
 are structurally reachable" rather than "the declared runs fit".**
 
-A one-line-per-backend fix was tried and reverted: the full gate failed ten
-tests, because a run's span is SUMMED into the enclosing struct's extent --
-so an unsatisfiable sentinel wraps, which is the same class of bug -- and
-because the walk cannot tell a frame that is too small from a message that
-nests too deeply. `doc/decision/26.676-*.md` has both, the two candidate
-designs with their costs, and the second wrap it turned up in the same
-walk, which was independent and is kept.
+Fixed in all SIX implementations of the verdict -- the four backends and
+both walkers, which is one more pair than anybody had enumerated. A run
+whose declared count cannot be walked inside the frame is refused now, and
+`validate() == ok` means what it says again.
 
-## 3-6. Not yet re-run here
+The route took two wrong turns worth knowing, since you may be reading
+situ's history: a one-line sentinel was tried and reverted, because a run's
+span is SUMMED into the enclosing struct's extent and an unsatisfiable
+value there wraps -- the same class of bug it was fixing -- and because the
+walk cannot tell a frame that is too small from a message that nests too
+deeply. `doc/decision/26.676-*.md` carries both, the design that worked,
+and a second wrap it turned up in the same walk.
 
-Recorded as reported, with their reproductions in 26.675's appendix:
+**The `framed()` half is still open, and this heading said FIXED for a
+day.** Your 20261023T1512Z reported it and the claim here was not
+narrowed; re-measured in situ's tree 2026-10-23 on `short_run`'s shape,
+C++:
 
-- **`varint x[n]` is generated as a single varint.** C reads 3 bytes where 5
-  are expected; C++ fails to build on an undeclared `x_len()`.
-- **`u8 t[remaining] max N` after a dynamic member is not enforced.**
-  `validate` returns OK with 4 bytes against `max 2`. Note `edges.situ`'s
-  `capped_tail` covers the cap but not the cap *after a dynamic member*,
-  which is the same corpus-shape gap 26.675 is about.
-- **C: `[max]` on a varint in a variant-arm struct** generates a call to a
-  `_count_get` that is not emitted, so the C does not compile.
+    col alone:  validate=1 framed=7 need=4
+    in variant: validate=1 framed=0 need=3
+
+So the GATE is right in both -- `validate` refuses the short run wherever
+it sits, which is what item 2 was about -- and `framed()` inside a variant
+arm says a three-byte message is whole where `col` itself says it needs
+four. Keep your own exact-length checks for this as well as for item 4.
+
+**The mechanism is 26.683's, one function over.** A variant contributes
+`at = need(at, x_c_extent())` to `framed`, and an extent walk SHRINKS when
+an element is truncated: `col`'s count says three elements, one byte is
+left, the walk stops at two bytes, and 1 + 2 is the three that arrived.
+`validate` does not have the fault because it DELEGATES -- it calls
+`arm.validate()`, which asks the arm about itself -- and `framed` reaches
+for the arm's extent instead of the arm's own `framed`. The fix is that
+delegation, and it is the same shape as `_span` versus `_span_min`: a
+framing function may never read a quantity that gets smaller as bytes go
+missing.
+
+## 3-6. Three fixed, the sixth outstanding
+
+Reproductions in 26.675's appendix. Re-measured in situ's tree rather
+than against your exports, so please confirm from your side:
+
+- **`varint x[n]` is generated as a single varint -- FIXED.** It was
+  documented and unimplemented: `project.md` has said "`access` of an
+  array of varints is `Sequential`, never `Random`" all along, and all
+  six readers measured ONE element. Four accessors now in each backend --
+  a count, a span, a MINIMUM span and an `_at` that walks -- and the
+  matching walk in both walkers. `doc/decision/26.683-*.md`, and
+  `edges.varint_run` is the corpus fixture that was missing.
+
+  Two things worth your knowing, since you call `required()`: it now
+  answers a monotone lower bound over every prefix (2, 5, 6, 6, 6,
+  complete at 6 for a six-byte message), because the span SHRINKS on a
+  truncated element and the first fix had `required` reading it -- two
+  bytes of six came back SITU_OK. And a `svar` run decodes through the
+  zigzag transform, which the first draft dropped.
+- **`u8 t[remaining] max N` after a dynamic member is not enforced --
+  FIXED.** Your framing was right and situ's first answer to it was
+  wrong: the cap IS enforced as a struct-level `SIZE_MAX`, and that bounds
+  the FRAME rather than the run, so the two coincide only where nothing
+  variable precedes it. The run's own length is checked against the cap
+  now. `doc/decision/26.681-*.md`, and decision 0059 is explicit that a
+  cap refuses rather than truncates.
+- **C: `[max]` on a varint in a variant-arm struct -- FIXED.** The check
+  was emitted in the outer struct as well, naming an accessor that does
+  not exist there, because the delegation test read only the FIRST path
+  component and an arm member is two deep. The arm is delegated to, one
+  component further in, and its own `check` already makes the check -- so
+  the duplicate was redundant as well as uncompilable.
+  `doc/decision/26.682-*.md`.
 - **Minor:** the README shows `require max_size(x) <= N` where the compiler
   takes `max_size(x, N)`; an enum member in `when` is refused as naming two
   messages; every diagnostic prints twice; a fractional expansion ratio

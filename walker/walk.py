@@ -357,6 +357,16 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		# refuses. Refusing here made `02 c3 a9` -- a one-byte payload size
 		# and a rowid that never terminates -- come back BOUNDS from a
 		# struct C reads to the end.
+		#
+		# A RUN of them is the sum of its elements' own lengths, which is
+		# what `_varint_run_bits` walks. Without it this answered ONE
+		# element for `uvar v[n]` and every member after the run was
+		# placed on top of it -- the walker's half of 26.683, and it
+		# agreed with the four backends only because all five were wrong
+		# the same way.
+		if is_run(view.image, index) \
+				and not _sizes_in_bytes(view.image, placement.size_code):
+			return _varint_run_bits(view, index)
 		try:
 			consumed, _ = varint(view, index)
 		except Refused:
@@ -1323,6 +1333,73 @@ def scan(view: View, index: int) -> tuple[int, bool, int]:
 				return at, True, took
 		at += 1
 	return limit, False, 0
+
+
+def _varint_run_bits(view: View, index: int) -> int:
+	"""How far a run of varints reaches, in bits.
+
+	`uvar v[n]` holds `n` varints of 1 to `max_bytes` each, so its extent
+	is the sum of their own lengths and not the count times anything.
+	There is no stride to multiply by, which is exactly why
+	`project.md` documents the construct's `access` as Sequential.
+
+	A run that stops early stops, as the single-element branch above
+	does: a truncated element ends the walk and the extent is the bytes
+	actually there, so a short frame is reported by whatever reads the
+	extent rather than refused here. The lax reader again.
+
+	`varint_run_at` is the element reader beside it; this is the one the
+	offset chain needs.
+	"""
+	rules = view.image.varint_rules.get(index)
+	if rules is None:
+		raise Refused(f"placement {index} has no varint rules in this image")
+
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	at    = start
+	seen  = 0
+	count = _count(view, index)
+
+	while seen < count:
+		if at >= view.limit:
+			break
+		try:
+			consumed, _ = decode_varint(view, at, *rules)
+		except Refused:
+			break
+		at   += consumed
+		seen += 1
+	return (at - start) * BITS_PER_BYTE
+
+
+def varint_run_at(view: View, index: int, element: int) -> int:
+	"""The `element`th value of a run of varints.
+
+	`read_scalar` refuses a run and `read_bytes` hands back its bytes
+	undecoded, so without this the walker could say how far a run reached
+	and not what was in it -- while all four backends emit an `_at`. The
+	walk is the documented cost: an element's offset is the sum of the
+	lengths before it.
+	"""
+	rules = view.image.varint_rules.get(index)
+	if rules is None:
+		raise Refused(f"placement {index} has no varint rules in this image")
+	if not is_run(view.image, index):
+		raise Refused(f"placement {index} is one varint, not a run; `varint` "
+		              f"reads it")
+
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	at    = start
+	count = _count(view, index)
+
+	for seen in range(count):
+		if at >= view.limit:
+			break
+		consumed, value = decode_varint(view, at, *rules)
+		if seen == element:
+			return value
+		at += consumed
+	raise Refused(f"element {element} is past the {count} this run holds")
 
 
 def varint(view: View, index: int) -> tuple[int, int]:

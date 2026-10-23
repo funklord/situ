@@ -315,3 +315,22 @@ declares `hull_frontend_list_validate` as `static inline` ahead of the
 generated header and is passed to the generated `.c` with `-include`.
 Nothing situ wrote is edited; the file and its make rule go once the
 generator orders the pair, or declares every function ahead.
+
+**FIXED in situ b186326, and confirmed from hull's side 2026-10-23.** The
+fix is a prototype for an IMPORTED cycle's `validate` and `check`, beside
+the `extent`/`nesting` prototypes `_recursive_prototypes` has emitted
+since 0054 -- the verdict pair was simply not in that list. 26.679 has it.
+
+hull reports both view headers gone, `frontend_view.h` and
+`protocol_view.h`, with their `-include` rules and the `fmake.toml` seds;
+the generated frontend and protocol C compiling as situ writes them under
+`-Wall -Wextra -Wconversion -Wsign-conversion`; its pin moved 86 commits;
+all three capability maps current and `make test` passing whole.
+
+**And it corrected two of situ's own claims about the blast radius**,
+which is the value of a consumer answering back. The C++ `--prefix`
+namespace fault found alongside (26.679) does not reach hull, which
+generates C only. And 26.680's walker divergence had no path into hull
+either: `sexpr.c` walks the forms itself and compares its `")"` against
+the generated C's extent rather than running situ's walker. situ had
+warned about both; neither applied.

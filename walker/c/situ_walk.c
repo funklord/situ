@@ -840,6 +840,61 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 	                     (rules[10] & VARINT_BIG) != 0, consumed, value);
 }
 
+/* One element of a run of varints, by index.
+ *
+ * `situ_walk_element` multiplies by `element_bits`, which a varint run has
+ * none of: an element's offset is the sum of the lengths before it, so
+ * reaching index `i` is a walk of `i` decodes. That is the documented cost
+ * of the construct's Sequential access, not a shortcut nobody declared.
+ *
+ * Without this the element reader answered UNSUPPORTED for `uvar v[n]`:
+ * the walk could say how far the run reached and not what was in it, while
+ * all four backends emit an `_at` (26.683).
+ */
+static situ_walk_err varint_run_element(const situ_walk_image *image,
+                                        const uint8_t *message, uint32_t len,
+                                        uint32_t shape, uint32_t index,
+                                        uint32_t element, uint64_t *out)
+{
+	uint32_t at    = 0u;
+	uint32_t count = 0u;
+	uint32_t seen;
+	situ_walk_err err = situ_walk_count(image, message, len, shape, index,
+	                                    &count);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (element >= count) {
+		return SITU_WALK_BOUNDS;
+	}
+	err = situ_walk_offset_bits(image, message, len, shape, index, &at);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	at /= 8u;
+
+	for (seen = 0u; seen < count; seen++) {
+		uint32_t consumed = 0u;
+		uint64_t value    = 0u;
+
+		if (at >= len) {
+			break;
+		}
+		err = situ_walk_varint(image, message, len, index, at, &consumed,
+		                       &value);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (seen == element) {
+			*out = value;
+			return SITU_WALK_OK;
+		}
+		at += consumed;
+	}
+	return SITU_WALK_BOUNDS;
+}
+
 /* `situ_walk_varint`'s loop, over parameters rather than a placement.
  *
  * Split out for a `tlv` region, whose tag and length varints belong to no
@@ -941,6 +996,76 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
                              const situ_walk_placement *held,
                              uint32_t start_bits, uint32_t width_bits,
                              uint64_t *out);
+
+static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
+                              int32_t base, int64_t *out);
+
+/* Whether a run's size program states BYTES rather than a count of
+ * elements. Defined with the other run predicates below; declared here
+ * because a varint run has to ask it before walking one. */
+static int size_code_is_bytes(const situ_walk_image *image,
+                              uint32_t code_at);
+
+/* How far a run of varints reaches, in bytes times eight.
+ *
+ * `uvar v[n]` holds `n` varints of 1 to `max_bytes` each, so its extent is
+ * the sum of their own lengths and not the count times anything -- there is
+ * no stride to multiply by, which is why `project.md` documents the
+ * construct's `access` as Sequential.
+ *
+ * A run that stops early stops, as the single-element branch does: a
+ * truncated element ends the walk and the extent is the bytes actually
+ * there, so a short frame is reported by whatever reads the extent rather
+ * than refused here. The lax reader again.
+ */
+static situ_walk_err varint_run_bits(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     uint32_t depth, uint32_t from,
+                                     uint32_t *out)
+{
+	situ_walk_placement held;
+	situ_walk_err err = situ_walk_placement_at(image, index, &held);
+	uint32_t at = from;
+	int64_t  count = 0;
+	int64_t  i;
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (held.array_count != SITU_WALK_NONE) {
+		count = (int64_t)held.array_count;
+	} else {
+		walk_ctx ctx = {image, message, len, shape, depth};
+
+		err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+		                     (int64_t)(len > from ? len - from : 0u),
+		                     &count);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+	}
+	if (count < 0) {
+		count = 0;
+	}
+
+	for (i = 0; i < count; i++) {
+		uint32_t consumed = 0u;
+		uint64_t value    = 0u;
+
+		if (at >= len) {
+			break;
+		}
+		err = situ_walk_varint(image, message, len, index, at, &consumed,
+		                       &value);
+		if (err != SITU_WALK_OK) {
+			break;
+		}
+		at += consumed;
+	}
+	*out = (at - from) * 8u;
+	return SITU_WALK_OK;
+}
 
 /* How deep a measurement may nest before this build refuses.
  *
@@ -1759,6 +1884,19 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		                       &at);
 		if (err != SITU_WALK_OK) {
 			return err;
+		}
+		/* A RUN of them is the sum of its elements' own lengths. Without
+		 * this the branch below answered ONE element for `uvar v[n]` and
+		 * every member after the run was placed on top of it -- this
+		 * walker's half of 26.683, and it agreed with the four backends
+		 * only because all six readers were wrong the same way. A bare
+		 * `[remaining]` states BYTES rather than a count, so it is not
+		 * one of these and falls through to the span below. */
+		if ((held.array_count != SITU_WALK_NONE
+		     || held.size_code != SITU_WALK_NONE)
+		    && !size_code_is_bytes(image, held.size_code)) {
+			return varint_run_bits(image, message, len, shape, index,
+			                       depth, at / 8u, out);
 		}
 		uint32_t consumed = 0u;
 		uint64_t value    = 0u;
@@ -2745,6 +2883,17 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+	/* A RUN OF VARINTS, which has no element width to multiply by. Before
+	 * the refusal below, which is what it got (26.683). A bare
+	 * `[remaining]` states BYTES rather than a count, so it is not one of
+	 * these. */
+	if (varint_rules(image, index) != NULL
+	    && (held.array_count != SITU_WALK_NONE
+	        || held.size_code != SITU_WALK_NONE)
+	    && !size_code_is_bytes(image, held.size_code)) {
+		return varint_run_element(image, message, len, shape, index, at,
+		                          out);
 	}
 	if (held.element_bits == SITU_WALK_NONE || held.element_bits == 0u) {
 		return SITU_WALK_UNSUPPORTED;
@@ -3821,14 +3970,35 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * line merely vacuous. One missing condition, two walkers wrong in
 		 * opposite directions (26.558). */
 		if ((capped.text_flags & SITU_WALK_FRAME_CAP) == 0u
-		                || capped.size_max_bits == SITU_WALK_NONE
-		                || capped.offset_bits == SITU_WALK_NONE) {
+		                || capped.size_max_bits == SITU_WALK_NONE) {
 			continue;
 		}
-		if (len > (capped.offset_bits + capped.size_max_bits + 7u) / 8u) {
-			record(why, SITU_WALK_NONE, SITU_WALK_NO_CHECK);
-			*verdict = SITU_WALK_BOUNDS;
-			return SITU_WALK_OK;
+		{
+			/* ASKED OF THE MESSAGE where the offset is data-decided,
+			 * rather than skipped. Skipping left the cap unenforced
+			 * wherever anything variable precedes the run: `u8 n;
+			 * u8 d[n]; u8 t[remaining] max 2` accepted a six-byte frame
+			 * with `t` four bytes long, here and in all four backends.
+			 * 0059 is explicit that such a cap refuses rather than
+			 * truncates (26.681).
+			 *
+			 * The wrap the comment above describes is gone with the
+			 * sentinel: `offset_bits_deep` answers in bits from the
+			 * bytes, so there is no 0xFFFFFFFF to add. */
+			uint32_t at = capped.offset_bits;
+
+			if (at == SITU_WALK_NONE) {
+				err = offset_bits_deep(image, message, len, shape,
+				                       first + i, depth, &at);
+				if (err != SITU_WALK_OK) {
+					continue;
+				}
+			}
+			if (len > (at + capped.size_max_bits + 7u) / 8u) {
+				record(why, SITU_WALK_NONE, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
 		}
 	}
 

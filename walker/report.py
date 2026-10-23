@@ -29,17 +29,19 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
-                         _evaluate, _read_at, counted_run_fits,
+                         _evaluate, _read_at, _sizes_in_bytes,
+                         counted_run_fits,
                          offset_bits, record_run_count,
                          chosen_arm, scan, size_bits, sized_run_count,
-                         struct_extent, tlv_count, varint, while_count)
+                         _count, content_bits, is_run, struct_extent,
+                         tlv_count, varint, varint_run_at, while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
 SUPPORTED = ("no-view", "needs-arguments", "scalar", "bytes", "element",
              "run_element", "arm_value", "sealed", "gated", "delimited",
-             "varint", "while_count", "nested", "tag", "marker", "validate",
-             "relation")
+             "varint", "varint_run", "while_count", "nested", "tag",
+             "marker", "validate", "relation")
 
 #: `image_kind`, all eight of it, from the enum `std/image.situ` declares.
 #: It named the first four for as long as those were the ones a reader here
@@ -236,6 +238,14 @@ def _offset_computable(image: Image, struct_index: int, index: int) -> bool:
 def _element(view: View, index: int, at: int) -> int:
 	"""One element of a run, by index rather than by pointer."""
 	placement = view.image.placements[index]
+	# A RUN OF VARINTS has no element width to multiply by: an element's
+	# offset is the sum of the lengths before it, which is what makes the
+	# construct's access Sequential. The arithmetic below would multiply by
+	# the NONE sentinel (26.683). A bare `[remaining]` states BYTES rather
+	# than a count, so it is not one of these.
+	if index in view.image.varints and is_run(view.image, index) \
+			and not _sizes_in_bytes(view.image, placement.size_code):
+		return varint_run_at(view, index, at)
 	width = placement.element_bits
 	start = offset_bits(view, index) + at * width
 	if (start + width) // 8 > view.limit:
@@ -444,7 +454,34 @@ def _varints(image: Image, struct_index: int) -> list[int]:
 	probe reporting only the value cannot tell them apart.
 	"""
 	return [index for index in image.members(image.structs[struct_index])
-	        if index in image.varints]
+	        if index in image.varints and not _is_varint_run(image, index)]
+
+
+def _is_varint_run(image: Image, index: int) -> bool:
+	"""Whether a varint member holds several of them rather than one.
+
+	The walker's spelling of `traverse.is_varint_run`, which it cannot
+	import -- decision 0026 forbids a walker reaching into `situc`, so the
+	condition is asked of the IMAGE here and of the placement there. A bare
+	`[remaining]` states BYTES rather than a count of elements, which is
+	the one run form this is not.
+	"""
+	placement = image.placements[index]
+	return (is_run(image, index)
+	        and not _sizes_in_bytes(image, placement.size_code))
+
+
+def _varint_runs(image: Image, struct_index: int) -> list[int]:
+	"""Members holding a RUN of varints.
+
+	Three quantities rather than the single one's two, and they are not the
+	same questions: there is no stride, so the span is the sum of the
+	elements' own lengths and an element is reached by walking. A probe
+	asking a run for `len=` and `value=` asks it what one varint answers,
+	which is how six readers agreed that `uvar v[n]` was one (26.683).
+	"""
+	return [index for index in image.members(image.structs[struct_index])
+	        if index in image.varints and _is_varint_run(image, index)]
 
 
 def _delimited(image: Image, struct_index: int) -> list[int]:
@@ -884,10 +921,26 @@ def _validate(image: Image, view: View, struct_index: int,
 		# the two walkers share one condition rather than agreeing by
 		# accident, which is how they came to differ in the first place.
 		if not capped.text_flags & FRAME_CAP \
-				or capped.size_max_bits == NONE \
-				or capped.offset_bits == NONE:
+				or capped.size_max_bits == NONE:
 			continue
-		reach = capped.offset_bits + capped.size_max_bits
+		at = capped.offset_bits
+		if at == NONE:
+			# ASKED OF THE MESSAGE rather than skipped. The comment above
+			# said this walk "cannot bound the member statically at all",
+			# which is true and was read as cannot bound it: `offset_bits`
+			# computes a data-decided offset from the bytes, which is what
+			# every other check in this function already does.
+			#
+			# Skipping left the cap unenforced wherever anything variable
+			# precedes the run -- `u8 n; u8 d[n]; u8 t[remaining] max 2`
+			# accepted a six-byte frame with `t` four bytes long, in all
+			# four backends and both walkers. 0059 is explicit that such a
+			# cap refuses rather than truncates (26.681).
+			try:
+				at = offset_bits(view, index)
+			except (Refused, Unplaceable, TooDeep):
+				continue
+		reach = at + capped.size_max_bits
 		if view.limit - view.at > (reach + BITS_PER_BYTE - 1) // BITS_PER_BYTE:
 			return fail(ERR_BOUNDS)
 
@@ -1878,6 +1931,24 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		except Refused:
 			continue
 		lines.append(f"{local} len={consumed} value={value}")
+
+	for index in _varint_runs(image, struct_index):
+		local = _local(image, index)
+		try:
+			count = _count(view, index)
+			# `reach` rather than `span`, which this function already has
+			# as the BYTES of a delimited member further down. mypy caught
+			# the shadow; naming it distinctly is what avoids it.
+			reach = content_bits(view, index) // BITS_PER_BYTE
+		except (Refused, Unplaceable):
+			continue
+		first = 0
+		if count:
+			try:
+				first = varint_run_at(view, index, 0)
+			except Refused:
+				first = 0
+		lines.append(f"{local} count={count} span={reach} [0]={first}")
 
 	for index in _delimited(image, struct_index):
 		local = _local(image, index)
