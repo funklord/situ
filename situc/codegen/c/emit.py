@@ -5275,6 +5275,12 @@ class Emitter:
 		element = self.resolved.structs.get(nested or "")
 		if element is None or self._element_extent_call(element) is None:
 			return []
+		# A `[remaining]` run has no declared count to fall short of, and
+		# the CALL site asks the same question -- so without this the
+		# definition was emitted for one and never called, which is the
+		# fault the gate beside this change exists to catch (26.676).
+		if placement.sized_by == "remaining":
+			return []
 
 		deep = self._recursive(nested or "")
 		name = ident(self.prefix, struct.name, local, "fits")
@@ -7009,9 +7015,18 @@ class Emitter:
 			return []
 		# The same question the DEFINITION is gated on. `_is_counted_run`
 		# admits a `[remaining]` run, which has no declared count to fall
-		# short of, so the predicate is not emitted for one and the call
-		# would name a function nothing defines (26.676).
-		if self._count_expression(struct, placement) is None:
+		# short of (26.676).
+		#
+		# Asked as `sized_by == "remaining"`, which is `dissector.py`'s
+		# idiom, and NOT as `_count_expression(...) is None`: the other
+		# three emitters answer None there and this one returns a string
+		# always, so the guard was dead here and the predicate was emitted
+		# and called for mqtt's two `[remaining]` runs where C++ emitted
+		# neither. The four then disagreed about check numbering, which is
+		# what `test_the_backends_name_the_same_members_in_the_same_order`
+		# reported -- a divergence found by the backends counting their own
+		# checks rather than by anything reading this code.
+		if placement.sized_by == "remaining":
 			return []
 
 		name = ident(self.prefix, struct.name,
