@@ -69,6 +69,18 @@ SUBTRACTION = re.compile(r"\blimit\s*-\s*(?!=)|\.len\(\)\s*-\s*(?!=)")
 #: is its own piece of work.
 #:
 #: Re-measure with this test rather than by hand: it prints the number.
+#:
+#: **A floor on a TOTAL is corpus-sensitive, which is this test's weakness
+#: and is worth stating.** It moved 131 -> 134 when `shared.situ` briefly
+#: gained a `branch`/`twig` pair for 26.679 -- reverted, so the number is
+#: 131 again -- with the emitter untouched throughout: a floor on
+#: a sum cannot tell "the emitter regressed" from "there is more to
+#: generate", so every corpus addition asks a reader to decide which it
+#: was. The honest form is a per-schema census compared against a recorded
+#: map, where a new schema is a new row rather than a bigger number. That
+#: is more machinery than this gate has earned while the count is small,
+#: and the reason it has not been built is recorded here rather than
+#: rediscovered the next time the number moves.
 RUST_PINNED = 131
 
 

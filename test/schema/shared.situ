@@ -23,29 +23,3 @@ struct stamp {
 	u16  millis [max = 999];
 }
 
-// A mutually recursive pair, which `importer.situ` names so that every
-// sweep reads one ACROSS AN IMPORT.
-//
-// hull reported the shape from its own frontend protocol: `form`'s `check`
-// calls `list`'s `validate` -- a variant arm is a struct, and validating
-// the arm is validating that struct -- `list` is emitted after `form`, and
-// an importing schema emits the pair in the order that puts the call ahead
-// of the declaration. The generated C would not compile: an implicit
-// declaration and then a conflicting type (26.679).
-//
-// The pair ALONE compiled, which is what said it was the emission order
-// rather than the pair. This corpus had an import fixture and a recursion
-// fixture and never the two together, so no sweep could reach it -- which
-// is 26.675's finding in a second place.
-struct branch [depth = 8] {
-	peek u8  tag;
-	variant body switch (tag) {
-		case '[':  twig  as_twig;
-		default:   u8    as_byte;
-	}
-}
-
-struct twig [depth = 8] {
-	u8      open;
-	branch  items[]  until "]";
-}

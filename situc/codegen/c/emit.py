@@ -4332,11 +4332,22 @@ class Emitter:
 			# the emission order rather than the pair: a schema that IMPORTS
 			# the cycle emits the pair in the other order.
 			#
-			# `static inline` to match the definitions, which is the form a
-			# recursive struct's verdict takes -- a non-recursive one is
-			# declared non-static here and defined in the `.c`.
+			# ONLY for an IMPORTED peer, and `static inline` to match.
+			# `_validate_decl` chooses the form on `_imported`: a struct
+			# that arrives by import is defined `static inline` in the
+			# header with no prototype, which is the case that needs one;
+			# a struct of this schema's own is DECLARED non-static in the
+			# header already and defined in the `.c`, so a prototype here
+			# is both wrong in form and redundant.
+			#
+			# Declaring it `static` for an own struct is what the gate
+			# caught: `situ_object_check` declared static and never
+			# defined, which `-Werror=unused-function` refuses. The form
+			# was read off `canonical.situ`, which is imported, and
+			# generalised to every cycle -- one schema's shape taken for
+			# the rule.
 			peer_struct = self.resolved.structs.get(peer)
-			if peer_struct is not None:
+			if peer_struct is not None and self._imported(peer):
 				tail = self._argument_tail(peer_struct)
 				lines.extend([
 					f"static inline situ_err_t "

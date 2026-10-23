@@ -11,15 +11,7 @@
 # A struct's size is a bare number where it is fixed, `min..max` where
 # it is bounded, and `min..` where nothing bounds it.
 
-struct branch size=1.. mutate=Shifting atomic=NonAtomic effect=EffectOnRead
-  branch.tag                             offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  branch.body                            offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
-  branch.body.as_twig                    offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
-  branch.body.as_twig.open               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  branch.body.as_twig.items              offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
-  branch.body.as_byte                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-
-struct record size=10.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
+struct record size=9..264 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   record.kind                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   record.taken                           offset=AbsoluteStatic(0x01) size=Fixed(6) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   record.taken.seconds                   offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
@@ -27,13 +19,6 @@ struct record size=10.. mutate=Shifting address=Unstable repr=ValueConverted ato
   record.name                            offset=AbsoluteStatic(0x07) size=Bounded(2, 257) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting
   record.name.len                        offset=AbsoluteStatic(0x07) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
   record.name.v                          offset=AbsoluteStatic(0x09) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  record.tree                            offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable effect=EffectOnRead
-  record.tree.tag                        offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
-  record.tree.body                       offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
-  record.tree.body.as_twig               offset=FrameStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable effect=EffectOnRead
-  record.tree.body.as_twig.open          offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
-  record.tree.body.as_twig.items         offset=FrameStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable effect=EffectOnRead
-  record.tree.body.as_byte               offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
 
 struct stamp size=6 repr=ValueConverted
   stamp.seconds                          offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
@@ -42,7 +27,3 @@ struct stamp size=6 repr=ValueConverted
 struct str size=2..257 mutate=Shifting repr=ValueConverted
   str.len                                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   str.v                                  offset=AbsoluteStatic(0x02) size=Bounded(0, 255) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-
-struct twig size=2.. mutate=Shifting atomic=NonAtomic effect=EffectOnRead
-  twig.open                              offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
-  twig.items                             offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead

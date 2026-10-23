@@ -712,3 +712,89 @@ def test_a_define_on_an_imported_const_is_refused(tmp_path: Path) -> None:
 	# and a textual substitution does not.
 	assert rewritten.text == own.read_text(encoding="ascii").replace(
 		"const CAP = 8;", "const CAP = 16;")
+
+
+#: A mutually recursive pair in a file somebody imports. hull's
+#: `sexpr/canonical.situ` is the real one -- a form whose `as_list` arm is a
+#: list, a list whose items are forms -- reduced to what the fault needs.
+CYCLE_LIB = """struct branch [depth = 8] {
+	peek u8  tag;
+	variant body switch (tag) {
+		case '[':  twig  as_twig;
+		default:   u8    as_byte;
+	}
+}
+
+struct twig [depth = 8] {
+	u8      open;
+	u8      count;
+	branch  items[count];
+}
+"""
+
+
+@pytest.mark.skipif(shutil.which("cc") is None and shutil.which("gcc") is None,
+                    reason="no C compiler")
+def test_an_imported_cycle_declares_its_verdict_before_calling_it(
+		tmp_path: Path) -> None:
+	"""hull's entry 18: the generated C did not compile (26.679).
+
+	`branch`'s `check` calls `twig`'s `validate` -- a variant arm is a
+	struct, and validating the arm is validating that struct -- and `twig`
+	is emitted after `branch`. An IMPORTED struct's verdict is defined
+	`static inline` in the header rather than declared here and defined in
+	the `.c`, so there was no prototype and the call was ahead of the
+	definition: an implicit declaration, and then a conflicting type.
+
+	    importer.h:563: error: implicit declaration of 'q_twig_validate'
+	    importer.h:1004: error: conflicting types for 'q_twig_validate'
+
+	COMPILED rather than matched, because what a consumer meets is the
+	compiler: a structural assertion about the prototype's presence could
+	pass with the linkage wrong, which is exactly how the first fix for this
+	was wrong -- it declared `static` for a struct of the schema's own,
+	whose definition is external in the `.c`, and `-Werror=unused-function`
+	refused the header.
+
+	Both directions are compiled here for that reason: the imported pair,
+	which needs the prototype, and a pair of the schema's own, which must
+	not get one.
+
+	NOT in `test/schema/`, which was tried first. A corpus fixture puts the
+	shape in front of the walker comparison and the four-way differential
+	too, and those disagree about a recursive variant with a depth cap --
+	112 elements against 425 -- which is a real finding and a different one
+	(26.680). The compile-order regression does not wait on it.
+	"""
+	compiler = shutil.which("gcc") or shutil.which("cc")
+	assert compiler is not None
+
+	write(tmp_path, "lib.situ", CYCLE_LIB)
+	write(tmp_path, "use.situ",
+	      'target buffer;\nendian big;\n\nimport "lib.situ";\n\n'
+	      "struct holder {\n\tbranch  value;\n}\n"
+	      # A cycle of this schema's OWN, beside the imported one, so the
+	      # two linkages are compiled in one header.
+	      "\nstruct node [depth = 8] {\n\tpeek u8  kind;\n"
+	      "\tvariant body switch (kind) {\n"
+	      "\t\tcase '{':  bag   as_bag;\n\t\tdefault:   u8    as_byte;\n"
+	      "\t}\n}\n"
+	      "\nstruct bag [depth = 8] {\n\tu8      open;\n\tu8      count;\n"
+	      "\tnode    items[count];\n}\n")
+
+	from situc.codegen.c import generate as generate_c
+
+	schema   = load(tmp_path / "use.situ")
+	resolved = resolve(schema, solve(schema))
+	built    = generate_c(schema, resolved, "use", prefix="q")
+	(tmp_path / "use.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "use.c").write_text(built.source, encoding="ascii")
+
+	runtime = Path(__file__).resolve().parents[2] / "runtime" / "c"
+	built_c = subprocess.run(
+		[compiler, "-std=c11", "-Os", "-Wall", "-Wextra", "-Werror",
+		 "-Wconversion", "-Wsign-conversion",
+		 f"-I{runtime}", f"-I{tmp_path}", "-c",
+		 str(tmp_path / "use.c"), "-o", str(tmp_path / "use.o")],
+		capture_output=True, text=True)
+	assert built_c.returncode == 0, built_c.stderr

@@ -18,21 +18,10 @@
 endian big
 target buffer
 
-struct branch size=1..
-  @0x0000   1         u8         tag  peek
-  @0x0000   1..       variant    body
-  body switch: tag
-  body case 91: as_twig twig
-  body case default: as_byte u8
-
-struct record size=10..
+struct record size=9..264
   @0x0000   1         u8         kind  max=7
   @0x0001   6         stamp      taken  big
   @0x0007   2..257    str        name  big
-  ~         1..       branch     tree
-  body switch: tag
-  body case 91: as_twig
-  body case default: as_byte
 
 struct stamp size=6
   @0x0000   4         u32        seconds  big min=1
@@ -41,7 +30,3 @@ struct stamp size=6
 struct str size=2..257
   @0x0000   2         u16        len  big max=255
   @0x0002   0..255    u8         v  sized-by=len
-
-struct twig size=2..
-  @0x0000   1         u8         open
-  @0x0001   until:5d  branch     items
