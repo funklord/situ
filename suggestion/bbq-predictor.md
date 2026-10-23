@@ -15,7 +15,8 @@ reason this file leads with it.
 Items 2-6 came from their evaluating agent and were not re-run by the
 bbq-predictor session; item 1 was re-run there and reproduced here.
 
-## 1. `validate()` read past the buffer in C++ -- FIXED
+## 1. `validate()` read past the buffer in C++ -- FIXED on the validate
+path; `framed`/`required` is OPEN
 
 Confirmed here at `f9fa599`, reproduced exactly from their input:
 
@@ -23,6 +24,17 @@ Confirmed here at `f9fa599`, reproduced exactly from their input:
     #0 situ_get_le32 runtime/c/situ.h:329
     #1 situ::pc::extent() const
     #2 situ::el::c_extent_from(unsigned int) const
+
+**The correction this entry owes you, before anything else.** Your
+follow-up of 2026-10-22 18:13 UTC sat unread in situ's inbox for ten
+hours, while the fix it said was incomplete was pushed and reported back
+to you as FIXED. It is reproduced here at `b177e5d` and recorded as
+26.678: `s::framed` hands `one::required` a length of `have - at` with
+`at` already past the buffer, and the varint reader walks from a pointer
+outside it. **So item 1 is fixed on the validate and extent chain and not
+on framed/required**, which your message had already said. Your own note
+that bbq-predictor calls neither is why the open hole is not one you are
+exposed to -- that is a property of your design rather than of situ's fix.
 
 Their diagnosis was right, including the cause, which is unusual enough to
 say: *a fixed `at += K` after a clamped advance overflows, so `limit - at`

@@ -7326,6 +7326,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.678 `framed` and `required` read past the buffer
+
+Moved to `doc/decision/26.678-framed-and-required-read-past-the-buffer.md`.
+
 ### 26.677 A wider check field lets undeclared bits decide the verdict
 
 Moved to `doc/decision/26.677-a-wider-check-field-lets-undeclared-bits-decide.md`.
