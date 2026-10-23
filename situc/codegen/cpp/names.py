@@ -75,7 +75,12 @@ SUFFIXES = frozenset({
 	# `extent_from` joins `span_from` and `terminated_from`: the same "measure
 	# at an offset the caller already has" shape, which is what keeps an offset
 	# chain linear instead of 2^k (26.555).
-	"extent", "extent_from", "finalize", "find", "first", "from", "gate",
+	"extent", "extent_from", "finalize", "find", "first",
+	# `fits` is the verdict a run's span cannot carry: whether every element
+	# the count declares is inside the frame. A span is summed into the
+	# enclosing extent, so a value meaning "does not fit" wraps when added
+	# (26.676).
+	"fits", "from", "gate",
 	"host", "index",
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",
 	"next", "of_host", "offset", "raw_len", "read", "self_span", "span",

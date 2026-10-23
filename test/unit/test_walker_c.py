@@ -2781,6 +2781,24 @@ def test_they_agree_about_the_corpus_being_well_formed(
 IDENTITY_APART = frozenset({
 	("pickle.situ", "pickle_wstring"),
 	("png.situ", "chunk"),
+	# A third instance of the same shape, and the list is now long enough to
+	# be a finding rather than a footnote.
+	#
+	# All three are a run whose length a `u32` declares: `png.chunk`'s
+	# `u8 data[length]`, `pickle_wstring`'s `u16 data[length]` and
+	# `oob_inner`'s `u8 payload[len]`. A hostile length there exceeds the
+	# frame by a margin, C's placement guard refuses first with no check
+	# identity, and the Python walk reaches `fits_frame`. BOTH REFUSE and
+	# both say BOUNDS; only the name of the check differs, which is the
+	# narrow divergence this set exists for and which the docstring below
+	# describes in those words.
+	#
+	# `oob_inner` is new to the corpus rather than newly divergent: it
+	# arrived with the shape 26.675 needed, and is the first thing in
+	# `edges.situ` to reach this. Three of one shape says the guard widths
+	# should be reconciled rather than listed -- raised rather than done,
+	# because which walk is right is a question about both of them.
+	("edges.situ", "oob_inner"),
 })
 
 

@@ -1707,6 +1707,14 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 	if (placement.size_code == NONE or placement.type_struct == NONE
 			or placement.element_bits != NONE):
 		return True
+	# A bare `x[remaining]` states BYTES rather than a count of elements, so
+	# walking `count` of them is walking a byte figure as though it were a
+	# population -- mqtt's `mqtt_string filters[remaining]` then refused a
+	# message every backend accepts. The backends ask the same question as
+	# `_count_expression is None`; this is the walker's spelling of it
+	# (26.676).
+	if _sizes_in_bytes(view.image, placement.size_code):
+		return True
 
 	count = _evaluate(view, placement.size_code,
 	                  lambda: offset_bits(view, index) // BITS_PER_BYTE)

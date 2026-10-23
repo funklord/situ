@@ -3668,6 +3668,9 @@ situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
  * the nesting answer instead -- which is why this cannot simply ask whether
  * the walk placed `count` elements.
  */
+/* Defined with the evaluator, whose opcode macros it reads. */
+static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at);
+
 static situ_walk_err counted_run_fits(const situ_walk_image *image,
                                       const uint8_t *message, uint32_t len,
                                       uint32_t shape, uint32_t index,
@@ -3687,6 +3690,17 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 	if (held.size_code == SITU_WALK_NONE
 	    || held.type_struct == SITU_WALK_NONE
 	    || held.element_bits != SITU_WALK_NONE) {
+		return SITU_WALK_OK;
+	}
+	/* A bare `x[remaining]` states BYTES rather than a count of elements,
+	 * so walking `count` of them walks a byte figure as though it were a
+	 * population. The SPAN walk survives that because the frame bounds it
+	 * and an over-large count merely stops early; this loop is bounded by
+	 * the count, so the same number becomes a false refusal -- mqtt's
+	 * `mqtt_string filters[remaining]` refused a message every backend
+	 * accepts. Same figure, opposite consequence, because the two loops
+	 * have different bounds (26.676). */
+	if (size_code_is_bytes(image, held.size_code)) {
 		return SITU_WALK_OK;
 	}
 
@@ -4708,6 +4722,20 @@ situ_walk_err situ_walk_gated(const situ_walk_image *image, uint32_t gate,
 #define OP_ARG_FIELD 0x07u
 #define OP_FIELD_IN 0x08u
 #define OP_TAG 0x09u
+
+/* Whether a run's size program states BYTES rather than a count of
+ * elements. The bare `x[remaining]` is the only form that does, and it
+ * compiles to exactly `REMAINING, END`: the test is that the program IS
+ * remaining, not that it mentions it, because `remaining / 2` is an
+ * element count that merely opens with the same opcode. `walk.py`'s
+ * `_sizes_in_bytes` is the same two comparisons and says why at length. */
+static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at)
+{
+	return code_at != SITU_WALK_NONE
+	       && (uint64_t)code_at + 1u < image->code_len
+	       && image->code[code_at] == OP_REMAINING
+	       && image->code[code_at + 1u] == OP_END;
+}
 
 #define STACK_DEPTH 32u
 
