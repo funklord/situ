@@ -112,6 +112,7 @@ from situc.traverse import (
 	bit_addressed_tag, covered_run, invalidating_members,
 	Member, arm_members, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, length_is_transform_output,
+	is_varint_run,
 	local_name, own_entries, own_members, unmeasurable_inside,
 )
 
@@ -152,6 +153,17 @@ class Probe(Enum):
 	MARKER    = "marker"
 	#: `name len=<n> value=<v>` -- a varint, both numbers off the wire.
 	VARINT    = "varint"
+	#: `name count=<n> span=<s> [0]=<v>` -- a RUN of varints, whose three
+	#: quantities are not the single one's two: there is no stride, so the
+	#: span is the sum of the elements' own lengths and an element is
+	#: reached by walking (26.683).
+	#:
+	#: A kind of its own rather than a wider `VARINT`, because the run has
+	#: no `_len` and no `_value` and the single one has no count. Asking
+	#: the first shape of the second emitted a driver naming
+	#: `situ_varint_run_v_len`, which nothing defines -- the differ being
+	#: the fifth consumer of this classification and the one nobody wired.
+	VARINT_RUN = "varint_run"
 	#: `name ok=<0|1> len=<n>` -- a variant's byte-run arm, reachable only
 	#: when the discriminant selects it.
 	ARM_BYTES = "arm_bytes"
@@ -566,7 +578,8 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:
-			found.append(Ask(Probe.VARINT, local))
+			found.append(Ask(Probe.VARINT_RUN if is_varint_run(placement)
+			                 else Probe.VARINT, local))
 		elif kind is Member.LOCATED:
 			# Byte runs only, which is every located member this corpus
 			# has: `bmp.bitmap_file.pixels` sized by a field and
@@ -1481,6 +1494,17 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		return [f'\t\t\tprintf("{ask.local} len=%u value=%llu\\n",'
 		        f' {call.format("len")}(view),'
 		        f' (unsigned long long){call.format("value")}(view));']
+	if ask.probe is Probe.VARINT_RUN:
+		return ["\t\t\t{",
+		        f"\t\t\t\tconst uint32_t n = {call.format('count')}(view);",
+		        "\t\t\t\tuint64_t first = 0;",
+		        "",
+		        f"\t\t\t\t(void){call.format('at')}(view, 0u, &first);",
+		        f'\t\t\t\tprintf("{ask.local} count=%u span=%u'
+		        ' [0]=%llu\\n",',
+		        f"\t\t\t\t\tn, {call.format('span')}(view),",
+		        "\t\t\t\t\t(unsigned long long)(n ? first : 0));",
+		        "\t\t\t}"]
 	if ask.probe is Probe.ARM_BYTES:
 		return ["\t\t\t{",
 		        "\t\t\t\tconst uint8_t *held = NULL;",
@@ -1898,6 +1922,18 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
 		        f" view.{call}_len(),"
 		        f" static_cast<unsigned long long>(view.{call}_value()));"]
+	if ask.probe is Probe.VARINT_RUN:
+		return ["\t\t\t{",
+		        f"\t\t\t\tconst std::uint32_t n = view.{call}_count();",
+		        "\t\t\t\tstd::uint64_t first = 0;",
+		        "",
+		        f"\t\t\t\t(void)view.{call}_at(0u, first);",
+		        f'\t\t\t\tstd::printf("{ask.local} count=%u span=%u'
+		        ' [0]=%llu\\n",',
+		        f"\t\t\t\t\tn, view.{call}_span(),",
+		        "\t\t\t\t\tstatic_cast<unsigned long long>"
+		        "(n ? first : 0));",
+		        "\t\t\t}"]
 	if ask.probe is Probe.ARM_BYTES:
 		return ["\t\t\t{",
 		        "\t\t\t\t::situ::rt::bytes held;",
@@ -2188,6 +2224,19 @@ def _rust_ask(ask: Ask) -> list[str]:
 		return [f'\t\t\t\tprintln!("{ask.local} len={{}} value={{}}",'
 		        f" view.{rust_ident(ask.local + '_len')}(),"
 		        f" view.{rust_ident(ask.local + '_value')}());"]
+	if ask.probe is Probe.VARINT_RUN:
+		return ["\t\t\t\t{",
+		        f"\t\t\t\t\tlet n = view"
+		        f".{rust_ident(ask.local + '_count')}();",
+		        f'\t\t\t\t\tprintln!("{ask.local} count={{}} span={{}}'
+		        ' [0]={}", n,',
+		        f"\t\t\t\t\t\tview.{rust_ident(ask.local + '_span')}(),",
+		        "\t\t\t\t\t\tif n == 0 { 0u64 } else {",
+		        f"\t\t\t\t\t\t\tview.{rust_ident(ask.local + '_at')}(0)",
+		        "\t\t\t\t\t\t\t\t.map(|held| held as u64)"
+		        ".unwrap_or(0)",
+		        "\t\t\t\t\t\t});",
+		        "\t\t\t\t}"]
 	if ask.probe is Probe.ARM_BYTES:
 		return [f"\t\t\t\tmatch view.{call}() {{",
 		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
@@ -2415,6 +2464,14 @@ def _python_ask(ask: Ask) -> list[str]:
 	if ask.probe is Probe.VARINT:
 		return [f'print("{ask.local} len=%d value=%d"'
 		        f" % (view.{call}_len, view.{call}_value))"]
+	if ask.probe is Probe.VARINT_RUN:
+		return [f"n = view.{call}_count",
+		        "try:",
+		        f"\tfirst = view.{call}_at(0) if n else 0",
+		        "except situ_runtime.SituError:",
+		        "\tfirst = 0",
+		        f'print("{ask.local} count=%d span=%d [0]=%d"'
+		        f" % (n, view.{call}_span, first))"]
 	if ask.probe is Probe.ARM_BYTES:
 		return ["try:",
 		        f"\theld = view.{call}",

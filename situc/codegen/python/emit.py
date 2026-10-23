@@ -84,6 +84,7 @@ from situc.traverse import (
 	is_own_member,
 	is_recursive,
 	is_run,
+	is_varint_run,
 	length_is_transform_output,
 	local_name,
 	matched_values,
@@ -2615,6 +2616,110 @@ class Emitter:
 			"\t\treturn value",
 		]
 
+	def _varint_run(self, struct: ResolvedStruct, placement: Placement,
+			declared: "ast.VarintDecl", name: str, start: str,
+			width: int, read: str, decoded: str,
+			encoded: str) -> list[str]:
+		"""`uvar v[n]` -- a run of varints, walked (26.683).
+
+		The C emitter's `_varint_run` carries the reasoning; this is the
+		same four accessors. `_span` places every member after the run,
+		`_span_min` is what `required` asks (a truncated element makes the
+		span SHORTER, and a short span reads as a complete message), and
+		`_at` walks because an element's offset is the sum of the lengths
+		before it.
+		"""
+		total = self._count_expression(struct, placement)
+		if total is None:
+			return ["", f"\t# {placement.path}: this backend cannot resolve"
+			        " how many elements it holds."]
+
+		refuse = ([
+			"",
+			f"\t\t\t# `{placement.varint}` is `minimal`: a padded element"
+			" is a",
+			"\t\t\t# second encoding of one value, which this schema does"
+			" not",
+			"\t\t\t# admit.",
+			f"\t\t\tif used != {encoded}:",
+			"\t\t\t\traise ConstraintError(",
+			f'\t\t\t\t\tf"{placement.path}[{{seen}}] is encoded in'
+			' {used} bytes"',
+			'\t\t\t\t\tf" and needs {' + encoded + '}; `minimal` admits'
+			' one")',
+		] if declared.minimal else [])
+
+		walk = [
+			"\t\tself._check()",
+			f"\t\tstart = {start}",
+			f"\t\tn     = self.{name}_count",
+			"\t\tdata  = self._span",
+			"\t\tat    = start",
+			"\t\tseen  = 0",
+			"",
+			"\t\twhile seen < n:",
+			"\t\t\tif at >= len(data):",
+			"\t\t\t\tbreak",
+			f"\t\t\tread = {read}",
+			"\t\t\tif read is None:",
+			"\t\t\t\tbreak",
+			"\t\t\traw, used = read",
+		]
+		advance = [
+			"\t\t\tat   += used",
+			"\t\t\tseen += 1",
+		]
+		return [
+			"",
+			"\t@property",
+			f"\tdef {name}_count(self) -> int:",
+			f'\t\t"""How many `{placement.varint}`s {placement.path} holds:'
+			' the',
+			'\t\tcount the message declares, bounded (14.2b)."""',
+			"\t\tself._check()",
+			f"\t\treturn {total}",
+			"",
+			"\t@property",
+			f"\tdef {name}_span(self) -> int:",
+			f'\t\t"""How far {placement.path} reaches, in bytes: the sum of',
+			f"\t\teach element's own length, 1 to {width} apiece. This is",
+			'\t\twhat places every member after the run."""',
+			*walk,
+			*advance,
+			"\t\treturn at - start",
+			"",
+			"\t@property",
+			f"\tdef {name}_span_min(self) -> int:",
+			f'\t\t"""How far {placement.path} reaches AT LEAST: the bytes of',
+			"\t\tthe elements that are whole, plus one for each that is not",
+			"\t\tthere yet. `required` asks this one, because a truncated",
+			"\t\telement makes the span above SHORTER and a short span reads",
+			'\t\tas a complete message."""',
+			*walk,
+			*advance,
+			"\t\treturn (at - start) + (n - seen)",
+			"",
+			f"\tdef {name}_at(self, index: int) -> int:",
+			f'\t\t"""The `index`th `{placement.varint}` of'
+			f' {placement.path},',
+			"\t\treached by walking: this run is Sequential and the walk is",
+			"\t\tthe cost the capability names.",
+			"",
+			"\t\tRaises BoundsError where `index` is past the count or the",
+			"\t\tframe ends mid-element"
+			+ (", and ConstraintError where an\n\t\telement is padded and"
+			   " `minimal` is declared."
+			   if declared.minimal else ".")
+			+ '"""',
+			*walk,
+			*refuse,
+			"\t\t\tif seen == index:",
+			f"\t\t\t\treturn {decoded}",
+			*advance,
+			f'\t\traise BoundsError(f"{placement.path}[{{index}}] is past'
+			' its {n} elements")',
+		]
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -2644,6 +2749,14 @@ class Emitter:
 		        if big else f"varint_get(data, at, {width})")
 		encoded = (f"varint_be_len(raw, {width}, {declared.terminal_bits})"
 		           if big else "varint_len(raw)")
+
+		# A RUN of varints, whose `access` `project.md` documents as
+		# Sequential. A run is sized by the data, so the shared classifier
+		# answered VARIABLE and this backend emitted a byte region for it:
+		# the run's bytes, with no way to read an element (26.683).
+		if is_varint_run(placement):
+			return self._varint_run(struct, placement, declared, name,
+			                        start, width, read, decoded, encoded)
 
 		minimal = ([
 			"",
@@ -5887,6 +6000,22 @@ class Emitter:
 		# Computed first and prepended to whatever the branches below
 		# decide: a literal count reaches none of them (26.676).
 		run_fits = self._run_fits_call(struct, placement)
+		# A `[remaining] max N` run's own length against its cap. The
+		# struct-level maximum bounds the run only where nothing variable
+		# precedes it, so `u8 n; u8 d[n]; u8 t[remaining] max 2` accepted a
+		# six-byte frame with `t` four bytes long (26.681). 0059 is explicit
+		# that a cap refuses rather than truncates.
+		if placement.remaining_cap is not None \
+				and placement.sized_by == "remaining":
+			at = self._offset_expression(struct, placement)
+			if at is not None:
+				run_fits = run_fits + [
+					f"\t\t# {placement.path}: its declared cap (26.681).",
+					f"\t\tif max(self._len - ({at}), 0)"
+					f" > {placement.remaining_cap}:",
+					f'\t\t\traise BoundsError("{placement.path}: longer'
+					f' than its declared cap of {placement.remaining_cap}")',
+				]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -6275,7 +6404,16 @@ class Emitter:
 		if placement.varint is not None:
 			if not self._reads_varint(placement):
 				return None
-			return f"self.{py_name(local_name(struct, placement))}_len"
+			# A RUN's length is its span, and `required` asks for the
+			# minimum: a run whose first element is truncated has a span
+			# of zero, which reads as a complete message (26.683).
+			if not is_varint_run(placement):
+				which = "_len"
+			elif leaf_bounded:
+				which = "_span"
+			else:
+				which = "_span_min"
+			return f"self.{py_name(local_name(struct, placement))}{which}"
 
 		# An opaque region's size expression is already a byte count: there are
 		# no elements to multiply by, and asking for an element width finds no

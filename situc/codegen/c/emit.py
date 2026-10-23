@@ -85,6 +85,7 @@ from situc.traverse import (
 	is_own_member,
 	is_recursive,
 	is_run,
+	is_varint_run,
 	length_is_transform_output,
 	local_name,
 	matched_values,
@@ -3451,6 +3452,158 @@ class Emitter:
 			        arm.source or str(arm.value))
 		return f"{held} != {arm.value}u", arm.source or str(arm.value)
 
+	def _varint_run(self, struct: ResolvedStruct, placement: Placement,
+			declared: "ast.VarintDecl", held: str, base: str, width: int,
+			read: str, taken: str, ctype: str,
+			decoded: str, encoded: str) -> list[str]:
+		"""`uvar v[n]` -- a run of varints, walked (26.683).
+
+		Four accessors, which is what a Sequential run answers: how many
+		there are, how far the run reaches, how far it reaches AT LEAST,
+		and the value at an index. The span is what places every member
+		after the run, and is the one the single-varint path got wrong by
+		measuring one element.
+
+		`_at` walks from the first element because an element's offset is
+		the sum of the lengths before it. `project.md` states that as the
+		capability -- "`access` of an array of varints is `Sequential`,
+		never `Random`" -- so the cost is the documented one rather than a
+		shortcut nobody declared.
+
+		A run that stops early stops: a truncated or overlong element ends
+		the walk, which makes the span the bytes actually there and lets
+		`validate` report the frame as short rather than the accessor
+		inventing a length.
+
+		`_span_min` exists because that is the wrong answer for
+		`required`, and dangerously so. Measured on `{ 3, 0x81 }` -- a
+		six-byte message of which two had arrived -- the walk broke on the
+		truncated first element, the span came back 0, and `required`
+		answered SITU_OK: a caller would have stopped reading and parsed a
+		message missing four bytes. The minimum counts ONE byte for each
+		element not yet seen, a varint being at least that, which is a
+		true lower bound and therefore never reports a complete message
+		short. It saturates for the same reason every other arithmetic in
+		`required` does -- a declared count of four billion is a need
+		nobody can satisfy rather than a sum that wraps (26.556).
+
+		`decoded` rather than the raw bytes, because a `svar` run holds
+		zigzag-encoded elements and the single-element path has always
+		applied the transform. The first draft of this returned the raw
+		value: -1 would have read as 1, 1 as -2, and nothing in the frame
+		would have looked wrong.
+		"""
+		local = c_name(self._local(struct, placement))
+		# `minimal` is a property of EVERY element, and the single-varint
+		# path checks it in the accessor that decodes. `_at` is that
+		# accessor here, so the refusal belongs in it; `_span` goes on
+		# measuring the bytes that are actually there, a padded element
+		# occupying its padding whether the schema admits it or not.
+		refuse = ([
+			"",
+			f"\t\t/* `{placement.varint}` is `minimal`: a padded element is"
+			" a second",
+			"\t\t * encoding of one value, which this schema does not"
+			" admit. */",
+			f"\t\tif (used != {encoded}) {{",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t}",
+		] if declared.minimal else [])
+		count = ident(self.prefix, struct.name, local, "count")
+		span  = ident(self.prefix, struct.name, local, "span")
+		least = ident(self.prefix, struct.name, local, "span_min")
+		at_fn = ident(self.prefix, struct.name, local, "at")
+		total = self._count_expression(struct, placement, held)
+		view  = held.split(".")[0]
+
+		walk = [
+			f"\tuint32_t at = {base};",
+			f"\tuint32_t n = {count}({view});",
+			"\tuint32_t seen = 0u;",
+			"",
+			"\twhile (seen < n) {",
+			"\t\tuint64_t raw = 0;",
+			"\t\tuint32_t used;",
+			"",
+			f"\t\tif (at >= {held}.limit) {{",
+			"\t\t\tbreak;",
+			"\t\t}",
+			f"\t\tused = {read};",
+			"\t\tif (used == 0u) {",
+			"\t\t\tbreak;",
+			"\t\t}",
+		]
+		return [
+			f"/* How many `{placement.varint}`s `{placement.name}` holds:"
+			" the count",
+			" * the message declares, bounded (14.2b). */",
+			f"static inline uint32_t {count}({taken})",
+			"{",
+			f"\treturn (uint32_t){total};",
+			"}",
+			"",
+			f"/* How far `{placement.name}` reaches, in bytes: the sum of"
+			" each",
+			f" * element's own length, 1 to {width} apiece. This is what"
+			" places",
+			" * every member after the run. */",
+			f"static inline uint32_t {span}({taken})",
+			"{",
+			*walk,
+			"\t\tat   += used;",
+			"\t\tseen += 1u;",
+			"\t}",
+			f"\treturn at - ({base});",
+			"}",
+			"",
+			f"/* How far `{placement.name}` reaches AT LEAST: the bytes of"
+			" the",
+			" * elements that are whole, plus one for each that is not"
+			" there",
+			" * yet. `required` asks this one, because a truncated element"
+			" makes",
+			" * the span above SHORTER and a short span reads as a"
+			" complete",
+			" * message. */",
+			f"static inline uint32_t {least}({taken})",
+			"{",
+			*walk,
+			"\t\tat   += used;",
+			"\t\tseen += 1u;",
+			"\t}",
+			f"\treturn situ_need_u32(at - ({base}), n - seen);",
+			"}",
+			"",
+			f"/* The `index`th `{placement.varint}` of `{placement.name}`,"
+			" reached by",
+			" * walking: this run is Sequential and the walk is the cost"
+			" the",
+			" * capability names.",
+			" *",
+			" * SITU_OK            decoded; *out is the value",
+			" * SITU_ERR_BOUNDS    `index` is past the count, or the frame"
+			" ends",
+			" *                    mid-element",
+			" * SITU_ERR_CONSTRAINT  the element is padded and"
+			" `minimal` is",
+			" *                    declared */",
+			f"static inline situ_err_t {at_fn}({taken}, uint32_t index,"
+			f" {ctype} *out)",
+			"{",
+			*walk,
+			*refuse,
+			"\t\tif (seen == index) {",
+			f"\t\t\t*out = {decoded};",
+			"\t\t\treturn SITU_OK;",
+			"\t\t}",
+			"\t\tat   += used;",
+			"\t\tseen += 1u;",
+			"\t}",
+			"\treturn SITU_ERR_BOUNDS;",
+			"}",
+		]
+
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -3510,6 +3663,23 @@ class Emitter:
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
 		           "situ_varint_len(raw)")
+
+		# A RUN of varints, which `project.md` section 828 documents as a
+		# construct whose `access` is Sequential: the layout and the
+		# capability map have always carried it -- `uvar v[n]` is
+		# `Bounded(0, count * max_bytes)` with `access=Sequential` -- and no
+		# backend emitted a run for it. The dispatch above returns on
+		# `varint is not None` before any array branch, so `v[n]` got the
+		# SINGLE varint's accessors and `required` measured one element:
+		# bbq-predictor read 3 bytes where 5 were there (26.683).
+		#
+		# Sequential by construction and not by choice: an element's offset
+		# is the sum of the lengths before it, so reaching index `i` is a
+		# walk of `i` decodes. That is what the documented axis says.
+		if is_varint_run(placement):
+			return self._varint_run(struct, placement, declared, held,
+			                        base, width, read, taken, ctype,
+			                        decoded, encoded)
 
 		minimal = ([
 			"",
@@ -7140,6 +7310,31 @@ class Emitter:
 		# the invariant six descriptions exist to keep (26.676).
 		run_fits = self._run_fits_call(struct, placement)
 
+		# A `[remaining] max N` run's own length against its cap, which the
+		# struct-level `view.limit > SITU_X_SIZE_MAX` guard bounds only when
+		# nothing variable precedes the run. `u8 n; u8 d[n]; u8 t[remaining]
+		# max 2` has a maximum of 258, so a six-byte frame is accepted and
+		# `t` is four bytes against a cap of two -- reported by
+		# bbq-predictor and recorded as 26.681.
+		#
+		# 0059 is explicit that a cap REFUSES a longer frame rather than
+		# truncating: "such a cap restates a bound the enclosing format
+		# guarantees, so a message exceeding it is malformed". The
+		# struct-level guard was read as discharging that, and it does for a
+		# run at a static offset, where the two numbers coincide.
+		if placement.remaining_cap is not None \
+				and placement.sized_by == "remaining":
+			at = self._base_expression(struct, placement)
+			run_fits = run_fits + [
+				f"\t/* {placement.path}: its declared cap. The struct's own",
+				"\t * maximum bounds this run only where nothing variable",
+				"\t * precedes it (26.681, decision 0059). */",
+				f"\tif (situ_remaining_u32(view.limit, {at})"
+				f" > {placement.remaining_cap}u) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			]
+
 		# The other half of the same sentence, one step further on. A member
 		# *placed* after a variable-length region has an offset that is a sum
 		# of lengths the message chose, so "does the frame contain it" is a
@@ -7522,7 +7717,21 @@ class Emitter:
 		# everything after a varint was placed as though it occupied nothing.
 		if placement.varint is not None:
 			local = c_name(self._local(struct, placement))
-			return f"{ident(self.prefix, struct.name, local, 'len')}({held})"
+			# A RUN's length is its span. This returned the single
+			# element's `_len`, so `required` reported the header plus the
+			# first varint -- 3 bytes where 5 were there -- and every
+			# member after the run was placed on top of it (26.683).
+			if not is_varint_run(placement):
+				which = "len"
+			elif leaf_bounded:
+				which = "span"
+			else:
+				# `required`'s caller. A run whose first element is
+				# truncated has a span of zero, which reads as a
+				# complete message; the minimum counts a byte for each
+				# element not yet there.
+				which = "span_min"
+			return f"{ident(self.prefix, struct.name, local, which)}({held})"
 
 		# An `indexed` region's count counts entries, and an entry is an
 		# `offset_type` wide (`traverse.index_entry_bytes`).
@@ -9872,11 +10081,24 @@ class Emitter:
 		struct's member different is that something else checks it.
 		"""
 		rest = placement.path[len(struct.name) + 1:]
-		head, sep, _ = rest.partition(".")
-		if not sep:
+		parts = rest.split(".")
+		if len(parts) < 2:
 			return False
-		owner = self.resolved.find(f"{struct.name}.{head}")
-		return owner is not None and self._delegates(struct, owner.placement)
+		# EVERY prefix, not just the first. A member inside a variant ARM is
+		# two deep -- `s.x.c.count` -- and the first component is the
+		# variant, which nothing delegates to, so this answered False and
+		# the check was emitted here as well: `situ_s_x_c_count_get`, a name
+		# nothing defines, where the accessor is `situ_col_count_get` on the
+		# arm's own struct. The arm IS delegated to, one component further
+		# in, and `situ_col_check` already makes that very check -- so the
+		# duplicate was redundant as well as uncompilable (26.682).
+		for depth in range(1, len(parts)):
+			owner = self.resolved.find(
+				f"{struct.name}.{'.'.join(parts[:depth])}")
+			if owner is not None \
+					and self._delegates(struct, owner.placement):
+				return True
+		return False
 
 	def _member_checks(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:

@@ -186,6 +186,24 @@ def readable_names(struct: ResolvedStruct) -> list[Placement]:
 	                 and entry.placement.scalar is not None))]
 
 
+def is_varint_run(placement: Placement) -> bool:
+	"""Whether this member is a RUN of varints rather than one of them.
+
+	One question, asked once, because this is precisely the spelling the
+	backends have twice parted on: `uvar v[n]` is sized by the data,
+	`uvar v[3]` carries a literal count, and `uvar v[(n + 1) * 2]` carries
+	arithmetic. All three are runs, and a bare `uvar v` is not.
+
+	A delimited run is not this: it ends where the bytes say rather than
+	after a count, and `classify` answers DELIMITED for it above.
+	"""
+	if placement.varint is None:
+		return False
+	return (placement.array_count is not None
+	        or placement.sized_by is not None
+	        or placement.size_expr is not None)
+
+
 def data_sized(placement: Placement) -> bool:
 	"""Whether this member's extent comes from an expression over the data.
 
@@ -330,6 +348,18 @@ def classify(struct: ResolvedStruct, placement: Placement,
 	#
 	# The same conflation `gen-fuzz` had, found the same way: a member the
 	# schema sizes is not a member the message sizes.
+	# A RUN OF VARINTS is a varint construct and not a byte region. It is
+	# sized by the data, so `data_sized` claimed it and three backends
+	# emitted `bytes v()` -- the run's bytes with no way to read an element
+	# -- while C, which does not ask this function, dispatched on `varint`
+	# and emitted the SINGLE varint's accessors. Neither placed the member
+	# after the run correctly: bbq-predictor read 3 bytes where 5 were
+	# there. `project.md` has documented the construct all along -- "`access`
+	# of an array of varints is `Sequential`, never `Random`" -- and no
+	# backend implemented it (26.683).
+	if is_varint_run(placement):
+		return Member.VARINT
+
 	if data_sized(placement):
 		return Member.VARIABLE
 

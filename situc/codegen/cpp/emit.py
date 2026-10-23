@@ -88,6 +88,7 @@ from situc.traverse import (
 	is_own_member,
 	is_recursive,
 	is_run,
+	is_varint_run,
 	length_is_transform_output,
 	local_name,
 	matched_values,
@@ -3198,6 +3199,22 @@ class Emitter:
 		# Computed first and prepended to whatever the branches below
 		# decide: a literal count reaches none of them (26.676).
 		run_fits = self._run_fits_call(struct, placement)
+		# A `[remaining] max N` run's own length against its cap. The
+		# struct-level maximum bounds the run only where nothing variable
+		# precedes it, so `u8 n; u8 d[n]; u8 t[remaining] max 2` accepted a
+		# six-byte frame with `t` four bytes long (26.681). 0059 is explicit
+		# that a cap refuses rather than truncates.
+		if placement.remaining_cap is not None \
+				and placement.sized_by == "remaining":
+			at = self._offset_expression(struct, placement)
+			if at is not None:
+				run_fits = run_fits + [
+					f"\t\t/* {placement.path}: its declared cap (26.681). */",
+					f"\t\tif (situ_remaining_u32(raw_.limit, {at})"
+					f" > {placement.remaining_cap}u) {{",
+					"\t\t\treturn ::situ::rt::err::bounds;",
+					"\t\t}",
+				]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -3565,7 +3582,21 @@ class Emitter:
 		if placement.varint is not None:
 			if not self._reads_varint(placement):
 				return None
-			return f"{bare_name(local_name(struct, placement))}_len()"
+			# A RUN's length is its span. This returned the single
+			# element's `_len`, so `required` reported the header plus the
+			# first varint and every member after the run was placed on
+			# top of it (26.683).
+			if not is_varint_run(placement):
+				which = "len"
+			elif leaf_bounded:
+				which = "span"
+			else:
+				# `required`'s caller. A run whose first element is
+				# truncated has a span of zero, which reads as a
+				# complete message; the minimum counts a byte for each
+				# element not yet there.
+				which = "span_min"
+			return f"{bare_name(local_name(struct, placement))}_{which}()"
 
 		# An opaque region's size expression is already a byte count: there are
 		# no elements to multiply by, and asking for an element width finds no
@@ -6157,6 +6188,114 @@ class Emitter:
 		return any(decl.name == placement.varint
 		           for decl in self.schema.varints())
 
+	def _varint_run(self, struct: ResolvedStruct, placement: Placement,
+			declared: "ast.VarintDecl", name: str, start: str,
+			width: int, read: str, ctype: str, decoded: str,
+			encoded: str) -> list[str]:
+		"""`uvar v[n]` -- a run of varints, walked (26.683).
+
+		The C emitter's `_varint_run` carries the reasoning; this is the
+		same four accessors as member functions. `_span` places every
+		member after the run, `_span_min` is what `required` asks (a
+		truncated element makes the span SHORTER, and a short span reads
+		as a complete message), and `_at` walks because an element's
+		offset is the sum of the lengths before it.
+		"""
+		total = self._count_expression(struct, placement)
+		if total is None:
+			return ["", f"\t/* {placement.path}: this backend cannot resolve"
+			        " how many elements it holds. */"]
+
+		refuse = ([
+			"",
+			f"\t\t\t/* `{placement.varint}` is `minimal`: a padded element"
+			" is a",
+			"\t\t\t * second encoding of one value, which this schema does"
+			" not",
+			"\t\t\t * admit. */",
+			f"\t\t\tif (used != {encoded}) {{",
+			"\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t}",
+		] if declared.minimal else [])
+
+		walk = [
+			f"\t\tstd::uint32_t at = {start};",
+			f"\t\tconst std::uint32_t n = {name}_count();",
+			"\t\tstd::uint32_t seen = 0u;",
+			"",
+			"\t\twhile (seen < n) {",
+			"\t\t\tstd::uint64_t raw = 0;",
+			"",
+			"\t\t\tif (at >= raw_.limit) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			f"\t\t\tconst std::uint32_t used = {read};",
+			"\t\t\tif (used == 0u) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+		]
+		advance = [
+			"\t\t\tat   += used;",
+			"\t\t\tseen += 1u;",
+			"\t\t}",
+		]
+		return [
+			"",
+			f"\t/* How many `{placement.varint}`s {placement.path} holds:"
+			" the count",
+			"\t * the message declares, bounded (14.2b). */",
+			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
+			"\t{",
+			f"\t\treturn static_cast<std::uint32_t>({total});",
+			"\t}",
+			"",
+			f"\t/* How far {placement.path} reaches, in bytes: the sum of"
+			" each",
+			f"\t * element's own length, 1 to {width} apiece. This is what"
+			" places",
+			"\t * every member after the run. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_span() const noexcept",
+			"\t{",
+			*walk,
+			*advance,
+			f"\t\treturn at - ({start});",
+			"\t}",
+			"",
+			f"\t/* How far {placement.path} reaches AT LEAST: the bytes of"
+			" the",
+			"\t * elements that are whole, plus one for each that is not"
+			" there",
+			"\t * yet. `required` asks this one, because a truncated element",
+			"\t * makes the span above SHORTER and a short span reads as a",
+			"\t * complete message. */",
+			f"\t[[nodiscard]] std::uint32_t {name}_span_min() const noexcept",
+			"\t{",
+			*walk,
+			*advance,
+			f"\t\treturn situ_need_u32(at - ({start}), n - seen);",
+			"\t}",
+			"",
+			f"\t/* The `index`th `{placement.varint}` of {placement.path},",
+			"\t * reached by walking: this run is Sequential and the walk is",
+			"\t * the cost the capability names.",
+			"\t *",
+			"\t * `bounds` where `index` is past the count or the frame ends",
+			"\t * mid-element; `constraint` where an element is padded and",
+			"\t * `minimal` is declared. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,"
+			f" {ctype} &out) const noexcept",
+			"\t{",
+			*walk,
+			*refuse,
+			"\t\t\tif (seen == index) {",
+			f"\t\t\t\tout = {decoded};",
+			"\t\t\t\treturn ::situ::rt::err::ok;",
+			"\t\t\t}",
+			*advance,
+			"\t\treturn ::situ::rt::err::bounds;",
+			"\t}",
+		]
+
 	def _varint_field(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""Decode a varint field, and say how wide it turned out to be.
@@ -6194,6 +6333,16 @@ class Emitter:
 		encoded = (f"situ_varint_be_len(raw, {width}u,"
 		           f" {declared.terminal_bits}u)" if big else
 		           "situ_varint_len(raw)")
+
+		# A RUN of varints, whose `access` `project.md` documents as
+		# Sequential. The dispatch above returns on `varint is not None`
+		# before any array branch, so `v[n]` got the SINGLE varint's
+		# accessors and every member after the run was placed on top of
+		# the first element (26.683).
+		if is_varint_run(placement):
+			return self._varint_run(struct, placement, declared, name,
+			                        start, width, read, ctype, decoded,
+			                        encoded)
 
 		minimal = ([
 			"",
