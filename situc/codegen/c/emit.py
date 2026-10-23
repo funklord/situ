@@ -3480,10 +3480,17 @@ class Emitter:
 		six-byte message of which two had arrived -- the walk broke on the
 		truncated first element, the span came back 0, and `required`
 		answered SITU_OK: a caller would have stopped reading and parsed a
-		message missing four bytes. The minimum counts ONE byte for each
-		element not yet seen, a varint being at least that, which is a
-		true lower bound and therefore never reports a complete message
-		short. It saturates for the same reason every other arithmetic in
+		message missing four bytes.
+
+		Where the walk stops early the minimum is every byte PRESENT plus
+		one, and then one for each element it never started. The first
+		version counted one byte for the element it stopped inside, which
+		is a true lower bound and a loose one: a single truncated element
+		whose first byte had arrived was credited with the one byte it
+		already had, so a run that is the last member of its struct read
+		as complete. The form here is exact for every prefix measured.
+
+		It saturates for the same reason every other arithmetic in
 		`required` does -- a declared count of four billion is a need
 		nobody can satisfy rather than a sum that wraps (26.556).
 
@@ -3571,7 +3578,20 @@ class Emitter:
 			"\t\tat   += used;",
 			"\t\tseen += 1u;",
 			"\t}",
-			f"\treturn situ_need_u32(at - ({base}), n - seen);",
+			"\tif (seen < n) {",
+			"\t\t/* The walk stopped early, so the run needs MORE than what",
+			"\t\t * is here: every byte present plus one, and then one for",
+			"\t\t * each element it never started. Counting one for the",
+			"\t\t * element it stopped INSIDE was the loose version -- a",
+			"\t\t * single truncated element reported a minimum of one byte",
+			"\t\t * where one byte of it had already arrived, so a run that",
+			"\t\t * is the last member read as complete. */",
+			f"\t\treturn situ_need_u32(",
+			f"\t\t\tsitu_need_u32(situ_remaining_u32({held}.limit,"
+			f" {base}), 1u),",
+			"\t\t\tn - seen - 1u);",
+			"\t}",
+			f"\treturn at - ({base});",
 			"}",
 			"",
 			f"/* The `index`th `{placement.varint}` of `{placement.name}`,"
@@ -4849,6 +4869,32 @@ class Emitter:
 				steps.extend(walk)
 				continue
 
+			# A SINGLE VARINT whose bytes have not all arrived. Its `_len`
+			# answers ZERO for one it cannot read -- the lax-reader
+			# convention, which is right for the offset chain and wrong
+			# here -- so `required` added nothing for the member and
+			# reported a complete message. `one { uvar v; }` answered
+			# SITU_OK with `*need` of 0 for a one-byte buffer holding
+			# `0x81`, and `col`'s walk then took three such elements and
+			# called two bytes of five whole (26.685).
+			#
+			# One byte more than has arrived, which is the delimiter
+			# branch's answer below and for the same reason: how much more
+			# a continuation byte promises is a question only the sender
+			# can answer, and the honest lower bound is to read again and
+			# ask again. A run of them is its own case -- `_span_min`.
+			if placement.varint is not None \
+					and not is_varint_run(placement):
+				width = ident(self.prefix, struct.name, local, "len")
+				steps.extend([
+					f"\tif ({width}(view) == 0u) {{",
+					f"\t\t/* {placement.path}: mid-varint, so one more byte"
+					" and ask again. */",
+					"\t\t*need = situ_need_u32(have, 1u);",
+					"\t\treturn SITU_ERR_TRUNCATED;",
+					"\t}",
+				])
+
 			if placement.delimiters:
 				terminated = ident(self.prefix, struct.name, local, "terminated")
 				steps.extend([
@@ -5008,20 +5054,21 @@ class Emitter:
 				# is past the end -- with `n = 8` in a two-byte message the
 				# varint reader walked from outside the buffer (26.678).
 				# Saturating as well, so the two defences are independent.
-				"\t\tif (have < at) {",
+				"\t\tif (have < pos) {",
 				"\t\t\t*need = at;",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				f"\t\te = {required}(data + at,"
-				" situ_remaining_u32(have, at), &part);",
+				f"\t\te = {required}(data + pos,"
+				" situ_remaining_u32(have, pos), &part);",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				"\t\tif (situ_view_sub(view, at, part, &element) != SITU_OK) {",
+				"\t\tif (situ_view_sub(view, pos, part, &element) != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
-				"\t\tat = situ_need_u32(at, part);",
+				"\t\tat  = situ_need_u32(at, part);",
+				"\t\tpos = situ_need_u32(pos, part);",
 				"",
 				"\t\t/* The condition is asked about the element just read,"
 				" which is",
@@ -5062,12 +5109,12 @@ class Emitter:
 				# is past the end -- with `n = 8` in a two-byte message the
 				# varint reader walked from outside the buffer (26.678).
 				# Saturating as well, so the two defences are independent.
-				"\t\tif (have < at) {",
+				"\t\tif (have < pos) {",
 				"\t\t\t*need = at;",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				f"\t\te = {required}(data + at,"
-				" situ_remaining_u32(have, at), &part);",
+				f"\t\te = {required}(data + pos,"
+				" situ_remaining_u32(have, pos), &part);",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t/* The element is short, so its own lower bound is"
 				" part of",
@@ -5082,7 +5129,8 @@ class Emitter:
 				f" {minimum}));",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				"\t\tat = situ_need_u32(at, part);",
+				"\t\tat  = situ_need_u32(at, part);",
+				"\t\tpos = situ_need_u32(pos, part);",
 				"\t\tn = n + 1u;",
 			])
 
@@ -5092,7 +5140,7 @@ class Emitter:
 			sym   = ident(self.prefix, struct.name, local, "delim")
 			body.extend([
 				"",
-				f"\t\tif (have < at + {len(delim)}u) {{",
+				f"\t\tif (have < pos + {len(delim)}u) {{",
 				f"\t\t\t*need = at + {len(delim)}u;",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
@@ -5100,8 +5148,10 @@ class Emitter:
 				"\t\t/* The terminator only terminates where an element would"
 				" start.",
 				"\t\t * It belongs to this member, as a delimiter does. */",
-				f"\t\tif (situ_scan(data + at, {len(delim)}u, {sym},"
+				f"\t\tif (situ_scan(data + pos, {len(delim)}u, {sym},"
 				f" {len(delim)}u) == 0u) {{",
+				# `at` only: the cursor is never read after this
+				# break, and Rust's `-D warnings` says so outright.
 				f"\t\t\tat = situ_need_u32(at, {len(delim)}u);",
 				"\t\t\tbreak;",
 				"\t\t}",
@@ -5112,26 +5162,47 @@ class Emitter:
 				# is past the end -- with `n = 8` in a two-byte message the
 				# varint reader walked from outside the buffer (26.678).
 				# Saturating as well, so the two defences are independent.
-				"\t\tif (have < at) {",
+				"\t\tif (have < pos) {",
 				"\t\t\t*need = at;",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				f"\t\te = {required}(data + at,"
-				" situ_remaining_u32(have, at), &part);",
+				f"\t\te = {required}(data + pos,"
+				" situ_remaining_u32(have, pos), &part);",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
-				"\t\tat = situ_need_u32(at, part);",
+				"\t\tat  = situ_need_u32(at, part);",
+				"\t\tpos = situ_need_u32(pos, part);",
 			])
 
-		# The counter exists only where a cap reads it, and lives in a block
-		# of its own: it belongs to this member's walk and a second run in the
-		# same struct would otherwise redeclare it.
+		# WHERE THIS ELEMENT STARTS, which is not the running total (26.685).
+		# `at` is the sum of every fixed member INCLUDING the ones after this
+		# run -- `_required`'s docstring says so -- and it was passed as the
+		# element's offset as well. The two coincide only when nothing follows
+		# the run: put a `u16 t` after it and `at` opens at 3 while the run
+		# starts at 1, so every element was read two bytes late and
+		# `withtail`'s six-byte message came back COMPLETE at five, with a
+		# reader resynchronising one byte into the next one.
+		#
+		# The pad branch in `_required` already knew this -- its comment says
+		# `at` is a total rather than an offset and it takes the base
+		# expression for exactly this reason. The knowledge was one branch
+		# away from the code that needed it.
+		#
+		# Both advance by each element's `part`: the total because that is
+		# what `required` answers, the cursor because that is where the next
+		# element begins.
+		base = self._base_expression(struct, placement)
+		# The counter exists only where a cap reads it, and the block is the
+		# cursor's as well: both belong to this member's walk, and a second
+		# run in the same struct would otherwise redeclare them.
 		loop = ["\tfor (;;) {", *body, "\t}"]
-		if cap is not None or counted:
-			loop = ["\t{", "\t\tuint32_t n = 0u;",
-			        *[f"\t{line}" if line else line for line in loop], "\t}"]
+		loop = ["\t{",
+		        f"\t\tuint32_t pos = {base};",
+		        *(["\t\tuint32_t n = 0u;"] if cap is not None or counted
+		          else []),
+		        *[f"\t{line}" if line else line for line in loop], "\t}"]
 
 		return [
 			"",

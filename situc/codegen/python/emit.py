@@ -2697,7 +2697,12 @@ class Emitter:
 			'\t\tas a complete message."""',
 			*walk,
 			*advance,
-			"\t\treturn (at - start) + (n - seen)",
+			"\t\tif seen < n:",
+			"\t\t\t# The walk stopped early, so the run needs MORE than",
+			"\t\t\t# what is here: every byte present plus one, and then",
+			"\t\t\t# one for each element it never started.",
+			"\t\t\treturn max(0, len(data) - start) + 1 + (n - seen - 1)",
+			"\t\treturn at - start",
 			"",
 			f"\tdef {name}_at(self, index: int) -> int:",
 			f'\t\t"""The `index`th `{placement.varint}` of'
@@ -5454,6 +5459,22 @@ class Emitter:
 				steps.extend(walk)
 				continue
 
+			# A SINGLE VARINT whose bytes have not all arrived. Its
+			# `_len` answers ZERO for one it cannot read -- the
+			# lax-reader convention, right for the offset chain and
+			# wrong here -- so `required` added nothing for the member
+			# and reported a complete message (26.685). One byte more
+			# than has arrived, as the delimiter branch answers. A run
+			# of them is its own case, `_span_min`.
+			if placement.varint is not None \
+					and not is_varint_run(placement):
+				width = py_name(local_name(struct, placement)) + "_len"
+				steps.extend([
+					f"\t\tif probe.{width} == 0:",
+					f'\t\t\traise TruncatedError("{placement.path}:'
+					' mid-varint", have + 1)',
+				])
+
 			# `leaf_bounded=False`, the only caller that asks: this
 			# reports a byte count to a caller rather than placing a
 			# member, so it saturates at the type's maximum. Bounded, a
@@ -5544,11 +5565,11 @@ class Emitter:
 			# Python's slice is forgiving where Rust panics and C reads
 			# past the end, so without this it answers from an empty
 			# slice and the four disagree (26.678).
-			"\t\t\tif have < at:",
+			"\t\t\tif have < pos:",
 			'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
 				'f"{have} here", at)',
 			"\t\t\ttry:",
-			f"\t\t\t\tpart = {inner}.required(data[at:])",
+			f"\t\t\t\tpart = {inner}.required(data[pos:])",
 			"\t\t\texcept TruncatedError as short:",
 			f'\t\t\t\traise TruncatedError("{placement.path}: incomplete",',
 			"\t\t\t\t\tat + short.needed) from None",
@@ -5565,8 +5586,9 @@ class Emitter:
 			cond = self._element_condition(element, placement, "at", "have")
 			body.extend([
 				*read,
-				f"\t\t\t_element = {inner}(probe._msg, at, part)",
-				"\t\t\tat += part",
+				f"\t\t\t_element = {inner}(probe._msg, pos, part)",
+				"\t\t\tat  += part",
+				"\t\t\tpos += part",
 				"",
 				"\t\t\t# The condition is asked about the element just"
 				" read, which",
@@ -5592,11 +5614,11 @@ class Emitter:
 			body.extend([
 				f"\t\t\tif seen >= {count}:",
 				"\t\t\t\tbreak",
-				"\t\t\tif have < at:",
+				"\t\t\tif have < pos:",
 				'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
 					'f"{have} here", at)',
 				"\t\t\ttry:",
-				f"\t\t\t\tpart = {inner}.required(data[at:])",
+				f"\t\t\t\tpart = {inner}.required(data[pos:])",
 				"\t\t\texcept TruncatedError as short:",
 				"\t\t\t\t# The element is short, so its own lower bound is"
 				" part of",
@@ -5608,7 +5630,8 @@ class Emitter:
 				"\t\t\t\t\tat + short.needed",
 				f"\t\t\t\t\t+ ({count} - seen - 1) * {inner}.SIZE_MIN)"
 				" from None",
-				"\t\t\tat += part",
+				"\t\t\tat  += part",
+				"\t\t\tpos += part",
 				"\t\t\tseen += 1",
 			])
 
@@ -5616,7 +5639,7 @@ class Emitter:
 			delim = placement.delimiter
 			assert delim is not None
 			body.extend([
-				f"\t\t\tif have < at + {len(delim)}:",
+				f"\t\t\tif have < pos + {len(delim)}:",
 				f'\t\t\t\traise TruncatedError("{placement.path}:'
 				' no terminator yet",',
 				f"\t\t\t\t\tat + {len(delim)})",
@@ -5625,18 +5648,29 @@ class Emitter:
 				" would",
 				"\t\t\t# start. It belongs to this member, as a delimiter"
 				" does.",
-				f"\t\t\tif bytes(data[at:at + {len(delim)}]) == {delim!r}:",
+				f"\t\t\tif bytes(data[pos:pos + {len(delim)}]) == {delim!r}:",
+				# `at` only: the cursor is never read after this
+				# break, and Rust's `-D warnings` says so outright.
 				f"\t\t\t\tat += {len(delim)}",
 				"\t\t\t\tbreak",
 				"",
 				*read,
-				"\t\t\tat += part",
+				"\t\t\tat  += part",
+				"\t\t\tpos += part",
 			])
 
+		# WHERE THIS ELEMENT STARTS, which is not the running total
+		# (26.685). `at` is the sum of every fixed member including the
+		# ones AFTER this run, so slicing from it read each element that
+		# many bytes late -- `withtail { u8 n; one d[n]; u16 t; }` called a
+		# six-byte message complete at five.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return None	# no base, so no cursor, so no walk
 		loop = ["\t\twhile True:", *body]
-		if cap is not None or counted:
-			loop = ["\t\tseen = 0",
-			        *loop]
+		loop = [f"\t\tpos = {start.replace('self.', 'probe.')}",
+		        *(["\t\tseen = 0"] if cap is not None or counted else []),
+		        *loop]
 
 		return [
 			"",

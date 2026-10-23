@@ -3530,14 +3530,23 @@ def test_a_record_run_is_framed_through_its_elements() -> None:
 	                 'struct s { u16 n; f fields[] until "\\r\\n"; }')
 
 	assert "a run of records ends at a terminator" not in header
-	# Saturating, and guarded: `at` has been advanced by a length the
-	# message chose, so `have - at` underflowed and the element was
+	# Saturating, and guarded: the cursor has been advanced by a length the
+	# message chose, so `have - pos` underflowed and the element was
 	# asked to frame from a pointer past the end (26.678).
-	assert "if (have < at) {" in header
-	assert ("situ_f_required(data + at, "
-	        "situ_remaining_u32(have, at), &part)") in header
-	assert "if (situ_scan(data + at, 2u, situ_s_fields_delim, 2u) == 0u) {" \
+	assert "if (have < pos) {" in header
+	# `pos` and not `at`, which is 26.685: `at` is the running TOTAL and
+	# includes every fixed member, INCLUDING the ones after this run, so
+	# passing it as the element's offset read each element that many bytes
+	# late. `withtail { u8 n; one d[n]; u16 t; }` answered complete at five
+	# bytes of six. The cursor starts at the member's own base and both
+	# advance by each element's `part`.
+	assert ("situ_f_required(data + pos, "
+	        "situ_remaining_u32(have, pos), &part)") in header
+	assert "if (situ_scan(data + pos, 2u, situ_s_fields_delim, 2u) == 0u) {" \
 		in header
+	# And the two are distinct declarations, or the fix is a rename.
+	assert "uint32_t pos = " in header
+	assert "uint32_t at = " in header
 
 
 TWO_LENGTHS = "struct s { u16 n; u8 a[n]; u16 m; u8 b[m]; }"

@@ -98,13 +98,18 @@ is then passed as the element's OFFSET. So a counted run followed by any
 fixed member -- a trailer, a checksum -- frames short: `withtail { u8 n;
 one d[n]; u16 t; }` answers complete at five bytes of six, and a reader
 resynchronises one byte into the next message. All four backends share
-the arithmetic and neither walker implements `required`, so nothing could
-have seen it. `doc/decision/26.685-*.md`, measured and open.
+the arithmetic, so nothing could have seen it. **Fixed since**, with two
+others the same sweep found, in `doc/decision/26.685-*.md` and
+`26.686-*.md`: a varint's `_len` answers zero for one it cannot read and
+`required` added the zero, and 26.683's own run minimum credited a byte to
+an element that had already spent one.
 
-**So the standing advice is narrower than "framing is unreliable inside a
-variant":** `validate()` is sound, and `required()`/`framed()` are wrong
-for a struct with a nested variable struct (26.684) or with a run
-followed by fixed members (26.685). Keep your exact-length checks.
+**So the standing advice, now narrower:** `validate()` is sound.
+`required()` and `framed()` are fixed for a run followed by fixed
+members, for a truncated varint and for a truncated run element, and are
+still wrong for a struct holding a NESTED variable struct -- 26.684, which
+includes the variant-arm case you reported. Keep your exact-length checks
+until that one lands; everything else the sweep found is closed.
 
 ## 3-6. Three fixed, the sixth outstanding
 

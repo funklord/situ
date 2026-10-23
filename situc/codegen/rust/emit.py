@@ -2153,7 +2153,15 @@ class Emitter:
 			f"\tpub fn {least}(&self) -> usize {{",
 			*walk("_"),
 			*advance,
-			"\t\t(at - start).saturating_add(n - seen)",
+			"\t\tif seen < n {",
+			"\t\t\t// The walk stopped early, so the run needs MORE than",
+			"\t\t\t// what is here: every byte present plus one, and then",
+			"\t\t\t// one for each element it never started.",
+			"\t\t\treturn self.bytes.len().saturating_sub(start)",
+			"\t\t\t\t.saturating_add(1)",
+			"\t\t\t\t.saturating_add(n - seen - 1);",
+			"\t\t}",
+			"\t\tat - start",
 			"\t}",
 			"",
 			f"\t/// The `index`th `{placement.varint}` of"
@@ -5491,6 +5499,26 @@ class Emitter:
 				steps.extend(walk)
 				continue
 
+			# A SINGLE VARINT whose bytes have not all arrived. Its
+			# `_len` answers ZERO for one it cannot read -- the
+			# lax-reader convention, right for the offset chain and
+			# wrong here -- so `required` added nothing for the member
+			# and reported a complete message (26.685). One byte more
+			# than has arrived, as the delimiter branch answers. A run
+			# of them is its own case, `_span_min`.
+			if placement.varint is not None \
+					and not is_varint_run(placement):
+				width = _ident(c_name(local_name(struct, placement))
+				               + "_len")
+				steps.extend([
+					f"\t\tif probe.{width}() == 0 {{",
+					f"\t\t\t// {placement.path}: mid-varint, so one more",
+					"\t\t\t// byte and ask again.",
+					"\t\t\treturn situ_rt::Framing::Need("
+					"have.saturating_add(1));",
+					"\t\t}",
+				])
+
 			# `leaf_bounded=False`, the only caller that asks: this
 			# reports a byte count to a caller rather than placing a
 			# member, so it saturates at the type's maximum. Bounded, a
@@ -5570,10 +5598,10 @@ class Emitter:
 			# `at` has been advanced by a length the message chose, so
 			# the slice panics where C and C++ read past the end --
 			# 26.27's three behaviours, on the framing path (26.678).
-			"\t\t\tif have < at {",
+			"\t\t\tif have < pos {",
 			"\t\t\t\treturn situ_rt::Framing::Need(at);",
 			"\t\t\t}",
-			f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
+			f"\t\t\tlet part = match {inner}::required(&data[pos..]) {{",
 			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
 			"\t\t\t\t\treturn situ_rt::Framing::Need(at.saturating_add(n)),",
@@ -5600,9 +5628,10 @@ class Emitter:
 				# is generated code that fails for the user. Same test as
 				# the `probe` above, for the same reason.
 				*([f"\t\t\tlet element = {inner} {{"
-				   " bytes: &data[at..at + part] };"]
+				   " bytes: &data[pos..pos + part] };"]
 				  if "element." in cond else []),
-				"\t\t\tat = at.saturating_add(part);",
+				"\t\t\tat  = at.saturating_add(part);",
+				"\t\t\tpos = pos.saturating_add(part);",
 				"",
 				"\t\t\t// The condition is asked about the element just"
 				" read, which",
@@ -5631,10 +5660,10 @@ class Emitter:
 				f"\t\t\tif seen >= {count} {{",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
-				"\t\t\tif have < at {",
+				"\t\t\tif have < pos {",
 				"\t\t\t\treturn situ_rt::Framing::Need(at);",
 				"\t\t\t}",
-				f"\t\t\tlet part = match {inner}::required(&data[at..]) {{",
+				f"\t\t\tlet part = match {inner}::required(&data[pos..]) {{",
 				"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 				"\t\t\t\tsitu_rt::Framing::Need(n) => {",
 				"\t\t\t\t\t// The element is short, so its own lower bound"
@@ -5648,7 +5677,8 @@ class Emitter:
 				f"\t\t\t\t\t\t\t.saturating_mul({inner}::SIZE_MIN)));",
 				"\t\t\t\t}",
 				"\t\t\t};",
-				"\t\t\tat = at.saturating_add(part);",
+				"\t\t\tat  = at.saturating_add(part);",
+				"\t\t\tpos = pos.saturating_add(part);",
 				"\t\t\tseen += 1;",
 			])
 
@@ -5657,7 +5687,7 @@ class Emitter:
 			assert delim is not None
 			bytes_ = "b\"" + "".join(f"\\x{byte:02x}" for byte in delim) + "\""
 			body.extend([
-				f"\t\t\tif have < at + {len(delim)} {{",
+				f"\t\t\tif have < pos + {len(delim)} {{",
 				f"\t\t\t\treturn situ_rt::Framing::Need(at + {len(delim)});",
 				"\t\t\t}",
 				"",
@@ -5665,20 +5695,38 @@ class Emitter:
 				" would",
 				"\t\t\t// start. It belongs to this member, as a delimiter"
 				" does.",
-				f"\t\t\tif &data[at..at + {len(delim)}] == {bytes_} {{",
+				f"\t\t\tif &data[pos..pos + {len(delim)}] == {bytes_} {{",
+				# `at` only: the cursor is never read after this
+				# break, and `-D warnings` refuses the dead store --
+				# which is how the other three learned about it.
 				f"\t\t\t\tat = at.saturating_add({len(delim)});",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
 				*read,
-				"\t\t\tat = at.saturating_add(part);",
+				"\t\t\tat  = at.saturating_add(part);",
+				"\t\t\tpos = pos.saturating_add(part);",
 			])
 
+		# WHERE THIS ELEMENT STARTS, which is not the running total
+		# (26.685). `at` is the sum of every fixed member including the
+		# ones AFTER this run, so slicing from it read each element that
+		# many bytes late -- `withtail { u8 n; one d[n]; u16 t; }` answered
+		# Complete(5) for a six-byte message.
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return None	# no base, so no cursor, so no walk
+		# `probe.` rather than `self.`: framing is an associated function
+		# over a slice, so there is no `self` -- the same substitution the
+		# length expression two screens up makes, and for the same reason.
+		start = self._unparen(start).replace("self.", "probe.")
 		loop = ["\t\tloop {", *body, "\t\t}"]
-		if cap is not None or counted:
-			loop = ["\t\t{", "\t\t\tlet mut seen = 0usize;",
-			        *[f"\t{line}" if line else line for line in loop],
-			        "\t\t}"]
+		loop = ["\t\t{",
+		        f"\t\t\tlet mut pos = {start};",
+		        *(["\t\t\tlet mut seen = 0usize;"]
+		          if cap is not None or counted else []),
+		        *[f"\t{line}" if line else line for line in loop],
+		        "\t\t}"]
 
 		return [
 			"",

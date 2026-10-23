@@ -7368,6 +7368,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.686 A varint's length answers zero, and `required` read it
+
+Moved to
+`doc/decision/26.686-a-varints-length-answers-zero-and-required-read-it.md`.
+
 ### 26.685 The framing total was used as the element offset
 
 **Open.** Moved to

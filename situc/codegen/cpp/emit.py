@@ -2617,6 +2617,26 @@ class Emitter:
 				steps.extend(walk)
 				continue
 
+			# A SINGLE VARINT whose bytes have not all arrived. Its
+			# `_len` answers ZERO for one it cannot read -- the
+			# lax-reader convention, right for the offset chain and
+			# wrong here -- so `required` added nothing for the member
+			# and reported a complete message (26.685). One byte more
+			# than has arrived, which is what the delimiter branch
+			# answers and for the same reason. A run of them is its own
+			# case, `_span_min`.
+			if placement.varint is not None \
+					and not is_varint_run(placement):
+				width = bare_name(local_name(struct, placement))
+				steps.extend([
+					f"\t\tif ({width}_len() == 0u) {{",
+					f"\t\t\t/* {placement.path}: mid-varint, so one more",
+					"\t\t\t * byte and ask again. */",
+					"\t\t\tneed = situ_need_u32(have, 1u);",
+					"\t\t\treturn ::situ::rt::err::truncated;",
+					"\t\t}",
+				])
+
 			# `leaf_bounded=False`, the only caller that asks: this
 			# reports a byte count to a caller rather than placing a
 			# member, so it saturates at the type's maximum. Bounded, a
@@ -2699,12 +2719,12 @@ class Emitter:
 			#
 			# Saturating too, so the two defences are independent -- the
 			# subtraction cannot wrap even if a later edit moves the guard.
-			"\t\t\tif (have < at) {",
+			"\t\t\tif (have < pos) {",
 			"\t\t\t\tneed = at;",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
 			"\t\t\t}",
-			call + "situ_base(raw_) + at,",
-			"\t\t\t\tsitu_remaining_u32(have, at), part);",
+			call + "situ_base(raw_) + pos,",
+			"\t\t\t\tsitu_remaining_u32(have, pos), part);",
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -2721,12 +2741,13 @@ class Emitter:
 				"\t\t\tsitu_view_t raw;",
 				"",
 				*read,
-				"\t\t\tif (situ_view_sub(this->raw(), at, part, &raw)"
+				"\t\t\tif (situ_view_sub(this->raw(), pos, part, &raw)"
 				" != SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
-				"\t\t\tat = situ_need_u32(at, part);",
+				"\t\t\tat  = situ_need_u32(at, part);",
+				"\t\t\tpos = situ_need_u32(pos, part);",
 				"",
 				"\t\t\t/* The condition is asked about the element just"
 				" read, which",
@@ -2756,12 +2777,12 @@ class Emitter:
 				f"\t\t\tif (n >= {count}) {{",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
-				"\t\t\tif (have < at) {",
+				"\t\t\tif (have < pos) {",
 				"\t\t\t\tneed = at;",
 				"\t\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t\t}",
-				call + "situ_base(raw_) + at,",
-				"\t\t\t\tsitu_remaining_u32(have, at), part);",
+				call + "situ_base(raw_) + pos,",
+				"\t\t\t\tsitu_remaining_u32(have, pos), part);",
 				"\t\t\tif (e != ::situ::rt::err::ok) {",
 				"\t\t\t\t/* The element is short, so its own lower bound is"
 				" part",
@@ -2774,7 +2795,8 @@ class Emitter:
 				f"\t\t\t\t                          {minimum}));",
 				"\t\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t\t}",
-				"\t\t\tat = situ_need_u32(at, part);",
+				"\t\t\tat  = situ_need_u32(at, part);",
+				"\t\t\tpos = situ_need_u32(pos, part);",
 				"\t\t\tn += 1;",
 			])
 
@@ -2784,7 +2806,7 @@ class Emitter:
 			array = self._delimiter_array(placement)
 			body.extend([
 				"",
-				f"\t\t\tif (have < at + {len(delim)}u) {{",
+				f"\t\t\tif (have < pos + {len(delim)}u) {{",
 				f"\t\t\t\tneed = at + {len(delim)}u;",
 				"\t\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t\t}",
@@ -2793,21 +2815,34 @@ class Emitter:
 				"\t\t\t/* The terminator only terminates where an element"
 				" would start.",
 				"\t\t\t * It belongs to this member, as a delimiter does. */",
-				f"\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u, {array},"
+				f"\t\t\tif (situ_scan(situ_base(raw_) + pos, {len(delim)}u, {array},"
 				f" {len(delim)}u) == 0u) {{",
+				# `at` only: the cursor is never read after this
+				# break, and Rust's `-D warnings` says so outright.
 				f"\t\t\t\tat = situ_need_u32(at, {len(delim)}u);",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
 				*read,
-				"\t\t\tat = situ_need_u32(at, part);",
+				"\t\t\tat  = situ_need_u32(at, part);",
+				"\t\t\tpos = situ_need_u32(pos, part);",
 			])
 
+		# WHERE THIS ELEMENT STARTS, which is not the running total
+		# (26.685). `at` is the sum of every fixed member including the
+		# ones AFTER this run, so passing it as the element's offset read
+		# each element that many bytes late -- `withtail { u8 n; one d[n];
+		# u16 t; }` answered complete at five bytes of six.
+		base = self._offset_expression(struct, placement)
+		if base is None:
+			return None	# no base, so no cursor, so no walk
 		loop = ["\t\tfor (;;) {", *body, "\t\t}"]
-		if cap is not None or counted:
-			loop = ["\t\t{", "\t\t\tstd::uint32_t n = 0;",
-			        *[f"\t{line}" if line else line for line in loop],
-			        "\t\t}"]
+		loop = ["\t\t{",
+		        f"\t\t\tstd::uint32_t pos = {base};",
+		        *(["\t\t\tstd::uint32_t n = 0;"]
+		          if cap is not None or counted else []),
+		        *[f"\t{line}" if line else line for line in loop],
+		        "\t\t}"]
 
 		return [
 			"",
@@ -6272,7 +6307,16 @@ class Emitter:
 			"\t{",
 			*walk,
 			*advance,
-			f"\t\treturn situ_need_u32(at - ({start}), n - seen);",
+			"\t\tif (seen < n) {",
+			"\t\t\t/* The walk stopped early, so the run needs MORE than",
+			"\t\t\t * what is here: every byte present plus one, and then",
+			"\t\t\t * one for each element it never started. */",
+			"\t\t\treturn situ_need_u32(",
+			f"\t\t\t\tsitu_need_u32(situ_remaining_u32(raw_.limit,"
+			f" {start}), 1u),",
+			"\t\t\t\tn - seen - 1u);",
+			"\t\t}",
+			f"\t\treturn at - ({start});",
 			"\t}",
 			"",
 			f"\t/* The `index`th `{placement.varint}` of {placement.path},",
