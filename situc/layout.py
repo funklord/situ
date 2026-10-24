@@ -273,6 +273,16 @@ class Placement:
 	# to attach the right reasons.
 	varint: str | None		= None
 	varint_minimal: bool		= True
+	#: Whether the declared varint applies `transform = zigzag`, which
+	#: makes its groups a SIGNED number. Here beside `varint_minimal`
+	#: because it is the same kind of fact and wanted in the same places:
+	#: every consumer that decides what a varint's bytes mean had to look
+	#: the declaration up for itself, and the differential's own driver
+	#: generator could not -- it takes a resolved schema and no `ast`, so
+	#: it printed a `svar` with `%llu` where the walker printed a signed
+	#: integer, and the two disagreed about -39 while agreeing about its
+	#: bits (26.687).
+	varint_signed: bool		= False
 	# The earlier member that made this one's offset dynamic, and where it is
 	# declared. Section 17 asks a blame chain to name the root cause and point
 	# at it, not at the field that suffers.
@@ -2367,6 +2377,7 @@ class Solver:
 			varint         = (member.type_ref.name
 			                  if member.type_ref.name in self.varints else None),
 			varint_minimal = self._varint_minimal(member),
+			varint_signed = self._varint_signed(member),
 			# Not for a delimited member. `array_extent` returns one run for
 			# `x[] until "D"` because that is what a run is, and recording it
 			# here said "an array of exactly one element", which is false and
@@ -2577,6 +2588,17 @@ class Solver:
 	def _varint_minimal(self, member: ast.Field | ast.Reserved) -> bool:
 		varint = self.varints.get(member.type_ref.name)
 		return True if varint is None else varint.minimal
+
+	def _varint_signed(self, member: ast.Field | ast.Reserved) -> bool:
+		"""Whether this member's varint decodes to a signed number.
+
+		False for a member that is not a varint at all, which is what
+		every caller wants: the question is "does this hold a signed
+		value", and a scalar answers it through `scalar.signed`.
+		"""
+		varint = self.varints.get(member.type_ref.name)
+		return (varint is not None
+		        and varint.transform is ast.VarintTransform.ZIGZAG)
 
 	def record_interval(self, member: ast.Field | ast.Reserved,
 			scalar: ScalarType | None, state: Walk, path: str, name: str) -> None:

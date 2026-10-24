@@ -578,8 +578,15 @@ def asks(struct: ResolvedStruct, structs: set[str],
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
 		elif kind is Member.VARINT:
+			# `signed` from the placement, which carries the transform now.
+			# This generator takes a resolved schema and no `ast`, so it
+			# could not look the declaration up -- and printed a `svar`
+			# with `%llu` where the walker printed a signed integer. The
+			# two agreed about -39's bits and disagreed about -39
+			# (26.687).
 			found.append(Ask(Probe.VARINT_RUN if is_varint_run(placement)
-			                 else Probe.VARINT, local))
+			                 else Probe.VARINT, local,
+			                 signed=placement.varint_signed))
 		elif kind is Member.LOCATED:
 			# Byte runs only, which is every located member this corpus
 			# has: `bmp.bitmap_file.pixels` sized by a field and
@@ -1491,9 +1498,11 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
-		return [f'\t\t\tprintf("{ask.local} len=%u value=%llu\\n",'
+		form = "%lld" if ask.signed else "%llu"
+		cast = "long long" if ask.signed else "unsigned long long"
+		return [f'\t\t\tprintf("{ask.local} len=%u value={form}\\n",'
 		        f' {call.format("len")}(view),'
-		        f' (unsigned long long){call.format("value")}(view));']
+		        f' ({cast}){call.format("value")}(view));']
 	if ask.probe is Probe.VARINT_RUN:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst uint32_t n = {call.format('count')}(view);",
@@ -1919,9 +1928,11 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
-		return [f'\t\t\tstd::printf("{ask.local} len=%u value=%llu\\n",'
+		form = "%lld" if ask.signed else "%llu"
+		cast = "long long" if ask.signed else "unsigned long long"
+		return [f'\t\t\tstd::printf("{ask.local} len=%u value={form}\\n",'
 		        f" view.{call}_len(),"
-		        f" static_cast<unsigned long long>(view.{call}_value()));"]
+		        f" static_cast<{cast}>(view.{call}_value()));"]
 	if ask.probe is Probe.VARINT_RUN:
 		return ["\t\t\t{",
 		        f"\t\t\t\tconst std::uint32_t n = view.{call}_count();",

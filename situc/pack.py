@@ -2491,11 +2491,26 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			varint_decl = varint_decls.get(placement.varint)
 			big  = (varint_decl is not None
 			        and varint_decl.encoding is ast.VarintEncoding.BE128)
+			# BIT 4 IS THE TRANSFORM, and the record carried no room for
+			# it until now -- so both walkers answered a `svar`'s RAW
+			# encoding where all four backends answered the decoded value,
+			# reading -1 as 1 and 1 as -2. Measured 2026-10-23 on a
+			# two-element run: the walkers said 1 and 6, the backends -1
+			# and 3. Unexercised, because the corpus declares one varint
+			# type and it has no transform -- so the four-way differential
+			# and the two-walker differential both passed over a
+			# divergence that was certain (26.687).
+			# The placement's own fact rather than the declaration looked
+			# up again: `varint_signed` is beside `varint_minimal` for
+			# exactly this reason, and two readings of one declaration are
+			# two things to be wrong.
+			zigzag = placement.varint_signed
 			varints_blob += _struct.pack(
 				"<IIBBBx", at, strings.intern(placement.varint),
 				min(varint_decl.max_bytes if varint_decl else 10, 255),
 				min(varint_decl.terminal_bits if varint_decl else 7, 255),
-				(1 if placement.varint_minimal else 0) | (2 if big else 0))
+				(1 if placement.varint_minimal else 0) | (2 if big else 0)
+				| (4 if zigzag else 0))
 		# The discriminant is what makes an arm answerable: without it a
 		# walker has the cases and no way to say which one this message
 		# selected, which is the whole question the probe asks.
@@ -2819,6 +2834,16 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		if placement.pinned_bits is not None:
 			flags |= PINNED
 		if placement.scalar is not None and placement.scalar.signed:
+			flags |= SIGNED
+		# A ZIGZAG VARINT HOLDS A SIGNED VALUE, and a varint has no
+		# `scalar` for the branch above to ask -- its width is in its own
+		# bytes. So the flag was clear, and a reader printing through it
+		# showed -1 as 18446744073709551615 while the backends, whose
+		# accessor returns `int64_t`, printed -1. Measured as a two-walker
+		# divergence on `edges.varint_signed`, where the BITS agreed and
+		# only the signedness anybody would print them with did not
+		# (26.687).
+		if placement.varint is not None and placement.varint_signed:
 			flags |= SIGNED
 		if placement.marker is not None:
 			flags |= MARKER_GOVERNED

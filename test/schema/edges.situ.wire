@@ -21,6 +21,10 @@ target buffer
 
 varint edge_varint : be128 bits=64 bytes=9
 
+varint edge_signed : leb128 bits=64 bytes=10 zigzag
+
+varint edge_canonical : leb128 bits=64 bytes=10 minimal
+
 enum signature : u8[2] unknown=error
   bmp="BM" pe="MZ"
 
@@ -563,6 +567,10 @@ struct utf16 size=17
   @0x0008   8         u16        le  big encoding=utf16le
   @0x0010   1         u8         tail
 
+struct varint_canonical size=3..12
+  @0x0000   1..10     edge_canonical v  varint=edge_canonical
+  ~         2         u16        tail  big
+
 struct varint_driver size=5..36893488147419103243
   @0x0000   1..9      edge_varint n  varint=edge_varint
   ~         2..36893488147419103232 u16        d  big sized-by=n+1
@@ -571,6 +579,10 @@ struct varint_driver size=5..36893488147419103243
 struct varint_run size=3..2298
   @0x0000   1         u8         n
   @0x0001   0..2295   edge_varint v  sized-by=n varint=edge_varint
+  ~         2         u16        tail  big
+
+struct varint_signed size=3..12
+  @0x0000   1..10     edge_signed v  varint=edge_signed
   ~         2         u16        tail  big
 
 struct versioned size=3..9 version=ver

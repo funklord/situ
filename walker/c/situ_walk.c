@@ -778,7 +778,20 @@ static situ_walk_err parse_digits(const uint8_t *data, uint32_t len,
 
 /* -- varints ------------------------------------------------------------ */
 
-#define VARINT_BIG 0x02u
+#define VARINT_MINIMAL 0x01u
+#define VARINT_BIG     0x02u
+/* The TRANSFORM, which the image had no bit for until 26.687 -- so this
+ * walker answered a `svar`'s raw groups where four backends answer the
+ * decoded value, reading -1 as 1 and 1 as -2. Bit 1 existed and nobody
+ * read it, so a padded encoding was taken where four backends refuse it.
+ * Neither was exercised: the corpus declared one varint type and it has
+ * no transform, so both differentials passed over a certain divergence. */
+#define VARINT_ZIGZAG  0x04u
+
+static void varint_transform(const uint8_t *rules, uint64_t *value);
+
+static situ_walk_err varint_admissible(const uint8_t *rules,
+                                       uint32_t consumed, uint64_t raw);
 
 static const uint8_t *varint_rules(const situ_walk_image *image,
                                    uint32_t index)
@@ -836,8 +849,74 @@ situ_walk_err situ_walk_varint(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	return decode_varint(message, len, at, rules[8], rules[9],
-	                     (rules[10] & VARINT_BIG) != 0, consumed, value);
+	{
+		const situ_walk_err err = decode_varint(message, len, at,
+		                rules[8], rules[9],
+		                (rules[10] & VARINT_BIG) != 0, consumed,
+		                value);
+
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		/* The TRANSFORM only. `minimal` is the getter's refusal and this
+		 * function serves the WIDTH path too -- `content_bits_deep` asks
+		 * it how many bytes the member occupies and would propagate a
+		 * refusal, placing every later member wrongly. The four backends
+		 * draw the same line: `_len` answers the encoded length whatever
+		 * its minimality, and only `_get` refuses. */
+		varint_transform(rules, value);
+		return SITU_WALK_OK;
+	}
+}
+
+/* What a varint's groups MEAN, which `decode_varint` cannot know.
+ *
+ * `transform = zigzag` makes the accumulator a signed number, and the
+ * image carried no bit for it until 26.687 -- so this walker answered the
+ * raw groups where four backends apply the transform, reading -1 as 1.
+ *
+ * Applied here rather than inside `decode_varint`, which also reads a
+ * `tlv` region's tag and length: those are the region's grammar and carry
+ * no member to ask.
+ */
+static void varint_transform(const uint8_t *rules, uint64_t *value)
+{
+	if ((rules[10] & VARINT_ZIGZAG) != 0u) {
+		/* The walker's convention for a signed value: the two's-complement
+		 * bit pattern through the `uint64_t`, as a fixed-width signed read
+		 * comes back. */
+		*value = ((*value) >> 1) ^ (uint64_t)(-(int64_t)((*value) & 1u));
+	}
+}
+
+/* Refuse a padded encoding where the varint declares `minimal`.
+ *
+ * The GETTER's refusal, which is the line all four backends draw -- their
+ * `_len` answers the encoded length whatever its minimality, and only
+ * `_get` refuses. So this is asked at the read sites and never by
+ * `situ_walk_varint`, which the width path shares.
+ */
+static situ_walk_err varint_admissible(const uint8_t *rules,
+                                       uint32_t consumed, uint64_t raw)
+{
+	uint32_t least = 1u;
+
+	if ((rules[10] & VARINT_MINIMAL) == 0u) {
+		return SITU_WALK_OK;
+	}
+	while (raw >= 0x80u) {
+		raw >>= 7;
+		least++;
+	}
+	/* `situ_varint_be_len`'s own clamp, copied rather than re-derived: the
+	 * whole-byte terminal form encodes one more value per length than the
+	 * grouped one, so a value needing every grouped byte fits in the
+	 * terminal byte instead. */
+	if ((rules[10] & VARINT_BIG) != 0u && rules[9] == 8u
+	    && least > rules[8]) {
+		least = rules[8];
+	}
+	return consumed == least ? SITU_WALK_OK : SITU_WALK_CONSTRAINT;
 }
 
 /* One element of a run of varints, by index.
@@ -2569,8 +2648,30 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		if (offset % 8u) {
 			return SITU_WALK_UNSUPPORTED;
 		}
-		return situ_walk_varint(image, message, len, index, offset / 8u,
-		                        &consumed, out);
+		err = situ_walk_varint(image, message, len, index, offset / 8u,
+		                       &consumed, out);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		/* `minimal` is the GETTER's refusal, so it is asked here and not
+		 * inside `situ_walk_varint`, which the width path shares. The raw
+		 * groups rather than `*out`: the transform has been applied and
+		 * the minimal length is a property of the encoding (26.687). */
+		{
+			uint64_t raw = 0u;
+			uint32_t again = 0u;
+
+			err = decode_varint(message, len, offset / 8u,
+			                    varint_rules(image, index)[8],
+			                    varint_rules(image, index)[9],
+			                    (varint_rules(image, index)[10]
+			                     & VARINT_BIG) != 0, &again, &raw);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			return varint_admissible(varint_rules(image, index), again,
+			                         raw);
+		}
 	}
 
 	/* A delimited member is a byte run whose end the data decides, so it has

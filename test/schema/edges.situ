@@ -905,6 +905,30 @@ varint_type edge_varint {
 	max_bytes = 9;
 }
 
+// A SIGNED varint and a CANONICAL one, because the image carried neither
+// fact and so both walkers disagreed with all four backends about what a
+// varint's bytes mean -- the raw groups rather than the decoded value,
+// and a padded encoding accepted where the backends refuse it. Neither
+// was exercised by anything: this file declared one varint type, with no
+// transform and no `minimal`, so the four-way differential and the
+// two-walker differential both passed over a certain divergence (26.687).
+//
+// leb128 for both, so the transform and the minimality are the only
+// things that differ from `edge_varint` above.
+varint_type edge_signed {
+	encoding  = leb128;
+	max_bits  = 64;
+	max_bytes = 10;
+	transform = zigzag;
+}
+
+varint_type edge_canonical {
+	encoding  = leb128;
+	max_bits  = 64;
+	max_bytes = 10;
+	minimal;
+}
+
 struct varint_driver {
 	edge_varint  n;
 	u16          d[n + 1];
@@ -928,6 +952,21 @@ struct varint_run {
 	u8           n;
 	edge_varint  v[n];
 	u16          tail;
+}
+
+// The two facts above, as members a reader is asked about. `tail` is
+// here for the reason it is on `varint_run`: a member after the varint
+// is what a wrong width moves, and a wrong VALUE moves nothing -- which
+// is exactly why a value divergence needed a fixture of its own rather
+// than waiting to be noticed.
+struct varint_signed {
+	edge_signed  v;
+	u16          tail;
+}
+
+struct varint_canonical {
+	edge_canonical  v;
+	u16             tail;
 }
 
 // A DELIMITED member as a variant ARM (26.423), which the file has had the

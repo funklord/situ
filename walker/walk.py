@@ -867,6 +867,7 @@ def read_scalar(view: View, index: int) -> int:
 	# varint has one -- and decoding is what every compiled backend's `_get`
 	# does.
 	if index in view.image.varints:
+		varint_admissible(view, index)
 		return varint(view, index)[1]
 
 	# A delimited member is a byte run whose end the data decides, so it has
@@ -1395,9 +1396,16 @@ def varint_run_at(view: View, index: int, element: int) -> int:
 	for seen in range(count):
 		if at >= view.limit:
 			break
-		consumed, value = decode_varint(view, at, *rules)
+		consumed, raw = decode_varint(view, at, *rules)
 		if seen == element:
-			return value
+			if index in view.image.varint_minimal \
+					and consumed != _minimal_length(view, index, raw):
+				raise Refused(
+					f"placement {index}[{element}] is encoded in "
+					f"{consumed} bytes and needs "
+					f"{_minimal_length(view, index, raw)}; `minimal` "
+					f"admits one encoding")
+			return _varint_transform(view, index, raw)
 		at += consumed
 	raise Refused(f"element {element} is past the {count} this run holds")
 
@@ -1425,7 +1433,84 @@ def varint(view: View, index: int) -> tuple[int, int]:
 		raise Refused(f"placement {index} has no varint rules in this image")
 
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
-	return decode_varint(view, start, *rules)
+	consumed, raw = decode_varint(view, start, *rules)
+	# The TRANSFORM only. `minimal` is the getter's refusal and this
+	# function serves the width path too: `content_bits` asks it how many
+	# bytes the member occupies, catches a refusal as a zero width, and
+	# then places every later member on top of the varint. Measured --
+	# `varint_canonical { edge_canonical v; u16 tail; }` over
+	# `85 00 00 00` put `tail` at offset 0 and read 0x8500 as its value.
+	# The four backends draw the same line: `_len` returns the encoded
+	# length whatever its minimality, and only `_get` refuses.
+	return consumed, _varint_transform(view, index, raw)
+
+
+def _varint_transform(view: View, index: int, raw: int) -> int:
+	"""What a varint's groups MEAN, which the decoder cannot know.
+
+	`transform = zigzag` makes the accumulator a signed number, and the
+	image carried no bit for it until 26.687 -- so this walker answered
+	the raw groups where every backend applies the transform, reading -1
+	as 1 and 1 as -2.
+
+	Named for the transform and not for the value, because `minimal` is
+	the other half of what the image was missing and does NOT belong
+	here: see `varint_admissible`.
+
+	`_varint_transform` and not `_decoded`, which this file already has
+	for a scalar's BCD and sign handling. The first spelling shadowed it,
+	and mypy named both call sites rather than letting a walker answer a
+	scalar through a varint's rules.
+	"""
+	if index in view.image.varint_zigzag:
+		return (raw >> 1) ^ -(raw & 1)
+	return raw
+
+
+def varint_admissible(view: View, index: int) -> None:
+	"""Refuse a padded encoding where the varint declares `minimal`.
+
+	The GETTER's refusal, which is the line all four backends draw: their
+	`_len` answers the encoded length whatever its minimality, and only
+	`_get` refuses. Asked by `read_scalar` and by the run's element
+	reader, and deliberately not by `varint` itself -- that function
+	serves the width path, where a refusal becomes a zero width and
+	places every later member on top of this one.
+	"""
+	if index not in view.image.varint_minimal:
+		return
+	rules = view.image.varint_rules.get(index)
+	if rules is None:
+		return
+	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	consumed, raw = decode_varint(view, start, *rules)
+	least = _minimal_length(view, index, raw)
+	if consumed != least:
+		raise Refused(
+			f"placement {index} is encoded in {consumed} bytes and needs "
+			f"{least}; `minimal` admits one encoding")
+
+
+def _minimal_length(view: View, index: int, value: int) -> int:
+	"""How many bytes the minimal encoding of `value` takes.
+
+	The encoding's own rule, which is the backends' `situ_varint_len` and
+	`situ_varint_be_len`: seven bits a byte, and for `be128` a last byte
+	that may carry `terminal_bits` instead.
+	"""
+	max_bytes, terminal, big = view.image.varint_rules[index]
+	count = 1
+	while value >= 0x80:
+		value >>= 7
+		count += 1
+	# `situ_varint_be_len`'s own clamp, copied rather than re-derived: the
+	# whole-byte terminal form encodes one more value per length than the
+	# grouped one, so a value needing every grouped byte fits in the
+	# terminal byte instead. The first draft here worked the bound out
+	# from the group widths and was a reproduction of half a function.
+	if big and terminal == BITS_PER_BYTE and count > max_bytes:
+		count = max_bytes
+	return count
 
 
 def decode_number(view: View, start: int, max_bytes: int,

@@ -586,6 +586,10 @@ struct utf16 size=17 repr=ValueConverted atomic=NonAtomic
   utf16.le                               offset=AbsoluteStatic(0x08) size=Fixed(8) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
   utf16.tail                             offset=AbsoluteStatic(0x10) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
 
+struct varint_canonical size=3..12 mutate=InPlaceSlack address=Unstable repr=ValueConverted atomic=NonAtomic
+  varint_canonical.v                     offset=AbsoluteStatic(0x00) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack
+  varint_canonical.tail                  offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
 struct varint_driver size=5..36893488147419103243 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   varint_driver.n                        offset=AbsoluteStatic(0x00) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   varint_driver.d                        offset=Dynamic size=Bounded(2, 36893488147419103232) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
@@ -595,6 +599,10 @@ struct varint_run size=3..2298 access=Sequential mutate=InPlaceSlack address=Uns
   varint_run.n                           offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   varint_run.v                           offset=AbsoluteStatic(0x01) size=Bounded(0, 2295) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=InPlaceSlack canonical=NonCanonical
   varint_run.tail                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct varint_signed size=3..12 mutate=InPlaceSlack address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  varint_signed.v                        offset=AbsoluteStatic(0x00) size=Bounded(1, 10) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
+  varint_signed.tail                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
 struct versioned size=3..9 repr=ValueConverted atomic=NonAtomic stage=ParseTime
   versioned.ver                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

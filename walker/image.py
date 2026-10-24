@@ -399,6 +399,12 @@ class Image:
 	#: the arithmetic is the compiler's and a second copy of it here would
 	#: be a second implementation to keep in step.
 	varint_rules: dict[int, tuple[int, int, bool]] = field(default_factory=dict)
+	#: Members whose varint declares `minimal`: a padded encoding is a
+	#: second encoding of one value and the schema does not admit it.
+	varint_minimal: set[int] = field(default_factory=set)
+	#: Members whose varint declares `transform = zigzag`: the groups
+	#: decode to a signed value, so the raw accumulator is not the value.
+	varint_zigzag: set[int] = field(default_factory=set)
 	#: placement index -> the value that means little-endian.
 	markers: dict[int, int]			= field(default_factory=dict)
 	#: Codec index -> what computing it takes, for a derived kernel (26.579).
@@ -644,6 +650,20 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			image.varints.add(where)
 			image.varint_rules[where] = (max_bytes, terminal,
 			                             bool(vflags & 2))
+			# The two flags the rules tuple does not carry, because they
+			# are not decode PARAMETERS: the decoder reads groups either
+			# way and these decide what the value MEANS and whether the
+			# encoding is admissible. Kept as sets for the same reason
+			# `varints` is one -- a walker asks "is this member one of
+			# those" rather than looking up a record (26.687).
+			#
+			# Bit 1 was read by nobody and bit 4 did not exist, so a
+			# padded encoding was accepted where four backends refuse it
+			# and a `svar` came back as its raw groups.
+			if vflags & 1:
+				image.varint_minimal.add(where)
+			if vflags & 4:
+				image.varint_zigzag.add(where)
 
 	if CONSTRAINTS in found:
 		at, records, stride = found[CONSTRAINTS]

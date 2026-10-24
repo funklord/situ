@@ -833,28 +833,14 @@ an `_at` that walks, in all four backends and both walkers. It had been
 documented and unimplemented, which is worse than either -- six readers
 agreed about it by all being wrong the same way.
 
-**Two gaps remain beside it, both in what the IMAGE carries about a varint
-rather than in the construct.** The packer writes three fields and one
-flags byte per varint member (`pack.py`, `SECTION_VARINTS`), and the flags
-byte states `minimal` and `be128` and nothing else:
-
-- **`transform = zigzag` is not in the image**, so both walkers answer a
-  `svar`'s RAW encoding where all four backends answer the decoded value.
-  Measured 2026-10-23 on a two-element run: the walkers said 1 and 6, the
-  backends -1 and 3. It applies to a single `svar` as much as to a run,
-  and predates the run by as long as the transform has existed.
-- **`minimal` reaches the image and not the walkers**: `image.py` reads
-  the flags byte for `be128` only, so a padded encoding is a
-  `SITU_ERR_CONSTRAINT` in all four backends and an accepted value in
-  both walkers.
-
-Neither is exercised, which is why neither has been seen: the corpus
-declares exactly one varint type, `edges.edge_varint`, and it is `be128`
-with neither attribute. So the four-way differential and the two-walker
-differential both pass over a divergence that is certain. Adding a corpus
-fixture for either one fails immediately, by construction, which is the
-right order -- but it needs the image's flags byte widened first, and two
-bits of it are free.
+**Two gaps stood beside it, both in what the IMAGE carried about a varint
+rather than in the construct, and both are closed by 26.687.** The flags
+byte stated `minimal` and `be128`, `image.py` read only the second, and
+the transform had no bit at all -- so both walkers answered a `svar`'s raw
+groups where four backends answer the decoded value, and took a padded
+encoding all four refuse. `edges.varint_signed` and
+`edges.varint_canonical` are the fixtures that were missing, and all six
+readers agree on them now.
 
 **And `uvar v[remaining]` crashes the compiler** -- `AssertionError` in
 `propagate._parameterise`, on `assert placement.size_max_bits is not
@@ -7367,6 +7353,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.687 The image did not say what a varint's bytes mean
+
+Moved to
+`doc/decision/26.687-the-image-did-not-say-what-a-varints-bytes-mean.md`.
 
 ### 26.686 A varint's length answers zero, and `required` read it
 
