@@ -1365,7 +1365,10 @@ class Solver:
 		interior_hi = (None if inner.cursor.hi is None or cursor.hi is None
 		               else inner.cursor.hi - cursor.hi)
 		interior    = Interval(interior_lo, interior_hi)
-		extent      = _expand(codec, interior)
+		# Whole bytes: a ratio can land between them and a member cannot
+		# sit on half a byte. See `_whole_bytes` for what the floor below
+		# `size_max_bytes` was costing.
+		extent      = _whole_bytes(_expand(codec, interior))
 
 		# A delimited region's extent is the scan, not the interior put
 		# through the expansion. The two answer different questions: the
@@ -3560,6 +3563,35 @@ def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:
 	# ratio_bounded: worst case known, actual data-dependent.
 	return Interval(interior.lo,
 	                None if interior.hi is None else scale(interior.hi))
+
+
+def _whole_bytes(extent: Interval) -> Interval:
+	"""A region's extent, rounded up to whole bytes.
+
+	**A coded region occupies whole bytes however the ratio divides.** The
+	expansion arithmetic is in bits (0046) and a ratio can land between
+	bytes: `ratio_bounded(1001, 1000) + 20` over a 446411-byte interior
+	gives 3575020 bits, which is 446877.5 bytes. The member after it
+	starts on a byte boundary and the message is byte-addressed, so half a
+	byte is not an extent anything can have.
+
+	Left alone it cost more than the odd `3575020bit` in the map, which is
+	how bbq-predictor found it. `size_max_bytes` is `size_max_bits //
+	BITS_PER_BYTE`, a FLOOR, so the generated `SITU_MONTH_TAIL_SIZE_MAX`
+	came out 446879 where the worst case is 446880 -- a static buffer
+	sized from situ's own promise, one byte short of the message it is
+	promised to hold. Rounding here rather than at the division because a
+	floor and a ceiling are both wrong answers to a question that should
+	not arise: the extent is whole bytes before anybody divides it.
+
+	The low bound rounds up too, and for the same reason: the fewest WHOLE
+	bytes a region can occupy is the ceiling of its bit minimum, and
+	flooring it would admit a buffer one byte short at the other end.
+	"""
+	return Interval(
+		-(-extent.lo // BITS_PER_BYTE) * BITS_PER_BYTE,
+		None if extent.hi is None
+		else -(-extent.hi // BITS_PER_BYTE) * BITS_PER_BYTE)
 
 
 def _arm_name(arm: ast.VariantArm) -> str:

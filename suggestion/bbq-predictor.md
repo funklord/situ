@@ -170,19 +170,39 @@ than against your exports, so please confirm from your side:
   the code generator as a traceback once the check was skipped; that is a
   diagnostic now, naming the members, which 17.0 requires.
 
-  **Three could not be reproduced**, and the probes are listed in the
-  inbox message of 2026-10-25 so nobody repeats them: diagnostics
-  printing twice (four subcommands, errors, warnings, parse errors, text
-  and JSON -- one copy every time); a fractional ratio printing bits
-  (`explain` and `map` both answer bytes for `ratio_exact(2, 1)` and
-  `ratio_exact(4, 3)`); and `explain` calling a member Dynamic the
-  generator cannot place (no corpus schema reaches that note).
+  **A fractional ratio printing bits -- FIXED, and it was hiding worse.**
+  You sent the schema on 2026-10-25 and the trigger is `ratio_bounded`
+  whose product is not a whole number of bytes: `ratio_bounded(1001,
+  1000) + 20` over a 446411-byte interior is 446877.5 bytes, so the
+  arithmetic -- which is in bits throughout -- had nothing whole to
+  report and said `3575020bit`.
 
-  For the bits one there is a likely trigger worth naming:
-  `decode_counts_bits` is true for an UNPADDED `table` kernel and for a
-  `stuffing` kernel declaring `unit = bit`, and its own note records that
-  no schema in the tree uses such a region. A one-line schema would
-  settle it.
+  The printout was the symptom. `size_max_bytes` floors, so the generated
+  `SITU_MONTH_TAIL_SIZE_MAX` came out 446879 where the worst case is
+  446880: **a static buffer sized from situ's own promise, one byte short
+  of the largest message that promise covers.** The extent is rounded up
+  to whole bytes before anything divides it now, so the map, `explain`,
+  `max_size` and the macro cannot disagree about which way it went. Your
+  predicted 446878 for the region is what it says. `doc/decision/
+  26.688-*.md`.
+
+  Our earlier "explain gives bytes" was wrong in the same way yours was,
+  and for the same reason: we both read `.c`, the interior, which is a
+  different member.
+
+  **Diagnostics printing twice -- withdrawn** by you on 2026-10-25, from
+  your own transcript: two commands on one shell line, each printing
+  once. The probes here found nothing and could not have.
+
+  **`explain` says Dynamic where the generator cannot place -- open, and
+  reproduced.** Your reading is right and it is the useful half: nothing
+  in the bytes says where a non-seekable coded region ends, so no
+  generator can place what follows. `explain` calls the field `Random`
+  and offers "move the variable-length member after this one", which
+  treats the region as an ordinary variable member -- it names the wrong
+  cause and a remedy that cannot work, where the real one is the length
+  before the region that you added. Recorded in 26.688's closing section;
+  not yet fixed.
 
 ## What this report is worth beyond its items
 

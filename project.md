@@ -7384,6 +7384,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.688 A coded region's extent landed between bytes
+
+Moved to
+`doc/decision/26.688-a-coded-regions-extent-landed-between-bytes.md`.
+
 ### 26.687 The image did not say what a varint's bytes mean
 
 Moved to
