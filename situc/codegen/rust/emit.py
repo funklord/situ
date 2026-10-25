@@ -332,6 +332,13 @@ class Emitter:
 			messages: bool = False) -> None:
 		self.schema   = schema
 		self.resolved = resolved
+		#: Structs whose `required` is being rendered. `_frames_itself`
+		#: renders it to see whether it emits, `_required` asks whether
+		#: each arm frames, and an arm that IS the recursion asks about
+		#: the struct already in flight -- a RecursionError the gate
+		#: found on `test_recursion`'s `arm` shape. The C emitter's
+		#: `_in_extent` is the same guard one function over (26.684).
+		self._in_required: set[str] = set()
 		self.basename = basename
 		self.enums    = {decl.name: decl for decl in schema.enums()}
 		self.tokens   = {decl.name: decl for decl in schema.token_sets()}
@@ -5617,8 +5624,17 @@ class Emitter:
 
 	def _frames_itself(self, struct: ResolvedStruct) -> bool:
 		"""Whether `required` is emitted for this struct at all."""
-		return any("pub fn required(" in line
-		           for line in self._required(struct))
+		if struct.name in self._in_required:
+			# Re-entered from its own arm: yes, because a recursive
+			# `required` exists and is bounded by `[depth]`, which is
+			# what makes the arm describable. The outer call renders it.
+			return True
+		self._in_required.add(struct.name)
+		try:
+			rendered = self._required(struct)
+		finally:
+			self._in_required.discard(struct.name)
+		return any("pub fn required(" in line for line in rendered)
 
 	def _nested_framing(self, struct: ResolvedStruct,
 			placement: Placement,

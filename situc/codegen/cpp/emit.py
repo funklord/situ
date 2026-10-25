@@ -238,6 +238,13 @@ class Emitter:
 		self.resolved  = resolved
 		self.basename  = basename
 		self.namespace = namespace
+		#: Structs whose `required` is being rendered. `_frames_itself`
+		#: renders it to see whether it emits, `_required` asks whether
+		#: each arm frames, and an arm that IS the recursion asks about
+		#: the struct already in flight -- a RecursionError the gate
+		#: found on `test_recursion`'s `arm` shape. The C emitter's
+		#: `_in_extent` is the same guard one function over (26.684).
+		self._in_required: set[str] = set()
 		#: Per struct, the members whose write moves a later one (12.3).
 		#: One rule for four backends, asked of the decision layer.
 		self._invalidating = invalidating_members(resolved.structs)
@@ -2731,8 +2738,18 @@ class Emitter:
 		predicate listing them would be a second copy of `_required`'s
 		own branches.
 		"""
+		if struct.name in self._in_required:
+			# Re-entered from its own arm: yes, because a recursive
+			# `required` exists and is bounded by `[depth]`, which is
+			# what makes the arm describable. The outer call renders it.
+			return True
+		self._in_required.add(struct.name)
+		try:
+			rendered = self._required(struct)
+		finally:
+			self._in_required.discard(struct.name)
 		return any("static ::situ::rt::err required(" in line
-		           for line in self._required(struct))
+		           for line in rendered)
 
 	def _nested_framing(self, struct: ResolvedStruct,
 			placement: Placement,

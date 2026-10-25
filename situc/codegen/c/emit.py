@@ -220,6 +220,14 @@ class Emitter:
 		#: question -- `_struct_extent` answers it from here rather than
 		#: re-entering. The solver's `in_progress` guard, one layer out.
 		self._in_extent: set[str] = set()
+		#: Structs whose `required` is being rendered, for the same reason
+		#: `_in_extent` exists one function over: `_frames_itself` renders
+		#: `_required` to see whether it emits, `_required` asks
+		#: `_variant_framing` whether each arm frames, and an arm that IS
+		#: the recursion asks `_frames_itself` about the struct already in
+		#: flight. The gate found it as a RecursionError on
+		#: `test_recursion`'s `arm` shape (26.684).
+		self._in_required: set[str] = set()
 		#: Emit the second accessor family (decision 0022). The consumer's
 		#: choice rather than the schema's: an embedded receiver and a desktop
 		#: inspector read the same bytes and want opposite trade-offs, and a
@@ -5085,9 +5093,19 @@ class Emitter:
 		`static inline` the emitter then declines to define is
 		`-Werror`, which is the trap 26.679 is about.
 		"""
+		if struct.name in self._in_required:
+			# Re-entered from its own arm. Yes, for `_struct_extent`'s
+			# reason: a recursive `required` exists and is bounded by
+			# `[depth]`, which is what makes the arm describable at all.
+			# The outer call is what renders the lines.
+			return True
 		name = ident(self.prefix, struct.name, "required")
-		return any(f"situ_err_t {name}(" in line
-		           for line in self._required(struct))
+		self._in_required.add(struct.name)
+		try:
+			rendered = self._required(struct)
+		finally:
+			self._in_required.discard(struct.name)
+		return any(f"situ_err_t {name}(" in line for line in rendered)
 
 	def _nested_framing(self, struct: ResolvedStruct,
 			placement: Placement,

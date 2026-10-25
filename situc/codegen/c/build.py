@@ -1620,6 +1620,12 @@ def _walk(part: Part, local: str, count: bool,
 		f"\t\t              {part.local}_len);",
 		f"\t\twhile ({SCAN} < {part.local}_len) {{",
 		f"\t\t\tuint32_t {NEED} = 0u;",
+		# Whether this element was taken because the buffer ENDED rather
+		# than because `_required` measured it. The verdict below differs:
+		# an element that fails its own checks answers with them, and a
+		# blob that is not a whole number of elements is the CALLER's
+		# error and says so.
+		"\t\t\tint situ_tail = 0;",
 		"",
 	]
 	if part.delimiter:
@@ -1638,7 +1644,28 @@ def _walk(part: Part, local: str, count: bool,
 		f"\t\t\tif ({part.inner}_required({part.local} + {SCAN},",
 		f"\t\t\t                      {part.local}_len - {SCAN},",
 		f"\t\t\t                      &{NEED}) != SITU_OK) {{",
-		"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+		"\t\t\t\t/* THE CALLER'S BUFFER ENDS HERE, and for an element",
+		"\t\t\t\t * that ends `before` a byte it does not own that end",
+		"\t\t\t\t * IS the separator. `_required` cannot know that: it",
+		"\t\t\t\t * frames a stream, where more bytes may extend the",
+		"\t\t\t\t * element, so it answers TRUNCATED and is right to.",
+		"\t\t\t\t *",
+		"\t\t\t\t * sexpr's `symbol` is the case: `symbol_required`",
+		"\t\t\t\t * has always refused a `b` with no separator after",
+		"\t\t\t\t * it, while `sexpr_required` accepted one -- a struct",
+		"\t\t\t\t * disagreeing with its own arm, which 26.684 fixed by",
+		"\t\t\t\t * making the variant ask the arm. This walk relied on",
+		"\t\t\t\t * the optimistic answer and refused to build `(a b)`",
+		"\t\t\t\t * once it was gone.",
+		"\t\t\t\t *",
+		"\t\t\t\t * Taking the rest as one element is CONFIRMED rather",
+		"\t\t\t\t * than assumed: the validate below is what decides,",
+		"\t\t\t\t * and it is the same call every other element gets.",
+		"\t\t\t\t * A genuinely short element fails it -- a fixed one",
+		"\t\t\t\t * at the view, whose own minimum refuses a short",
+		"\t\t\t\t * frame, and a variable one at its constraints. */",
+		f"\t\t\t\t{NEED} = {part.local}_len - {SCAN};",
+		"\t\t\t\tsitu_tail = 1;",
 		"\t\t\t}",
 		f"\t\t\tif ({NEED} == 0u) {{",
 		"\t\t\t\t/* What stops the loop. A zero-byte element would",
@@ -1669,7 +1696,16 @@ def _walk(part: Part, local: str, count: bool,
 		# The element's own verdict rather than a flat CONSTRAINT: a
 		# caller told which of its elements is wrong, and why, can fix
 		# it.
-		f"\t\t\t\treturn {ERR};",
+		#
+		# EXCEPT where the buffer's end is what ended this element. Then
+		# the element was never measured -- the rest was taken on
+		# approval and the validate is the approval -- so its failure
+		# means the blob is not a whole number of elements, which is the
+		# caller's error rather than this element's. `ble`'s probe passes
+		# one byte short of two reports and wants CONSTRAINT; the
+		# element's own answer there is BOUNDS, which describes the frame
+		# it was handed rather than the mistake that was made.
+		f"\t\t\t\treturn situ_tail ? SITU_ERR_CONSTRAINT : {ERR};",
 		"\t\t\t}",
 		f"\t\t\t{SCAN} += {NEED};",
 		*([f"\t\t\t{COUNT}++;"] if count else []),
