@@ -252,7 +252,7 @@ than against your exports, so please confirm from your side:
 
   `doc/decision/26.689-*.md`. The generalisation we are keeping: **a
   diagnostic is code, and an unexercised diagnostic is unexercised
-  code.** Three of the six findings were explanations rather than
+  code.** Three of the six were explanations rather than
   behaviour -- nothing would have failed a test, nothing would have
   crashed a caller, and each sent a reader to change the wrong thing.
 

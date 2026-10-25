@@ -2813,6 +2813,31 @@ IDENTITY_APART = frozenset({
 	# should be reconciled rather than listed -- raised rather than done,
 	# because which walk is right is a question about both of them.
 	("edges.situ", "oob_inner"),
+	# A FOURTH, and it was divergent before anybody could see it.
+	#
+	# `varint_driver`'s `u16 d[n + 1]` is the same shape with the length
+	# declared by a VARINT rather than by a fixed-width field: a hostile `n`
+	# exceeds the frame by a margin, C's placement guard refuses first and
+	# records no check identity -- `c_why` renders an id outside
+	# `CHECK_NAMES` as "bounds", which is what that string means here -- and
+	# the Python walk reaches `fits_frame`. Measured on both sides:
+	# verdict 1 from each, `placement[156]` from each, on packet
+	# a685a8d4978dcc3f48024c8e8b59f0c49c9860082203798427d5291bc7.
+	#
+	# **It was exposed by the corpus moving, not by anything changing.**
+	# The draw is seeded and the packets are taken in struct order, so
+	# `edges.situ` gaining two structs ahead of this one handed it two
+	# different packets -- and these are the first that reach the hostile
+	# length. So this struct has very likely been divergent since it was
+	# written, and what found it was luck re-dealt.
+	#
+	# That is a finding about the detector rather than about the walks: two
+	# packets per struct from a fixed seed finds this class when the deal
+	# happens to be hostile, and the deal changes whenever somebody adds a
+	# struct. Four of one shape now, and the reconciliation raised at the
+	# third is still the answer -- which walk is right is a question about
+	# both of them (26.689).
+	("edges.situ", "varint_driver"),
 })
 
 
