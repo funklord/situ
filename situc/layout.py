@@ -289,6 +289,15 @@ class Placement:
 	dynamic_cause: str | None	= None
 	dynamic_cause_span: Span | None	= None
 	dynamic_cause_size: str | None	= None
+	#: The codec of that cause, where the cause is a coded region whose
+	#: expansion has no closed form. A strictly stronger claim than
+	#: `dynamic_cause`, for the same reason `Walk.scan` is one: a dynamic
+	#: offset is arithmetic over values already read, and a region whose
+	#: expansion is a worst case rather than a length cannot be measured
+	#: by any arithmetic at all -- it has to be decoded. Carried so that
+	#: the blame chain names the codec and offers the remedy that works,
+	#: rather than "move the variable-length member after this one".
+	dynamic_cause_codec: str | None	= None
 	# Whether the frame this member is measured against is itself placed
 	# dynamically. An element of a fixed array at a known offset is
 	# frame-relative in its offset but nothing can move it, so its address is
@@ -991,7 +1000,14 @@ class Walk:
 	# The first member whose size was not fixed, which is what every later
 	# member's Dynamic offset traces back to.
 	cause: tuple[str, Span, str] | None = None
-	# The first member found by scanning for a delimiter. Separate from
+	# The codec of that cause, where the cause is a coded region whose
+	# expansion has no closed form. Set with `cause` and only then, so the
+	# two cannot disagree about which member is being blamed.
+	decode_cause: str | None = None
+	# The first member or coded region whose end is found by scanning for a
+	# delimiter -- both, since 26.689: a region's extent is the scan rather
+	# than the expansion (section 13.6), so what follows one is reached the
+	# same way. Separate from
 	# `cause` because it is a strictly stronger claim: a dynamic offset is
 	# arithmetic over values already read and cannot fail, while reaching a
 	# member past a scan means searching, and the delimiter may not be there
@@ -1269,6 +1285,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 
 		if state.cause is None and bits.hi != bits.lo:
@@ -1323,6 +1340,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 		state.cursor = cursor.advance(bits)
 
@@ -1348,7 +1366,8 @@ class Solver:
 
 		# The interior is placed at the region's base. Its offsets are what the
 		# decoded bytes look like, which is what a caller addresses.
-		inner = Walk(fields=dict(state.fields), cursor=cursor, cause=state.cause)
+		inner = Walk(fields=dict(state.fields), cursor=cursor,
+		             cause=state.cause, decode_cause=state.decode_cause)
 		self.place_members(decl, region.members, scope, layout,
 		                   f"{prefix}.{region.name}", inner)
 
@@ -1407,6 +1426,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 
 		# Everything the region contains carries the codec, so the propagation
@@ -1423,8 +1443,31 @@ class Solver:
 			                  unverified_ok = _has_attr(region.attrs,
 			                                            "allow_unverified_read"))
 
+		if until is not None and state.scan is None:
+			# A delimited region ends wherever the terminator turns out to
+			# be, so reaching anything past it is a SEARCH -- the same claim
+			# `place_field` records for a delimited member, and recorded in
+			# the same place for the same reason: after the placement, so
+			# the region is not blamed for its own delimiter.
+			#
+			# It was recorded for members only, so a field after a delimited
+			# REGION reported a dynamic offset -- arithmetic over values
+			# already read -- where the generated accessor calls the
+			# region's `_span` scan. One question, two constructs, one of
+			# them wired (26.689).
+			state.scan = (region.name, region.span)
+
 		if state.cause is None and extent.hi != extent.lo:
 			state.cause = (region.name, region.span, _render_extent(extent))
+			# And whether it is the CODEC that makes it unmeasurable, which
+			# is a stronger claim than a varying extent: a length-preserving
+			# codec over `u8 body[n]` varies with `n` and is still arithmetic
+			# over a value already read. A delimited region is excluded
+			# because its extent is the scan rather than the expansion --
+			# where the bytes stop is on the wire, whatever the transform did
+			# to them on the way past (section 13.6).
+			if until is None and not expansion_is_closed_form(codec):
+				state.decode_cause = region.codec
 
 		state.cursor = cursor.advance(extent)
 
@@ -1462,6 +1505,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 
 		self.stamp_region(layout, slot, region.name)
@@ -1807,6 +1851,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 
 		state.cursor = cursor.advance(Interval(bits, bits))
@@ -1859,6 +1904,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 
 		if state.cause is None:
@@ -1961,6 +2007,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 		))
 
 		if state.cause is None:
@@ -2085,6 +2132,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 			arm_sizes     = tuple(arm_sizes),
 			discriminant  = expr_to_source(variant.discriminant),
 			arm_cases     = tuple(arm_cases),
@@ -2106,7 +2154,7 @@ class Solver:
 		assert arm.member is not None
 
 		arm_state = Walk(fields=dict(state.fields), cursor=state.cursor,
-		                 cause=state.cause)
+		                 cause=state.cause, decode_cause=state.decode_cause)
 		before    = state.cursor
 
 		self.place_members(decl, (arm.member,), scope, layout,
@@ -2411,6 +2459,7 @@ class Solver:
 			dynamic_cause      = state.cause[0] if state.cause else None,
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
+			dynamic_cause_codec = state.decode_cause,
 			delimiters         = member.until.delimiters if member.until else (),
 			delimiter_consumed = (member.until.consumed if member.until
 			                      else True),
@@ -3508,6 +3557,30 @@ class Solver:
 def _path_of(expr: ast.Expr) -> str | None:
 	from situc.expr import path_text
 	return path_text(expr)
+
+
+#: Expansion forms whose output length is a FUNCTION of the input length.
+#: The other two -- a bounded ratio and an unbounded one -- publish a worst
+#: case, which is not a length: nothing in the bytes says where such a region
+#: ends, so no arithmetic places what follows it and the decoder is the only
+#: thing that can say. `traverse.region_extent` gates on this, so the one
+#: authority decides both the extent and the diagnostic.
+CLOSED_FORM_EXPANSION = frozenset({
+	ast.Expansion.PRESERVING,
+	ast.Expansion.FIXED_ADD,
+	ast.Expansion.RATIO_EXACT,
+	ast.Expansion.RATIO_PADDED,
+})
+
+
+def expansion_is_closed_form(codec: object) -> bool:
+	"""Whether a codec's expansion gives the output length from the input.
+
+	Loosely typed because `traverse.region_extent` takes its codec as an
+	`object` -- the lattice reads a property signature and the signature may
+	arrive from a kernel rather than from a declaration.
+	"""
+	return getattr(codec, "expansion", None) in CLOSED_FORM_EXPANSION
 
 
 def _expand(codec: ast.CodecDecl, interior: Interval) -> Interval:

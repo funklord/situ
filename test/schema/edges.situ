@@ -685,6 +685,66 @@ struct externally_stuffed {
 	}
 }
 
+// A MEMBER AFTER A CODED REGION, which no schema here or in the examples had
+// -- measured across all 45 of them, and the count was zero both ways.
+//
+// `externally_stuffed` above is the corpus's only delimited region and it is
+// its struct's only member, so nothing ever asked what a region does to the
+// member AFTER it. Two different answers were wrong, and bbq-predictor found
+// the second from outside with a real format (26.689).
+//
+// `stuffed_then_field` is the delimited one. A region ends wherever its
+// terminator turns out to be, so reaching anything past it is a SEARCH that
+// can fail -- which `place_field` had recorded for a delimited member since
+// 8.6.1 and `place_coded` had not, so `after` reported a dynamic offset
+// (arithmetic over values already read) while the generated accessor called
+// the region's own `_span` scan. The capability map said one thing and the
+// code did another, which is the one thing the map must never do.
+//
+// `stuffed_opaque_tail` is the undelimited one, and it is the shape situ
+// cannot place at all: stuffing's expansion is `ratio_bounded(2, 1)`, a
+// worst case rather than a length, so nothing in the bytes says where the
+// region ends. Every backend declines `after` and says so, which is the
+// correct behaviour and is why this struct is here -- the refusal is now
+// something the corpus exercises rather than something four emitters claim
+// in a comment nobody reads. The lattice reports it as `stage :=
+// TransformTime` on `after`: the region has to be decoded before anything
+// after it can be found.
+struct stuffed_then_field {
+	u8  n;
+	coded body(stuffed_apart) until "\xC0" {
+		u8  content[n];
+	}
+	u16 after;
+}
+
+struct stuffed_opaque_tail {
+	u8  n;
+	coded body(stuffed_apart) {
+		u8  content[n];
+	}
+	u16 after;
+}
+
+// A MEMBER AFTER A VARIANT NO ARM CHAIN CAN MEASURE, which is the third way
+// into the same note and the second one that was false.
+//
+// An arm holding a counted run of variable-length elements is the shape no
+// backend walks -- the ordinary member path emits `_span`, `_at` and
+// `_count` for a run and an arm's parallel family emits none of them -- so
+// the variant has no length and nothing after it can be placed. C's note
+// for that case read "codec `variant` has no closed-form expansion", taking
+// the literal word `variant` for a codec name, where the three other
+// backends decline the member with no explanation at all (26.689).
+struct unwalkable_arm {
+	u8  kind;
+	variant body switch (kind) {
+		case 1:  piece recs[kind];
+		default: u8    raw;
+	}
+	u16 after;
+}
+
 // AN ENUM MEMBER IN A SIZE EXPRESSION, which nothing here had.
 //
 // Section 10 admits "integer literals, `const` references" in a size

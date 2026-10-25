@@ -48,6 +48,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
+	arm_of,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -6541,6 +6542,26 @@ class Emitter:
 
 		if placement.kind == "variant":
 			return self._variant_length(struct, placement, depth)
+
+		# A run inside a variant arm has no length here, because the arm
+		# emitter has no walk: an arm is emitted by a family of its own,
+		# which reaches a scalar, a byte run, a run of wide values and one
+		# fixed-size struct -- never a run of records. C, C++ and Rust all
+		# decline such a member and say why; this backend answered, naming
+		# `<arm>_span` where the arm family defines `<arm>_extent`, so
+		# `piece recs[kind]` in an arm emitted a getter, a setter and a
+		# `required` that all raise `AttributeError` on first use -- and
+		# the gate that compares the four could not see it, because the
+		# phrase the other three decline with was not one it knew (26.689).
+		# A COUNTED run only, which is where the measurement landed: this
+		# backend's arm family does reach a delimited byte run and a `while`
+		# run, and C, C++ and Rust emit `delimited_arm.after`,
+		# `separated_arm.after` and `wide_delim_arm.after` -- so the wider
+		# guard those three carry would have made this backend the lone
+		# refuser of three members it gets right.
+		if arm_of(struct, placement) is not None \
+				and is_counted_run(self.resolved.structs, placement):
+			return None
 
 		# A delimited member's extent is wherever the delimiter turns out to
 		# be, and `_span` is the member's own answer. One name for "how far

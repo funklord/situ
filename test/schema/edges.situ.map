@@ -512,11 +512,23 @@ struct spoken size=3.. access=Sequential mutate=Shifting address=Unstable canoni
   spoken.word                            offset=Scanned size=Bounded(1, 16) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
   spoken.rest                            offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct stuffed_opaque_tail size=3..514 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic stage=TransformTime
+  stuffed_opaque_tail.n                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  stuffed_opaque_tail.body               offset=AbsoluteStatic(0x01) size=Bounded(0, 511) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  stuffed_opaque_tail.body.content       offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
+  stuffed_opaque_tail.after              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable stage=TransformTime
+
 struct stuffed_seal size=18.. access=Sequential mutate=Immutable address=Unstable atomic=NonAtomic stage=VerifyGated effect=EffectOnRead
   stuffed_seal.lead                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   stuffed_seal.body                      offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting stage=VerifyGated auth=Covered(seal_sig) effect=EffectOnRead
   stuffed_seal.body.inner                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential stage=VerifyGated auth=Covered(seal_sig)
   stuffed_seal.seal_sig                  offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
+
+struct stuffed_then_field size=4.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic stage=TransformTime effect=EffectOnRead
+  stuffed_then_field.n                   offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  stuffed_then_field.body                offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
+  stuffed_then_field.body.content        offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
+  stuffed_then_field.after               offset=Scanned size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential address=Unstable
 
 struct tagged_options size=1.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
   tagged_options.head                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
@@ -574,6 +586,16 @@ struct unverified size=19 mutate=Immutable repr=ValueConverted atomic=NonAtomic 
   unverified.body                        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.body.seq                    offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=ValueConverted atomic=NonAtomic stage=TransformTime auth=Covered(mac)
   unverified.mac                         offset=AbsoluteStatic(0x03) size=Fixed(16) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
+
+struct unwalkable_arm size=3..65283 access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  unwalkable_arm.kind                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  unwalkable_arm.body                    offset=AbsoluteStatic(0x01) size=Bounded(0, 65280) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  unwalkable_arm.body.recs               offset=AbsoluteStatic(0x01) size=Bounded(0, 65280) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  unwalkable_arm.body.recs[]             offset=FrameStatic(0x00) size=Bounded(1, 256) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  unwalkable_arm.body.recs[].len         offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  unwalkable_arm.body.recs[].body        offset=FrameStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  unwalkable_arm.body.raw                offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  unwalkable_arm.after                   offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
 struct usb_token size=2 mutate=Immutable repr=ValueConverted atomic=NonAtomic auth=Covered(crc)
   usb_token.body                         offset=AbsoluteStatic(0x00) size=Fixed(11bit) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic auth=Covered(crc)

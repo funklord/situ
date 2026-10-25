@@ -2192,6 +2192,7 @@ output can be read against this table directly.
 | `unbounded-size` | a member with no upper bound on its length | computed from the construct |
 | `data-placed` | a member the data positions, rather than the members before it | `offset := DataPlaced`, `address := Unstable` |
 | `dynamic-predecessor` | a dynamically sized member earlier in the same frame | `offset := Dynamic`, `address := Unstable` |
+| `coded-predecessor` | a coded region earlier in the same frame whose codec has no closed-form expansion | computed from the construct |
 | `frame-relative` | a member of a frame, addressed from the frame base | `offset := FrameStatic` |
 | `dynamic-element-type` | an array whose element type is variable-sized | `access := Sequential` |
 | `variant-unequal-arms` | a variant whose arms are not the same size | computed from the construct |
@@ -7383,6 +7384,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 ### 26.408 A uniform tail is a rule with two halves, and only one was applied
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
+
+### 26.689 A member after something nobody can measure
+
+Moved to
+`doc/decision/26.689-a-member-after-something-nobody-can-measure.md`.
 
 ### 26.688 A coded region's extent landed between bytes
 

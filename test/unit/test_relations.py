@@ -1765,6 +1765,47 @@ def test_a_struct_that_cannot_be_framed_gets_no_reader() -> None:
 	assert "situ_row_required" not in header
 
 
+#: A counted run of variable-length records inside a variant arm. No backend
+#: walks one -- an arm is emitted by a family of its own, which reaches a
+#: scalar, a byte run, a run of wide values and one fixed-size struct -- so
+#: the variant has no length any of them can compute.
+ARM_RUN = """struct piece { u8 len; u8 body[len]; }
+struct arms {
+	u8 kind;
+	variant body switch (kind) {
+		case 1:  piece  recs[kind];
+		default: u8     raw;
+	}
+	u16 after;
+}
+"""
+
+
+def test_a_variant_arm_nothing_walks_gets_no_reader() -> None:
+	"""The same disagreement as above, one blocker over.
+
+	All four backends decline the member after such a variant and write a
+	note saying why; `frameable` said yes, so all four frame layers emitted
+	a Reader calling a `required` the same file declines to define. C's is
+	the only frame layer a test compiles, and that is how it was found
+	(26.689).
+
+	Asserted on all four, because the fault was in the shared predicate and
+	fixing it in one backend's emitter would have left three.
+	"""
+	schema, resolved = analysed(ARM_RUN)
+
+	framed = [struct.name for struct in frame.framed_structs(resolved)]
+	assert "arms" not in framed
+	assert "piece" in framed, "the measurable element must still get one"
+
+	for generated, name in ((frame.generate(schema, resolved, "t"), "t_frame.h"),
+	                        (frame_cpp.generate(schema, resolved, "t"), "t_frame.hpp"),
+	                        (frame_rs.generate(schema, resolved, "t"), "t_frame.rs"),
+	                        (frame_py.generate(schema, resolved, "t"), "t_frame.py")):
+		assert "arms" not in generated[name], name
+
+
 def test_every_backend_frames_the_same_structs() -> None:
 	"""The set is a property of the schema, so it cannot differ per language
 	even though the readers do."""

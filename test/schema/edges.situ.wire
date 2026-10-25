@@ -487,11 +487,21 @@ struct spoken size=3..
   ~         until:09  reserved_words word  cap=16
   ~         0..       u8         rest  sized-by=remaining
 
+struct stuffed_opaque_tail size=3..514
+  @0x0000   1         u8         n
+  @0x0001   0..511    stuffed_apart body  codec=stuffed_apart
+  ~         2         u16        after  big
+
 struct stuffed_seal size=18..
   @0x0000   1         u8         lead
   @0x0001   until:c0  sealed_stuffing body  codec=sealed_stuffing
   ~         16        u8         seal_sig
   seal_sig covers: body body.inner
+
+struct stuffed_then_field size=4..
+  @0x0000   1         u8         n
+  @0x0001   until:c0  stuffed_apart body  codec=stuffed_apart
+  ~         2         u16        after  big
 
 struct tagged_options size=1..
   @0x0000   1         u8         head
@@ -555,6 +565,14 @@ struct unverified size=19
   @0x0001   2         sealing_aead body  codec=sealing_aead
   @0x0003   16        u8         mac
   mac covers: body body.seq
+
+struct unwalkable_arm size=3..65283
+  @0x0000   1         u8         kind
+  @0x0001   0..65280  variant    body
+  ~         2         u16        after  big
+  body switch: kind
+  body case 1: recs piece
+  body case default: raw u8
 
 struct usb_token size=2
   @0x0000   7bit      u7         address  lsb_first

@@ -7601,6 +7601,52 @@ class Emitter:
 				" * `while` condition gives it a span function. */",
 			]
 
+		# A LENGTH ONLY THE DECODER CAN PRODUCE, which is not a length
+		# (26.570) -- and the blocker is then a MEMBER inside a region
+		# rather than the region itself. `Placement.codec` is stamped on
+		# everything a region contains, so the sentence below named that
+		# codec as though the member were one: `sealed_self_sized.body.n`
+		# is a varint and C told the reader "codec `edge_varint` has no
+		# closed-form expansion". The same false-diagnostic class the
+		# counted-run branch above exists to avoid (26.689).
+		if length_is_transform_output(blocker):
+			return [
+				f"/* No accessor for `{placement.name}`: it starts after "
+				f"`{blocker.name}`, whose",
+				" * length is in its own bytes -- and from outside the"
+				f" region those bytes",
+				f" * are `{blocker.codec}`'s output, so the number read out of"
+				" them is not",
+				" * a length of anything (26.440).",
+				" *",
+				" * A fixed-width field states its length in the schema,"
+				" where this",
+				" * view can see it. */",
+			]
+
+		# A VARIANT NO ARM CHAIN CAN MEASURE, which reached the codec
+		# sentence with `blocker.type_name` the literal word "variant", so
+		# the note read "codec `variant` has no closed-form expansion".
+		# Fourteen lines of schema reproduce it -- a counted run of
+		# variable-length elements in an arm, which no backend walks -- and
+		# the corpus had no instance until this branch was written (26.689).
+		if blocker.kind == "variant":
+			return [
+				f"/* No accessor for `{placement.name}`: it starts after the"
+				f" variant",
+				f" * `{blocker.name}`, and one of its arms has no length this"
+				" can compute,",
+				" * so how far the variant reaches depends on an arm that"
+				" cannot be",
+				" * measured.",
+				" *",
+				" * An arm holding a nested struct is measured by that"
+				" struct's own",
+				" * extent, which every backend reaches -- a run placed"
+				" directly in an",
+				" * arm is the shape none of them walks. */",
+			]
+
 		return [
 			f"/* No accessor for `{placement.name}`: it starts after "
 			f"`{blocker.name}`, whose",

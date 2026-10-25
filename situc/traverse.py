@@ -29,7 +29,8 @@ from math import lcm
 
 from situc.expr import Env
 from situc.layout import (BITS_PER_BYTE, Arm, Placement,
-                          regions_covered_by, transform_covers)
+                          expansion_is_closed_form, regions_covered_by,
+                          transform_covers)
 from situc.propagate import Resolved
 from situc.resolve import ResolvedStruct
 
@@ -661,6 +662,17 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 	every member after the region has to say so.
 	"""
 	if codec is None:
+		return None
+
+	# One authority for "the expansion has no closed form", because the
+	# diagnostic for everything AFTER such a region asks the same question
+	# and the two must not drift: `layout` names the codec as the cause of a
+	# later member's offset exactly where this declines to measure the
+	# region. The branches below still decline for their own reasons -- a
+	# `fixed_add` of a number of bits no byte holds, an interior that would
+	# have to be walked -- so this is a necessary condition and not the only
+	# one.
+	if not expansion_is_closed_form(codec):
 		return None
 
 	prefix   = region.path + "."
@@ -2150,6 +2162,21 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		# wrong for it when the table gained a length; C answered all along,
 		# and answered with the bound (26.35).
 		if placement.kind == "indexed":
+			return False
+		# AN ARM HOLDING A COUNTED RUN, which no backend walks: an arm is
+		# emitted by a family of its own -- a scalar, a byte run, a run of
+		# wide values and one fixed-size struct -- and never a run of
+		# records, so the variant has no length any of them can compute.
+		# All four decline the member after such a variant and say so, and
+		# this function did not, so all four `frame.py` layers emitted a
+		# Reader calling a `required` the same file declines to define.
+		# C's frame layer is the only one a test compiles and that is how
+		# it was caught -- the same shape as slip's, one blocker over
+		# (26.689).
+		if placement.kind == "variant" \
+				and any(member is not None
+				        and is_counted_run(structs, member)
+				        for _arm, member in arm_members(struct, placement)):
 			return False
 		if not is_run(placement, structs):
 			continue

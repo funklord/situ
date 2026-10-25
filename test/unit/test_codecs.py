@@ -342,6 +342,45 @@ def test_a_bounded_ratio_is_checked_as_a_bound() -> None:
 	assert "assert_true(out_len <= (in_len * 255u + 253u) / 254u);" in text
 
 
+def test_a_ratio_that_lands_between_bytes_rounds_the_region_up() -> None:
+	"""26.688, and the case bbq-predictor's own format reached first.
+
+	The expansion arithmetic is in bits (0046) and a ratio can land between
+	them: `ratio_bounded(1001, 1000) + 20` over a 446411-byte interior is
+	446877.5 bytes. `size_max_bytes` FLOORS, so the generated
+	`SIZE_MAX` macro came out one byte short of the largest message situ's
+	own promise covers -- a static buffer sized from the compiler and
+	overrun by a legal message.
+
+	Asserted here rather than as a corpus fixture because the shape needs an
+	`extern` codec with a bounded ratio and the corpus's codecs are derived
+	or exact. The three numbers are the arithmetic's three surfaces: the
+	region, the struct and the macro, which could disagree about which way
+	the division went while each looked plausible alone.
+	"""
+	body = ("codec squashy { expansion = ratio_bounded(1001, 1000) + 20; "
+	        "granularity = byte; seekable = none; invertible; deterministic; }"
+	        'impl squashy extern "my_squashy";'
+	        "struct month_tail {"
+	        "  u32 count [max = 446411];"
+	        "  coded columns(squashy) { u8 payload[count]; }"
+	        "}")
+	schema   = parse_text(PREAMBLE + body)
+	resolved = resolve(schema, solve(schema))
+	struct   = resolved.structs["month_tail"]
+	region   = next(entry.placement for entry in struct.entries
+	                if entry.placement.name == "columns")
+
+	assert region.size_max_bits == 446878 * 8
+	assert struct.layout.size_max_bits == 446882 * 8
+
+	from situc.codegen.c import generate as generate_c
+
+	header = generate_c(schema, resolved, "x").header
+	assert "SITU_MONTH_TAIL_SIZE_MAX" in header
+	assert "446882u" in header
+
+
 def test_an_authenticated_claim_says_what_checks_it_instead() -> None:
 	"""The four AEADs guarding every sealed region got neither.
 

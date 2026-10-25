@@ -71,6 +71,15 @@ REFUSALS = (
 	# bleed. What the gate still cannot see is recorded in 26.190 rather than
 	# papered over by widening the window.
 	"No accessor for",
+	# "its offset cannot be resolved" -- which `"cannot resolve"` above does
+	# NOT match, the two differing by a passive voice. It is the phrase C++,
+	# Rust and Python all write for a member after something they cannot
+	# measure, so the gate was blind to the commonest decline in three of
+	# the four backends; it showed up the moment the corpus gained a member
+	# after a region with no closed-form expansion, where C was reported as
+	# the lone refuser and the other three as emitting an accessor that is
+	# nowhere in their output (26.689).
+	"cannot be resolved",
 )
 
 #: Phrases that name their member *after* themselves rather than before.

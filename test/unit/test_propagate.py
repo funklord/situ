@@ -489,6 +489,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"endian-marker-scope",
 		"data-placed",
 		"dynamic-predecessor",
+		"coded-predecessor",
 		"frame-relative",
 		"bounded-size",
 		"unbounded-size",
@@ -863,6 +864,62 @@ def test_an_exact_ratio_keeps_following_members_static() -> None:
 def test_a_bounded_ratio_does_not() -> None:
 	body = coded("expansion = ratio_bounded(2, 1); granularity = stream; invertible;")
 	assert axis_of(body, "S.t", Axis.OFFSET) == Value("Dynamic")
+
+
+def test_a_bounded_ratio_blames_the_codec_and_not_the_length() -> None:
+	"""The row that reports it, because the value alone was already right.
+
+	`Dynamic` is "arithmetic over values already read", and the generic
+	dynamic-predecessor row said exactly that about a member nothing can
+	place without running the decoder -- offering "move the variable-length
+	member after this one" as the remedy, which treats a coded region as an
+	ordinary variable member (bbq-predictor, 2026-10-25).
+	"""
+	body = coded("expansion = ratio_bounded(2, 1); granularity = stream; invertible;")
+	assert rules_for(body, "S.t", Axis.OFFSET) == ["coded-predecessor"]
+	assert "dynamic-predecessor" not in rules_for(body, "S.t", Axis.ADDRESS)
+
+	# The stage axis is what carries the cost, for the same reason
+	# `versioned-member` weakens it: whether these bytes are HERE is not
+	# something the frame can compute.
+	assert axis_of(body, "S.t", Axis.STAGE) == Value("TransformTime")
+
+	blame = entries(body)["S.t"].blame(Axis.OFFSET)[0]
+	assert "`c`'s output" in blame.effect.because
+	assert "until" in blame.rule.remedy
+
+
+def test_a_closed_form_expansion_keeps_the_generic_row() -> None:
+	"""The control, and it is the one that separates the two rules.
+
+	An exact ratio over a VARIABLE interior leaves the following member at a
+	dynamic offset too -- so a predicate keyed on "the cause is a coded
+	region" rather than on the expansion would fire here, and this is where
+	the generic remedy is the right one: the bytes before the member really
+	do vary with a value already read.
+	"""
+	body = coded("expansion = ratio_exact(2, 1); seekable = linear; "
+	             "granularity = symbol(1); invertible;",
+	             body="u8 n; u8 d[n];")
+	assert axis_of(body, "S.t", Axis.OFFSET) == Value("Dynamic")
+	assert rules_for(body, "S.t", Axis.OFFSET) == ["dynamic-predecessor"]
+	assert axis_of(body, "S.t", Axis.STAGE) == Value("CompileTime")
+
+
+def test_a_delimited_region_is_a_scan_for_what_follows() -> None:
+	"""Where a delimited MEMBER had always said so.
+
+	A region's extent is the scan rather than the expansion (section 13.6),
+	so reaching anything past it is a search that can fail -- which is the
+	`Scanned` claim, and `place_coded` was not making it: the offset came
+	back `Dynamic` while the generated accessor called the region's own
+	`_span` scan (26.689).
+	"""
+	body = coded("expansion = ratio_bounded(2, 1); granularity = stream; invertible;",
+	             body="u8 content[remaining];", tail='u16 t;')
+	body = body.replace("coded b(c) {", 'coded b(c) until "\xC0" {')
+	assert axis_of(body, "S.t", Axis.OFFSET) == Value("Scanned")
+	assert rules_for(body, "S.t", Axis.OFFSET) == ["scanned-predecessor"]
 
 
 def test_unbounded_expansion_is_fatal_downstream() -> None:

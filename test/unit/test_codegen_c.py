@@ -1955,6 +1955,49 @@ def test_a_region_whose_codec_expands_without_bound_stops_addressing() -> None:
 	assert "not known until it has been decoded" in header
 
 
+def test_the_decline_note_calls_a_codec_a_codec_and_nothing_else() -> None:
+	"""The sentence was reached by three shapes and true for one of them.
+
+	`blocker.type_name` is a codec only where the blocker is a region. For a
+	varint it is the varint type -- so the note read "codec `v` has no
+	closed-form expansion" about a construct that has no codec -- and for a
+	variant it is the literal word `variant`. Both are a diagnostic that is
+	simply false, which is the class the counted-run branch beside them
+	already exists to avoid (26.689).
+
+	A false explanation is worse than the bland "its offset cannot be
+	resolved" the other three backends write, because it sends the reader to
+	change a codec that is not there.
+	"""
+	varint, _ = emit("""struct S {
+		sealed body(aead) {
+			v    n;
+			u16  after;
+		}
+		tag u8 mac[16] covers(body);
+	}
+	""", preamble=CRYPTO + "varint_type v { encoding = leb128; max_bits = 32; }\n")
+
+	assert "No accessor for `after`" in varint
+	assert "codec `v`" not in varint
+	assert "are `aead`'s output" in varint
+
+	variant, _ = emit("""struct elem { u8 n; u8 d[n]; }
+	struct S {
+		u8 kind;
+		variant body switch (kind) {
+			case 1:  elem  recs[kind];
+			default: u8    raw;
+		}
+		u16 after;
+	}
+	""")
+
+	assert "No accessor for `after`" in variant
+	assert "codec `variant`" not in variant
+	assert "one of its arms has no length this can compute" in variant
+
+
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
 def test_crypto_constructs_compile_warning_clean(tmp_path: Path) -> None:
 	compile_generated(tmp_path, SEALED, preamble=CRYPTO)

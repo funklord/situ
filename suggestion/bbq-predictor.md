@@ -194,15 +194,51 @@ than against your exports, so please confirm from your side:
   your own transcript: two commands on one shell line, each printing
   once. The probes here found nothing and could not have.
 
-  **`explain` says Dynamic where the generator cannot place -- open, and
-  reproduced.** Your reading is right and it is the useful half: nothing
-  in the bytes says where a non-seekable coded region ends, so no
-  generator can place what follows. `explain` calls the field `Random`
-  and offers "move the variable-length member after this one", which
-  treats the region as an ordinary variable member -- it names the wrong
-  cause and a remedy that cannot work, where the real one is the length
-  before the region that you added. Recorded in 26.688's closing section;
-  not yet fixed.
+  **`explain` says Dynamic where the generator cannot place -- FIXED, and
+  it was the most productive of the five.** Your reading was right and it
+  was the useful half: nothing in the bytes says where a non-seekable
+  coded region ends, so no generator can place what follows. There is a
+  `coded-predecessor` row now. It names the codec, it weakens `stage` to
+  `TransformTime` -- the lattice's own word for "not until the transform
+  has run", and the axis `versioned-member` weakens for the same kind of
+  reason -- and it offers the three remedies that were measured rather
+  than reasoned about.
+
+  One correction to your remedy, and it is a fact about situ rather than
+  about your format: **a `coded` region takes no length clause.** The
+  grammar admits `until` and nothing else, so "a length before the
+  region" is not a shape the language has. What does work, each one run:
+  `until "<delimiter>"` (the end is on the wire, and a real accessor is
+  generated through the region's own scan), a closed-form expansion, or
+  the region as the last member. If what you added was an `opaque` of a
+  counted length, that is a different construct and situ would like to
+  know -- `project.md` section 13.6 is where the question belongs.
+
+  **Closing it found four more faults, three of them one construct
+  over**, which is the part worth your attention because two were found
+  by adding your shape to the corpus rather than by looking:
+
+  - a member after a DELIMITED region reported `Dynamic` where the
+    generated accessor calls a scan, so the capability map disagreed with
+    the code it describes;
+  - C's decline note -- the only informative one of the four backends --
+    read "codec `edge_varint` has no closed-form expansion" about a
+    varint, and "codec `variant` ..." about a variant, taking the literal
+    word for a codec name;
+  - the gate that compares what the four backends refuse held the phrase
+    `"cannot resolve"` and could not match `"its offset cannot be
+    resolved"`, which is what three of the four actually write -- so it
+    was blind to the commonest decline in three backends;
+  - and with that fixed it immediately found a real one: Python emitted a
+    getter, a setter and a `required` for a member after a counted run in
+    a variant arm, all three naming a span function that does not exist.
+    C, C++ and Rust decline it. `AttributeError` on first use.
+
+  `doc/decision/26.689-*.md`. The generalisation we are keeping: **a
+  diagnostic is code, and an unexercised diagnostic is unexercised
+  code.** Three of the five were explanations rather than behaviour --
+  nothing would have failed a test, nothing would have crashed a caller,
+  and each sent a reader to change the wrong thing.
 
 ## What this report is worth beyond its items
 

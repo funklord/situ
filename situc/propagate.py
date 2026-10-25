@@ -233,7 +233,22 @@ def _is_odd_width_scalar(context: Context) -> bool:
 
 
 def _has_dynamic_offset(context: Context) -> bool:
-	return context.placement.offset_bits is None
+	return (context.placement.offset_bits is None
+	        and not _has_coded_predecessor(context))
+
+
+def _has_coded_predecessor(context: Context) -> bool:
+	"""The offset is unknown, and a codec is why.
+
+	Excluded from the generic row rather than fired alongside it, for the
+	reason `_is_bounded_size` gives: the two would meet to the same values and
+	the specific reason is the product. It matters more here than there,
+	because the generic remedy -- move the variable-length member after this
+	one -- reads as the answer and is not the one anybody with this format
+	will take.
+	"""
+	return (context.placement.offset_bits is None
+	        and context.placement.dynamic_cause_codec is not None)
 
 
 def _is_frame_relative(context: Context) -> bool:
@@ -1090,6 +1105,22 @@ TABLE: tuple[Row, ...] = (
 	),
 	Row(
 		rule = Rule(
+			name      = "coded-predecessor",
+			construct = "a coded region earlier in the same frame whose "
+			            "codec has no closed-form expansion",
+			effects   = (),		# `_coded_predecessor_effects`
+			remedy    = "end the region with `until \"<delimiter>\"`, which "
+			            "puts where the encoded bytes stop on the wire rather "
+			            "than in the expansion; a `length_preserving` codec, "
+			            "or one with a `fixed_add` or exact-ratio expansion, "
+			            "reaches it by arithmetic instead; failing both, the "
+			            "region has to be the last member",
+			blames_cause = True,
+		),
+		applies = _has_coded_predecessor,
+	),
+	Row(
+		rule = Rule(
 			name      = "frame-relative",
 			construct = "a member of a frame, addressed from the frame base",
 			# The address effect is attached per placement: an element of a
@@ -1670,6 +1701,8 @@ def apply(context: Context) -> Resolved:
 			effects = _marker_effects(context)
 		elif row.rule.name == "dynamic-predecessor":
 			effects = _predecessor_effects(context)
+		elif row.rule.name == "coded-predecessor":
+			effects = _coded_predecessor_effects(context)
 		elif row.rule.name == "frame-relative":
 			effects = _frame_effects(context)
 		elif row.rule.name == "variant-unequal-arms":
@@ -1882,6 +1915,40 @@ def _predecessor_effects(context: Context) -> tuple[Effect, ...]:
 		Effect(Axis.ADDRESS, Value("Unstable"),
 		       "a pointer to it is invalidated by any write that changes the "
 		       "length of what precedes it"),
+	)
+
+
+def _coded_predecessor_effects(context: Context) -> tuple[Effect, ...]:
+	"""Name the codec, and say that reaching this field costs a decode.
+
+	`Dynamic` is "arithmetic over values already read" (doc/capability-axes),
+	and that is what this field's offset is NOT: a bounded or unbounded
+	expansion publishes a worst case, so nothing before this field says how
+	many bytes the region took. It is still the value the offset axis meets --
+	the position does exist once the decoder has run, and no weaker value
+	says anything truer -- so the stage axis is what carries the cost, for
+	the same reason `versioned-member` weakens it: whether these bytes are
+	HERE depends on something nobody can compute from the frame.
+
+	Without this the vector read `offset Dynamic, stage CompileTime` while
+	every backend declined to emit an accessor at all, and the blame chain
+	offered a remedy for a different fault (bbq-predictor, 2026-10-25).
+	"""
+	placement = context.placement
+	cause     = placement.dynamic_cause
+	codec     = placement.dynamic_cause_codec
+
+	return (
+		Effect(Axis.OFFSET, Value("Dynamic"),
+		       f"`{cause}` is `{codec}`'s output, and that codec's expansion "
+		       f"is a worst case rather than a length, so where this field "
+		       f"starts is wherever the decoder stopped"),
+		Effect(Axis.ADDRESS, Value("Unstable"),
+		       "a pointer to it is invalidated by any write that changes the "
+		       "length of what precedes it"),
+		Effect(Axis.STAGE, Value("TransformTime"),
+		       f"`{cause}` has to be decoded before anything after it can be "
+		       f"found, so this field is not reachable at parse time"),
 	)
 
 
