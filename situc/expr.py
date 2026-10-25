@@ -770,12 +770,17 @@ def _call(expr: ast.Call, env: Env) -> int:
 		return _layout_call(expr, env)
 
 	# A CAPABILITY PREDICATE in expression position, which is the mistake
-	# the documents invite: both `project.md` and the README write
-	# `require max_size(X) <= N`, and `max_size` is a predicate taking its
-	# bound as an argument -- `max_size(X, N)` -- rather than a function
-	# yielding a number. A reader who copies the documented form was told
-	# only that it is "not a builtin", with the six builtins listed and no
-	# mention of the thing that does exist under that name.
+	# the documents invited: both `project.md` and the README wrote
+	# `require max_size(X) <= N`, where `max_size` is a predicate taking
+	# its bound as an argument rather than a function yielding a number.
+	# A reader who copied the documented form was told only that it is
+	# "not a builtin", with the six builtins listed and no mention of the
+	# thing that does exist under that name.
+	#
+	# The documents are corrected (holder, 2026-10-25: `max_size(X, n)`
+	# is right), and this stays: the old form is in every copy of the
+	# README anybody has already read, and a name that is a predicate is
+	# worth saying so about whatever the documents happen to say today.
 	#
 	# Imported here rather than at module scope: `requirements` reads the
 	# capability lattice and this module is one of its dependencies.

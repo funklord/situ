@@ -884,14 +884,36 @@ names a field situ *maintains* rather than one it merely checks. Writing a
 field an invariant reads leaves the derived one stale in exactly the way a
 covered write leaves a tag stale, and the generated API says so.
 
-`assert` is the same check reported as a warning rather than an error, and
-`require size(x) == N` / `require max_size(x) <= N` take a bound rather than a
-bare path. Every predicate names one axis and the value it insists on:
+`assert` is the same check reported as a warning rather than an error.
+
+Two forms take a bound rather than a bare path, and they are not the same
+form. `require size(x) == N` is an EXPRESSION: `size` is a builtin that
+yields a number, so a comparison is what tests it.
+`require max_size(x, N)` is a PREDICATE, and its bound is an argument --
+a predicate answers yes or no about one axis, so there is no value for a
+comparison to be made against. `aligned(x, n)` is the only other
+predicate this compiler discharges that takes one. `bounded_stack(x, n)`
+is written the same way and is DEFERRED -- it needs a stack-depth model
+of the generated code,
+which the compiler does not build, so it parses and reports as unchecked
+rather than being discharged either way.
+
+This file said `require max_size(x) <= N`, which the compiler has never
+accepted. Settled by the copyright holder 2026-10-25.
+
+The table below lists each predicate by NAME, which is what identifies
+it; the two that take a bound say so in what they demand. Putting the
+form in the name column instead is what the first draft of this
+correction did, and `test_cli.py` refused it -- that table is gated
+against a predicate arriving without a row, and the row is keyed on the
+bare name.
+
+Every predicate names one axis and the value it insists on:
 
 | predicate | axis | what it demands |
 |---|---|---|
 | `absolute_static` | offset | the offset is known at compile time from the message base |
-| `aligned` | align | the field starts on the requested byte boundary |
+| `aligned` | align | the field starts on the `n`-byte boundary it takes |
 | `atomic` | atomic | the access fits in a single instruction |
 | `canonical` | canonical | exactly one byte sequence encodes a given value |
 | `deterministic_writer` | canonical | a writer always emits the same bytes for the same value |
@@ -899,7 +921,7 @@ bare path. Every predicate names one axis and the value it insists on:
 | `immutable` | mutate | the field cannot be written at all |
 | `in_place` | mutate | the field can be written without moving anything else, and writing it leaves no tag stale |
 | `in_place_dirty` | mutate | the field can be written without moving anything else, accepting that a tag covering it must then be recomputed |
-| `max_size` | size | the worst-case extent is known, so a static buffer can hold it |
+| `max_size` | size | the worst-case extent is known and at most the `n` it takes, so a static buffer can hold it |
 | `memory_identical` | repr | the bytes are the value: no swap, shift, scale or decode stands between them |
 | `no_alloc` | size | nothing under it needs storage rung 1 cannot give (0031, 0032) |
 | `no_tag_invalidation` | auth | writing the field invalidates no authentication tag |

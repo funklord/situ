@@ -146,20 +146,21 @@ than against your exports, so please confirm from your side:
   `doc/decision/26.682-*.md`.
 - **Minor: two fixed, three unreproduced.**
 
-  **`max_size` -- diagnostic fixed, syntax raised.** You are right that
-  the compiler takes `max_size(x, N)`. The syntax is NOT changed, because
-  `project.md` -- which outranks the code -- also writes
-  `require max_size(X) <= N`, and the same list writes `aligned(X, n)`
-  and `bounded_stack(X, n)`: the document is inconsistent with itself and
-  the compiler follows one of its two conventions. That is the holder's
-  to settle, and it is raised rather than resolved from inside the
-  compiler.
+  **`max_size` -- fixed, and the documents were the wrong half.** You
+  are right that the compiler takes `max_size(x, N)`. It was raised
+  rather than resolved from inside the compiler, because `project.md`
+  outranks the code and also wrote `require max_size(X) <= N` while the
+  same list wrote `aligned(X, n)` -- a document disagreeing with itself.
+  **The copyright holder settled it 2026-10-25: the argument form is
+  right and both documents are corrected.**
 
-  What is fixed either way is the diagnostic, which was the whole cost: a
-  predicate used in expression position said "unknown function" and
-  listed the six builtins, never mentioning the predicate of that name.
-  It now names the form to write. `require size(x) == N`, the other half
-  of that README sentence, was always correct -- `size` is a builtin.
+  The diagnostic is fixed too, and stays: the old form is in every copy
+  of the README anybody has already read. A predicate used in expression
+  position said "unknown function" and listed the six builtins, never
+  mentioning the predicate of that name; it now names the form to write.
+  `require size(x) == N`, the other half of that README sentence, was
+  always correct -- `size` is an expression builtin, which is exactly
+  what made one list of two different things look like one thing.
 
   **An enum member in `when` -- fixed.** `kind.bye` parses exactly as
   `packet.mode` does, so the one-message check read it as a second

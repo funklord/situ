@@ -3942,15 +3942,45 @@ Two keywords, deliberately distinguished:
 Capability predicates:
 
 ```
-size(X) == N            offset(X) == N          max_size(X) <= N
 absolute_static(X)      frame_static(X)         static(X)
 in_place(X)             in_place_dirty(X)       immutable(X)
 random_access(X)        stable_address(X)
 canonical(X)            deterministic(X)        deterministic_writer(X)
 aligned(X, n)           atomic(X)               memory_identical(X)
-no_tag_invalidation(X)  verify_gated(X)         uncovered(X)
-no_alloc(X)             bounded_stack(X, n)     no_realloc(expr)
+max_size(X, n)          no_tag_invalidation(X)  verify_gated(X)
+uncovered(X)            no_alloc(X)             bounded_stack(X, n)
+no_realloc(expr)
 ```
+
+**A predicate's bound is an ARGUMENT, and this list said otherwise about
+one of them.** `max_size` was written `max_size(X) <= N` here for as long
+as the section has existed, beside `aligned(X, n)` and
+`bounded_stack(X, n)` in the same block -- the same kind of thing spelled
+two ways, and the compiler has only ever accepted the second.
+
+Of the three, `aligned` is the one this compiler discharges with a bound;
+`bounded_stack` is deferred for want of a stack-depth model and reports
+as unchecked, which is why its spelling has never been tested by anything
+either. bbq-predictor copied the documented form, got "unknown function
+`max_size`" with the six expression builtins listed, and reported it. The
+copyright holder settled it on 2026-10-25: `max_size(X, n)` is right and
+this list was wrong.
+
+A predicate answers yes or no about one axis, so there is no value for a
+comparison to be made against -- which is the reason the argument form is
+the right one rather than merely the accepted one.
+
+**`size` and `offset` are expression builtins and not predicates**, which
+is why they were in this list and why they do not belong in it:
+
+```
+require size(X) == N;           require offset(X) == N;
+```
+
+Those are `expr` in `capability_expr = ident "(" expr { "," expr } ")" |
+expr`, and they take a comparison because they yield a number. `size` and
+`max_size` reading so alike is what made one list of two things look like
+one thing.
 
 `memory_identical(X)` asks the `repr` axis: are the bytes the value, with no
 swap, shift, scale or decode between them? It is the question a caller has

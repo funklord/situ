@@ -348,10 +348,18 @@ def _discharge_capability(requirement: ast.Requirement, call: ast.Call,
 
 
 def _within_max_size(actual: Value, required: Value) -> tuple[bool, Value]:
-	"""`max_size(X) <= N`: the worst case must fit, and must be known.
+	"""`max_size(X, n)`: the worst case must fit, and must be known.
 
-	An Unbounded size fails whatever N is, which is the point: a region with no
+	An Unbounded size fails whatever n is, which is the point: a region with no
 	upper bound cannot be statically allocated at any size.
+
+	`max_size(X, n)` and not `max_size(X) <= n`, which is how this
+	docstring and both documents wrote it. The bound is an ARGUMENT
+	because a predicate answers yes or no about one axis, so there is no
+	value for a comparison to be made against -- and `project.md`'s own
+	list spelled `aligned(X, n)` the right way in the same block. Settled
+	by the copyright holder 2026-10-25, after bbq-predictor copied the
+	documented form and got "unknown function `max_size`".
 	"""
 	limit = int(required.params[0])
 

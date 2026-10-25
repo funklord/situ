@@ -821,20 +821,23 @@ def test_a_delimited_radix_field_survives_a_reprint() -> None:
 
 
 def test_a_predicate_used_as_a_function_says_which_it_is() -> None:
-	"""`require max_size(x) <= N` is what both documents show.
+	"""`require max_size(x) <= N` is what both documents used to show.
 
-	It is not what the compiler takes: `max_size` is a capability
-	PREDICATE whose bound is an argument -- `max_size(X, n)` -- and the
-	documents' own list spells the other two argument-taking predicates
-	that way, `aligned(X, n)` and `bounded_stack(X, n)`. So the prose is
-	inconsistent with itself and the compiler follows one of its two
-	conventions.
+	`max_size` is a capability PREDICATE whose bound is an argument --
+	`max_size(X, n)` -- because a predicate answers yes or no about one
+	axis and there is no value for a comparison to be made against.
+	`project.md`'s own list spelled `aligned(X, n)` that way in the same
+	block, so the prose disagreed with itself and the compiler followed
+	one of its two conventions. Settled by the copyright holder
+	2026-10-25: the argument form is right, and both documents are
+	corrected.
 
-	Which spelling wins is the holder's, and this is the part that is
-	right either way: a reader who copies the documented form was told
-	only that `max_size` is "not a builtin", with the six builtins listed
-	and no mention of the thing that does exist under that name. Reported
-	by bbq-predictor as the first of its minor items.
+	The message is still worth having, which is why this test is about
+	the message rather than about the syntax: the old form is in every
+	copy of the README anybody has already read. A reader who copies it
+	was told only that `max_size` is "not a builtin", with the six
+	builtins listed and no mention of the thing that does exist under
+	that name. Reported by bbq-predictor as the first of its minor items.
 	"""
 	report = discharged("endian big;\n"
 	                    "struct m { u8 n; u8 d[n]; }\n"
