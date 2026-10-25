@@ -29,6 +29,22 @@ def rendered(source: str) -> str:
 	return caught.value.diagnostic.render()
 
 
+def discharged(source: str) -> str:
+	"""The report from DISCHARGING the requirements, not from parsing.
+
+	A `require` parses fine and fails when it is evaluated against the
+	capability vectors, which needs the layout and the resolved schema --
+	so a helper that stops at the parser sees no error at all.
+	"""
+	from situc import requirements			# noqa: PLC0415
+	from situc.resolve import resolve		# noqa: PLC0415
+
+	parsed = parse_text(source, path="s.situ")
+	with pytest.raises(SituError) as caught:
+		requirements.discharge(parsed, resolve(parsed, solve(parsed)))
+	return caught.value.diagnostic.render()
+
+
 # -- duplicate declarations -------------------------------------------------
 
 
@@ -37,6 +53,10 @@ def rendered(source: str) -> str:
 
 
 WHEN_PREAMBLE = ("endian big;\n"
+                 "enum kind : u8 {\n"
+                 "\thello = 1,\n"
+                 "\tbye   = 2,\n"
+                 "}\n"
                  "struct packet { u8 mode; u8 flags; }\n"
                  "struct other { u8 x; }\n")
 
@@ -45,6 +65,36 @@ def when_refused(body: str) -> str:
 	with pytest.raises(SituError) as caught:
 		parse_text(WHEN_PREAMBLE + body + "\n")
 	return caught.value.diagnostic.render()
+
+
+def test_a_when_may_name_an_enum_constant() -> None:
+	"""An enum member is a constant, and it is spelled like a path.
+
+	`kind.bye` parses as `Access(NameRef('kind'), 'bye')`, exactly as
+	`packet.mode` does, so the two-message check read it as a second
+	message and refused the only spelling that uses the enum's NAME --
+	leaving the bare number, which is what an enum exists to replace.
+	Reported by bbq-predictor as the second of its minor items.
+	"""
+	parsed = parse_text(
+		WHEN_PREAMBLE
+		+ 'when packet.mode == kind.bye refuse no_bye "a bye is refused";\n')
+	wellformed.check(parsed)
+
+
+def test_a_when_naming_an_enum_member_that_is_not_there_is_refused() -> None:
+	"""And the member still has to exist.
+
+	Skipping the check outright is what the first fix did, and
+	`kind.farewell` then reached the code generator and raised
+	`UnknownName` as a traceback -- the same failure the conditional-holder
+	refusal next door was written for, met one construct over. Section
+	17.0: a crash is not a diagnostic.
+	"""
+	report = when_refused(
+		'when packet.mode == kind.farewell refuse no_bye "x";')
+	assert "has no member `farewell`" in report
+	assert "members are: bye, hello" in report
 
 
 def test_a_when_over_two_messages_is_a_relation() -> None:
@@ -768,6 +818,44 @@ def test_a_delimited_radix_field_survives_a_reprint() -> None:
 	# Idempotent, which is the property that says nothing is lost per pass
 	# rather than merely surviving the first one.
 	assert unparse(parse_text(once, path="s.situ")) == once
+
+
+def test_a_predicate_used_as_a_function_says_which_it_is() -> None:
+	"""`require max_size(x) <= N` is what both documents show.
+
+	It is not what the compiler takes: `max_size` is a capability
+	PREDICATE whose bound is an argument -- `max_size(X, n)` -- and the
+	documents' own list spells the other two argument-taking predicates
+	that way, `aligned(X, n)` and `bounded_stack(X, n)`. So the prose is
+	inconsistent with itself and the compiler follows one of its two
+	conventions.
+
+	Which spelling wins is the holder's, and this is the part that is
+	right either way: a reader who copies the documented form was told
+	only that `max_size` is "not a builtin", with the six builtins listed
+	and no mention of the thing that does exist under that name. Reported
+	by bbq-predictor as the first of its minor items.
+	"""
+	report = discharged("endian big;\n"
+	                    "struct m { u8 n; u8 d[n]; }\n"
+	                    "require max_size(m) <= 300;\n")
+	assert "is a capability predicate, not a function" in report
+	assert "`require max_size(X, n)`" in report
+	# And the arity shows: `aligned` takes one too, `canonical` does not.
+	report = discharged("endian big;\n"
+	                    "struct m { u16 a; }\n"
+	                    "require canonical(m.a) == 1;\n")
+	assert "`require canonical(X)`" in report
+
+
+def test_an_unknown_function_is_still_unknown() -> None:
+	"""The control for the message above: a name that is no predicate
+	gets the builtin list, which is the right answer for it."""
+	report = discharged("endian big;\n"
+	                    "struct m { u16 a; }\n"
+	                    "require wibble(m.a) == 1;\n")
+	assert "unknown function `wibble`" in report
+	assert "builtins: align_up, count, max, min, offset, size" in report
 
 
 def test_an_unknown_attribute_is_refused() -> None:

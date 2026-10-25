@@ -1377,6 +1377,14 @@ def check_whens(schema: ast.Schema) -> None:
 	is exactly what the record's "identity is the contract" rules out.
 	"""
 	structs = {decl.name: decl for decl in schema.structs()}
+	# AN ENUM CONSTANT IS NOT A PATH, and it is spelled like one:
+	# `kind.bye` parses as `Access(NameRef('kind'), 'bye')`, exactly as
+	# `m.k` does, so every check below read it as a second message. A
+	# `when` comparing a member against a named constant -- which is what
+	# an enum is for -- was refused as "two messages, not one", and the
+	# only spelling left was the bare number. Reported by bbq-predictor.
+	enums = {decl.name: {member.name for member in decl.members}
+	         for decl in schema.enums()}
 	seen: dict[str, ast.When] = {}
 
 	for held in schema.whens():
@@ -1396,6 +1404,34 @@ def check_whens(schema: ast.Schema) -> None:
 		owner: str | None = None
 		for path in paths_in(held.expr):
 			struct_name, _, field = path.partition(".")
+
+			# The constant, handled before anything treats it as a view:
+			# it names no member, so it is neither this `when`'s owner nor
+			# a second one, and the struct checks below have nothing to
+			# look up. `validate` reads it as the number it is.
+			if struct_name in enums and struct_name not in structs:
+				# The member still has to exist, and refusing it HERE is
+				# the point: skipping the check outright let
+				# `kind.farewell` reach the code generator, which raised
+				# `UnknownName` as a traceback. That is the same failure
+				# the `_conditional_holder` note below records being
+				# refused for -- "all four backends raised `UnknownName`
+				# out of the code generator instead" -- met again one
+				# construct over, and section 17.0 is why it cannot stand:
+				# a crash is not a diagnostic.
+				if field and field not in enums[struct_name]:
+					known = ", ".join(sorted(enums[struct_name])) or "none"
+					raise error(
+						f"`{struct_name}` has no member `{field}`",
+						held.span,
+						label = "no such enum member",
+						notes = [f"`{struct_name}` is an enum, and its "
+						         f"members are: {known}",
+						         "an enum constant in a `when` is read as "
+						         "the number it stands for, so a name that "
+						         "is not one cannot be read at all"],
+					)
+				continue
 
 			if owner is None:
 				owner = struct_name

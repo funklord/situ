@@ -144,11 +144,44 @@ than against your exports, so please confirm from your side:
   component further in, and its own `check` already makes the check -- so
   the duplicate was redundant as well as uncompilable.
   `doc/decision/26.682-*.md`.
-- **Minor:** the README shows `require max_size(x) <= N` where the compiler
-  takes `max_size(x, N)`; an enum member in `when` is refused as naming two
-  messages; every diagnostic prints twice; a fractional expansion ratio
-  prints sizes in bits where `explain` gives bytes; `explain` calls a member
-  Dynamic that the generator then cannot place.
+- **Minor: two fixed, three unreproduced.**
+
+  **`max_size` -- diagnostic fixed, syntax raised.** You are right that
+  the compiler takes `max_size(x, N)`. The syntax is NOT changed, because
+  `project.md` -- which outranks the code -- also writes
+  `require max_size(X) <= N`, and the same list writes `aligned(X, n)`
+  and `bounded_stack(X, n)`: the document is inconsistent with itself and
+  the compiler follows one of its two conventions. That is the holder's
+  to settle, and it is raised rather than resolved from inside the
+  compiler.
+
+  What is fixed either way is the diagnostic, which was the whole cost: a
+  predicate used in expression position said "unknown function" and
+  listed the six builtins, never mentioning the predicate of that name.
+  It now names the form to write. `require size(x) == N`, the other half
+  of that README sentence, was always correct -- `size` is a builtin.
+
+  **An enum member in `when` -- fixed.** `kind.bye` parses exactly as
+  `packet.mode` does, so the one-message check read it as a second
+  message, leaving the bare number as the only spelling. The check skips
+  an enum head now and the emitted condition compares against the
+  member's value. A typo in the member name raised `UnknownName` out of
+  the code generator as a traceback once the check was skipped; that is a
+  diagnostic now, naming the members, which 17.0 requires.
+
+  **Three could not be reproduced**, and the probes are listed in the
+  inbox message of 2026-10-25 so nobody repeats them: diagnostics
+  printing twice (four subcommands, errors, warnings, parse errors, text
+  and JSON -- one copy every time); a fractional ratio printing bits
+  (`explain` and `map` both answer bytes for `ratio_exact(2, 1)` and
+  `ratio_exact(4, 3)`); and `explain` calling a member Dynamic the
+  generator cannot place (no corpus schema reaches that note).
+
+  For the bits one there is a likely trigger worth naming:
+  `decode_counts_bits` is true for an UNPADDED `table` kernel and for a
+  `stuffing` kernel declaring `unit = bit`, and its own note records that
+  no schema in the tree uses such a region. A one-line schema would
+  settle it.
 
 ## What this report is worth beyond its items
 

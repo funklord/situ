@@ -769,6 +769,34 @@ def _call(expr: ast.Call, env: Env) -> int:
 		_check_arity(expr, LAYOUT_BUILTINS[expr.name])
 		return _layout_call(expr, env)
 
+	# A CAPABILITY PREDICATE in expression position, which is the mistake
+	# the documents invite: both `project.md` and the README write
+	# `require max_size(X) <= N`, and `max_size` is a predicate taking its
+	# bound as an argument -- `max_size(X, N)` -- rather than a function
+	# yielding a number. A reader who copies the documented form was told
+	# only that it is "not a builtin", with the six builtins listed and no
+	# mention of the thing that does exist under that name.
+	#
+	# Imported here rather than at module scope: `requirements` reads the
+	# capability lattice and this module is one of its dependencies.
+	from situc.requirements import PREDICATES		# noqa: PLC0415
+
+	predicate = PREDICATES.get(expr.name)
+	if predicate is not None:
+		form = (f"{expr.name}(X, n)" if predicate.takes_argument
+		        else f"{expr.name}(X)")
+		raise error(
+			f"`{expr.name}` is a capability predicate, not a function",
+			expr.span,
+			label = "a predicate, used as a function",
+			notes = [f"write it as a requirement of its own: "
+			         f"`require {form}`",
+			         f"`{expr.name}` asks that {predicate.summary}",
+			         "a predicate answers yes or no about one axis, so it "
+			         "has no value to compare -- and its bound, where it "
+			         "takes one, is an argument rather than a comparison"],
+		)
+
 	raise error(
 		f"unknown function `{expr.name}`",
 		expr.span,
