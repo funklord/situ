@@ -1891,6 +1891,58 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
+def framing_gaps(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct) -> list[int] | None:
+	"""The fixed bytes before each variable member, in order.
+
+	`extent_parts` splits a struct into a constant and the variable
+	members, which is what a length expression needs. This says WHERE
+	each of those members sits, which `required` needs and could only get
+	by calling an offset accessor -- a function emitted later in the
+	header than `required` is, and for some members not emitted at all
+	(26.684).
+
+	`gaps[i]` is the fixed bytes between variable member `i - 1`'s end
+	and member `i`'s base, so member `i` begins at `gaps[0] + len(0) +
+	gaps[1] + ... + gaps[i]` and a caller that already accumulates the
+	lengths has the offset for nothing.
+
+	None where a single gap is not a whole number of bytes.
+	`extent_parts` asks that of the constant as a whole, which is not the
+	same question: a `u2` and a `u6` are one byte together and zero
+	apart, so a pair split by a variable member would put the arithmetic
+	a bit out even though the total is whole. The layout solver refuses a
+	bit-packed field at a dynamic offset, so this should not arise -- and
+	is checked rather than assumed, because the cost of being wrong is a
+	framing function that reads at the wrong place.
+	"""
+	parts = extent_parts(structs, struct)
+	if parts is None:
+		return None
+	constant, _variable = parts
+
+	gaps: list[int] = []
+	run_bits = 0
+	for placement in own_members(struct):
+		if occupies_fixed_bytes(placement):
+			run_bits += fixed_span_bits(placement)
+			continue
+		if run_bits % BITS_PER_BYTE:
+			return None
+		gaps.append(run_bits // BITS_PER_BYTE)
+		run_bits = 0
+
+	# The proof a mechanical change carries: these gaps and the bytes
+	# after the last variable member are the constant, exactly. If they
+	# are not, the walk above and `extent_parts` disagree about which
+	# members are fixed, and every offset derived from them is wrong.
+	if run_bits % BITS_PER_BYTE:
+		return None
+	if sum(gaps) + run_bits // BITS_PER_BYTE != constant:
+		return None
+	return gaps
+
+
 def walk_order(struct: ResolvedStruct,
 		placement: Placement) -> list[Placement]:
 	"""The members to step over when placing `placement`, in order.

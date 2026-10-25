@@ -76,6 +76,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
 	indexed_elements,
@@ -5443,7 +5444,14 @@ class Emitter:
 			        " holds one")
 
 		steps: list[str] = []
-		for placement in variable:
+		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684):
+		# `at` is a running TOTAL and includes every fixed member, the ones
+		# after this one included, so it is not an offset. The C emitter's
+		# `_required` carries the reasoning and the proof.
+		gaps = framing_gaps(self.resolved.structs, struct)
+		cursor = "pos" if gaps is not None else None
+
+		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
@@ -5452,11 +5460,14 @@ class Emitter:
 			# way, and was not -- see `_framing_walk` (26.557).
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
-				walk = self._framing_walk(struct, placement)
+				walk = self._framing_walk(struct, placement, cursor)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
 					        " cannot be framed cannot be framed either")
 				steps.extend(walk)
+				# The walk advanced both itself, element by element, so
+				# only the fixed bytes after the run are left to add.
+				steps.extend(self._gap_step(cursor, gaps, index))
 				continue
 
 			# A SINGLE VARINT whose bytes have not all arrived. Its
@@ -5491,7 +5502,7 @@ class Emitter:
 				"",
 				f"\t\t# {placement.path}: reading its length means reading",
 				"\t\t# bytes that have to be here first.",
-				"\t\tif have < at:",
+				f"\t\tif have < {cursor or 'at'}:",
 				f'\t\t\traise TruncatedError("{placement.path}: '
 				'incomplete", at)',
 			])
@@ -5514,12 +5525,38 @@ class Emitter:
 			# 0x7FFFFFFF` fits; `required` dropping that bound (26.651)
 			# is what made the four disagree, at 0x100000004 here against
 			# 0xFFFFFFFF everywhere else.
-			steps.append("\t\tat = min(at + "
-			             f"{length.replace('self.', 'probe.')}, 0xFFFFFFFF)")
+			# The cursor advances only where a LATER variable member
+			# reads it; the last one's store is dead, which Rust's
+			# `-D warnings` refuses outright and the other three take in
+			# silence.
+			ahead = cursor if index + 1 < len(variable) else None
+			handed = (self._nested_framing(struct, placement, cursor,
+			                               ahead)
+			          or self._variant_framing(struct, placement, cursor,
+			                                   ahead))
+			if handed is not None:
+				steps.extend(handed)
+				steps.extend(self._gap_step(cursor, gaps, index))
+				continue
+
+			rendered = length.replace("self.", "probe.")
+			if cursor is None:
+				steps.append(f"\t\tat = min(at + {rendered}, 0xFFFFFFFF)")
+			else:
+				steps.extend([
+					f"\t\tlen_ = {rendered}",
+					"\t\tat  = min(at + len_, 0xFFFFFFFF)",
+					*([f"\t\t{ahead} = min({ahead} + len_,"
+					   " 0xFFFFFFFF)"] if ahead else []),
+				])
+			steps.extend(self._gap_step(cursor, gaps, index))
 
 		return [
 			*head,
 			f"\t\tat = {constant}",
+			*([f"\t\t{cursor} = {gaps[0]}"]
+			  if cursor and gaps and any(cursor in line for line in steps)
+			  else []),
 			"\t\tif have < cls.SIZE_MIN:",
 			f'\t\t\traise TruncatedError("{struct.name}: incomplete",'
 			" cls.SIZE_MIN)",
@@ -5543,8 +5580,141 @@ class Emitter:
 			"\t\treturn at",
 		]
 
+	def _gap_step(self, cursor: str | None, gaps: list[int] | None,
+			index: int) -> list[str]:
+		"""Step the cursor over the fixed bytes after this member."""
+		if cursor is None or gaps is None or index + 1 >= len(gaps):
+			return []
+		gap = gaps[index + 1]
+		return [] if gap == 0 else [f"\t\t{cursor} += {gap}"]
+
+	def _nested_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a nested struct: through its own `required` (26.684).
+
+		The C emitter's `_nested_framing` carries the reasoning.
+		"""
+		if cursor is None:
+			return None
+		name = placement.type_name
+		if name is None or name not in self.resolved.structs:
+			return None
+		if placement.delimiters or placement.repeat_while is not None \
+				or is_run(placement, self.resolved.structs) \
+				or is_counted_run(self.resolved.structs, placement):
+			return None
+		inner = self.resolved.structs[name]
+		if not frameable(self.resolved.structs, inner):
+			return None
+
+		return [
+			"",
+			f"\t\t# {placement.path}: a nested `{inner.name}` frames",
+			"\t\t# itself. Its EXTENT shrinks when the bytes run out, so",
+			"\t\t# adding that reported a complete message (26.684).",
+			f"\t\tif have < {cursor}:",
+			f'\t\t\traise TruncatedError("{placement.path}:'
+			' incomplete", at)',
+			"\t\ttry:",
+			f"\t\t\tlen_ = {py_name(inner.name)}.required"
+			f"(data[{cursor}:])",
+			"\t\texcept TruncatedError as short:",
+			f'\t\t\traise TruncatedError("{placement.path}: incomplete",',
+			"\t\t\t\tat + short.needed) from None",
+			"\t\tat  = min(at + len_, 0xFFFFFFFF)",
+			*([f"\t\t{ahead} = min({ahead} + len_, 0xFFFFFFFF)"]
+			  if ahead else []),
+		]
+
+	def _variant_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a variant: through the selected arm's own `required`.
+
+		None unless every arm is accounted for, since a chain handling
+		some would report the rest as zero bytes.
+		"""
+		if cursor is None or not placement.arm_cases \
+				or placement.discriminant is None:
+			return None
+		pairs = [(arm, member)
+		         for arm, member in arm_members(struct, placement)
+		         if member is not None]
+		if not pairs:
+			return None
+
+		# The loop below binds `case` rather than rebinding `arm`: one
+		# name for the arm `arm_members` yields and another for the
+		# planned entry, because mypy reads a rebind as narrowing and
+		# because two meanings on one name is what this tree keeps
+		# catching.
+		plan: list[tuple[object, str | None, str]] = []
+		for arm, member in pairs:
+			inner = self.resolved.structs.get(member.type_name or "")
+			if inner is not None and not member.delimiters \
+					and not is_run(member, self.resolved.structs) \
+					and not is_counted_run(self.resolved.structs, member) \
+					and frameable(self.resolved.structs, inner):
+				plan.append((arm, py_name(inner.name), ""))
+			elif member.is_fixed_size:
+				plan.append((arm, None,
+				             str(member.size_bits // BITS_PER_BYTE)))
+			else:
+				return None
+		if not any(call for _, call, _ in plan):
+			return None
+
+		disc  = self._over_fields(struct, placement.discriminant, "probe")
+		lines = [
+			"",
+			f"\t\t# {placement.path}: the arm the discriminant selects",
+			"\t\t# frames itself -- reported by bbq-predictor against a",
+			"\t\t# variant arm, whose extent shrank (26.684).",
+			f"\t\tif have < {cursor}:",
+			f'\t\t\traise TruncatedError("{placement.path}:'
+			' incomplete", at)',
+		]
+		opened = False
+		for case, call, size in plan:
+			value = getattr(case, "value", None)
+			if value is None:
+				head = "\t\telse:" if opened else "\t\tif True:"
+			else:
+				head = (f"\t\telif {disc} == {value}:" if opened
+				        else f"\t\tif {disc} == {value}:")
+			lines.append(head)
+			opened = True
+			if call is None:
+				lines.append(f"\t\t\tlen_ = {size}")
+			else:
+				lines.extend([
+					"\t\t\ttry:",
+					f"\t\t\t\tlen_ = {call}.required(data[{cursor}:])",
+					"\t\t\texcept TruncatedError as short:",
+					f'\t\t\t\traise TruncatedError("{placement.path}:'
+					' incomplete",',
+					"\t\t\t\t\tat + short.needed) from None",
+				])
+		# A chain with no `default:` arm leaves `len_` unbound for an
+		# unexpected discriminant, which is a NameError at run time here
+		# and "possibly-uninitialized" in Rust. Zero is what the other
+		# two answer, being what `_length_expression`'s chain opens with.
+		if not any(getattr(case, "value", None) is None
+		           for case, _call, _size in plan):
+			lines.extend(["\t\telse:", "\t\t\tlen_ = 0"])
+		lines.extend([
+			"\t\tat  = min(at + len_, 0xFFFFFFFF)",
+			*([f"\t\t{ahead} = min({ahead} + len_, 0xFFFFFFFF)"]
+			  if ahead else []),
+		])
+		return lines
+
 	def _framing_walk(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str] | None:
+			placement: Placement,
+			cursor: str | None = None) -> list[str] | None:
 		"""Framing a run: one element at a time, through the element's own
 		`required`.
 
@@ -5587,7 +5757,7 @@ class Emitter:
 			body.extend([
 				*read,
 				f"\t\t\t_element = {inner}(probe._msg, pos, part)",
-				"\t\t\tat  += part",
+				"\t\t\tat  = min(at + part, 0xFFFFFFFF)",
 				"\t\t\tpos += part",
 				"",
 				"\t\t\t# The condition is asked about the element just"
@@ -5664,11 +5834,20 @@ class Emitter:
 		# ones AFTER this run, so slicing from it read each element that
 		# many bytes late -- `withtail { u8 n; one d[n]; u16 t; }` called a
 		# six-byte message complete at five.
-		start = self._offset_expression(struct, placement)
-		if start is None:
-			return None	# no base, so no cursor, so no walk
+		# The CALLER's cursor where there is one -- and in Python that is
+		# not a preference: there are no blocks, so a second `pos = ...`
+		# at this indentation CLOBBERS the running offset `required`
+		# carries. The other three shadow it in a block and merely fail
+		# to advance it; here it would be overwritten outright.
+		own = cursor is None
+		start = ""
+		if own:
+			base = self._offset_expression(struct, placement)
+			if base is None:
+				return None	# no base, so no cursor, so no walk
+			start = base.replace("self.", "probe.")
 		loop = ["\t\twhile True:", *body]
-		loop = [f"\t\tpos = {start.replace('self.', 'probe.')}",
+		loop = [*([f"\t\tpos = {start}"] if own else []),
 		        *(["\t\tseen = 0"] if cap is not None or counted else []),
 		        *loop]
 

@@ -76,6 +76,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
 	indexed_elements,
@@ -5483,7 +5484,11 @@ class Emitter:
 			        " holds one")
 
 		steps: list[str] = []
-		for placement in variable:
+		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
+		# The C emitter's `_required` carries the reasoning and the proof.
+		gaps = framing_gaps(self.resolved.structs, struct)
+		cursor = "pos" if gaps is not None else None
+		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
@@ -5492,11 +5497,13 @@ class Emitter:
 			# way, and was not -- see `_framing_walk` (26.557).
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
-				walk = self._framing_walk(struct, placement)
+				walk = self._framing_walk(struct, placement, cursor)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
 					        " cannot be framed cannot be framed either")
 				steps.extend(walk)
+				# The walk advanced both itself, element by element.
+				steps.extend(self._gap_step(cursor, gaps, index))
 				continue
 
 			# A SINGLE VARINT whose bytes have not all arrived. Its
@@ -5535,7 +5542,7 @@ class Emitter:
 				"",
 				f"\t\t// {placement.path}: reading its length means reading",
 				"\t\t// bytes that have to be here first.",
-				"\t\tif have < at {",
+				f"\t\tif have < {cursor or 'at'} {{",
 				"\t\t\treturn situ_rt::Framing::Need(at);",
 				"\t\t}",
 			])
@@ -5549,9 +5556,30 @@ class Emitter:
 					"\t\t\treturn situ_rt::Framing::Need(have + 1);",
 					"\t\t}",
 				])
-			steps.append(
-				f"\t\tat = at.saturating_add("
-				f"{self._unparen(length).replace('self.', 'probe.')});")
+			# The cursor is advanced only where a LATER variable member
+			# reads it: the last one's store is dead, and Rust's
+			# `-D warnings` refuses a dead store outright.
+			ahead = cursor if index + 1 < len(variable) else None
+			handed = (self._nested_framing(struct, placement, cursor,
+			                               ahead)
+			          or self._variant_framing(struct, placement, cursor,
+			                                   ahead))
+			if handed is not None:
+				steps.extend(handed)
+				steps.extend(self._gap_step(cursor, gaps, index))
+				continue
+
+			rendered = self._unparen(length).replace("self.", "probe.")
+			if cursor is None:
+				steps.append(f"\t\tat = at.saturating_add({rendered});")
+			else:
+				steps.extend([
+					f"\t\tlet len_ = {rendered};",
+					"\t\tat = at.saturating_add(len_);",
+					*([f"\t\t{ahead} = {ahead}.saturating_add(len_);"]
+					  if ahead else []),
+				])
+			steps.extend(self._gap_step(cursor, gaps, index))
 
 		return [
 			*head,
@@ -5559,6 +5587,14 @@ class Emitter:
 			# variable member is a versioned one resolves entirely to
 			# constants, and `unused_mut` is an error under `-D warnings`.
 			f"\t\tlet {'mut ' if steps else ''}at = {constant};",
+			# `mut` on the same terms as `at`'s, and declared only where
+			# something reads it: `unused_mut`, `unused_variables` and
+			# `unused_assignments` are all errors under `-D warnings`,
+			# which is why this backend is the one that finds every dead
+			# store the other three accept in silence.
+			*([f"\t\tlet {'mut ' if cursor and any(f'{cursor} =' in line for line in steps) else ''}{cursor} = {gaps[0]}usize;"]
+			  if cursor and gaps
+			  and any(cursor in line for line in steps) else []),
 			"",
 			"\t\tif have < Self::SIZE_MIN {",
 			"\t\t\treturn situ_rt::Framing::Need(Self::SIZE_MIN);",
@@ -5579,8 +5615,156 @@ class Emitter:
 			"\t}",
 		]
 
+	def _frames_itself(self, struct: ResolvedStruct) -> bool:
+		"""Whether `required` is emitted for this struct at all."""
+		return any("pub fn required(" in line
+		           for line in self._required(struct))
+
+	def _nested_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a nested struct: through its own `required` (26.684).
+
+		The C emitter's `_nested_framing` carries the reasoning. `ahead`
+		is the cursor again, or None where nothing after this member
+		reads it -- a dead store, which `-D warnings` refuses.
+		"""
+		if cursor is None:
+			return None
+		name = placement.type_name
+		if name is None or name not in self.resolved.structs:
+			return None
+		if placement.delimiters or placement.repeat_while is not None \
+				or is_run(placement, self.resolved.structs) \
+				or is_counted_run(self.resolved.structs, placement):
+			return None
+		inner = self.resolved.structs[name]
+		if not frameable(self.resolved.structs, inner) \
+				or not self._frames_itself(inner):
+			return None
+
+		return [
+			"",
+			f"\t\t// {placement.path}: a nested `{inner.name}` frames",
+			"\t\t// itself. Its EXTENT shrinks when the bytes run out, so",
+			"\t\t// adding that reported a complete message (26.684).",
+			f"\t\tif have < {cursor} {{",
+			"\t\t\treturn situ_rt::Framing::Need(at);",
+			"\t\t}",
+			f"\t\tlet len_ = match {_pascal(inner.name)}"
+			f"::required(&data[{cursor}..]) {{",
+			"\t\t\tsitu_rt::Framing::Complete(n) => n,",
+			"\t\t\tsitu_rt::Framing::Need(n) =>",
+			"\t\t\t\treturn situ_rt::Framing::Need("
+			"at.saturating_add(n)),",
+			"\t\t};",
+			"\t\tat = at.saturating_add(len_);",
+			*([f"\t\t{ahead} = {ahead}.saturating_add(len_);"]
+			  if ahead else []),
+		]
+
+	def _variant_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a variant: through the selected arm's own `required`.
+
+		None unless every arm is accounted for, since a chain handling
+		some would report the rest as zero bytes.
+		"""
+		if cursor is None or not placement.arm_cases \
+				or placement.discriminant is None:
+			return None
+		pairs = [(arm, member)
+		         for arm, member in arm_members(struct, placement)
+		         if member is not None]
+		if not pairs:
+			return None
+
+		plan: list[tuple[object, str | None, str]] = []
+		for arm, member in pairs:
+			inner = self.resolved.structs.get(member.type_name or "")
+			if inner is not None and not member.delimiters \
+					and not is_run(member, self.resolved.structs) \
+					and not is_counted_run(self.resolved.structs, member) \
+					and frameable(self.resolved.structs, inner) \
+					and self._frames_itself(inner):
+				plan.append((arm, _pascal(inner.name), ""))
+			elif member.is_fixed_size:
+				plan.append((arm, None,
+				             str(member.size_bits // BITS_PER_BYTE)))
+			else:
+				return None
+		if not any(call for _, call, _ in plan):
+			return None
+
+		disc = self._over_fields(struct, placement.discriminant, "self")
+		disc = self._unparen(disc).replace("self.", "probe.")
+		lines = [
+			"",
+			f"\t\t// {placement.path}: the arm the discriminant selects",
+			"\t\t// frames itself -- reported by bbq-predictor against a",
+			"\t\t// variant arm, whose extent shrank (26.684).",
+			f"\t\tif have < {cursor} {{",
+			"\t\t\treturn situ_rt::Framing::Need(at);",
+			"\t\t}",
+			"\t\tlet len_;",
+		]
+		opened = False
+		for case, call, size in plan:
+			value = getattr(case, "value", None)
+			if value is None:
+				head = "\t\t} else {" if opened else "\t\t{"
+			else:
+				head = (f"\t\t}} else if {disc} == {value} {{"
+				        if opened else f"\t\tif {disc} == {value} {{")
+			lines.append(head)
+			opened = True
+			if call is None:
+				lines.append(f"\t\t\tlen_ = {size};")
+			else:
+				lines.extend([
+					f"\t\t\tlen_ = match {call}::required"
+					f"(&data[{cursor}..]) {{",
+					"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
+					"\t\t\t\tsitu_rt::Framing::Need(n) =>",
+					"\t\t\t\t\treturn situ_rt::Framing::Need("
+					"at.saturating_add(n)),",
+					"\t\t\t};",
+				])
+		# A chain with no `default:` arm matches nothing for an
+		# unexpected discriminant, and then `len_` is never assigned --
+		# which Rust refuses outright ("possibly-uninitialized") and
+		# Python would meet as a NameError at run time. Zero is the
+		# answer the other two already give, being what
+		# `_length_expression`'s own chain opens with: no arm matched, so
+		# no bytes are claimed, and `validate` is what refuses the
+		# discriminant.
+		if not any(getattr(case, "value", None) is None
+		           for case, _call, _size in plan):
+			lines.extend(["\t\t} else {", "\t\t\tlen_ = 0;"])
+		lines.extend([
+			"\t\t}",
+			"\t\tat = at.saturating_add(len_);",
+			*([f"\t\t{ahead} = {ahead}.saturating_add(len_);"]
+			  if ahead else []),
+		])
+		return lines
+
+	def _gap_step(self, cursor: str | None, gaps: list[int] | None,
+			index: int) -> list[str]:
+		"""Step the cursor over the fixed bytes after this member."""
+		if cursor is None or gaps is None or index + 1 >= len(gaps):
+			return []
+		gap = gaps[index + 1]
+		if gap == 0:
+			return []
+		return [f"\t\t{cursor} = {cursor}.saturating_add({gap});"]
+
 	def _framing_walk(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str] | None:
+			placement: Placement,
+			cursor: str | None = None) -> list[str] | None:
 		"""Framing a run: one element at a time, through the element's own
 		`required`.
 
@@ -5713,16 +5897,25 @@ class Emitter:
 		# ones AFTER this run, so slicing from it read each element that
 		# many bytes late -- `withtail { u8 n; one d[n]; u16 t; }` answered
 		# Complete(5) for a six-byte message.
-		start = self._offset_expression(struct, placement)
-		if start is None:
-			return None	# no base, so no cursor, so no walk
-		# `probe.` rather than `self.`: framing is an associated function
-		# over a slice, so there is no `self` -- the same substitution the
-		# length expression two screens up makes, and for the same reason.
-		start = self._unparen(start).replace("self.", "probe.")
+		# The CALLER's cursor where there is one (26.684): `required`
+		# derives every member's offset now, so the walk advances that
+		# rather than opening a second one from a base expression -- a
+		# call naming an offset accessor some members do not have.
+		own = cursor is None
+		start = ""
+		if own:
+			# `where` rather than `base`, which this function already
+			# binds as a `str` further down -- mypy named the collision
+			# rather than letting an optional flow into it.
+			where = self._offset_expression(struct, placement)
+			if where is None:
+				return None	# no base, so no cursor, so no walk
+			# `probe.` rather than `self.`: framing is an associated
+			# function over a slice, so there is no `self`.
+			start = self._unparen(where).replace("self.", "probe.")
 		loop = ["\t\tloop {", *body, "\t\t}"]
 		loop = ["\t\t{",
-		        f"\t\t\tlet mut pos = {start};",
+		        *([f"\t\t\tlet mut pos = {start};"] if own else []),
 		        *(["\t\t\tlet mut seen = 0usize;"]
 		          if cap is not None or counted else []),
 		        *[f"\t{line}" if line else line for line in loop],

@@ -80,6 +80,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
 	indexed_elements,
@@ -2601,7 +2602,11 @@ class Emitter:
 			        " holds one")
 
 		steps: list[str] = []
-		for placement in variable:
+		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
+		# The C emitter's `_required` carries the reasoning and the proof.
+		gaps = framing_gaps(self.resolved.structs, struct)
+		cursor = "pos" if gaps is not None else None
+		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
@@ -2610,11 +2615,13 @@ class Emitter:
 			# way, and was not -- see `_framing_walk` (26.557).
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
-				walk = self._framing_walk(struct, placement)
+				walk = self._framing_walk(struct, placement, cursor)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
 					        " cannot be framed cannot be framed either")
 				steps.extend(walk)
+				# The walk advanced both itself, element by element.
+				steps.extend(self._gap_step(cursor, gaps, index))
 				continue
 
 			# A SINGLE VARINT whose bytes have not all arrived. Its
@@ -2653,7 +2660,7 @@ class Emitter:
 				"",
 				f"\t\t/* {placement.path}: reading its length means reading",
 				"\t\t * bytes that have to be here first. */",
-				"\t\tif (have < at) {",
+				f"\t\tif (have < {cursor or 'at'}) {{",
 				"\t\t\tneed = at;",
 				"\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t}",
@@ -2669,11 +2676,40 @@ class Emitter:
 					"\t\t\treturn ::situ::rt::err::truncated;",
 					"\t\t}",
 				])
-			steps.append(f"\t\tat = situ_need_u32(at, {length});")
+			# The cursor advances only where a LATER variable member
+			# reads it; the last one's store is dead, which Rust's
+			# `-D warnings` refuses outright and the other three take in
+			# silence.
+			ahead = cursor if index + 1 < len(variable) else None
+			handed = (self._nested_framing(struct, placement, cursor,
+			                               ahead)
+			          or self._variant_framing(struct, placement, cursor,
+			                                   ahead))
+			if handed is not None:
+				steps.extend(handed)
+				steps.extend(self._gap_step(cursor, gaps, index))
+				continue
+
+			if cursor is None:
+				steps.append(f"\t\tat = situ_need_u32(at, {length});")
+			else:
+				steps.extend([
+					"\t\t{",
+					f"\t\t\tconst std::uint32_t len = {length};",
+					"",
+					"\t\t\tat = situ_need_u32(at, len);",
+					*([f"\t\t\t{ahead} = situ_need_u32({ahead}, len);"]
+					  if ahead else []),
+					"\t\t}",
+				])
+			steps.extend(self._gap_step(cursor, gaps, index))
 
 		return [
 			*head,
 			f"\t\tstd::uint32_t at = {constant}u;",
+			*([f"\t\tstd::uint32_t {cursor} = {gaps[0]}u;"]
+			  if cursor and gaps and any(cursor in line for line in steps)
+			  else []),
 			"",
 			"\t\tif (have < size_min) {",
 			"\t\t\tneed = size_min;",
@@ -2688,8 +2724,162 @@ class Emitter:
 			*tail,
 		]
 
+	def _frames_itself(self, struct: ResolvedStruct) -> bool:
+		"""Whether `required` is emitted for this struct at all.
+
+		Asked by rendering it: the decline has many causes and a
+		predicate listing them would be a second copy of `_required`'s
+		own branches.
+		"""
+		return any("static ::situ::rt::err required(" in line
+		           for line in self._required(struct))
+
+	def _nested_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a nested struct: through its own `required` (26.684).
+
+		The C emitter's `_nested_framing` carries the reasoning.
+		"""
+		if cursor is None:
+			return None
+		name = placement.type_name
+		if name is None or name not in self.resolved.structs:
+			return None
+		if placement.delimiters or placement.repeat_while is not None \
+				or is_run(placement, self.resolved.structs) \
+				or is_counted_run(self.resolved.structs, placement):
+			return None
+		inner = self.resolved.structs[name]
+		if not frameable(self.resolved.structs, inner) \
+				or not self._frames_itself(inner):
+			return None
+
+		call = f"::{self.namespace}::{class_name(inner)}::required"
+		return [
+			"",
+			f"\t\t/* {placement.path}: a nested `{inner.name}` frames",
+			"\t\t * itself. Its EXTENT shrinks when the bytes run out, so",
+			"\t\t * adding that reported a complete message (26.684). */",
+			"\t\t{",
+			"\t\t\tstd::uint32_t part = 0;",
+			"",
+			f"\t\t\tif (have < {cursor}) {{",
+			"\t\t\t\tneed = at;",
+			"\t\t\t\treturn ::situ::rt::err::truncated;",
+			"\t\t\t}",
+			f"\t\t\tconst ::situ::rt::err e = {call}(",
+			f"\t\t\t\tsitu_base(raw_) + {cursor},",
+			f"\t\t\t\tsitu_remaining_u32(have, {cursor}), part);",
+			"\t\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\t\tneed = situ_need_u32(at, part);",
+			"\t\t\t\treturn ::situ::rt::err::truncated;",
+			"\t\t\t}",
+			"\t\t\tat = situ_need_u32(at, part);",
+			*([f"\t\t\t{ahead} = situ_need_u32({ahead}, part);"]
+			  if ahead else []),
+			"\t\t}",
+		]
+
+	def _variant_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a variant: through the selected arm's own `required`.
+
+		None unless every arm is accounted for, since a chain handling
+		some would report the rest as zero bytes.
+		"""
+		if cursor is None or not placement.arm_cases \
+				or placement.discriminant is None:
+			return None
+		pairs = [(arm, member)
+		         for arm, member in arm_members(struct, placement)
+		         if member is not None]
+		if not pairs:
+			return None
+
+		plan: list[tuple[object, str | None, str]] = []
+		for arm, member in pairs:
+			inner = self.resolved.structs.get(member.type_name or "")
+			if inner is not None and not member.delimiters \
+					and not is_run(member, self.resolved.structs) \
+					and not is_counted_run(self.resolved.structs, member) \
+					and frameable(self.resolved.structs, inner) \
+					and self._frames_itself(inner):
+				plan.append((arm,
+				             f"::{self.namespace}::{class_name(inner)}"
+				             "::required", ""))
+			elif member.is_fixed_size:
+				plan.append((arm, None,
+				             f"{member.size_bits // BITS_PER_BYTE}u"))
+			else:
+				return None
+		if not any(call for _, call, _ in plan):
+			return None
+
+		disc  = self._over_fields(struct, placement.discriminant)
+		lines = [
+			"",
+			f"\t\t/* {placement.path}: the arm the discriminant selects",
+			"\t\t * frames itself -- reported by bbq-predictor against a",
+			"\t\t * variant arm, whose extent shrank (26.684). */",
+			"\t\t{",
+			"\t\t\tstd::uint32_t part = 0;",
+			"\t\t\t::situ::rt::err e = ::situ::rt::err::ok;",
+			"",
+			f"\t\t\tif (have < {cursor}) {{",
+			"\t\t\t\tneed = at;",
+			"\t\t\t\treturn ::situ::rt::err::truncated;",
+			"\t\t\t}",
+		]
+		opened = False
+		for case, call, size in plan:
+			value = getattr(case, "value", None)
+			if value is None:
+				head = "\t\t\t} else {" if opened else "\t\t\t{"
+			else:
+				head = (f"\t\t\t}} else if ({disc} == {value}u) {{"
+				        if opened else
+				        f"\t\t\tif ({disc} == {value}u) {{")
+			lines.append(head)
+			opened = True
+			if call is None:
+				lines.append(f"\t\t\t\tpart = {size};")
+			else:
+				lines.extend([
+					f"\t\t\t\te = {call}(situ_base(raw_) + {cursor},",
+					"\t\t\t\t\tsitu_remaining_u32(have,"
+					f" {cursor}), part);",
+					"\t\t\t\tif (e != ::situ::rt::err::ok) {",
+					"\t\t\t\t\tneed = situ_need_u32(at, part);",
+					"\t\t\t\t\treturn ::situ::rt::err::truncated;",
+					"\t\t\t\t}",
+				])
+		lines.extend([
+			"\t\t\t}",
+			"\t\t\t(void)e;",
+			"\t\t\tat = situ_need_u32(at, part);",
+			*([f"\t\t\t{ahead} = situ_need_u32({ahead}, part);"]
+			  if ahead else []),
+			"\t\t}",
+		])
+		return lines
+
+	def _gap_step(self, cursor: str | None, gaps: list[int] | None,
+			index: int) -> list[str]:
+		"""Step the cursor over the fixed bytes after this member."""
+		if cursor is None or gaps is None or index + 1 >= len(gaps):
+			return []
+		gap = gaps[index + 1]
+		if gap == 0:
+			return []
+		return [f"\t\t{cursor} = situ_need_u32({cursor}, {gap}u);"]
+
 	def _framing_walk(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str] | None:
+			placement: Placement,
+			cursor: str | None = None) -> list[str] | None:
 		"""Framing a run: one element at a time, through the element's own
 		`required`.
 
@@ -2833,12 +3023,18 @@ class Emitter:
 		# ones AFTER this run, so passing it as the element's offset read
 		# each element that many bytes late -- `withtail { u8 n; one d[n];
 		# u16 t; }` answered complete at five bytes of six.
-		base = self._offset_expression(struct, placement)
-		if base is None:
-			return None	# no base, so no cursor, so no walk
+		# The CALLER's cursor where there is one (26.684): `required`
+		# derives every member's offset now, so the walk advances that
+		# rather than opening a second one from a base expression -- a
+		# call naming an offset accessor some members do not have.
+		own = cursor is None
+		if own:
+			base = self._offset_expression(struct, placement)
+			if base is None:
+				return None	# no base, so no cursor, so no walk
 		loop = ["\t\tfor (;;) {", *body, "\t\t}"]
 		loop = ["\t\t{",
-		        f"\t\t\tstd::uint32_t pos = {base};",
+		        *([f"\t\t\tstd::uint32_t pos = {base};"] if own else []),
 		        *(["\t\t\tstd::uint32_t n = 0;"]
 		          if cap is not None or counted else []),
 		        *[f"\t{line}" if line else line for line in loop],

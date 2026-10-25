@@ -77,6 +77,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
 	indexed_elements,
@@ -4547,6 +4548,28 @@ class Emitter:
 					f"{ident(self.prefix, peer, 'check')}"
 					f"(situ_view_t view, uint32_t *which{tail});",
 				])
+			# AND `required`, which is the next function along the same
+			# argument. A nested member frames itself through the nested
+			# struct's own `required` (26.684), and in a cycle that call
+			# is ahead of its definition: `json`'s `element` nests
+			# `value`, and `value` is emitted after it, so the header did
+			# not compile on an implicit declaration. `sexpr` and
+			# `edges.nest_group` the same.
+			#
+			# Unlike the verdict pair this is needed for an OWN struct as
+			# well, because `required` is `static inline` in the header
+			# either way -- it is not part of the `.c`.
+			#
+			# Gated on `_frames_itself`, which renders it and looks: a
+			# prototype for a `static inline` the emitter then declines to
+			# define is `-Werror=unused-function`, and that is exactly the
+			# trap 26.679's own comment above records falling into.
+			if peer_struct is not None and self._frames_itself(peer_struct):
+				lines.append(
+					f"static inline situ_err_t "
+					f"{ident(self.prefix, peer, 'required')}"
+					"(const uint8_t *data, uint32_t have, uint32_t *need"
+					f"{self._argument_tail(peer_struct)});")
 		return lines + self._predicate_prototypes(struct, cycle)
 
 	def _predicate_prototypes(self, struct: ResolvedStruct,
@@ -4793,8 +4816,23 @@ class Emitter:
 
 		steps: list[str] = []
 		at = str(constant) + "u"
+		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
+		# `at` is a running TOTAL and includes every fixed member, the ones
+		# AFTER this one included, so it is not an offset; and the offset
+		# accessor is not available here -- it is emitted later in the
+		# header than this function, and for a member behind an optional
+		# one it is not emitted at all. The gaps plus the lengths this loop
+		# already accumulates give the offset for nothing.
+		#
+		# None is the safety net rather than a case: `framing_gaps` derived
+		# them for all 107 corpus structs that have an extent, and checked
+		# 100 first-member bases against the layout's own static offsets
+		# with no mismatch. Where it declines, every branch below falls
+		# back to what it did before.
+		gaps = framing_gaps(self.resolved.structs, struct)
+		cursor = "pos" if gaps is not None else None
 
-		for placement in variable:
+		for index, placement in enumerate(variable):
 			if placement.kind == "indexed":
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
@@ -4827,7 +4865,7 @@ class Emitter:
 				# base rather than at `at`, or a `pad_to(4)` behind a 2-byte
 				# length and in front of a 2-byte trailer aligns `2 + n + 2`
 				# and answers 4 where the truth is 6.
-				base = self._base_expression(struct, placement)
+				base = cursor or self._base_expression(struct, placement)
 				steps.extend([
 					"",
 					f"\t/* {placement.path}: a pad reads nothing. Its length"
@@ -4837,11 +4875,17 @@ class Emitter:
 					"\t * `at` is a total rather than an offset, so the"
 					" alignment is",
 					"\t * taken at the pad's own base (0043). */",
-					f"\tat = situ_need_u32(at,"
-					f" situ_align_up_u32({base}, {pad}u,"
-					" view.limit)",
-					f"\t           - {base});",
+					"\t{",
+					f"\t\tconst uint32_t len = situ_align_up_u32({base},"
+					f" {pad}u, view.limit)",
+					f"\t\t                   - {base};",
+					"",
+					"\t\tat = situ_need_u32(at, len);",
+					*([f"\t\t{cursor} = situ_need_u32({cursor}, len);"]
+					  if cursor else []),
+					"\t}",
 				])
+				steps.extend(self._gap_step(cursor, gaps, index))
 				continue
 
 			steps.extend([
@@ -4849,7 +4893,7 @@ class Emitter:
 				f"\t/* {placement.path}: reading its length means reading bytes"
 				" that",
 				"\t * have to be here first. */",
-				"\tif (have < at) {",
+				f"\tif (have < {cursor or 'at'}) {{",
 				"\t\t*need = at;",
 				"\t\treturn SITU_ERR_TRUNCATED;",
 				"\t}",
@@ -4862,11 +4906,14 @@ class Emitter:
 			# buffer indistinguishably from the end of the run (26.557).
 			if (is_run(placement, self.structs)
 					or self._is_counted_run(placement)):
-				walk = self._framing_walk(struct, placement)
+				walk = self._framing_walk(struct, placement, cursor)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
 					        " cannot be framed cannot be framed either")
 				steps.extend(walk)
+				# The walk advanced both itself, element by element, so
+				# only the fixed bytes after the run are left to add.
+				steps.extend(self._gap_step(cursor, gaps, index))
 				continue
 
 			# A SINGLE VARINT whose bytes have not all arrived. Its `_len`
@@ -4921,14 +4968,45 @@ class Emitter:
 			# length of 0xFFFFFFFF came back as 0x80000004: two gigabytes,
 			# which a caller CAN supply, and would then be handed a body
 			# truncated from the four the message declared (26.651).
-			steps.append("\tat = situ_need_u32(at, "
-				+ self._length_expression(struct, placement, running="at",
-				                          leaf_bounded=False)
-				+ ");")
+			# The cursor is advanced only where a LATER variable member
+			# reads it. Rust's `-D warnings` refuses the last member's
+			# dead store outright; the other three accept it in silence,
+			# and dead arithmetic reads as arithmetic somebody meant.
+			ahead = cursor if index + 1 < len(variable) else None
+			nested = (self._nested_framing(struct, placement, cursor,
+			                               ahead)
+			          or self._variant_framing(struct, placement, cursor,
+			                                   ahead))
+			if nested is not None:
+				steps.extend(nested)
+				steps.extend(self._gap_step(cursor, gaps, index))
+				continue
+
+			length = self._length_expression(struct, placement,
+			                                 running="at",
+			                                 leaf_bounded=False)
+			if cursor is None:
+				steps.append(f"\tat = situ_need_u32(at, {length});")
+			else:
+				# Bound once: the length expression can be a chain of
+				# accessor calls, and the cursor needs the same number the
+				# total does.
+				steps.extend([
+					"\t{",
+					f"\t\tconst uint32_t len = {length};",
+					"",
+					"\t\tat = situ_need_u32(at, len);",
+					*([f"\t\t{ahead} = situ_need_u32({ahead}, len);"]
+					  if ahead else []),
+					"\t}",
+				])
+			steps.extend(self._gap_step(cursor, gaps, index))
 
 		# Only where something reads through it. A length that is arithmetic
 		# over nothing -- a varint's, say -- leaves the local set and unused,
 		# which is `-Werror` under `-Wunused-but-set-variable`.
+		uses_cursor = cursor is not None \
+			and any(cursor in line for line in steps)
 		uses_view = any("view" in line for line in steps)
 		view_lines = [
 			"\t/* A view over what has arrived, so every length expression"
@@ -4972,6 +5050,8 @@ class Emitter:
 			f"{self._argument_tail(struct)})",
 			"{",
 			f"\tuint32_t at = {at};",
+			*([f"\tuint32_t {cursor} = {gaps[0]}u;"]
+			  if uses_cursor and gaps else []),
 			*(["\tsitu_view_t view;"] if uses_view else []),
 			"",
 			*self._argument_unused(struct, self._argument_tail(struct), *steps),
@@ -4993,8 +5073,204 @@ class Emitter:
 		]
 		return lines
 
+	def _frames_itself(self, struct: ResolvedStruct) -> bool:
+		"""Whether `_required` is emitted for this struct at all.
+
+		Asked by rendering it, because the decline has many causes --
+		an `indexed` region, a member with no computable length, a
+		`[remaining]` tail, a register -- and a predicate listing them
+		would be a second copy of this function's own branches.
+
+		It exists for the prototypes: a forward declaration of a
+		`static inline` the emitter then declines to define is
+		`-Werror`, which is the trap 26.679 is about.
+		"""
+		name = ident(self.prefix, struct.name, "required")
+		return any(f"situ_err_t {name}(" in line
+		           for line in self._required(struct))
+
+	def _nested_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a nested struct: through its own `required` (26.684).
+
+		`framed` added the nested member's EXTENT, and an extent walk
+		stops early when the bytes run out -- so the quantity it added
+		got smaller as the message got shorter, and once the fixed prefix
+		had arrived it could never report truncation again. `outer { u8
+		h; col c; }` answered complete at two bytes of five.
+
+		`validate` has never had the fault because `validate` DELEGATES:
+		it makes a sub-view and calls the nested struct's own validator.
+		This is the same delegation one function over, and the same call
+		`_framing_walk` already makes per element of a run.
+
+		None without a cursor, because the base is what this needs and
+		the cursor is what supplies it -- the first version asked
+		`_base_expression` and named an offset accessor that `mqtt`'s
+		`connect_body.will` does not have.
+		"""
+		if cursor is None:
+			return None
+		name = placement.type_name
+		if name is None or name not in self.resolved.structs:
+			return None
+		if placement.delimiters or placement.repeat_while is not None \
+				or is_run(placement, self.structs) \
+				or self._is_counted_run(placement):
+			return None
+		inner = self.resolved.structs[name]
+		if not frameable(self.resolved.structs, inner) \
+				or not self._frames_itself(inner):
+			return None
+
+		required = ident(self.prefix, inner.name, "required")
+		return [
+			"",
+			f"\t/* {placement.path}: a nested `{inner.name}` frames itself.",
+			"\t * Its EXTENT shrinks when the bytes run out, so adding that",
+			"\t * reported a complete message; this asks the same question",
+			"\t * one level down, as `validate` does (26.684). */",
+			"\t{",
+			"\t\tuint32_t   part = 0u;",
+			"\t\tsitu_err_t e;",
+			"",
+			f"\t\tif (have < {cursor}) {{",
+			"\t\t\t*need = at;",
+			"\t\t\treturn SITU_ERR_TRUNCATED;",
+			"\t\t}",
+			f"\t\te = {required}(data + {cursor},",
+			f"\t\t                situ_remaining_u32(have, {cursor}),"
+			" &part);",
+			"\t\tif (e != SITU_OK) {",
+			"\t\t\t*need = situ_need_u32(at, part);",
+			"\t\t\treturn SITU_ERR_TRUNCATED;",
+			"\t\t}",
+			"\t\tat = situ_need_u32(at, part);",
+			*([f"\t\t{ahead} = situ_need_u32({ahead}, part);"]
+			  if ahead else []),
+			"\t}",
+		]
+
+	def _variant_framing(self, struct: ResolvedStruct,
+			placement: Placement,
+			cursor: str | None,
+			ahead: str | None = None) -> list[str] | None:
+		"""Framing a variant: through the selected arm's own `required`.
+
+		`_nested_framing` with a discriminant in front of it, and the
+		shape bbq-predictor reported: `framed` inside a variant arm
+		answered OK for a three-byte buffer where the arm's own struct
+		said four.
+
+		None unless EVERY arm is accounted for -- a fixed one by its
+		size, a struct one by its own framing -- because a chain handling
+		some arms would report the rest as zero bytes, which is this
+		fault again with a smaller blast radius.
+		"""
+		if cursor is None or not placement.arm_cases \
+				or placement.discriminant is None:
+			return None
+		pairs = [(arm, member)
+		         for arm, member in arm_members(struct, placement)
+		         if member is not None]
+		if not pairs:
+			return None
+
+		# The loop below binds `case` rather than rebinding `arm`: one
+		# name for the arm `arm_members` yields and another for the
+		# planned entry, because mypy reads a rebind as narrowing and
+		# because two meanings on one name is what this tree keeps
+		# catching.
+		plan: list[tuple[object, str | None, str]] = []
+		for arm, member in pairs:
+			inner = self.resolved.structs.get(member.type_name or "")
+			if inner is not None and not member.delimiters \
+					and not is_run(member, self.structs) \
+					and not self._is_counted_run(member) \
+					and frameable(self.resolved.structs, inner) \
+					and self._frames_itself(inner):
+				plan.append((arm, ident(self.prefix, inner.name,
+				                        "required"), ""))
+			elif member.is_fixed_size:
+				plan.append((arm, None,
+				             f"{member.size_bits // BITS_PER_BYTE}u"))
+			else:
+				return None	# an arm this cannot frame
+		if not any(call for _, call, _ in plan):
+			return None	# every arm fixed: the extent cannot shrink
+
+		disc  = self._over_fields(struct, placement.discriminant, "view")
+		lines = [
+			"",
+			f"\t/* {placement.path}: the arm the discriminant selects frames",
+			"\t * itself. Its EXTENT shrinks when the bytes run out, so",
+			"\t * adding that reported a complete message -- reported by",
+			"\t * bbq-predictor against a variant arm (26.684). */",
+			"\t{",
+			"\t\tuint32_t   part = 0u;",
+			"\t\tsitu_err_t e = SITU_OK;",
+			"",
+			f"\t\tif (have < {cursor}) {{",
+			"\t\t\t*need = at;",
+			"\t\t\treturn SITU_ERR_TRUNCATED;",
+			"\t\t}",
+		]
+		opened = False
+		for case, call, size in plan:
+			# `default:` matches anything, so it is the final `else`.
+			value = getattr(case, "value", None)
+			if value is None:
+				head = "\t\t} else {" if opened else "\t\t{"
+			else:
+				head = (f"\t\t}} else if ({disc} == {value}u) {{"
+				        if opened else
+				        f"\t\tif ({disc} == {value}u) {{")
+			lines.append(head)
+			opened = True
+			if call is None:
+				lines.append(f"\t\t\tpart = {size};")
+			else:
+				lines.extend([
+					f"\t\t\te = {call}(data + {cursor},",
+					"\t\t\t                situ_remaining_u32(have,"
+					f" {cursor}), &part);",
+					"\t\t\tif (e != SITU_OK) {",
+					"\t\t\t\t*need = situ_need_u32(at, part);",
+					"\t\t\t\treturn SITU_ERR_TRUNCATED;",
+					"\t\t\t}",
+				])
+		lines.extend([
+			"\t\t}",
+			"\t\t(void)e;",
+			"\t\tat = situ_need_u32(at, part);",
+			*([f"\t\t{ahead} = situ_need_u32({ahead}, part);"]
+			  if ahead else []),
+			"\t}",
+		])
+		return lines
+
+	def _gap_step(self, cursor: str | None, gaps: list[int] | None,
+			index: int) -> list[str]:
+		"""Step the cursor over the fixed bytes after this member.
+
+		`gaps[i]` is the fixed bytes BEFORE variable member `i`, so what
+		follows member `i` is `gaps[i + 1]` -- and nothing follows the
+		last one that anybody reads, so there is no gap to add there.
+		Zero is the common case and emits nothing: a step of zero bytes
+		reads as arithmetic somebody meant.
+		"""
+		if cursor is None or gaps is None or index + 1 >= len(gaps):
+			return []
+		gap = gaps[index + 1]
+		if gap == 0:
+			return []
+		return [f"\t{cursor} = situ_need_u32({cursor}, {gap}u);"]
+
 	def _framing_walk(self, struct: ResolvedStruct,
-			placement: Placement) -> list[str] | None:
+			placement: Placement,
+			cursor: str | None = None) -> list[str] | None:
 		"""Framing a run: one element at a time, through the element's own
 		`required`.
 
@@ -5193,13 +5469,22 @@ class Emitter:
 		# Both advance by each element's `part`: the total because that is
 		# what `required` answers, the cursor because that is where the next
 		# element begins.
-		base = self._base_expression(struct, placement)
+		# The CALLER's cursor where there is one, which is 26.684's half of
+		# this: `required` derives every member's offset from the gaps and
+		# the lengths it already sums, so the walk advances that rather
+		# than opening a second one from a base expression. The fallback
+		# is the base call, which is what this did alone -- and which
+		# names an offset accessor that `mqtt`'s `connect_body.will` does
+		# not have.
+		own = cursor is None
+		base = self._base_expression(struct, placement) if own else cursor
 		# The counter exists only where a cap reads it, and the block is the
-		# cursor's as well: both belong to this member's walk, and a second
-		# run in the same struct would otherwise redeclare them.
+		# cursor's as well where the walk owns one: both belong to this
+		# member's walk, and a second run in the same struct would
+		# otherwise redeclare them.
 		loop = ["\tfor (;;) {", *body, "\t}"]
 		loop = ["\t{",
-		        f"\t\tuint32_t pos = {base};",
+		        *([f"\t\tuint32_t pos = {base};"] if own else []),
 		        *(["\t\tuint32_t n = 0u;"] if cap is not None or counted
 		          else []),
 		        *[f"\t{line}" if line else line for line in loop], "\t}"]
