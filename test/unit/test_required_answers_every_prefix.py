@@ -15,8 +15,8 @@ one sweep there was. Three lines of loop over four shapes found:
 - 26.683, `_span` shrinking on a truncated element, so two bytes of six
   came back complete;
 - 26.684, a nested member's extent shrinking the same way, so
-  `outer { u8 h; col c; }` answered complete at two bytes of five -- open,
-  recorded, not fixed here;
+  `outer { u8 h; col c; }` answered complete at two bytes of five, and
+  the same behind a discriminant, which is what bbq-predictor reported;
 - 26.685, the running TOTAL passed as the element's OFFSET, so a run with
   a fixed member after it answered complete at five bytes of six;
 - and a single varint's `_len` answering zero for one it cannot read, so
@@ -99,6 +99,27 @@ struct lone {
 	uvar  v;
 	u8    k;
 }
+
+// A NESTED variable struct, which is 26.684: the extent shrinks when the
+// bytes run out, so `required` reported complete for anything carrying
+// the fixed prefix.
+struct outer {
+	u8   h;
+	col  c;
+}
+
+struct nothing { }
+
+// The same fault behind a discriminant, which is the shape
+// bbq-predictor reported: `framed` inside a variant arm answered OK for
+// a three-byte buffer where the arm's own struct says four.
+struct arms {
+	u8  has;
+	variant x switch (has) {
+		case 0:  nothing  none;
+		default: col      c;
+	}
+}
 """
 
 #: struct -> (whole message, [answer per prefix length, 1..len]).
@@ -112,6 +133,13 @@ CASES: dict[str, tuple[bytes, list[int | None]]] = {
 	             [2, 3, None]),
 	"lone":     (bytes([0x81, 0x01, 0x77]),
 	             [2, 3, None]),
+	"outer":    (bytes([0xAA, 0x03, 0x81, 0x01, 0x05, 0x06]),
+	             [2, 5, 6, 6, 6, None]),
+	# The variant answers exactly what the plain nested case does, which
+	# is the point: the discriminant costs a byte and changes nothing
+	# else about the framing.
+	"arms":     (bytes([0x01, 0x03, 0x81, 0x01, 0x05, 0x06]),
+	             [2, 5, 6, 6, 6, None]),
 }
 
 
@@ -212,6 +240,50 @@ def test_an_incomplete_message_asks_for_more_than_arrived(name: str,
 			assert answer > n, (
 				f"{name}: {n} bytes arrived and `need` is {answer}, "
 				f"so a caller is told to read {answer - n} more")
+
+
+@pytest.mark.parametrize("name", sorted(CASES))
+def test_the_walker_frames_the_same_prefixes(name: str) -> None:
+	"""The walker's `Reader` against the generated `required`.
+
+	26.684's record asked for this rather than a test of the walker's
+	own: the walker exists to be a second opinion, so what matters is
+	that it agrees about WHICH prefixes are whole messages -- not that
+	its own numbers are self-consistent.
+
+	`Reader` framed through `struct_extent` until this pass, and an
+	extent measures what is THERE. Measured before the fix: `col` handed
+	back a whole message at ONE byte of five, and again at two, three
+	and four, each with a different length. It asks `frame_min` now, and
+	takes the extent afterwards for the length -- two questions, which
+	is the distinction the fault turned on.
+	"""
+	from situc import pack as packer			# noqa: PLC0415
+	from walker.image import load			# noqa: PLC0415
+	from walker.session import Reader		# noqa: PLC0415
+
+	schema   = parse_text(SHAPES)
+	resolved = resolve(schema, solve(schema))
+	blob, _  = packer.pack(schema, resolved, metadata=True)
+	image    = load(blob)
+	index    = {image.struct_name(i): i
+	            for i in range(len(image.structs))}[name]
+
+	whole, want = CASES[name]
+	for n, answer in enumerate(want, start=1):
+		reader = Reader(image, index)
+		reader.push(whole[:n])
+		got = reader.next()
+		if answer is not None:
+			assert got is None, (
+				f"{name}: the walker calls {n} bytes of {len(whole)} a "
+				f"whole message, {len(whole) - n} short")
+		else:
+			assert got is not None, (
+				f"{name}: the walker does not see the whole message")
+			assert reader.ready == len(whole), (
+				f"{name}: the walker frames {reader.ready} bytes where "
+				f"the message is {len(whole)}")
 
 
 @pytest.mark.parametrize("name", sorted(CASES))

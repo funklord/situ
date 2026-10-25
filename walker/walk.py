@@ -2174,6 +2174,226 @@ def _ceiling(image: Image, shape: int) -> int:
 	return min(declared[1], WALK_DEPTH_MAX)
 
 
+def frame_min(view: View, depth: int = 0) -> int:
+	"""The fewest bytes a WHOLE instance of this struct needs.
+
+	`struct_extent`'s companion and not its replacement: that function
+	measures what is THERE, which is right for placing a member and wrong
+	for framing a stream. An extent walk stops early when the bytes run
+	out, so the quantity shrinks as a message gets shorter -- and
+	`session.py`'s `Reader` admitted a message when `extent <=
+	len(buffer)`, which a shrunken extent satisfies. Measured 2026-10-23
+	on `col { uvar count [max = 100]; one d[count]; }`: a whole message
+	handed back at ONE byte of five, and again at two, three and four,
+	each time with a different length (26.684).
+
+	This is the four backends' `required` as a walk. The ONE-SIDED
+	property is what matters: it may answer more than a complete message
+	needs -- the caller reads again, which it was doing anyway -- and
+	never less, because less is a caller parsing bytes that are not
+	there.
+
+	So every member answers its MINIMUM, which is the member's own
+	measurement where that cannot shrink and a lower bound where it can:
+
+	- a fixed member: its size;
+	- a varint: its length, or the bytes present plus one where it cannot
+	  be read, since how much more a continuation byte promises is the
+	  sender's to know (26.686);
+	- a run of varints: the bytes present plus one, then one for each
+	  element the count has not reached (26.683's `_span_min`);
+	- a run of records: each element's own `frame_min`, plus the minimum
+	  for every element the count still promises;
+	- a nested struct or a selected arm: its own `frame_min`;
+	- a delimited member: its scan, or the bytes present plus one.
+
+	`TooDeep` propagates as it does from `struct_extent`: a limit folded
+	into a length produces wrong values indistinguishable from right
+	ones, which this walker's notes record twice.
+	"""
+	if depth > _ceiling(view.image, view.struct):
+		raise TooDeep(
+			"nested deeper than this walker follows: the schema's `[limit]` "
+			"where it states one, and this build's ceiling otherwise")
+	shape = view.shape
+	if shape.fixed:
+		return (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+
+	total = 0
+	for member in view.image.members(shape):
+		if view.image.placements[member].located_code != NONE:
+			continue
+		total += _member_min(view, member, depth)
+	return total
+
+
+def _member_min(view: View, index: int, depth: int) -> int:
+	"""One member's minimum, in bytes. `frame_min`'s per-member rule.
+
+	Bytes rather than bits, because every quantity below is a byte count
+	already and a framing answer is in bytes: the one place this differs
+	from `size_bits` is that it may not round a shrinking bit figure.
+	"""
+	placement = view.image.placements[index]
+	here = offset_bits(view, index) // BITS_PER_BYTE
+	left = max(0, view.limit - (view.at + here))
+
+	# A member that cannot shrink answers for itself. `size_bits` is the
+	# measurement, and for a fixed member it is a constant.
+	if placement.fixed:
+		return (size_bits(view, index, depth) + BITS_PER_BYTE - 1) \
+			// BITS_PER_BYTE
+
+	# A VARINT, whose `_len` answers zero for one it cannot read. One byte
+	# more than has arrived is the honest bound (26.686), and a RUN of
+	# them counts one for each element not started (26.683).
+	if index in view.image.varints:
+		if is_run(view.image, index) \
+				and not _sizes_in_bytes(view.image, placement.size_code):
+			span = content_bits(view, index) // BITS_PER_BYTE
+			try:
+				count = _count(view, index)
+			except Refused:
+				return left + 1
+			seen = 0
+			rules = view.image.varint_rules.get(index)
+			at = view.at + here
+			while rules is not None and seen < count:
+				if at >= view.limit:
+					break
+				try:
+					consumed, _ = decode_varint(view, at, *rules)
+				except Refused:
+					break
+				at   += consumed
+				seen += 1
+			if seen < count:
+				return left + 1 + (count - seen - 1)
+			return span
+		try:
+			consumed, _ = varint(view, index)
+		except Refused:
+			return left + 1
+		return consumed
+
+	# A COUNTED RUN OF RECORDS: each element frames itself, and the count
+	# still promises the ones the walk has not reached. This is the
+	# backends' `_framing_walk` as a walk -- without it the fall-through
+	# below took `size_bits`, which is the span the walk REACHED, so
+	# `col { uvar count; one d[count]; }` handed back a whole message at
+	# one byte of five.
+	if placement.type_struct != NONE and is_run(view.image, index) \
+			and index not in view.image.delimiters \
+			and placement.repeat_code == NONE:
+		least = _element_min(view.image, placement.type_struct)
+		try:
+			count = _count(view, index)
+		except Refused:
+			return left + 1
+		at = view.at + here
+		for seen in range(count):
+			if at >= view.limit:
+				# None of this element arrived: it and every one after it
+				# need at least the element's own minimum.
+				return (at - (view.at + here)) \
+					+ (count - seen) * least
+			element = _at_view(view, placement.type_struct, at)
+			if element is None:
+				return left + 1
+			try:
+				need = frame_min(element, depth + 1)
+			except (Refused, Unplaceable):
+				return left + 1
+			if at + need > view.limit:
+				# This one is short, so its own minimum is part of the
+				# run's -- and so is a minimum for each one after it.
+				return (at - (view.at + here)) + need \
+					+ (count - seen - 1) * least
+			try:
+				at += struct_extent(element, depth + 1)
+			except (Refused, Unplaceable):
+				return left + 1
+		return at - (view.at + here)
+
+	# A NESTED STRUCT or a SELECTED ARM frames itself, which is the whole
+	# of 26.684: its extent shrinks and its own minimum does not.
+	inner = _sub_view(view, index, depth)
+	if inner is not None:
+		return frame_min(inner, depth + 1)
+
+	# Anything else: its own measurement, which is a lower bound on what a
+	# whole one needs wherever it can stop early -- and the caller reads
+	# again, which is the cost this function is allowed to have.
+	try:
+		return (size_bits(view, index, depth) + BITS_PER_BYTE - 1) \
+			// BITS_PER_BYTE
+	except (Refused, Unplaceable):
+		return left + 1
+
+
+def _element_min(image: Image, struct: int) -> int:
+	"""The fewest bytes one instance of a struct can be.
+
+	The image's own figure, which for a variable struct is its minimum --
+	the same number the backends emit as `SIZE_MIN` and the same one
+	their framing walk multiplies by for the elements a count still
+	promises.
+	"""
+	shape = image.structs[struct]
+	return max(1, (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
+
+
+def _at_view(view: View, struct: int, at: int) -> View | None:
+	"""A view over one struct at an absolute byte offset in this buffer.
+
+	The window rather than a slice, because `acquire` is the one bounds
+	check and a caller that cut the buffer up itself would have skipped
+	it (26.581).
+	"""
+	if at > view.limit:
+		return None
+	try:
+		return acquire(view.image, view.buffer, struct, (),
+		               at=at, limit=view.limit)
+	except Refused:
+		return None
+
+
+def _sub_view(view: View, index: int, depth: int) -> View | None:
+	"""A view over a nested struct or the arm a discriminant selects.
+
+	None where the member is neither, or where one cannot be opened at
+	all -- which is a short frame rather than a construct this cannot
+	measure, and the caller's fallback answers it.
+	"""
+	placement = view.image.placements[index]
+	target = placement.type_struct
+	if index in view.image.arms:
+		try:
+			chosen = chosen_arm(view, index)
+		except Refused:
+			return None
+		if chosen is None:
+			return None
+		target = view.image.placements[chosen].type_struct
+		index  = chosen
+	if target == NONE:
+		return None
+	if is_run(view.image, index) or index in view.image.delimiters:
+		return None		# a run of them, not one of them
+	try:
+		here = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	except (Refused, Unplaceable):
+		return None
+	if here > view.limit:
+		return None
+	try:
+		return acquire(view.image, view.buffer, target, (),
+		               at=here, limit=view.limit)
+	except Refused:
+		return None
+
+
 def struct_extent(view: View, depth: int = 0) -> int:
 	"""How many bytes one instance of a struct occupies, from its own bytes.
 

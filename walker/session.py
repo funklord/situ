@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 
 from walker.image import Image
 from walker.report import OK, relate
-from walker.walk import Refused, View, acquire, struct_extent
+from walker.walk import (Refused, View, acquire, frame_min,
+                         struct_extent)
 
 
 @dataclass
@@ -81,10 +82,34 @@ class Reader:
 		try:
 			probe = acquire(self.image, bytes(self.buffer), self.struct,
 			                self.args)
-			need  = struct_extent(probe)
+			# `frame_min` and NOT `struct_extent`, which is what this
+			# asked and is the wrong question: an extent measures what is
+			# THERE, so it shrinks as a message gets shorter and a
+			# shrunken extent satisfies the test below. Measured
+			# 2026-10-23 on `col { uvar count [max = 100]; one
+			# d[count]; }` -- a whole message handed back at ONE byte of
+			# five, and again at two, three and four, each with a
+			# different length (26.684).
+			#
+			# The docstring above says framing needs no framing section
+			# because `struct_extent` "already measures one instance from
+			# its own bytes". That is the sentence this fault falsified:
+			# it does, and measuring one instance is not deciding whether
+			# a whole one is here.
+			need = frame_min(probe)
 		except Refused:
 			return None
 
+		if need == 0 or need > len(self.buffer):
+			return None
+		# And the LENGTH is the extent, which is a different question
+		# again: `frame_min` says a whole one has arrived, `struct_extent`
+		# says how long this one is. They agree for a complete message and
+		# the second is what the caller consumes.
+		try:
+			need = struct_extent(probe)
+		except Refused:
+			return None
 		if need == 0 or need > len(self.buffer):
 			return None
 
