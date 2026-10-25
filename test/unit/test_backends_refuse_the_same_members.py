@@ -38,6 +38,7 @@ from situc.diagnostics import Source
 from situc.layout import solve
 from situc.parser import parse, parse_text
 from situc.resolve import ResolvedSchema, resolve
+from situc.traverse import offset_unresolvable
 
 from every_schema import ROOT, SCHEMAS, ids
 
@@ -371,6 +372,46 @@ def emitted(path: Path) -> tuple[dict[str, str], set[str]]:
 		"python": generate_py(schema, resolved, name).module,
 		"rust":   generate_rs(schema, resolved, name).module,
 	}, paths
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_nothing_claimed_unplaceable_gets_an_accessor(path: Path) -> None:
+	"""`traverse.offset_unresolvable` against what the backends actually do.
+
+	The predicate exists so the shared consumers -- the differential's
+	driver generator, the propagation table -- can skip a member no backend
+	places, and it is only useful if it never claims one that IS placed: a
+	skip is a comparison given up, silently.
+
+	So the relationship rather than either side. A member the predicate
+	calls unplaceable must be declined by every backend, and the first
+	version of it was wrong in exactly this direction -- it called a
+	counted run a blocker whatever its element was, naming six members all
+	four emit, among them `pieces.after` and `segments.after` (26.689).
+
+	The converse is deliberately not asserted: a backend declines for
+	reasons of its own as well -- a sealed interior read from the plain
+	view, an accessor family that has no walk -- and this predicate speaks
+	only for the layout.
+	"""
+	texts, paths = emitted(path)
+	sets  = {backend: refused(text, paths, backend)
+	         for backend, text in texts.items()}
+
+	source   = Source(str(path), path.read_text(encoding="ascii"))
+	schema   = parse(source)
+	resolved = resolve(schema, solve(schema))
+
+	for struct in resolved.structs.values():
+		for entry in struct.entries:
+			placement = entry.placement
+			if not offset_unresolvable(resolved.structs, struct, placement):
+				continue
+			emitting = sorted(backend for backend, held in sets.items()
+			                  if placement.path not in held)
+			assert not emitting, (
+				f"{placement.path}: the layout says nothing can place it, "
+				f"and {emitting} emit an accessor for it")
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))

@@ -234,11 +234,36 @@ than against your exports, so please confirm from your side:
     a variant arm, all three naming a span function that does not exist.
     C, C++ and Rust decline it. `AttributeError` on first use.
 
+  And putting your shape in the corpus then broke six more consumers,
+  every one of which had assumed each member has an accessor: the
+  differential's driver generator, the map's own writability gate, the
+  packer's "nothing here is unencodable" assertion, a subtraction floor
+  and an arm census. Ten failures in five gates, none of them in the code
+  above.
+
+  The sixth is the one worth your attention if you ever put a counted run
+  of records in a variant arm: **C's `validate` reports a message whose
+  arm overruns the frame as valid.** Every other counted run gets a
+  `_fits` predicate and a call to it; a run in an arm gets neither,
+  because no backend walks one. The walker caught it by disagreeing. It
+  is recorded rather than fixed -- the two available answers are
+  different decisions, not a patch -- so if your format has that shape,
+  do not rely on `validate` for it yet.
+
   `doc/decision/26.689-*.md`. The generalisation we are keeping: **a
   diagnostic is code, and an unexercised diagnostic is unexercised
-  code.** Three of the five were explanations rather than behaviour --
-  nothing would have failed a test, nothing would have crashed a caller,
-  and each sent a reader to change the wrong thing.
+  code.** Three of the six findings were explanations rather than
+  behaviour -- nothing would have failed a test, nothing would have
+  crashed a caller, and each sent a reader to change the wrong thing.
+
+  One thing your format has that this compiler cannot yet describe:
+  **no axis says "unreachable"**. `offset` reports `Dynamic` because the
+  position does exist once the decoder has run, and `mutate` is
+  `Immutable` now where a codec is the blocker -- but nothing in the
+  vector says "no accessor exists at all", which is what every backend
+  writes a comment about. If you are reading the map to decide what your
+  generated code can do, read `stage` beside `offset`: `TransformTime`
+  there is the signal.
 
 ## What this report is worth beyond its items
 

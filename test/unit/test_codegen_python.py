@@ -3103,3 +3103,37 @@ def test_a_scalar_arm_past_the_minimum_reports_bounds_through_its_accessor(
 	view(b"\x01\x00\x00\x00\x03", 5).validate()
 	with pytest.raises(module.ConstraintError, match="max 7"):
 		view(b"\x01\x00\x00\x00\x09", 5).validate()
+
+
+def test_a_counted_run_in_an_arm_is_declined_rather_than_named() -> None:
+	"""The fourth backend of a gap the other three had already closed.
+
+	An arm is emitted by a family of its own, which reaches a scalar, a
+	byte run, a run of wide values and one fixed-size struct -- never a run
+	of records. C, C++ and Rust decline the member after such a variant and
+	say why; this backend answered, naming `<arm>_span` where the arm
+	family defines `<arm>_extent`. Five references, no definition: a
+	getter, a setter and `required` all raising `AttributeError` on first
+	use, where C would not have compiled (26.689).
+
+	Both halves, because the first alone passes for a backend that emits
+	nothing: the span must not be named, and the member must carry the note
+	saying why it is absent.
+	"""
+	module = emit("""struct piece { u8 len; u8 body[len]; }
+	struct arms {
+		u8 kind;
+		variant body switch (kind) {
+			case 1:  piece  recs[kind];
+			default: u8     raw;
+		}
+		u16 after;
+	}
+	""")
+
+	assert "body_recs_span" not in module
+	assert "arms.after: its offset cannot be resolved" in module
+
+	# And the shape is still reached: a run in an arm that this backend DOES
+	# write, so the guard above cannot be passing by declining everything.
+	assert "body_recs_extent" in module

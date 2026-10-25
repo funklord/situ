@@ -1949,6 +1949,14 @@ def _coded_predecessor_effects(context: Context) -> tuple[Effect, ...]:
 		Effect(Axis.STAGE, Value("TransformTime"),
 		       f"`{cause}` has to be decoded before anything after it can be "
 		       f"found, so this field is not reachable at parse time"),
+		# A member nothing can locate is a member nothing can write, and no
+		# backend emits a setter for one. The map said `InPlaceFixed` --
+		# claiming a property the code does not have, which is the one thing
+		# the map must never do, and the gate that compares the two found it
+		# the moment the corpus gained the shape (26.689).
+		Effect(Axis.MUTATE, Value("Immutable"),
+		       f"where this field starts is not known until `{cause}` has "
+		       f"been decoded, so there is nothing for a setter to address"),
 	)
 
 

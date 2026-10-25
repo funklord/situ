@@ -27,6 +27,7 @@ from situc.codegen.cpp import generate as generate_cpp
 from situc.codegen.cpp import converse as converse_cpp
 from situc.codegen.cpp import drive as drive_cpp
 from situc.codegen.cpp import edit as edit_cpp
+from situc.codegen import differ
 from situc.codegen.cpp import frame as frame_cpp
 from situc.codegen.cpp import relate as relate_cpp
 from situc.codegen.python import generate as generate_py
@@ -40,6 +41,7 @@ from situc.codegen.rust import converse as converse_rs
 from situc.codegen.rust import drive as drive_rs
 from situc.codegen.rust import edit as edit_rs
 from situc.codegen.rust import frame as frame_rs
+from situc.traverse import offset_unresolvable
 from situc.codegen.rust import relate as relate_rs
 from situc.diagnostics import SituError
 from situc.relation import OPERATORS, UNARY
@@ -1804,6 +1806,34 @@ def test_a_variant_arm_nothing_walks_gets_no_reader() -> None:
 	                        (frame_rs.generate(schema, resolved, "t"), "t_frame.rs"),
 	                        (frame_py.generate(schema, resolved, "t"), "t_frame.py")):
 		assert "arms" not in generated[name], name
+
+
+def test_nothing_probes_a_member_an_arm_run_blocks() -> None:
+	"""`offset_unresolvable`'s variant branch, and the driver that reads it.
+
+	The corpus has no instance: `edges.situ` held one for a while and it
+	found a fault in `validate` that wants a decision rather than a fix, so
+	the struct came back out and this is what covers the branch (26.689).
+
+	Both the predicate and its consumer, because the predicate is only
+	useful through the consumer: the differential's driver generator named
+	`arms_after_get` and `arms_after_set`, which no backend defines, and
+	four drivers stopped compiling.
+	"""
+	schema, resolved = analysed(ARM_RUN)
+	struct = resolved.structs["arms"]
+	after  = next(entry.placement for entry in struct.entries
+	              if entry.placement.name == "after")
+
+	assert offset_unresolvable(resolved.structs, struct, after)
+
+	# `kind` sits before the variant, so the probe lists are not empty and
+	# a guard that skipped the struct outright would not pass this.
+	reads  = differ.asks(struct, set(resolved.structs), resolved.structs)
+	writes = differ.writes(struct, resolved.structs)
+	assert "after" not in [ask.local for ask in reads]
+	assert "after" not in [ask.local for ask in writes]
+	assert "kind" in [ask.local for ask in reads]
 
 
 def test_every_backend_frames_the_same_structs() -> None:

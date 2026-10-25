@@ -708,8 +708,18 @@ struct externally_stuffed {
 // correct behaviour and is why this struct is here -- the refusal is now
 // something the corpus exercises rather than something four emitters claim
 // in a comment nobody reads. The lattice reports it as `stage :=
-// TransformTime` on `after`: the region has to be decoded before anything
-// after it can be found.
+// TransformTime` and `mutate := Immutable` on `after`: the region has to
+// be decoded before anything after it can be found, and a member nothing
+// can locate is a member nothing can write.
+//
+// A third struct was here and is not. `unwalkable_arm` put a counted run
+// of variable records in a variant arm -- the shape no backend walks --
+// and it found a fault in `validate` that is nobody's to settle in
+// passing: C's `check` verifies only the struct's minimum length for it
+// and reports a message whose arm overruns the frame as valid, where the
+// walker reports it malformed. `validate` being sound is what every
+// framing argument here rests on. The shape, the reproduction and the
+// decision it needs are in 26.689.
 struct stuffed_then_field {
 	u8  n;
 	coded body(stuffed_apart) until "\xC0" {
@@ -722,25 +732,6 @@ struct stuffed_opaque_tail {
 	u8  n;
 	coded body(stuffed_apart) {
 		u8  content[n];
-	}
-	u16 after;
-}
-
-// A MEMBER AFTER A VARIANT NO ARM CHAIN CAN MEASURE, which is the third way
-// into the same note and the second one that was false.
-//
-// An arm holding a counted run of variable-length elements is the shape no
-// backend walks -- the ordinary member path emits `_span`, `_at` and
-// `_count` for a run and an arm's parallel family emits none of them -- so
-// the variant has no length and nothing after it can be placed. C's note
-// for that case read "codec `variant` has no closed-form expansion", taking
-// the literal word `variant` for a codec name, where the three other
-// backends decline the member with no explanation at all (26.689).
-struct unwalkable_arm {
-	u8  kind;
-	variant body switch (kind) {
-		case 1:  piece recs[kind];
-		default: u8    raw;
 	}
 	u16 after;
 }

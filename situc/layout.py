@@ -298,6 +298,14 @@ class Placement:
 	#: the blame chain names the codec and offers the remedy that works,
 	#: rather than "move the variable-length member after this one".
 	dynamic_cause_codec: str | None	= None
+	#: For a coded or sealed region: the codec's expansion publishes a worst
+	#: case rather than a length, so the region's encoded extent is not
+	#: computable from the bytes. The same fact `dynamic_cause_codec` carries
+	#: for the members AFTER it, carried on the region itself -- set here
+	#: because `place_coded` holds the codec declaration and the consumers
+	#: do not. The differential's driver generator asked such a region for
+	#: its bytes and named a `_ptr` and a `_len` no backend emits (26.689).
+	expansion_open: bool		= False
 	# Whether the frame this member is measured against is itself placed
 	# dynamically. An element of a fixed array at a known offset is
 	# frame-relative in its offset but nothing can move it, so its address is
@@ -1427,6 +1435,8 @@ class Solver:
 			dynamic_cause_span = state.cause[1] if state.cause else None,
 			dynamic_cause_size = state.cause[2] if state.cause else None,
 			dynamic_cause_codec = state.decode_cause,
+			expansion_open     = (until is None
+			                      and not expansion_is_closed_form(codec)),
 		))
 
 		# Everything the region contains carries the codec, so the propagation

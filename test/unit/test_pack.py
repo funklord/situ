@@ -475,7 +475,15 @@ def test_the_whole_tree_encodes_every_expression_it_carries() -> None:
 		for where, why in coverage.unencodable.items():
 			dropped[f"{path.name}:{where}"] = why
 
-	assert not dropped, f"expressions the image cannot carry: {dropped}"
+	# A region whose codec publishes a worst case rather than a length has
+	# no size program to encode -- the number is not in the bytes, so there
+	# is nothing for the image to carry and the walkers must not guess one.
+	# Named rather than filtered by its reason text, so a second shape
+	# arriving under the same sentence still fails here (26.689).
+	expected = {"edges.situ:stuffed_opaque_tail.body":
+	            "the codec's expansion has no closed form"}
+	assert dropped == expected, (
+		f"expressions the image cannot carry: {dropped}")
 	assert total > 0, "no schema in the tree exercised the bytecode"
 
 

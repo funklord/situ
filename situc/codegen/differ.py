@@ -113,7 +113,8 @@ from situc.traverse import (
 	Member, arm_members, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, length_is_transform_output,
 	is_varint_run,
-	local_name, own_entries, own_members, unmeasurable_inside,
+	local_name, offset_unresolvable, own_entries, own_members,
+	unmeasurable_inside,
 )
 
 
@@ -391,6 +392,7 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				found.append(Ask(Probe.DELIMITED, local))
 			elif placement.kind == "coded" \
 					and placement.size_max_bits is not None \
+					and not placement.expansion_open \
 					and not _region_walks(struct, placement, structs_by_name):
 				# ...and only where the region has a length to hand back. Its
 				# extent is its interior's put through the codec's expansion,
@@ -399,6 +401,16 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				# plaintext. Four backends decline the region there, and this
 				# asked for its bytes anyway.
 				found.append(Ask(Probe.BYTES, local))
+			continue
+
+		# NOTHING CAN PLACE THIS MEMBER, so no backend emits an accessor and
+		# a driver naming one is a compile error rather than a comparison.
+		# The `since` branch below already guards its own narrower case and
+		# says why; this is the general one, asked of `traverse` so the four
+		# backends and this generator cannot disagree about it. Two `edges`
+		# structs reached it at once and four drivers stopped compiling
+		# (26.689).
+		if offset_unresolvable(structs_by_name, struct, placement):
 			continue
 
 		scalar = placement.scalar
@@ -749,6 +761,12 @@ def writes(struct: ResolvedStruct,
 		scalar    = placement.scalar
 
 		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
+			continue
+		# And where nothing can place the member, whatever `mutate` says.
+		# The lattice weakens it to `Immutable` for a codec blocker and has
+		# no signal for a variant arm nothing walks, so the read pass's own
+		# guard is asked here too rather than trusted to the vector.
+		if offset_unresolvable(structs_by_name or {}, struct, placement):
 			continue
 		if local_name(struct, placement) in drivers:
 			continue

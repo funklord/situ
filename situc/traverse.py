@@ -2102,6 +2102,63 @@ def is_counted_run(structs: dict[str, ResolvedStruct],
 	return inner is not None and not inner.layout.is_fixed_size
 
 
+def offset_unresolvable(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct, placement: Placement) -> bool:
+	"""Whether nothing can compute where this member starts.
+
+	Not "this backend declines it": the three blockers below are facts about
+	the layout, so all four decline and whatever else reads the layout has to
+	know too -- the differential's driver generator named accessors nobody
+	emits and four drivers stopped compiling. A backend's own `_has_length`
+	asks a strictly wider question, because it also knows what its accessor
+	family can write.
+
+	The three:
+
+	- a coded region whose expansion publishes a worst case rather than a
+	  length, which the layout has already named on this member as
+	  `dynamic_cause_codec`. `edges.situ`'s `stuffed_opaque_tail`;
+	- a counted run of variable-length elements, whose reach is the sum of
+	  what a walk stepped over;
+	- a variant with an arm holding such a run, which no backend walks
+	  because an arm is emitted by a family of its own. No corpus schema has
+	  that shape -- `test_relations.py` covers it, and 26.689 says why it is
+	  not in `edges.situ`.
+
+	`test_nothing_claimed_unplaceable_gets_an_accessor` holds this against
+	what the backends actually emit, over every corpus schema: a member this
+	calls unplaceable must be one all four decline. The first version was
+	wrong in that direction, naming six members all four emit.
+	"""
+	if placement.offset_bits is not None:
+		return False
+	if placement.dynamic_cause_codec is not None:
+		return True
+
+	for other in walk_order(struct, placement):
+		if other.path == placement.path:
+			return False
+		if other.is_fixed_size:
+			continue
+		# A counted run blocks only where its ELEMENT cannot be measured
+		# from its own bytes: a run of `piece { u8 len; u8 body[len]; }` is
+		# walked and every backend places what follows it, which is what
+		# `pieces.after` and `segments.after` are. Claiming otherwise made
+		# this predicate name six members all four backends emit.
+		if is_counted_run(structs, other):
+			element = structs.get(other.type_name or "")
+			if element is None or not has_computable_extent(structs, element):
+				return True
+		# In an ARM it blocks whatever the element is, because an arm is
+		# emitted by a family of its own that writes no walk at all.
+		if other.kind == "variant" \
+				and any(member is not None
+				        and is_counted_run(structs, member)
+				        for _arm, member in arm_members(struct, other)):
+			return True
+	return False
+
+
 def is_run(placement: Placement, structs: Container[str]) -> bool:
 	"""A run of elements rather than a run of bytes.
 
