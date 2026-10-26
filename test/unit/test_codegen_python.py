@@ -22,6 +22,10 @@ import pytest
 from situc.diagnostics import SituError
 from situc.codegen.c import generate as generate_c
 from situc.codegen.python import generate as generate_py
+from situc.codegen.python import frame as frame_py
+# The framed set is a property of the schema rather than of a language,
+# so it has one definition and the C module is where it lives.
+from situc.codegen.c.frame import framed_structs
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -3137,3 +3141,98 @@ def test_a_counted_run_in_an_arm_is_declined_rather_than_named() -> None:
 	# And the shape is still reached: a run in an arm that this backend DOES
 	# write, so the guard above cannot be passing by declining everything.
 	assert "body_recs_extent" in module
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_frame_layer_imports(path: Path, tmp_path: Path) -> None:
+	"""Rung 4, which only C compiled -- so only C's faults were caught.
+
+	`test_every_schema_frame_layer_compiles` has built the C frame layer
+	since 26.260, when slip's reader called a `situ_frame_required` the
+	same header declined to define. The other three were generated and
+	never built by anything: 26.689's `unwalkable_arm` put a Reader naming
+	a missing `required` into all four at once, and one compiler found it
+	while three shipped it.
+
+	Importing rather than byte-compiling, because the fault class is a name
+	that is not there and `py_compile` does not resolve names. An import
+	executes the module body, which is where the class definitions and
+	their method bodies are built -- so a reader built out of a `required`
+	nothing defines is a module that imports and then raises on use, and
+	the stronger assertion is below: every struct the layer frames answers
+	`required` when asked.
+	"""
+	if "STATUS: needs phase" in path.read_text(encoding="ascii"):
+		pytest.skip("declares itself unbuildable")
+
+	schema   = load_schema(path)
+	resolved = resolve(schema, solve(schema))
+	files    = frame_py.generate(schema, resolved, "unit")
+	if "unit_frame.py" not in files:
+		pytest.skip("no struct this schema frames")
+
+	(tmp_path / "unit.py").write_text(
+		generate_py(schema, resolved, "unit").module, encoding="ascii")
+	(tmp_path / "unit_frame.py").write_text(
+		files["unit_frame.py"], encoding="ascii")
+
+	runtime()
+	sys.path.insert(0, str(tmp_path))
+	try:
+		spec = importlib.util.spec_from_file_location(
+			"unit", tmp_path / "unit.py")
+		assert spec is not None and spec.loader is not None
+		unit = importlib.util.module_from_spec(spec)
+		sys.modules["unit"] = unit
+		spec.loader.exec_module(unit)
+
+		spec = importlib.util.spec_from_file_location(
+			"unit_frame", tmp_path / "unit_frame.py")
+		assert spec is not None and spec.loader is not None
+		layer = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(layer)
+	finally:
+		sys.modules.pop("unit", None)
+		sys.path.remove(str(tmp_path))
+
+	# The name the C test's compiler resolves for free. A Reader is emitted
+	# per framed struct and asks that struct's `required`, so the absence
+	# this is looking for is an attribute error on first use rather than on
+	# import.
+	framed = [struct.name for struct in framed_structs(resolved)]
+	assert framed, "the layer was emitted for no struct"
+	for name in framed:
+		# A namespaced struct is `wire::framed_body` in the schema and
+		# `wire_framed_body` as a class: this backend has no namespaces, so
+		# the separator flattens (0036).
+		held = getattr(unit, name.replace("::", "_"), None)
+		assert held is not None, f"{name} is framed and not defined"
+		if (path.name, name) in FRAME_REQUIRED_APART:
+			continue
+		assert hasattr(held, "required"), (
+			f"{name} is framed and has no `required` for its Reader to call")
+
+
+#: Framed structs whose `required` this backend declines while its own frame
+#: layer calls it -- an `AttributeError` on first use of the Reader.
+#:
+#: Found by the test above on its first run, which is the whole argument for
+#: having written it: three of the four frame layers were generated and
+#: never built by anything, so 26.260's fault -- a Reader calling a function
+#: the same generation declined to define -- was caught in C and shipped in
+#: the other three. C defines `situ_pickle_string_required` for the same
+#: schema, so this is a divergence between the shared `frameable` and what
+#: this backend's `_has_length` will answer, which is 26.689's Python gap one
+#: function over.
+#:
+#: Held out rather than deleted, because the assertion is sound for the other
+#: 38 schemas and a held-out set with a reason is what this tree does with a
+#: gap it has measured and not yet closed. 26.692 has the reproduction and
+#: why it is not fixed here.
+FRAME_REQUIRED_APART = frozenset({
+	("coap.situ", "coap"),
+	("protobuf.situ", "proto_message"),
+	("edges.situ", "tagged_options"),
+	("padded.situ", "byte_run"),
+	("padded.situ", "pickle_string"),
+})

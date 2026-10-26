@@ -20,6 +20,7 @@ import pytest
 
 from situc.codegen.c import generate as generate_c
 from situc.codegen.cpp import generate as generate_cpp
+from situc.codegen.cpp import frame as frame_cpp
 from situc.codegen.cpp.names import PREFIXES, SUFFIXES
 from situc.diagnostics import SituError
 from situc.layout import solve
@@ -4164,3 +4165,79 @@ int main()
 	assert run.returncode == 0, (
 		"framed or required read outside the buffer:\n"
 		+ run.stdout + run.stderr)
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:
+	"""The C sibling of this has existed since 26.260; this had not.
+
+	Three of the four frame layers were generated and never built by
+	anything, so a Reader calling a `required` the same generation declined
+	to define was caught in C and shipped in the other three -- which is
+	exactly what 26.689's `unwalkable_arm` did to all four at once.
+
+	Compiled rather than inspected, for the reason the C one gives: the
+	fault is a call to a function that is not there, no assertion about the
+	text would find it, and the compiler finds it for free.
+	"""
+	if "STATUS: needs phase" in path.read_text(encoding="ascii"):
+		pytest.skip("declares itself unbuildable")
+
+	schema   = load_schema(path)
+	resolved = resolve(schema, solve(schema))
+	files    = frame_cpp.generate(schema, resolved, "unit")
+	if "unit_frame.hpp" not in files:
+		pytest.skip("no struct this schema frames")
+
+	(tmp_path / "unit.hpp").write_text(
+		generate_cpp(schema, resolved, "unit").header, encoding="ascii")
+	(tmp_path / "unit_frame.hpp").write_text(
+		files["unit_frame.hpp"], encoding="ascii")
+	(tmp_path / "probe.cpp").write_text(
+		'#include "unit_frame.hpp"\nint main() { return 0; }\n',
+		encoding="ascii")
+
+	built = subprocess.run(
+		[HOST_CXX or "g++", *WARNINGS,
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 "-c", str(tmp_path / "probe.cpp"),
+		 "-o", str(tmp_path / "frame.o")],
+		capture_output=True, text=True)
+
+	if path.name in FRAME_LAYER_APART:
+		# Asserted to FAIL, and asserted to fail for the stated reason.
+		# A skip would hide the gap and an xfail would not care why, where
+		# this fails the day somebody closes it -- which is when the entry
+		# should go -- and fails differently if the layer breaks for a new
+		# reason (26.692).
+		assert built.returncode != 0, (
+			f"{path.name} now builds: close its entry in FRAME_LAYER_APART")
+		# The compiler words it two ways -- "is not a member of" for a
+		# class it can see and "has not been declared" for one it cannot --
+		# so the stable half is the name and the error, not the phrasing.
+		assert "required" in built.stderr and "error:" in built.stderr, (
+			f"{path.name} fails for a reason this set does not describe:\n"
+			+ built.stderr)
+		return
+
+	assert built.returncode == 0, f"{path.parent.name}:\n{built.stderr}"
+
+
+#: Schemas whose C++ frame layer does not compile, because it calls a
+#: `required` this backend declines to define while the shared `frameable`
+#: says the struct is frameable and C defines one.
+#:
+#: Found by this test and its Python sibling on their first runs, which is
+#: the argument for having written them: three of the four frame layers had
+#: never been built by anything. The structs are `coap`, `proto_message`,
+#: `tagged_options`, `byte_run` and `pickle_string`, and the same five are
+#: missing from the Python layer -- so this is one gap in three backends
+#: rather than three faults, and C is the only one that answers.
+#:
+#: Not closed here: three emitters gaining what C has is a feature, and
+#: narrowing `frameable` instead would take a working `required` away from
+#: C. 26.692 has the reproduction and the choice.
+FRAME_LAYER_APART = frozenset({
+	"coap.situ", "protobuf.situ", "edges.situ", "padded.situ",
+})
