@@ -5718,10 +5718,15 @@ holder's:
   already written -- `test_required_answers_every_prefix` holds that the
   answer never goes backwards -- and its six shapes are all runs of
   records or varints, so the population is what missed it. The
-  reproduction wants an alignment ahead of a variable member -- a wide
-  length field was tried and is conformant -- and the Python backend
-  emits no `required` for a `pad_to` struct, so the sweep needs a C or
-  C++ arm before it can look at the suspect. Their third invariant, that
+  two candidate shapes are tried and cleared -- a wide length field and
+  an alignment, the latter swept in C because the Python backend emits no
+  `required` for a `pad_to` struct. What the aligned sweep showed is the
+  mechanism: `need` rises one byte per round trip because the pad term is
+  computed from a cursor clamped against `have` rather than from the
+  length the data already gave. So the next step is to find the clamped
+  terms in `required`'s offset chain and ask of each whether a larger
+  `have` can make the total smaller, rather than trying more shapes.
+  Their third invariant, that
   the `need` bytes answer the same need, is **not** situ's contract: all
   six shapes break it, `required` reporting a lower bound that rises.
   Whether it should promise it is a design question and the holder's.
