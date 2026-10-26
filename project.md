@@ -5736,9 +5736,14 @@ holder's:
   the walk answers, since `required` is the one function asked about
   unvalidated prefixes. `[max]` still feeds the layout -- every static
   buffer rests on it -- and `SIZE_MIN` keeps the view guard and the map,
-  which are statements about valid messages and are true. The cost is one
-  extra round trip for a caller holding very few bytes, which is the
-  right way round. bbq-predictor found it by fuzzing situ's
+  which are statements about valid messages and are true. **The expected
+  cost was disproved by the gate**: the one pinned sequence that moved
+  got TIGHTER, `withtail` going from `[3, 3, ...]` to `[5, 6, ...]`,
+  because the floor counted the run as empty while the walk reads the
+  count. So the floor was the weaker bound almost everywhere and could
+  only exceed the walk where a constraint the bytes violate made it do
+  so -- the unsafe case. A bound derived from constraints is not a better
+  bound, it is a different claim. bbq-predictor found it by fuzzing situ's
   generated C++ against four invariants situ states and does not test;
   `need` falls as `have` rises in two of their structs. The property is
   already written -- `test_required_answers_every_prefix` holds that the

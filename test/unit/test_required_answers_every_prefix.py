@@ -127,8 +127,15 @@ struct arms {
 CASES: dict[str, tuple[bytes, list[int | None]]] = {
 	"col":      (bytes([0x03, 0x81, 0x01, 0x05, 0x06]),
 	             [4, 5, 5, 5, None]),
+	# Was `[3, 3, ...]` while `required` opened with a floor of `SIZE_MIN`:
+	# three bytes, the fixed `n` and `t` with the run counted as empty. The
+	# floor went in 26.693 and the walk answers, which is TIGHTER -- it
+	# reads `n = 2` and knows two varint elements must follow, so five at
+	# one byte and six at two. The floor can only beat the walk where it is
+	# derived from a constraint the bytes violate, which is the case that
+	# made it unsafe.
 	"withtail": (bytes([2, 0x81, 0x01, 0x05, 0x00, 0x00]),
-	             [3, 3, 6, 6, 6, None]),
+	             [5, 6, 6, 6, 6, None]),
 	"lastrun":  (bytes([1, 0x81, 0x01]),
 	             [2, 3, None]),
 	"lone":     (bytes([0x81, 0x01, 0x77]),
