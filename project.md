@@ -5707,17 +5707,6 @@ log rather than a running order: nothing in 26.95 through 26.98 waits for
 26.99, because emitting a lower rung's files is not the same as needing its
 emitter written first.
 
-**`2025f69` is committed, unpushed and ungated**, and is the first thing
-to settle: it removes `required`'s constraint-derived floor in all four
-backends (26.693). Green already are the prefix sweep, relations, the
-Python and Rust suites, both style modes, typecheck, and bbq-predictor's
-own thirteen bytes through all four backends. Unmeasured are
-`test_codegen_c.py`, `test_checks.py` and `test_walker_c.py`, whose run
-was killed by the budget; a gate is in flight at that commit. Read its
-`gate.rc` and push on zero. If it fails, expect a pinned `need` in a C
-test that the floor used to supply rather than a mystery -- the
-four-backend measurement stands.
-
 **What is open as of 2026-10-26**, with the record that carries each
 reproduction. Three are decisions rather than work, and are the copyright
 holder's:
@@ -5736,7 +5725,8 @@ holder's:
   the walk answers, since `required` is the one function asked about
   unvalidated prefixes. `[max]` still feeds the layout -- every static
   buffer rests on it -- and `SIZE_MIN` keeps the view guard and the map,
-  which are statements about valid messages and are true. **The expected
+  which are statements about valid messages and are true. Gated at
+  `3df4d4f` -- 9171 passed -- and pushed. **The expected
   cost was disproved by the gate**: the one pinned sequence that moved
   got TIGHTER, `withtail` going from `[3, 3, ...]` to `[5, 6, ...]`,
   because the floor counted the run as empty while the walk reads the
