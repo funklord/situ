@@ -5718,8 +5718,13 @@ holder's:
   already written -- `test_required_answers_every_prefix` holds that the
   answer never goes backwards -- and its six shapes are all runs of
   records or varints, so the population is what missed it. The
-  reproduction to build is an alignment or a wide length field ahead of a
-  variable member, added to `SHAPES`.
+  reproduction wants an alignment ahead of a variable member -- a wide
+  length field was tried and is conformant -- and the Python backend
+  emits no `required` for a `pad_to` struct, so the sweep needs a C or
+  C++ arm before it can look at the suspect. Their third invariant, that
+  the `need` bytes answer the same need, is **not** situ's contract: all
+  six shapes break it, `required` reporting a lower bound that rises.
+  Whether it should promise it is a design question and the holder's.
 - **Rung 4 is emitted four ways and built twice** (26.692). C's frame
   layer has been compiled since 26.260 and C++'s and Python's since
   2026-10-26; **Rust's is still unbuilt**. Both new tests failed on their
