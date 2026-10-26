@@ -1957,6 +1957,18 @@ def _coded_predecessor_effects(context: Context) -> tuple[Effect, ...]:
 		Effect(Axis.MUTATE, Value("Immutable"),
 		       f"where this field starts is not known until `{cause}` has "
 		       f"been decoded, so there is nothing for a setter to address"),
+		# Reported by bbq-predictor 2026-10-26: the vector said `Random`
+		# while the generator wrote "its offset cannot be resolved" and
+		# emitted nothing, so the axis that says how a field is reached
+		# disagreed with the code about this one. `Sequential` is the
+		# honest value and needs no new one: reaching this field means
+		# running the decoder from the start of the region, which is a
+		# walk and not an addition -- the same reason `codec-needs-decode`
+		# weakens it for the region's own interior.
+		Effect(Axis.ACCESS, Value("Sequential"),
+		       f"nothing reaches this field by arithmetic: `{cause}` has to "
+		       f"be decoded from its start, and where it stops is what says "
+		       f"where this field begins"),
 	)
 
 

@@ -7385,6 +7385,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.690 A memory-safety closure nobody had tested
+
+Moved to
+`doc/decision/26.690-a-memory-safety-closure-nobody-had-tested.md`.
+
 ### 26.689 A member after something nobody can measure
 
 Moved to
@@ -7407,12 +7412,12 @@ Moved to
 
 ### 26.685 The framing total was used as the element offset
 
-**Open.** Moved to
+Moved to
 `doc/decision/26.685-the-framing-total-was-used-as-the-element-offset.md`.
 
 ### 26.684 `framed` reads an extent, and an extent shrinks
 
-**Open.** Moved to
+Moved to
 `doc/decision/26.684-framed-reads-an-extent-and-an-extent-shrinks.md`.
 
 ### 26.683 A run of varints was one varint, in all six readers

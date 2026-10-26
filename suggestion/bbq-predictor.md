@@ -15,8 +15,7 @@ reason this file leads with it.
 Items 2-6 came from their evaluating agent and were not re-run by the
 bbq-predictor session; item 1 was re-run there and reproduced here.
 
-## 1. `validate()` read past the buffer in C++ -- FIXED on the validate
-path; `framed`/`required` is OPEN
+## 1. `validate()` read past the buffer in C++ -- FIXED, both halves
 
 Confirmed here at `f9fa599`, reproduced exactly from their input:
 
@@ -28,13 +27,22 @@ Confirmed here at `f9fa599`, reproduced exactly from their input:
 **The correction this entry owes you, before anything else.** Your
 follow-up of 2026-10-22 18:13 UTC sat unread in situ's inbox for ten
 hours, while the fix it said was incomplete was pushed and reported back
-to you as FIXED. It is reproduced here at `b177e5d` and recorded as
-26.678: `s::framed` hands `one::required` a length of `have - at` with
-`at` already past the buffer, and the varint reader walks from a pointer
-outside it. **So item 1 is fixed on the validate and extent chain and not
-on framed/required**, which your message had already said. Your own note
-that bbq-predictor calls neither is why the open hole is not one you are
-exposed to -- that is a property of your design rather than of situ's fix.
+to you as FIXED. It was reproduced at `b177e5d` and recorded as 26.678:
+`s::framed` handed `one::required` a length of `have - at` with `at`
+already past the buffer, and the varint reader walked from a pointer
+outside it. Your own note that bbq-predictor calls neither is why that
+hole was never one you were exposed to -- a property of your design
+rather than of situ's fix.
+
+**Both halves are closed, and this heading said OPEN for three days
+longer than it was true.** The framed/required half was fixed on
+2026-10-23 in `b4cf766`, hours after your message and the same day it was
+recorded; what stayed stale was this file, which is the copy you read and
+the one nobody here re-reads. It has a test now and it did not before --
+every `n` a byte holds against every length to 24, through both entry
+points, under ASan and UBSan, with the control naming the commits either
+side of the fix. `doc/decision/26.690-*.md`, which is mostly about how
+the stale heading survived.
 
 Their diagnosis was right, including the cause, which is unusual enough to
 say: *a fixed `at += K` after a clamped advance overflows, so `limit - at`
@@ -43,7 +51,7 @@ clean on the same bytes, the three reasons nothing here caught it, and the
 two tests added. Fixed in the C++ emitter; the same arithmetic was swept
 out of the C emitter too, and Rust's remaining sites are pinned by a floor.
 
-## 2. Truncated element runs are accepted -- `validate` FIXED, `framed` OPEN
+## 2. Truncated element runs are accepted -- FIXED, both halves
 
 Confirmed here, and it is not only C++: C, C++ and Rust all return OK from
 `validate()` for their `validate_oob` input, and Python does too.
@@ -67,10 +75,13 @@ walk cannot tell a frame that is too small from a message that nests too
 deeply. `doc/decision/26.676-*.md` carries both, the design that worked,
 and a second wrap it turned up in the same walk.
 
-**The `framed()` half is still open, and this heading said FIXED for a
-day.** Your 20261023T1512Z reported it and the claim here was not
-narrowed; re-measured in situ's tree 2026-10-23 on `short_run`'s shape,
-C++:
+**The `framed()` half is closed too, and this heading said OPEN for two
+days after.** Your 20261023T1512Z reported it; it was re-measured in
+situ's tree 2026-10-23 on `short_run`'s shape, C++, and fixed the
+following day in 26.684 -- the generated header now calls
+`col::required` inside the arm rather than reaching for its extent,
+verified in the emitted C++ 2026-10-26. What it answered when the claim
+below was written:
 
     col alone:  validate=1 framed=7 need=4
     in variant: validate=1 framed=0 need=3
@@ -111,7 +122,7 @@ still wrong for a struct holding a NESTED variable struct -- 26.684, which
 includes the variant-arm case you reported. Keep your exact-length checks
 until that one lands; everything else the sweep found is closed.
 
-## 3-6. Three fixed, the sixth outstanding
+## 3-6. All six fixed
 
 Reproductions in 26.675's appendix. Re-measured in situ's tree rather
 than against your exports, so please confirm from your side:
@@ -255,6 +266,20 @@ than against your exports, so please confirm from your side:
   code.** Three of the six were explanations rather than
   behaviour -- nothing would have failed a test, nothing would have
   crashed a caller, and each sent a reader to change the wrong thing.
+
+  **The `access Random` residue you reported 2026-10-26 is FIXED.** You
+  were right that it disagreed with the generator, and the honest value
+  needed no new one: `Sequential`, because reaching the field means
+  running the decoder from the start of the region, which is a walk and
+  not an addition -- the same reason `codec-needs-decode` weakens that
+  axis for the region's own interior. Two of the six axes on that member
+  were right the first time.
+
+  **And your stale pointer is fixed, along with one you could not see.**
+  `project.md`'s `### 26.684` read **Open.** over a record whose status
+  says fixed in all four backends -- and `### 26.685` beside it had the
+  same marker over the same kind of record. Both cleared. They were the
+  only two in the file, so that is the class and not two instances of it.
 
   One thing your format has that this compiler cannot yet describe:
   **no axis says "unreachable"**. `offset` reports `Dynamic` because the

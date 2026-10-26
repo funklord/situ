@@ -4076,3 +4076,91 @@ int main()
 	assert run.returncode == 0, (
 		f"validate() read outside the buffer: {run.stderr}")
 	assert "AddressSanitizer" not in run.stderr, run.stderr
+
+
+#: 26.678's reproduction, which is bbq-predictor's item 1(c): a counted run
+#: of varint-bearing records after a byte run the same count sizes. The
+#: varint is what makes it bite -- its length is in its own bytes, so the
+#: reader walks from wherever the offset chain left it.
+FRAMED_RUN = ("varint_type uvar { encoding = leb128; max_bits = 32; }\n"
+              "struct one { uvar v; }\n"
+              "struct s { u8 n; u8 pad[n]; one run[n]; }")
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_framed_does_not_read_past_the_buffer_on_a_hostile_count(
+		tmp_path: Path) -> None:
+	"""26.675's sweep took validate and extent and left `framed` (26.678).
+
+	With `n = 8` in a two-byte message, `s::framed` handed `one::required` a
+	length of `have - at` with `at` already past the buffer, and the varint
+	reader walked from a pointer outside it -- a heap-buffer-overflow in
+	`situ_varint_get`, four frames under `s::required`.
+
+	**It was closed by 26.684 and nobody checked**, which is why this test
+	exists rather than a sentence. That pass gave `required` a running
+	offset derived from `traverse.framing_gaps`, so every delegation is
+	`situ_remaining_u32(have, pos)` behind an `if (have < pos)` guard, and
+	the subtraction this record is about is not spelled anywhere any more.
+	A fix aimed at one fault closing another is exactly the kind nobody
+	goes back to confirm.
+
+	Swept rather than sampled, because non-reproduction on the reported
+	input is what "intermittent" looks like and this is not intermittent:
+	every `n` a byte can hold against every length to 24, through both
+	entry points. The buffer is heap-allocated and sized to the case, so a
+	read one byte past it is a fault the sanitizer sees rather than slack
+	in a stack frame -- and the filler is `0x80`, a continuation byte, so
+	every varint in range runs off the end rather than terminating early.
+	"""
+	result = compiles(tmp_path, FRAMED_RUN, extra="""
+#include <cstdlib>
+#include <cstring>
+#include <cstdio>
+#include "unit.hpp"
+
+int main()
+{
+	for (unsigned n = 0; n < 256u; ++n) {
+		for (unsigned len = 1u; len <= 24u; ++len) {
+			auto *b = static_cast<std::uint8_t *>(std::malloc(len));
+
+			if (b == nullptr)
+				return 1;
+			std::memset(b, 0x80, len);
+			b[0] = static_cast<std::uint8_t>(n);
+
+			std::uint32_t part = 0;
+			(void)::situ::s::required(b, len, part);
+
+			situ::rt::message m(b, len);
+			situ::s view;
+
+			if (situ::s::at(m, 0, len, view) == situ::rt::err::ok) {
+				std::uint32_t need = 0;
+				(void)view.framed(need);
+			}
+			std::free(b);
+		}
+	}
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "framed_probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-fsanitize=address,undefined", "-g", "-O1",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, (
+		"framed or required read outside the buffer:\n"
+		+ run.stdout + run.stderr)

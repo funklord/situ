@@ -516,7 +516,7 @@ struct stuffed_opaque_tail size=3..514 access=Sequential mutate=Immutable addres
   stuffed_opaque_tail.n                  offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   stuffed_opaque_tail.body               offset=AbsoluteStatic(0x01) size=Bounded(0, 511) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
   stuffed_opaque_tail.body.content       offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
-  stuffed_opaque_tail.after              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Immutable address=Unstable stage=TransformTime
+  stuffed_opaque_tail.after              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable stage=TransformTime
 
 struct stuffed_seal size=18.. access=Sequential mutate=Immutable address=Unstable atomic=NonAtomic stage=VerifyGated effect=EffectOnRead
   stuffed_seal.lead                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
