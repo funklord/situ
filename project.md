@@ -5711,8 +5711,16 @@ emitter written first.
 reproduction. Three are decisions rather than work, and are the copyright
 holder's:
 
-- **`required` answers from bytes past the frame it names** (26.693), the
-  only live correctness bug. bbq-predictor found it by fuzzing situ's
+- **`required` mixes a constraint-derived floor with a data-derived
+  total** (26.693), the only live correctness bug, reproduced and
+  diagnosed 2026-10-26 against bbq-predictor's own schema. `SIZE_MIN` is
+  derived from `[min]` constraints and the total is computed from
+  unvalidated bytes, so `head_body` answers truncated-need-11 at ten
+  bytes and **complete-need-10 at eleven** -- the one-sided safety
+  property, not merely monotonicity. A framing function may not hold a
+  floor it cannot enforce: framing precedes validation, so either the
+  floor is structural with value constraints ignored, or there is no
+  floor. Not yet fixed. bbq-predictor found it by fuzzing situ's
   generated C++ against four invariants situ states and does not test;
   `need` falls as `have` rises in two of their structs. The property is
   already written -- `test_required_answers_every_prefix` holds that the
