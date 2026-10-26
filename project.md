@@ -7385,6 +7385,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.693 `required` answered from bytes past the frame it named
+
+Moved to
+`doc/decision/26.693-required-answered-from-bytes-past-the-frame-it-named.md`.
+
 ### 26.692 Three frame layers nothing ever built
 
 Moved to
