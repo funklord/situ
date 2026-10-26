@@ -5707,6 +5707,40 @@ log rather than a running order: nothing in 26.95 through 26.98 waits for
 26.99, because emitting a lower rung's files is not the same as needing its
 emitter written first.
 
+**What is open as of 2026-10-26**, with the record that carries each
+reproduction. Three are decisions rather than work, and are the copyright
+holder's:
+
+- **`required` answers from bytes past the frame it names** (26.693), the
+  only live correctness bug. bbq-predictor found it by fuzzing situ's
+  generated C++ against four invariants situ states and does not test;
+  `need` falls as `have` rises in two of their structs. The property is
+  already written -- `test_required_answers_every_prefix` holds that the
+  answer never goes backwards -- and its six shapes are all runs of
+  records or varints, so the population is what missed it. The
+  reproduction to build is an alignment or a wide length field ahead of a
+  variable member, added to `SHAPES`.
+- **Rung 4 is emitted four ways and built twice** (26.692). C's frame
+  layer has been compiled since 26.260 and C++'s and Python's since
+  2026-10-26; **Rust's is still unbuilt**. Both new tests failed on their
+  first run, on five structs in four schemas whose `required` three
+  backends decline and C defines -- so the shared `frameable` is wider
+  than three backends' own `_has_length`, and closing it is three
+  emitters gaining what C has.
+- **`validate` reports a malformed message as valid** where a counted run
+  sits in a variant arm (26.689). C's `check` is the struct's minimum
+  length and `return SITU_OK`; every other counted run gets a `_fits`
+  predicate and a call to it. An absent `validate` or a walk for arm
+  members are different decisions, so `edges.situ` carries no such struct
+  rather than carrying an unsound verdict silently.
+- **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
+  `access` each carry part of it for a member no backend can place, and
+  nothing says the whole.
+- **`uvar v[remaining]` builds in C alone** (26.691). The crash is fixed;
+  three backends short of a construct is a feature.
+- **Four walker identity divergences** of one shape (26.689), where the
+  guard widths want reconciling rather than listing.
+
 **Four backends over one layout**, and the claim that matters is that they
 agree. Each is tested against the C output on the same buffer, field by field,
 because four backends that disagreed would mean a schema means four things.
