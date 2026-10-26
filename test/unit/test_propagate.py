@@ -448,6 +448,42 @@ def test_non_canonicity_reaches_the_containing_field() -> None:
 	assert axis_of(body, "S.i", Axis.CANONICAL) == Value("NonCanonical")
 
 
+def test_a_remaining_run_of_varints_has_no_maximum() -> None:
+	"""The `varint` row stated `Bounded` flat, and one spelling has no top.
+
+	A varint's own extent is one to five bytes, which is where `Bounded`
+	comes from. How many bytes the MEMBER holds is a different question, and
+	for `uvar v[remaining]` the frame answers it -- so there is no maximum,
+	`_parameterise` had no second number to render, and `situc map` on this
+	schema died with a bare `AssertionError` and no diagnostic. Section 17.0
+	forbids that twice over: the compiler neither worked nor refused in
+	words (26.691).
+
+	Both spellings, because the fix is a branch and a test of one arm would
+	pass against a row that answered `Unbounded` always.
+	"""
+	preamble = PREAMBLE + "varint_type uvar { encoding = leb128; max_bits = 32; }\n"
+
+	body = "struct S { u8 n; uvar v[remaining]; }"
+
+	assert axis_of(body, "S.v", Axis.SIZE, preamble) == Value("Unbounded")
+
+	# `unbounded-size` fires here too and is listed first, which is why the
+	# VALUE was never the symptom: the meet reaches `Unbounded` either way.
+	# What crashed was rendering the varint row's own `Bounded` before any
+	# meet happened, so the row's reason is what has to have changed.
+	because = [w.effect.because
+	           for w in entries(body, preamble)["S.v"].blame(Axis.SIZE)]
+	assert any("the frame decides how many varints are here" in one
+	           for one in because), because
+	assert "varint" in [w.rule.name
+	                    for w in entries(body, preamble)["S.v"].blame(Axis.SIZE)]
+
+	counted = axis_of("struct S { u8 n; uvar v[n]; }", "S.v",
+	                  Axis.SIZE, preamble)
+	assert counted.base == "Bounded" and counted.params
+
+
 # -- table hygiene ----------------------------------------------------------
 
 

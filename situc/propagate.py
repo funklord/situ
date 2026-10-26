@@ -1415,6 +1415,14 @@ TABLE: tuple[Row, ...] = (
 		rule = Rule(
 			name      = "varint",
 			construct = "a variable-length integer",
+			# The SIZE effect is computed, because a varint's extent depends
+			# on how many of them the member holds: `Bounded` for one and
+			# for a counted run, `Unbounded` for a `[remaining]` run, whose
+			# count the frame decides. Stated flat as `Bounded`, it reached
+			# `_parameterise`, which renders that value's two numbers and
+			# asserts there is a maximum -- so `uvar v[remaining]` took the
+			# compiler down with an `AssertionError` and no diagnostic,
+			# which section 17.0 forbids twice over (26.691).
 			effects   = (
 				Effect(Axis.SIZE, Value("Bounded"),
 				       "one byte per seven payload bits, so the extent is a "
@@ -1707,6 +1715,8 @@ def apply(context: Context) -> Resolved:
 			effects = _frame_effects(context)
 		elif row.rule.name == "variant-unequal-arms":
 			effects = _variant_effects(context)
+		elif row.rule.name == "varint":
+			effects = _varint_effects(context)
 		elif row.rule.name == "bounded-size":
 			effects = _bounded_effects(context)
 		elif row.rule.name == "unbounded-size":
@@ -1918,6 +1928,27 @@ def _predecessor_effects(context: Context) -> tuple[Effect, ...]:
 	)
 
 
+def _varint_effects(context: Context) -> tuple[Effect, ...]:
+	"""The row's effects, with SIZE answered from the placement.
+
+	Everything but the extent is a property of the encoding and is stated in
+	the row. The extent is a property of how many varints the member holds,
+	and `Bounded` is wrong for the one spelling where the frame decides
+	that -- so this answers `Unbounded` where the layout found no maximum,
+	with the reason naming the run rather than the encoding.
+	"""
+	row = next(held for held in TABLE if held.rule.name == "varint")
+	if context.placement.size_max_bits is not None:
+		return row.rule.effects
+
+	return tuple(
+		Effect(Axis.SIZE, Value("Unbounded"),
+		       "the frame decides how many varints are here, and a frame has "
+		       "no maximum the schema states")
+		if effect.axis is Axis.SIZE else effect
+		for effect in row.rule.effects)
+
+
 def _coded_predecessor_effects(context: Context) -> tuple[Effect, ...]:
 	"""Name the codec, and say that reaching this field costs a decode.
 
@@ -1988,7 +2019,14 @@ def _parameterise(effect: Effect, placement: Placement) -> Effect:
 		              effect.because)
 
 	if effect.axis is Axis.SIZE and effect.value.base == "Bounded":
-		assert placement.size_max_bits is not None
+		# A row claiming `Bounded` for a member with no maximum is a bug in
+		# the row, not an input this can render: there is no second number
+		# to print. Said rather than asserted bare, because the one row
+		# that did it took the compiler down with an unexplained
+		# `AssertionError` (26.691).
+		assert placement.size_max_bits is not None, (
+			f"{placement.path}: a row states SIZE := Bounded and the layout "
+			f"found no maximum")
 		return Effect(effect.axis, Value("Bounded", (
 			render_size(placement.size_bits),
 			render_size(placement.size_max_bits))), effect.because)

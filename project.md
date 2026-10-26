@@ -7385,6 +7385,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.691 A row stated Bounded for a member with no maximum
+
+Moved to
+`doc/decision/26.691-a-row-stated-bounded-for-a-member-with-no-maximum.md`.
+
 ### 26.690 A memory-safety closure nobody had tested
 
 Moved to
