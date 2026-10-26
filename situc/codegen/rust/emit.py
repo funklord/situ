@@ -5603,9 +5603,11 @@ class Emitter:
 			  if cursor and gaps
 			  and any(cursor in line for line in steps) else []),
 			"",
-			"\t\tif have < Self::SIZE_MIN {",
-			"\t\t\treturn situ_rt::Framing::Need(Self::SIZE_MIN);",
-			"\t\t}",
+			# No floor from `SIZE_MIN`: see the C backend's note at the
+			# same site. It is derived from the declared constraints and
+			# this function is handed unvalidated bytes, so the two
+			# disagree for a message that violates a `[min]` and the walk
+			# is the only number computed from what arrived (26.693).
 			"",
 			*([
 				"\t\t// A struct over what has arrived, so every length below",

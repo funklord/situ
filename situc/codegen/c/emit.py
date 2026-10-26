@@ -5063,15 +5063,29 @@ class Emitter:
 			*(["\tsitu_view_t view;"] if uses_view else []),
 			"",
 			*self._argument_unused(struct, self._argument_tail(struct), *steps),
-			# Skipped where the minimum is zero: `have < 0u` is always false
-			# and `-Wtype-limits` says so.
-			*([] if struct.layout.size_bytes == 0 else [
-				f"\tif (have < {size_min}) {{",
-				f"\t\t*need = {size_min};",
-				"\t\treturn SITU_ERR_TRUNCATED;",
-				"\t}",
-				"",
-			]),
+			# NO FLOOR FROM `SIZE_MIN`, and that is the fix for 26.693.
+			#
+			# `SIZE_MIN` is derived from the DECLARED CONSTRAINTS -- a
+			# `u8 len [min = 1]` makes the run it sizes at least one byte,
+			# so `station_id` is at least two and `head_body` at least
+			# eleven. The walk below computes its total from the ACTUAL
+			# bytes, which a framer is handed before anything has validated
+			# them, so for a message violating a `[min]` the two disagree:
+			# bbq-predictor's `head_body` answered truncated-need-11 at ten
+			# bytes and COMPLETE-need-10 at eleven, which is the one-sided
+			# safety property rather than a monotonicity break.
+			#
+			# A framing function may not hold a bound it is structurally
+			# unable to enforce. Framing precedes validation by design --
+			# that is what this function is for -- so the floor goes and
+			# the walk answers: every member's own guard already refuses
+			# short input with a need, and the final line reports `at`,
+			# which is the only number computed from what arrived.
+			#
+			# `SIZE_MIN` keeps its other uses. The view guard holds it
+			# because a VALID message really is that long, and the map
+			# prints it for the same reason; what changes is that the one
+			# function asked about unvalidated prefixes stops quoting it.
 			*view_lines,
 			*steps,
 			"",

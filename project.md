@@ -5720,7 +5720,14 @@ holder's:
   property, not merely monotonicity. A framing function may not hold a
   floor it cannot enforce: framing precedes validation, so either the
   floor is structural with value constraints ignored, or there is no
-  floor. Not yet fixed. bbq-predictor found it by fuzzing situ's
+  floor. **Fixed 2026-10-26 on the holder's instruction that the call was
+  situ's**: the floor comes out of `required` in all four backends and
+  the walk answers, since `required` is the one function asked about
+  unvalidated prefixes. `[max]` still feeds the layout -- every static
+  buffer rests on it -- and `SIZE_MIN` keeps the view guard and the map,
+  which are statements about valid messages and are true. The cost is one
+  extra round trip for a caller holding very few bytes, which is the
+  right way round. bbq-predictor found it by fuzzing situ's
   generated C++ against four invariants situ states and does not test;
   `need` falls as `have` rises in two of their structs. The property is
   already written -- `test_required_answers_every_prefix` holds that the

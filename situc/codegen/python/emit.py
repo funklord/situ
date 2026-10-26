@@ -5558,9 +5558,11 @@ class Emitter:
 			*([f"\t\t{cursor} = {gaps[0]}"]
 			  if cursor and gaps and any(cursor in line for line in steps)
 			  else []),
-			"\t\tif have < cls.SIZE_MIN:",
-			f'\t\t\traise TruncatedError("{struct.name}: incomplete",'
-			" cls.SIZE_MIN)",
+			# No floor from `SIZE_MIN`: see the C backend's note at the
+			# same site. It is derived from the declared constraints and
+			# this function is handed unvalidated bytes, so the two
+			# disagree for a message that violates a `[min]` and the walk
+			# is the only number computed from what arrived (26.693).
 			"",
 			"\t\t# A view over what has arrived, so every length below reads",
 			"\t\t# through the same bounds the accessors do.",
