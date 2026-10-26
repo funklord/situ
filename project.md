@@ -5707,6 +5707,17 @@ log rather than a running order: nothing in 26.95 through 26.98 waits for
 26.99, because emitting a lower rung's files is not the same as needing its
 emitter written first.
 
+**`2025f69` is committed, unpushed and ungated**, and is the first thing
+to settle: it removes `required`'s constraint-derived floor in all four
+backends (26.693). Green already are the prefix sweep, relations, the
+Python and Rust suites, both style modes, typecheck, and bbq-predictor's
+own thirteen bytes through all four backends. Unmeasured are
+`test_codegen_c.py`, `test_checks.py` and `test_walker_c.py`, whose run
+was killed by the budget; a gate is in flight at that commit. Read its
+`gate.rc` and push on zero. If it fails, expect a pinned `need` in a C
+test that the floor used to supply rather than a mystery -- the
+four-backend measurement stands.
+
 **What is open as of 2026-10-26**, with the record that carries each
 reproduction. Three are decisions rather than work, and are the copyright
 holder's:
