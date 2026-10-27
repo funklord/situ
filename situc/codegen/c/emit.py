@@ -799,10 +799,19 @@ class Emitter:
 			])
 		else:
 			first, last = spans
+			# THE SPANS CAN NAME THE CALLER'S ARGUMENT AND THIS SIGNATURE
+			# WAS A FIXED STRING. A coverage that ends at a member the
+			# argument sizes renders `situ_s_sig_offset(view, arg_blk)` into
+			# `end`, and the function declaring no `arg_blk` does not
+			# compile -- C alone, the other three taking the same schema.
+			# Asked of the span text through `_covered_tail`, which
+			# `compute` asks too, so the definition and the call cannot
+			# disagree (26.708).
 			lines.extend([
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'covered')}"
-				"(situ_view_t view, uint32_t *offset, uint32_t *len)",
+				f"(situ_view_t view, uint32_t *offset, uint32_t *len"
+				f"{self._covered_tail(struct, placement)})",
 				"{",
 				f"\tuint32_t start = {first};",
 				f"\tuint32_t end   = {last};",
@@ -1007,10 +1016,17 @@ class Emitter:
 			" * has the whole message.",
 			" */",
 			f"static inline situ_err_t {compute}(situ_view_t view,"
-			f"{self._prefix_params(placement)} uint32_t *out)",
+			f"{self._prefix_params(placement)} uint32_t *out"
+			f"{self._covered_tail(struct, placement)})",
 			"{",
 			"\tuint32_t at, n;",
-			f"\tconst situ_err_t e = {covered}(view, &at, &n);",
+			# `covered`'s tail rather than its own, because this body names
+			# the argument only by passing it on: asking
+			# `_argument_tail_in` of the text below would find nothing
+			# until the call already carried it, which is the loop a
+			# text-driven tail cannot close on itself.
+			f"\tconst situ_err_t e = {covered}(view, &at, &n"
+			f"{self._covered_args(struct, placement)});",
 			"",
 			"\tif (e != SITU_OK) {",
 			"\t\treturn e;",
@@ -1025,12 +1041,17 @@ class Emitter:
 			" * `SITU_ERR_TAG`: that one means a cryptographic gate refused,",
 			" * and this means the message is corrupt or truncated.",
 			" */",
+			# `crc_at` below is a span expression of its own and can name
+			# the argument independently of the coverage, so this tail is
+			# the union: what `compute` takes, and what `where` reads.
 			f"static inline situ_err_t {check}(situ_view_t view"
-			f"{self._prefix_tail(placement)})",
+			f"{self._prefix_tail(placement)}"
+			f"{self._argument_tail_in(struct, self._covered_tail(struct, placement), where)})",
 			"{",
 			"\tuint32_t want;",
 			f"\tconst situ_err_t e = {compute}(view,"
-			f"{self._prefix_args(placement)} &want);",
+			f"{self._prefix_args(placement)} &want"
+			f"{self._covered_args(struct, placement)});",
 			"",
 			"\tif (e != SITU_OK) {",
 			"\t\treturn e;",
@@ -11575,6 +11596,46 @@ class Emitter:
 			if re.search(rf"\b{name}\b", text):
 				parts.append(f", {self._ctype(held.scalar)} {name}")
 		return "".join(parts)
+
+	def _argument_args_in(self, struct: ResolvedStruct, *body: str) -> str:
+		"""`_argument_tail_in`'s call site, over the same text.
+
+		A declaration and the call that fills it have to agree about which
+		arguments are there, and the only way they cannot drift is to derive
+		both from one body. Keyed on the same `\bname\b` search, so a tail
+		that declares two and a call that passes one is not expressible.
+		"""
+		text  = "\n".join(one for one in body if one)
+		return "".join(
+			f", {self._argument_name(held)}"
+			for held in self._arguments(struct)
+			if re.search(rf"\b{self._argument_name(held)}\b", text))
+
+	def _covered_tail(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The argument tail the covered-span accessor carries.
+
+		Asked here rather than remembered, because the accessor is emitted by
+		`_tag_support` and called from `_tag_codec`'s `compute`, which are
+		different methods over one placement -- and a signature one of them
+		believes in is how this went wrong. Both ask this.
+
+		Only the byte-span form can name an argument: the bit-span form's
+		offset and extent are literal integers, and the refusal form emits no
+		function at all. So the span expressions are the body to ask about.
+		"""
+		spans = self._covered_spans(struct, placement)
+		if spans is None:
+			return ""
+		return self._argument_tail_in(struct, *(str(one) for one in spans))
+
+	def _covered_args(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The same, as the call site `compute` writes."""
+		spans = self._covered_spans(struct, placement)
+		if spans is None:
+			return ""
+		return self._argument_args_in(struct, *(str(one) for one in spans))
 
 	def _member_reads_arguments(self, struct: ResolvedStruct,
 			placement: Placement) -> bool:

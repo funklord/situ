@@ -6998,3 +6998,76 @@ int main(void)
 	assert ran.returncode == 0, (
 		f"the probe failed at check {ran.returncode}: a nested constraint no "
 		"longer reaches the parent's verdict")
+
+
+#: A tag whose coverage ENDS at a member the caller's argument sizes, so the
+#: span expressions name `arg_<n>` (26.708). Two shapes, because the codec
+#: form emits two more functions over the same span: `compute`, which calls
+#: `covered`, and `check`, which calls `compute` and reads the stored value's
+#: own offset -- a second span expression that can name the argument by
+#: itself.
+ARGUED_COVERAGE = ("struct s {\n"
+                   "\tparameter u8 blk [stream];\n"
+                   "\tauthenticated body { u8 payload[blk]; }\n"
+                   "\tchecksum u8 sig[2] covers(body);\n}\n")
+
+ARGUED_CODEC = (SUMMED
+                + "struct s {\n"
+                  "\tparameter u8 blk [stream];\n"
+                  "\tauthenticated body { u8 payload[blk]; }\n"
+                  "\tchecksum u8 sig[2] covers(body) is ic;\n}\n")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+@pytest.mark.parametrize("body", [ARGUED_COVERAGE, ARGUED_CODEC],
+                         ids=["plain", "codec"])
+def test_a_covered_span_that_reaches_the_argument_declares_it(
+		tmp_path: Path, body: str) -> None:
+	"""The fifth shape of the class `edges.situ` names, and C's alone.
+
+	`_covered`'s signature was a fixed string while the span expressions
+	inside it are rendered, so a coverage ending at a member the argument
+	sizes put `situ_s_sig_offset(view, arg_blk)` in the body of a function
+	declaring no `arg_blk`:
+
+	    static inline situ_err_t situ_s_sig_covered(
+	            situ_view_t view, uint32_t *offset, uint32_t *len)
+	    ...
+	    error: 'arg_blk' undeclared
+
+	The codec form carries two more: `compute` calls `covered` and `check`
+	calls `compute`, so the tail has to be threaded down the chain rather
+	than added to one signature. `check` needs the union of what `compute`
+	takes and what the stored value's own offset names, those being two
+	independent span expressions.
+
+	C alone -- C++, Rust and Python all take the same schema -- and
+	invisible to the suite because `test/schema/edges.situ`'s `negotiated`
+	is the tree's only parameterised struct and carries no tag.
+
+	Compiled rather than matched on the text, for this class's own reason:
+	a signature and the body built from it disagreeing is exactly what no
+	assertion about either half can see.
+	"""
+	compile_generated(tmp_path, body)
+
+
+def test_the_covered_tail_is_asked_of_the_spans_not_of_the_struct() -> None:
+	"""The control, and it is about not over-declaring.
+
+	A tail added wherever a struct has an argument would compile just as
+	happily and give every tag an argument it may not read -- which is an
+	unused parameter under `-Werror` and, worse, a signature change for
+	schemas that never needed one. So the tail is asked of the span text:
+	a coverage over a FIXED region in a struct that takes an argument gets
+	no tail at all.
+	"""
+	header, _ = emit(SUMMED + "struct s {\n"
+	                 "\tparameter u8 blk [stream];\n"
+	                 "\tauthenticated body { u8 a; u8 b; }\n"
+	                 "\tchecksum u8 sig[2] covers(body) is ic;\n"
+	                 "\tu8 payload[blk];\n}\n")
+
+	assert ("situ_s_sig_covered(situ_view_t view, uint32_t *offset,"
+	        " uint32_t *len)") in header, "a fixed span took a tail it cannot read"
+	assert "arg_blk" in header, "the struct does take an argument"

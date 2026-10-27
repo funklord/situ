@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.708 A covered span that reaches the argument
+
+Moved to
+`doc/decision/26.708-a-covered-span-that-reaches-the-argument.md`.
+
 ### 26.707 gen-tests was the fifth in the family and did not refuse
 
 Moved to
