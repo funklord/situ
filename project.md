@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.704 Two Python guards matched by a member's own name
+
+Moved to
+`doc/decision/26.704-two-python-guards-matched-by-a-members-own-name.md`.
+
 ### 26.703 A type name that begins with a runtime name
 
 Moved to

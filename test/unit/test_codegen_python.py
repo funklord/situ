@@ -2029,6 +2029,58 @@ HAS_MYPY = subprocess.run(
 
 
 @pytest.mark.skipif(not HAS_MYPY, reason="no mypy")
+@pytest.mark.parametrize("name", ["bytearray", "memoryview", "i"],
+                         ids=lambda n: n)
+def test_a_member_named_for_a_shadowed_builtin_type_checks(
+		name: str, tmp_path: Path) -> None:
+	"""`_unshadow` aliases a builtin a member has taken and rewrites the
+	annotations, and it could see one only in FIRST position.
+
+	The only place `bytearray` and `memoryview` appear in a generated module
+	is the union `data: bytes | bytearray | memoryview`, where they are the
+	second and third alternatives -- so for a member of either name the
+	alias was emitted, never used, and the annotation resolved to the
+	member's own property: *"Function `s.bytearray` is not valid as a
+	type"*. The sibling above cannot reach this because no corpus schema
+	carries such a name, and `py_compile` cannot either: `from __future__
+	import annotations` makes the annotation a string, so only a type
+	checker looks (26.704).
+	"""
+	shutil.copy(RUNTIME / "python" / "situ_runtime.py",
+	            tmp_path / "situ_runtime.py")
+	(tmp_path / "unit.py").write_text(
+		emit(f"struct s {{ u8 {name} [max = 4]; u8 b[{name} + 1];"
+		     f" u16 tail; }}"), encoding="ascii")
+
+	checked = subprocess.run(
+		[sys.executable, "-m", "mypy", "--strict", "--no-pretty",
+		 "--no-error-summary", str(tmp_path / "unit.py")],
+		capture_output=True, text=True)
+
+	assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def test_a_member_named_setter_still_gets_its_explanation() -> None:
+	"""Section 1 asks that an absent operation be "deliberate, explained,
+	and assertable", and the guard against explaining twice was a bare
+	substring over every line.
+
+	A member called `setter` renders `def setter_offset` and the like, so
+	the guard matched the member's own accessors and the explanation was
+	dropped -- silently, while C, C++ and Rust each still wrote theirs. The
+	explanation is a COMMENT, which is what tells it from code (26.704).
+	"""
+	held = emit('struct s { u8 setter[] until "\\0"; u16 count2; }')
+	control = emit('struct s { u8 i[] until "\\0"; u16 count2; }')
+
+	# `# No setter setter: mutate is ...` -- the member's name, then the
+	# word. One note each way is the assertion; the control is what says
+	# the shape is normal rather than special to this name.
+	assert "No setter setter: mutate is" in held
+	assert held.count("mutate is") == control.count("mutate is") == 1
+
+
+@pytest.mark.skipif(not HAS_MYPY, reason="no mypy")
 def test_every_generated_module_type_checks(tmp_path: Path) -> None:
 	"""The annotations are for a caller who runs a type checker over them, and
 	nothing ran one. Thirty-one errors in fifteen of the twenty-five modules

@@ -692,8 +692,17 @@ class Emitter:
 		alias += "".join(f"_situ_{name} = {name}\n" for name in shadowed)
 		text  = text.replace("\nfrom situ_runtime import",
 		                     f"\n{alias}\nfrom situ_runtime import", 1)
+		# `|` as well as `:` and `->`, because the only place `bytearray`
+		# and `memoryview` appear in a generated module is the union
+		# `data: bytes | bytearray | memoryview`, where they are the SECOND
+		# and third alternatives. The rewrite could see a shadowed builtin
+		# only in first position, so for a member of either name the alias
+		# was emitted, never used, and the annotation resolved to the
+		# member's own property: mypy says *"Function `s.bytearray` is not
+		# valid as a type"*. `py_compile` passes either way, `from __future__
+		# import annotations` making it a string (26.704).
 		for name in shadowed:
-			text = _re.sub(rf"(:|->) {name}\b", rf"\1 _situ_{name}", text)
+			text = _re.sub(rf"(:|->|\|) {name}\b", rf"\1 _situ_{name}", text)
 		return text
 
 	def _refuse_collisions(self, module: str) -> str:
@@ -3563,7 +3572,16 @@ class Emitter:
 
 		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
 			return lines
-		if any("mutate is" in line or "setter" in line for line in lines):
+		# COMMENT LINES ONLY. The explanation this guards against repeating
+		# is a comment -- `# No <name> setter: mutate is ...` -- and a bare
+		# substring over every line matched a MEMBER called `setter`, whose
+		# own `def setter_offset` carries the word. The explanation was then
+		# dropped, silently, while C, C++ and Rust each still wrote theirs:
+		# four backends disagreeing about whether an absence is explained,
+		# and section 1's "deliberate, explained, and assertable" failing on
+		# the third clause with nothing to notice it (26.704).
+		if any("mutate is" in line or "setter" in line
+		       for line in lines if line.lstrip().startswith("#")):
 			return lines
 		# A ValueConverted run has no memoryview but is read through its
 		# indexed getter, so it is read-accessible-but-unwritable the same way
