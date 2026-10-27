@@ -22,3 +22,9 @@ debian/debhelper-build-stamp
 .fmake/
 /libsitu.a
 /situ-walk-c
+
+# Harness state: worktrees, and a session's own working notes. The
+# directory is already here untracked, and these trees depend on `git
+# status --porcelain` being readable -- a line nobody can explain is the
+# whole warning a shared index gets.
+/.claude/
