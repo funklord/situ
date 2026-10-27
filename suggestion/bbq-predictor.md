@@ -290,6 +290,69 @@ than against your exports, so please confirm from your side:
   generated code can do, read `stage` beside `offset`: `TransformTime`
   there is the signal.
 
+## 7. `required()` answered from bytes past the frame -- FIXED
+
+Reported 2026-10-26 in two messages, from fuzzing the C++ generated from
+your own `src/wire/bbq.situ`. **Turn `FUZZ_FRAMING=1` back on**: the fix
+is gated at situ's `3df4d4f`, 9171 passing, and pushed.
+
+It reproduced on the first run once you sent the schema, and worse than
+you reported: at eleven bytes `head_body::required` says **ok with a need
+of ten** -- less than it was handed. That is the one-sided safety
+property, not merely the monotonicity break, because a caller told
+complete stops reading and parses bytes that are not there.
+
+The cause was two numbers answering to different authorities.
+`SIZE_MIN` is 11, derived from the DECLARED CONSTRAINT -- your
+`station_id` is `u8 len [min = 1, max = 32]`, so `id` is at least a byte
+and the struct at least two. `required` computes its total from the
+ACTUAL bytes, which carry `len = 0`, so station is one byte and the total
+is ten. The function opened with `if (have < 11) *need = 11` and then
+computed 10.
+
+**A framing function may not hold a bound it is structurally unable to
+enforce.** Framing precedes validation by design, so the floor is out of
+`required` in all four backends and the walk answers. `[max]` still
+feeds the layout -- every static buffer rests on it -- and `SIZE_MIN`
+keeps the view guard and the map, which are true statements about valid
+messages. Your thirteen bytes, all four backends agreeing where none of
+them did:
+
+    1..9    truncated need=10
+    10      ok        need=10
+    11..13  ok        need=10
+
+**Two things you asked, answered.**
+
+Your third invariant is not situ's contract, as sent by inbox: all six
+shapes in situ's own prefix sweep break it, `required` reporting a lower
+bound that rises. Your other three hold.
+
+And you asked whether `ok` at `need = n` means the message is exactly `n`
+bytes. **It does not, and cannot** -- `n` is computed from lengths
+nothing has validated, and your own bytes are the counter-example: ten
+bytes answer ok and `validate` refuses them for the `[min = 1]` your
+`len` breaks. What `ok` promises is that **nothing in those `n` bytes
+asks for more** -- a statement about the prefix. `validate` remains the
+only thing that speaks for the whole message. If your reader wants the
+stronger property, it wants `validate` after `required`, which is the
+sequence situ's own framing argument has always assumed.
+
+**What your fuzzer found that we had not, which is the part worth your
+time.** Three guesses at the shape were wrong before you sent the file --
+a wide length field, an alignment, and a length field after an alignment,
+all three swept by prefix in C and all three conformant. And the gate
+disproved the cost we had written down: the one pinned sequence that
+moved got TIGHTER, because the floor counted a run as empty where the
+walk reads its count. So the floor was the weaker bound almost
+everywhere and could only beat the walk where a constraint the bytes
+violate made it do so -- the unsafe case. **A bound derived from
+constraints is not a better bound, it is a different claim.** That
+intuition is what kept it in `required` through four records that each
+read the function closely.
+
+`doc/decision/26.693-*.md`.
+
 ## What this report is worth beyond its items
 
 **A consumer's schema reached a composition the corpus does not have.**
