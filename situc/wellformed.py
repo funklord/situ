@@ -19,6 +19,7 @@ import difflib
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
 from situc.invariant import BUILTINS, paths_in
+from situc.traverse import ARGUMENT_PREFIX
 from situc.types import (MAX_WIDTH, NUMERIC_BOUNDS, TEXT_ENCODINGS, ScalarKind,
                          is_scalar_name, literal_bytes)
 
@@ -3177,6 +3178,43 @@ def check_parameters(schema: ast.Schema) -> None:
 					["an argument is one value the caller supplies; a "
 					 "struct-typed one would be a second message, which is "
 					 "what a `relation` is for (decision 0030)"])
+
+		# A MEMBER NAMED FOR AN ARGUMENT'S OWN SPELLING (26.706). Every
+		# backend spells a parameter's argument `arg_<name>` now, so
+		# `u8 arg_n;` beside `parameter u8 n;` is two members under one
+		# generated name. The four answers were measured and there are
+		# three of them: C++ refuses to compile -- *`arg_n` conflicts with
+		# a previous declaration* -- Python's emitted module is refused by
+		# 0062's own parse of it, C is unaffected because its accessors are
+		# prefixed free functions in a namespace of their own, and RUST
+		# COMPILES, a field and a method of one name being legal there.
+		#
+		# Refused here so the four agree and so the answer arrives at the
+		# schema line rather than out of a C++ compiler. It is also a
+		# hazard the prefix CREATED: before 26.706 the argument was spelled
+		# `n` on the view in three backends, and this schema compiled.
+		for member in _members_and_arms(struct):
+			if not isinstance(member, ast.Field) or member.parameter:
+				continue
+			taken = next((held for held in named.values()
+			              if member.name == ARGUMENT_PREFIX + held.name), None)
+			if taken is None:
+				continue
+			raise error(
+				f"`{member.name}` is the generated name of "
+				f"`parameter {taken.name}`",
+				member.span,
+				"rename this member",
+				[
+					f"every backend spells an argument "
+					f"`{ARGUMENT_PREFIX}<name>`, so this member and "
+					f"`{taken.name}`'s argument are one name in the generated "
+					"code (26.706)",
+					"C++ will not compile it, Python's module is refused by "
+					"its own duplicate-name check, and Rust compiles it as a "
+					"field and a method of one name -- three answers to one "
+					"schema, which is what this refuses",
+				])
 
 		# ...and each variant ARM's member, which is not in `struct.members`
 		# (26.432). `case 1: u8 body[n];` moves whatever follows the variant

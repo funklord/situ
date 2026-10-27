@@ -2620,15 +2620,50 @@ def arguments(struct: "ResolvedStruct") -> list[Placement]:
 	        if held.parameter and held.scalar is not None]
 
 
+ARGUMENT_PREFIX = "arg_"
+
+
+def argument_spelling(name: str,
+		spell: "Callable[[str], str]") -> str:
+	"""`arg_` on a schema's parameter name, THEN the backend's sanitiser.
+
+	Every backend prefixes a `parameter`'s name, and the premise that only
+	C needed to was false. What this said was that the other three "put
+	the value on the view object, where a schema's name cannot collide
+	with anything" -- and the view object is exactly where it collides.
+	Rust gives the view a `bytes` field beside the parameter's, so
+	`parameter u8 bytes` declares `bytes` twice and every `self.bytes` in
+	the module reads the number rather than the buffer. Python's `at`
+	already takes `cls`, `msg`, `offset` and `length`, and a keyword-only
+	argument named for any of the four is a `SyntaxError` -- the module
+	does not import, which is the one failure Python cannot defer to a
+	call.
+
+	Measured 2026-10-27 over seven names declared as a parameter: `bytes`
+	and `data` break Rust, `cls`, `data`, `msg` and `offset` break Python,
+	`have` breaks Rust alone by shadowing a local inside `required`, and
+	C -- the one backend that prefixed -- took all seven (26.706).
+
+	The sanitiser is the caller's because each backend has one and they do
+	not agree on keywords. The prefix is the part that must not vary, so it
+	is stated here once.
+
+	**The order matters and the other one is wrong.** Spelling first and
+	prefixing after gave Rust `arg_r#fn` for `parameter u8 fn`, which is
+	not an identifier at all: `_ident` escapes a keyword as `r#fn` and the
+	prefix landed in front of the escape. Prefixed first, `arg_fn` is a
+	keyword in none of the four languages, so no escape is called for and
+	none is applied -- which also retires a C++ data member spelled
+	`arg_class__`. That one predates the prefix, `bare_name` having
+	suffixed the keyword and `_argument_local` adding the underscore that
+	makes every member of a frame reader, and two underscores anywhere in
+	an identifier are reserved to the implementation.
+	"""
+	return spell(ARGUMENT_PREFIX + name)
+
+
 def argument_name(placement: Placement) -> str:
 	"""What a struct argument is called in generated C.
-
-	Prefixed, which the other three backends do not need: they put the
-	value on the view object, where a schema's name cannot collide with
-	anything, while C has no such object and the bodies declare locals
-	out of the same flat namespace a schema names a parameter in.
-	`parameter u8 n` is the natural spelling and `n` is the likeliest to
-	shadow.
 
 	Moved here from `codegen/c/emit.py` when the writer needed it: the
 	reader's accessor argument and the writer's parameter are the same
@@ -2637,7 +2672,7 @@ def argument_name(placement: Placement) -> str:
 	"""
 	from situc.codegen.c.names import c_name
 
-	return f"arg_{c_name(placement.name)}"
+	return argument_spelling(placement.name, c_name)
 
 
 def reserved_policy(attrs: tuple[ast.Attr, ...]) -> str:

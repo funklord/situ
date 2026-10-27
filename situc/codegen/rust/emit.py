@@ -567,15 +567,17 @@ class Emitter:
 			"\tbytes: &'a [u8],",
 			# The arguments this format's shape follows, which the message
 			# does not carry (0050). `pub` because they ARE the value a
-			# caller supplied -- there is nothing to read them out of, so a
-			# getter would be a second name for one field.
-			*(f"\tpub {_ident(one.name)}: {self._rust_type(one.scalar)},"
+			# caller supplied -- there is nothing to read them out of, and
+			# a getter would read the member after it. It used to say "a
+			# second name for one field" as well; the prefix retired that
+			# half (26.706) and left this one.
+			*(f"\tpub {self._argument_ident(one)}: {self._rust_type(one.scalar)},"
 			  for one in self._arguments(struct) if one.scalar is not None),
 			"}",
 			"",
 			f"pub struct {name}Mut<'a> {{",
 			"\tbytes: &'a mut [u8],",
-			*(f"\tpub {_ident(one.name)}: {self._rust_type(one.scalar)},"
+			*(f"\tpub {self._argument_ident(one)}: {self._rust_type(one.scalar)},"
 			  for one in self._arguments(struct) if one.scalar is not None),
 			"}",
 			"",
@@ -601,10 +603,15 @@ class Emitter:
 		for entry in own_entries(struct):
 			# A parameter is the caller's argument, carried as a field
 			# (0050). It occupies no bytes, so the offset an accessor
-			# would read is the offset of the member AFTER it -- and
-			# `Frame { n }` beside `fn n()` is a field and a method of
-			# one name, where the field is right and the method reads
-			# the payload. The struct field IS the accessor.
+			# would read is the offset of the member AFTER it: the field
+			# would be right and the method would read the payload. The
+			# struct field IS the accessor.
+			#
+			# That is the whole reason now. It used to have a second --
+			# `Frame { n }` beside `fn n()` being a field and a method
+			# of one name -- and 26.706 retired it by spelling the field
+			# `arg_n`. The names no longer collide and the getter is
+			# still wrong, which is the half that was load-bearing.
 			if entry.placement.parameter:
 				lines.extend(self._no_parameter_accessor(struct, entry))
 				continue
@@ -3273,19 +3280,30 @@ class Emitter:
 		"""Say why a `parameter` has no accessor of its own (0050).
 
 		The struct field is the accessor: `new` takes the argument and
-		stores it, so `view.n` answers. A generated `fn n()` would be a
-		method of the same name reading the bytes -- at the offset of the
-		member AFTER it, a parameter occupying none -- so the field would
-		be right and the method wrong, and nothing in the spelling says
-		which a caller reached for.
+		stores it, so `view.arg_n` answers. A generated `fn n()` would
+		read the bytes at the offset of the member AFTER it, a parameter
+		occupying none, so the field is right and the method would be
+		wrong.
+
+		It used to be wrong for a second reason as well -- the field was
+		spelled `n` too, so nothing in `view.n` against `view.n()` said
+		which a caller had reached for. 26.706 prefixed the field and
+		that reason is gone; this one is not.
 		"""
 		name = _ident(c_name(local_name(struct, entry.placement)))
 		return [
 			"",
+			# Two spellings, and they are not the same one. The method
+			# that is NOT emitted carries the schema's name, because that
+			# is what a caller would have typed; the field that IS emitted
+			# carries the prefix (26.706). Both were `{name}` until the
+			# prefix landed, so the comment sent a reader to `view.n`,
+			# which does not compile -- a comment in generated code is
+			# read by somebody who cannot see this one.
 			f"\t// No {name}(): `{entry.placement.path}` is a parameter, so"
 			" the field",
-			f"\t// `{name}` above IS its value -- the caller gave it to"
-			" `new`. A",
+			f"\t// `{self._argument_ident(entry.placement)}` above IS its"
+			" value -- the caller gave it to `new`. A",
 			"\t// method reading the bytes would read the member after it,"
 			" which",
 			"\t// occupies the offset a parameter does not.",
@@ -4819,7 +4837,7 @@ class Emitter:
 			# the view as a field (0050). A read at its offset would read
 			# the member after it, since a parameter occupies nothing.
 			if held_at.parameter:
-				return leaf(f"{held}.{_ident(c_name(name))}",
+				return leaf(f"{held}.{self._argument_ident(held_at)}",
 				            held_at.scalar is not None
 				            and held_at.scalar.signed)
 			# A text number is digits, not bytes of an integer: reading it
@@ -7182,7 +7200,7 @@ class Emitter:
 		# a caller passing 2^40 would have them disagree for the reason
 		# a lying varint did.
 		if driver.placement.parameter:
-			name = _ident(c_name(placement.sized_by or ''))
+			name = self._argument_ident(driver.placement)
 			return (leaf(f"self.{name} as u64"), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
@@ -8170,24 +8188,36 @@ class Emitter:
 		return [held for held in own_members(struct)
 		        if held.parameter and held.scalar is not None]
 
+	def _argument_ident(self, held: Placement) -> str:
+		"""The field's spelling, which is also the argument's.
+
+		Prefixed, because the view has a `bytes` field of its own and a
+		parameter named `bytes` declared it twice -- see
+		`traverse.argument_spelling`. One spelling for the field and the
+		argument both, since `Self { bytes, arg_n }` is shorthand and
+		breaks the moment they differ.
+		"""
+		return traverse.argument_spelling(held.name, _ident)
+
 	def _argument_signature(self, struct: ResolvedStruct) -> str:
 		"""What `new` adds for them, undefaulted: Rust has no default
 		argument and should not grow one here by convention -- situ does
 		not know the caller's block size, and a view built on a guessed
 		one reads the wrong bytes confidently."""
 		return "".join(
-			f", {_ident(one.name)}: {self._rust_type(one.scalar)}"
+			f", {self._argument_ident(one)}: {self._rust_type(one.scalar)}"
 			for one in self._arguments(struct) if one.scalar is not None)
 
 	def _argument_fields(self, struct: ResolvedStruct) -> str:
-		return "".join(f", {_ident(one.name)}"
+		return "".join(f", {self._argument_ident(one)}"
 		               for one in self._arguments(struct))
 
 	def _argument_copies(self, struct: ResolvedStruct) -> str:
 		"""`as_ref` hands the same arguments on: the read-only view is the
 		same message under the same assumptions, and one that dropped them
 		would answer a different question about the same bytes."""
-		return "".join(f", {_ident(one.name)}: self.{_ident(one.name)}"
+		return "".join(f", {self._argument_ident(one)}:"
+		               f" self.{self._argument_ident(one)}"
 		               for one in self._arguments(struct))
 
 	def _check_groups(self, struct: ResolvedStruct) -> list[tuple[str, list[str]]]:

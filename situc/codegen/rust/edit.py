@@ -13,7 +13,7 @@ accident of translation.
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen import arguments
 from situc.codegen.c.edit import editable
 from situc.codegen.rust.emit import Emitter, _ident, _pascal
@@ -78,6 +78,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		fields = []
 		for placement in members:
 			local = _ident(local_name(struct, placement))
+			if placement.parameter:
+				# The argument's spelling, not the member's (0050): the value
+				# reaches the copy from the caller, and the view's own field is
+				# prefixed for a harder reason -- `parameter u8 bytes` would
+				# otherwise declare `bytes` twice.
+				local = traverse.argument_spelling(
+					local_name(struct, placement), _ident)
 			if placement in runs:
 				fields.append(f"\tpub {local}: &'a [u8],")
 			elif placement.scalar is not None and placement.array_count is None:
@@ -139,6 +146,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		]
 		for placement in members:
 			local = _ident(local_name(struct, placement))
+			if placement.parameter:
+				# The argument's spelling on both sides (0050): the field above
+				# carries it and `view.<name>` is where `new` put it.
+				local = traverse.argument_spelling(
+					local_name(struct, placement), _ident)
 			if placement in runs:
 				lines.append(f"\t\t\t{local}: &frozen[{local}_at..{local}_at "
 				             f"+ {local}_n],")

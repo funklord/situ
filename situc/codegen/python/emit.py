@@ -1214,6 +1214,19 @@ class Emitter:
 		"""The `parameter`s this struct takes, in declaration order (0050)."""
 		return [held for held in own_members(struct) if held.parameter]
 
+	def _argument_ident(self, held: Placement) -> str:
+		"""The attribute's spelling, which is also the keyword argument's.
+
+		Prefixed, because `at` already takes `cls`, `msg`, `offset` and
+		`length` and `required` takes `cls` and `data`: a keyword-only
+		argument named for one of them is a `SyntaxError`, so the module
+		does not import. `traverse.argument_spelling` has the measurement.
+
+		One spelling for the attribute and the argument both, so that
+		`view.arg_n = arg_n` stays the plain statement it reads as.
+		"""
+		return traverse.argument_spelling(held.name, py_name)
+
 	def _argument_signature(self, struct: ResolvedStruct) -> str:
 		"""What `at` adds for them: keyword-only and with no default.
 
@@ -1228,7 +1241,7 @@ class Emitter:
 		if not held:
 			return ""
 		return ", *, " + ", ".join(
-			f"{py_name(one.name)}: int" for one in held)
+			f"{self._argument_ident(one)}: int" for one in held)
 
 	def _argument_declarations(self, struct: ResolvedStruct) -> list[str]:
 		"""Declare each argument on the class, so a type checker sees it.
@@ -1241,7 +1254,7 @@ class Emitter:
 		parameter. Until one did, no gate could see it.
 
 		The other backends say it in their own way and always did: Rust a
-		`pub n: u8` field, C++ a data member. Python's way is an
+		`pub arg_n: u8` field, C++ a data member. Python's way is an
 		annotation, and it is the same statement -- the argument is part
 		of what a view IS, not something stuck to it afterwards.
 		"""
@@ -1255,14 +1268,15 @@ class Emitter:
 			"\t#: caller supplies them and the message does not carry",
 			"\t#: them, so they are part of what a view IS.",
 		]
-		lines.extend(f"\t{py_name(one.name)}: int" for one in held)
+		lines.extend(f"\t{self._argument_ident(one)}: int" for one in held)
 		return lines
 
 	def _argument_store(self, struct: ResolvedStruct) -> list[str]:
 		"""Put them on the view, which is what makes an accessor able to
 		read one: every expression over a parameter renders `self.<name>`,
 		exactly as it renders `self.<field>` for bytes."""
-		return [f"\t\tview.{py_name(one.name)} = {py_name(one.name)}"
+		return [f"\t\tview.{self._argument_ident(one)} ="
+		        f" {self._argument_ident(one)}"
 		        for one in self._arguments(struct)]
 
 	def _acquire(self, struct: ResolvedStruct) -> list[str]:
@@ -3608,10 +3622,16 @@ class Emitter:
 
 	def _member(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		# A parameter is the argument the caller supplied to `at`, stored on
-		# the view there (0050). `self.<name>` IS the value, so it gets no
-		# accessor: a property over it would read the BUFFER at its offset,
-		# which is where the member after it begins -- a parameter occupies
-		# nothing -- and would shadow the argument with a wrong number.
+		# the view there (0050). `self.arg_<name>` IS the value, so it gets
+		# no accessor: a property over it would read the BUFFER at its
+		# offset, which is where the member after it begins -- a parameter
+		# occupies nothing.
+		#
+		# It would also have SHADOWED the argument, a property being a data
+		# descriptor, so `view.n = n` in `at` would have raised. 26.706
+		# prefixed the attribute and a property `n` now sits beside
+		# `arg_n` shadowing nothing, which leaves the wrong byte as the
+		# whole of the reason.
 		if entry.placement.parameter:
 			return []
 
@@ -5129,7 +5149,7 @@ class Emitter:
 			# buffer at its offset would read the member AFTER it, since a
 			# parameter occupies nothing.
 			if placement.parameter:
-				return leaf(f"{held}.{py_name(local)}")
+				return leaf(f"{held}.{self._argument_ident(placement)}")
 			if "." not in local:
 				# A varint's own property raises on a truncated encoding;
 				# `_value` is the read that cannot, which is what the count
@@ -5592,7 +5612,8 @@ class Emitter:
 			# the first size expression raised `AttributeError` naming a
 			# field the class does declare.
 			"\t\tprobe = cls(Message(bytearray(data)), 0, have)",
-			*[f"\t\tprobe.{py_name(one.name)} = {py_name(one.name)}"
+			*[f"\t\tprobe.{self._argument_ident(one)} ="
+			  f" {self._argument_ident(one)}"
 			  for one in self._arguments(struct)],
 			*steps,
 			"",
@@ -6796,7 +6817,7 @@ class Emitter:
 		# so a caller passing 2^40 would have the two disagree for the
 		# reason a lying varint did.
 		if driver.placement.parameter:
-			return (leaf(f"self.{py_name(placement.sized_by or '')}"), True)
+			return (leaf(f"self.{self._argument_ident(driver.placement)}"), True)
 
 		# A varint driver has no scalar and no constant offset, so neither the
 		# guard above nor the load below applies to it. It was refused by the

@@ -2470,17 +2470,24 @@ TAKES = """struct frame {
 
 def test_the_view_carries_the_argument() -> None:
 	"""A public field rather than a getter: it IS the value the caller
-	supplied, so a getter would be a second name for one field. Undefaulted
+	supplied, and a getter would read the member after it. Undefaulted
 	because Rust has no default argument and should not grow one by
-	convention -- situ does not know the caller's block size."""
+	convention -- situ does not know the caller's block size.
+
+	Prefixed since 26.706, and this backend is where it mattered most: the
+	view holds the message in a field called `bytes`, so `parameter u8
+	bytes` declared `bytes` twice and `self.bytes` was the slice on one
+	line and a `u8` on the next.
+	"""
 	module = emit(TAKES)
 
-	assert "\tpub n: u8," in module
-	assert "pub fn new(bytes: &'a [u8], n: u8) -> Result<Self>" in module
+	assert "\tpub arg_n: u8," in module
+	assert "pub fn new(bytes: &'a [u8], arg_n: u8) -> Result<Self>" in module
 	# `required` takes it too: how far a message reaches follows the
 	# argument, and a framer that could not be told would answer about a
 	# different message.
-	assert "pub fn required(data: &[u8], n: u8) -> situ_rt::Framing" in module
+	assert ("pub fn required(data: &[u8], arg_n: u8) -> situ_rt::Framing"
+	        in module)
 
 
 def test_a_variant_arm_at_a_dynamic_offset_reads_the_right_bytes() -> None:
@@ -2532,13 +2539,18 @@ struct S {
 
 
 def test_a_parameter_gets_no_accessor_of_its_own() -> None:
-	"""A field and a method of one name, where the field is right.
+	"""A method reading the member after the one it is named for.
 
-	`Frame { n }` is the argument the caller gave `new`; a generated
+	`Frame { arg_n }` is the argument the caller gave `new`; a generated
 	`fn n()` reads the bytes at the parameter's offset, which -- a
-	parameter occupying none -- is where the member AFTER it begins. So
-	`view.n` answered correctly and `view.n()` returned the payload's
-	first byte, and nothing in the spelling said which was which.
+	parameter occupying none -- is where the member AFTER it begins.
+
+	The title of 26.398 is *a field and a method of one name, where the
+	field is right*, and that was this test's summary line: `view.n`
+	answered correctly, `view.n()` returned the payload's first byte, and
+	nothing in the spelling said which was which. 26.706 prefixed the field,
+	so they are two names now and the spelling does say. What survives is
+	the wrong byte, which is why the method is still not emitted.
 
 	The setter is the worse half: `set_n(4)` stored 4 over that same byte
 	and left the argument alone, so the write corrupted the payload while
@@ -2765,3 +2777,79 @@ def test_an_unconstrained_arm_says_nothing_new() -> None:
 	assert "frame.held.a" not in body
 	assert "frame.held.b" not in body
 	assert "match self.held_a()" not in body
+
+
+#: The three names that broke this backend when a schema used one for a
+#: `parameter`, from the sweep in 26.706. `bytes` is the view's own field for
+#: the message, `data` is `required`'s buffer argument, and `have` is a local
+#: inside it; the first two were `error[E0415]`, identifier bound more than
+#: once, and the third `error[E0308]` through the local.
+COLLIDING_ARGUMENT = ("bytes", "data", "have")
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("name", COLLIDING_ARGUMENT)
+def test_a_parameter_may_be_named_for_the_views_own_field(
+		tmp_path: Path, name: str) -> None:
+	"""A schema's argument name is not the schema author's to avoid.
+
+	`parameter u8 bytes` is the one worth reading twice. The view carries
+	the message in a field called `bytes`, so the struct declared the name
+	twice and -- had Rust allowed it -- `self.bytes` would have been the
+	buffer on one line and a `u8` on the next, in the same expression that
+	sizes a run. The argument is prefixed now, which is what C always did.
+	"""
+	result = build(tmp_path, f"""struct s {{
+	parameter u8 {name} [stream];
+	u8        payload[{name}];
+	u16       checksum;
+}}
+""")
+
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_views_own_field_still_means_the_message(tmp_path: Path) -> None:
+	"""The control for the test above, and the half a compile cannot see.
+
+	A rename that moved the parameter's field and left a read behind would
+	still compile wherever the types happened to agree -- `parameter u8
+	have` was exactly that, an `error[E0308]` rather than a duplicate -- so
+	this reads the emitted text: `self.bytes` must be the slice, and the
+	argument must reach the run's length under its prefixed name.
+	"""
+	module = emit("""struct s {
+	parameter u8 bytes [stream];
+	u8        payload[bytes];
+	u16       checksum;
+}
+""")
+
+	assert "\tbytes: &'a [u8]," in module
+	assert "\tpub arg_bytes: u8," in module
+	assert "self.arg_bytes as u64" in module
+	assert "self.bytes as u64" not in module
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("name", ("fn", "match", "type"))
+def test_a_parameter_named_for_a_keyword_needs_no_escape(
+		tmp_path: Path, name: str) -> None:
+	"""`arg_fn` is not a keyword, so `r#` has nothing to do (26.706).
+
+	This backend's `_ident` escapes a keyword as `r#fn`, and a prefix
+	applied AFTER that is `arg_r#fn`, which is not an identifier -- the
+	one way this change could be got wrong that still looked prefixed.
+	The prefix goes on first and the escape is then never reached.
+	"""
+	body = f"""struct s {{
+	parameter u8 {name} [stream];
+	u8        payload[{name}];
+	u16       checksum;
+}}
+"""
+	result = build(tmp_path, body)
+
+	assert result.returncode == 0, result.stderr
+	assert "arg_r#" not in emit(body), "the escape is inside the name"

@@ -840,11 +840,15 @@ is zero and stays zero until a person sets it: a dissector cannot know the
 argument and does not guess. `situc map` and `situc wire` name a parameter
 rather than placing it, since it occupies no bytes.
 
-**Every generated view takes its arguments**: `frame.at(msg, offset,
-length, *, n)`, `Frame::new(bytes, n)`, `frame::at(owner, 0, n, out)` and,
-in C, a trailing parameter on the accessors whose arithmetic reaches it --
-`situ_frame_body_len(view, arg_n)`. Undefaulted everywhere, because a
-default would be a guess about somebody else's block size. The framing
+**Every generated view takes its arguments, and all four backends spell
+one `arg_n`**: `frame.at(msg, offset, length, *, arg_n)`,
+`Frame::new(bytes, arg_n)`, `frame::at(owner, offset, length, arg_n_, out)`
+and, in C, a trailing parameter on the accessors whose arithmetic reaches
+it -- `situ_frame_body_len(view, arg_n)`. The prefix is C's, which had it
+from the start, and the other three took it so that one name serves all
+four; C++ adds a trailing underscore on the function's local, its data
+member being `arg_n`. Undefaulted everywhere, because a default would be a
+guess about somebody else's block size. The framing
 helper takes them too -- how far a message reaches can follow an argument,
 and a framer that could not be told would answer about a different message.
 

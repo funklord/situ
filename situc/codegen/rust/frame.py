@@ -71,10 +71,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		fields = ["\t/// The caller's argument, fixed for this stream."] if args else []
 		for one in args:
 			assert one.scalar is not None
-			fields.append(f"\tpub {_ident(one.name)}: "
+			fields.append(f"\tpub {emitter._argument_ident(one)}: "
 			              f"{emitter._rust_type(one.scalar)},")
-		init   = "".join(f", {_ident(one.name)}" for one in args)
-		given  = "".join(f", self.{_ident(one.name)}" for one in args)
+		init   = "".join(f", {emitter._argument_ident(one)}" for one in args)
+		given  = "".join(f", self.{emitter._argument_ident(one)}"
+		                 for one in args)
 		note   = (["///",
 		           "/// `new` takes the argument(s) this struct's layout",
 		           "/// follows, for the stream it is reading."] if args else [])

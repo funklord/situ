@@ -14,7 +14,7 @@ the limit exists for the language's sake or the protocol's.
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen.c.edit import editable
 from situc.codegen.python.emit import py_name
 from situc.layout import Placement
@@ -61,6 +61,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		fields, build = [], []
 		for placement in members:
 			local = py_name(local_name(struct, placement))
+			if placement.parameter:
+				# The argument's spelling, not the member's (0050): the value
+				# reaches the copy from the caller, and `view.<name>` is the
+				# attribute `at` stored it under -- prefixed because a keyword
+				# argument named `msg` or `offset` is a SyntaxError.
+				local = traverse.argument_spelling(
+					local_name(struct, placement), py_name)
 			if placement in runs:
 				fields.append(f"\t{local}: bytes")
 				build.append(f"\t\t\t{local}=bytes(view.{local}),")

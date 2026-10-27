@@ -3207,7 +3207,10 @@ def test_a_rust_view_takes_the_argument_rather_than_refusing() -> None:
 	resolved = resolve(schema, solve(schema))
 	module   = backend.generate(schema, resolved, "unit").module
 
-	assert "pub fn new(bytes: &'a [u8], n: u8)" in module
+	# `arg_n`, not `n`: every backend prefixes an argument now (26.706),
+	# and this backend is where it mattered -- the view's own field for
+	# the message is called `bytes`.
+	assert "pub fn new(bytes: &'a [u8], arg_n: u8)" in module
 
 
 def test_a_python_view_takes_the_argument_rather_than_refusing() -> None:
@@ -3223,7 +3226,10 @@ def test_a_python_view_takes_the_argument_rather_than_refusing() -> None:
 	                      "u8 body[n]; }")
 	resolved = resolve(schema, solve(schema))
 
-	assert "*, n: int" in backend.generate(schema, resolved, "unit").module
+	# `arg_n`, not `n`: prefixed since 26.706, because `at`'s own
+	# parameter list already holds `cls`, `msg`, `offset` and `length`.
+	assert "*, arg_n: int" in backend.generate(
+		schema, resolved, "unit").module
 
 
 def test_the_dissector_takes_a_stream_argument_rather_than_refusing() -> None:
@@ -3813,3 +3819,68 @@ def test_one_delimiter_or_none_is_kept(body: str) -> None:
 	case the several-delimiter form exists for, and no codec frames it."""
 	schema = parse_text(DELIMITED_REGION + body, path="s.situ")
 	resolve(schema, solve(schema))
+
+
+def test_a_member_may_not_take_an_arguments_generated_name() -> None:
+	"""`u8 arg_n;` beside `parameter u8 n;` is one generated name (26.706).
+
+	A hazard the prefix CREATED, which is why it is refused rather than
+	left to each backend. Before every backend spelled the argument
+	`arg_<name>`, this schema compiled everywhere: three backends put the
+	value on the view under the schema's own `n`, and C's accessors are
+	prefixed free functions in a namespace of their own.
+
+	Afterwards there were three answers to one schema, measured: C++ would
+	not compile -- *`arg_n` conflicts with a previous declaration* --
+	Python's emitted module was refused by 0062's parse of it, C was
+	unaffected, and **Rust compiled it**, a field and a method of one name
+	being legal there. Refused at the schema line, where the author is.
+	"""
+	report = rendered(PARAM + "struct S { parameter u8 blk [stream];\n"
+	                          "\tu8 arg_blk;\n"
+	                          "\tu8 payload[blk];\n"
+	                          "\tu16 tail; }")
+
+	assert "`arg_blk` is the generated name of `parameter blk`" in report
+	assert "rename this member" in report
+	assert "Rust compiles it as a field and a method of one name" in report
+
+
+def test_the_argument_name_refusal_reaches_a_variant_arm() -> None:
+	"""`struct.members` has a hole in it where arms are (26.432).
+
+	The same loop that missed `case 1: parameter u8 n;` would miss this,
+	and the generated name is no less taken for being inside an arm.
+	"""
+	report = rendered(PARAM + "struct S { parameter u8 blk [stream];\n"
+	                          "\tu8 kind;\n"
+	                          "\tvariant held switch (kind) {\n"
+	                          "\t\tcase 1:  u8 arg_blk;\n"
+	                          "\t\tdefault: error;\n"
+	                          "\t}\n"
+	                          "\tu8 payload[blk]; }")
+
+	assert "`arg_blk` is the generated name of `parameter blk`" in report
+
+
+def test_only_the_arguments_own_name_is_taken() -> None:
+	"""The control, and it has two halves.
+
+	`arg_blk` is an ordinary member name in a struct with no `blk`
+	argument, and a struct that takes one may still have members whose
+	names merely begin with the prefix. A refusal keyed on the prefix
+	alone would take both, and the prefix is not reserved -- only the
+	spelling of an argument this struct actually declares.
+	"""
+	def fields(source: str) -> list[str]:
+		parsed = parse_text(PARAM + source, path="s.situ")
+		return [one.name for one in parsed.structs()[0].members
+		        if isinstance(one, ast.Field)]
+
+	assert fields("struct S { u8 arg_blk; u16 tail; }") \
+		== ["arg_blk", "tail"]
+	assert fields("struct S { parameter u8 blk [stream];\n"
+	              "\tu8 arg_other;\n"
+	              "\tu8 payload[blk];\n"
+	              "\tu16 tail; }") \
+		== ["blk", "arg_other", "payload", "tail"]

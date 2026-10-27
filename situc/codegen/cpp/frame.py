@@ -9,7 +9,7 @@ is the only part that is merely spelling.
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen import arguments
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.c.names import c_name
@@ -25,13 +25,15 @@ __all__ = ["generate"]
 def _member(placement: Placement) -> str:
 	"""Where the reader keeps an argument.
 
-	The constructor's parameter is the backend's own `_argument_local`
-	spelling, asked of the emitter; this is the member it is stored in, and
-	it needs a name of its own because every member of this reader already
-	ends in an underscore -- `parameter u8 cap` would otherwise be `cap_`
-	twice, once as the reader's capacity and once as the argument.
+	The view class's shape, deliberately: the member is the argument's own
+	name and the constructor's parameter is `_argument_local`, which is
+	that name plus one underscore. It had the two the other way round --
+	member `arg_cap_`, parameter `cap_` -- which worked only while the
+	argument went unprefixed. Once `_argument_local` became `arg_cap_`
+	the member would have been initialised from itself, so the pair is
+	now spelled the way `class s` already spells it.
 	"""
-	return f"arg_{c_name(placement.name)}_"
+	return traverse.argument_spelling(placement.name, c_name)
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -78,10 +80,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		# (26.394): one value for the whole run, because that is what a
 		# per-stream fact is.
 		#
-		# `<name>_` for the constructor's parameter is the backend's own
-		# spelling for a function-local (26.396); the member takes `arg_` as
-		# well, because every member here already ends in an underscore and
-		# `parameter u8 cap` would otherwise be `cap_` twice.
+		# `arg_<name>_` for the constructor's parameter is the backend's
+		# own spelling for a function-local (26.396), and the member is
+		# `arg_<name>` -- `class s`'s shape, which `_member` explains. The
+		# pair used to be the other way round, member `arg_cap_` against
+		# parameter `cap_`, and 26.706 made those one word.
 		taken  = emitter._argument_signature(struct)
 		init   = "".join(
 			f", {_member(one)}({emitter._argument_local(struct, one)})"

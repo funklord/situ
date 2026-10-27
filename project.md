@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.706 One spelling for a parameter's argument
+
+Moved to
+`doc/decision/26.706-one-spelling-for-a-parameters-argument.md`.
+
 ### 26.705 Two name collisions whose fix is a decision
 
 Moved to

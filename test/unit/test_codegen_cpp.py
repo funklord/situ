@@ -3872,17 +3872,23 @@ def test_a_parameter_is_a_data_member() -> None:
 	something true of both.
 	"""
 	held = emit(PARAMETER)
-	assert "\tstd::uint8_t n = 0;" in held
+	assert "\tstd::uint8_t arg_n = 0;" in held
 
 	field = emit(DRIVEN_BY_A_FIELD)
+	assert "std::uint8_t arg_n" not in field
 	assert "\tstd::uint8_t n = 0;" not in field
 	assert "std::uint8_t n() const noexcept" in field
 
 
 def test_a_parameter_gets_no_accessor() -> None:
-	"""A getter would be a second name for one field, and a getter that read
-	the buffer would read `body`'s first byte -- so there is none, and no
-	setter either: there is nothing on the wire to set."""
+	"""A getter would read `body`'s first byte, a parameter sitting at the
+	offset of the member after it -- so there is none, and no setter either:
+	there is nothing on the wire to set.
+
+	It used to be refused for a second reason as well, the getter and the
+	data member being one name. 26.706 spelled the member `arg_n` and that
+	one is gone; this one is not, which is the half that was load-bearing.
+	"""
 	held = emit(PARAMETER)
 
 	assert "std::uint8_t n() const noexcept" not in held
@@ -3892,17 +3898,26 @@ def test_a_parameter_gets_no_accessor() -> None:
 def test_the_factory_takes_the_arguments() -> None:
 	"""`at` is where a view is built, so it is where the arguments arrive.
 
-	The local carries a trailing underscore for the reason `check`'s `which_`
-	does: the factory's own names are `owner`, `offset`, `length` and `out`,
-	and a schema may declare `parameter u8 length`. The data member keeps the
-	schema's spelling, because that is the name a caller reads.
+	The data member carries the `arg_` prefix all four backends now use
+	(26.706), so the pair is `arg_n` and `arg_n_` -- it used to keep the
+	schema's bare spelling, on the reasoning that that is the name a caller
+	reads, and the holder settled it the other way so that one name serves
+	four backends.
+
+	The local's trailing underscore separates it from that member, which is
+	all it does now. It was there for `check`'s `which_` hazard -- the
+	factory's own names being `owner`, `offset`, `length` and `out`, and a
+	schema being free to declare `parameter u8 length` -- and the prefix
+	closes that one; see `test_an_argument_does_not_collide_with_the_factory`
+	below, which measures it.
 	"""
 	held = emit(PARAMETER)
 
-	assert "std::uint32_t length, std::uint8_t n_, frame &out) noexcept" in held
-	assert "out = ::situ::frame(raw, n_);" in held
+	assert ("std::uint32_t length, std::uint8_t arg_n_, frame &out) noexcept"
+	        in held)
+	assert "out = ::situ::frame(raw, arg_n_);" in held
 	# And the constructor it calls, which is what stores it.
-	assert ": ::situ::rt::view(raw), n(n_) {}" in held
+	assert ": ::situ::rt::view(raw), arg_n(arg_n_) {}" in held
 
 	# The control: no parameter, no argument -- the signature the rest of
 	# this file asserts on is unchanged for every other schema.
@@ -3927,7 +3942,7 @@ def test_a_plain_sized_by_reads_the_member() -> None:
 	# caller-supplied rather than read, and it is bounded all the same:
 	# this one is a `std::uint32_t` and Python's is an `int`, so a caller
 	# passing 2^40 would have the two disagree.
-	assert "::situ::rt::nonneg(::situ::rt::leaf_u(n))" in body
+	assert "::situ::rt::nonneg(::situ::rt::leaf_u(arg_n))" in body
 	assert "situ_base(raw_) + 0)" not in body, "the length is read off the wire"
 
 	# The control: with `n` a real field the SAME accessor must read the
@@ -3951,7 +3966,7 @@ def test_an_arithmetic_size_reads_the_member() -> None:
 	body = held[held.index("bytes body()"):]
 	body = body[:body.index("\t}")]
 
-	assert "::situ::rt::leaf_u(n) + 1" in body
+	assert "::situ::rt::leaf_u(arg_n) + 1" in body
 	assert "situ_base(raw_) + 0)" not in body, "the length is read off the wire"
 
 	# The control: with `n` a real field the same expression must read the
@@ -3961,8 +3976,8 @@ def test_an_arithmetic_size_reads_the_member() -> None:
 	# `this->n()` and not `n()`: a member read is qualified so that an
 	# emitter local of the same name cannot capture it -- `framed()`
 	# declares `at`, `n` and `have` (26.501). The contrast this control
-	# draws is sharper for it rather than weaker, the parameter above
-	# being a data member and staying bare.
+	# draws is sharper for it rather than weaker: the parameter above is a
+	# data member read as `arg_n`, prefixed rather than qualified.
 	field = emit(DRIVEN_BY_A_FIELD.replace("body[n]", "body[n + 1]"))
 	span  = field[field.index("bytes body()"):]
 	span  = span[:span.index("\t}")]
@@ -3979,8 +3994,9 @@ def test_the_framing_helper_carries_the_arguments() -> None:
 	"""
 	held = emit(PARAMETER)
 
-	assert "std::uint32_t have, std::uint8_t n_, std::uint32_t &need)" in held
-	assert "nullptr }, n_ }.framed(need);" in held
+	assert ("std::uint32_t have, std::uint8_t arg_n_, std::uint32_t &need)"
+	        in held)
+	assert "nullptr }, arg_n_ }.framed(need);" in held
 
 	field = emit(DRIVEN_BY_A_FIELD)
 	assert "std::uint32_t have, std::uint32_t &need)" in field
@@ -3991,14 +4007,27 @@ def test_the_framing_helper_carries_the_arguments() -> None:
                                    "data", "have", "need"])
 def test_an_argument_does_not_collide_with_the_factory(
 		tmp_path: Path, taken: str) -> None:
-	"""Which is what the trailing underscore on the local buys.
+	"""Seven names a schema may use for a parameter, all of which build.
 
 	`at` and `required` have seven locals of their own between them, and a
 	schema is free to name a parameter any of the seven -- `length` and
-	`offset` are ordinary things to be told about a stream. Without the
-	underscore the factory declares the same name twice and the header does
-	not compile at all, which is the same hazard `check`'s `which_` was
-	given that spelling for.
+	`offset` are ordinary things to be told about a stream.
+
+	**What this used to assert, it no longer can.** The trailing underscore
+	on the local was the defence: without it the factory declared one name
+	twice and the header did not compile, the same hazard `check`'s `which_`
+	was given that spelling for. Since 26.706 the argument is `arg_<name>`
+	and none of the seven is reachable -- measured by generating each of the
+	seven, rewriting `arg_<name>_` to `arg_<name>` in the header, and
+	compiling: **all seven compile**, at the view layer and at `frame`. So
+	the underscore is a convention against a confusing shadow now, not a
+	defence, and this test has no discriminating power over it.
+
+	Kept because the seven names are still worth building -- they are the
+	population 26.705 swept and four of them broke another backend -- and
+	renamed in the docstring rather than deleted, because a test whose
+	stated mechanism is gone and whose summary line still claims it is worse
+	than either keeping or dropping it.
 	"""
 	result = compiles(tmp_path, f"""struct frame {{
 	parameter u8 {taken} [stream];

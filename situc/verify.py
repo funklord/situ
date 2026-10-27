@@ -208,7 +208,22 @@ def _outcome(schema: ast.Schema, module: object, resolved: ResolvedSchema,
 				f"{struct.name} takes {', '.join(f'`{one}`' for one in absent)}"
 				f", which no `--arg` supplied",
 				unwalked=unwalked)
-		gave = {one: arguments[one] for one in wants}
+		# Keyed by the GENERATED spelling, which is NOT the schema's.
+		# Every backend prefixes an argument `arg_<name>` (26.706) because
+		# `at` already takes `cls`, `msg`, `offset` and `length`, and a
+		# keyword named for one of those is a `SyntaxError`. `--arg` keeps
+		# the schema's name, that being what the author wrote and what the
+		# refusal above quotes back, so the two spellings are deliberately
+		# different and this is the one place they have to meet.
+		#
+		# Missed when the prefix landed, and the suite caught it where no
+		# sweep had: this command needs a vectors file, so a loop over the
+		# subcommands against a bare schema never reaches it. What it said
+		# was `TypeError: frame.at() got an unexpected keyword argument
+		# 'n'` -- reported as a fault in situc rather than a verdict on the
+		# bytes, which is the one thing that went right.
+		gave = {traverse.argument_spelling(one, py_name): arguments[one]
+		        for one in wants}
 
 		view  = (held.at(message(bytearray(case.data)), 0, **gave)   # type: ignore[attr-defined]
 		         if fixed else

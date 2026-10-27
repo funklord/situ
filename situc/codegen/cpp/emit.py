@@ -1071,13 +1071,19 @@ class Emitter:
 		the caller's block size -- a view built on the wrong one reads the
 		wrong bytes confidently.
 
-		The trailing underscore marks a name belonging to the generated
-		function rather than to the schema, which is what `check`'s `which_`
-		already does and for the same hazard: these functions' own locals are
-		`owner`, `offset`, `length`, `out`, `data`, `have` and `need`, and a
-		schema is free to declare `parameter u8 length`. The DATA MEMBER
-		below keeps the schema's spelling, because that is the name a caller
-		reads.
+		The trailing underscore separates the function's local from the
+		DATA MEMBER, which is `arg_<name>` -- `_argument_member` below, and
+		the shape `: ::situ::rt::view(raw), arg_n(arg_n_)` needs two names.
+
+		**It used to be there for a different hazard and that one is
+		closed.** These functions' own locals are `owner`, `offset`,
+		`length`, `out`, `data`, `have` and `need`, and a schema may
+		declare `parameter u8 length`; the underscore kept the two apart.
+		Since 26.706 the prefix does that, and measured over all seven
+		names the header compiles with the underscore removed. So the
+		underscore is now a convention against a confusing shadow rather
+		than a defence, and `test_an_argument_does_not_collide_with_the_
+		factory` says so.
 		"""
 		return "".join(
 			f", {self._ctype(one.scalar)} {self._argument_local(struct, one)}"
@@ -1099,8 +1105,19 @@ class Emitter:
 		return self._argument_member(struct, held) + "_"
 
 	def _argument_member(self, struct: ResolvedStruct, held: Placement) -> str:
-		"""The data member's spelling, which is the schema's own name."""
-		return bare_name(local_name(struct, held))
+		"""The data member's spelling: the schema's own name, prefixed.
+
+		Prefixed as C's argument is, and for C's reason rather than one of
+		C++'s own -- `traverse.argument_spelling` carries which names break
+		which backend. C++ is the one that did not need it: `required`
+		takes `data` and `have`, and a parameter of either name reaches the
+		body as `data_`, so nothing shadowed. It is prefixed anyway so that
+		a caller holding one value for four backends learns one spelling of
+		it, which is the reason `argument_name` was moved to `traverse` in
+		the first place.
+		"""
+		return traverse.argument_spelling(
+			local_name(struct, held), bare_name)
 
 	def _acquire(self, struct: ResolvedStruct) -> list[str]:
 		"""The factory. Fixed-size structs know their own extent; the rest are
@@ -6128,12 +6145,15 @@ class Emitter:
 		"""A `parameter`: the argument the caller gave `at`, held on the view
 		(0050).
 
-		A data member and no accessor. The member IS the value, so a getter
-		would be a second name for one field -- and a getter that read the
-		buffer would read the member AFTER this one, since a parameter
-		occupies no bytes and so shares its offset. That read compiles and
-		measures the wrong byte, which is what this backend's whole-schema
-		refusal used to stand in front of.
+		A data member and no accessor, because a getter that read the
+		buffer would read the member AFTER this one, a parameter occupying
+		no bytes and so sharing its offset. That read compiles and measures
+		the wrong byte, which is what this backend's whole-schema refusal
+		used to stand in front of.
+
+		It was also a second name for one field until 26.706 spelled the
+		member `arg_<name>`, which retired that half of the reason. The
+		wrong byte is the half that was load-bearing.
 
 		Public, because there is nothing else to read it out of, and not
 		`const`: `at` assigns a freshly built view over its `out` parameter,

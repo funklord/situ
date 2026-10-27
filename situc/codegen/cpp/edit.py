@@ -8,7 +8,7 @@ returns.
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen import arguments
 from situc.codegen.c.edit import editable
 from situc.codegen.c.names import c_name
@@ -100,6 +100,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		fields = []
 		for placement in members:
 			local = c_name(local_name(struct, placement))
+			if placement.parameter:
+				# The argument's spelling, not the member's (0050): the value
+				# reaches the copy from the caller, and the four backends'
+				# owned copies agree on the name because the prefix is shared.
+				local = traverse.argument_spelling(
+					local_name(struct, placement), c_name)
 			if placement in runs:
 				fields.append(f"\t::situ::rt::const_bytes {local};"
 				              f"\t/* into your backing */")
@@ -164,6 +170,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		]
 		for placement in members:
 			local = c_name(local_name(struct, placement))
+			if placement.parameter:
+				# The argument's spelling on both sides (0050): the field above
+				# carries it and `view.<name>` is where `new` put it.
+				local = traverse.argument_spelling(
+					local_name(struct, placement), c_name)
 			if placement in runs:
 				lines += [
 					f"\t\t{{",

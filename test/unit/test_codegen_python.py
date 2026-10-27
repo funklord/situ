@@ -2575,11 +2575,14 @@ def test_at_takes_the_argument_and_the_view_carries_it() -> None:
 	module = emit(TAKES)
 
 	assert ("def at(cls, msg: Message, offset: int, length: int, *, "
-	        "n: int) -> \"frame\":") in module
-	assert "view.n = n" in module
-	# And no accessor: `self.n` IS the argument, so a property over it
+	        "arg_n: int) -> \"frame\":") in module
+	assert "view.arg_n = arg_n" in module
+	# And no accessor: `self.arg_n` IS the argument, so a property over it
 	# would read the buffer at its offset -- which is where `body` begins.
+	# Prefixed since 26.706, because a keyword argument named `msg`,
+	# `offset` or `cls` is a SyntaxError in `at`'s own parameter list.
 	assert "def n(self)" not in module
+	assert "def arg_n(self)" not in module
 
 
 def test_the_layout_follows_the_argument(tmp_path: Path) -> None:
@@ -2598,7 +2601,7 @@ def test_the_layout_follows_the_argument(tmp_path: Path) -> None:
 	raw    = bytes([0x11, 0x22, 0x33, 0x44, 0x55])
 
 	for n, body, tail in ((0, "", 0x11), (2, "1122", 0x33), (4, "11223344", 0x55)):
-		view = module.frame.at(module.Message(raw), 0, len(raw), n=n)
+		view = module.frame.at(module.Message(raw), 0, len(raw), arg_n=n)
 		assert bytes(view.body).hex() == body, n
 		assert view.tail == tail, n
 
@@ -2677,7 +2680,7 @@ def test_the_argument_is_declared_on_the_class_and_reaches_required(
 	`at` did `view.<name> = <name>` and the class declared the attribute
 	nowhere, so `mypy --strict` -- which this suite runs over every
 	generated module -- said *"negotiated" has no attribute "block"*. The
-	other backends always said it in their own way: Rust a `pub n: u8`
+	other backends always said it in their own way: Rust a `pub arg_n: u8`
 	field, C++ a data member. Python's way is an annotation, and it is the
 	same statement: the argument is part of what a view IS.
 
@@ -2694,13 +2697,13 @@ def test_the_argument_is_declared_on_the_class_and_reaches_required(
 	module = emit(TAKES)
 
 	# Declared, not merely assigned.
-	assert "\tn: int" in module
+	assert "\targ_n: int" in module
 	# `required` takes it, in `at`'s keyword-only shape.
 	assert "def required(cls, data: bytes | bytearray | memoryview, *," \
-		" n: int) -> int:" in module
+		" arg_n: int) -> int:" in module
 	# ...and puts it on the probe, which is built directly rather than
 	# through `at` and so gets none of `at`'s work for free.
-	assert "\t\tprobe.n = n" in module
+	assert "\t\tprobe.arg_n = arg_n" in module
 
 	# The control: a struct with no parameter grows none of it, so a
 	# declaration emitted unconditionally fails here.
@@ -3288,3 +3291,56 @@ FRAME_REQUIRED_APART = frozenset({
 	("padded.situ", "byte_run"),
 	("padded.situ", "pickle_string"),
 })
+
+
+#: The four names that broke this backend when a schema used one for a
+#: `parameter`, from the sweep in 26.706. All four are `at`'s own parameter
+#: list -- `at(cls, msg, offset, length, *, <name>)` -- and `data` is
+#: `required`'s buffer besides.
+COLLIDING_ARGUMENT = ("cls", "msg", "offset", "data")
+
+
+@pytest.mark.parametrize("name", COLLIDING_ARGUMENT)
+def test_a_parameter_named_for_ats_own_arguments_imports(
+		tmp_path: Path, name: str) -> None:
+	"""A duplicate parameter is a `SyntaxError`, so the module is unusable.
+
+	Not a failure at a call the way most of this backend's faults are: the
+	module does not import at all, which is the one failure Python cannot
+	defer. `def at(cls, msg, offset, length, *, offset)` is where three of
+	the four landed, and a schema author has no way to know the list.
+
+	The argument is prefixed now, which is what C always did. `length` is
+	absent from the four because the front end refuses it as a member name
+	for its own reason, which is a different outcome from a broken module.
+	"""
+	module = load(tmp_path, f"""struct s {{
+	parameter u8 {name} [stream];
+	u8        payload[{name}];
+	u16       checksum;
+}}
+""")
+
+	assert hasattr(module.s, "at")
+	assert hasattr(module.s, "required")
+
+
+def test_the_argument_reaches_the_run_it_sizes(tmp_path: Path) -> None:
+	"""The half importing cannot show, over a name that never collided.
+
+	A rename that moved the keyword argument and left `self.<name>` behind
+	would import and then read an attribute nothing had set, so this passes
+	a block size in and reads the run back. 3 bytes of payload from a 6-byte
+	frame, under the prefixed keyword.
+	"""
+	module  = load(tmp_path, """struct s {
+	parameter u8 block [stream];
+	u8        payload[block];
+	u16       checksum;
+}
+""")
+	message = runtime().Message(bytearray(b"\x01\x02\x03\x04\x05\x06"))
+	view    = module.s.at(message, 0, 6, arg_block=3)
+
+	assert bytes(view.payload) == b"\x01\x02\x03"
+	assert view.arg_block == 3

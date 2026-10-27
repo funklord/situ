@@ -33,7 +33,7 @@ from situc.codegen.c.names import ident, macro
 from situc.codegen.c.owned import owned_structs
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import is_own_member, local_name
+from situc.traverse import argument_name, is_own_member, local_name
 from situc import __version__
 
 __all__ = ["editable", "generate", "refusals"]
@@ -126,6 +126,13 @@ def _fields(struct: ResolvedStruct, runs: list[Placement],
 		if not is_own_member(struct, placement):
 			continue
 		local = local_name(struct, placement)
+		if placement.parameter:
+			# THE ARGUMENT'S SPELLING, NOT THE MEMBER'S (0050). The value
+			# reaches the owned copy from the caller, so the field holding
+			# it carries the name the caller already passes it under -- and
+			# the four backends' owned copies then agree, which is why the
+			# prefix is `traverse`'s rather than each backend's.
+			local = argument_name(placement)
 		if placement in runs:
 			lines += [
 				f"\tconst uint8_t *{local};\t/* into your backing */",
@@ -233,6 +240,8 @@ def _one(struct: ResolvedStruct, prefix: str, emitter: Emitter) -> list[str]:
 		if not is_own_member(struct, placement):
 			continue
 		local = local_name(struct, placement)
+		if placement.parameter:
+			local = argument_name(placement)
 		if placement in runs:
 			reach  = emitter._member_args(struct, placement)
 			length = f"{ident(prefix, struct.name, local, 'len')}(view{reach})"

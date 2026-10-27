@@ -12,7 +12,7 @@ this language does not need -- the same reasoning 26.30 records for why
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen import arguments
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.python.emit import py_name
@@ -24,16 +24,20 @@ __all__ = ["generate"]
 
 
 def _name(placement: Placement) -> str:
-	"""What the caller calls an argument here: the schema's own spelling,
-	which is what `at` takes it under (26.393)."""
-	return py_name(placement.name)
+	"""What the caller calls an argument here, which must be what `at` and
+	`required` take it under (26.393) -- so it is their spelling, prefixed,
+	and `traverse.argument_spelling` says why."""
+	return traverse.argument_spelling(placement.name, py_name)
 
 
 def _held(placement: Placement) -> str:
-	"""Where the reader keeps it. `_arg_`-prefixed rather than `_`-prefixed
-	because this reader's own slots are `_buf` and `_ready`, and `parameter
-	u8 buf` is a name a schema may use."""
-	return f"_arg_{py_name(placement.name)}"
+	"""Where the reader keeps it: the argument's name with the leading
+	underscore this reader gives its own slots, so `_buf` and `_ready` sit
+	beside `_arg_n` and nothing a schema can name reaches any of them.
+
+	Derived from `_name` rather than spelled again, because the two were
+	two spellings of one fact and the prefix moved under them."""
+	return f"_{_name(placement)}"
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
