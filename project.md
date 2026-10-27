@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.701 The C offset cache took no argument tail
+
+Moved to
+`doc/decision/26.701-the-c-offset-cache-took-no-argument-tail.md`.
+
 ### 26.700 One accessor, two spellings
 
 Moved to `doc/decision/26.700-one-accessor-two-spellings.md`.

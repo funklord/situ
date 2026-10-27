@@ -7295,10 +7295,23 @@ class Emitter:
 			*fields,
 			f"}} {kind};",
 			"",
-			f"static inline void {build}(situ_view_t view, {kind} *out)",
+			# THE ARGUMENT TAIL, which this function did not take while
+			# its steps rendered reads of one. `_argument_tail`'s own
+			# docstring enumerates the functions still spelling
+			# `situ_view_t view` alone and says neither has a schema in
+			# this tree; the offset cache was missing from that list, and
+			# it is the one that does -- `edges.situ`'s `negotiated`,
+			# under `--materialize`, where the body says `arg_block` and
+			# the signature declared nothing (26.701).
+			f"static inline void {build}(situ_view_t view, {kind} *out"
+			f"{self._argument_tail(struct)})",
 			"{",
 			"\tuint32_t at = 0u;",
 			"",
+			*self._argument_unused(struct, self._argument_tail(struct),
+			                       *steps),
+			*(["\t(void)view;"]
+			  if not any("view" in one for one in steps) else []),
 			*steps,
 			"}",
 		]

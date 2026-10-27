@@ -529,9 +529,20 @@ def test_every_refusal_in_check_names_the_member_that_refused(
 				+ "\n".join(lines[max(0, at - 4):at + 1]))
 
 
+@pytest.mark.parametrize("materialize", [False, True],
+                         ids=["plain", "materialized"])
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
-def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None:
-	"""Every schema in the repository, not every example.
+def test_every_schema_generates_and_compiles(path: Path, materialize: bool,
+		tmp_path: Path) -> None:
+	"""Every schema in the repository, not every example, in both modes.
+
+	**Both modes, and this is the third backend to get it.** 26.699
+	parametrised the C++ and Rust sweeps on `--materialize` and left this
+	one reading the plain mode, because the C corpus is compiled through
+	the Makefile and `grep -n materialize Makefile` is empty. In the mode
+	that left unguarded, `edges.situ` -- a committed schema -- did not
+	compile at all: the offset cache took no argument tail while its own
+	steps rendered `arg_block` (26.701).
 
 	This was the examples alone for four phases, and so were the other three
 	backends' versions of it -- which is how `test/schema/edges.situ` came to
@@ -545,7 +556,8 @@ def test_every_schema_generates_and_compiles(path: Path, tmp_path: Path) -> None
 	source    = Source(str(path), path.read_text(encoding="ascii"))
 	schema    = parse(source)
 	resolved  = resolve(schema, solve(schema))
-	generated = generate(schema, resolved, path.stem)
+	generated = generate(schema, resolved, path.stem,
+	                     materialize=materialize)
 
 	for name, text in generated.files().items():
 		(tmp_path / name).write_text(text, encoding="ascii")
