@@ -89,6 +89,31 @@ STRADDLED = ("struct S [allow_straddle] {\n"
              "\tchecksum u8 c[2] covers(body) is ic;\n}\n")
 
 
+@pytest.mark.parametrize("name",
+                         ["view", "preview", "viewport", "overview", "i"],
+                         ids=lambda n: n)
+def test_a_member_whose_name_contains_view_declares_no_unused_local(
+		name: str, tmp_path: Path) -> None:
+	"""`required` declares `situ_view_t view;` only where a step reads one,
+	and it decided that with a bare substring test over the rendered steps.
+
+	Each step carries `/* s.<name>: ... */`, so the test answered about the
+	schema's names as well as the code: a member called `view`, `preview`,
+	`viewport`, `overview` or `reviewer` made it true with nothing reading
+	the local, which is *"variable `view` set but not used"* and an error
+	under this project's flags. Four of the five contain `view` without
+	being it, so a word boundary would not have been enough -- the name is
+	in a COMMENT, and the fix is to strip them.
+
+	The Rust sibling has stripped comments since it was written, because
+	`Dirty` appears in a doc comment there and `unused_imports` is an error
+	under `-D warnings`. `i` is the control (26.702).
+	"""
+	compile_generated(tmp_path,
+	                  f"struct s {{ parameter u8 blk [stream];"
+	                  f" u8 {name}[blk]; u16 tail; }}")
+
+
 def test_a_one_byte_checksum_reads_the_byte_rather_than_a_word(
 		tmp_path: Path) -> None:
 	"""`check` reads the stored sum with `situ_get_be<width * 8>`, and at one

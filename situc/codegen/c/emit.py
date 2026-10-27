@@ -5013,9 +5013,25 @@ class Emitter:
 		# Only where something reads through it. A length that is arithmetic
 		# over nothing -- a varint's, say -- leaves the local set and unused,
 		# which is `-Werror` under `-Wunused-but-set-variable`.
+		# COMMENTS STRIPPED FIRST, because a member's name is in them. Each
+		# step carries `/* s.<name>: ... */`, so a bare substring test over
+		# the whole step list answers about the schema's names as well as
+		# about the code -- and a member called `view`, `preview`,
+		# `viewport`, `overview` or `reviewer` made `uses_view` true with
+		# nothing reading the local: *"variable `view` set but not used"*,
+		# an error under this project's flags. Measured, five of five.
+		#
+		# The Rust sibling has stripped them since it was written and its
+		# comment says why -- `Dirty` appears in a doc comment there, and
+		# `unused_imports` is an error under `-D warnings`. This is that,
+		# arriving in C by the same route (26.702). `uses_cursor` is tested
+		# the same way for the same reason: nothing stops a member being
+		# named for the cursor either.
+		code = [line for line in steps
+		        if not line.lstrip().startswith(("/*", "*", "//"))]
 		uses_cursor = cursor is not None \
-			and any(cursor in line for line in steps)
-		uses_view = any("view" in line for line in steps)
+			and any(cursor in line for line in code)
+		uses_view = any("view" in line for line in code)
 		view_lines = [
 			"\t/* A view over what has arrived, so every length expression"
 			" below",
