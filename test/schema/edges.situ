@@ -1347,6 +1347,13 @@ struct keywords {
 	u8   type;
 	u8   match;
 	u8   lambda;
+	// And one SIZED BY one of them, which is the half the six plain fields
+	// could not reach. `bare_name` renames the accessor a keyword would
+	// otherwise be -- `int()` is not C++ -- and until 26.700 the READ said
+	// `this->int()` while the declaration said `int_()`, so a header with
+	// these names compiled only while nothing measured a member by one.
+	// Six names and no reference is the shape that hid it.
+	u8   body[class + 1];
 }
 
 // A delimited text number carrying a declared range, which is two constructs

@@ -81,6 +81,28 @@ WARNINGS = ["-std=c++17", "-pedantic-errors",
 	"-Wsign-conversion", "-Werror", "-fno-exceptions", "-fno-rtti"]
 
 
+def _view_surface() -> list[str]:
+	"""Every name `::situ::rt::view` declares, read from the header.
+
+	Member functions and the protected data member both: a derived member of
+	either name hides the base's, which is 26.694 and 26.700. Skipped if the
+	class cannot be found rather than silently returning nothing -- an empty
+	parametrize is a test that inspects nothing and says so as loudly as a
+	real pass.
+	"""
+	text = (RUNTIME / "cpp" / "situ.hpp").read_text(encoding="ascii")
+	body = re.search(r"\nclass view \{(.*?)\n\};", text, re.S)
+	assert body is not None, "runtime/cpp/situ.hpp has no `class view`"
+	held = body.group(1)
+	names = set(re.findall(r"\b([a-z_][a-z0-9_]*)\s*\([^)]*\)\s*"
+	                       r"(?:const\s*)?noexcept", held))
+	names |= {m[1] for m in re.findall(
+		r"^\t([A-Za-z_][\w:]*)\s+([a-z_][a-z0-9_]*)\s*;", held, re.M)}
+	names.discard("view")		# the constructor, not a member a field hides
+	assert names, "found no members of `class view` to check"
+	return sorted(names)
+
+
 def emit(body: str, preamble: str = PREAMBLE) -> str:
 	schema   = parse_text(preamble + body)
 	resolved = resolve(schema, solve(schema))
@@ -214,6 +236,29 @@ def test_the_runtime_does_not_squat_on_schema_names() -> None:
 
 	assert "class message : public ::situ::rt::view {" in header
 	assert "class view : public ::situ::rt::view {" in header
+
+
+@pytest.mark.parametrize("name", _view_surface(), ids=lambda n: n)
+def test_a_field_named_for_the_views_surface_compiles(
+		name: str, tmp_path: Path) -> None:
+	"""The population is read from the runtime, not listed here.
+
+	A generated class derives from `::situ::rt::view`, so every name that
+	class declares is a name a member can hide. 26.694 fixed `raw` by
+	qualifying the call sites and 26.700 fixed `raw_` by renaming the
+	accessor; `base`, `limit` and the constructor were measured clean and
+	stay so by this test rather than by anybody remembering.
+
+	Derived rather than written down for the reason `RUNTIME_SYMBOLS` gives
+	about itself -- a list nobody checks is a list that has drifted -- and
+	the member is REFERENCED in a size expression, because the plain shape
+	cannot reach the read path at all. That is what hid 26.700: six keyword
+	fields have sat in `edges.situ` since it was written with nothing
+	measuring a member by one.
+	"""
+	assert compiles(tmp_path, f"struct s {{ u8 {name} [max = 4];"
+	                          f" u8 b[{name} + 1]; u16 tail; }}"
+	                 ).returncode == 0
 
 
 def test_a_member_named_raw_does_not_hide_the_view_it_is_read_through(

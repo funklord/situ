@@ -145,6 +145,30 @@ def c_name(path: str) -> str:
 	               for character in flattened)
 
 
+#: Members of `::situ::rt::view` that a *bare* generated name may not be.
+#:
+#: A generated C++ class derives from that view, so a member named for one of
+#: its members HIDES it rather than overloading it -- 26.694's rule, and the
+#: third time a schema name has hidden something generated code needs. It is
+#: one name today and the set is the point rather than the count: the base
+#: declares `base`, `limit`, `raw`, `view` and `raw_`, and only the last
+#: collides, because the emitter reads the DATA MEMBER bare in about ninety
+#: places (`situ_base(raw_)`, `raw_.limit`) while it reaches the three
+#: accessors through a free function or a base-qualified call. Measured, all
+#: four constructs each: `raw_` broken, the other four clean (26.700).
+#:
+#: Suffixed rather than refused, which is this function's own argument and
+#: decision 0025's -- the schema keeps its name and the emitter moves.
+#: `raw_` becomes `raw__`, and `raw` is deliberately NOT here: suffixing it
+#: would land on `raw_` and create the collision this removes.
+#:
+#: `test_a_field_named_for_the_view_s_surface_compiles` derives the
+#: population from `runtime/cpp/situ.hpp` and compiles a schema per name,
+#: which is the half a literal needs -- a list nobody checks is a list that
+#: has drifted, which is what `RUNTIME_SYMBOLS` above says about itself.
+CPP_BASE_MEMBERS = frozenset({"raw_"})
+
+
 def bare_name(path: str) -> str:
 	"""`c_name`, for a name that is emitted on its own.
 
@@ -172,7 +196,8 @@ def bare_name(path: str) -> str:
 	the day it was written.
 	"""
 	name = c_name(path)
-	return f"{name}_" if name in KEYWORDS else name
+	return (f"{name}_" if name in KEYWORDS or name in CPP_BASE_MEMBERS
+	        else name)
 
 
 @dataclass(frozen=True)

@@ -217,13 +217,14 @@ struct inner_right size=3
   @0x0001   2         u8         sig
   sig covers: right_body y
 
-struct keywords size=10
+struct keywords size=11..266
   @0x0000   4         u32        int  big
   @0x0004   2         u16        short  big
   @0x0006   1         u8         class
   @0x0007   1         u8         type
   @0x0008   1         u8         match
   @0x0009   1         u8         lambda
+  @0x000a   1..256    u8         body  sized-by=class+1
 
 struct kinded size=2..3
   @0x0000   1         u8         kind  peek

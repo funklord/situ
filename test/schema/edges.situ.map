@@ -210,13 +210,14 @@ struct inner_right size=3 mutate=Immutable atomic=NonAtomic auth=Covered(sig)
   inner_right.y                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord auth=Covered(sig)
   inner_right.sig                        offset=AbsoluteStatic(0x01) size=Fixed(2) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Immutable
 
-struct keywords size=10 repr=ValueConverted
+struct keywords size=11..266 mutate=Shifting repr=ValueConverted
   keywords.int                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   keywords.short                         offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
   keywords.class                         offset=AbsoluteStatic(0x06) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
   keywords.type                          offset=AbsoluteStatic(0x07) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   keywords.match                         offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   keywords.lambda                        offset=AbsoluteStatic(0x09) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  keywords.body                          offset=AbsoluteStatic(0x0A) size=Bounded(1, 256) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
 
 struct kinded size=2..3 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   kinded.kind                            offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

@@ -2371,7 +2371,14 @@ class Emitter:
 			if held is not None and held.type_name in self.enums \
 					and held.scalar is not None:
 				return f"({self._load(held.scalar, held, None, on='element')})"
-			return f"element.{c_name(name)}()"
+			# `bare_name`, matching the DECLARATION. `cpp/names.py` names
+			# every accessor with it so a member called `int` becomes
+			# `int_()`, and these four call sites said `c_name` -- so the
+			# class declared `int_()` and the read asked for `int()`,
+			# *"expected primary-expression before `(`"*. Latent only
+			# because `edges.situ`'s `struct keywords` holds `int`, `class`
+			# and four more with nothing sizing a member by them (26.700).
+			return f"element.{bare_name(name)}()"
 
 		return over_fields([*names, "remaining"],
 		                   placement.repeat_while or "", read)
@@ -3293,7 +3300,7 @@ class Emitter:
 			# where it sits parses eight ASCII characters as a binary
 			# integer, which is a plausible number nobody wrote.
 				if held.radix is not None:
-					return leaf(f"{c_name(name)}_value()",
+					return leaf(f"{bare_name(name)}_value()",
 					            held.scalar is not None and held.scalar.signed)
 				assert held.scalar is not None
 				return leaf(f"({self._load(held.scalar, held, None)})",
@@ -3316,7 +3323,7 @@ class Emitter:
 			# and a text number's getter reports one too, which only the
 			# nested branch above knew about.
 			if held.varint is not None or held.radix is not None:
-				return leaf(f"{c_name(name)}_value()",
+				return leaf(f"{bare_name(name)}_value()",
 				            held.scalar is not None and held.scalar.signed)
 			# `this->` because this is a member of the class being emitted
 			# and `framed()` declares locals named `at`, `n` and `have`: a
@@ -3324,7 +3331,7 @@ class Emitter:
 			# and the header stops compiling. The `_value()` leaves above
 			# need no qualifier, no emitter local ending in `_value`
 			# existing to capture one (26.499, 26.501).
-			return leaf(f"this->{c_name(name)}()",
+			return leaf(f"this->{bare_name(name)}()",
 			            held.scalar is not None and held.scalar.signed)
 
 		return expand_calls(over_fields([*by_name, *consts, *(extra or {})],
