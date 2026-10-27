@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.694 A member named for the view it is read through
+
+Moved to
+`doc/decision/26.694-a-member-named-for-the-view-it-is-read-through.md`.
+
 ### 26.693 `required` answered from bytes past the frame it named
 
 Moved to

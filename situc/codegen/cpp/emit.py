@@ -2185,7 +2185,7 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"\t\tsitu_view_t raw;",
-			"\t\tconst auto e = situ_view_sub(this->raw(), idx.start[index],",
+			"\t\tconst auto e = situ_view_sub(::situ::rt::view::raw(), idx.start[index],",
 			"\t\t\tidx.start[index + 1u] - idx.start[index], &raw);",
 			"\t\tif (e != SITU_OK) {",
 			"\t\t\treturn static_cast<::situ::rt::err>(e);",
@@ -2229,7 +2229,7 @@ class Emitter:
 			"",
 			f"\t\twhile (at < raw_.limit{cap}) {{",
 			"\t\t\tsitu_view_t raw;",
-			"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)"
+			"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)"
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
@@ -2269,7 +2269,7 @@ class Emitter:
 			*walk,
 			"\t\t\tif (n == index) {",
 			"\t\t\t\tsitu_view_t found;",
-			"\t\t\t\tconst situ_err_t e = situ_view_sub(this->raw(), at,"
+			"\t\t\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), at,"
 			" size, &found);",
 			"",
 			"\t\t\t\tif (e == SITU_OK) {",
@@ -2424,7 +2424,7 @@ class Emitter:
 			"\t\t\t}",
 			"",
 			"\t\t\tsitu_view_t raw;",
-			"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)"
+			"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)"
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
@@ -2463,7 +2463,7 @@ class Emitter:
 			*walk,
 			"\t\t\tif (n == index) {",
 			"\t\t\t\tsitu_view_t found;",
-			"\t\t\t\tconst situ_err_t e = situ_view_sub(this->raw(), at, size,"
+			"\t\t\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), at, size,"
 			" &found);",
 			"",
 			"\t\t\t\tif (e == SITU_OK) {",
@@ -2950,7 +2950,7 @@ class Emitter:
 				"\t\t\tsitu_view_t raw;",
 				"",
 				*read,
-				"\t\t\tif (situ_view_sub(this->raw(), pos, part, &raw)"
+				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), pos, part, &raw)"
 				" != SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -3399,7 +3399,7 @@ class Emitter:
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return None
-		return f"situ_in_bounds(raw(), {start}, {bytes_}u)"
+		return f"situ_in_bounds(::situ::rt::view::raw(), {start}, {bytes_}u)"
 
 	def _run_fits_call(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
@@ -4147,7 +4147,7 @@ class Emitter:
 				"\t\twhile (at < raw_.limit) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
+				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -4200,6 +4200,12 @@ class Emitter:
 				"\t * O(n^2), and there is no cursor here to replace it with",
 				"\t * -- hold `at` yourself, take each element with",
 				"\t * `situ_view_sub(raw(), at, situ_remaining_u32(raw().limit, at), &raw)` and",
+				# Unqualified ON PURPOSE, unlike the call sites: the code
+				# names the base to dodge a member that hides it, and a
+				# qualified name backticked in a doc comment is an explicit
+				# link request Doxygen cannot resolve -- which is the note
+				# below, met again by a pass that qualified 35 spellings
+				# and read one of them as a call site (26.694).
 				# The element class is deliberately NOT named here.
 				# `{inner}(raw).extent()` backticked is an explicit link
 				# request Doxygen cannot resolve, and the bare `::situ::name`
@@ -4223,7 +4229,7 @@ class Emitter:
 				"\t\twhile (at < raw_.limit) {",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
+				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -4239,7 +4245,7 @@ class Emitter:
 				"\t\t\tif (n == index) {",
 				"\t\t\t\tsitu_view_t narrowed;",
 				"\t\t\t\tconst situ_err_t e =",
-				"\t\t\t\t\tsitu_view_sub(this->raw(), at, size, &narrowed);",
+				"\t\t\t\t\tsitu_view_sub(::situ::rt::view::raw(), at, size, &narrowed);",
 				"",
 				"\t\t\t\tif (e == SITU_OK) {",
 				f"\t\t\t\t\tout = {inner}(narrowed);",
@@ -4269,7 +4275,7 @@ class Emitter:
 				f"\t\twhile ({bound}at < raw_.limit) {{",
 				"\t\t\tsitu_view_t raw;",
 				"",
-				"\t\t\tif (situ_view_sub(this->raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
+				"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, situ_remaining_u32(raw_.limit, at), &raw)",
 				"\t\t\t\t\t!= SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
@@ -4324,7 +4330,7 @@ class Emitter:
 					"\t\t\tif (at >= raw_.limit) {",
 					"\t\t\t\treturn false;",
 					"\t\t\t}",
-					"\t\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 					"\t\t\t\t\tsitu_remaining_u32(raw_.limit, at), &raw)"
 					" != SITU_OK) {",
 					"\t\t\t\treturn false;",
@@ -4401,7 +4407,7 @@ class Emitter:
 			"\t\t}",
 			"",
 			"\t\tsitu_view_t raw;",
-			f"\t\tconst situ_err_t e = situ_view_sub(this->raw(),",
+			f"\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(),",
 			f"\t\t\t{name}_offset() + index * {inner}::size_bytes,",
 			f"\t\t\t{inner}::size_bytes, &raw);",
 			"",
@@ -4596,7 +4602,7 @@ class Emitter:
 			f"\t\tif (index >= {name}_count()) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tif (!situ_in_bounds(this->raw(), at, {width}u)) {{",
+			f"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), at, {width}u)) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			"",
@@ -4707,7 +4713,7 @@ class Emitter:
 
 		if element.layout.is_fixed_size:
 			return [
-				f"\t\tif (situ_view_sub(this->raw(), start,"
+				f"\t\tif (situ_view_sub(::situ::rt::view::raw(), start,"
 				f" {inner}::size_bytes, &raw)",
 				"\t\t\t\t!= SITU_OK) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
@@ -4726,11 +4732,11 @@ class Emitter:
 			"\t\tif (start > raw_.limit) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			"\t\tif (situ_view_sub(this->raw(), start, situ_remaining_u32(raw_.limit, start), &raw)",
+			"\t\tif (situ_view_sub(::situ::rt::view::raw(), start, situ_remaining_u32(raw_.limit, start), &raw)",
 			"\t\t\t\t!= SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tif (situ_view_sub(this->raw(), start,",
+			f"\t\tif (situ_view_sub(::situ::rt::view::raw(), start,",
 			f"\t\t\t\t::{self.namespace}::{inner}(raw).extent(), &raw) != SITU_OK) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -5560,7 +5566,7 @@ class Emitter:
 			# one wrote whatever the sum came to.
 			width = max(1, scalar.bits // BITS_PER_BYTE)
 			guard = ([] if at is None else [
-				f"\t\tif (!situ_in_bounds(raw(), {at}, {width})) {{",
+				f"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), {at}, {width})) {{",
 				"\t\t\treturn;",
 				"\t\t}",
 			])
@@ -5919,7 +5925,7 @@ class Emitter:
 					"\t{",
 					"\t\tsitu_view_t whole;",
 					"",
-					f"\t\tif (situ_view_sub(this->raw(), {start},",
+					f"\t\tif (situ_view_sub(::situ::rt::view::raw(), {start},",
 					f"\t\t\t\tsitu_remaining_u32(raw_.limit, {start}),"
 					" &whole) != SITU_OK) {",
 					"\t\t\treturn 0;",
@@ -5937,7 +5943,7 @@ class Emitter:
 					"\t{",
 					"\t\tsitu_view_t whole;",
 					"",
-					"\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 					"\t\t\t\tsitu_remaining_u32(raw_.limit, at),"
 					" &whole) != SITU_OK) {",
 					"\t\t\treturn 0;",
@@ -5960,7 +5966,7 @@ class Emitter:
 				"\t{",
 				*refuse,
 				"\t\tsitu_view_t whole;",
-				f"\t\tsitu_err_t e = situ_view_sub(this->raw(), {start},",
+				f"\t\tsitu_err_t e = situ_view_sub(::situ::rt::view::raw(), {start},",
 				f"\t\t\tsitu_remaining_u32(raw_.limit, {start}), &whole);",
 				"",
 				"\t\tif (e != SITU_OK) {",
@@ -5969,7 +5975,7 @@ class Emitter:
 				"",
 				"\t\t/* Twice: once over what is left, to give the extent",
 				"\t\t * something to measure, and once at the size it says. */",
-				f"\t\te = situ_view_sub(this->raw(), {start},",
+				f"\t\te = situ_view_sub(::situ::rt::view::raw(), {start},",
 				f"\t\t\t::{self.namespace}::{inner}(whole).extent(), &whole);",
 				"\t\tif (e == SITU_OK) {",
 				f"\t\t\tout = ::{self.namespace}::{inner}(whole);",
@@ -5991,7 +5997,7 @@ class Emitter:
 				# an offset the discriminant chose, and a view built by hand
 				# claimed the struct's size whatever the frame held.
 				"\t\tsitu_view_t raw;",
-				f"\t\tconst situ_err_t e = situ_view_sub(this->raw(), {start},"
+				f"\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), {start},"
 				f" {c_name(nested.name)}::size_bytes, &raw);",
 				"",
 				"\t\tif (e == SITU_OK) {",
@@ -6421,7 +6427,7 @@ class Emitter:
 			return []
 		width = max(1, (scalar.bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE)
 		return [
-			f"\t\tif (!situ_in_bounds(raw(), {placement.offset_bytes},"
+			f"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), {placement.offset_bytes},"
 			f" {width})) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -7087,7 +7093,7 @@ class Emitter:
 					"\t\tsitu_view_t whole;",
 					f"\t\tconst std::uint32_t at = {start};",
 					"",
-					"\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 					"\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
 					" != SITU_OK) {",
 					"\t\t\treturn 0u;",
@@ -7101,7 +7107,7 @@ class Emitter:
 					"\t{",
 					"\t\tsitu_view_t whole;",
 					"",
-					"\t\tif (situ_view_sub(this->raw(), at,",
+					"\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 					"\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
 					" != SITU_OK) {",
 					"\t\t\treturn 0u;",
@@ -7166,7 +7172,7 @@ class Emitter:
 			" const noexcept",
 			"\t{",
 			"\t\tsitu_view_t raw;",
-			f"\t\tconst situ_err_t e = situ_view_sub(this->raw(), {start},"
+			f"\t\tconst situ_err_t e = situ_view_sub(::situ::rt::view::raw(), {start},"
 			f" {extent}, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
@@ -7436,7 +7442,7 @@ class Emitter:
 				f"\t\tconst std::uint32_t end   ="
 				f" {self._region_end(struct, last)};",
 				"",
-				"\t\tif (end < start || !situ_in_bounds(raw(), start,"
+				"\t\tif (end < start || !situ_in_bounds(::situ::rt::view::raw(), start,"
 				" end - start)) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
@@ -7471,7 +7477,7 @@ class Emitter:
 				f"\t\tconst std::uint32_t n  ="
 				f" {placement.size_bits // BITS_PER_BYTE};",
 				"",
-				"\t\tif (!situ_in_bounds(raw(), at, n)) {",
+				"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), at, n)) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
 				"",
@@ -7839,7 +7845,7 @@ class Emitter:
 			# The stored sum's own offset, dynamic whenever the coverage is:
 			# PNG's crc follows a chunk whose length the message decides.
 			f"\t\tconst std::uint32_t crc_at = ({where});",
-			f"\t\tif (!situ_in_bounds(raw(), crc_at, {spanned}u)) {{",
+			f"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), crc_at, {spanned}u)) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			f"\t\treturn {stored} == want",
@@ -8081,7 +8087,7 @@ class Emitter:
 		# 26.27's fault exactly, and worse than refusing.
 		body = (f"::situ::rt::bytes(situ_base(raw_) + {start}, {count})"
 		        if placement.offset_bits is not None else
-		        f"situ_in_bounds(raw(), {start}, {count}u)"
+		        f"situ_in_bounds(::situ::rt::view::raw(), {start}, {count}u)"
 		        f" ? ::situ::rt::bytes(situ_base(raw_) + {start}, {count})"
 		        f" : ::situ::rt::bytes()")
 
@@ -8171,7 +8177,7 @@ class Emitter:
 		# it keeps the load it always had.
 		reach = f"({start}) + index * {width}"
 		body  = (load if placement.offset_bits is not None else
-		         f"situ_in_bounds(raw(), {reach}, {width}u)"
+		         f"situ_in_bounds(::situ::rt::view::raw(), {reach}, {width}u)"
 		         f" ? {load} : {ctype}{{}}")
 
 		return [
@@ -8227,7 +8233,7 @@ class Emitter:
 			f"\t\tconst std::uint32_t at = ({start})"
 			f" + index * {inner}::size_bytes;",
 			"",
-			f"\t\tif (situ_view_sub(this->raw(), at, {inner}::size_bytes,"
+			f"\t\tif (situ_view_sub(::situ::rt::view::raw(), at, {inner}::size_bytes,"
 			" &raw) != SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -9215,7 +9221,7 @@ class Emitter:
 			"\t\t\t::situ::rt::bytes _arm;",
 			"",
 			f"\t\t\tif ({name}(_arm) == ::situ::rt::err::ok) {{",
-			f"\t\t\t\tif (!situ_in_bounds(raw(), ({start}), {width}u)) {{",
+			f"\t\t\t\tif (!situ_in_bounds(::situ::rt::view::raw(), ({start}), {width}u)) {{",
 			"\t\t\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t\t\t}",
 			*_deeper(inner),

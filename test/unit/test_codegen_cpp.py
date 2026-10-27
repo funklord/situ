@@ -172,6 +172,39 @@ def test_the_runtime_does_not_squat_on_schema_names() -> None:
 	assert "class view : public ::situ::rt::view {" in header
 
 
+def test_a_member_named_raw_does_not_hide_the_view_it_is_read_through(
+		tmp_path: Path) -> None:
+	"""A generated class derives from `::situ::rt::view`, so a member named
+	for one of the base's own accessors HIDES it rather than overloading it.
+
+	`u8 raw` emits `std::uint8_t raw() const`, and C++ name lookup stops at
+	the derived class -- so every `situ_in_bounds(raw(), ...)` the backend
+	wrote for the VIEW was handed a `uint8_t`, and `this->raw()` selects the
+	same wrong one because hiding is not about the object expression. The
+	compiler said so, twice, in a schema whose only unusual feature is a
+	three-letter field name:
+
+	    error: could not convert '((const situ::s*)this)->situ::s::raw()'
+	           from 'uint8_t' to 'situ_view_t'
+
+	Naming the base explicitly is what bypasses hiding. This is 26.80's rule
+	met a third time -- a schema name must not be able to hide what generated
+	code needs -- and is a DIFFERENT mechanism from 26.501's emitter locals
+	and from 0062's one class binding a name twice: nothing here binds `raw`
+	twice, the second binding being the base's.
+	"""
+	held = compiles(tmp_path, "struct s { u8 raw [max = 4]; u8 b[raw + 1];"
+	                          " u16 tail; }")
+
+	assert held.returncode == 0, held.stderr
+
+	# And structurally, so that a later rewrite cannot satisfy the compiler
+	# by accident while leaving the view read hideable again.
+	header = emit("struct s { u8 raw [max = 4]; u8 b[raw + 1]; u16 tail; }")
+	assert "situ_in_bounds(::situ::rt::view::raw()" in header
+	assert "situ_in_bounds(raw()" not in header
+
+
 def test_a_variable_member_inside_a_gate_is_reachable() -> None:
 	"""Its length is read through the gate's own view: the field that sizes it
 	is plaintext at the same offsets, so only the view differs."""
