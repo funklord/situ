@@ -22,12 +22,21 @@ def refuse_parameters(schema: ast.Schema) -> None:
 
 	It covered the four backends and the packer too until 2026-09-17, and
 	those six now take their arguments (26.393 to 26.397). What is left are
-	the generators that emit a SECOND artifact over a schema -- the differ,
-	the C checks, fuzz and tamper harnesses, and the three `derived`
-	emitters. Each builds calls of its own and would have to thread an
-	argument through them; none is on a `situc build` path, so what a
-	parameter costs there is `situc gen-checks` and its siblings declining,
-	not a broken build.
+	the generators that emit a SECOND artifact over a schema and build calls
+	of their own: each would have to thread an argument through them, and
+	none is on a `situc build` path, so what a parameter costs there is
+	`situc gen-checks` and its siblings declining rather than a broken
+	build.
+
+	**Four call it**, and the list is kept here because this is where
+	somebody checks whether a generator is covered: the C checks, fuzz and
+	tamper harnesses, and the golden-vector suite. **It said seven and
+	meant three** -- naming the differ and the three `derived` emitters,
+	which decline by their own means or state that they read no struct or
+	member and so need none -- while `c/vectors.py`, which genuinely needed
+	it, was in neither the list nor the code and emitted C nobody could
+	compile (26.707). A list that over-claims is worse than none in the one
+	function that exists to be the single copy of this refusal.
 
 	A whole-schema refusal rather than a note beside the parameter, because
 	a note leaves every expression that READS it still emitting that read:

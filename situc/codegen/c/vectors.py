@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.codegen import refuse_parameters
 from situc.codegen.c.names import c_name, ident, macro
 from situc.diagnostics import Source, Span, error
 from situc.traverse import invalidating_members
@@ -139,6 +140,29 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# still collide, and a duplicate line in a vectors file is a mistake
 	# rather than a second case. A redefinition in generated C is a
 	# compiler error a long way from the file somebody edited.
+	# THE FIFTH GENERATOR IN THIS FAMILY, AND THE ONE THAT WAS MISSING.
+	# `refuse_parameters` exists for the generators that emit a SECOND
+	# artifact over a schema and build calls of their own; `c/fuzz.py`,
+	# `c/tamper.py` and `c/checks.py` call it and this did not, so a
+	# vectors file over a struct with a `parameter` produced C that cannot
+	# be compiled:
+	#
+	#     assert_int_equal(situ_s_validate(view), SITU_OK);
+	#     situ_s_blk_set(&msg, view, situ_s_blk_get(view));
+	#
+	#     error: too few arguments to function 'situ_s_validate'
+	#
+	# `validate` takes the argument tail, and `_get`/`_set` are accessors
+	# the backend deliberately does not emit for a parameter -- it occupies
+	# no bytes, so they would read the member after it. Refused rather than
+	# taught to pass one, which is this family's whole bargain: the cost is
+	# `situc gen-tests` declining a schema, and the alternative was a
+	# generated suite nobody could build.
+	#
+	# First, so that a vectors file is not validated against a schema this
+	# cannot serve -- the refusal is about the schema, not the vectors.
+	refuse_parameters(schema)
+
 	seen: dict[str, Case] = {}
 	for case in cases:
 		symbol = _symbol(case)

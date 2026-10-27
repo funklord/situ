@@ -2864,6 +2864,7 @@ REFUSING = {
 	"situc.codegen.c.checks",
 	"situc.codegen.c.fuzz",
 	"situc.codegen.c.tamper",
+	"situc.codegen.c.vectors",
 }
 
 #: What a generator DOES with a schema carrying a `parameter`, measured
@@ -2902,20 +2903,25 @@ SKIPS = [
 	("situc.codegen.c.tamper",  ("schema", "resolved", "name")),
 ]
 
-#: REFUSES either. Empty, and asserted empty rather than deleted.
+#: REFUSES either, mixed schema included.
 #:
-#: `c/tamper` sat here on the stated ground that nothing sweeps it over
-#: the corpus, so a `parameter` in `edges.situ` would cost it nothing.
-#: That was measured against `test_tamper.py` and `test/generated/`, and
-#: missed `test_cli.py::test_every_subcommand_runs_on_every_schema`, which
-#: runs EVERY subcommand over every schema. The corpus struct is what
-#: found it -- the construct landing in `edges.situ` turned a passing
-#: sweep red, which is the whole reason for putting it there.
+#: Empty until 2026-10-27, and kept as a named cell so that a generator
+#: which genuinely should decline outright had somewhere to go. It now has
+#: an inhabitant, and the cell being there is what gave it one -- see
+#: `test_the_vector_generator_declines_a_mixed_schema_too` for why
+#: declining is right for it.
 #:
-#: Kept as a named cell so that a generator which genuinely should decline
-#: outright has somewhere to go, and so that its emptiness is a claim
-#: somebody asserted rather than a list that quietly vanished.
-REFUSES: list[tuple[str, tuple[str, ...]]] = []
+#: `c/tamper` sat here once on the stated ground that nothing sweeps it
+#: over the corpus, so a `parameter` in `edges.situ` would cost it
+#: nothing. That was measured against `test_tamper.py` and
+#: `test/generated/`, and missed
+#: `test_cli.py::test_every_subcommand_runs_on_every_schema`, which runs
+#: EVERY subcommand over every schema. The corpus struct is what found it
+#: -- the construct landing in `edges.situ` turned a passing sweep red,
+#: which is the whole reason for putting it there.
+REFUSES: list[tuple[str, tuple[str, ...]]] = [
+	("situc.codegen.c.vectors", ("schema", "resolved", "cases", "name")),
+]
 
 #: The old name, kept for `situc pack`, which is not a codegen module.
 TAKING = ["c", "cpp", "python", "rust", "pack"]
@@ -2941,8 +2947,10 @@ def _argued(only: bool) -> tuple[ast.Schema, ResolvedSchema]:
 
 def _call(module: str, shape: tuple[str, ...], only: bool) -> object:
 	schema, resolved = _argued(only)
+	# `cases` empty on purpose: `c/vectors` refuses before it reads one,
+	# and a fixture carrying vectors would not show that.
 	held = {"schema": schema, "resolved": resolved, "name": "unit",
-	        "target": "c"}
+	        "target": "c", "cases": []}
 	generate = __import__(module, fromlist=["generate"]).generate
 	return generate(*[held[one] for one in shape])
 
@@ -2984,25 +2992,40 @@ def test_a_generator_that_skips_refuses_when_the_skip_empties_it(
 	assert "parameter n" in str(refused.value)
 
 
-def test_nothing_refuses_a_parameterised_schema_outright() -> None:
-	"""The empty cell, asserted rather than deleted.
+@pytest.mark.parametrize("module,shape", REFUSES,
+                         ids=[one for one, _ in REFUSES])
+def test_the_vector_generator_declines_a_mixed_schema_too(
+		module: str, shape: tuple[str, ...]) -> None:
+	"""The cell that was empty, and the reason its inhabitant is there.
 
-	Every generator that reads a schema now either takes the argument, is
-	unreachable by one, or skips the struct and refuses only what the skip
-	would have emptied. Nothing declines a mixed schema outright.
+	The other two cells are kinder and this one is right anyway. A
+	golden-vector suite names its structs in a file somebody wrote, so a
+	schema with one argued struct and vectors only for the others could be
+	served -- which is what `c/checks` and `c/fuzz` do, filter and then
+	refuse only what the filter emptied.
 
-	Asserted because a cell that empties is exactly where the next
-	generator will be put without anybody noticing: an entry added here
-	fails this test and has to say why declining is right for it, rather
-	than being absorbed by a parametrize over a list nobody reads.
+	**It declines outright instead, and the reason is that the alternative
+	is a capability rather than a filter.** A vector naming the argued
+	struct cannot be generated at all: `validate` takes the argument tail
+	and the accessors a vector calls are ones the C backend does not emit
+	for a parameter, since it occupies no bytes and they would read the
+	member after it. So the choice is not "serve part of this file" but
+	"serve this file unless it mentions the argued struct", and a refusal
+	keyed on what a schema DECLARES is the family's one message, where a
+	refusal keyed on which vectors happen to be present is a second one to
+	keep in step. Teaching it to pass an argument is the standing work the
+	family defers; until then this is a loud no rather than a quiet
+	half-yes (26.707).
+
+	Asserted on the mixed schema as well as the all-argued one, because the
+	mixed case is the whole of what makes this cell different from `SKIPS`.
 	"""
-	assert REFUSES == [], (
-		f"{[one for one, _ in REFUSES]} decline a parameterised schema "
-		f"outright. That is a real position -- it is what `c/tamper` did "
-		f"until the corpus gained a `parameter` and `test_cli`'s "
-		f"every-subcommand sweep went red -- but it needs saying out "
-		f"loud, so add the test that pins the reason and take this "
-		f"assertion out.")
+	for only in (False, True):
+		with pytest.raises(SituError) as refused:
+			_call(module, shape, only=only)
+		assert "parameter n" in str(refused.value)
+		assert any("decision 0050" in note
+		           for note in refused.value.diagnostic.notes)
 
 
 def _parameter_schema() -> tuple[ast.Schema, ResolvedSchema]:
@@ -3155,6 +3178,10 @@ SHAPES = {
 	"situc.codegen.c.derived":      ("schema", "name"),
 	"situc.codegen.rust.derived":   ("schema", "name"),
 	"situc.codegen.python.derived": ("schema", "name"),
+	# The one shape with a fourth argument. `cases` is where a vectors file
+	# would go and the fixture leaves it empty, which is the point: the
+	# refusal is about the schema and fires before a case is read.
+	"situc.codegen.c.vectors":      ("schema", "resolved", "cases", "name"),
 }
 
 

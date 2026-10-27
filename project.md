@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.707 gen-tests was the fifth in the family and did not refuse
+
+Moved to
+`doc/decision/26.707-gen-tests-was-the-fifth-in-the-family-and-did-not-refuse.md`.
+
 ### 26.706 One spelling for a parameter's argument
 
 Moved to

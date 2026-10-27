@@ -208,6 +208,60 @@ def test_gen_tests_writes_a_vector_suite(
 	assert "4 vectors" in capsys.readouterr().err
 
 
+def test_gen_tests_refuses_a_schema_that_takes_an_argument(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The fifth generator in the `refuse_parameters` family, which was the
+	one not calling it.
+
+	`codegen/__init__.py` says what that family is: the generators that
+	emit a SECOND artifact over a schema and build calls of their own.
+	`c/fuzz.py`, `c/tamper.py` and `c/checks.py` all call it; `c/vectors.py`
+	did not, so a vectors file over a struct with a `parameter` produced C
+	that cannot be compiled --
+
+	    assert_int_equal(situ_s_validate(view), SITU_OK);
+	    situ_s_blk_set(&msg, view, situ_s_blk_get(view));
+
+	    error: too few arguments to function 'situ_s_validate'
+
+	-- `validate` taking the argument tail, and `_get`/`_set` being
+	accessors the backend deliberately does not emit for a parameter, since
+	it occupies no bytes and they would read the member after it.
+
+	Invisible until now because no `.vectors` file in the tree sits beside a
+	schema that declares one: `test/schema/edges.situ` has the only
+	`parameter` and has no vectors.
+	"""
+	schema = tmp_path / "takes.situ"
+	schema.write_text("endian little;\n"
+	                  "struct s { parameter u8 blk [stream];\n"
+	                  "\tu8 payload[blk];\n"
+	                  "\tu16 checksum; }\n", encoding="ascii")
+	vectors = tmp_path / "takes.vectors"
+	vectors.write_text("s one 02 11 22 33 44\n", encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors),
+	             "--out", str(tmp_path)]) == 1
+
+	said = capsys.readouterr().err
+	assert "parameter blk" in said
+	assert "decision 0050" in said
+	assert not (tmp_path / "takes_vectors.c").exists(), (
+		"the refusal must come before anything is written")
+
+
+def test_gen_tests_still_writes_a_suite_for_a_schema_without_one(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The control for the refusal above, which would otherwise pass just as
+	happily if `gen-tests` refused everything."""
+	vectors = str(Path(HEADER).with_suffix(".vectors"))
+	assert main(["gen-tests", HEADER, vectors, "--out", str(tmp_path)]) == 0
+	assert (tmp_path / "header_vectors.c").exists()
+	assert "4 vectors" in capsys.readouterr().err
+
+
 def test_gen_tests_reports_a_stale_vector(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
