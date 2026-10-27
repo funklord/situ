@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.705 Two name collisions whose fix is a decision
+
+Moved to
+`doc/decision/26.705-two-name-collisions-whose-fix-is-a-decision.md`.
+
 ### 26.704 Two Python guards matched by a member's own name
 
 Moved to
