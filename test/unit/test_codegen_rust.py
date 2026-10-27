@@ -1805,6 +1805,33 @@ SIZED_CHAIN = ("struct s { u8 n [max = 4]; u8 b[n]; u16 tail; }")
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("name", ["dirty_bits", "error_code", "i"],
+                         ids=lambda n: n)
+def test_a_type_name_beginning_with_a_runtime_name_imports_nothing_extra(
+		name: str, tmp_path: Path) -> None:
+	"""The `use crate::situ_rt::{...}` list is decided by testing tokens
+	against the rendered module, and three of the four carry punctuation no
+	identifier can -- `situ_rt::`, `Error::`, `Result<`. `Dirty` carried
+	none.
+
+	So a struct whose PascalCase name merely BEGINS with it matched:
+	`struct dirty_bits` emits `DirtyBits`, the import was added for a schema
+	that touches no dirty bit, and `-D warnings` calls that an unused import
+	and refuses. Legitimate uses are `&Dirty` and `&mut Dirty`, where the
+	name ends at a boundary (26.703).
+
+	A struct named `dirty` exactly is NOT covered and should not be: it
+	emits `pub struct Dirty`, which collides with the runtime's own name,
+	and that is 0062's class rather than a substring accident.
+	"""
+	result = build(tmp_path,
+	               f"struct {name} {{ u8 a; u16 b; }}\n"
+	               f"struct s {{ {name} head; u16 tail; }}")
+
+	assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
 def test_the_offset_cache_compiles_for_a_sized_run(tmp_path: Path) -> None:
 	"""26.496 made `-D warnings` the standard for generated Rust, and the
 	offset cache was outside what that gate reached.
