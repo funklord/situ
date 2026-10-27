@@ -1534,6 +1534,32 @@ def test_the_setter_reaches_the_marker_through_as_ref() -> None:
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_a_member_named_bytes_is_not_mistaken_for_the_data_field(
+		tmp_path: Path) -> None:
+	"""That rewrite carries two exceptions, and a member's own accessor
+	could match one of them.
+
+	`reading()` turns `self.X` into `self.as_ref().X` in a setter body,
+	because the offset helpers live on the read view -- and it excepts
+	`self.bytes`, which is the one thing both types have. A member named
+	`bytes` emits `self.bytes()`, the exception swallowed it, and the setter
+	called a method `SMut` does not carry:
+
+	    error[E0599]: no method named `bytes` found for mutable reference
+	                  `&mut SMut<'a>` in the current scope
+
+	The field is `self.bytes.len()` and an accessor is `self.bytes()`, so
+	the paren tells them apart. The control is the field itself: all 46
+	generated Rust modules are byte-identical across the fix, which is what
+	shows the exception still covers what it was written for (26.698).
+	"""
+	held = build(tmp_path, "struct s { u8 bytes [max = 4]; u8 b[bytes + 1];"
+	                       " u16 tail; }")
+
+	assert held.returncode == 0, held.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
 def test_both_byte_orders_read_the_same_values(tmp_path: Path) -> None:
 	result = build(tmp_path, MARKED, main="""
 fn main() {

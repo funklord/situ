@@ -8068,8 +8068,16 @@ class Emitter:
 		# variable-length one is the only shape that reaches both, and no
 		# schema here has one -- `example/tiff` is a header of constant
 		# offsets.
+		# And `bytes` means the DATA FIELD, not a member of that name. The
+		# field is `self.bytes.len()` and an accessor is `self.bytes()`, so
+		# the paren is what tells them apart -- without it the exception
+		# swallowed a member's own getter and the setter called a method
+		# `SMut` does not have, *"no method named `bytes` found for mutable
+		# reference"*. A member named `as_ref` cannot be separated this way
+		# and is recorded rather than fixed: there the guard and the
+		# collision are the same string (26.698).
 		def reading(text: str) -> str:
-			return re.sub(r"self\.(?!as_ref\(\))(?!bytes\b)",
+			return re.sub(r"self\.(?!as_ref\(\))(?!bytes\b(?!\s*\())",
 			              "self.as_ref().", text)
 
 		rtype = self._field_type(placement, writing=True)
