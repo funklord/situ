@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.699 `--materialize` had no corpus-wide compile
+
+Moved to
+`doc/decision/26.699-materialize-had-no-corpus-wide-compile.md`.
+
 ### 26.698 A rewriter's own exceptions, matched by a member
 
 Moved to

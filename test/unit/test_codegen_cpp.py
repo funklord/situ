@@ -1918,8 +1918,11 @@ struct frame {
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+@pytest.mark.parametrize("materialize", [False, True],
+                         ids=["plain", "materialized"])
 @pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
-def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
+def test_every_schema_compiles(schema: Path, materialize: bool,
+		tmp_path: Path) -> None:
 	"""The C suite has had this since phase 4 and this one had not, which is
 	how three examples came to not compile at all: `message` had a counted
 	array of structs whose element type was qualified twice, `ipv6ext` a run
@@ -1934,10 +1937,20 @@ def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 	`struct framed` and the framing method every view gets meet in a scope C++
 	will not let them share. The schema written to hold the awkward shapes is
 	the one a check globbing `example/` skips (26.31).
+
+	**Both modes, because `--materialize` has shipped two breaks on its
+	own.** 26.486 was `at += None;` in a materialized header -- a Python
+	object in C++ source, from a committed schema -- and 26.697 was a
+	redundant paren pair that `-D warnings` refuses in materialized Rust.
+	Each was found by a constructed probe while this test read the plain
+	mode only, and `padded.situ` is in this very list, so it would have
+	caught the first for free. 46 more headers at `-fsyntax-only` costs
+	about four seconds (26.699).
 	"""
 	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
-	built    = generate_cpp(parsed, resolved, schema.stem)
+	built    = generate_cpp(parsed, resolved, schema.stem,
+	                        materialize=materialize)
 
 	(tmp_path / f"{schema.stem}.hpp").write_text(built.header,
 	                                             encoding="ascii")

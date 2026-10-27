@@ -976,15 +976,24 @@ fn main() {
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("materialize", [False, True],
+                         ids=["plain", "materialized"])
 @pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
-def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
+def test_every_schema_compiles(schema: Path, materialize: bool,
+		tmp_path: Path) -> None:
 	"""The C suite has had this since phase 4 and this one had not, which is
 	how `packet` came to import a name it never used and `smtp` to call scan
 	helpers this backend does not emit. Generating is not compiling.
 
 	Every schema rather than every example, for the reason the C++ suite
 	records: the file carrying the constructs no worked example has is the one
-	a check globbing `example/` never reads (26.31)."""
+	a check globbing `example/` never reads (26.31).
+
+	Both modes, because `--materialize` has shipped two breaks on its own:
+	26.486 in C++ and 26.697 here, a redundant paren pair that
+	`-D warnings` refuses. Both were found by a constructed probe while
+	this test read the plain mode only. 46 more crates costs about nineteen
+	seconds (26.699)."""
 	src = tmp_path / "src"
 	src.mkdir(exist_ok=True)
 	(src / "situ_rt.rs").write_text(
@@ -993,7 +1002,8 @@ def test_every_schema_compiles(schema: Path, tmp_path: Path) -> None:
 
 	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
-	module   = generate_rs(parsed, resolved, schema.stem).module
+	module   = generate_rs(parsed, resolved, schema.stem,
+	                       materialize=materialize).module
 
 	(src / "unit.rs").write_text(module, encoding="ascii")
 	(src / "lib.rs").write_text("pub mod situ_rt;\npub mod unit;\n",
