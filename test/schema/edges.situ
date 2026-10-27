@@ -1982,6 +1982,38 @@ struct negotiated {
 	}
 }
 
+// A tag whose COVERAGE ends at a member the argument sizes, which is the
+// fifth shape of the class above and the one `negotiated` does not reach:
+// it carries no tag, and nothing else in the tree carries a parameter at
+// all, so the four compile gates could not fail on this.
+//
+// The C backend emitted `situ_<s>_sig_covered` with a FIXED signature over
+// a body naming `arg_block` -- the two halves of one function disagreeing,
+// which no assertion about either half can see and only a compiler
+// catches. It was found by reading rather than by any gate (26.708), which
+// is the whole argument for the struct being here.
+//
+// `covered`, `compute` and `check` are a chain and each needs the argument
+// threaded down it. `check` takes the UNION of what `compute` needs and
+// what the stored value's own offset names, and those are two independent
+// span expressions -- a coverage can be fixed while the checksum's offset
+// is dynamic, or the reverse -- so a fixture whose coverage is fixed
+// proves neither.
+struct negotiated_signed {
+	parameter u8 block [stream];
+
+	// Bounded by the argument, so the coverage's end is an expression
+	// naming it rather than a constant.
+	authenticated signed_body {
+		u8 payload[block];
+	}
+
+	// Dynamic by construction: `sig` sits after a run the argument sizes,
+	// so `check`'s own read of `crc_at` reaches the argument by a second
+	// route that the coverage does not.
+	checksum u8 sig[2] covers(signed_body);
+}
+
 // A region name a struct SHARES with the type of one of its members, which
 // is the shape every "which region does this name mean" lookup has been
 // wrong about. `tag_covers`, `regions` and `covered_by` all hold BARE

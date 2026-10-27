@@ -308,6 +308,12 @@ struct negotiated size=5..516 mutate=Shifting address=Unstable repr=ValueConvert
   negotiated.carried.marker.body         offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   negotiated.carried.flag                offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
+struct negotiated_signed size=2..257 mutate=Immutable address=Unstable atomic=NonAtomic
+  negotiated_signed.block                parameter
+  negotiated_signed.signed_body          offset=AbsoluteStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(sig)
+  negotiated_signed.payload              offset=AbsoluteStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(sig)
+  negotiated_signed.sig                  offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
+
 struct nest_group size=2.. mutate=Shifting atomic=NonAtomic effect=EffectOnRead
   nest_group.open                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   nest_group.items                       offset=AbsoluteStatic(0x01) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead

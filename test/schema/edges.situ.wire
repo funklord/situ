@@ -305,6 +305,12 @@ struct negotiated size=5..516
   carried case 2: flag u8
   carried case default: error
 
+struct negotiated_signed size=2..257
+  parameter -         u8         block [stream]
+  @0x0000   0..255    u8         payload  sized-by=block
+  ~         2         u8         sig
+  sig covers: payload signed_body
+
 struct nest_group size=2..
   @0x0000   1         u8         open
   @0x0001   until:5d  nest_item  items
