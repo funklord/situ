@@ -174,7 +174,18 @@ def _expand_one(source: str, name: str,
 	Arguments are expanded before the call around them, so a nested builtin
 	still gets its own spelling.
 	"""
-	pattern = re.compile(rf"\b{re.escape(name)}\s*\(")
+	# NOT `\b`, and the difference is a crash. `over_fields` runs first and
+	# rewrites a field named `min` into the target's getter -- `this->min()`
+	# in C++, `self.min()` in Rust -- at which point `min(` is in the text
+	# and a word boundary sits right before it, so this read the GETTER as
+	# the two-argument builtin and handed one argument to `c_spelling`,
+	# which unpacks two: `ValueError: not enough values to unpack`, an
+	# uncaught traceback rather than a diagnostic. C and Python never met it
+	# because their reads are `situ_s_min_get(view)` and `self.min`, neither
+	# of which spells `min(`. So a builtin call is a name reached by
+	# NOTHING -- not a member access, not a qualified name, not a longer
+	# identifier (26.696).
+	pattern = re.compile(rf"(?<![.>:\w]){re.escape(name)}\s*\(")
 	pieces: list[str] = []
 	cursor = 0
 

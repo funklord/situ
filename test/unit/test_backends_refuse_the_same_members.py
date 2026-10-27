@@ -255,6 +255,55 @@ def four_ways(text: str) -> dict[str, str]:
 	}
 
 
+def test_a_member_named_for_a_builtin_is_read_and_not_called() -> None:
+	"""`min` and `max` are two-argument builtins AND legal field names, and
+	the second half crashed two backends out of four.
+
+	`over_fields` runs first and rewrites the field into the target's getter
+	-- `this->min()` in C++, `self.min()` in Rust -- so `min(` is in the
+	text by the time `expand_calls` reads it, with a word boundary right in
+	front. It took the GETTER for the builtin and handed `c_spelling` one
+	argument where it unpacks two:
+
+	    ValueError: not enough values to unpack (expected 2, got 1)
+
+	an uncaught traceback rather than a diagnostic. C and Python never met
+	it, their reads being `situ_s_min_get(view)` and `self.min` -- neither
+	spells `min(` -- so a legal schema generated cleanly in two backends and
+	killed the compiler in the other two (26.696).
+
+	The bare form `u8 b[min]` is a different question and is refused by the
+	front end, `[min]` being an attribute name.
+	"""
+	for name in ("min", "max"):
+		held = four_ways("endian big;\n"
+		                 f"struct s {{ u8 {name} [max = 4];"
+		                 f" u8 b[{name} + 1]; u16 tail; }}\n")
+
+		assert len(held) == 4, name
+		for backend, text in held.items():
+			# The read, not a call: nothing may pass the getter to a
+			# two-argument spelling of the builtin.
+			assert "core::cmp::min(self." not in text, (backend, name)
+			assert f"?) ? (this->{name}()" not in text, (backend, name)
+
+
+def test_a_real_builtin_call_still_expands() -> None:
+	"""The control for the test above: the fix narrows what counts as a
+	builtin call, so it has to be shown not to narrow it to nothing.
+
+	`edges.situ` carries `u8 clamped[min(units, 3)]` for this reason, and its
+	own comment says so -- *"an attribute name, being called"*.
+	"""
+	held = four_ways("endian big;\n"
+	                 "struct s { u8 units [max = 9]; u8 clamped[min(units, 3)];"
+	                 " u16 tail; }\n")
+
+	assert "core::cmp::min(" in held["rust"]
+	assert "situ_min_u32(" in held["c"] or " < " in held["c"]
+	assert "min(" in held["python"]
+
+
 #: A checksum over a codec, and the codec's name. Reed-Solomon is a
 #: polynomial over an extension field: the parity is symbols rather than a
 #: digest and it comes back, so it is a different code from a CRC.
