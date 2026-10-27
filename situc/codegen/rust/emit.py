@@ -37,6 +37,7 @@ from situc.layout import (
 )
 from situc.names import (
 	UnknownName, expand_calls, over_fields, render_delimiter, rust_spelling,
+	unwrap_parens,
 )
 from situc.propagate import Resolved
 from situc.invariant import derived as derived_by
@@ -146,22 +147,6 @@ def _is_run(placement: Placement) -> bool:
 	return (placement.array_count is not None
 	        or placement.sized_by is not None
 	        or data_sized(placement))
-
-
-def _unwrapped(expr: str) -> str:
-	"""`(x)` as `x`, where the parentheses wrap the whole of it.
-
-	`(a) + (b)` is left alone: its first character is an open paren and its
-	last a close, and they are not a pair.
-	"""
-	if not (expr.startswith("(") and expr.endswith(")")):
-		return expr
-	depth = 0
-	for index, char in enumerate(expr):
-		depth += (char == "(") - (char == ")")
-		if depth == 0 and index != len(expr) - 1:
-			return expr
-	return expr[1:-1]
 
 
 @dataclass
@@ -1379,8 +1364,25 @@ class Emitter:
 				steps.append(f"\t\tat = situ_rt::advance(at, {step.size}, "
 				             "self.bytes.len());")
 			else:
-				length = self._length_expression(struct, step.placement,
-				                                 running="at")
+				# `unwrap_parens`: the length renderer wraps every read,
+				# and as a whole function argument that pair is what
+				# `-D warnings` calls unnecessary (26.697).
+				# `_length_expression` answers None for a run whose length
+				# is the codec's output and for such a run inside an arm,
+				# and the f-string below would have formatted that None
+				# into generated Rust -- 26.485's class, in a mode no
+				# committed schema materializes. Unreached: 42 corpus
+				# schemas and six shapes written against both of those
+				# conditions, including a delimited coded region with a
+				# member after it. So it asserts rather than branches,
+				# because what the length SHOULD be here is not obvious
+				# and inventing one is worse than stopping (26.697).
+				held = self._length_expression(struct, step.placement,
+				                               running="at")
+				assert held is not None, (
+					f"no length for {step.placement.path} in the offset "
+					f"cache; see 26.697")
+				length = unwrap_parens(held)
 				steps.append(f"\t\tat = situ_rt::advance(at, {length}, "
 				             "self.bytes.len());")
 
@@ -1414,8 +1416,25 @@ class Emitter:
 				body.append(f"\t\tat = situ_rt::advance(at, {step.size}, "
 				            "self.bytes.len());")
 			else:
-				length = self._length_expression(struct, step.placement,
-				                                 running="at")
+				# `unwrap_parens`: the length renderer wraps every read,
+				# and as a whole function argument that pair is what
+				# `-D warnings` calls unnecessary (26.697).
+				# `_length_expression` answers None for a run whose length
+				# is the codec's output and for such a run inside an arm,
+				# and the f-string below would have formatted that None
+				# into generated Rust -- 26.485's class, in a mode no
+				# committed schema materializes. Unreached: 42 corpus
+				# schemas and six shapes written against both of those
+				# conditions, including a delimited coded region with a
+				# member after it. So it asserts rather than branches,
+				# because what the length SHOULD be here is not obvious
+				# and inventing one is worse than stopping (26.697).
+				held = self._length_expression(struct, step.placement,
+				                               running="at")
+				assert held is not None, (
+					f"no length for {step.placement.path} in the offset "
+					f"cache; see 26.697")
+				length = unwrap_parens(held)
 				body.append(f"\t\tat = situ_rt::advance(at, {length}, "
 				            "self.bytes.len());")
 
@@ -6873,7 +6892,7 @@ class Emitter:
 		# already parenthesised -- so wrapping it produced `min((x), 16)` and
 		# a denied lint. Strip one redundant outer pair, and only where it
 		# genuinely wraps the whole expression.
-		return f"core::cmp::min({_unwrapped(found)}, {pin})"
+		return f"core::cmp::min({unwrap_parens(found)}, {pin})"
 
 	def _raw_length_expression(self, struct: ResolvedStruct,
 			placement: Placement, running: str | None = None,

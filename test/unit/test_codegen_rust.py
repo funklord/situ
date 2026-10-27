@@ -1760,6 +1760,36 @@ def test_the_offset_cache_resolves_every_dynamic_member() -> None:
 	assert "pub fn resolve_offsets(&self) -> LineOffsets" in module
 
 
+#: A SIZED run rather than a delimited one, which is the difference that
+#: matters to the offset cache. `CHAIN`'s lengths are scans and render bare;
+#: a `[max]`-bounded count renders as `(situ_rt::nonneg(...))`, parenthesised
+#: because the field renderer wraps every read -- and as a whole function
+#: argument that pair is what `-D warnings` refuses.
+SIZED_CHAIN = ("struct s { u8 n [max = 4]; u8 b[n]; u16 tail; }")
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+def test_the_offset_cache_compiles_for_a_sized_run(tmp_path: Path) -> None:
+	"""26.496 made `-D warnings` the standard for generated Rust, and the
+	offset cache was outside what that gate reached.
+
+	`--materialize` emitted
+	`situ_rt::advance(at, (situ_rt::nonneg(...)), self.bytes.len())` and
+	rustc called the pair *"unnecessary parentheses around function
+	argument"*. The flag's only compiled test used `CHAIN`, whose members
+	are delimited runs whose lengths are scans -- so the construct that
+	reaches the hazard was the one construct it did not have.
+
+	Not one of the 42 committed schemas reaches it either: measured both
+	ways, the materialized Rust for all 46 generated modules is
+	byte-identical across this fix, so the corpus could never have caught
+	this and the fixture is the only evidence there is (26.697).
+	"""
+	result = build(tmp_path, SIZED_CHAIN, materialize=True)
+
+	assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")
 def test_the_cache_agrees_with_the_per_member_offsets(tmp_path: Path) -> None:
 	"""Which is the whole point: one pass instead of a rescan per member, and

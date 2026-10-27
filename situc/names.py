@@ -238,15 +238,21 @@ def rust_spelling(name: str, args: list[str]) -> str:
 	left, right = args
 	if name == "align_up":
 		return _rounded(left, right, "1", "/")
-	return f"core::cmp::{name}({_unwrap(left)}, {_unwrap(right)})"
+	return f"core::cmp::{name}({unwrap_parens(left)}, {unwrap_parens(right)})"
 
 
-def _unwrap(text: str) -> str:
+def unwrap_parens(text: str) -> str:
 	"""One layer of parentheses, where they wrap the whole expression.
 
 	The field renderer parenthesises every read, and `-D warnings` calls a
 	parenthesised function argument unnecessary. Only where the outer pair
 	matches, so `(a) + (b)` is left alone.
+
+	Public because the Rust backend needs it at its `advance` sites too, and
+	a second copy is a second thing to be wrong: 26.496 made `-D warnings`
+	the standard for generated Rust and the offset cache was outside what
+	that gate reached, so `--materialize` emitted a redundant pair that
+	refused to compile (26.697).
 	"""
 	if not (text.startswith("(") and text.endswith(")")):
 		return text
