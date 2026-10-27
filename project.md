@@ -7450,6 +7450,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.695 Every name the generator declares, swept
+
+Moved to `doc/decision/26.695-every-name-the-generator-declares.md`.
+
 ### 26.694 A member named for the view it is read through
 
 Moved to

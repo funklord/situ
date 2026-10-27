@@ -163,6 +163,50 @@ def test_a_field_may_share_its_name_with_its_type() -> None:
 	assert "::situ::protocol protocol() const" in header
 
 
+def test_a_field_may_share_its_name_with_a_type_the_struct_REFERENCES(
+		tmp_path: Path) -> None:
+	"""The test above covers a field sharing the name of its OWN type, and
+	qualifying the return type answers it. The hazard is wider: a field may
+	share the name of a type the struct mentions somewhere ELSE, and the
+	element out-parameter of a run was spelled bare.
+
+	    struct foo { u8 q; }
+	    struct s { u8 foo [max = 4]; foo items[2]; u16 tail; }
+
+	`err items(std::uint32_t index, foo &out)` -- and inside `class s` the
+	member function `foo()` hides the type, so `'foo' is not a type`. The
+	same applies to `foo::size_bytes`. Nine type positions were bare; the
+	hazard is not the author's to avoid, which is the other test's words.
+	"""
+	assert compiles(tmp_path, "struct foo { u8 q; }\n"
+	                          "struct s { u8 foo [max = 4]; foo items[2];"
+	                          " u16 tail; }", preamble=PREAMBLE).returncode == 0
+
+	# A `while` run reaches different emitter sites with the same hazard.
+	assert compiles(tmp_path, "struct foo { u8 q; }\n"
+	                          "struct s { u8 foo [max = 4];"
+	                          " foo items[] while (q != 0); u16 tail; }",
+	                 preamble=PREAMBLE).returncode == 0
+
+
+def test_a_member_named_for_a_local_the_check_declares(tmp_path: Path) -> None:
+	"""`check()` declares `std::uint32_t sink;` as its fallback for a caller
+	that passes `nullptr` for the identity, so a member called `sink` had its
+	own getter captured by that local: *"'sink' cannot be used as a
+	function"*.
+
+	26.501 qualified the SIZE read for exactly this reason and covered
+	`framed()`'s locals -- `at`, `n`, `have` -- while the constraint check in
+	`validate` still emitted a bare getter. Found by sweeping every name the
+	generator declares rather than a list of names anyone had met (26.695).
+	"""
+	held = compiles(tmp_path, "struct s { u8 sink [max = 4]; u16 tail; }")
+
+	assert held.returncode == 0, held.stderr
+	assert "if (this->sink() > 4)" in emit(
+		"struct s { u8 sink [max = 4]; u16 tail; }")
+
+
 def test_the_runtime_does_not_squat_on_schema_names() -> None:
 	"""Generated code lives in `situ`; the runtime lives in `situ::rt`. A schema
 	is free to declare `struct message`, and it would collide otherwise."""
@@ -782,7 +826,9 @@ def test_an_enum_rejects_a_value_that_is_not_a_member() -> None:
 	header = emit('enum k : u8 { one = 1, two = 2 }\nstruct s { k kind; u8 pad; }')
 
 	assert "constexpr bool is_known(k value) noexcept" in header
-	assert "if (!is_known(kind())) {" in header
+	# `this->kind()`: the constraint read is qualified so that a local
+	# `check()` declares cannot capture a member of the same name (26.695).
+	assert "if (!is_known(this->kind())) {" in header
 
 
 def test_default_pass_admits_what_it_says_it_admits() -> None:
@@ -800,7 +846,8 @@ def test_a_constrained_field_at_a_dynamic_offset_is_validated() -> None:
 	              "struct s { h hdr; u8 opts[hdr.n]; u16 after [must_eq = 7]; }")
 
 	assert "std::uint16_t after() const noexcept" in header
-	assert "if (after() != 7) {" in header
+	# Qualified, per 26.695 -- see the note in the enum test above.
+	assert "if (this->after() != 7) {" in header
 
 
 # -- a member nothing can measure -------------------------------------------

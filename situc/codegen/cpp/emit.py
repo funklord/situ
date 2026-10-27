@@ -2264,7 +2264,7 @@ class Emitter:
 			"\t}",
 			"",
 			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,"
-			f" {inner} &out) const noexcept",
+			f" ::{self.namespace}::{inner} &out) const noexcept",
 			"\t{",
 			*walk,
 			"\t\t\tif (n == index) {",
@@ -2458,7 +2458,7 @@ class Emitter:
 			"\t}",
 			"",
 			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,"
-			f" {inner} &out) const noexcept",
+			f" ::{self.namespace}::{inner} &out) const noexcept",
 			"\t{",
 			*walk,
 			"\t\t\tif (n == index) {",
@@ -4668,7 +4668,7 @@ class Emitter:
 				"\t * knows where offset zero is. */",
 				f"\t[[nodiscard]] ::situ::rt::err {name}_at("
 				f"::situ::rt::message &owner,",
-				f"\t\t\tstd::uint32_t index, {inner} &out) const noexcept",
+				f"\t\t\tstd::uint32_t index, ::{self.namespace}::{inner} &out) const noexcept",
 				"\t{",
 				"\t\tstd::uint32_t found = 0;",
 				f"\t\tconst ::situ::rt::err e = {name}_offset(index, found);",
@@ -4677,7 +4677,7 @@ class Emitter:
 				"\t\t\treturn e;",
 				"\t\t}",
 				f"\t\treturn ::{self.namespace}::{inner}::at(owner, found,",
-				f"\t\t\t{inner}::size_bytes, out);",
+				f"\t\t\t::{self.namespace}::{inner}::size_bytes, out);",
 				"\t}",
 			]
 
@@ -4686,7 +4686,7 @@ class Emitter:
 			"\t/* A view over element `index`, whose offset is measured from",
 			f"\t * {self._index_base_noun(table)}. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}_at(std::uint32_t index,",
-			f"\t\t\t{inner} &out) const noexcept",
+			f"\t\t\t::{self.namespace}::{inner} &out) const noexcept",
 			"\t{",
 			"\t\tstd::uint32_t found = 0;",
 			f"\t\tconst ::situ::rt::err e = {name}_offset(index, found);",
@@ -4714,7 +4714,7 @@ class Emitter:
 		if element.layout.is_fixed_size:
 			return [
 				f"\t\tif (situ_view_sub(::situ::rt::view::raw(), start,"
-				f" {inner}::size_bytes, &raw)",
+				f" ::{self.namespace}::{inner}::size_bytes, &raw)",
 				"\t\t\t\t!= SITU_OK) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
@@ -8223,7 +8223,7 @@ class Emitter:
 			"\t * the extent: bytes after the array are inside the view and are",
 			"\t * not elements. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}(std::uint32_t index,",
-			f"\t\t\t{inner} &out) const noexcept",
+			f"\t\t\t::{self.namespace}::{inner} &out) const noexcept",
 			"\t{",
 			f"\t\tif (index >= {count}u) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
@@ -8231,9 +8231,9 @@ class Emitter:
 			"",
 			f"\t\tsitu_view_t raw;",
 			f"\t\tconst std::uint32_t at = ({start})"
-			f" + index * {inner}::size_bytes;",
+			f" + index * ::{self.namespace}::{inner}::size_bytes;",
 			"",
-			f"\t\tif (situ_view_sub(::situ::rt::view::raw(), at, {inner}::size_bytes,"
+			f"\t\tif (situ_view_sub(::situ::rt::view::raw(), at, ::{self.namespace}::{inner}::size_bytes,"
 			" &raw) != SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
@@ -9472,7 +9472,14 @@ class Emitter:
 			lines.extend(self._text_number_check(struct, placement, name))
 			read = f"{name}_value()"
 		else:
-			read = f"{name}_value" if versioned else f"{name}()"
+			# `this->` for the same reason 26.501 qualified the size read:
+			# `check()` declares a local `sink` as its null-`which_`
+			# fallback, so a member called `sink` had its own getter
+			# captured by it -- *"'sink' cannot be used as a function"*.
+			# 26.501 covered `framed()`'s locals and not this one (26.695).
+			# The versioned branch reads a local and stays bare.
+			read = (f"{name}_value" if versioned
+			        else f"this->{name}()")
 
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None and enum.effective_default is ast.EnumDefault.ERROR:
