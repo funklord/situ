@@ -35,21 +35,65 @@ static const char *why(situ_walk_err err)
 	}
 }
 
-/* Hex on the command line, so the program needs no file format of its own
- * and a caller can paste a capture straight in. */
-static uint32_t from_hex(const char *text, uint8_t *out, uint32_t cap)
+/* What a hex digit is worth, or that it is not one. `strtoul` was reading
+ * the pair and cannot tell `zz` from `00`, which is the third of the three
+ * substitutions below. */
+static int hex_digit(char c, unsigned int *value)
 {
-	uint32_t len = 0u;
-	while (text[0] != '\0' && text[1] != '\0' && len < cap) {
-		char pair[3];
-		pair[0] = text[0];
-		pair[1] = text[1];
-		pair[2] = '\0';
-		out[len] = (uint8_t)strtoul(pair, NULL, 16);
-		len++;
-		text += 2;
+	if (c >= '0' && c <= '9') {
+		*value = (unsigned int)(c - '0');
+		return 1;
 	}
-	return len;
+	if (c >= 'a' && c <= 'f') {
+		*value = (unsigned int)(c - 'a') + 10u;
+		return 1;
+	}
+	if (c >= 'A' && c <= 'F') {
+		*value = (unsigned int)(c - 'A') + 10u;
+		return 1;
+	}
+	return 0;
+}
+
+#define HEX_OK       0
+#define HEX_DIGITS   1
+#define HEX_TOO_LONG 2
+
+/* Hex on the command line, so the program needs no file format of its own
+ * and a caller can paste a capture straight in.
+ *
+ * The whole of it or none of it. Three ways this quietly walked a DIFFERENT
+ * message from the one it was handed -- a capture past the cap, an odd
+ * digit count, and a digit that is not hex -- and `bin/situ-walk` refuses
+ * all three, `bytes.fromhex` raising on the last two. Two readers of one
+ * image answering about two different frames is the one thing this program
+ * exists to make impossible: measured at 5000 bytes, where the Python tool
+ * reads a `length` of 5000 that fits its frame and this one saw the same
+ * 5000 in a frame of 4096 (26.719).
+ *
+ * A ceiling and a refusal rather than an allocation, this program still
+ * having none. */
+static int from_hex(const char *text, uint8_t *out, uint32_t cap,
+                    uint32_t *len)
+{
+	uint32_t n = 0u;
+
+	for (; text[0] != '\0'; text += 2) {
+		unsigned int high = 0u;
+		unsigned int low  = 0u;
+
+		if (text[1] == '\0' || !hex_digit(text[0], &high)
+		                || !hex_digit(text[1], &low)) {
+			return HEX_DIGITS;
+		}
+		if (n >= cap) {
+			return HEX_TOO_LONG;
+		}
+		out[n] = (uint8_t)((high << 4) | low);
+		n++;
+	}
+	*len = n;
+	return HEX_OK;
 }
 
 int main(int argc, char **argv)
@@ -75,7 +119,21 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	const uint32_t len   = from_hex(argv[2], message_bytes, MESSAGE_MAX);
+	uint32_t len = 0u;
+
+	switch (from_hex(argv[2], message_bytes, MESSAGE_MAX, &len)) {
+	case HEX_DIGITS:
+		fprintf(stderr, "situ-walk-c: the message is not a run of hex "
+		        "digit pairs\n");
+		return 1;
+	case HEX_TOO_LONG:
+		fprintf(stderr, "situ-walk-c: the message is longer than the %u "
+		        "bytes this build reads\n", MESSAGE_MAX);
+		return 1;
+	default:
+		break;
+	}
+
 	const uint32_t shape = (argc > 3) ? (uint32_t)strtoul(argv[3], NULL, 10)
 	                                  : 0u;
 

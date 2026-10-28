@@ -3796,3 +3796,111 @@ def test_a_long_packet_is_compared_rather_than_dropped(
 	assert len(message) > 512, "the buffer this pins was 512 bytes"
 	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
 
+
+#: The program, as against the library. `main.c` had no test of any kind
+#: until 26.719: nothing in `test/` compiled it, so the one thing a person
+#: runs to see that the embedded walker works was the one thing nothing
+#: asked. That is how a silent truncation lives for eleven weeks.
+PROGRAM = WALKER / "main.c"
+
+#: `MESSAGE_MAX` in `main.c`, read from the source rather than copied, so a
+#: build that raises the ceiling does not leave this test asserting about a
+#: number nobody uses any more.
+def _message_max() -> int:
+	for line in PROGRAM.read_text(encoding="ascii").split("\n"):
+		if line.startswith("#define MESSAGE_MAX"):
+			return int(line.split()[2].rstrip("u"))
+	raise AssertionError("main.c states no MESSAGE_MAX")
+
+
+@pytest.fixture(scope="module")
+def program(tmp_path_factory: pytest.TempPathFactory) -> Path:
+	"""`situ-walk-c` itself, built once for this file's program tests."""
+	if COMPILER is None:
+		pytest.skip("no C compiler")
+	where = tmp_path_factory.mktemp("program")
+	built = subprocess.run(
+		[COMPILER, *WARNINGS, f"-I{WALKER}", str(WALKER / "situ_walk.c"),
+		 str(PROGRAM), "-o", str(where / "situ-walk-c")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	return where / "situ-walk-c"
+
+
+def _program_answers(program: Path, image: Path, message: bytes,
+		shape: int = 0) -> subprocess.CompletedProcess[str]:
+	return subprocess.run([str(program), str(image), message.hex(),
+	                       str(shape)], capture_output=True, text=True)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_program_refuses_a_message_it_cannot_read_whole(
+		program: Path, tmp_path: Path) -> None:
+	"""Three ways it walked a message other than the one it was given.
+
+	`from_hex` took a cap and honoured it silently, so a capture longer
+	than `MESSAGE_MAX` was truncated and every answer after the cut was
+	about bytes the caller had not sent -- while `bin/situ-walk` reads the
+	whole of its argument. Measured at 5000 bytes against `example/udp`:
+	the Python tool read a `length` of 5000 that fits its frame, and this
+	one read the same 5000 in a frame of 4096.
+
+	The other two are `strtoul` on a pair it cannot lex. An odd digit
+	count dropped the last nibble and `zz` read as `00`, where
+	`bytes.fromhex` raises on both. All three are the same fault: a reader
+	that answers about a frame the caller did not describe (26.719).
+	"""
+	blob = image_for(ROOT / "example" / "udp" / "udp.situ")
+	image = tmp_path / "img"
+	image.write_bytes(blob)
+	cap = _message_max()
+
+	over = _program_answers(program, image, b"\xab" * (cap + 1))
+	assert over.returncode != 0, over.stdout
+	assert str(cap) in over.stderr, over.stderr
+
+	# The control, and it is the one that makes the refusal a boundary
+	# rather than a ban: exactly the cap is read, and the frame it reports
+	# is the message it was handed.
+	at_cap = _program_answers(program, image, b"\xab" * cap)
+	assert at_cap.returncode == 0, at_cap.stderr
+	assert f"over {cap} bytes" in at_cap.stdout, at_cap.stdout
+
+	for bad in ("1f902382138800000", "1f90zz82", "1f90 2382"):
+		ran = subprocess.run([str(program), str(image), bad, "0"],
+		                     capture_output=True, text=True)
+		assert ran.returncode != 0, f"{bad!r} was read: {ran.stdout}"
+		assert "hex digit pairs" in ran.stderr, ran.stderr
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_program_reads_what_the_python_walker_reads(
+		program: Path, tmp_path: Path) -> None:
+	"""The program held to the other walker, not just the library.
+
+	Every other test in this file drives `situ_walk.c` through a driver
+	this file writes, so a fault in `main.c` -- which is what a person
+	runs -- was outside all of them. The program's own rendering is
+	mapped to the driver's here rather than compared as text: a line
+	carrying `= value` is an answer and a line carrying `-- ` is a
+	refusal, which is the same two outcomes `python_answers` renders.
+	"""
+	blob  = image_for(ROOT / "example" / "udp" / "udp.situ")
+	image = tmp_path / "img"
+	image.write_bytes(blob)
+
+	for message in (bytes.fromhex("1f90238200105f2a"),
+	                b"", bytes(range(32))):
+		ran = _program_answers(program, image, message)
+		assert ran.returncode == 0, ran.stderr
+
+		said = []
+		for line in ran.stdout.split("\n"):
+			one = line.strip()
+			if not one.startswith("["):
+				continue
+			said.append(one.split(" = ")[1] if " = " in one else "refused")
+
+		assert said == python_answers(blob, message), (
+			f"on {message.hex()!r} the program says {said} and the python "
+			f"walker says {python_answers(blob, message)}")

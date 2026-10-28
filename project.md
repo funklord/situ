@@ -7464,6 +7464,11 @@ Moved to `doc/decision/26.717-the-thunk-that-reached-one-walker-of-two.md`.
 Moved to
 `doc/decision/26.718-the-harness-overwrote-the-image-it-was-comparing-against.md`.
 
+### 26.719 The program walked a message nobody gave it
+
+Moved to
+`doc/decision/26.719-the-program-walked-a-message-nobody-gave-it.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
