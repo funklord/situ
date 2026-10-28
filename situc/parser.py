@@ -11,7 +11,7 @@ diagnostics are the product.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from collections.abc import Callable
 from typing import TypeVar
@@ -53,6 +53,14 @@ class _CodecProperties:
 	pipeline: tuple[str, ...]	= ()
 	tag_bytes: int | None		= None
 	nonce_bytes: int | None		= None
+	#: Which DERIVED property names the author wrote, accumulated as each
+	#: branch assigns one. Names and not the words the author typed: one
+	#: word can set more than one property -- `expansion = ratio_exact(8, 9)`
+	#: sets `expansion` and `ratio`, `expansion = +5 bits` sets `expansion`
+	#: and `expansion_add` -- and a map from words to properties would have
+	#: to claim all of them for every form, which turns a `+N` form into a
+	#: declaration that `ratio` is None and invents a disagreement.
+	written: set[str]		= field(default_factory=set)
 
 	def build(self, span: Span, name: str) -> ast.CodecDecl:
 		return ast.CodecDecl(
@@ -74,6 +82,7 @@ class _CodecProperties:
 			pipeline          = self.pipeline,
 			tag_bytes         = self.tag_bytes,
 			nonce_bytes       = self.nonce_bytes,
+			written           = frozenset(self.written),
 		)
 
 
@@ -1087,10 +1096,12 @@ class Parser:
 
 		if token.text == "length_preserving":
 			properties.expansion = ast.Expansion.PRESERVING
+			properties.written.add("expansion")
 		elif token.text == "expansion":
 			self.expect_symbol("=", "after `expansion`")
 			self.parse_expansion(properties)
 		elif token.text == "seekable":
+			properties.written.add("seekable")
 			if negated:
 				properties.seekable = ast.Seekable.NONE
 			elif self.accept_symbol("=") is not None:
@@ -1101,6 +1112,7 @@ class Parser:
 				properties.seekable = ast.Seekable.LINEAR
 		elif token.text == "granularity":
 			self.expect_symbol("=", "after `granularity`")
+			properties.written.add("granularity")
 			properties.granularity = self._named(
 				ast.Granularity, "granularity", properties, size=True)
 		elif token.text == "kernel":
@@ -1126,6 +1138,7 @@ class Parser:
 		elif token.text in ("systematic", "authenticated", "invertible",
 		                    "deterministic", "error_propagating"):
 			setattr(properties, token.text, not negated)
+			properties.written.add(token.text)
 		else:
 			raise error(
 				f"unknown codec property `{token.text}`",
@@ -1142,6 +1155,7 @@ class Parser:
 			if value is None or value < 0:
 				raise error("`expansion = +N` needs a literal byte count", token.span)
 			properties.expansion = ast.Expansion.FIXED_ADD
+			properties.written.update(("expansion", "expansion_add"))
 			# `+5 bits` for a code whose growth is not a whole number of
 			# them (0046): a five-bit CRC adds five, and there is no byte
 			# count that says so. Bytes stay the default because every code
@@ -1157,6 +1171,7 @@ class Parser:
 
 		if token.text == "unbounded":
 			properties.expansion = ast.Expansion.UNBOUNDED
+			properties.written.add("expansion")
 			return
 
 		if token.text in ("ratio_exact", "ratio_padded", "ratio_bounded"):
@@ -1175,6 +1190,7 @@ class Parser:
 				"ratio_bounded": ast.Expansion.RATIO_BOUNDED,
 			}[token.text]
 			properties.ratio = (first, second)
+			properties.written.update(("expansion", "ratio"))
 
 			# `ratio_bounded(255, 254) + 1`: a code that expands by a ratio
 			# and then appends a constant number of bytes (0048). COBS, SLIP
@@ -1202,6 +1218,7 @@ class Parser:
 						         "buffer as `len * 255 / 254 + 1` (0048)"],
 					)
 				properties.expansion_add = added * BITS_PER_BYTE
+				properties.written.add("expansion_add")
 			return
 
 		raise error(
@@ -1235,6 +1252,7 @@ class Parser:
 					            inner.span)
 				if size:
 					properties.granularity_size = value
+					properties.written.add("granularity_size")
 			return candidate
 
 		options = ", ".join(f"`{item.value}`" for item in enum)

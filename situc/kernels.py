@@ -213,13 +213,29 @@ def apply_to(decl: ast.CodecDecl) -> ast.CodecDecl:
 def _explicit(decl: ast.CodecDecl) -> set[str]:
 	"""Properties the author wrote, as opposed to ones that defaulted.
 
-	Recovered by comparing against a bare signature: the parser does not record
-	which properties were written, and a property equal to its own default was
-	not worth arguing about anyway.
+	**Asked of the parser now, which records them** (26.493). It used to be
+	recovered by comparing against a bare signature, on the reasoning that
+	"a property equal to its own default was not worth arguing about
+	anyway" -- and that is true only when the DERIVED value also equals
+	that default. Where the two defaults differ, a declaration equal to the
+	decl's default is indistinguishable from silence, so it was dropped:
+
+	    not deterministic      decl default False, derived True
+	    seekable = none        decl default NONE, kernel derives LINEAR
+	    granularity = stream   decl default STREAM, kernel derives bit(1)
+	    length_preserving      decl default PRESERVING, kernel adds 32 bits
+
+	all accepted with the declaration discarded, against seven live
+	controls on the same axes. The last is the one that cost most: it is a
+	load-bearing claim about offsets, silently replaced by a CRC kernel's
+	expansion.
+
+	The parser was always the only place that could answer this -- it
+	already tracked the words for its own "given twice" refusal -- and the
+	check below REPLACES these fields with the derived values, so by the
+	time anybody else holds the decl the author's text is gone.
 	"""
-	bare = ast.CodecDecl(decl.span, decl.name)
-	return {name for name in DERIVED_PROPERTIES
-	        if getattr(decl, name) != getattr(bare, name)}
+	return set(decl.written) & set(DERIVED_PROPERTIES)
 
 
 def _render(name: str, value: object) -> str:
@@ -1053,6 +1069,28 @@ def resolve_signatures(schema: ast.Schema) -> None:
 		composed = compose(decl, stages)
 		schema.decls[index] = composed
 		by_name[composed.name] = composed
+
+	# CONSUMED, SO CLEARED -- every codec, kernel or not. `written` answers
+	# one question, did the author write this, and `_explicit` above is the
+	# only thing that asks it. The docstring already says what must be true
+	# from here on: *the lattice reads nine properties and never asks where
+	# they came from*. Clearing makes that an enforced fact rather than a
+	# convention, and a test asserts it.
+	#
+	# Done here and not in `apply_to`, because `apply_to` sees only the
+	# kernel-bearing ones: `std/codecs.situ`'s AEADs have no kernel, keep
+	# whatever they were parsed with, and that is what broke the round trip
+	# when the clear was in the wrong place.
+	#
+	# Which keeps `test_examples._without_spans` whole, and that matters
+	# more than the convenience. That comparator walks EVERY dataclass field
+	# on purpose -- ten AST fields were once dropped on the round trip and
+	# it saw none of them -- so excluding provenance from it would weaken
+	# the property those ten paid for. With the set cleared there is nothing
+	# to exclude.
+	for index, decl in enumerate(schema.decls):
+		if isinstance(decl, ast.CodecDecl) and decl.written:
+			schema.decls[index] = replace(decl, written=frozenset())
 
 
 def _stage(decl: ast.CodecDecl, name: str,

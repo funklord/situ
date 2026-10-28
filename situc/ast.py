@@ -1408,6 +1408,21 @@ class CodecDecl(Decl):
 	# says nothing about the tag beside it.
 	tag_bytes: int | None		= None
 	nonce_bytes: int | None		= None
+	#: The DERIVED properties the author actually wrote, by property name
+	#: (26.493). Recorded rather than inferred, because it cannot be
+	#: inferred: `kernels._check_derived` REPLACES these fields with the
+	#: derived values, so by the time anybody holds a parsed `CodecDecl` the
+	#: author's text is gone -- and the check that compares them ran before
+	#: that, on a guess.
+	#:
+	#: The guess was "a property differing from the bare default was
+	#: written", and it is wrong in exactly the cases that matter: a
+	#: declaration EQUAL to the default is indistinguishable from silence,
+	#: so `not deterministic` (the decl default is False, the derived value
+	#: True), `seekable = none` and `granularity = stream` were dropped, and
+	#: so was `length_preserving` over a kernel that adds 32 bits -- a
+	#: load-bearing claim about offsets.
+	written: frozenset[str]		= frozenset()
 
 
 class ImplKind(Enum):

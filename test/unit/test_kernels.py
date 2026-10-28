@@ -349,6 +349,153 @@ def test_a_declaration_that_contradicts_its_kernel_is_refused() -> None:
 	assert "one of the two being wrong" in rendered
 
 
+#: A declaration whose value EQUALS the decl's own default, over a kernel
+#: that derives something else (26.493). Each was accepted with the
+#: declaration discarded, because `_explicit` inferred "the author wrote
+#: this" from "it differs from the bare default".
+#: The expected fragment is carried rather than derived from the property
+#: name, because `_render` spells a false bool as `not deterministic` and
+#: an enum as `seekable = none` -- so the four diagnostics are four shapes,
+#: and an assertion built from the name alone passes for the wrong reason
+#: or fails for a reason that is not the code's.
+BLIND_AT_THE_DEFAULT = (
+	("not deterministic;", "table",
+	 "declares `not deterministic` but its kernel implies `deterministic`"),
+	("seekable = none;", "table",
+	 "declares `seekable = none` but its kernel implies `seekable ="),
+	("granularity = stream;", "table",
+	 "declares `granularity = stream` but its kernel implies"),
+	("length_preserving;", "polynomial",
+	 "declares `expansion = length_preserving` but its kernel implies"),
+)
+
+TABLE_KERNEL = ("table(input_bits = 1, output_bits = 2,"
+                " code = manchester_802_3)")
+POLY_KERNEL  = ("polynomial(width = 32, poly = 0x04C11DB7,"
+                " init = 0xFFFFFFFF)")
+
+
+@pytest.mark.parametrize("body,family,said", BLIND_AT_THE_DEFAULT,
+                         ids=["deterministic", "seekable", "granularity",
+                              "expansion"])
+def test_a_declaration_equal_to_its_own_default_is_not_silence(
+		body: str, family: str, said: str) -> None:
+	"""Four axes that could not be contradicted, and ONE cause (26.493).
+
+	`_explicit` recovered "what the author wrote" by comparing against a
+	bare signature, and its own docstring defended that: *"a property equal
+	to its own default was not worth arguing about anyway"*. That holds
+	only when the DERIVED value also equals that default. Where the two
+	disagree, a declaration equal to the decl's default cannot be told from
+	silence -- `deterministic` is the plainest case, defaulting False on
+	`CodecDecl` and True on `Derived` -- so the declaration was dropped and
+	the kernel's value used, at rc=0.
+
+	`length_preserving` is the one that cost most: a claim about offsets,
+	replaced by a CRC kernel's +32 bits.
+
+	**The declaration was never lost**, which is what makes this the
+	check's fault rather than the parser's: `not seekable; seekable =
+	linear;` has always been refused as *"seekable is given twice"*, so the
+	words were recorded. They are recorded as property NAMES now, and
+	`_explicit` asks for them.
+	"""
+	kernel = TABLE_KERNEL if family == "table" else POLY_KERNEL
+	rendered = refusal(f"codec c {{\n\t{body}\n"
+	                   f"\tkernel = {kernel};\n}}\n")
+
+	assert said in rendered
+	assert "one of the two being wrong" in rendered
+
+
+def test_a_declaration_the_kernel_agrees_with_is_still_accepted() -> None:
+	"""The control for the four above, on the same axes.
+
+	A refusal keyed on "the author wrote something about this axis" rather
+	than on a disagreement would refuse these too, and saying a thing twice
+	is redundant rather than wrong. `deterministic` and `seekable = linear`
+	are what the table kernel derives, so both are accepted and both are
+	written at a value that is NOT the decl default -- which is why they
+	were never in the blind set.
+	"""
+	decl = only("endian big;\nbit_order msb_first;\n"
+	            "codec c {\n\tdeterministic;\n\tseekable = linear;\n"
+	            f"\tkernel = {TABLE_KERNEL};\n}}\n")
+
+	assert decl.deterministic is True
+	assert decl.seekable is ast.Seekable.LINEAR
+
+
+#: Any span: `_explicit` reads only the written set, and a constructed decl
+#: needs one to exist. Taken from a real parse so it is a span and not a
+#: stub pretending to be one.
+_ANY_SPAN = only("endian big;\nbit_order msb_first;\n"
+                 "codec c { length_preserving; }\n").span
+
+
+def test_explicit_reads_the_written_set_and_infers_nothing() -> None:
+	"""`_explicit` is where the fix lands, so it is tested where it lives.
+
+	The old version inferred "the author wrote this" from "it differs from
+	the bare default", and the first half of this test pins that the
+	inference is gone: a decl whose values all differ from the defaults,
+	carrying an EMPTY written set, must report nothing explicit. Under the
+	old rule it reported five.
+
+	The second half pins what the parser records -- property NAMES, not the
+	author's words. One word can set more than one property and the forms
+	differ: `expansion = +5 bits` sets `expansion` and `expansion_add`,
+	`expansion = ratio_exact(8, 9)` sets `expansion` and `ratio`. A map
+	from the word to all three would make the `+N` form a declaration that
+	`ratio` is None, so a kernel deriving a ratio would disagree with a
+	claim the author never made -- a refusal invented by the bookkeeping.
+
+	Asserted here rather than through a parsed schema because the set is
+	deliberately unobservable by then: `resolve_signatures` clears it, and
+	the test below asserts that.
+	"""
+	loud = ast.CodecDecl(
+		span = _ANY_SPAN, name = "c",
+		expansion = ast.Expansion.UNBOUNDED, seekable = ast.Seekable.LINEAR,
+		granularity = ast.Granularity.BIT, systematic = True,
+		invertible = True, written = frozenset())
+	assert kernels._explicit(loud) == set(), (
+		"the default-difference inference is still there")
+
+	for written, expected in (
+			(frozenset({"expansion", "expansion_add"}),
+			 {"expansion", "expansion_add"}),
+			(frozenset({"expansion", "ratio"}), {"expansion", "ratio"}),
+			# `kernel` and `tag_bytes` are recorded by nobody and are not
+			# derived properties anyway, so they fall out here.
+			(frozenset({"expansion", "tag_bytes"}), {"expansion"})):
+		decl = ast.CodecDecl(span = _ANY_SPAN, name = "c", written = written)
+		assert kernels._explicit(decl) == expected
+
+
+def test_the_written_set_is_cleared_once_signatures_resolve() -> None:
+	"""Provenance does not outlive the one question it answers.
+
+	`resolve_signatures`' own docstring says what must hold from there on --
+	*the lattice reads nine properties and never asks where they came
+	from* -- and this makes that an enforced fact. It is also what keeps
+	`test_examples._without_spans` whole: that comparator walks EVERY
+	dataclass field on purpose, ten having once been dropped on the round
+	trip with nothing noticing, so excluding provenance from it would
+	weaken the property those ten paid for.
+
+	Over every corpus schema, because the first attempt cleared it in
+	`apply_to`, which sees only the kernel-bearing codecs -- and
+	`std/codecs.situ`'s AEADs have no kernel, kept what they were parsed
+	with, and broke the round trip in the one place a fixture would not
+	have looked.
+	"""
+	for path in SCHEMAS:
+		for decl in load_schema(path).codecs():
+			assert decl.written == frozenset(), (
+				f"{path.name}: `{decl.name}` still carries {decl.written}")
+
+
 def test_a_declaration_that_agrees_with_its_kernel_is_accepted() -> None:
 	"""Saying it twice is redundant, not wrong."""
 	decl = only("""codec c {
