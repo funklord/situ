@@ -80,6 +80,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_floor,
 	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
@@ -3010,7 +3011,18 @@ class Emitter:
 		cap     = placement.repeat_cap if placement.repeat_while else None
 		counted = is_counted_run(self.resolved.structs, placement)
 		count   = bare_name(local_name(struct, placement)) + "_count()"
-		minimum = f"::{self.namespace}::{inner}::size_min"
+		# THE STRUCTURAL MINIMUM, not `SIZE_MIN` (26.724). `SIZE_MIN` is
+		# `layout.size_bytes` and is derived from the declared constraints,
+		# so quoting it for the elements this walk has not reached made the
+		# total FALL as bytes arrived: the element ahead completes and is
+		# re-counted at its own honest bound, which is lower than a `[min]`
+		# says. `framing_floor` is what each unreached element will itself
+		# report once reached, which is what makes the total monotone --
+		# 26.693's rule in the one place that still broke it. Written as the
+		# VALUE rather than the constant, so the emitted comment names the
+		# figure's origin and a mutual cycle cannot put a declaration after
+		# the function reading it.
+		minimum = f"{framing_floor(self.resolved.structs, element)}u"
 		body    = ["\t\t\tstd::uint32_t part = 0;"]
 
 		if placement.repeat_while is not None:
@@ -3065,7 +3077,13 @@ class Emitter:
 				" part",
 				"\t\t\t\t * of this run's -- and so is a minimum for each"
 				" element",
-				"\t\t\t\t * the count still promises after it. */",
+				"\t\t\t\t * the count still promises after it -- the"
+				" STRUCTURAL",
+				"\t\t\t\t * minimum, every value constraint ignored, so"
+				" that it",
+				"\t\t\t\t * agrees with what each of those elements will"
+				" itself",
+				"\t\t\t\t * report once reached (26.724). */",
 				"\t\t\t\tneed = situ_need_u32(at, part);",
 				"\t\t\t\tneed = situ_need_u32(need,",
 				f"\t\t\t\t        situ_need_mul_u32({count} - n - 1u,",

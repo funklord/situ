@@ -77,6 +77,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_floor,
 	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
@@ -5862,6 +5863,17 @@ class Emitter:
 			return None
 
 		inner = _pascal(element.name)
+		# THE STRUCTURAL MINIMUM, not `SIZE_MIN` (26.724). `SIZE_MIN` is
+		# `layout.size_bytes` and is derived from the declared constraints,
+		# so quoting it for the elements this walk has not reached made the
+		# total FALL as bytes arrived: the element ahead completes and is
+		# re-counted at its own honest bound, which is lower than a `[min]`
+		# says. `framing_floor` is what each unreached element will itself
+		# report once reached, which is what makes the total monotone --
+		# 26.693's rule in the one place that still broke it. The VALUE
+		# rather than the constant, so the emitted comment names the
+		# figure's origin and no declaration order can matter.
+		floor = framing_floor(self.resolved.structs, element)
 		read  = [
 			# `at` has been advanced by a length the message chose, so
 			# the slice panics where C and C++ read past the end --
@@ -5938,11 +5950,17 @@ class Emitter:
 				" is part",
 				"\t\t\t\t\t// of this run's -- and so is a minimum for"
 				" each element",
-				"\t\t\t\t\t// the count still promises after it.",
+				"\t\t\t\t\t// the count still promises after it --"
+				" the",
+				"\t\t\t\t\t// STRUCTURAL minimum, every value constraint"
+				" ignored,",
+				"\t\t\t\t\t// so that it agrees with what each of those"
+				" elements",
+				"\t\t\t\t\t// will itself report once reached (26.724).",
 				"\t\t\t\t\treturn situ_rt::Framing::Need("
 				"at.saturating_add(n)",
 				f"\t\t\t\t\t\t.saturating_add(({count} - seen - 1)",
-				f"\t\t\t\t\t\t\t.saturating_mul({inner}::SIZE_MIN)));",
+				f"\t\t\t\t\t\t\t.saturating_mul({floor})));",
 				"\t\t\t\t}",
 				"\t\t\t};",
 				"\t\t\tat  = at.saturating_add(part);",

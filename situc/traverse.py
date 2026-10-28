@@ -1903,6 +1903,72 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
+def framing_floor(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct) -> int:
+	"""The fewest bytes a COMPLETE `struct` can occupy, constraints ignored.
+
+	Not `layout.size_bytes`, which is what every backend's `SIZE_MIN` is
+	and which is derived from the DECLARED CONSTRAINTS: `u8 len [min = 1]`
+	makes the run it sizes at least one byte, so
+
+	    struct item { u8 len [min = 1, max = 32]; u8 id[len]; }
+
+	has a `size_bytes` of two. Structurally a complete one is ONE byte --
+	framing precedes validation, and a `len` of zero is bytes that arrived.
+
+	**This is 26.693's rule in the one place that still broke it.** That
+	rule is that a framing function may not mix a bound derived from
+	constraints with a total computed from unvalidated data, and the floor
+	it removed from `required` was only the first instance. The second is
+	the counted-run walk, which credits every element it has NOT reached
+	with a per-element minimum: quoting `SIZE_MIN` there made the total
+	FALL as bytes arrived, because the element ahead completes and is
+	re-counted at its own honest bound, which is lower than the constraint
+	says. Measured on the shape above with `count = 2`, a 2-byte and a
+	3-byte element, all four backends agreeing:
+
+	    have=10 need=13   have=11 need=14   have=12 need=13   <-- FELL
+
+	That is situ's second stated framing property broken in a CONFORMANT
+	schema, where 26.693's two cases needed one violating a `[min]`.
+
+	The figure has to be the one each unreached element will itself report
+	once reached, and this is it by construction: every backend's
+	`required` opens `at` at exactly the constant `extent_parts` returns,
+	so the tail credits an element with what its own `required` answers for
+	zero bytes. The total is then monotone because a completing element
+	adds at least what the tail stops crediting it (26.724).
+
+	A fixed-size struct falls back to `size_bytes`, which is its real size
+	rather than a minimum and carries no constraint.
+
+	**One, not zero, where nothing is fixed in front.** A struct whose first
+	member is variable has a constant of zero -- `one { uvar v; }` is the
+	case -- and zero would be sound and useless: it is what makes a caller
+	fetch a run of varints one byte per round trip. A frameable run element
+	cannot be zero bytes, because every backend refuses a struct a complete
+	one of which can be (*"a complete one can be zero bytes, so every buffer
+	already holds one"*), so one byte is both honest and the figure
+	`size_bytes` already carried for that shape. The defect was never the
+	varint's byte; it was a `[min]` on a length counted as though the bytes
+	had been validated.
+
+	**What this rests on, and it is measured rather than argued.** The
+	monotonicity it buys needs this figure to be no larger than the smallest
+	answer the element's own `required` can give, which is its answer for
+	zero bytes. `test_the_framing_floor_is_never_above_what_an_empty_buffer
+	_is_told` asks that of every struct in the corpus: 95 report a number,
+	none is below this, and it is EXACT for 93 -- `dnsname.question`
+	answering five where this says four and `mqtt.will_message` two where
+	this says one are the only two it is strictly below.
+	"""
+	parts = extent_parts(structs, struct)
+	if parts is None:
+		return int(struct.layout.size_bytes)
+	constant, _ = parts
+	return max(constant, 1)
+
+
 def framing_gaps(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct) -> list[int] | None:
 	"""The fixed bytes before each variable member, in order.

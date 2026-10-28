@@ -77,6 +77,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_floor,
 	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
@@ -5378,7 +5379,7 @@ class Emitter:
 		# lands after the function reading it: `expr`'s run of `item` read
 		# `SITU_ITEM_SIZE_MIN` forty lines above the `#define`. The emitted
 		# comment names the macro so the number is still traceable.
-		minimum  = f"{int(element.layout.size_bytes)}u"
+		minimum  = f"{framing_floor(self.resolved.structs, element)}u"
 		min_name = macro(self.prefix, element.name, "SIZE_MIN")
 		# A counted run needs the counter for its own termination rather than
 		# for a cap, so it carries one whether or not `repeat_cap` is set.
@@ -5465,9 +5466,17 @@ class Emitter:
 				" part of",
 				"\t\t\t * this run's -- and so is a minimum for each element"
 				" the",
-				f"\t\t\t * count still promises after it: {min_name}, written",
-				"\t\t\t * out because a mutual cycle would put the `#define`",
-				"\t\t\t * after this function. */",
+				"\t\t\t * count still promises after it. That minimum is"
+				" the",
+				"\t\t\t * STRUCTURAL one, every value constraint ignored,"
+				" because",
+				f"\t\t\t * it has to agree with what each of those elements"
+				f" will",
+				f"\t\t\t * itself report once reached -- {min_name} is"
+				" derived from",
+				"\t\t\t * the constraints and made this total fall as bytes"
+				" arrived",
+				"\t\t\t * (26.724). */",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				f"\t\t\t*need = situ_need_u32(*need,"
 				f" situ_need_mul_u32({count} - n - 1u,"

@@ -77,6 +77,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	framing_floor,
 	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
@@ -5789,6 +5790,17 @@ class Emitter:
 			return None
 
 		inner = py_name(element.name)
+		# THE STRUCTURAL MINIMUM, not `SIZE_MIN` (26.724). `SIZE_MIN` is
+		# `layout.size_bytes` and is derived from the declared constraints,
+		# so quoting it for the elements this walk has not reached made the
+		# total FALL as bytes arrived: the element ahead completes and is
+		# re-counted at its own honest bound, which is lower than a `[min]`
+		# says. `framing_floor` is what each unreached element will itself
+		# report once reached, which is what makes the total monotone --
+		# 26.693's rule in the one place that still broke it. The VALUE
+		# rather than the constant, so the emitted comment names the
+		# figure's origin and no declaration order can matter.
+		floor = framing_floor(self.resolved.structs, element)
 		read  = [
 			# Python's slice is forgiving where Rust panics and C reads
 			# past the end, so without this it answers from an empty
@@ -5852,11 +5864,17 @@ class Emitter:
 				" part of",
 				"\t\t\t\t# this run's -- and so is a minimum for each"
 				" element the",
-				"\t\t\t\t# count still promises after it.",
+				"\t\t\t\t# count still promises after it -- the"
+				" STRUCTURAL",
+				"\t\t\t\t# minimum, every value constraint ignored, so"
+				" that it",
+				"\t\t\t\t# agrees with what each of those elements will"
+				" itself",
+				"\t\t\t\t# report once reached (26.724).",
 				f'\t\t\t\traise TruncatedError("{placement.path}:'
 				' incomplete",',
 				"\t\t\t\t\tat + short.needed",
-				f"\t\t\t\t\t+ ({count} - seen - 1) * {inner}.SIZE_MIN)"
+				f"\t\t\t\t\t+ ({count} - seen - 1) * {floor})"
 				" from None",
 				"\t\t\tat  += part",
 				"\t\t\tpos += part",

@@ -7489,6 +7489,11 @@ Moved to
 Moved to
 `doc/decision/26.723-the-floor-was-also-a-bounds-guard.md`.
 
+### 26.724 The run walk credited a constraint it could not enforce
+
+Moved to
+`doc/decision/26.724-the-run-walk-credited-a-constraint-it-could-not-enforce.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

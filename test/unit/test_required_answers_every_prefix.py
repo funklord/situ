@@ -56,6 +56,7 @@ from situc.codegen.python import generate			# noqa: E402
 from situc.layout import solve				# noqa: E402
 from situc.parser import parse_text			# noqa: E402
 from situc.resolve import resolve			# noqa: E402
+from situc.traverse import framing_floor		# noqa: E402
 
 RUNTIME = ROOT / "runtime" / "python"
 
@@ -108,6 +109,28 @@ struct outer {
 	col  c;
 }
 
+// A WIDE FIXED PREFIX in front of a counted run of records, which is the
+// arrangement none of the shapes above has: every one of them reads its
+// count from offset 0 or from a varint there, so one byte already carries
+// it. This one reads a `u16` at offset 8. bbq-predictor's `stations_body`
+// is this shape member for member, and it carried two faults the sweep
+// could not see -- an out-of-bounds read of the count (26.723) and a
+// `need` that fell as bytes arrived (26.724).
+//
+// `[min = 1]` on the element's length is load-bearing: it is what makes
+// `item`'s SIZE_MIN two where its STRUCTURAL minimum is one, and the gap
+// between those two numbers is the whole of 26.724.
+struct item {
+	u8  len [min = 1, max = 32];
+	u8  id[len];
+}
+
+struct wide {
+	i64   stamp;
+	u16   count [max = 4096];
+	item  ids[count];
+}
+
 struct nothing { }
 
 // The same fault behind a discriminant, which is the shape
@@ -142,6 +165,20 @@ CASES: dict[str, tuple[bytes, list[int | None]]] = {
 	             [2, 3, None]),
 	"outer":    (bytes([0xAA, 0x03, 0x81, 0x01, 0x05, 0x06]),
 	             [2, 5, 6, 6, 6, None]),
+	# Eight zero bytes, `count = 2`, then a one-byte id and a two-byte
+	# one: fifteen bytes in all. The first ten answers are the fixed
+	# prefix, which is 26.723's guard -- before it, C++ read the count out
+	# of the buffer and the other three answered from a lax zero.
+	#
+	# Then 12, 13, 13, 15, 15. The pair of 13s is 26.724: the element
+	# ahead completes and `at` grows by the two bytes it took, while the
+	# tail stops crediting it with the one byte an element structurally
+	# needs. Quoting `item.SIZE_MIN` there instead made that step
+	# 14 -> 13 and broke monotonicity in a CONFORMANT schema.
+	"wide":     (bytes(8) + bytes([0x02, 0x00])
+	             + bytes([0x01, 0x78]) + bytes([0x02, 0x79, 0x79]),
+	             [10, 10, 10, 10, 10, 10, 10, 10, 10,
+	              12, 13, 13, 15, 15, None]),
 	# The variant answers exactly what the plain nested case does, which
 	# is the point: the discriminant costs a byte and changes nothing
 	# else about the framing.
@@ -291,6 +328,98 @@ def test_the_walker_frames_the_same_prefixes(name: str) -> None:
 			assert reader.ready == len(whole), (
 				f"{name}: the walker frames {reader.ready} bytes where "
 				f"the message is {len(whole)}")
+
+
+#: Every schema in the corpus, for the one claim below that is about the
+#: corpus rather than about these shapes.
+SCHEMAS = sorted((ROOT / "example").glob("*/*.situ"))
+
+
+def _corpus_module(path: Path, out: Path) -> ModuleType:
+	"""The Python backend for one corpus schema."""
+	from situc.diagnostics import Source			# noqa: PLC0415
+	from situc.parser import parse			# noqa: PLC0415
+
+	schema   = parse(Source(str(path), path.read_text(encoding="ascii")))
+	resolved = resolve(schema, solve(schema))
+	module   = out / (path.stem + ".py")
+	module.write_text(generate(schema, resolved, path.stem).module,
+	                  encoding="ascii")
+
+	_runtime()
+	spec = importlib.util.spec_from_file_location(path.stem, module)
+	assert spec is not None and spec.loader is not None
+	built = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(built)
+	return built
+
+
+def test_the_framing_floor_is_never_above_what_an_empty_buffer_is_told(
+		tmp_path: Path) -> None:
+	"""`framing_floor` is a LOWER bound on every answer, over the corpus.
+
+	The counted-run walk credits each element it has not reached with
+	`framing_floor` of that element, and the whole of 26.724 is that the
+	figure has to be no larger than the smallest answer the element's own
+	`required` can give -- or the total FALLS when the element ahead
+	completes and is re-counted at its own honest bound. `SIZE_MIN` was
+	larger for an element whose length carries a `[min]`, which is how a
+	conformant schema came to break monotonicity.
+
+	The smallest answer is the one for zero bytes, because an element's
+	own answer is monotone in what has arrived, so that is the one input
+	this asks about. It asks it of every struct in the corpus rather than
+	of the elements of the one corpus run, because 95 structs is a
+	population and `ble`'s `adv_report` is not -- and `adv_report` is the
+	ONLY counted run of variable-size records in the corpus, where
+	`SIZE_MIN` and the floor are both ten and the fault cannot appear.
+
+	A struct that reports a complete message for no bytes at all is
+	skipped: `id3`'s and `mqtt`'s `nothing` are the two, and every backend
+	refuses such a struct as a run element outright, which is why the
+	comparison does not reach them.
+	"""
+	asked = exact = above = 0
+	for path in SCHEMAS:
+		module = _corpus_module(path, tmp_path)
+		schema = parse_text(path.read_text(encoding="ascii"))
+		for name, struct in resolve(schema, solve(schema)).structs.items():
+			view = getattr(module, name, None)
+			if view is None or not hasattr(view, "required"):
+				continue
+			try:
+				view.required(b"")
+				continue		# complete at nothing; never an element
+			except module.TruncatedError as short:
+				told = int(short.needed)
+			except Exception:			# noqa: BLE001
+				continue	# refuses rather than frames; not this claim
+			floor = framing_floor(
+				resolve(schema, solve(schema)).structs, struct)
+			asked += 1
+			exact += int(told == floor)
+			above += int(told > floor)
+			assert floor <= told, (
+				f"{path.name}:{name}: the floor is {floor} and its own "
+				f"`required` answers {told} for no bytes, so a run of "
+				f"these would be credited more than the element will "
+				f"ever report and the total can fall")
+
+	# Not vacuous, and the figures are the ones measured when written:
+	# 95 structs answered a bound, the floor was EXACT for 93 of them, and
+	# `dnsname.question` (five against four) and `mqtt.will_message` (two
+	# against one) were the two it was strictly below.
+	#
+	# `exact` is the guard that matters. A floor that collapsed to zero or
+	# to one everywhere would satisfy the assertion above it trivially --
+	# a lower bound of zero is sound and useless -- and would send this
+	# count to about ten, which is how many structs open with a varint.
+	assert asked >= 90, f"only {asked} structs answered a bound"
+	assert exact >= 85, (
+		f"the floor is exact for only {exact} of {asked}, where 93 of 95 "
+		f"were measured; a floor that has gone slack is sound and buys "
+		f"nothing, and this is the only thing that notices")
+	assert above >= 1, "the floor is exact everywhere, where two were above"
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
