@@ -1079,6 +1079,45 @@ static situ_walk_err read_at(const uint8_t *message, uint32_t len,
 static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
                               int32_t base, int64_t *out);
 
+/* `remaining` is ASKED FOR rather than handed over, so a program that never
+ * names it never pays for the offset the word is measured from.
+ *
+ * This is 26.585 ported. `walk.py` passed that offset eagerly, as a value,
+ * where every other input to a program is a thunk -- and for a member
+ * interior to a region the offset is not answerable against the parent view:
+ * the sum walks the parent's members, reaches the region, needs the region's
+ * size, and needs this member again. keystore's sealed `plaintext` is the
+ * case, and its size program never names `remaining` at all, so the offset
+ * was computed for nothing and the recursion was the whole of what it bought.
+ *
+ * Python was fixed on 2026-10-08 and this walker was not, which is why a
+ * zero-byte input took `walk_keystore` to a stack overflow: the two readers
+ * are meant to be independent witnesses, and one of them died on a message
+ * the other reports.
+ *
+ * It changes WHEN the offset is taken and not from where, which is what lets
+ * the two cases the eager form existed for keep their answers -- sqlite's 44
+ * against C's 37 and ipv6ext's 38 against 46. */
+typedef situ_walk_err (*walk_remaining_fn)(void *ctx, int64_t *out);
+
+/* What `remaining_from_member` needs to answer the question later. */
+typedef struct {
+	const situ_walk_image *image;
+	const uint8_t         *message;
+	uint32_t               len;
+	uint32_t               shape;
+	uint32_t               index;
+	uint32_t               depth;
+} walk_from;
+
+static situ_walk_err remaining_from_member(void *raw, int64_t *out);
+
+static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
+                               situ_walk_load load, void *ctx,
+                               walk_remaining_fn remaining_of,
+                               void *remaining_ctx, int have_tag,
+                               uint64_t tag, int64_t *out);
+
 /* Whether a run's size program states BYTES rather than a count of
  * elements. Defined with the other run predicates below; declared here
  * because a varint run has to ask it before walking one. */
@@ -2128,17 +2167,11 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 	 * the mistake `walk.py` records sqlite and ipv6ext catching, 44 against
 	 * C's 37 and 38 against 46, and this walker made it again from a clean
 	 * start. The member's own offset is what the word is relative to. */
-	uint32_t from = 0u;
-	err = offset_bits_deep(image, message, len, shape, index, depth, &from);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-	from /= 8u;
-
-	walk_ctx ctx = {image, message, len, shape, depth};
-	int64_t  count = 0;
-	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
-	                     (int64_t)(len > from ? len - from : 0u), &count);
+	walk_ctx  ctx    = {image, message, len, shape, depth};
+	walk_from anchor = {image, message, len, shape, index, depth};
+	int64_t   count  = 0;
+	err = eval_lazy(image, held.size_code, ctx_load, &ctx,
+	                remaining_from_member, &anchor, 0, 0, &count);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
@@ -2200,12 +2233,26 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 			 * times one byte is that byte count. */
 			held.element_bits = 8u;
 		} else {
+			/* The one path that needs the member's own byte offset, and
+			 * so the one that takes it. Above, `remaining` is a thunk the
+			 * size program may never call; here the walk has to start
+			 * somewhere, so the offset is asked for where it is used
+			 * rather than before the program that usually does not want
+			 * it (26.585). */
+			uint32_t from = 0u;
+			uint32_t at;
+			int64_t  i;
+
+			err = offset_bits_deep(image, message, len, shape, index,
+			                       depth, &from);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			from /= 8u;
 			if (from > len) {
 				return SITU_WALK_BOUNDS;
 			}
-
-			uint32_t at = from;
-			int64_t  i;
+			at = from;
 
 			for (i = 0; i < count && at < len; i++) {
 				uint32_t extent = 0u;
@@ -2953,17 +3000,11 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;	/* not a run */
 	}
 
-	uint32_t from = 0u;
-	err = situ_walk_offset_bits(image, message, len, shape, index, &from);
-	if (err != SITU_WALK_OK) {
-		return err;
-	}
-	from /= 8u;
-
-	walk_ctx ctx   = {image, message, len, shape, 0u};
-	int64_t  count = 0;
-	err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
-	                     (int64_t)(len > from ? len - from : 0u), &count);
+	walk_ctx  ctx    = {image, message, len, shape, 0u};
+	walk_from anchor = {image, message, len, shape, index, 0u};
+	int64_t   count  = 0;
+	err = eval_lazy(image, held.size_code, ctx_load, &ctx,
+	                remaining_from_member, &anchor, 0, 0, &count);
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
@@ -5010,11 +5051,6 @@ static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at)
 
 #define STACK_DEPTH 32u
 
-static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
-                                 situ_walk_load load, void *ctx,
-                                 int64_t remaining, int have_tag, uint64_t tag,
-                                 int64_t *out);
-
 situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
                              situ_walk_load load, void *ctx,
                              int64_t remaining, int64_t *out)
@@ -5027,10 +5063,56 @@ situ_walk_err situ_walk_eval(const situ_walk_image *image, uint32_t at,
 }
 
 
+/* The constant thunk, for every caller that already holds the figure.
+
+   A caller whose `remaining` costs nothing to compute passes it as a value
+   still, and only the three that would have to walk the frame for it pass a
+   real thunk. Boxing the constant rather than branching on a null pointer
+   keeps one path through `OP_REMAINING`: a second path is a second place for
+   the two walkers to disagree. */
+static situ_walk_err remaining_held(void *raw, int64_t *out)
+{
+	*out = *(const int64_t *)raw;
+	return SITU_WALK_OK;
+}
+
+
 static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
                                  situ_walk_load load, void *ctx,
                                  int64_t remaining, int have_tag, uint64_t tag,
                                  int64_t *out)
+{
+	int64_t held = remaining;
+
+	return eval_lazy(image, at, load, ctx, remaining_held, &held, have_tag,
+	                 tag, out);
+}
+
+
+/* The offset asked for only if the program names `remaining`. */
+static situ_walk_err remaining_from_member(void *raw, int64_t *out)
+{
+	const walk_from *held = (const walk_from *)raw;
+	uint32_t         from = 0u;
+	const situ_walk_err err = offset_bits_deep(held->image, held->message,
+	                                           held->len, held->shape,
+	                                           held->index, held->depth,
+	                                           &from);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	from /= 8u;
+	*out = (int64_t)(held->len > from ? held->len - from : 0u);
+	return SITU_WALK_OK;
+}
+
+
+static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
+                               situ_walk_load load, void *ctx,
+                               walk_remaining_fn remaining_of,
+                               void *remaining_ctx, int have_tag,
+                               uint64_t tag, int64_t *out)
 {
 	int64_t  stack[STACK_DEPTH];
 	unsigned depth = 0u;
@@ -5080,10 +5162,16 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
 		}
 
 		if (op == OP_REMAINING) {
+			int64_t             word = 0;
+			const situ_walk_err err  = remaining_of(remaining_ctx, &word);
+
 			if (depth >= STACK_DEPTH) {
 				return SITU_WALK_MALFORMED;
 			}
-			stack[depth++] = remaining;
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = word;
 			continue;
 		}
 

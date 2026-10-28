@@ -7450,6 +7450,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.717 The thunk that reached one walker of two
+
+Moved to `doc/decision/26.717-the-thunk-that-reached-one-walker-of-two.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

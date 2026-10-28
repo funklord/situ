@@ -3646,3 +3646,87 @@ def test_the_two_walkers_agree_about_every_offset(
 					f"python {p_at}, on {packet.hex()}")
 
 	OFFSETS_ASKED[schema.name] = (asked, declined)
+
+
+#: A control for `remaining`'s laziness, read from the other side. `body`'s
+#: program IS the op, so the thunk must be called and must answer from the
+#: member's own offset: seven bytes of ten, where measuring from the frame
+#: start would say ten.
+_MEASURED_FROM_HERE = """struct measured_from_here {
+	u8  head[3];
+	u8  body[remaining];
+}
+"""
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_sealed_member_is_measured_without_recursing(tmp_path: Path) -> None:
+	"""keystore over a frame too short for its sealed region, in both walkers.
+
+	The C walker died here -- a stack overflow, not a refusal, on a ZERO-BYTE
+	input, which is as reachable as an input gets. `chain_bits` for the
+	sealed `plaintext` summed the parent's members, reached the region,
+	needed the region's size, and needed `plaintext` again; the cycle ran 48
+	frames and repeated until the stack was gone.
+
+	26.585 fixed exactly that in `walk.py` on 2026-10-08 and named this
+	schema as the case. This walker never got the port, so for three weeks
+	the two readers situ holds up as independent witnesses disagreed about
+	whether a keystore can be read at all -- one answering, one dying. That
+	is the expensive shape of the disagreement, because a traceback is not a
+	verdict anybody compares.
+
+	The fix is Python's: `remaining` is asked for through a thunk, so
+	`plaintext`'s size program -- which never names the word -- no longer
+	pays for the offset it would be measured from. The offset was computed
+	for nothing and the recursion was the whole of what it bought.
+
+	Three frames, because the interesting one is not the empty buffer. The
+	short ones refuse the region and answer everything around it; the whole
+	one answers it, which is what says the laziness did not simply break the
+	member it was protecting.
+	"""
+	path  = ROOT / "example" / "keystore" / "keystore.situ"
+	blob  = image_for(path)
+	shape = shape_named(path, "keystore")
+	whole = b"KSTR" + bytes([0]) + b"\x00" * 28 + b"\x10\x00"
+
+	for message in (b"", b"KSTR", whole):
+		theirs = c_widths(tmp_path, blob, message, shape)
+		mine   = python_widths(blob, message, shape)
+
+		assert theirs == mine, (f"on {message.hex()!r}: C {theirs}, "
+		                        f"python {mine}")
+
+	# And the region is answered rather than refused once the frame holds
+	# it, so the test above is not two walkers agreeing on a refusal.
+	assert "refused" not in python_widths(blob, whole, shape)
+	assert "refused" in python_widths(blob, b"", shape)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_program_that_names_remaining_still_measures_from_the_member(
+		tmp_path: Path) -> None:
+	"""The control the laziness needs, and it pins the laziness not the bug.
+
+	Making `remaining` a thunk is only correct if the one op that wants it
+	still gets the right figure. A thunk nobody called would make every
+	`[remaining]` run measure zero, and the test above would not notice --
+	it asserts that two walkers agree, and they would agree on nothing.
+
+	So: three bytes of head, `body[remaining]`, ten bytes of message. Seven
+	is the answer measured from `body`'s own offset and ten is the answer
+	measured from the frame start, which is the mistake `walk.py` records
+	sqlite and ipv6ext catching (44 against 37, 38 against 46) and which
+	this walker made once from a clean start.
+	"""
+	blob    = _inline_image(_MEASURED_FROM_HERE)
+	message = bytes(range(10))
+
+	theirs = c_widths(tmp_path, blob, message)
+	mine   = python_widths(blob, message)
+
+	assert theirs == mine, f"C {theirs}, python {mine}"
+	assert theirs == ["3", "7"], (
+		f"`body[remaining]` measures {theirs[1]} where 7 is from the "
+		f"member and 10 would be from the frame start")
