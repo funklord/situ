@@ -3065,3 +3065,65 @@ def test_the_two_legitimate_shapes_are_still_accepted() -> None:
 	               "\ttag_bytes = 16;\n\tnonce_bytes = 12;\n}\n")
 	assert unbound.kernel is None
 	assert unbound.authenticated is True
+
+
+def _derived_comment(body: str) -> str:
+	"""The C `gen-derived` output for one codec with a `derived` binding."""
+	from situc.codegen.c import derived as c_derived
+
+	schema = parse_text("endian big;\nbit_order msb_first;\n"
+	                    f"codec c {{ kernel = {body}; }}\n"
+	                    "impl c derived;\n"
+	                    "struct s { u8 a; }\n")
+	return c_derived.generate(schema, "unit", "situ")
+
+
+def test_a_polynomial_with_no_poly_is_told_what_generates() -> None:
+	"""The fifth family `_what_is_generated`'s lesson had not reached.
+
+	Its docstring records the shape: decision 0017 read *"not yet
+	generated"* as `stuffing` returning nothing for any input, when three
+	codes generated then and five do now -- and the fix went to `stuffing`,
+	`table`, `linear_block` and `permutation`. Polynomial kept the bare
+	sentence, so
+
+	    codec c { kernel = polynomial(width = 16, init = 0); }
+	    impl c derived;
+
+	was told its properties are "derived and correct" and to bind an
+	`impl c extern`, which sends the author off to write a CRC by hand. Add
+	`poly = 0x1021` and the same build emits 152 lines of one, table and
+	all.
+
+	The condition is neither `poly` nor `field`, because the family
+	generates two ways and both work: a CRC from `width` and `poly`, and a
+	Reed-Solomon code from `field`, `n` and `k` -- measured at 152 and 309
+	lines. `width` alone is enough for the properties and not for the code,
+	which is `permutation`'s position exactly.
+	"""
+	said = _derived_comment("polynomial(width = 16, init = 0x0000)")
+
+	assert "No implementation for `c`" in said
+	assert "A polynomial generates two ways" in said
+	assert "`field`, `n` and `k`" in said
+
+
+@pytest.mark.parametrize("body", [
+	"polynomial(width = 16, poly = 0x1021, init = 0x0000)",
+	"polynomial(field = 256, n = 255, k = 223, primitive = 0x11D)",
+], ids=["crc", "reed-solomon"])
+def test_a_complete_polynomial_says_nothing_about_what_generates(
+		body: str) -> None:
+	"""The control, and it is the half that makes the test above a test.
+
+	A note added to every polynomial would read as a complaint about
+	descriptions that are complete, and both of these generate -- so
+	neither may carry the sentence, and neither may carry the "No
+	implementation" comment either. Both forms, because keying the
+	condition on `poly` alone would have put the note on every
+	Reed-Solomon codec in the tree.
+	"""
+	said = _derived_comment(body)
+
+	assert "No implementation" not in said
+	assert "generates two ways" not in said

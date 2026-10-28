@@ -317,6 +317,43 @@ def pair_of(decl: ast.CodecDecl, prefix: str = "situ") -> tuple[str, str] | None
 	return (ident(prefix, decl.name, "encode"), ident(prefix, decl.name, "decode"))
 
 
+def _why_no_polynomial(decl: ast.CodecDecl) -> str | None:
+	"""Why a described polynomial generates nothing, where the reason is a
+	missing argument rather than an unimplemented family.
+
+	**The fifth family this helper's lesson had not reached.** Its own
+	docstring records the shape: 0017 read "not yet generated" as
+	`stuffing` returning nothing for any input, when three codes generated
+	then and five do now, and the fix went to `stuffing`, `table`,
+	`linear_block` and `permutation`. Polynomial kept the bare sentence, so
+
+	    codec c { kernel = polynomial(width = 16, init = 0); }
+	    impl c derived;
+
+	got *"a polynomial kernel is described but not yet generated. Its
+	properties are derived and correct; bind an `impl c extern`"* -- which
+	sends the author to write a CRC by hand. Add `poly = 0x1021` and the
+	same build emits 152 lines of it, table and all.
+
+	Keyed on neither `poly` nor `field` being there, which is the one
+	condition that separates an incomplete description from a complete one
+	of either form. A CRC needs `width` and `poly`; a Reed-Solomon code
+	needs `field`, `n` and `k`. Both generate, and `width` alone is enough
+	for the properties and not for the code -- which is `permutation`'s
+	position exactly, and why this reads like its sibling.
+	"""
+	kernel = decl.kernel
+	assert kernel is not None
+
+	if kernel.argument("poly") is not None or kernel.argument("field") is not None:
+		return None
+
+	return ("A polynomial generates two ways: as a CRC from `width` and "
+	        "`poly`, or as a Reed-Solomon code from `field`, `n` and `k`. "
+	        "This kernel gives neither `poly` nor `field`, so the width is "
+	        "enough for the properties and not enough for the code.")
+
+
 def _why_no_matrix(decl: ast.CodecDecl) -> str | None:
 	"""Why a described (n, k) code generates nothing, where the reason is
 	about the matrix rather than about an unknown name.
@@ -401,6 +438,11 @@ def _what_is_generated(decl: ast.CodecDecl) -> list[str]:
 
 	if kernel.family is ast.KernelFamily.LINEAR:
 		reason = _why_no_matrix(decl)
+		if reason is not None:
+			return [" *", *_wrap(reason)]
+
+	if kernel.family is ast.KernelFamily.POLYNOMIAL:
+		reason = _why_no_polynomial(decl)
 		if reason is not None:
 			return [" *", *_wrap(reason)]
 
