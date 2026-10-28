@@ -7474,6 +7474,11 @@ Moved to
 Moved to
 `doc/decision/26.720-the-sweep-compiled-a-driver-for-every-packet.md`.
 
+### 26.721 What the two walkers read, asked over the corpus
+
+Moved to
+`doc/decision/26.721-what-the-two-walkers-read-asked-over-the-corpus.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

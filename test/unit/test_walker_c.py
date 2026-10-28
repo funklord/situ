@@ -514,8 +514,8 @@ def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
 
 
 def c_answers(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int = 0) -> list[str]:
-	return _drive(tmp_path, blob, message, VALUES, shape)
+		shape: int = 0, drive: Path | None = None) -> list[str]:
+	return _drive(tmp_path, blob, message, VALUES, shape, drive=drive)
 
 
 def c_arms(tmp_path: Path, blob: bytes, message: bytes,
@@ -3697,6 +3697,158 @@ def test_the_two_walkers_agree_about_every_offset(
 					f"python {p_at}, on {packet.hex()}")
 
 	OFFSETS_ASKED[schema.name] = (asked, declined)
+
+
+#: Per schema, how many (struct, message) value comparisons were made and
+#: how many either walker declined, for the non-vacuity assertion below.
+VALUES_ASKED: dict[str, tuple[int, int]] = {}
+
+#: Structs whose VALUES are not compared, because the two walkers answer a
+#: member that has no single value and answer differently. Named by schema
+#: and struct rather than by loosening the comparison, so a fourth instance
+#: has to be added here (26.721).
+#:
+#: All three are a NESTED STRUCT whose extent the data decides, and the two
+#: readings are not two guesses at one number -- they are two different
+#: questions:
+#:
+#:     http.request_head.start   row 32 bits, measured 5 bytes
+#:                               C 2782332101 (0xa5d704c5, the row's four)
+#:                               python 712277017891 (0xa5d704c523, the five)
+#:     dnsname.question.qname    row 8 bits, measured 2 bytes
+#:                               C 209, python 53679
+#:     edges.kv_block.entries    row 16 bits, measured 3 bytes
+#:                               C 13344, python 3416192
+#:
+#: Both walkers agree about the member's OFFSET and its WIDTH -- measured on
+#: all three -- so the sweeps beside this one cannot see it. C reads the
+#: `size_bits` the row states, which for a variable member is its minimum,
+#: and the Python walk reads the extent it measured.
+#:
+#: `situ_walk.h` says what C should do and C does not do it: "Fixed offsets
+#: and widths up to 64 bits; anything else answers SITU_WALK_UNSUPPORTED
+#: rather than a number, because a wrong length is indistinguishable from a
+#: right one once it leaves." A nested struct whose extent the data decides
+#: is the `anything else`.
+#:
+#: And the Python walk has refused four constructs for exactly that reason,
+#: each recorded in `read_scalar` as it was settled -- a run, a delimited
+#: member, a variant, and a varint settled the other way because it does
+#: have a value. A nested struct is the fifth to arrive there as bits and
+#: the only one still answering.
+#:
+#: Raised rather than resolved, because the two available answers are a
+#: change to BOTH independent readers of the image and the question behind
+#: them is the one 26.356 records for `native`: whether a walker should
+#: answer for this at all is a question about what a walker IS. Holding the
+#: struct out costs the other members of these three -- `qtype` and
+#: `qclass`, `payload`, `fields` -- which is the same price `IDENTITY_APART`
+#: pays and is why the set is keyed this way.
+VALUES_APART = frozenset({
+	("http.situ", "request_head"),
+	("dnsname.situ", "question"),
+	("edges.situ", "kv_block"),
+})
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_two_walkers_agree_about_every_value(
+		schema: Path, tmp_path: Path) -> None:
+	"""What each member READS, over the corpus.
+
+	The three comparisons above ask whether a message is well formed,
+	which check refused it and where each member begins. None of them can
+	see two walkers that place a member identically, agree that the
+	message is fine, and read different numbers out of it -- which is the
+	question a caller actually asks a member.
+
+	It was asked on `example/udp` with one message, and on the schemas
+	this file writes inline. Nowhere else. `test_walker.py` holds the
+	PYTHON walker to the four compiled backends on values over the whole
+	corpus, so what escaped was the C walker's half specifically: a wrong
+	value there had to be caught by a hand-written case naming the
+	construct, and 26.444 is the precedent for how that fails -- "a
+	one-byte span slip shows as a wrong value in a later member while
+	every verdict stays 0".
+
+	Affordable only since 26.720. Asking it the way the sweeps beside it
+	ask theirs cost 15 minutes while each answer carried a 2.61-second
+	compile, and costs about 70 seconds now.
+
+	A `refused` from either side is an answer rather than a disagreement,
+	counted and not asserted on, which is this file's settled treatment:
+	the two walkers differ in what they render, and one declining to read
+	a member is saying something true about itself.
+	"""
+	blob  = image_for(schema)
+	image = load(blob)
+	rng   = random.Random(20261028)
+	drive = _build_driver(tmp_path, blob, VALUES)
+	named = [struct.name for struct in parse(
+		Source(str(schema), schema.read_text(encoding="ascii"))).structs()]
+
+	asked = declined = 0
+	for which in range(len(image.structs)):
+		if which < len(named) and (schema.name, named[which]) in VALUES_APART:
+			continue
+		for packet in (draw(rng), draw(rng)):
+			try:
+				theirs = c_answers(tmp_path, blob, packet, which, drive)
+				mine   = python_answers(blob, packet, which)
+			except (AssertionError, IndexError, Refused, Unplaceable,
+			        Unsupplied):
+				# The same four reasons the sweeps above skip on: a
+				# struct the driver cannot walk, a struct with no
+				# members, a message the Python walk cannot acquire, and
+				# a `parameter` neither walker may guess (0050).
+				declined += 1
+				continue
+			if not theirs and not mine:
+				continue
+
+			assert len(theirs) == len(mine), (
+				f"{schema.name} struct {which}: the walkers report a "
+				f"different NUMBER of members -- C {theirs}, python {mine}")
+
+			for ordinal, (c_read, p_read) in enumerate(zip(theirs, mine)):
+				if c_read == "refused" or p_read == "refused":
+					declined += 1
+					continue
+				asked += 1
+				assert c_read == p_read, (
+					f"{schema.name} struct {which} "
+					f"({image.struct_name(which)}) member {ordinal}: the "
+					f"walkers read it differently -- C {c_read}, python "
+					f"{p_read}, on {packet.hex()}")
+
+	VALUES_ASKED[schema.name] = (asked, declined)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_value_comparison_asked_something() -> None:
+	"""The denominator, over the corpus rather than per schema.
+
+	`std/codecs.situ` and `std/kernels.situ` declare no message struct, so
+	nothing being asked of them is the right answer -- which is why the
+	floor belongs over the whole corpus, as it does for the three sweeps
+	beside this one.
+
+	It has the same three ways to go vacuous they have: every draw
+	refusing on one side, the driver failing to build, and `VALUES_APART`
+	growing until it covers the corpus.
+	"""
+	assert VALUES_ASKED, "the parametrised cases did not run"
+
+	asked    = sum(one for one, _ in VALUES_ASKED.values())
+	declined = sum(two for _, two in VALUES_ASKED.values())
+	assert asked >= 800, (
+		f"only {asked} values were compared across "
+		f"{len(VALUES_ASKED)} schemas, with {declined} declined; it was "
+		f"1145 compared and 689 declined over 46 schemas when written")
+	assert len(VALUES_APART) <= 3, (
+		f"{len(VALUES_APART)} structs are held out of the value "
+		"comparison; each one is a divergence nobody is looking at")
 
 
 #: A control for `remaining`'s laziness, read from the other side. `body`'s
