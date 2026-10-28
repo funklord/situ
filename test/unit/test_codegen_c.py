@@ -7071,3 +7071,86 @@ def test_the_covered_tail_is_asked_of_the_spans_not_of_the_struct() -> None:
 	assert ("situ_s_sig_covered(situ_view_t view, uint32_t *offset,"
 	        " uint32_t *len)") in header, "a fixed span took a tail it cannot read"
 	assert "arg_blk" in header, "the struct does take an argument"
+
+
+#: A text number whose offset the MESSAGE decides, which is the shape that
+#: reaches past the frame (26.714), and the same one `edges.situ` carries as
+#: `text_driver_moved`: a varint of message-chosen length, then four digits.
+TEXT_AT_A_MOVED_OFFSET = ("varint_type edge_varint {\n"
+                          "\tencoding  = be128;\n"
+                          "\tmax_bits  = 64;\n"
+                          "\tmax_bytes = 9;\n}\n"
+                          "struct s {\n"
+                          "\tedge_varint   lead;\n"
+                          "\tdecimal u32   n[4]  [max = 4];\n"
+                          "\tu16           tail;\n}\n")
+
+#: The control: the same four digits at a CONSTANT offset. `at` checked the
+#: extent for this one, so the bytes are there by 20.2 and a guard would be
+#: a branch that is always taken.
+TEXT_AT_A_FIXED_OFFSET = ("struct s {\n"
+                          "\tu16           lead;\n"
+                          "\tdecimal u32   n[4]  [max = 4];\n"
+                          "\tu16           tail;\n}\n")
+
+
+def test_a_text_number_past_a_variable_member_checks_it_is_there() -> None:
+	"""`situ_parse_uint` was handed the DECLARED width and read past the
+	frame (26.714).
+
+	    if (situ_parse_uint(situ_s_n_ptr(view), 4u, 10u, 9999u, &value) != 0)
+
+	with nothing checking four bytes were there. ASan caught it as a
+	one-byte heap-buffer-overflow inside `situ_parse_uint`, reached through
+	`edges.situ`'s `text_driver_moved` -- a varint of message-chosen length
+	in front of four digits, so the digits' offset is a sum the message
+	chose. 45 of the 51 text reads in the generated corpus pass a declared
+	width.
+
+	**The file already promised this.** `_text_value_helper`'s comment says
+	an unvalidated frame *"reads zero, which is the same bargain every other
+	accessor makes with the bounds check it did not do"* -- and the scalar
+	getters keep it while these read past the frame instead.
+
+	Refused rather than clamped, which is the whole of the choice:
+	`min(width, remaining)` would parse the digits that ARE there and hand
+	back a different number, and a length field quietly reading 12 instead
+	of refusing is worse than the over-read because nothing downstream can
+	tell.
+	"""
+	header, _ = emit(TEXT_AT_A_MOVED_OFFSET)
+
+	# The fallible getter refuses, which it can.
+	assert "if (!situ_in_bounds(view, situ_s_n_offset(view), 4u)) {" in header
+	assert "return SITU_ERR_BOUNDS;" in header
+
+	# And the non-failing one reads zero, which is the bargain it states.
+	value = header[header.index("situ_s_n_value(situ_view_t view)"):]
+	value = value[:value.index("\n}")]
+	assert "situ_in_bounds(view, situ_s_n_offset(view), 4u)" in value
+	assert "return (uint32_t)0;" in value
+	assert value.index("situ_in_bounds") < value.index("situ_parse_uint"), (
+		"the check must come before the read it guards")
+
+
+def test_a_text_number_at_a_constant_offset_is_not_guarded() -> None:
+	"""The control, and it is the half that keeps the fix honest.
+
+	This fix's first version guarded unconditionally and put 39
+	always-reached branches into `example/cpio`'s header, whose text
+	offsets are all constant. That is stricter than the scalar getter
+	beside it, which reads `situ_base(view)[9u]` with no check at all --
+	and `_fits` carries the reason: *a statically placed member is inside
+	the frame by the bounds check that acquired the view (20.2), which is
+	the argument that makes every constant-offset access unchecked.*
+
+	So the guard is asked of `_fits` rather than added, and a constant
+	offset gets none. Measured: the whole corpus changes in ONE file,
+	`test/schema/edges.h`, because no worked example puts a text number
+	after a variable-length member.
+    """
+	header, _ = emit(TEXT_AT_A_FIXED_OFFSET)
+
+	assert "situ_parse_uint" in header, "this schema has no text read at all"
+	assert "situ_in_bounds" not in header, (
+		"a constant offset was guarded, which no other accessor here is")

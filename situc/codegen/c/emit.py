@@ -6606,6 +6606,33 @@ class Emitter:
 		# the proxy was never answering the question either way.
 		base  = f"situ_base(view) + {self._base_expression(struct, placement)}"
 
+		# A WIDTH THE SCHEMA DECLARES IS NOT A WIDTH THE FRAME HAS (26.714).
+		# This passed the declared width to `situ_parse_uint` with nothing
+		# checking the bytes were there, so a text number at a DYNAMIC
+		# offset read past the end -- ASan caught it as a one-byte
+		# heap-buffer-overflow through `edges.situ`'s `text_driver_moved`,
+		# and 45 of the 51 text reads in the corpus pass a declared width.
+		#
+		# `_fits` and not a check of its own, because the question is the
+		# one every other accessor here already asks and its answer is
+		# `None` for a constant offset: *a statically placed member is
+		# inside the frame by the bounds check that acquired the view
+		# (20.2)*. Guarding unconditionally was this fix's first version
+		# and it put 39 always-reached branches into `cpio`'s header, whose
+		# offsets are all constant -- stricter than the scalar getter
+		# beside it, which reads `situ_base(view)[9u]` unchecked for the
+		# same reason.
+		#
+		# Refused rather than clamped. `min(width, remaining)` would parse
+		# the digits that ARE there and hand back a different number --
+		# "1234" with two bytes left is 12, not an error -- and a length
+		# field quietly reading 12 is worse than the over-read, because
+		# nothing downstream can tell. `SITU_ERR_BOUNDS` rather than
+		# `CONSTRAINT`: the digits are not wrong, they are absent.
+		held_fits = self._fits(struct, placement, width)
+		fits = ([f"\tif (!{held_fits}) {{", "\t\treturn SITU_ERR_BOUNDS;",
+		         "\t}", ""] if held_fits is not None else [])
+
 		return [
 			"",
 			f"/* `{placement.name}`: {width} digits, padded, holding 0..{limit}.",
@@ -6627,6 +6654,7 @@ class Emitter:
 			"{",
 			"\tuint64_t value;",
 			"",
+			*fits,
 			f"\tif (situ_parse_uint({ident(self.prefix, struct.name, local, 'ptr')}"
 			f"(view), {width}u, {placement.radix}u, {limit}u, &value) != 0) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
@@ -8706,9 +8734,28 @@ class Emitter:
 		source = (base, width)
 		signed_text = bool(placement.scalar and placement.scalar.signed)
 
+		# THE BOUNDS CHECK THE COMMENT BELOW PROMISES (26.714). It says an
+		# unvalidated frame "reads zero, which is the same bargain every
+		# other accessor makes with the bounds check it did not do" -- and
+		# the scalar getters keep that bargain while this one read past the
+		# frame instead.
+		#
+		# Through `_fits`, so the answer is `None` for a constant offset --
+		# inside the frame by the acquiring check (20.2) -- and for a
+		# delimited field, whose length is its own scan's answer and
+		# already compared against `situ_remaining_u32`.
+		held_fits = (self._fits(struct, placement, placement.array_count)
+		             if placement.array_count is not None and not nested
+		             else None)
+		guard = ([f"	if (!{held_fits}) {{",
+		          f"		return ({ctype})0;",
+		          "	}",
+		          ""]
+		         if held_fits is not None else [])
+
 		if placement.scaled:
 			return self._scaled_value_helper(struct, placement, local,
-			                                 source, ctype)
+			                                 source, ctype, guard)
 
 		return [
 			"",
@@ -8730,6 +8777,7 @@ class Emitter:
 			("	int64_t value = 0;" if signed_text else
 			 "	uint64_t value = 0u;"),
 			"",
+			*guard,
 			((f"	(void)situ_parse_int({source[0]}, {source[1]},"
 			  f" {placement.radix}u, {self._int64_literal(placement.radix_min)},"
 			  f" {self._int64_literal(placement.radix_max)}, &value);") if signed_text else
@@ -8741,7 +8789,8 @@ class Emitter:
 
 	def _scaled_value_helper(self, struct: ResolvedStruct,
 			placement: Placement, local: str,
-			source: tuple[str, str], ctype: str) -> list[str]:
+			source: tuple[str, str], ctype: str,
+			guard: list[str]) -> list[str]:
 		"""The significand and the power of ten, read where nothing can fail.
 
 		Two accessors rather than one, because the value IS two numbers: a
@@ -8778,6 +8827,10 @@ class Emitter:
 			"	int64_t value = 0;",
 			"	int32_t scale = 0;",
 			"",
+			# Both halves, because both parse: a decimal is two numbers read
+			# from one run of digits, so a missing run is two accessors
+			# reading past the frame rather than one (26.714).
+			*guard,
 			f"	(void){call};",
 			"	(void)scale;",
 			f"	return ({ctype})value;",
@@ -8790,6 +8843,7 @@ class Emitter:
 			"	int64_t value = 0;",
 			"	int32_t scale = 0;",
 			"",
+			*[one.replace(f"return ({ctype})0;", "return 0;") for one in guard],
 			f"	(void){call};",
 			"	(void)value;",
 			"	return scale;",
