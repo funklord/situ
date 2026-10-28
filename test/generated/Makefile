@@ -445,11 +445,24 @@ FUZZ_CC		?= $(firstword $(shell for c in clang clang-19 clang-18 clang-17; \
 			do command -v $$c && break; done) clang)
 FUZZ_SECONDS	?= 30
 FUZZ_DIR	:= $(BUILD_DIR)/fuzz
-FUZZ_CFLAGS	:= -g -O1 -fsanitize=fuzzer,address -fno-omit-frame-pointer
+# `undefined` beside `address`, because the output of this compiler is bit
+# and byte manipulation and UBSan is the instrument for it: shift exponents
+# derived from schema widths, offset arithmetic, `situ_base(view) + offset`.
+# ASan has been gated since this target existed and `undefined` never was,
+# which is how a text number read its declared width past the end of the
+# frame for as long as it did (26.714).
+#
+# `-fno-sanitize-recover=undefined` IS LOAD-BEARING AND NOT TIDINESS. With
+# recovery, UBSan prints its report and the harness carries on and exits 0 --
+# measured on a deliberate `1 << 64`: one report, exit 0 with recovery and
+# exit 1 without. A gate that prints a finding and passes is worse than no
+# gate, so the flag is what makes this one able to fail.
+FUZZ_CFLAGS	:= -g -O1 -fsanitize=fuzzer,address,undefined \
+		   -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 FUZZ_CXX	?= $(firstword $(shell for c in clang++ clang++-19 clang++-18 \
 			clang++-17; do command -v $$c && break; done) clang++)
-FUZZ_CXXFLAGS	:= -std=c++17 -g -O1 -fsanitize=fuzzer,address \
-		   -fno-omit-frame-pointer
+FUZZ_CXXFLAGS	:= -std=c++17 -g -O1 -fsanitize=fuzzer,address,undefined \
+		   -fno-sanitize-recover=undefined -fno-omit-frame-pointer
 WALKER_DIR	:= $(REPO_ROOT)/walker/c
 WALKER_SRC	:= $(WALKER_DIR)/situ_walk.c
 FUZZ_RUNNERS	:= $(FUZZ_SCHEMAS:%=$(FUZZ_DIR)/%)
