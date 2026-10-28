@@ -407,6 +407,52 @@ def test_an_authenticated_codec_that_carries_its_tag_is_told_to_attack_it() -> N
 	assert "nothing here" not in text
 
 
+#: Every combination of the two facts the `authenticated` note speaks
+#: about, with the expected clauses. `carries_tag` -- a width declared AND
+#: an expansion that accounts for it -- is the fourth row and gets a
+#: different note entirely, which the test below this one covers.
+AUTHENTICATED_CLAUSES = (
+	("length_preserving; authenticated;",                  True,  False),
+	("length_preserving; tag_bytes = 16; authenticated;",  True,  True),
+	("expansion = +16; authenticated;",                    False, False),
+)
+
+
+@pytest.mark.parametrize("body,preserving,width", AUTHENTICATED_CLAUSES,
+                         ids=["preserving", "preserving-width", "expanding"])
+def test_the_authenticated_note_claims_only_what_holds(
+		body: str, preserving: bool, width: bool) -> None:
+	"""The note asserted two things that are not always true (26.491).
+
+	`carries_tag` is false in two different situations -- a width declared
+	over a length-preserving transform, and no width declared at all -- and
+	the note was written for the first, so the second got its sentences.
+	`edges.situ`'s `sealed_stuffing` was told that a length-preserving
+	transform has nowhere to put a tag, while expanding, AND that its
+	`tag_bytes` is checked by the compiler, while declaring none.
+
+	**Split by case first, which dropped a true sentence with the false
+	one**: a length-preserving codec with no width really does put its tag
+	in a schema field that 14.2 checks, and only the compiler-checks-the-
+	width clause is wrong for it. The sibling test above caught that, so
+	the note is assembled from the clauses that hold rather than chosen
+	from a list of cases -- two independent facts, four combinations, and a
+	case analysis gets one of them wrong.
+
+	Asserted in both directions per clause, because a note that says
+	everything is as useless as one that says nothing: what makes this a
+	test is the absences.
+	"""
+	text = codec_tests(f"codec c {{ {body} }}")
+
+	assert "`authenticated` is declared and nothing here" in text
+	assert ("section 14.2" in text) is preserving, (
+		"the length-preserving clause does not follow the expansion")
+	assert ("`tag_bytes` is checked against that field" in text) is width, (
+		"the compiler-checks-the-width clause does not follow the width")
+	assert ("No `tag_bytes` is declared" in text) is not width
+
+
 def test_an_error_propagating_claim_gets_a_note_too() -> None:
 	"""Falsifiable at this ABI and measured that way for derived codecs
 	(26.150). No tier-1 codec here declares it, so the note is the whole of

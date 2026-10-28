@@ -28,7 +28,7 @@ from typing import Any, Callable, cast
 
 import pytest
 
-from every_schema import load_schema
+from every_schema import SCHEMAS, load_schema
 
 from situc import ast, kernels, traverse
 from situc.codegen.c import derived, generate
@@ -2803,3 +2803,118 @@ def test_the_whole_derived_module_compiles_under_denied_warnings(
 		capture_output=True, text=True, cwd=tmp_path)
 
 	assert built.returncode == 0, built.stderr
+
+
+def test_the_derived_tuple_and_the_dataclass_are_one_list() -> None:
+	"""`DERIVED_PROPERTIES` and `Derived`'s fields are two spellings of one
+	fact, kept in step by hand.
+
+	Nothing held them to each other: 26.491 records that `grep -rn
+	DERIVED_PROPERTIES test/` returned nothing, which is why a property
+	missing from BOTH was invisible for as long as it was. This cannot
+	catch that case -- an omission from both is still an omission -- but it
+	catches the half-added one, where a field arrives on the dataclass and
+	the tuple does not learn its name, and the comparison in the derived
+	check then never asks about it.
+	"""
+	from dataclasses import fields
+
+	assert set(kernels.DERIVED_PROPERTIES) == {
+		one.name for one in fields(kernels.Derived)}
+
+
+def test_no_kernel_family_authenticates() -> None:
+	"""The fact behind the refusal below, over the schemas that carry it.
+
+	`authenticated` was the one declarable property no kernel could
+	contradict, and the asymmetry that makes it the real gap is that all
+	seven families imply **not** authenticated: none is a MAC or an AEAD,
+	there is no key in any of them and nothing in the output but the code.
+	So this is a sentence `Derived` can carry, where a tag width is not --
+	`tag_bytes` has no left-hand side in any family, which is why 26.491
+	withdraws it and keeps this.
+
+	Asked of the CORPUS rather than of declarations written here, for two
+	reasons. Hand-written ones are a guess at each family's arguments and
+	four of seven were wrong on the first attempt, which is a test of the
+	author rather than of the code. And a fixture cannot say whether the
+	claim covers every family; the second assertion can, by holding the
+	corpus to `_FAMILIES` and naming any family no schema exercises.
+	"""
+	seen: dict[ast.KernelFamily, int] = {}
+	for path in SCHEMAS:
+		for decl in load_schema(path).codecs():
+			if decl.kernel is None:
+				continue
+			seen[decl.kernel.family] = seen.get(decl.kernel.family, 0) + 1
+			assert kernels.derive(decl).authenticated is False, (
+				f"{path.name}: `{decl.name}` derives authenticated")
+
+	missing = set(kernels._FAMILIES) - set(seen)
+	assert not missing, (
+		"no schema exercises "
+		+ ", ".join(sorted(one.name for one in missing))
+		+ ", so the claim above does not cover it")
+	assert sum(seen.values()) > 40, (
+		f"only {sum(seen.values())} kernel-bearing codecs; the population "
+		"moved and this asserted almost nothing")
+
+
+def test_a_kernel_codec_may_not_declare_itself_authenticated() -> None:
+	"""A Manchester line code claiming a guarantee nothing keeps (26.491).
+
+	    codec manch { authenticated; kernel = table(...manchester...); }
+
+	was accepted, and `situc map` then printed `stage=VerifyGated
+	auth=Covered(tag)` over it while the generated prose said that parsing
+	before authenticating "does not compile".
+
+	**Nothing is forged**, and the entry withdraws the part of its own
+	claim that said so: situ reads no tag for a real extern AEAD either --
+	`verified` is the caller's parameter -- and the generated `_open` is
+	byte-identical between the two. What the hole cost is the one refusal
+	protecting what `verified` MEANS, which `wellformed.py` states in its
+	own words: *the caller passes `verified`, nothing checked anything, and
+	the type system carries a promise the cryptography never made.*
+
+	Refused at the CODEC and not at a use, which is asserted below by a
+	schema with no sealed region in it: the false claim is wrong where it
+	is made.
+	"""
+	report = refusal("endian big;\nbit_order msb_first;\n"
+	                 "codec manch {\n"
+	                 "\tauthenticated;\n"
+	                 "\tkernel = table(input_bits = 1, output_bits = 2,\n"
+	                 "\t               code = manchester_802_3);\n"
+	                 "}\n"
+	                 "struct msg { u8 kind; u16 tail; }\n")
+
+	assert ("`manch` declares `authenticated` but its kernel implies"
+	        " `not authenticated`") in report
+	assert "the table kernel implies not authenticated" in report
+
+
+def test_the_two_legitimate_shapes_are_still_accepted() -> None:
+	"""The controls, and the second is the one a refusal keyed on the word
+	rather than on the disagreement would break.
+
+	A kernel codec that claims nothing is ordinary. And an `authenticated`
+	codec with NO kernel is the normal case for a protocol under design --
+	`std/codecs.situ` calls a signature with no binding and says so -- so
+	the claim is only refused where a kernel contradicts it.
+	"""
+	# Asserted as ACCEPTANCE rather than through the new field, so that it
+	# passes against `git archive HEAD` too: a control that fails on the
+	# old tree for want of an attribute is testing the fix, not guarding
+	# against the fix being too broad, which is this one's whole job.
+	plain = only("endian big;\nbit_order msb_first;\n"
+	             "codec k { kernel = ones_complement(width = 16); }\n")
+	assert plain.kernel is not None
+	assert plain.authenticated is False
+
+	# No kernel, so nothing to contradict it: parses, and keeps the claim.
+	unbound = only("endian big;\nbit_order msb_first;\n"
+	               "codec sealing {\n\tauthenticated;\n"
+	               "\ttag_bytes = 16;\n\tnonce_bytes = 12;\n}\n")
+	assert unbound.kernel is None
+	assert unbound.authenticated is True

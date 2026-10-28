@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.710 The one property no kernel could contradict
+
+Moved to
+`doc/decision/26.710-the-one-property-no-kernel-could-contradict.md`.
+
 ### 26.709 The class moves and the reference did not
 
 Moved to

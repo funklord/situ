@@ -587,13 +587,51 @@ def _authenticated_note(codec: ast.CodecDecl, encode: str,
 		         " * output must refuse. No test is generated for it yet;",
 		         " * attack it by hand. */"], None)
 
-	return ([f"/* {codec.name}: `authenticated` is declared and nothing here",
-	         " * attacks it. The tier-1 ABI carries no key and no nonce, and a",
-	         " * length-preserving transform has nowhere in its own output to",
-	         " * put a tag -- so the tag is a schema field, and what checks it",
-	         " * is section 14.2's coverage and staleness machinery, not this",
-	         " * harness. `tag_bytes` is checked against that field by the",
-	         " * compiler (decision 0038). */"], None)
+	# ASSEMBLED FROM THE CLAUSES THAT HOLD, because `carries_tag` being
+	# false does not say which of the two sentences below is true (26.491).
+	# It is false when a tag width is declared over a length-preserving
+	# transform AND when no width is declared at all, and the note was
+	# written for the first:
+	#
+	#     edges.situ:sealing_aead      preserving, no tag_bytes
+	#     edges.situ:sealed_stuffing   expanding,  no tag_bytes
+	#
+	# got "a length-preserving transform has nowhere in its own output to
+	# put a tag" over an expanding one, and "`tag_bytes` is checked against
+	# that field by the compiler" where no width is declared to check.
+	#
+	# Split by CASE first, which dropped a true sentence with the false
+	# one: a length-preserving codec with no width really does put its tag
+	# in a schema field that 14.2 checks, and only the compiler-checks-the-
+	# width clause is wrong for it. `test_codecs.py` caught that, which is
+	# the second time this note has been corrected by a test rather than by
+	# reading it.
+	#
+	# The loop's own reason for notes is that "silence would read as
+	# coverage", so a sentence that is not true reads as more than
+	# coverage.
+	lines = [f"/* {codec.name}: `authenticated` is declared and nothing here",
+	         " * attacks it. The tier-1 ABI (13.2a) carries no key and no",
+	         " * nonce, so whatever the claim rests on is outside this",
+	         " * harness."]
+
+	if codec.expansion is ast.Expansion.PRESERVING:
+		lines += [" *",
+		          " * A length-preserving transform has nowhere in its own",
+		          " * output to put a tag, so the tag is a schema field, and",
+		          " * what checks it is section 14.2's coverage and staleness",
+		          " * machinery rather than this harness."]
+
+	if codec.tag_bytes is not None:
+		lines += [" *",
+		          " * `tag_bytes` is checked against that field by the",
+		          " * compiler (decision 0038). */"]
+	else:
+		lines += [" *",
+		          " * No `tag_bytes` is declared, so there is no width for",
+		          " * the compiler to check against such a field. */"]
+
+	return (lines, None)
 
 
 def _error_propagating_note(codec: ast.CodecDecl, encode: str,

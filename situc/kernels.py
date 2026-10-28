@@ -38,7 +38,7 @@ from situc.diagnostics import error
 DERIVED_PROPERTIES = (
 	"expansion", "expansion_add", "ratio", "seekable", "granularity",
 	"granularity_size", "systematic", "invertible", "deterministic",
-	"error_propagating",
+	"error_propagating", "authenticated",
 )
 
 
@@ -56,6 +56,27 @@ class Derived:
 	invertible: bool                = False
 	deterministic: bool             = True
 	error_propagating: bool         = False
+	# NOT AUTHENTICATED, FOR ALL SEVEN FAMILIES (26.491). None of them is
+	# a MAC or an AEAD: a table, a polynomial, a shift register, an
+	# arithmetic kernel -- there is no key in any of them and nothing in
+	# the output but the code. So this is a sentence `Derived` can carry,
+	# and until it did, `authenticated` was the one declarable property no
+	# kernel could contradict.
+	#
+	# What the omission cost is the refusal that protects what `verified`
+	# MEANS. A Manchester line code declaring `authenticated` was accepted,
+	# `situc map` printed `stage=VerifyGated auth=Covered(tag)` over it,
+	# and the generated prose said parsing before authenticating "does not
+	# compile". Nothing is forged -- situ reads no tag for a real AEAD
+	# either, `verified` being the caller's parameter, and the generated
+	# `_open` is byte-identical between the two -- but an assertion was
+	# made that nothing is positioned to keep.
+	#
+	# `tag_bytes` and `nonce_bytes` are deliberately NOT here. No kernel
+	# family could contradict them either, none being a MAC, so `Derived`
+	# has no left-hand side for a tag width; that is a gap with nothing
+	# behind it, where this was a gap with a fact behind it.
+	authenticated: bool             = False
 
 
 def derive(decl: ast.CodecDecl) -> Derived:
