@@ -3163,6 +3163,109 @@ int main()
 	assert subprocess.run([str(binary)]).returncode == 0
 
 
+# -- framing a buffer too short for the fixed prefix ------------------------
+
+
+#: A wide fixed prefix in front of a counted run, which is the shape the
+#: prefix sweeps did not have. Every shape in
+#: `test_required_answers_every_prefix.py` reads its count from offset 0 or
+#: from a varint there, so a prefix of one byte already carries it; this one
+#: reads a `u16` at offset 8 and needs ten bytes before the count is there
+#: at all. bbq-predictor's `stations_body` is this shape, member for member.
+WIDE_PREFIX = """
+struct item {
+	u8  len [min = 1, max = 32];
+	u8  id[len];
+}
+
+struct body {
+	i64   stamp;
+	u16   count [max = 4096];
+	item  ids[count];
+}
+"""
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+def test_required_reads_no_count_the_buffer_is_too_short_to_hold(
+		tmp_path: Path) -> None:
+	"""`required` is handed the bytes that have arrived, which may be none.
+
+	Reported by bbq-predictor 2026-10-28, found by fuzzing the C++ generated
+	from their own schema: `stations_body::required(p, 5, need)` read `p[8]`
+	through `ids_count()`, a heap-buffer-overflow under ASan, and "applying
+	non-zero offset 8 to null pointer" under UBSan for `(nullptr, 0)`.
+
+	THE OVER-READ IS WHAT THIS PINS, so the buffer is `malloc`ed at exactly
+	`n` bytes and the sanitizer is the instrument -- a stack array would put
+	the count's bytes inside some other object and answer from them silently,
+	which is why the prefix sweep over `example/http` never saw it.
+
+	This backend's accessors are NOT lax: `ids_count()` is a static offset
+	and reads through `situ_get_be16` with no bounds check of its own,
+	because the invariant is that a view has passed `view()`'s
+	`length >= size_min` guard. `required` builds its own view over `have`
+	bytes and so holds no such guarantee -- which the `have < SIZE_MIN` floor
+	used to supply by accident until 26.693 removed it as a claim about the
+	message (26.723). Rust and Python escaped with the right answer only
+	because their readers return zero out of bounds; C has emitted the guard
+	all along.
+	"""
+	result = compiles(tmp_path, WIDE_PREFIX, extra=r"""
+#include "unit.hpp"
+#include <cstdlib>
+#include <cstring>
+
+int main()
+{
+	/* Every prefix shorter than the ten bytes the count needs, each in a
+	 * buffer of exactly that size so a read past it is a read past the
+	 * allocation. */
+	for (std::uint32_t n = 0; n < 10u; n++) {
+		auto *p = static_cast<std::uint8_t *>(std::malloc(n != 0u ? n : 1u));
+		std::uint32_t need = 0;
+
+		if (p == nullptr) return 1;
+		std::memset(p, 0, n != 0u ? n : 1u);
+
+		const auto got = situ::body::required(p, n, need);
+		std::free(p);
+
+		if (got != situ::rt::err::truncated) return 2;
+		if (need != 10u)                     return 3;
+	}
+
+	/* And the degenerate call a stream reader makes before anything has
+	 * arrived, which is where UBSan reported the offset on a null pointer. */
+	{
+		std::uint32_t need = 0;
+
+		if (situ::body::required(nullptr, 0u, need)
+		    != situ::rt::err::truncated) return 4;
+		if (need != 10u)                 return 5;
+	}
+	return 0;
+}
+""")
+	assert result.returncode == 0, result.stderr
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CXX or "g++", *[w for w in WARNINGS if w != "-fsyntax-only"],
+		 "-g", "-fsanitize=address,undefined",
+		 "-fno-sanitize-recover=all",
+		 f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", f"-I{tmp_path}",
+		 str(tmp_path / "main.cpp"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stdout + run.stderr
+
+
 # -- a class a member has taken the name of ---------------------------------
 
 

@@ -7484,6 +7484,11 @@ Moved to
 Moved to
 `doc/decision/26.722-the-image-ceilings-beside-the-message-ones.md`.
 
+### 26.723 The floor 26.693 removed was also a bounds guard
+
+Moved to
+`doc/decision/26.723-the-floor-was-also-a-bounds-guard.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

@@ -5497,6 +5497,30 @@ class Emitter:
 				        " table does not say")
 			# A counted run of variable-size elements is framed the same
 			# way, and was not -- see `_framing_walk` (26.557).
+			# THE GUARD GOES BEFORE THE RUN BRANCH, WHICH IS WHERE THE C
+			# EMITTER HAS ALWAYS HAD IT (26.723). A counted run reads its
+			# count from a STATIC OFFSET, and the branch below `continue`s,
+			# so with the guard further down the count was read out of a
+			# buffer too short to hold it: bbq-predictor reported
+			# `stations_body::required(p, 5, need)` reading `p[8]` through
+			# `ids_count()` under ASan on 2026-10-28, and a 12-line schema
+			# in this tree reproduces it.
+			#
+			# Until 26.693 the `have < SIZE_MIN` floor stood at the top of
+			# this function and hid it. That floor was unsound as a claim
+			# about the message, which is why it went, and sound as a bounds
+			# guard, which is what went with it. This is the second half
+			# back -- as the STRUCTURAL minimum the cursor already carries,
+			# which is the form 26.693's own record said it would have to
+			# take.
+			steps.extend([
+				"",
+				f"\t\t# {placement.path}: reading its length means reading",
+				"\t\t# bytes that have to be here first.",
+				f"\t\tif have < {cursor or 'at'}:",
+				f'\t\t\traise TruncatedError("{placement.path}: '
+				'incomplete", at)',
+			])
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
 				walk = self._framing_walk(struct, placement, cursor)
@@ -5537,14 +5561,6 @@ class Emitter:
 				return self._unframeable(struct)
 
 			local = py_name(local_name(struct, placement))
-			steps.extend([
-				"",
-				f"\t\t# {placement.path}: reading its length means reading",
-				"\t\t# bytes that have to be here first.",
-				f"\t\tif have < {cursor or 'at'}:",
-				f'\t\t\traise TruncatedError("{placement.path}: '
-				'incomplete", at)',
-			])
 			if placement.delimiters:
 				steps.extend([
 					f"\t\tif not probe.{local}_terminated:",
