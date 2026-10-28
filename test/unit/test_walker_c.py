@@ -23,7 +23,7 @@ import pytest
 import random
 
 from every_schema import ROOT, SCHEMAS, ids
-from fourway import draw
+from fourway import LONGEST, draw
 from situc.layout import solve
 from situc.pack import pack
 from situc.parser import parse
@@ -53,7 +53,7 @@ SHOW
 int main(int argc, char **argv)
 {
 	static uint8_t img[65536];
-	static uint8_t msg[512];
+	uint8_t       *msg;
 
 	(void)show;	/* the width ask has no value to print */
 
@@ -80,7 +80,23 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	uint32_t len = 0;
+	/* Exactly the message, which is the differ's driver's answer to the
+	 * same question (26.317): a fixed buffer with the message at the front
+	 * hands an accessor a tail of slack, and a read past the frame that
+	 * lands there is a valid read of a valid object.
+	 *
+	 * Here it was worse than blind. `msg` was a 512-byte static with
+	 * `img` 32 bytes behind it, the draw this file's corpus tests deal
+	 * reaches 1196 bytes, and the loop had no bound -- so a long draw
+	 * wrote over the IMAGE the walk was about to read, and the twelfth
+	 * packet of the identity deal is 1019 bytes (26.718). */
+	uint32_t len = (uint32_t)(strlen(argv[2]) / 2u);
+
+	msg = (uint8_t *)malloc(len != 0u ? len : 1u);
+	if (msg == NULL) {
+		return 2;
+	}
+	len = 0;
 	for (const char *p = argv[2]; p[0] && p[1]; p += 2) {
 		char pair[3];
 		pair[0] = p[0];
@@ -97,11 +113,13 @@ int main(int argc, char **argv)
 	uint32_t first = 0;
 	uint32_t count = 0;
 	if (situ_walk_members(&image, shape, &first, &count) != SITU_WALK_OK) {
+		free(msg);
 		return 1;
 	}
 	for (uint32_t i = 0; i < count; i++) {
 		ASK
 	}
+	free(msg);
 	return 0;
 }
 """
@@ -3060,7 +3078,7 @@ ARG_DRIVER = """#include <stdio.h>
 int main(int argc, char **argv)
 {
 	static uint8_t img[65536];
-	static uint8_t msg[512];
+	uint8_t       *msg;
 
 	if (argc < 4) {
 		return 2;
@@ -3079,7 +3097,23 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	uint32_t len = 0;
+	/* Exactly the message, which is the differ's driver's answer to the
+	 * same question (26.317): a fixed buffer with the message at the front
+	 * hands an accessor a tail of slack, and a read past the frame that
+	 * lands there is a valid read of a valid object.
+	 *
+	 * Here it was worse than blind. `msg` was a 512-byte static with
+	 * `img` 32 bytes behind it, the draw this file's corpus tests deal
+	 * reaches 1196 bytes, and the loop had no bound -- so a long draw
+	 * wrote over the IMAGE the walk was about to read, and the twelfth
+	 * packet of the identity deal is 1019 bytes (26.718). */
+	uint32_t len = (uint32_t)(strlen(argv[2]) / 2u);
+
+	msg = (uint8_t *)malloc(len != 0u ? len : 1u);
+	if (msg == NULL) {
+		return 2;
+	}
+	len = 0;
 	for (const char *p = argv[2]; p[0] && p[1]; p += 2) {
 		char pair[3];
 		pair[0] = p[0];
@@ -3091,6 +3125,7 @@ int main(int argc, char **argv)
 	uint32_t first = 0;
 	uint32_t count = 0;
 	if (situ_walk_members(&image, 0u, &first, &count) != SITU_WALK_OK) {
+		free(msg);
 		return 1;
 	}
 
@@ -3154,6 +3189,7 @@ int main(int argc, char **argv)
 		}
 		printf("\\n");
 	}
+	free(msg);
 	return 0;
 }
 """
@@ -3730,3 +3766,33 @@ def test_a_program_that_names_remaining_still_measures_from_the_member(
 	assert theirs == ["3", "7"], (
 		f"`body[remaining]` measures {theirs[1]} where 7 is from the "
 		f"member and 10 would be from the frame start")
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_a_long_packet_is_compared_rather_than_dropped(
+		tmp_path: Path) -> None:
+	"""The driver's own buffer, which decided what the corpus tests saw.
+
+	`msg` was a 512-byte static with `img` thirty-two bytes behind it and
+	the decode loop had no bound, so a packet past about 544 bytes wrote
+	over the image `situ_walk_open` had already taken pointers into. The
+	driver then exited 1, `_run_driver`'s assertion fired, and all three
+	corpus comparisons catch that and `continue` under a comment reading
+	"no driver can acquire this shape".
+
+	`fourway.draw` reaches 1200 bytes and takes that branch one draw in
+	four -- 14.7 per cent of 4000 draws, the twelfth packet of the
+	identity deal being 1019 -- so about one case in seven was discarded
+	as an unsupported shape while the harness was corrupting its own
+	image (26.718).
+
+	1200 bytes rather than a figure of this test's own, because that is
+	`LONGEST`: the thing to pin is that the longest packet the corpus
+	tests can deal is one this driver reads whole.
+	"""
+	blob    = image_for(ROOT / "example" / "udp" / "udp.situ")
+	message = bytes((i * 7) % 256 for i in range(LONGEST))
+
+	assert len(message) > 512, "the buffer this pins was 512 bytes"
+	assert c_answers(tmp_path, blob, message) == python_answers(blob, message)
+
