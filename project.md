@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.715 The same width in the other pointer backend
+
+Moved to
+`doc/decision/26.715-the-same-width-in-the-other-pointer-backend.md`.
+
 ### 26.714 A declared width is not a width the frame has
 
 Moved to

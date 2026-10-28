@@ -3419,6 +3419,8 @@ class Emitter:
 			name  = bare_name(local_name(struct, placement))
 			ctype = self._field_ctype(placement)
 			limit = (1 << scalar.bits) - 1
+			value_fits = self._fits(struct, placement,
+			                        placement.array_count)
 			lines.extend([
 				"",
 				f"\t/* {placement.path}, where an error cannot be returned:",
@@ -3429,6 +3431,13 @@ class Emitter:
 				"\t{",
 				"\t\tstd::uint64_t value = 0;",
 				"",
+				# The bounds check this comment's C sibling promises and
+				# did not keep (26.714). Zero where the digits are not
+				# there, which is what a failed parse already gives.
+				*([f"\t\tif (!{value_fits}) {{",
+				   f"\t\t\treturn static_cast<{ctype}>(0);",
+				   "\t\t}",
+				   ""] if value_fits is not None else []),
 				f"\t\t(void)situ_parse_uint(situ_base(raw_) + ({at}),"
 				f" {placement.array_count}, {placement.radix}, {limit},"
 				" &value);",
@@ -7330,6 +7339,7 @@ class Emitter:
 			        " where the digits start. */"]
 
 		ctype = self._ctype(scalar)
+		held_fits = self._fits(struct, placement, width)
 
 		return [
 			"",
@@ -7352,6 +7362,19 @@ class Emitter:
 			"\t{",
 			"\t\tstd::uint64_t value = 0;",
 			"",
+			# A DECLARED WIDTH IS NOT A WIDTH THE FRAME HAS (26.714). C had
+			# the same read and ASan caught it as a one-byte
+			# heap-buffer-overflow, through a text number whose offset the
+			# message decides. Asked of `_fits`, so a constant offset gets
+			# nothing: inside the frame by the acquiring check (20.2).
+			#
+			# `bounds` and not `constraint`: the digits are not wrong, they
+			# are absent. Refused rather than clamped, because parsing the
+			# digits that ARE there hands back a different number.
+			*([f"\t\tif (!{held_fits}) {{",
+			   "\t\t\treturn ::situ::rt::err::bounds;",
+			   "\t\t}",
+			   ""] if held_fits is not None else []),
 			f"\t\t/* Zero is success, which is C's convention here and not",
 			"\t\t * this backend's. */",
 			f"\t\tif (situ_parse_uint(situ_base(raw_) + ({start}), {width}u,"

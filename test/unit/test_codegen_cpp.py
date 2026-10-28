@@ -4493,3 +4493,82 @@ def test_a_struct_whose_name_needs_no_move_keeps_it() -> None:
 	assert "class inner : public ::situ::rt::view" in header
 	assert "::situ::inner &out" in header
 	assert "inner_" not in header
+
+
+def test_a_text_number_past_a_variable_member_checks_it_is_there(
+		tmp_path: Path) -> None:
+	"""C's sibling of this was a heap-buffer-overflow (26.714).
+
+	The read passed the schema's DECLARED digit width to `situ_parse_uint`
+	with nothing checking the frame had those bytes, and ASan caught it one
+	byte past an 8-byte region. This backend had the identical shape, at
+	both the fallible getter and the non-failing `_value`.
+
+	Reachable only where the offset is one the message decides -- a varint
+	of message-chosen length in front of four digits -- which is why the
+	guard is asked of `_fits` and not added: *a statically placed member is
+	inside the frame by the bounds check that acquired the view (20.2)*, so
+	a constant offset gets none, exactly as the scalar getters here do.
+
+	`bounds` and not `constraint`: the digits are not wrong, they are
+	absent. And refused rather than clamped, because parsing the digits
+	that ARE there hands back a different number -- "1234" with two bytes
+	left is 12 -- which a length field would carry downstream with nothing
+	able to tell.
+	"""
+	moved = ("varint_type edge_varint {\n"
+	         "\tencoding  = be128;\n"
+	         "\tmax_bits  = 64;\n"
+	         "\tmax_bytes = 9;\n}\n"
+	         "struct s {\n"
+	         "\tedge_varint   lead;\n"
+	         "\tdecimal u32   n[4]  [max = 4];\n"
+	         "\tu16           tail;\n}\n")
+	header = emit(moved, PREAMBLE)
+
+	guard = ("situ_in_bounds(::situ::rt::view::raw(),"
+	         " situ_advance_u32(0, lead_len(), raw_.limit), 4u)")
+
+	def body(signature: str) -> str:
+		"""One method, so the assertions are about it rather than about the
+		header. A global count said 2 and the right answer is 3: `validate`
+		carries a fits check of its own for the same member, and counting
+		the file asserted something neither of these tests means."""
+		at = header.index(signature)
+		return header[at:header.index("\n\t}", at)]
+
+	for signature in ("err n(std::uint32_t &out) const noexcept",
+	                  "n_value() const noexcept"):
+		one = body(signature)
+		assert guard in one, f"{signature} reads four bytes unguarded"
+		assert one.index("situ_in_bounds") < one.index("situ_parse_uint"), (
+			"the check must come before the read it guards")
+
+	assert "return ::situ::rt::err::bounds;" in body(
+		"err n(std::uint32_t &out) const noexcept")
+	# The value form answers zero rather than failing, which is the bargain
+	# it already states for an unvalidated frame.
+	assert "return static_cast<std::uint32_t>(0);" in body(
+		"n_value() const noexcept")
+
+	assert compiles(tmp_path, moved, preamble=PREAMBLE).returncode == 0
+
+
+def test_a_text_number_at_a_constant_offset_is_not_guarded() -> None:
+	"""The control. C's version of this fix guarded unconditionally first
+	and put 39 always-reached branches into `example/cpio`'s header, whose
+	text offsets are all constant -- stricter than the scalar getter beside
+	it, which reads the buffer with no check at all.
+
+	So a constant offset must get nothing here either, and the measured
+	corpus cost of the pair is one file: `test/schema/edges.hpp`, because
+	no worked example puts a text number after a variable-length member.
+	"""
+	header = emit("struct s {\n"
+	              "\tu16           lead;\n"
+	              "\tdecimal u32   n[4]  [max = 4];\n"
+	              "\tu16           tail;\n}\n", PREAMBLE)
+
+	assert "situ_parse_uint" in header, "this schema has no text read at all"
+	assert "situ_in_bounds" not in header, (
+		"a constant offset was guarded, which no other accessor here is")
