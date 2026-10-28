@@ -7450,6 +7450,10 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.712 Six hundred and forty-three dates
+
+Moved to `doc/decision/26.712-six-hundred-and-forty-three-dates.md`.
+
 ### 26.711 A declaration equal to its default was silence
 
 Moved to

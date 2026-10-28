@@ -959,6 +959,45 @@ def _register_items() -> list[tuple[str, str]]:
 	return found
 
 
+def test_every_record_opens_with_a_readable_date() -> None:
+	"""`Date:` is the shelf-life field, and 643 of them were not dates.
+
+	The bulk move of 2026-10-17 spliced a diff hunk header into the field
+	in 643 of 776 records:
+
+	    Date: @ -21417,0 +21418,56 @@ where they parted, twice, in the...
+
+	A record in this directory opens with `Status:` and `Date:` -- that is
+	the shape every one of them claims -- so it was broken in 643 places by
+	a tool whose output nobody checked, and **nothing in this file looked at
+	the field**, which is why it stayed broken for eleven days while the
+	`Status:` line beside it was gated.
+
+	26.689 found it and left it, naming the proof a mechanical change over
+	many files has to carry. 26.712 did it, and this is the guard: the
+	cheapest half of that proof, standing where the next bulk move will meet
+	it.
+
+	A date and not merely non-empty, because the value's whole job is to
+	tell a reader how old a claim is -- `evidence.md`'s shelf-life rule, in
+	the field that exists to serve it.
+	"""
+	records = sorted((ROOT / "doc" / "decision").glob("*.md"))
+	assert len(records) > 400, f"only {len(records)} records; the population moved"
+
+	wrong = []
+	for path in records:
+		first = re.search(r"^Date:(.*)$", path.read_text(encoding="utf-8"),
+		                  re.M)
+		if first is None:
+			wrong.append(f"{path.name}: no `Date:` line")
+		elif not re.match(r"^ \d{4}-\d{2}-\d{2}$", first.group(1)):
+			wrong.append(f"{path.name}: `Date:{first.group(1)[:40]}`")
+
+	assert not wrong, ("a record's date is not a date:\n  "
+	                   + "\n  ".join(wrong[:8]))
+
+
 def test_a_record_says_which_rule_governs_it() -> None:
 	"""`doc/decision/` holds two kinds of record under two rules.
 
