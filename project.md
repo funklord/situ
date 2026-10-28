@@ -7450,6 +7450,11 @@ Moved to `doc/decision/26.407-skipping-the-struct-rather-than-the-schema-in-chec
 
 Moved to `doc/decision/26.408-a-uniform-tail-is-a-rule-with-two-halves-and-only-one-was-applied.md`.
 
+### 26.709 The class moves and the reference did not
+
+Moved to
+`doc/decision/26.709-the-class-moves-and-the-reference-did-not.md`.
+
 ### 26.708 A covered span that reaches the argument
 
 Moved to

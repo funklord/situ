@@ -1099,6 +1099,28 @@ class Emitter:
 		return "".join(f", {self._argument_local(struct, one)}"
 		               for one in self._arguments(struct))
 
+	def _struct_class(self, name: str) -> str:
+		"""What a struct a schema REFERENCES is called in this backend.
+
+		`class_name`'s answer and not `c_name`'s, and the gap between them
+		is the whole of 26.709: a struct whose own name is a C++ keyword is
+		emitted as `class int_` and was referenced as `::situ::int` from
+		every other struct holding one, so the header did not compile. The
+		suffix was applied where the class is DECLARED and not where it is
+		USED.
+
+		Unqualified on purpose. Every caller already writes its own
+		`::{namespace}::` where it needs one, and a helper carrying the
+		qualifier too would double it at those sites -- which is 26.695's
+		trap, where the pre-qualified string contains the bare one and a
+		replace over both produced `::situ::::situ::adv_report`.
+
+		Falls back to `c_name` for a name that resolves to no struct, which
+		is an enum or a type this backend emits no class for.
+		"""
+		held = self.resolved.structs.get(name)
+		return class_name(held) if held is not None else c_name(name)
+
 	def _argument_local(self, struct: ResolvedStruct, held: Placement) -> str:
 		"""The function-local spelling: the member's name and one underscore.
 		Separate from `_argument_member` so the two cannot drift apart."""
@@ -1132,7 +1154,8 @@ class Emitter:
 				f"\tstatic constexpr std::uint32_t size_bytes = {layout.size_bytes};",
 				"",
 				"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
-				f"\t\t\tstd::uint32_t offset{args}, {name} &out) noexcept",
+				f"\t\t\tstd::uint32_t offset{args},"
+				f" ::{self.namespace}::{name} &out) noexcept",
 				"\t{",
 				"\t\tsitu_view_t raw;",
 				"\t\tconst situ_err_t e = situ_view_at(owner.raw(), offset,"
@@ -1158,7 +1181,7 @@ class Emitter:
 			"\t * random bytes to all four and diffing what they said. */",
 			"\t[[nodiscard]] static ::situ::rt::err at(::situ::rt::message &owner,",
 			f"\t\t\tstd::uint32_t offset, std::uint32_t length{args},"
-			f" {name} &out) noexcept",
+			f" ::{self.namespace}::{name} &out) noexcept",
 			"\t{",
 			"\t\tif (length < size_min) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
@@ -2222,7 +2245,7 @@ class Emitter:
 			        "\t * extent this backend can compute. */"]
 
 		name  = bare_name(local_name(struct, placement))
-		inner = c_name(placement.type_name or "")
+		inner = self._struct_class(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t/* {placement.path}: this backend cannot resolve"
@@ -2419,7 +2442,7 @@ class Emitter:
 
 		name  = bare_name(local_name(struct, placement))
 		delim = placement.delimiter
-		inner = c_name(placement.type_name or "")
+		inner = self._struct_class(placement.type_name or "")
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t/* {placement.path}: this backend cannot resolve"
@@ -2605,7 +2628,12 @@ class Emitter:
 			f"\t\t\tstd::uint32_t have{args},"
 			" std::uint32_t &need) noexcept",
 			"\t{",
-			f"\t\treturn {name}{{ situ_view_t{{",
+			# Qualified, because this function's own parameter is called
+			# `data` and a struct a schema calls `data` is hidden by it --
+			# `data{ ... }` then names the pointer, and the error is a
+			# conversion from `const uint8_t*` rather than anything about
+			# a name (26.709).
+			f"\t\treturn ::{self.namespace}::{name}{{ situ_view_t{{",
 			# `nullptr` owner: no message yet, these bytes have merely
 			# arrived. `situ_view_check` reads an absent owner as "nothing
 			# can have moved under this", which is exactly true here.
@@ -4131,7 +4159,8 @@ class Emitter:
 			return lines
 
 		count = self._count_expression(struct, placement)
-		inner = f"::{self.namespace}::{c_name(placement.type_name or '')}"
+		inner = (f"::{self.namespace}::"
+		         f"{self._struct_class(placement.type_name or '')}")
 
 		# `[remaining]` says how many *bytes* are left, not how many elements
 		# are in them, and an element with no single size has no stride to
@@ -4678,7 +4707,7 @@ class Emitter:
 			        "\t * would mean measuring it through a view this frame"
 			        " cannot bound. */"]
 
-		inner  = c_name(element.name)
+		inner  = self._struct_class(element.name)
 		origin = (self._index_member_base(struct, table)
 		          if table.base == "member" else start)
 
@@ -4733,7 +4762,7 @@ class Emitter:
 
 	def _index_element_extent(self, element: ResolvedStruct) -> list[str]:
 		"""Narrow to one element, measuring it first where it varies."""
-		inner = c_name(element.name)
+		inner = self._struct_class(element.name)
 
 		if element.layout.is_fixed_size:
 			return [
@@ -5931,7 +5960,7 @@ class Emitter:
 		# in something the data sizes (26.55).
 		if nested is not None and not nested.layout.is_fixed_size \
 				and has_computable_extent(self.resolved.structs, nested):
-			inner = c_name(nested.name)
+			inner = self._struct_class(nested.name)
 			# An arm that IS the recursion -- `case 1: node kid`, which is
 			# how a tagged tree is written. The depth travels with it as it
 			# does through a run's span and an ordinary nested member.
@@ -7072,7 +7101,8 @@ class Emitter:
 
 	def _nested(self, struct: ResolvedStruct, placement: Placement) -> list[str]:
 		name   = bare_name(local_name(struct, placement))
-		nested = f"::{self.namespace}::{c_name(placement.type_name or '')}"
+		nested = (f"::{self.namespace}::"
+		          f"{self._struct_class(placement.type_name or '')}")
 		inner  = self.resolved.structs.get(placement.type_name or "")
 		start  = self._offset_expression(struct, placement)
 
@@ -8236,7 +8266,7 @@ class Emitter:
 			        "\t * so element N is not at a constant stride. */"]
 
 		name  = bare_name(local_name(struct, placement))
-		inner = c_name(element.name)
+		inner = self._struct_class(element.name)
 		start = self._offset_expression(struct, placement)
 		if start is None:
 			return ["", f"\t/* {placement.path}: this backend cannot resolve"
@@ -8300,7 +8330,7 @@ class Emitter:
 		for placement, guard in self._recursive_members(struct, cycle):
 			target = placement.type_name or ""
 			name  = bare_name(local_name(struct, placement))
-			inner = f"::{self.namespace}::{c_name(target)}"
+			inner = f"::{self.namespace}::{self._struct_class(target)}"
 			start = self._offset_expression(struct, placement)
 			if start is None:
 				continue
@@ -9390,7 +9420,8 @@ class Emitter:
 				return [f"\t\t/* {placement.path}: no accessor to validate"
 				        " through. */"]
 			name  = bare_name(local_name(struct, placement))
-			held  = f"::{self.namespace}::{c_name(placement.type_name or '')}"
+			held  = (f"::{self.namespace}::"
+			         f"{self._struct_class(placement.type_name or '')}")
 			# Two errors rather than one, because they are two things: the
 			# frame does not contain the member, or the member is there and
 			# malformed. The accessor refuses the first now (26.31), and

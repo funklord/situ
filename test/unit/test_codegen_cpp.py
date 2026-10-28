@@ -609,7 +609,8 @@ def test_a_variable_struct_is_told_its_extent() -> None:
 	it -- and that is the one bounds check everything else trusts."""
 	header = emit("struct h { u8 v; u16 n; }\nstruct s { h hdr; u8 opts[hdr.n]; }\n")
 
-	assert "std::uint32_t offset, std::uint32_t length, s &out" in header
+	assert ("std::uint32_t offset, std::uint32_t length, ::situ::s &out"
+	        in header)
 	assert "static constexpr std::uint32_t size_min = 3;" in header
 
 
@@ -3199,7 +3200,11 @@ def test_a_struct_named_for_a_method_every_view_has_is_renamed() -> None:
 	# The self-references inside the class body cannot use the alias: it is
 	# declared after the class, and a member of that name hides it anyway.
 	assert "framed_ &out) noexcept" in header
-	assert "return framed_{ situ_view_t{" in header
+	# Qualified since 26.709: the factory's own parameters are `offset`
+	# and `data`, so a struct named either hides the bare class name at
+	# the use site. It is the reference half of this test's own claim --
+	# the class moved and every reference to it had not.
+	assert "return ::situ::framed_{ situ_view_t{" in header
 
 
 def test_a_register_named_for_one_of_its_own_members_is_renamed_too() -> None:
@@ -3913,8 +3918,8 @@ def test_the_factory_takes_the_arguments() -> None:
 	"""
 	held = emit(PARAMETER)
 
-	assert ("std::uint32_t length, std::uint8_t arg_n_, frame &out) noexcept"
-	        in held)
+	assert ("std::uint32_t length, std::uint8_t arg_n_,"
+	        " ::situ::frame &out) noexcept" in held)
 	assert "out = ::situ::frame(raw, arg_n_);" in held
 	# And the constructor it calls, which is what stores it.
 	assert ": ::situ::rt::view(raw), arg_n(arg_n_) {}" in held
@@ -3922,7 +3927,7 @@ def test_the_factory_takes_the_arguments() -> None:
 	# The control: no parameter, no argument -- the signature the rest of
 	# this file asserts on is unchanged for every other schema.
 	field = emit(DRIVEN_BY_A_FIELD)
-	assert "std::uint32_t length, frame &out) noexcept" in field
+	assert "std::uint32_t length, ::situ::frame &out) noexcept" in field
 
 
 def test_a_plain_sized_by_reads_the_member() -> None:
@@ -4408,3 +4413,83 @@ def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:
 FRAME_LAYER_APART = frozenset({
 	"coap.situ", "protobuf.situ", "edges.situ", "padded.situ",
 })
+
+
+#: A struct's OWN name, where the generated class is not spelled the way the
+#: schema spelled it or where the generator's own locals hide it (26.709).
+#: Two mechanisms and both are here: a C++ keyword, which `class_name` moves
+#: to `<name>_`, and a name the factories declare as a parameter, which
+#: hides the bare class name at a use site.
+STRUCT_NAME_COLLIDES = ("int", "float", "new", "class", "template",
+                        "operator", "typename", "this", "offset", "data")
+
+
+@pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")
+@pytest.mark.parametrize("name", STRUCT_NAME_COLLIDES)
+def test_a_struct_may_be_named_for_a_keyword_or_a_factory_local(
+		tmp_path: Path, name: str) -> None:
+	"""The sibling of the two tests above, one level out: the hazard was the
+	STRUCT's name rather than a field's.
+
+	    struct int { u8 a; u16 b; }
+	    struct holder { int head; u16 tail; }
+
+	Two mechanisms, and the first is the one that reads as impossible.
+	`class_name` has moved a keyword to `int_` since it was written -- the
+	class is declared `class int_` -- and every struct HOLDING one
+	referenced it as `::situ::int`, qualified but unsuffixed. The suffix was
+	applied where the class is declared and not where it is used, so a
+	reader of either half sees a correct name.
+
+	The second is 26.695's, one level out: `at` declares `std::uint32_t
+	offset` and `required` declares `const std::uint8_t *data`, so a struct
+	named either is hidden by the factory's own parameter at the use site in
+	the same function -- `data{ ... }` names the pointer, and the error is
+	a conversion from `const uint8_t*` with nothing in it about a name.
+
+	Swept over `KEYWORDS` and the generator's own locals, 109 names: **83
+	did not compile before and none does now**, with `bool` refused by the
+	front end for its own reason in both.
+	"""
+	assert compiles(tmp_path,
+	                f"struct {name} {{ u8 a; u16 b; }}\n"
+	                f"struct holder {{ {name} head; u16 tail; }}",
+	                preamble=PREAMBLE).returncode == 0
+
+
+def test_the_class_is_referenced_by_the_name_it_is_declared_with() -> None:
+	"""The invariant behind the compile tests, asserted on the text.
+
+	A compiler catches a reference to a name that is not declared; it cannot
+	say which half is wrong, and the fix could as easily have been made by
+	dropping the suffix at the declaration. So this pins the direction: the
+	schema keeps its name, the CLASS moves, and every reference moves with
+	it. That is `class_name`'s own stated choice -- *"the class moves and
+	the schema keeps its name"* -- which had been true of the declaration
+	alone.
+	"""
+	header = emit("struct int { u8 a; u16 b; }\n"
+	              "struct holder { int head; u16 tail; }", PREAMBLE)
+
+	assert "class int_ : public ::situ::rt::view" in header
+	assert "::situ::int_ &out" in header
+	assert "::situ::int " not in header, "a reference kept the schema's name"
+	assert "::situ::int&" not in header
+	assert "::situ::int:" not in header
+
+
+def test_a_struct_whose_name_needs_no_move_keeps_it() -> None:
+	"""The control, and the half a compile cannot see.
+
+	`_struct_class` asks `class_name`, which moves a name only when
+	something has it. A helper that suffixed unconditionally would compile
+	every one of the tests above and rename all 46 corpus structs, so the
+	assertion that matters is that an ordinary name comes through
+	untouched.
+	"""
+	header = emit("struct inner { u8 a; u16 b; }\n"
+	              "struct holder { inner head; u16 tail; }", PREAMBLE)
+
+	assert "class inner : public ::situ::rt::view" in header
+	assert "::situ::inner &out" in header
+	assert "inner_" not in header
