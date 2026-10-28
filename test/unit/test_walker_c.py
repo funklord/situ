@@ -496,8 +496,20 @@ def _run_driver(drive: Path, tmp_path: Path, message: bytes, shape: int,
 
 
 def _drive(tmp_path: Path, blob: bytes, message: bytes, ask: str,
-		shape: int = 0, by_line: bool = False) -> list[str]:
-	drive = _build_driver(tmp_path, blob, ask)
+		shape: int = 0, by_line: bool = False,
+		drive: Path | None = None) -> list[str]:
+	"""One answer, building the driver unless the caller already has one.
+
+	`drive` is a driver already built for this `blob` and this `ask`, and
+	passing it is what the corpus sweeps do. Measured: compiling is 2.61
+	seconds and running is 2 milliseconds, a ratio of about 1500 -- and
+	the three sweeps were calling the one-shot form once per packet, so
+	each of some four hundred comparisons paid a whole compile for a two
+	millisecond answer. `_build_driver` was split out for exactly this and
+	its docstring says why; the sweeps never took it up (26.720).
+	"""
+	if drive is None:
+		drive = _build_driver(tmp_path, blob, ask)
 	return _run_driver(drive, tmp_path, message, shape, by_line)
 
 
@@ -590,8 +602,8 @@ def c_widths(tmp_path: Path, blob: bytes, message: bytes,
 
 
 def c_offsets(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int = 0) -> list[str]:
-	return _drive(tmp_path, blob, message, OFFSETS, shape)
+		shape: int = 0, drive: Path | None = None) -> list[str]:
+	return _drive(tmp_path, blob, message, OFFSETS, shape, drive=drive)
 
 
 def c_region_counts(tmp_path: Path, blob: bytes, message: bytes,
@@ -1821,7 +1833,7 @@ WHY = """situ_walk_err verdict = SITU_WALK_OK;
 
 
 def c_why(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int = 0) -> tuple[str, str] | str:
+		shape: int = 0, drive: Path | None = None) -> tuple[str, str] | str:
 	"""The C walk's `(member, check)`, spelled the Python walk's way.
 
 	`_drive` splits on whitespace, so a refusal comes back as two fields and
@@ -1829,7 +1841,7 @@ def c_why(tmp_path: Path, blob: bytes, message: bytes,
 	`report.failed_check` gives, and is why this renders the ids rather than
 	the names: the names are a rendering and the ids are the contract.
 	"""
-	said = _drive(tmp_path, blob, message, WHY, shape)
+	said = _drive(tmp_path, blob, message, WHY, shape, drive=drive)
 	if len(said) == 1:
 		return report.CLEAN if said[0] == "clean" else report.CANNOT_SAY
 
@@ -1852,8 +1864,8 @@ VERDICT = """situ_walk_err verdict = SITU_WALK_OK;
 
 
 def c_verdict(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int = 0) -> str:
-	return _drive(tmp_path, blob, message, VERDICT, shape)[0]
+		shape: int = 0, drive: Path | None = None) -> str:
+	return _drive(tmp_path, blob, message, VERDICT, shape, drive=drive)[0]
 
 
 def python_verdict(blob: bytes, message: bytes, shape: int = 0) -> str:
@@ -2776,11 +2788,12 @@ def test_they_agree_about_the_corpus_being_well_formed(
 	blob  = image_for(schema)
 	image = load(blob)
 	rng   = random.Random(20260913)
+	drive = _build_driver(tmp_path, blob, VERDICT)
 
 	asked = declined = 0
 	for which in range(len(image.structs)):
 		for packet in (draw(rng), draw(rng)):
-			pair = _verdict_pair(tmp_path, blob, packet, which)
+			pair = _verdict_pair(tmp_path, blob, packet, which, drive)
 			if pair is None:
 				continue	# no driver can acquire this shape
 			c_said, p_said = pair
@@ -2887,6 +2900,7 @@ def test_the_two_walkers_agree_about_which_check_refused(
 	blob  = image_for(schema)
 	image = load(blob)
 	rng   = random.Random(20260913)
+	drive = _build_driver(tmp_path, blob, WHY)
 
 	# `image_for` packs without metadata, so that blob carries no names --
 	# which is what `shape_named` exists to work around. The held-out set is
@@ -2939,7 +2953,7 @@ def test_the_two_walkers_agree_about_which_check_refused(
 				continue
 
 			try:
-				c_said = c_why(tmp_path, blob, packet, which)
+				c_said = c_why(tmp_path, blob, packet, which, drive)
 			except (AssertionError, IndexError):
 				continue	# no driver can acquire this shape
 			if c_said in (report.CLEAN, report.CANNOT_SAY):
@@ -2989,7 +3003,7 @@ VERDICTS_ASKED: dict[str, tuple[int, int]] = {}
 
 
 def _verdict_pair(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int) -> tuple[str, str] | None:
+		shape: int, drive: Path | None = None) -> tuple[str, str] | None:
 	"""Both walkers' verdicts, or None where the drivers cannot be asked.
 
 	The C driver walks a struct's members and exits non-zero for one with
@@ -2999,7 +3013,7 @@ def _verdict_pair(tmp_path: Path, blob: bytes, message: bytes,
 	made this test red for five schemas over its own plumbing.
 	"""
 	try:
-		c_said = c_verdict(tmp_path, blob, message, shape)
+		c_said = c_verdict(tmp_path, blob, message, shape, drive)
 		p_said = python_verdict(blob, message, shape)
 	except (AssertionError, IndexError, Refused, Unplaceable):
 		return None
@@ -3587,7 +3601,7 @@ def test_every_arm_field_both_answers_and_refuses() -> None:
 
 
 def _offset_pair(tmp_path: Path, blob: bytes, message: bytes,
-		shape: int) -> tuple[list[str], list[str]] | None:
+		shape: int, drive: Path | None = None) -> tuple[list[str], list[str]] | None:
 	"""Both walkers' offsets, or None where the drivers cannot be asked.
 
 	`_verdict_pair`'s body, for `_verdict_pair`'s reason, and its
@@ -3599,7 +3613,7 @@ def _offset_pair(tmp_path: Path, blob: bytes, message: bytes,
 	file (26.538).
 	"""
 	try:
-		theirs = c_offsets(tmp_path, blob, message, shape)
+		theirs = c_offsets(tmp_path, blob, message, shape, drive)
 		mine   = python_offsets(blob, message, shape)
 	except (AssertionError, IndexError, Refused, Unplaceable, Unsupplied):
 		return None
@@ -3649,11 +3663,12 @@ def test_the_two_walkers_agree_about_every_offset(
 	blob  = image_for(schema)
 	image = load(blob)
 	rng   = random.Random(20260930)
+	drive = _build_driver(tmp_path, blob, OFFSETS)
 
 	asked = declined = 0
 	for which in range(len(image.structs)):
 		for packet in (draw(rng), draw(rng)):
-			pair = _offset_pair(tmp_path, blob, packet, which)
+			pair = _offset_pair(tmp_path, blob, packet, which, drive)
 			if pair is None:
 				declined += 1
 				continue	# no driver can acquire this shape

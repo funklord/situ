@@ -7469,6 +7469,11 @@ Moved to
 Moved to
 `doc/decision/26.719-the-program-walked-a-message-nobody-gave-it.md`.
 
+### 26.720 The sweep compiled a driver for every packet
+
+Moved to
+`doc/decision/26.720-the-sweep-compiled-a-driver-for-every-packet.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
