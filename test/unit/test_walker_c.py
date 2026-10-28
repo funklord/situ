@@ -14,6 +14,7 @@ that reads exactly like a right one.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -459,6 +460,29 @@ def python_widths(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 	return found
 
 
+#: The `img` array every driver in this file declares. The drivers read the
+#: image with `fread(img, 1, sizeof img, f)` and pass what they got to
+#: `situ_walk_open` -- and a truncated image is not a malformed one, since
+#: the tables it finds are the ones the header points at and a header near
+#: the front still points at them. So an image past this would be compared
+#: against in silence.
+#:
+#: 65536 against a largest corpus image of 45538 bytes -- `edges.situ`
+#: packed WITH metadata, which several tests here need for struct names;
+#: `image_for` packs without and gives 31202. So the headroom is a factor
+#: of 1.44 rather than the 2.1 the smaller figure suggests, on the file
+#: this project's own practice grows one struct per construct no worked
+#: example carries.
+#:
+#: The failure when it runs out is 26.718's: the driver fails at
+#: `situ_walk_open`, exits 1, trips `_run_driver`'s assertion, and all
+#: four sweeps catch that and skip the struct as a shape no driver can
+#: acquire. Asserted on this side for exactly that reason -- the Python
+#: side has the blob, and a refusal written in C would land in the
+#: `except AssertionError` that hid 26.718 for eleven weeks (26.722).
+DRIVER_IMAGE_MAX = 65536
+
+
 def _build_driver(tmp_path: Path, blob: bytes, ask: str) -> Path:
 	"""Write the image and compile one driver, answering where it landed.
 
@@ -467,6 +491,10 @@ def _build_driver(tmp_path: Path, blob: bytes, ask: str) -> Path:
 	thirty messages spent thirty compilations on one binary. The one-shot
 	wrapper below keeps every existing caller unchanged.
 	"""
+	assert len(blob) <= DRIVER_IMAGE_MAX, (
+		f"the image is {len(blob)} bytes and every driver in this file "
+		f"reads at most {DRIVER_IMAGE_MAX}; raise `img` in DRIVER, "
+		f"ARG_DRIVER and CROSS_DRIVER together with this figure")
 	(tmp_path / "img").write_bytes(blob)
 	(tmp_path / "drive.c").write_text(
 		DRIVER.replace("SHOW", SHOW).replace("ASK", ask), encoding="ascii")
@@ -783,6 +811,26 @@ def python_elements(blob: bytes, message: bytes, shape: int = 0) -> list[str]:
 				held.append("refused")
 		found.append(f"{count}:" + ",".join(held))
 	return found
+
+
+def test_every_driver_reads_the_image_size_the_guard_asserts() -> None:
+	"""The figure in one place and the arrays in three.
+
+	`DRIVER_IMAGE_MAX` is what `_build_driver` holds every blob to, and it
+	is a claim about C that lives in Python. A driver whose `img` shrank
+	below it would read a truncated image with nothing saying so, which is
+	the whole of what the assertion exists to prevent -- so the three
+	declarations are read back and compared (26.722).
+	"""
+	declared = {name: re.findall(r"static uint8_t img\[(\d+)\]", text)
+	            for name, text in (("DRIVER", DRIVER),
+	                               ("ARG_DRIVER", ARG_DRIVER),
+	                               ("CROSS_DRIVER", CROSS_DRIVER))}
+
+	for name, found in declared.items():
+		assert found == [str(DRIVER_IMAGE_MAX)], (
+			f"{name} declares img{found} where the guard asserts "
+			f"{DRIVER_IMAGE_MAX}")
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
@@ -3973,11 +4021,23 @@ PROGRAM = WALKER / "main.c"
 #: `MESSAGE_MAX` in `main.c`, read from the source rather than copied, so a
 #: build that raises the ceiling does not leave this test asserting about a
 #: number nobody uses any more.
-def _message_max() -> int:
+def _stated_max(which: str) -> int:
+	"""A ceiling `main.c` states, read from the source rather than copied.
+
+	So a build that raises one does not leave this file asserting about a
+	number nobody uses. `MESSAGE_MAX` is a literal and `IMAGE_MAX` is a
+	shift, which are the two spellings there; anything else should fail
+	here rather than be guessed at.
+	"""
 	for line in PROGRAM.read_text(encoding="ascii").split("\n"):
-		if line.startswith("#define MESSAGE_MAX"):
-			return int(line.split()[2].rstrip("u"))
-	raise AssertionError("main.c states no MESSAGE_MAX")
+		if not line.startswith(f"#define {which}"):
+			continue
+		figure = line.split(maxsplit=2)[2].strip().strip("()").replace("u", "")
+		if "<<" in figure:
+			high, low = figure.split("<<")
+			return int(high) << int(low)
+		return int(figure)
+	raise AssertionError(f"main.c states no {which}")
 
 
 @pytest.fixture(scope="module")
@@ -4020,7 +4080,7 @@ def test_the_program_refuses_a_message_it_cannot_read_whole(
 	blob = image_for(ROOT / "example" / "udp" / "udp.situ")
 	image = tmp_path / "img"
 	image.write_bytes(blob)
-	cap = _message_max()
+	cap = _stated_max("MESSAGE_MAX")
 
 	over = _program_answers(program, image, b"\xab" * (cap + 1))
 	assert over.returncode != 0, over.stdout
@@ -4038,6 +4098,16 @@ def test_the_program_refuses_a_message_it_cannot_read_whole(
 		                     capture_output=True, text=True)
 		assert ran.returncode != 0, f"{bad!r} was read: {ran.stdout}"
 		assert "hex digit pairs" in ran.stderr, ran.stderr
+
+	# The image has the same fault with the other operand, and it is the
+	# quieter one: a truncated image is not a malformed one, because the
+	# tables `situ_walk_open` finds are the ones the header points at and a
+	# header near the front still points at them (26.722).
+	big = tmp_path / "big"
+	big.write_bytes(blob + bytes(_stated_max("IMAGE_MAX") + 1 - len(blob)))
+	over_image = _program_answers(program, big, b"\x11" * 8)
+	assert over_image.returncode != 0, over_image.stdout
+	assert "image is larger" in over_image.stderr, over_image.stderr
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")

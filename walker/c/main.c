@@ -109,8 +109,20 @@ int main(int argc, char **argv)
 		fprintf(stderr, "situ-walk-c: cannot open %s\n", argv[1]);
 		return 2;
 	}
-	const size_t got = fread(image_bytes, 1u, sizeof image_bytes, held);
+	const size_t got  = fread(image_bytes, 1u, sizeof image_bytes, held);
+	/* Whether the file had more. A truncated image is not a malformed one
+	 * -- the tables `situ_walk_open` finds are the ones the header points
+	 * at, and a header near the front still points at them -- so this
+	 * would answer about an image nobody wrote, which is the message
+	 * fault below with the other operand (26.722). */
+	const int    more = (got == sizeof image_bytes) && (getc(held) != EOF);
+
 	fclose(held);
+	if (more) {
+		fprintf(stderr, "situ-walk-c: the image is larger than the %u "
+		        "bytes this build reads\n", IMAGE_MAX);
+		return 1;
+	}
 
 	situ_walk_image image;
 	situ_walk_err err = situ_walk_open(&image, image_bytes, (uint32_t)got);

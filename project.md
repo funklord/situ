@@ -7479,6 +7479,11 @@ Moved to
 Moved to
 `doc/decision/26.721-what-the-two-walkers-read-asked-over-the-corpus.md`.
 
+### 26.722 The image ceilings beside the message ones
+
+Moved to
+`doc/decision/26.722-the-image-ceilings-beside-the-message-ones.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
