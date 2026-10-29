@@ -1020,25 +1020,19 @@ def test_every_schema_compiles(schema: Path, materialize: bool,
 
 #: Schemas whose Rust frame layer does not compile, with the struct its
 #: `Reader` calls a `required` for that this backend declines to define.
-#: The C++ and Python siblings carry the same pair in their own sets --
-#: `pickle_string` and `byte_run` in `test/schema/padded.situ` -- and the
-#: reason is one construct: C computes a `pad_to` alignment in its extent
-#: chain and the other three have no pad branch at all, so the member
-#: reaches a length expression that answers None.
 #:
-#: Not closed here: three emitters gaining what C has is a feature, and
-#: narrowing the shared `frameable` instead would take a working
-#: `required` away from C. 26.692 has the reproduction and the choice.
+#: **CLOSED by 26.731**, which gave this backend the `pad_to` branch, so
+#: the set is empty and the two entries it held are gone. It also held
+#: `coap.situ`, `protobuf.situ` and `edges.situ` until 26.729 -- a
+#: different fault wearing this one's clothes, each holding a `tlv`
+#: region whose reach is schema-free, which C framed at the length of its
+#: fixed members while the other three declined.
 #:
-#: It held `coap.situ`, `protobuf.situ` and `edges.situ` too until 26.729,
-#: and those three were a different fault wearing this one's clothes: each
-#: holds a `tlv` region, whose reach is schema-free, and C framed them at
-#: the length of their fixed members while the other three declined. No
-#: backend frames them now.
-FRAME_LAYER_APART = frozenset({
-	("padded.situ", "PickleString"),
-	("padded.situ", "ByteRun"),
-})
+#: Kept rather than removed because the mechanism is live: the frame layer
+#: asks the shared `frameable` and each emitter's `_required` then applies
+#: its own conditions, so a construct one backend gains first puts a pair
+#: back here.
+FRAME_LAYER_APART: frozenset[tuple[str, str]] = frozenset()
 
 
 @pytest.mark.skipif(RUSTC is None, reason="no rustc")

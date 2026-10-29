@@ -47,3 +47,23 @@ struct byte_run {
 
 require size(aligned_header) == 8;
 require absolute_static(aligned_header.word);
+
+// A PAD AS THE LAST MEMBER, with nothing fixed after it. 26.730 is what
+// this is here for: `at` is a running total, so the two fixed bytes of
+// `pickle_string`'s and `byte_run`'s `trailer` keep it at `have + 2` and
+// the clamp that used to be in the pad term could only make the answer
+// loose. Take the trailer away and there is no margin -- `at` clamps to
+// exactly `have`, `have >= at` comes out TRUE, and `required` reported a
+// message COMPLETE up to three bytes short, which is the one-sided safety
+// property.
+//
+// So the two shapes above are the two arrangements in which that fault
+// cannot be seen, and this is the arrangement in which it can. A trailing
+// pad is ordinary rather than exotic: chunk padding in RIFF, TIFF and ELF
+// all end a record this way.
+struct trailing_pad {
+	u16  used;
+	u8   data[used];
+	pad_to(4);
+}
+

@@ -34,3 +34,8 @@ struct pickle_string size=4..65542
   @0x0002   0..65535  u8         data  sized-by=used
   ~         0..3      u8         <pad>  pad-to=4 must_be_zero
   ~         2         u16        trailer  big
+
+struct trailing_pad size=2..65540
+  @0x0000   2         u16        used  big
+  @0x0002   0..65535  u8         data  sized-by=used
+  ~         0..3      u8         <pad>  pad-to=4 must_be_zero

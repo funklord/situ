@@ -27,3 +27,8 @@ struct pickle_string size=4..65542 mutate=Shifting address=Unstable repr=ValueCo
   pickle_string.data                     offset=AbsoluteStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
   pickle_string.<pad>                    offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
   pickle_string.trailer                  offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+
+struct trailing_pad size=2..65540 mutate=Shifting address=Unstable repr=ValueConverted
+  trailing_pad.used                      offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  trailing_pad.data                      offset=AbsoluteStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  trailing_pad.<pad>                     offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable

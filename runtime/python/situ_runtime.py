@@ -540,8 +540,24 @@ def align_up(at: int, n: int, limit: int) -> int:
 	precondition for agreement with `situ.h` rather than for safety
 	(26.592).
 	"""
-	pad = (n - at % n) % n
-	return advance(at, pad, limit)
+	return advance(at, pad_to(at, n), limit)
+
+
+def pad_to(at: int, n: int) -> int:
+	"""`pad_to(n)`'s padding on its own, UNCLAMPED: how many bytes from
+	`at` to the next multiple of `n`.
+
+	`align_up` clamps its result to the view, because an accessor asks
+	which bytes are in the frame. `required` asks how many a whole one
+	needs and must never clamp: a pad term capped at what had arrived
+	dragged the total down to exactly that, and a message with a trailing
+	pad was reported COMPLETE three bytes short (26.730).
+
+	Split out rather than inlined at both call sites so the clamped and
+	unclamped forms cannot drift -- which is how `situ.h` has always had
+	it, `situ_align_up_u32` being built out of `situ_pad_to_u32`.
+	"""
+	return (n - at % n) % n
 
 
 def skip_run(data: "memoryview | bytes", limit: int,

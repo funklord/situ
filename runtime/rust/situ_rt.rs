@@ -189,9 +189,21 @@ pub fn advance(at: usize, by: usize, limit: usize) -> usize {
 /// the way `advance` is, so an aligned offset past a short message is a
 /// `validate` failure rather than a panic on the slice that follows.
 pub fn align_up(at: usize, n: usize, limit: usize) -> usize {
-	let pad = (n - at % n) % n;
+	advance(at, pad_to(at, n), limit)
+}
 
-	advance(at, pad, limit)
+/// `pad_to(n)`'s padding on its own, UNCLAMPED: how many bytes from `at`
+/// to the next multiple of `n`.
+///
+/// `align_up` above clamps its result to the view, because an accessor
+/// asks which bytes are in the frame. `required` asks how many a whole one
+/// needs and must never clamp -- a pad term capped at what has arrived
+/// dragged the total down to exactly that and reported a message with a
+/// trailing pad COMPLETE three bytes short (26.730). Split out rather than
+/// inlined at the two call sites so the clamped and unclamped forms cannot
+/// drift, which is how C's runtime has always had it.
+pub fn pad_to(at: usize, n: usize) -> usize {
+	(n - at % n) % n
 }
 
 /// Zero where the bytes are not all there, which is what the C runtime's

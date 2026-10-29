@@ -5789,22 +5789,21 @@ holder's:
   `test_codegen_rust.py` beside its three siblings. The entry here said
   Rust's was unbuilt and was right; a record that said only C's had ever
   been compiled was not, and 26.728 carries that correction.
-  - **What is left of the gap is two structs in one schema**:
-    `pickle_string` and `byte_run` in `test/schema/padded.situ`, held out
-    by name in all three non-C backends. C computes a `pad_to` alignment
-    in its extent chain and the other three have no pad branch at all, so
-    the member reaches a length expression that answers None. **Closing
-    it is three emitters gaining what C has, which is a feature and is
-    still open** -- narrowing the shared predicate instead would take a
-    working `required` away from C. **Port the form 26.730 left, not the
-    one that stood there**: C's pad term passed `view.limit` and so
-    clamped the total down to what had arrived, which reported a message
-    with a trailing pad COMPLETE three bytes short -- the one-sided
-    safety property, in a shape the corpus does not have because both of
-    its pad structs carry a trailer whose two fixed bytes hide it. It is
-    `situ_pad_to_u32` now, which also removes the one-byte-per-round-trip
-    looseness 26.693 measured and attributed correctly while concluding
-    the branch was not worth looking at.
+  - **CLOSED 2026-10-29** (26.731). The last of it was `pickle_string`
+    and `byte_run` in `test/schema/padded.situ`, and the three backends
+    have C's `pad_to` branch now -- on the UNCLAMPED form 26.730 left
+    rather than the clamped one that stood there, which had reported a
+    message with a trailing pad COMPLETE three bytes short. Every
+    backend's frame holdout set is empty; they are kept rather than
+    deleted because the mechanism is live, and the next construct one
+    backend gains before the others puts a schema back in them.
+  - **The parking was wrong, which is the part worth keeping.** The run
+    before deferred this as depending on whether `required` should read
+    every readable length, because C's pad term was loose. Section 26's
+    own sentence settles it -- four backends that disagreed would mean a
+    schema means four things -- and the looseness turned out to be the
+    safety fault 26.730 fixed. So the deferral held up a port AND left
+    the fault that made the port look unattractive.
   - **Three of the five that gap used to hold were a different fault**
     (26.729), and the worst thing found this week. `coap`,
     `proto_message` and `tagged_options` each hold a `tlv` region, whose
@@ -7589,6 +7588,11 @@ Moved to
 
 Moved to
 `doc/decision/26.730-the-pad-term-shortened-the-answer-to-what-arrived.md`.
+
+### 26.731 Three emitters gained C's pad branch
+
+Moved to
+`doc/decision/26.731-three-emitters-gained-c-s-pad-branch.md`.
 
 ### 26.715 The same width in the other pointer backend
 

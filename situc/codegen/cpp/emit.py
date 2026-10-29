@@ -2671,6 +2671,59 @@ class Emitter:
 				return self._unframeable(struct, "an `indexed` region reaches"
 				        " wherever its furthest element ends, which its offset"
 				        " table does not say")
+			# A PAD READS NOTHING, so none of the branches below applies
+			# to it: no bytes have to have arrived to know how long it is,
+			# and the length is the padding from its own base (0043). This
+			# backend had no branch for one at all, so a `pad_to` member
+			# fell through to a length expression -- which answers an array
+			# count a pad has not got -- and the struct was declined. That
+			# is 26.692's "three backends short of a construct", and
+			# `padded.situ`'s `pickle_string` and `byte_run` were the two
+			# structs C framed and nobody else did (26.731).
+			#
+			# THE ALIGNMENT IS TAKEN AT THE PAD'S OWN BASE, not at `at`.
+			# `at` is a running TOTAL whose constant includes every fixed
+			# member, the ones AFTER this pad included, so aligning `at` for
+			# `u16 used; u8 data[used]; pad_to(4); u16 trailer;` aligns
+			# `2 + n + 2` and answers 4 where the truth is 6.
+			#
+			# AND IT IS NOT CLAMPED. The accessors' `align_up` caps its
+			# result at the view because an accessor asks which bytes are in
+			# the frame; this asks how many a whole one needs. C emitted the
+			# clamped form for eleven months under a comment forbidding it,
+			# and a struct ending in a pad was reported COMPLETE three bytes
+			# short -- the one-sided safety property (26.730). So this ports
+			# the form that record left, not the one that stood there.
+			pad = pad_alignment(placement)
+			if pad is not None:
+				if cursor is None:
+					# C falls back to a static base expression here. This
+					# backend has none, and no schema in the tree reaches
+					# it -- `framing_gaps` gives a cursor for both pad
+					# structs. Declining is the honest answer rather than
+					# a base guessed at, and it is what this backend did
+					# for every pad until now.
+					return self._unframeable(struct, "a pad whose base this"
+					        " backend cannot name")
+				ahead = cursor if index + 1 < len(variable) else None
+				steps.extend([
+					"",
+					f"\t\t/* {placement.path}: a pad reads nothing. Its",
+					f"\t\t * length is the bytes from its own base to the next",
+					f"\t\t * multiple of {pad}, and `at` is a total rather than",
+					"\t\t * an offset (0043). */",
+					"\t\t{",
+					f"\t\t\tconst std::uint32_t len ="
+					f" situ_pad_to_u32({cursor}, {pad}u);",
+					"",
+					"\t\t\tat = situ_need_u32(at, len);",
+					*([f"\t\t\t{ahead} = situ_need_u32({ahead}, len);"]
+					  if ahead else []),
+					"\t\t}",
+				])
+				steps.extend(self._gap_step(cursor, gaps, index))
+				continue
+
 			# THE GUARD GOES BEFORE THE RUN BRANCH, WHICH IS WHERE THE C
 			# EMITTER HAS ALWAYS HAD IT (26.723). A counted run reads its
 			# count from a STATIC OFFSET, and the branch below `continue`s,

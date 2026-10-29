@@ -3284,19 +3284,18 @@ def test_every_schema_frame_layer_imports(path: Path, tmp_path: Path) -> None:
 #: 38 schemas and a held-out set with a reason is what this tree does with a
 #: gap it has measured and not yet closed. 26.692 has the reproduction and
 #: why it is not fixed here.
-#: The first three entries were here until 26.729 and were a different
-#: fault: `coap`, `proto_message` and `tagged_options` each hold a `tlv`
-#: region, which C framed at the length of its fixed members while the
-#: other three declined. `frameable` refuses a `tlv` region now, so no
-#: backend frames them and what is left is the `pad_to` construct.
+#: EMPTY now, and the history says what it held. `coap`,
+#: `proto_message` and `tagged_options` were here until 26.729 and were a
+#: different fault: each holds a `tlv` region, which C framed at the
+#: length of its fixed members while the other three declined, and
+#: `frameable` refuses one now. `byte_run` and `pickle_string` were here
+#: until 26.731 gave this backend the `pad_to` branch in `_required`.
 #:
-#: A frozenset would not have noticed them going, where this one's
-#: entries are now all exercised: that is the argument the C++ sibling's
-#: assert-to-fail makes, one level down.
-FRAME_REQUIRED_APART = frozenset({
-	("padded.situ", "byte_run"),
-	("padded.situ", "pickle_string"),
-})
+#: Kept rather than removed because the mechanism is live: the frame layer
+#: asks the shared `frameable` and each emitter's `_required` then applies
+#: its own conditions, so a construct one backend gains first puts a pair
+#: back here.
+FRAME_REQUIRED_APART: frozenset[tuple[str, str]] = frozenset()
 
 
 #: The four names that broke this backend when a schema used one for a

@@ -4513,15 +4513,20 @@ def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:
 #: Not closed here: three emitters gaining what C has is a feature, and
 #: narrowing `frameable` instead would take a working `required` away from
 #: C. 26.692 has the reproduction and the choice.
-#: `coap.situ`, `protobuf.situ` and `edges.situ` were here too until
-#: 26.729, and they were a different fault wearing this one's clothes:
-#: each holds a `tlv` region, whose reach is schema-free, so C framed them
-#: at the length of their fixed members -- zero, for `proto_message`,
-#: whose Reader then looped. `frameable` refuses a `tlv` region now, so no
-#: backend frames those three and the set is the one construct.
-FRAME_LAYER_APART = frozenset({
-	"padded.situ",
-})
+#: EMPTY, and the history is why that is worth a comment rather than a
+#: deletion. It held `coap.situ`, `protobuf.situ` and `edges.situ` until
+#: 26.729 -- a different fault wearing this one's clothes, each holding a
+#: `tlv` region whose reach is schema-free, so C framed them at the length
+#: of their fixed members and `proto_message`'s Reader looped. And it held
+#: `padded.situ` until 26.731 gave this backend the `pad_to` branch in
+#: `_required` that C has had since 26.265.
+#:
+#: Kept rather than removed because the mechanism is still live: the frame
+#: layer asks the shared `frameable` and each emitter's `_required` then
+#: applies its own conditions, so a construct one backend gains before the
+#: others puts a schema back in here. The test asserts an empty set is
+#: empty, which costs nothing and names where the next one goes.
+FRAME_LAYER_APART: frozenset[str] = frozenset()
 
 
 #: A struct's OWN name, where the generated class is not spelled the way the
