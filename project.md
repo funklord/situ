@@ -5906,6 +5906,11 @@ open-ended.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
+- **The backends split on readers for byte runs inside a gate** (26.750):
+  a fixed run has a reader in C and Rust only, one sized from inside the
+  region is declined by Rust, a `[remaining]` one by C++. No corpus schema
+  has any of them, so the differential probe now asks only for runs sized
+  from outside, which all four read. Emitter work in four backends.
 - **Four walker identity divergences** of one shape (26.689), where the
   guard widths want reconciling rather than listing. **The holder's**, and
   the parking was re-measured and confirmed 2026-10-28 rather than
@@ -7773,6 +7778,11 @@ Moved to
 ### 26.749 C named an offset function no variant has
 
 Moved to `doc/decision/26.749-c-named-an-offset-function-no-variant-has.md`.
+
+### 26.750 The gated byte probe asked for readers the backends split on
+
+Moved to
+`doc/decision/26.750-the-gated-byte-probe-asked-for-readers-backends-split-on.md`.
 
 ### 26.715 The same width in the other pointer backend
 

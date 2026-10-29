@@ -95,6 +95,7 @@ question with two answers.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -1012,8 +1013,25 @@ def _gated_bytes(struct: ResolvedStruct,
 	offset that disagrees while the length happens to match. Secrets are out
 	for the reason they are out of `_interior_scalars`: 14.6 emits no reader
 	for one at all.
+
+	**Only the runs all four read: those sized by a field OUTSIDE the
+	region** (26.750). The others split the backends, and asking for one
+	produced a driver that did not compile, in every sealed cell of the
+	composed sweep with such a run:
+
+	- a FIXED run: C and Rust give a reader, C++ and Python none, and C's
+	  has `_ptr` and no `_len`;
+	- one sized by a field INSIDE the region: Rust declines it;
+	- one sized by `remaining`: C++ declines it.
+
+	No corpus schema has any of the three, so nothing compared here before
+	is lost. Which backends should read them is recorded in 26.750 and not
+	settled by a probe.
 	"""
 	found: list[str] = []
+	inside = {held.path for held in (entry.placement
+	                                 for entry in struct.entries)
+	          if held.sealed_by == region.name}
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -1027,6 +1045,17 @@ def _gated_bytes(struct: ResolvedStruct,
 		if placement.array_count is None and not data_sized(placement):
 			continue
 		if any(attr.name == "secret" for attr in placement.attrs):
+			continue
+		# What the count names: one field, or every name in an expression
+		# (`fragment[length - 24]` in dtls, which a test of `sized_by` alone
+		# dropped). None of it may be `remaining` or inside the region, and
+		# a run that names nothing is a fixed one.
+		names = ({placement.sized_by} if placement.sized_by is not None
+		         else set(re.findall(r"[A-Za-z_][\w.]*",
+		                             placement.size_expr or "")))
+		if not names or "remaining" in names \
+				or any(f"{struct.name}.{region.name}.{name}" in inside
+				       for name in names):
 			continue
 
 		found.append(c_name(local_name(struct, placement))
