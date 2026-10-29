@@ -2539,6 +2539,66 @@ fn main() {
 	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
 
 
+NESTED_CHECK = """struct inner {
+	u8  kind [must_eq = 7];
+}
+struct outer {
+	inner  head;
+	u8     level;
+}
+when outer.level == 9
+	refuse nine
+	"a level of nine is reserved";
+"""
+
+
+def test_check_which_is_no_check_after_a_nested_member_passes(
+		tmp_path: Path) -> None:
+	"""A nested member is checked with a `?;` line, and the member's id is
+	set on the line before it whether it refuses or not. So a clean walk
+	returned `Ok` with `*which` naming `head`, and the message refusal after
+	it was reported against `head` too, where C reports NO_CHECK (26.739).
+	The test above has no nested member and could not see it."""
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	schema   = parse_text(PREAMBLE + NESTED_CHECK)
+	resolved = resolve(schema, solve(schema))
+	(src / "unit.rs").write_text(
+		generate_rs(schema, resolved, "unit").module, encoding="ascii")
+	(src / "main.rs").write_text("""mod situ_rt;
+mod unit;
+
+fn verdict(kind: u8, level: u8, which: &mut u32) -> situ_rt::Result<()> {
+	let raw = [kind, level];
+	unit::Outer::new(&raw).unwrap().check_which(which)
+}
+
+fn main() {
+	let mut which = 0xabcd_u32;
+
+	assert!(verdict(7, 3, &mut which).is_ok());
+	assert_eq!(which, unit::Outer::NO_CHECK);
+
+	assert!(verdict(8, 3, &mut which).is_err());
+	assert_eq!(which, unit::Outer::CHECK_HEAD);
+
+	assert!(verdict(7, 9, &mut which).is_err());
+	assert_eq!(which, unit::Outer::NO_CHECK);
+}
+""", encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings",
+		 "-o", str(tmp_path / "probe"), str(src / "main.rs")],
+		capture_output=True, text=True)
+	assert built.returncode == 0, built.stderr
+	assert subprocess.run([str(tmp_path / "probe")]).returncode == 0
+
+
 # ---------------------------------------------------------------------------
 # A view takes its arguments (0050)
 # ---------------------------------------------------------------------------

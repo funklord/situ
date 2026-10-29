@@ -7719,6 +7719,11 @@ Moved to `doc/decision/26.737-nothing-validated-a-tlv-region.md`.
 Moved to
 `doc/decision/26.738-unknown-error-was-the-default-and-nothing-enforced-it.md`.
 
+### 26.739 Rust's `check_which` named a member that passed
+
+Moved to
+`doc/decision/26.739-rust-check-which-named-a-member-that-passed.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

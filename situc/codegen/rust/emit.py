@@ -8520,6 +8520,15 @@ class Emitter:
 			*depth,
 			*(checks or refusals or ([] if depth or floor or ceiling else
 			             ["\t\t// Nothing in this struct is constrained."])),
+			# Back to NO_CHECK once every member has passed (26.739). A `?;`
+			# line is preceded by its member's id whether it refuses or not,
+			# so a passing nested `validate` left `*which` naming it -- an
+			# `Ok` naming a member, against the doc comment above, and a
+			# `when` refusal below reported against that member where C
+			# reports NO_CHECK, its ids being set only inside a refusal.
+			*(["\t\t*which = Self::NO_CHECK;"]
+			  if checks and ids and any("?;" in one for one in checks)
+			  else []),
 			*(refusals if checks else []),
 			"\t\tOk(())",
 			"\t}",
