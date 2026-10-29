@@ -113,7 +113,7 @@ def test_the_mutate_row_says_what_the_compiler_produces(
 EXPECTED_CAUSES = {
 	# "non-minimal varint encodings accepted (pb_varint has no `minimal`)"
 	"tlv-non-minimal-tag",
-	# "duplicate_tags = allowed with no ordering rule"
+	# "duplicate_tags = allowed"
 	"tlv-unordered-duplicates",
 	# "unknown = preserve"
 	"tlv-unknown-preserve",

@@ -2641,11 +2641,12 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				ENDIAN.get(placement.tag_codec_endian, 0))
 
 		if placement.tlv_grammar is not None:
-			# Bit 0: an ordering rule. Bit 1: the region names `known` tags
-			# and refuses every other (26.738). Bit 2: it admits some of
-			# those tags once at most (26.740). A walker can enforce neither,
-			# the image carrying neither the tags nor the part they match,
-			# and so must decline rather than call such a region valid.
+			# Bit 0: `ordering = ascending` (26.741). Bit 1: the region names
+			# `known` tags and refuses every other (26.738). Bit 2: it admits
+			# some of those tags once at most (26.740). A walker can enforce
+			# none of them, the image carrying neither the tags nor the part
+			# they are matched on, and so must decline rather than call such
+			# a region valid.
 			regions = ((1 if placement.tlv_ordered else 0)
 			           | (2 if traverse.tlv_admitted_tags(placement) is not None
 			              else 0)

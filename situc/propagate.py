@@ -560,9 +560,15 @@ def _tlv_allows_packed_and_unpacked(context: Context) -> bool:
 
 
 def _tlv_allows_unordered_duplicates(context: Context) -> bool:
-	"""Duplicates without an ordering rule: the same content, several encodings."""
-	return (context.placement.tlv_duplicates == "allowed"
-	        and not context.placement.tlv_ordered)
+	"""Duplicates allowed: the same content, several encodings.
+
+	**Whether or not an order is declared.** `ordering = ascending` fixes
+	items of different identities and says nothing about the order among
+	equal ones, so two items tagged 1 can still swap. This answered False
+	for any region with an `ordering`, which then had no defined meaning
+	and so fixed nothing at all (26.741).
+	"""
+	return context.placement.tlv_duplicates == "allowed"
 
 
 def _is_opaque(context: Context) -> bool:
@@ -1284,8 +1290,8 @@ TABLE: tuple[Row, ...] = (
 			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
 			                    "items are self-describing, so the same content "
 			                    "can be written with them in any order"),),
-			remedy    = "declare an ordering rule on the region, which is what "
-			            "makes a tag-based format signable at all",
+			remedy    = "declare `ordering = ascending` on the region, which is "
+			            "what makes a tag-based format signable at all",
 		),
 		applies = _tlv_has_no_ordering,
 	),
@@ -1332,14 +1338,14 @@ TABLE: tuple[Row, ...] = (
 	Row(
 		rule = Rule(
 			name      = "tlv-unordered-duplicates",
-			construct = "a `tlv` region with `duplicate_tags = allowed` and no "
-			            "ordering rule",
+			construct = "a `tlv` region with `duplicate_tags = allowed`",
 			effects   = (Effect(Axis.CANONICAL, Value("NonCanonical"),
 			                    "the same content can be written with the "
 			                    "duplicates in any order, so it has more than "
-			                    "one encoding"),),
-			remedy    = "declare an ordering rule alongside `duplicate_tags = "
-			            "allowed`, or use `duplicate_tags = error`",
+			                    "one encoding -- an ascending order fixes items "
+			                    "of different tags, not the order among equal "
+			                    "ones"),),
+			remedy    = "use `duplicate_tags = error`, which is the default",
 		),
 		applies = _tlv_allows_unordered_duplicates,
 	),

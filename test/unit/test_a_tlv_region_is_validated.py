@@ -287,3 +287,63 @@ def test_the_walkers_decline_a_region_that_limits_repeats(
 		expected = str(verdict) if struct == "many" else "cannot-say"
 		assert python_verdict(blob, packet, shape) == expected, label
 		assert c_verdict(tmp_path, blob, packet, shape) == expected, label
+
+
+# -- `ordering = ascending` (26.741) ----------------------------------------
+#
+# `ordering` parsed with any value and lifted the region to Canonical, with
+# no order defined and none checked -- so `require canonical(...)` passed
+# for messages whose items came in any order. `ascending` is the one value
+# now: identities never decrease, matched on decision 0023's part. Repeated
+# identities are in order, which is why `duplicate_tags = allowed` stays
+# NonCanonical beside it.
+
+ORDERED = """target buffer;
+endian little;
+struct sorted {
+	u8 head;
+	tlv items (
+		tag_type       = u8,
+		tag_decode     = { delta = tag >> 4, length = tag & 0x0F },
+		tag_identity   = delta,
+		value_size     = switch (delta) { default: length },
+		ordering       = ascending,
+		duplicate_tags = allowed,
+	);
+}
+"""
+
+#: label, verdict, bytes.
+ORDERED_CASES = [
+	("ascending", 0, bytes([0, 0x11, 9, 0x21, 9, 0x31, 9])),
+	("equal identities in a row", 0, bytes([0, 0x11, 9, 0x11, 7])),
+	("a descent", 2, bytes([0, 0x21, 9, 0x11, 9])),
+	("a descent after a repeat", 2, bytes([0, 0x21, 9, 0x21, 9, 0x11, 9])),
+]
+
+
+def test_an_item_out_of_order_is_refused_by_all_four(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(ORDERED, encoding="ascii")
+	try:
+		command = fourway.build(tmp_path, schema)
+	except fourway.BuildFailed as failed:
+		pytest.skip(f"a backend could not be built here: {failed}")
+
+	for label, verdict, packet in ORDERED_CASES:
+		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),
+		                        "sorted")
+		         for name, argv in command.items()}
+		assert set(given.values()) == {f"validate {verdict}"}, (
+			f"{label}: {given}")
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_walkers_decline_an_ordered_region(tmp_path: Path) -> None:
+	"""The image carries no identity program to compare, so an order is one
+	more policy both walkers decline rather than pass."""
+	blob  = packed_text(ORDERED)
+	shape = shape_named_text(ORDERED, "sorted")
+	for label, _verdict_code, packet in ORDERED_CASES:
+		assert python_verdict(blob, packet, shape) == "cannot-say", label
+		assert c_verdict(tmp_path, blob, packet, shape) == "cannot-say", label

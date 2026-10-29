@@ -1925,7 +1925,7 @@ class Parser:
 			unknown    = self._tlv_policy(args, "unknown", ast.UnknownPolicy, span),
 			duplicates = self._tlv_policy(args, "duplicate_tags",
 			                              ast.DuplicatePolicy, span),
-			ordered    = any(arg.name == "ordering" for arg in args),
+			ordered    = self._tlv_ordering(args),
 			attrs      = attrs,
 			wire_types = tuple(case.label for case in sizes.cases
 			                   if case.label is not None) if sizes else (),
@@ -2237,6 +2237,30 @@ class Parser:
 			            arg.value.span, label=f"expected one of {options}")
 
 		return next(iter(enum))		# ERROR is first in both policies
+
+	def _tlv_ordering(self, args: list[ast.Attr]) -> bool:
+		"""`ordering = ascending`: items in non-decreasing identity order.
+
+		The only ordering with a meaning, and it is a decision rather than a
+		reading (26.741). `ordering` was accepted with ANY value -- `ordering
+		= banana` parsed -- and its presence alone lifted the region to
+		Canonical in the capability map, so `require canonical(...)` passed
+		for an order nobody had defined and no backend checked. The advisor
+		recommended adding one. A value with no meaning is refused now,
+		naming the one that has.
+		"""
+		for arg in args:
+			if arg.name != "ordering":
+				continue
+			if not isinstance(arg.value, ast.NameRef) \
+					or arg.value.name != "ascending":
+				raise error(
+					"`ordering` has one defined value, `ascending`",
+					arg.span,
+					label="items in non-decreasing order of the part "
+					      "`tag_identity` names, or of the raw tag")
+			return True
+		return False
 
 	def parse_variant(self) -> ast.Variant:
 		"""`variant body switch (hdr.type) { case A: X a; default: error; }`"""

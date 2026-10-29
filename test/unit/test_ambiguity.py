@@ -204,10 +204,23 @@ def test_duplicates_allowed_without_ordering_is_not_canonical() -> None:
 	assert "tlv-unordered-duplicates" in {w.rule.name for w in entry.weakenings}
 
 
-def test_duplicates_allowed_with_ordering_is_canonical() -> None:
+def test_duplicates_allowed_with_ordering_is_still_not_canonical() -> None:
+	"""`ordering = ascending` fixes items of different identities and not the
+	order among equal ones, so two items tagged 1 can still swap. This said
+	Canonical when `ordering` had no defined meaning and fixed nothing
+	(26.741)."""
 	resolved = analyse(PREAMBLE + "struct S { tlv o (tag_type = u8, "
 	                   "duplicate_tags = allowed, ordering = ascending); }")
-	assert axis(resolved, "S.o", Axis.CANONICAL) == Value("Canonical")
+	entry = resolved.find("S.o")
+	assert entry is not None
+	assert entry.vector.get(Axis.CANONICAL) == Value("NonCanonical")
+	assert "tlv-unordered-duplicates" in {w.rule.name for w in entry.weakenings}
+
+
+def test_an_ordering_with_no_defined_meaning_is_rejected() -> None:
+	"""It parsed with any value and lifted the region to Canonical (26.741)."""
+	assert "`ordering` has one defined value" in rejected(
+		PREAMBLE + "struct S { tlv o (tag_type = u8, ordering = banana); }")
 
 
 def test_an_unknown_duplicate_policy_is_rejected() -> None:

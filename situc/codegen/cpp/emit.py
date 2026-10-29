@@ -4984,7 +4984,8 @@ class Emitter:
 		lines.extend(self._tlv_read(struct, placement, grammar, item, name))
 		lines.extend(self._tlv_cursor(grammar, item, name, start,
 		                              tlv_admitted_tags(placement),
-		                              tlv_single_tags(placement)))
+		                              tlv_single_tags(placement),
+		                              placement.tlv_ordered))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -5238,7 +5239,7 @@ class Emitter:
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
 			start: str, admitted: tuple[int, ...] | None = None,
-			single: tuple[int, ...] = ()) -> list[str]:
+			single: tuple[int, ...] = (), ordered: bool = False) -> list[str]:
 		"""`first`, `next` and `count`: the region walked from its own start."""
 		# The tag `find` matches on, decision 0023's part or the raw tag,
 		# held against every tag `known` names (26.738).
@@ -5295,17 +5296,21 @@ class Emitter:
 			"\t * walk ends at the region's end, and otherwise the error that",
 			"\t * stopped it -- `bounds` for an item the frame cuts short,",
 			"\t * `constraint` for one the schema says is an error"
-			+ (", or" if admitted or single else ". */"),
+			+ (", or" if admitted or single or ordered else ". */"),
 			*(["\t * for a tag outside `known`, which `unknown = error`"
-			   + (" refuses, or" if single else " refuses. */")]
+			   + (" refuses, or" if single or ordered else " refuses. */")]
 			  if admitted else []),
 			*(["\t * for a second item with a tag `duplicate_tags = error`"
-			   " admits once. */"] if single else []),
+			   + (" admits once, or" if ordered else " admits once. */")]
+			  if single else []),
+			*(["\t * for an item out of `ordering = ascending` order. */"]
+			  if ordered else []),
 			f"\t[[nodiscard]] ::situ::rt::err {name}_whole() const noexcept",
 			"\t{",
 			f"\t\t{item} item{{}};",
 			f"\t\tstd::uint32_t end = {start};",
 			*[f"\t\tstd::uint32_t seen_{tag} = 0;" for tag in single],
+			*(["\t\tstd::uint64_t last = 0;"] if ordered else []),
 			f"\t\t::situ::rt::err e = {name}_first(item);",
 			"",
 			"\t\twhile (e == ::situ::rt::err::ok) {",
@@ -5316,6 +5321,11 @@ class Emitter:
 				f"\t\t\tif ({keyed} == {tag}u && ++seen_{tag} > 1u) {{",
 				"\t\t\t\treturn ::situ::rt::err::constraint;",
 				"\t\t\t}")],
+			*([f"\t\t\tif (static_cast<std::uint64_t>({keyed}) < last) {{",
+			   "\t\t\t\treturn ::situ::rt::err::constraint;",
+			   "\t\t\t}",
+			   f"\t\t\tlast = static_cast<std::uint64_t>({keyed});"]
+			  if ordered else []),
 			"\t\t\tend = item.next;",
 			f"\t\t\te   = {name}_next(item);",
 			"\t\t}",

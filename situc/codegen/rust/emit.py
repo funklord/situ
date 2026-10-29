@@ -1018,7 +1018,8 @@ class Emitter:
 		lines = list(self._tlv_read(struct, placement, grammar, item, name))
 		lines.extend(self._tlv_cursor(grammar, item, name, start,
 		                              tlv_admitted_tags(placement),
-		                              tlv_single_tags(placement)))
+		                              tlv_single_tags(placement),
+		                              placement.tlv_ordered))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -1252,7 +1253,7 @@ class Emitter:
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
 			start: str, admitted: tuple[int, ...] | None = None,
-			single: tuple[int, ...] = ()) -> list[str]:
+			single: tuple[int, ...] = (), ordered: bool = False) -> list[str]:
 		"""`first`, `next`, `count`, and the value's bytes."""
 		# The tag `find` matches on, decision 0023's part or the raw tag,
 		# held against every tag `known` names (26.738).
@@ -1305,16 +1306,20 @@ class Emitter:
 			"\t/// walk ends at the region's end, and otherwise the error that",
 			"\t/// stopped it -- `Bounds` for an item the frame cuts short,",
 			"\t/// `Constraint` for one the schema says is an error"
-			+ (", or" if admitted or single else "."),
+			+ (", or" if admitted or single or ordered else "."),
 			*(["\t/// for a tag outside `known`, which `unknown = error`"
-			   + (" refuses, or" if single else " refuses.")]
+			   + (" refuses, or" if single or ordered else " refuses.")]
 			  if admitted else []),
 			*(["\t/// for a second item with a tag `duplicate_tags = error`"
-			   " admits once."] if single else []),
+			   + (" admits once, or" if ordered else " admits once.")]
+			  if single else []),
+			*(["\t/// for an item out of `ordering = ascending` order."]
+			  if ordered else []),
 			f"\tpub fn {name}_whole(&self) -> Result<()> {{",
 			f"\t\tlet mut end  = {start};",
 			f"\t\tlet mut held = self.{name}_first();",
 			*[f"\t\tlet mut seen_{tag} = 0u32;" for tag in single],
+			*(["\t\tlet mut last: u64 = 0;"] if ordered else []),
 			"",
 			"\t\tloop {",
 			"\t\t\tmatch held {",
@@ -1329,6 +1334,10 @@ class Emitter:
 				"\t\t\t\t\t\t\treturn Err(Error::Constraint);",
 				"\t\t\t\t\t\t}",
 				"\t\t\t\t\t}")],
+			*([f"\t\t\t\t\tif u64::from({keyed}) < last {{",
+			   "\t\t\t\t\t\treturn Err(Error::Constraint);",
+			   "\t\t\t\t\t}",
+			   f"\t\t\t\t\tlast = u64::from({keyed});"] if ordered else []),
 			"\t\t\t\t\tend  = item.next;",
 			f"\t\t\t\t\theld = self.{name}_next(&item);",
 			"\t\t\t\t}",

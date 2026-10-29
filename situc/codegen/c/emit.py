@@ -2649,6 +2649,8 @@ class Emitter:
 		unknown  = " && ".join(f"{keyed} != {tag}u" for tag in admitted or ())
 		# One counter per tag `known` admits once, in the same walk (26.740).
 		single   = tlv_single_tags(placement)
+		# `ordering = ascending`: identities never decrease (26.741).
+		ordered  = placement.tlv_ordered
 
 		# A carried value starts at zero and is handed on by `next`. The
 		# seed is what makes the walk the only way to a number: a caller
@@ -2711,17 +2713,21 @@ class Emitter:
 			" * walk ends at the region's end, and otherwise the error that",
 			" * stopped it -- SITU_ERR_BOUNDS for an item the frame cuts short,",
 			" * SITU_ERR_CONSTRAINT for one the schema says is an error"
-			+ (", or" if admitted or single else ". */"),
+			+ (", or" if admitted or single or ordered else ". */"),
 			*([" * for a tag outside `known`, which `unknown = error` refuses",
-			   " * (26.738)" + (", or" if single else ". */")]
+			   " * (26.738)" + (", or" if single or ordered else ". */")]
 			  if admitted else []),
 			*([" * for a second item with a tag `duplicate_tags = error` admits",
-			   " * once (26.740). */"] if single else []),
+			   " * once (26.740)" + (", or" if ordered else ". */")]
+			  if single else []),
+			*([" * for an item out of `ordering = ascending` order (26.741). */"]
+			  if ordered else []),
 			f"static inline situ_err_t {whole}(situ_view_t view)",
 			"{",
 			f"\t{item} item;",
 			f"\tuint32_t end = {base};",
 			*[f"\tuint32_t seen_{tag} = 0u;" for tag in single],
+			*(["\tuint64_t last = 0u;"] if ordered else []),
 			f"\tsitu_err_t err = {first}(view, &item);",
 			"",
 			"\twhile (err == SITU_OK) {",
@@ -2732,6 +2738,10 @@ class Emitter:
 				f"\t\tif ({keyed} == {tag}u && ++seen_{tag} > 1u) {{",
 				"\t\t\treturn SITU_ERR_CONSTRAINT;",
 				"\t\t}")],
+			*([f"\t\tif ((uint64_t){keyed} < last) {{",
+			   "\t\t\treturn SITU_ERR_CONSTRAINT;",
+			   "\t\t}",
+			   f"\t\tlast = (uint64_t){keyed};"] if ordered else []),
 			"\t\tend = item.next;",
 			f"\t\terr = {nxt}(&item);",
 			"\t}",

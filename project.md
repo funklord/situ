@@ -1802,9 +1802,18 @@ document had already answered: *the document wins over the code*, which
 made implementing it the only available reading rather than a decision
 anybody had to take.
 
-`duplicate_tags = allowed` sets `canonical := NonCanonical` unless an ordering
-rule is also declared, because the same content then has multiple valid
-encodings.
+`duplicate_tags = allowed` sets `canonical := NonCanonical`, because the same
+content then has multiple valid encodings -- and an order does not change
+that, since `ordering = ascending` fixes items of different identities and
+not the order among equal ones (26.741).
+
+`ordering = ascending` is the one ordering rule: each item's identity, the
+part `tag_identity` names or the raw tag, is no lower than the one before.
+`validate` refuses an item that descends, in all four backends; the walkers
+decline the region, the image carrying no identity program. It clears
+`tlv-unordered-items`. Until 26.741 the argument was accepted with any value
+and its presence alone lifted the region to Canonical, with no order defined
+and none checked.
 
 **The item grammar is structure, and is checked.** `tag_decode`, `value_size`
 and `known` are what a walk over the region would have to follow, and for a
@@ -1990,7 +1999,7 @@ proto_message.fields    access=Sequential  address=Unstable  mutate=InPlaceSlack
 proto_message.fields[*] offset=Dynamic
 canonical = NonCanonical, five independent causes:
   - non-minimal varint encodings accepted (pb_varint has no `minimal`)
-  - duplicate_tags = allowed with no ordering rule
+  - duplicate_tags = allowed
   - unknown = preserve
   - field order is unconstrained
   - packed and unpacked repeated encodings both legal
@@ -2257,7 +2266,7 @@ output can be read against this table directly.
 | `tlv-non-minimal-tag` | a `tlv` region whose tag type accepts non-minimal encodings | `canonical := NonCanonical` |
 | `tlv-packed-and-unpacked` | a `tlv` region accepting both packed and unpacked encodings of a repeated value | `canonical := NonCanonical` |
 | `tlv-unknown-preserve` | a `tlv` region with `unknown = preserve` | `canonical := NonCanonical` |
-| `tlv-unordered-duplicates` | a `tlv` region with `duplicate_tags = allowed` and no ordering rule | `canonical := NonCanonical` |
+| `tlv-unordered-duplicates` | a `tlv` region with `duplicate_tags = allowed` | `canonical := NonCanonical` |
 | `opaque` | an `opaque` region | `access := Sequential`, `mutate := RewriteRequired` |
 | `indexed` | an `indexed` region | `address := FrameStable` |
 | `indexed-outside-the-region` | an `indexed` region whose offsets are measured from the start of the message | `address := Unstable` |
@@ -4149,7 +4158,7 @@ resolved:
 | variant arms of unequal size | accepted, but the dynamic consequence is reported; `[equalize]` to pad |
 | unknown enum value, TLV tag, or version | explicit `error` / `skip` / `preserve` / `pass` policy |
 | non-minimal varint acceptance | `minimal` present or absent, never defaulted |
-| duplicate TLV tags | `duplicate_tags = error \| allowed`, plus an ordering rule if allowed |
+| duplicate TLV tags | `duplicate_tags = error \| allowed`; `allowed` is NonCanonical whatever the order |
 | layer order of codecs over the same region | explicit pipeline; encrypt-then-code and code-then-encrypt are never inferred |
 | a codec signature with a `kernel` whose derived properties contradict the declared ones | error naming both values; no precedence rule |
 | a field's alignment when the target may fault on unaligned access | `[require_aligned]` or explicit acceptance |
@@ -7728,6 +7737,11 @@ Moved to
 
 Moved to
 `doc/decision/26.740-duplicate-tags-error-was-the-default-and-nothing-enforced-it.md`.
+
+### 26.741 `ordering` meant nothing, and made a region canonical
+
+Moved to
+`doc/decision/26.741-ordering-meant-nothing-and-made-a-region-canonical.md`.
 
 ### 26.715 The same width in the other pointer backend
 

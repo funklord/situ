@@ -1586,7 +1586,8 @@ class Emitter:
 		lines = self._tlv_read(struct, placement, grammar, name)
 		lines.extend(self._tlv_cursor(grammar, name, start, item,
 		                              tlv_admitted_tags(placement),
-		                              tlv_single_tags(placement)))
+		                              tlv_single_tags(placement),
+		                              placement.tlv_ordered))
 		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
 
@@ -1850,7 +1851,7 @@ class Emitter:
 
 	def _tlv_cursor(self, grammar: TlvGrammar, name: str, start: str,
 			item: str, admitted: tuple[int, ...] | None = None,
-			single: tuple[int, ...] = ()) -> list[str]:
+			single: tuple[int, ...] = (), ordered: bool = False) -> list[str]:
 		"""The cursor, the generator over it, and the value's bytes.
 
 		Annotated, like everything else this backend emits. These were not,
@@ -1921,15 +1922,19 @@ class Emitter:
 			"\t\tstopped the walk -- BoundsError for an item the frame cuts"
 			" short,",
 			"\t\tConstraintError for one the schema says is an error"
-			+ ('."""' if not (admitted or single) else ", or"),
+			+ ('."""' if not (admitted or single or ordered) else ", or"),
 			*(["\t\tfor a tag outside `known`, which `unknown = error`"
-			   + (" refuses, or" if single else ' refuses."""')]
+			   + (" refuses, or" if single or ordered else ' refuses."""')]
 			  if admitted else []),
 			*(["\t\tfor a second item with a tag `duplicate_tags = error`"
-			   ' admits once."""'] if single else []),
+			   + (" admits once, or" if ordered else ' admits once."""')]
+			  if single else []),
+			*(['\t\tfor an item out of `ordering = ascending` order."""']
+			  if ordered else []),
 			f"\t\tend = {start}",
 			# 26.740: one count per tag admitted once, in the same walk.
 			*([f"\t\tseen: dict[int, int] = {{}}"] if single else []),
+			*(["\t\tlast = 0"] if ordered else []),
 			"\t\ttry:",
 			f"\t\t\titem = self.{name}_first()",
 			"\t\t\twhile True:",
@@ -1944,6 +1949,10 @@ class Emitter:
 			   f'\t\t\t\t\t\traise ConstraintError(f"{name}: tag'
 			   f' {{{keyed}}} appears more than once")']
 			  if single else []),
+			*([f"\t\t\t\tif {keyed} < last:",
+			   f'\t\t\t\t\traise ConstraintError(f"{name}: tag'
+			   f' {{{keyed}}} after {{last}}, against `ordering = ascending`")',
+			   f"\t\t\t\tlast = {keyed}"] if ordered else []),
 			"\t\t\t\tend  = item.next",
 			f"\t\t\t\titem = self.{name}_next(item)",
 			"\t\texcept (BoundsError, ConstraintError):",
