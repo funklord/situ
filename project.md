@@ -5796,7 +5796,15 @@ holder's:
     the member reaches a length expression that answers None. **Closing
     it is three emitters gaining what C has, which is a feature and is
     still open** -- narrowing the shared predicate instead would take a
-    working `required` away from C.
+    working `required` away from C. **Port the form 26.730 left, not the
+    one that stood there**: C's pad term passed `view.limit` and so
+    clamped the total down to what had arrived, which reported a message
+    with a trailing pad COMPLETE three bytes short -- the one-sided
+    safety property, in a shape the corpus does not have because both of
+    its pad structs carry a trailer whose two fixed bytes hide it. It is
+    `situ_pad_to_u32` now, which also removes the one-byte-per-round-trip
+    looseness 26.693 measured and attributed correctly while concluding
+    the branch was not worth looking at.
   - **Three of the five that gap used to hold were a different fault**
     (26.729), and the worst thing found this week. `coap`,
     `proto_message` and `tagged_options` each hold a `tlv` region, whose
@@ -7576,6 +7584,11 @@ Moved to
 
 Moved to
 `doc/decision/26.729-c-framed-a-tlv-region-at-zero-bytes.md`.
+
+### 26.730 The pad term shortened the answer to what had arrived
+
+Moved to
+`doc/decision/26.730-the-pad-term-shortened-the-answer-to-what-arrived.md`.
 
 ### 26.715 The same width in the other pointer backend
 

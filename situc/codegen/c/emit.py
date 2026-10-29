@@ -4911,6 +4911,34 @@ class Emitter:
 			# here, where the question is how many a whole one needs:
 			# clamping would shorten the answer to what has already arrived,
 			# which is the one thing `required` must never do.
+			#
+			# **AND THIS PARAGRAPH DESCRIBED A LINE THAT DID NOT EXIST**
+			# until 26.730. The emitted term WAS the accessors' form, limit
+			# and all, so the clamp the paragraph forbids was the one in the
+			# code beside it -- and it is not merely loose. A struct ending
+			# in a pad has no fixed bytes after it to carry `at` past
+			# `have`, so the clamp drags the total down to exactly what
+			# arrived and `have >= at` comes out TRUE:
+			#
+			#     struct s { u16 used; u8 data[used]; pad_to(4); }
+			#     used = 3, so a whole one is eight bytes
+			#
+			#     have=4  truncated need=5
+			#     have=5  COMPLETE  need=5   <-- three bytes short
+			#     have=6  COMPLETE  need=6
+			#     have=7  COMPLETE  need=7
+			#
+			# That is the one-sided safety property, the only one this tree
+			# calls one: a caller told complete stops reading and parses
+			# bytes that are not there. `situ_pad_to_u32` is the unclamped
+			# padding and has been in the runtime all along -- it is what
+			# `situ_align_up_u32` is built from.
+			#
+			# The corpus could not see it: both `padded.situ` pad structs
+			# carry a `u16 trailer`, whose two fixed bytes keep `at` at
+			# `have + 2` and so keep the comparison false. A trailing pad is
+			# an ordinary shape -- chunk padding in RIFF, TIFF and ELF -- and
+			# `edges.situ` carries one now.
 			pad = pad_alignment(placement)
 			if pad is not None:
 				# `at` is a running TOTAL, not a running offset: the constant
@@ -4930,9 +4958,8 @@ class Emitter:
 					" alignment is",
 					"\t * taken at the pad's own base (0043). */",
 					"\t{",
-					f"\t\tconst uint32_t len = situ_align_up_u32({base},"
-					f" {pad}u, view.limit)",
-					f"\t\t                   - {base};",
+					f"\t\tconst uint32_t len ="
+					f" situ_pad_to_u32({base}, {pad}u);",
 					"",
 					"\t\tat = situ_need_u32(at, len);",
 					*([f"\t\t{cursor} = situ_need_u32({cursor}, len);"]

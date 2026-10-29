@@ -663,6 +663,132 @@ int main(void)
 	assert subprocess.run([str(binary)]).returncode == 0
 
 
+#: The same shape with NOTHING after the pad, which is 26.730. The test
+#: above has a `u16 trailer`, and those two fixed bytes are what hid the
+#: fault for as long as they did.
+PAD_LAST = "struct s { u16 used; u8 data[used]; pad_to(4); }"
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
+def test_required_does_not_shorten_a_pad_to_what_has_arrived(
+		tmp_path: Path) -> None:
+	"""A pad at the end, asked about every prefix of a real message.
+
+	**The sibling above passes `sizeof buf` as `have`** -- 64 bytes for a
+	message of at most ten -- so the pad term is never asked about a
+	buffer that ends before the pad does, and the clamp inside it is
+	invisible. A bound is only tested by an input whose edge exists.
+
+	The emitted term was `situ_align_up_u32(base, n, view.limit)`, the
+	accessors' own form, whose clamp is right where the question is which
+	bytes are in the frame and wrong here. The comment beside it said so
+	and described a line that did not exist.
+
+	With nothing fixed after the pad there is nothing to carry `at` past
+	`have`, so the clamp drags the total down to exactly what arrived and
+	`have >= at` comes out TRUE. For `used = 3`, where a whole one is
+	eight bytes:
+
+	    have=4  truncated need=5
+	    have=5  COMPLETE  need=5   <-- three bytes short
+	    have=6  COMPLETE  need=6
+	    have=7  COMPLETE  need=7
+
+	That is the one-sided safety property, the only one this tree calls
+	one: a caller told complete stops reading and parses bytes that are
+	not there. `situ_pad_to_u32` is the unclamped padding and has been in
+	the runtime all along -- `situ_align_up_u32` is built out of it.
+
+	Every residue rather than one length, for the reason the sibling
+	gives: `used = 2` needs no padding and would pass against the bug.
+	"""
+	schema   = parse_text(PREAMBLE + PAD_LAST)
+	resolved = resolve(schema, solve(schema))
+	files    = dict(generate(schema, resolved, "unit").files())
+	files.update(frame_c.generate(schema, resolved, "unit", "situ"))
+	for name, text in files.items():
+		(tmp_path / name).write_text(text, encoding="ascii")
+
+	(tmp_path / "probe.c").write_text("""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "unit_frame.h"
+
+int main(void)
+{
+	for (uint32_t used = 0; used <= 5u; used++) {
+		/* `used`, then that many bytes, then up to the next multiple
+		 * of four. Nothing follows. */
+		const uint32_t whole = (((used + 2u) + 3u) / 4u) * 4u;
+		uint32_t       prev  = 0u;
+
+		for (uint32_t n = 0; n <= whole; n++) {
+			/* EXACTLY `n` bytes, so the pad term is asked about a
+			 * buffer whose end is real. */
+			uint8_t   *p = malloc(n != 0u ? n : 1u);
+			uint32_t   need = 0xEEEEu;
+			situ_err_t got;
+
+			if (p == NULL)
+				return 1;
+			memset(p, 0, n != 0u ? n : 1u);
+			if (n >= 1u) p[0] = (uint8_t)(used >> 8);
+			if (n >= 2u) p[1] = (uint8_t)used;
+
+			got = situ_s_required(p, n, &need);
+			free(p);
+
+			if (got == SITU_OK && n < whole) {
+				printf("used=%u have=%u: COMPLETE, %u bytes short\\n",
+				       used, n, whole - n);
+				return 2;
+			}
+			if (got == SITU_OK && need != whole) {
+				printf("used=%u have=%u: complete but need=%u of %u\\n",
+				       used, n, need, whole);
+				return 3;
+			}
+			if (got == SITU_ERR_TRUNCATED) {
+				if (need <= n) {
+					printf("used=%u have=%u: truncated, need=%u\\n",
+					       used, n, need);
+					return 4;
+				}
+				if (need < prev) {
+					printf("used=%u have=%u: need FELL to %u from %u\\n",
+					       used, n, need, prev);
+					return 5;
+				}
+				if (need > whole) {
+					printf("used=%u have=%u: need=%u OVER %u, so a "
+					       "caller waits for bytes that never come\\n",
+					       used, n, need, whole);
+					return 6;
+				}
+				prev = need;
+			}
+		}
+	}
+	return 0;
+}
+""", encoding="ascii")
+
+	binary = tmp_path / "probe"
+	built  = subprocess.run(
+		[HOST_CC or "cc", *WARNINGS, "-g", "-fsanitize=address,undefined",
+		 "-fno-sanitize-recover=all", f"-I{RUNTIME}", f"-I{tmp_path}",
+		 str(tmp_path / "probe.c"), str(tmp_path / "unit.c"),
+		 str(RUNTIME / "situ.c"), "-o", str(binary)],
+		capture_output=True, text=True)
+	if built.returncode != 0 and "sanitize" in built.stderr:
+		pytest.skip("no address sanitizer")
+	assert built.returncode == 0, built.stderr
+
+	run = subprocess.run([str(binary)], capture_output=True, text=True)
+	assert run.returncode == 0, run.stdout + run.stderr
+
+
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
 def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:
