@@ -5766,14 +5766,22 @@ holder's:
 - **The framing layer had no corpus-wide execution in any backend**
   until 26.725, and `situc/codegen/differ.py` -- the differential over
   all five spellings, and the source the C++ fuzz harness is built from
-  -- still does not mention `required` or `framed`.
-  `test/unit/test_required_over_the_corpus.py` closes the prefix axis in
-  C++: every class whose `required` takes only bytes, every prefix to
-  48, four fills, each prefix in a `malloc` of exactly its own length,
-  under ASan and UBSan. **Teaching the differential to compare framing
-  answers across all five spellings is the larger piece of work and is
-  not done** -- it is what would make framing as well witnessed as the
-  accessors already are.
+  -- still does not mention `required` or `framed`. Two files stand in
+  its place and ask different questions, which is why there are two:
+  - `test/unit/test_required_over_the_corpus.py` owns the PROPERTIES,
+    in C and C++: every `required` taking only bytes, every prefix to
+    48, four fills, each prefix in a `malloc` of exactly its own length,
+    under ASan and UBSan. This is where a missing bound is caught.
+  - `test/unit/test_four_backends_frame_alike.py` owns AGREEMENT, in all
+    four: the same sweep to 32, with each backend's answer sequence read
+    back and compared token for token. 221 structs and 884
+    (struct, fill) sequences. **It found Rust saturating at `usize::MAX`
+    where the other three saturate at `u32::MAX` deliberately** -- five
+    structs, and the divergence depended on the target's pointer width
+    (26.732).
+  - **Two backends agreeing wrongly is what the second cannot see**, and
+    the properties are what see it. Teaching `differ.py` itself would
+    fold both into the corpus differential and is still not done.
 - **A population is not only which schemas are swept but which bytes
   they are swept with** (26.727). The construct 26.724 needed -- a
   counted run whose element length carries a `[min]` -- was in no schema
@@ -7593,6 +7601,11 @@ Moved to
 
 Moved to
 `doc/decision/26.731-three-emitters-gained-c-s-pad-branch.md`.
+
+### 26.732 Rust framed to a different ceiling
+
+Moved to
+`doc/decision/26.732-rust-framed-to-a-different-ceiling.md`.
 
 ### 26.715 The same width in the other pointer backend
 

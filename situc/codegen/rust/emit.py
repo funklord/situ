@@ -5614,8 +5614,8 @@ class Emitter:
 					"\t\t{",
 					f"\t\t\tlet len = situ_rt::pad_to({cursor}, {pad});",
 					"",
-					"\t\t\tat = at.saturating_add(len);",
-					*([f"\t\t\t{ahead} = {ahead}.saturating_add(len);"]
+					"\t\t\tat = situ_rt::need(at, len);",
+					*([f"\t\t\t{ahead} = situ_rt::need({ahead}, len);"]
 					  if ahead else []),
 					"\t\t}",
 				])
@@ -5677,7 +5677,7 @@ class Emitter:
 					"\t\t\t// quantities and neither bounds the other",
 					"\t\t\t// (26.726).",
 					"\t\t\treturn situ_rt::Framing::Need("
-					"have.saturating_add(1).max(at));",
+					"situ_rt::need(have, 1).max(at));",
 					"\t\t}",
 				])
 
@@ -5723,12 +5723,12 @@ class Emitter:
 
 			rendered = self._unparen(length).replace("self.", "probe.")
 			if cursor is None:
-				steps.append(f"\t\tat = at.saturating_add({rendered});")
+				steps.append(f"\t\tat = situ_rt::need(at, {rendered});")
 			else:
 				steps.extend([
 					f"\t\tlet len_ = {rendered};",
-					"\t\tat = at.saturating_add(len_);",
-					*([f"\t\t{ahead} = {ahead}.saturating_add(len_);"]
+					"\t\tat = situ_rt::need(at, len_);",
+					*([f"\t\t{ahead} = situ_rt::need({ahead}, len_);"]
 					  if ahead else []),
 				])
 			steps.extend(self._gap_step(cursor, gaps, index))
@@ -5820,10 +5820,10 @@ class Emitter:
 			"\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\tsitu_rt::Framing::Need(n) =>",
 			"\t\t\t\treturn situ_rt::Framing::Need("
-			"at.saturating_add(n)),",
+			"situ_rt::need(at, n)),",
 			"\t\t};",
-			"\t\tat = at.saturating_add(len_);",
-			*([f"\t\t{ahead} = {ahead}.saturating_add(len_);"]
+			"\t\tat = situ_rt::need(at, len_);",
+			*([f"\t\t{ahead} = situ_rt::need({ahead}, len_);"]
 			  if ahead else []),
 		]
 
@@ -5893,7 +5893,7 @@ class Emitter:
 					"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 					"\t\t\t\tsitu_rt::Framing::Need(n) =>",
 					"\t\t\t\t\treturn situ_rt::Framing::Need("
-					"at.saturating_add(n)),",
+					"situ_rt::need(at, n)),",
 					"\t\t\t};",
 				])
 		# A chain with no `default:` arm matches nothing for an
@@ -5909,8 +5909,8 @@ class Emitter:
 			lines.extend(["\t\t} else {", "\t\t\tlen_ = 0;"])
 		lines.extend([
 			"\t\t}",
-			"\t\tat = at.saturating_add(len_);",
-			*([f"\t\t{ahead} = {ahead}.saturating_add(len_);"]
+			"\t\tat = situ_rt::need(at, len_);",
+			*([f"\t\t{ahead} = situ_rt::need({ahead}, len_);"]
 			  if ahead else []),
 		])
 		return lines
@@ -5923,7 +5923,7 @@ class Emitter:
 		gap = gaps[index + 1]
 		if gap == 0:
 			return []
-		return [f"\t\t{cursor} = {cursor}.saturating_add({gap});"]
+		return [f"\t\t{cursor} = situ_rt::need({cursor}, {gap});"]
 
 	def _framing_walk(self, struct: ResolvedStruct,
 			placement: Placement,
@@ -5962,7 +5962,8 @@ class Emitter:
 			f"\t\t\tlet part = match {inner}::required(&data[pos..]) {{",
 			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
-			"\t\t\t\t\treturn situ_rt::Framing::Need(at.saturating_add(n)),",
+			"\t\t\t\t\treturn situ_rt::Framing::Need("
+				"situ_rt::need(at, n)),",
 			"\t\t\t};",
 		]
 		cap     = placement.repeat_cap if placement.repeat_while else None
@@ -5988,8 +5989,8 @@ class Emitter:
 				*([f"\t\t\tlet element = {inner} {{"
 				   " bytes: &data[pos..pos + part] };"]
 				  if "element." in cond else []),
-				"\t\t\tat  = at.saturating_add(part);",
-				"\t\t\tpos = pos.saturating_add(part);",
+				"\t\t\tat  = situ_rt::need(at, part);",
+				"\t\t\tpos = situ_rt::need(pos, part);",
 				"",
 				"\t\t\t// The condition is asked about the element just"
 				" read, which",
@@ -6035,14 +6036,14 @@ class Emitter:
 				"\t\t\t\t\t// so that it agrees with what each of those"
 				" elements",
 				"\t\t\t\t\t// will itself report once reached (26.724).",
-				"\t\t\t\t\treturn situ_rt::Framing::Need("
-				"at.saturating_add(n)",
-				f"\t\t\t\t\t\t.saturating_add(({count} - seen - 1)",
-				f"\t\t\t\t\t\t\t.saturating_mul({floor})));",
+				"\t\t\t\t\treturn situ_rt::Framing::Need(situ_rt::need(",
+				"\t\t\t\t\t\tsitu_rt::need(at, n),",
+				f"\t\t\t\t\t\tsitu_rt::need_mul({count} - seen - 1,",
+				f"\t\t\t\t\t\t                  {floor})));",
 				"\t\t\t\t}",
 				"\t\t\t};",
-				"\t\t\tat  = at.saturating_add(part);",
-				"\t\t\tpos = pos.saturating_add(part);",
+				"\t\t\tat  = situ_rt::need(at, part);",
+				"\t\t\tpos = situ_rt::need(pos, part);",
 				"\t\t\tseen += 1;",
 			])
 
@@ -6063,13 +6064,13 @@ class Emitter:
 				# `at` only: the cursor is never read after this
 				# break, and `-D warnings` refuses the dead store --
 				# which is how the other three learned about it.
-				f"\t\t\t\tat = at.saturating_add({len(delim)});",
+				f"\t\t\t\tat = situ_rt::need(at, {len(delim)});",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
 				*read,
-				"\t\t\tat  = at.saturating_add(part);",
-				"\t\t\tpos = pos.saturating_add(part);",
+				"\t\t\tat  = situ_rt::need(at, part);",
+				"\t\t\tpos = situ_rt::need(pos, part);",
 			])
 
 		# WHERE THIS ELEMENT STARTS, which is not the running total

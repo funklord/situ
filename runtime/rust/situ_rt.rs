@@ -192,6 +192,34 @@ pub fn align_up(at: usize, n: usize, limit: usize) -> usize {
 	advance(at, pad_to(at, n), limit)
 }
 
+/// A running framing total, saturating at **`u32`** rather than at
+/// `usize`.
+///
+/// `required` reports a byte count to a caller, and the other three
+/// backends carry it in a `uint32_t` and saturate there -- deliberately,
+/// which is 26.651: a `u32` length of `0xFFFFFFFF` once answered
+/// `0x80000004`, two gigabytes a caller can actually satisfy and then be
+/// handed a body truncated from the four declared. Saturating at the
+/// type's maximum makes the answer a recognisable refusal instead.
+///
+/// This backend carries the total in a `usize` and `saturating_add`
+/// saturates there, so for a hostile length it answered 8589934594 where
+/// the other three answered 4294967295 -- and on a 32-bit target it would
+/// have agreed with them, which makes the divergence depend on the
+/// pointer width. Four backends that disagreed would mean a schema means
+/// four things, so the ceiling is `u32::MAX` here too (26.732).
+pub fn need(at: usize, by: usize) -> usize {
+	at.saturating_add(by).min(u32::MAX as usize)
+}
+
+/// The same question asked of a product: a counted run reports a minimum
+/// for every element the count still promises, which is a declared count
+/// times a constant and so is exactly the multiplication a hostile count
+/// overflows.
+pub fn need_mul(count: usize, each: usize) -> usize {
+	count.saturating_mul(each).min(u32::MAX as usize)
+}
+
 /// `pad_to(n)`'s padding on its own, UNCLAMPED: how many bytes from `at`
 /// to the next multiple of `n`.
 ///
