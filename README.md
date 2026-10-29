@@ -2,6 +2,18 @@
 
 **One description, infinite possibilities.**
 
+Computers store and exchange information as long rows of small numbers
+called bytes. When two programs talk over a network, when a program saves a
+file, or when a computer controls a piece of hardware, both sides have to
+agree on exactly what every byte means: which ones hold a name, which hold a
+date, and where one piece ends and the next begins. The code that reads and
+writes these bytes is usually written by hand, which is slow, and small
+mistakes in it are a well-known cause of crashes and security problems.
+Situ lets a programmer write that agreement down once, in a short
+description, and produces the reading and writing code from it in four
+common programming languages. It also points out the parts of a format that
+are hard to handle safely or efficiently, and explains why.
+
 Situ describes the exact byte layout of data that already has a binary
 representation -- wire protocols, packet formats, on-disk records,
 memory-mapped registers -- and generates accessors for it in C, C++, Rust and
