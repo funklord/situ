@@ -1139,12 +1139,19 @@ static int size_code_is_bytes(const situ_walk_image *image,
  * `whole`, where not NULL, says whether every declared element was there:
  * `counted_run_fits` asks it, because the extent cannot -- a walk that
  * stopped early reaches less, and less always fits (26.735).
+ *
+ * The bare `uvar v[remaining]` declares no count: the frame says how many
+ * BYTES and nothing says how many varints, so the walk goes to the end of
+ * the frame and the count is the whole elements it passed. `whole` then
+ * says whether it reached the end, the last element not cut short, and
+ * `seen` hands the count to `situ_walk_count` (26.742).
  */
 static situ_walk_err varint_run_bits(const situ_walk_image *image,
                                      const uint8_t *message, uint32_t len,
                                      uint32_t shape, uint32_t index,
                                      uint32_t depth, uint32_t from,
-                                     uint32_t *out, int *whole)
+                                     uint32_t *out, int *whole,
+                                     uint32_t *seen)
 {
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
@@ -1154,6 +1161,31 @@ static situ_walk_err varint_run_bits(const situ_walk_image *image,
 
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+	if (held.array_count == SITU_WALK_NONE
+	    && size_code_is_bytes(image, held.size_code)) {
+		uint32_t passed = 0u;
+
+		while (at < len) {
+			uint32_t consumed = 0u;
+			uint64_t value    = 0u;
+
+			err = situ_walk_varint(image, message, len, index, at,
+			                       &consumed, &value);
+			if (err != SITU_WALK_OK) {
+				break;
+			}
+			at     += consumed;
+			passed += 1u;
+		}
+		if (whole != NULL) {
+			*whole = at >= len;
+		}
+		if (seen != NULL) {
+			*seen = passed;
+		}
+		*out = (at - from) * 8u;
+		return SITU_WALK_OK;
 	}
 	if (held.array_count != SITU_WALK_NONE) {
 		count = (int64_t)held.array_count;
@@ -1187,6 +1219,9 @@ static situ_walk_err varint_run_bits(const situ_walk_image *image,
 	}
 	if (whole != NULL) {
 		*whole = i >= count;
+	}
+	if (seen != NULL) {
+		*seen = (uint32_t)i;
 	}
 	*out = (at - from) * 8u;
 	return SITU_WALK_OK;
@@ -2014,14 +2049,13 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		 * this the branch below answered ONE element for `uvar v[n]` and
 		 * every member after the run was placed on top of it -- this
 		 * walker's half of 26.683, and it agreed with the four backends
-		 * only because all six readers were wrong the same way. A bare
-		 * `[remaining]` states BYTES rather than a count, so it is not
-		 * one of these and falls through to the span below. */
-		if ((held.array_count != SITU_WALK_NONE
-		     || held.size_code != SITU_WALK_NONE)
-		    && !size_code_is_bytes(image, held.size_code)) {
+		 * only because all six readers were wrong the same way. The
+		 * bare `[remaining]` form is walked too: it fell through to ONE
+		 * varint while all four declined it (26.742). */
+		if (held.array_count != SITU_WALK_NONE
+		    || held.size_code != SITU_WALK_NONE) {
 			return varint_run_bits(image, message, len, shape, index,
-			                       depth, at / 8u, out, NULL);
+			                       depth, at / 8u, out, NULL, NULL);
 		}
 		uint32_t consumed = 0u;
 		uint64_t value    = 0u;
@@ -3033,6 +3067,21 @@ situ_walk_err situ_walk_count(const situ_walk_image *image,
 	if (held.size_code == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;	/* not a run */
 	}
+	/* `uvar v[remaining]`: the program states BYTES, and the count is the
+	 * whole varints from the run's start to the frame's end (26.742). */
+	if (varint_rules(image, index) != NULL
+	    && size_code_is_bytes(image, held.size_code)) {
+		uint32_t from  = 0u;
+		uint32_t reach = 0u;
+
+		err = situ_walk_offset_bits(image, message, len, shape, index,
+		                            &from);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		return varint_run_bits(image, message, len, shape, index, 0u,
+		                       from / 8u, &reach, NULL, out);
+	}
 
 	walk_ctx  ctx    = {image, message, len, shape, 0u};
 	walk_from anchor = {image, message, len, shape, index, 0u};
@@ -3061,13 +3110,12 @@ situ_walk_err situ_walk_element(const situ_walk_image *image,
 		return err;
 	}
 	/* A RUN OF VARINTS, which has no element width to multiply by. Before
-	 * the refusal below, which is what it got (26.683). A bare
-	 * `[remaining]` states BYTES rather than a count, so it is not one of
-	 * these. */
+	 * the refusal below, which is what it got (26.683). The bare
+	 * `[remaining]` form is one of these, its count a walk to the frame's
+	 * end (26.742). */
 	if (varint_rules(image, index) != NULL
 	    && (held.array_count != SITU_WALK_NONE
-	        || held.size_code != SITU_WALK_NONE)
-	    && !size_code_is_bytes(image, held.size_code)) {
+	        || held.size_code != SITU_WALK_NONE)) {
 		return varint_run_element(image, message, len, shape, index, at,
 		                          out);
 	}
@@ -4074,11 +4122,11 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 	 * no element struct -- so `{ 3, 0x01, 0x01 }` against `uvar v[n]`
 	 * validated clean with two of three elements present, here and in all
 	 * four backends (26.735). The span walk already counts what it placed;
-	 * this asks it whether that was all of them. */
+	 * this asks it whether that was all of them -- and of the bare
+	 * `[remaining]` form, whether it reached the frame's end (26.742). */
 	if (varint_rules(image, index) != NULL
 	    && (held.array_count != SITU_WALK_NONE
-	        || held.size_code != SITU_WALK_NONE)
-	    && !size_code_is_bytes(image, held.size_code)) {
+	        || held.size_code != SITU_WALK_NONE)) {
 		uint32_t reach = 0u;
 
 		err = offset_bits_deep(image, message, len, shape, index, depth,
@@ -4087,7 +4135,7 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 			return err;
 		}
 		return varint_run_bits(image, message, len, shape, index, depth,
-		                       from / 8u, &reach, fits);
+		                       from / 8u, &reach, fits, NULL);
 	}
 	/* A bare `x[remaining]` states BYTES rather than a count, so it is not
 	 * walked to a count below -- mqtt's `filters[remaining]` refused a

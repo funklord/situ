@@ -876,18 +876,14 @@ encoding all four refuse. `edges.varint_signed` and
 `edges.varint_canonical` are the fixtures that were missing, and all six
 readers agree on them now.
 
-**And `uvar v[remaining]` crashes the compiler** -- `AssertionError` in
-`propagate._parameterise`, on `assert placement.size_max_bits is not
-None`, with no diagnostic. Measured 2026-10-23 and confirmed identical in
-a worktree pinned at `b186326`, so it predates the array work rather than
-following from it. A bare `[remaining]` states BYTES rather than a count
-of elements, which is a question the construct has to answer before it can
-be compiled: either the run fills the remaining bytes (well defined -- walk
-until the frame ends) or the form is refused. Both walkers decline it
-already, asking `_sizes_in_bytes` before walking, so whichever answer is
-chosen they are ready for it. An assertion is not either answer, and
-section 17.0 is about exactly this: a construct situ cannot decide is one
-it refuses with a reason.
+**`uvar v[remaining]` fills what the frame leaves** (26.742). A bare
+`[remaining]` states BYTES rather than a count, and varints have no stride
+to divide bytes by, so the count is the whole varints from the run's start
+to the end of the view -- a walk, which is the cost a Sequential run
+already names. An element the frame cuts short is not counted, and
+`validate` refuses that frame in all four backends and both walkers. The
+construct crashed the compiler until 26.691, then C answered a constant
+zero count (26.733), then all four declined it until the walk arrived.
 
 **Two encodings, and what a declared `max_bytes` means.** `be128` is the same
 shape with the high group first: ASN.1's identifier octets, MIDI's delta times,
@@ -5758,11 +5754,10 @@ holder's** -- whether `required` should read every readable length
 and the walker guard-width reconciliation (26.689). Only the second
 blocks anything.
 
-**What a session picking this up should take first**, in order: the
-`uvar v[remaining]` walk below, which is specified and blocked on nothing;
-then rungs 3, 5 and 6 of the layer ladder with 26.99 finishing rung 2,
-which is the real goal gap and is sequenced in the phases above rather
-than open-ended; then teaching `differ.py` to compare framing, which would
+**What a session picking this up should take first**, in order: rungs
+3, 5 and 6 of the layer ladder with 26.99 finishing rung 2, which is the
+real goal gap and is sequenced in the phases above rather than
+open-ended; then teaching `differ.py` to compare framing, which would
 fold 26.725's and 26.732's two files into the corpus differential.
 
 - **`required` has seven records in four days and what is left of it is
@@ -5905,17 +5900,6 @@ fold 26.725's and 26.732's two files into the corpus differential.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **`uvar v[remaining]` is unimplemented in all four** (26.691, 26.733).
-  It was recorded as three backends short of a construct with C
-  answering; **C emitted a count returning the constant `0u`**, so on
-  four bytes holding three varints every accessor said the run was empty
-  and `validate` returned OK. Four short, with C the one that answered
-  confidently. C declines now, in the other three's words, and the
-  construct is honestly unsupported rather than wrong in one -- the
-  corpus C output is byte-identical, since no committed schema has it.
-  `edges.situ` carries one now so the agreement is witnessed.
-  **Walking varints to the end of the view is the feature, and none of
-  the four does it.**
 - **Four walker identity divergences** of one shape (26.689), where the
   guard widths want reconciling rather than listing. **The holder's**, and
   the parking was re-measured and confirmed 2026-10-28 rather than
@@ -7746,6 +7730,11 @@ Moved to
 
 Moved to
 `doc/decision/26.741-ordering-meant-nothing-and-made-a-region-canonical.md`.
+
+### 26.742 A run of varints the frame sizes is walked to its end
+
+Moved to
+`doc/decision/26.742-a-run-of-varints-the-frame-sizes-is-walked.md`.
 
 ### 26.715 The same width in the other pointer backend
 

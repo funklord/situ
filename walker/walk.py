@@ -363,9 +363,10 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 		# element for `uvar v[n]` and every member after the run was
 		# placed on top of it -- the walker's half of 26.683, and it
 		# agreed with the four backends only because all five were wrong
-		# the same way.
-		if is_run(view.image, index) \
-				and not _sizes_in_bytes(view.image, placement.size_code):
+		# the same way. The bare `[remaining]` form is walked too: it was
+		# excluded here while all four declined it, and measured as ONE
+		# varint (26.742).
+		if is_run(view.image, index):
 			return _varint_run_bits(view, index)
 		try:
 			consumed, _ = varint(view, index)
@@ -1336,6 +1337,34 @@ def scan(view: View, index: int) -> tuple[int, bool, int]:
 	return limit, False, 0
 
 
+def varint_run_count(view: View, index: int) -> int:
+	"""How many varints a run holds.
+
+	The count the message declares, for `uvar v[n]`. For the bare `uvar
+	v[remaining]` the frame says how many BYTES and nothing says how many
+	varints, so the count is the whole ones from the run's start to the end
+	of the view: one the frame cuts short is not counted, and
+	`counted_run_fits` refuses that frame instead (26.742). The four
+	backends emit the same walk in `_count`.
+	"""
+	placement = view.image.placements[index]
+	if not _sizes_in_bytes(view.image, placement.size_code):
+		return _count(view, index)
+	rules = view.image.varint_rules.get(index)
+	if rules is None:
+		raise Refused(f"placement {index} has no varint rules in this image")
+	at   = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	seen = 0
+	while at < view.limit:
+		try:
+			consumed, _ = decode_varint(view, at, *rules)
+		except Refused:
+			break
+		at   += consumed
+		seen += 1
+	return seen
+
+
 def _varint_run_bits(view: View, index: int) -> int:
 	"""How far a run of varints reaches, in bits.
 
@@ -1359,7 +1388,7 @@ def _varint_run_bits(view: View, index: int) -> int:
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	at    = start
 	seen  = 0
-	count = _count(view, index)
+	count = varint_run_count(view, index)
 
 	while seen < count:
 		if at >= view.limit:
@@ -1391,7 +1420,7 @@ def varint_run_at(view: View, index: int, element: int) -> int:
 
 	start = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	at    = start
-	count = _count(view, index)
+	count = varint_run_count(view, index)
 
 	for seen in range(count):
 		if at >= view.limit:
@@ -1897,8 +1926,9 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 	# validated clean with two of three elements present, here and in all
 	# four backends (26.735). Its own walk, because an element's extent is
 	# in its own bytes rather than a struct's.
-	if index in view.image.varints and is_run(view.image, index) \
-			and not _sizes_in_bytes(view.image, placement.size_code):
+	if index in view.image.varints and is_run(view.image, index):
+		if _sizes_in_bytes(view.image, placement.size_code):
+			return _varints_reach_the_end(view, index)
 		return _varint_run_fits(view, index)
 	# A bare `x[remaining]` states BYTES rather than a count of elements, so
 	# walking `count` of them is walking a byte figure as though it were a
@@ -1991,6 +2021,18 @@ def _remaining_run_fits(view: View, index: int, depth: int) -> bool:
 			return False
 		at += size
 	return True
+
+
+def _varints_reach_the_end(view: View, index: int) -> bool:
+	"""Whether a `uvar v[remaining]` run is whole varints to the frame's end.
+
+	Its count is the whole ones the frame holds, so `_varint_run_fits`'
+	question -- is every counted element there -- cannot fail; what can be
+	wrong is the last one, cut short by the frame (26.742).
+	"""
+	reach = _varint_run_bits(view, index) // BITS_PER_BYTE
+	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	return at + reach >= view.limit
 
 
 def _varint_run_fits(view: View, index: int) -> bool:

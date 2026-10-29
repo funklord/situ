@@ -35,6 +35,7 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          chosen_arm, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
                          tlv_count, tlv_whole, varint, varint_run_at,
+                         varint_run_count,
                          while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
@@ -242,10 +243,9 @@ def _element(view: View, index: int, at: int) -> int:
 	# A RUN OF VARINTS has no element width to multiply by: an element's
 	# offset is the sum of the lengths before it, which is what makes the
 	# construct's access Sequential. The arithmetic below would multiply by
-	# the NONE sentinel (26.683). A bare `[remaining]` states BYTES rather
-	# than a count, so it is not one of these.
-	if index in view.image.varints and is_run(view.image, index) \
-			and not _sizes_in_bytes(view.image, placement.size_code):
+	# the NONE sentinel (26.683). The bare `[remaining]` form is one of
+	# these, its count a walk to the frame's end (26.742).
+	if index in view.image.varints and is_run(view.image, index):
 		return varint_run_at(view, index, at)
 	width = placement.element_bits
 	start = offset_bits(view, index) + at * width
@@ -463,13 +463,11 @@ def _is_varint_run(image: Image, index: int) -> bool:
 
 	The walker's spelling of `traverse.is_varint_run`, which it cannot
 	import -- decision 0026 forbids a walker reaching into `situc`, so the
-	condition is asked of the IMAGE here and of the placement there. A bare
-	`[remaining]` states BYTES rather than a count of elements, which is
-	the one run form this is not.
+	condition is asked of the IMAGE here and of the placement there. The
+	bare `[remaining]` form is one too since 26.742, its count a walk to
+	the frame's end; it was excluded while all four declined it.
 	"""
-	placement = image.placements[index]
-	return (is_run(image, index)
-	        and not _sizes_in_bytes(image, placement.size_code))
+	return is_run(image, index)
 
 
 def _varint_runs(image: Image, struct_index: int) -> list[int]:
@@ -1956,7 +1954,7 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 	for index in _varint_runs(image, struct_index):
 		local = _local(image, index)
 		try:
-			count = _count(view, index)
+			count = varint_run_count(view, index)
 			# `reach` rather than `span`, which this function already has
 			# as the BYTES of a delimited member further down. mypy caught
 			# the shadow; naming it distinctly is what avoids it.

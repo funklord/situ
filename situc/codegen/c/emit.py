@@ -77,7 +77,6 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
-	elements_are_countable,
 	framing_floor,
 	nests_one_struct,
 	framing_gaps,
@@ -109,6 +108,7 @@ from situc.traverse import (
 	tlv_admitted_tags,
 	tlv_single_tags,
 	walk_order,
+	walks_to_the_frame_end,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source as unparse_expr
@@ -3613,35 +3613,44 @@ class Emitter:
 		span  = ident(self.prefix, struct.name, local, "span")
 		least = ident(self.prefix, struct.name, local, "span_min")
 		at_fn = ident(self.prefix, struct.name, local, "at")
-		# NO COUNT MEANS NO ACCESSORS, which is what the other three say
-		# and what this backend answered `0u` to (26.733).
-		#
-		# `uvar v[remaining]` is sized by the FRAME rather than by a
-		# field, so `_count_read` looks up a field called `remaining`,
-		# finds none, falls through to `array_count or 0` and this
-		# emitted `return (uint32_t)0u;` -- a run reported EMPTY whatever
-		# the bytes hold. Measured on `r { u8 n; uvar v[remaining]; }` and
-		# four bytes holding three one-byte varints: `situ_r_v_count`
-		# answered 0, `situ_r_v_at(view, 0, &out)` refused because the
-		# walk it drives never ran, and `validate` returned OK. So the
-		# data was there and every accessor said the run was empty.
-		#
-		# The other three decline the member in words -- "this backend
-		# cannot resolve how many elements it holds" -- which is honest,
-		# and 26.691 recorded this as three backends short of a construct.
-		# It was four: C emitted a stub and answered confidently.
-		# Declining takes nothing away, because what it answered was
-		# wrong, and it leaves the construct unimplemented in all four
-		# rather than wrong in one.
-		#
-		# Walking varints to the end of the view IS implementable and is
-		# the feature 26.691 asks for; it is not this.
-		if not elements_are_countable(placement):
-			return ["", f"\t/* {placement.path}: this backend cannot"
-			        " resolve how many elements it holds. */"]
-
-		total = self._count_expression(struct, placement, held)
 		view  = held.split(".")[0]
+		# `uvar v[remaining]`: the frame says how many BYTES and nothing
+		# says how many varints, so the count is a walk to the end of the
+		# view, and an element the frame cuts short is not counted --
+		# `check` refuses that frame (26.742). This answered the constant
+		# `0u` until 26.733 and was declined in all four after it.
+		if walks_to_the_frame_end(placement):
+			counted = [
+				f"\tuint32_t at = {base};",
+				"\tuint32_t seen = 0u;",
+				"",
+				f"\twhile (at < {held}.limit) {{",
+				"\t\tuint64_t raw = 0;",
+				f"\t\tuint32_t used = {read};",
+				"",
+				"\t\tif (used == 0u) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+				"\t\tat   += used;",
+				"\t\tseen += 1u;",
+				"\t}",
+				"\treturn seen;",
+			]
+			says = [
+				f"/* How many `{placement.varint}`s `{placement.name}` holds:"
+				" the whole",
+				" * ones from its start to the end of the frame, which is"
+				" what sizes it.",
+				" * One the frame cuts short is not counted (26.742). */",
+			]
+		else:
+			total   = self._count_expression(struct, placement, held)
+			counted = [f"\treturn (uint32_t){total};"]
+			says    = [
+				f"/* How many `{placement.varint}`s `{placement.name}` holds:"
+				" the count",
+				" * the message declares, bounded (14.2b). */",
+			]
 
 		walk = [
 			f"\tuint32_t at = {base};",
@@ -3661,12 +3670,10 @@ class Emitter:
 			"\t\t}",
 		]
 		return [
-			f"/* How many `{placement.varint}`s `{placement.name}` holds:"
-			" the count",
-			" * the message declares, bounded (14.2b). */",
+			*says,
 			f"static inline uint32_t {count}({taken})",
 			"{",
-			f"\treturn (uint32_t){total};",
+			*counted,
 			"}",
 			"",
 			f"/* How far `{placement.name}` reaches, in bytes: the sum of"
@@ -8015,6 +8022,8 @@ class Emitter:
 			]
 		run_fits = run_fits + self._remaining_divides(
 			placement, self._base_expression(struct, placement))
+		run_fits = run_fits + self._varints_reach_the_end(
+			struct, placement, self._base_expression(struct, placement))
 
 		# The other half of the same sentence, one step further on. A member
 		# *placed* after a variable-length region has an offset that is a sum
@@ -8143,6 +8152,29 @@ class Emitter:
 			"\t}",
 		]
 
+	def _varints_reach_the_end(self, struct: ResolvedStruct,
+			placement: Placement, base: str) -> list[str]:
+		"""`check`'s test that a `[remaining]` run of varints is whole.
+
+		Its count stops where the frame does, so `_span_min` is `_span` and
+		`_varint_run_fits`' test cannot fail. What can be wrong is the
+		frame's last element, cut short: then the walk stops before the
+		limit, and the bytes after it are a varint nobody can read (26.742).
+		"""
+		if not walks_to_the_frame_end(placement):
+			return []
+		local = c_name(self._local(struct, placement))
+		span  = ident(self.prefix, struct.name, local, "span")
+		return [
+			f"\t/* {placement.path}: and the frame is whole varints, the"
+			" last",
+			"\t * not cut short (26.742). */",
+			f"\tif (situ_remaining_u32(view.limit, {base}) != {span}(view))"
+			" {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
+
 	def _varint_run_fits(self, struct: ResolvedStruct, placement: Placement,
 			base: str) -> list[str]:
 		"""`check`'s test that every varint a run declares is in the frame.
@@ -8159,7 +8191,7 @@ class Emitter:
 		the walk completed and more than the frame holds where it did not,
 		so holding the frame against it refuses exactly the short run.
 		"""
-		if not is_varint_run(placement) or not elements_are_countable(placement):
+		if not is_varint_run(placement) or walks_to_the_frame_end(placement):
 			return []
 		local = c_name(self._local(struct, placement))
 		least = ident(self.prefix, struct.name, local, "span_min")

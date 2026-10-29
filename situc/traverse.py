@@ -1948,35 +1948,28 @@ def nests_one_struct(structs: dict[str, ResolvedStruct],
 	return placement.array_count is None and placement.sized_by is None
 
 
-def elements_are_countable(placement: Placement) -> bool:
-	"""Whether anything can say how many elements a run holds.
+def walks_to_the_frame_end(placement: Placement) -> bool:
+	"""Whether a run of varints is counted by walking to the frame's end.
 
-	False for exactly one arrangement: a run of VARINTS whose extent the
-	frame decides, `uvar v[remaining]`. The frame supplies no count, and
-	varints have no stride to divide the bytes by, so the only way to the
-	number is to walk to the end of the view -- which no backend does.
+	True for exactly one arrangement: `uvar v[remaining]`. The frame says
+	how many BYTES the run holds and varints have no stride to divide them
+	by, so the count is the number of whole varints from the run's start
+	to the end of the view, and an element cut short by the frame is not
+	one of them -- `check` refuses that frame instead (26.742).
 
-	Everything else answers. A literal count answers itself; a count
-	driven by a field answers from the field; and `u8 data[remaining]`
-	answers `limit - base`, because a fixed-size element divides the
-	bytes the frame leaves. A `[remaining]` run of RECORDS answers too --
-	`mqtt_string filters[remaining]` is one and C walks it.
+	Every other run has a count to read: a literal, a field, or for a
+	fixed-size element `limit - base` divided by its width.
 
-	**Asked in two places, which is why it is here.** C's `_varint_run`
-	asks it to decline the four accessors, and the `gen-checks` generator
-	asks it before emitting a call to the `_at` that would not exist.
-	They disagreed: C emitted a count returning the constant `0u` while
-	the other three declined in words, and when C was made to decline,
-	the checks harness went on calling an accessor no header declared --
-	a build failure `make test` would find and `gen-checks` would not
-	(26.733). One predicate rather than three conditions is the lesson
-	26.728 and 26.729 both paid for.
+	Until 26.742 this was `elements_are_countable`, False for the same
+	arrangement, and all four backends declined the member: C had emitted
+	a count returning the constant `0u` (26.733), and declining was the
+	honest answer while nothing walked. It is asked by the four emitters,
+	by `gen-checks` and by the differ, which is why it is here: three
+	conditions in three places is how 26.733 happened.
 	"""
-	if placement.array_count is not None:
-		return True
-	if placement.sized_by != "remaining":
-		return True
-	return placement.varint is None
+	return (placement.array_count is None
+	        and placement.sized_by == "remaining"
+	        and placement.varint is not None)
 
 
 def remaining_stride(structs: dict[str, ResolvedStruct],

@@ -73,7 +73,6 @@ from situc.traverse import (
 	depth_limit,
 	dynamic_frame_owner,
 	element_bytes,
-	elements_are_countable,
 	enforceable_max,
 	extent_parts,
 	extern_symbol,
@@ -113,6 +112,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	walks_to_the_frame_end,
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -3649,6 +3649,19 @@ class Emitter:
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
 			]
+		# And a `[remaining]` run of varints is whole varints to the frame's
+		# end: its count stops where the frame does, so the 26.735 test
+		# below cannot fail, and what can be wrong is the last element, cut
+		# short (26.742).
+		if walks_to_the_frame_end(placement) and at is not None:
+			span = f"{bare_name(local_name(struct, placement))}_span()"
+			run_fits = run_fits + [
+				f"\t\t/* {placement.path}: whole varints, the last not cut"
+				" short (26.742). */",
+				f"\t\tif (situ_remaining_u32(raw_.limit, {at}) != {span}) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -3702,7 +3715,7 @@ class Emitter:
 		# see for the same reason: `_span` is how far the walk reached, and
 		# the walk stops at the frame. `_span_min` is more than the frame
 		# holds exactly where the walk stopped early (26.735).
-		if is_varint_run(placement) and elements_are_countable(placement):
+		if is_varint_run(placement) and not walks_to_the_frame_end(placement):
 			least = f"{bare_name(local_name(struct, placement))}_span_min()"
 			lines += [
 				f"\t\t/* {placement.path}: and every varint the count declares",
@@ -6720,10 +6733,46 @@ class Emitter:
 		as a complete message), and `_at` walks because an element's
 		offset is the sum of the lengths before it.
 		"""
-		total = self._count_expression(struct, placement)
-		if total is None:
-			return ["", f"\t/* {placement.path}: this backend cannot resolve"
-			        " how many elements it holds. */"]
+		# `uvar v[remaining]`: the frame says how many BYTES and nothing
+		# says how many varints, so the count is a walk to the end of the
+		# view, and an element the frame cuts short is not counted --
+		# `check` refuses that frame (26.742).
+		if walks_to_the_frame_end(placement):
+			counted = [
+				f"\t\tstd::uint32_t at = {start};",
+				"\t\tstd::uint32_t seen = 0u;",
+				"",
+				"\t\twhile (at < raw_.limit) {",
+				"\t\t\tstd::uint64_t raw = 0;",
+				f"\t\t\tconst std::uint32_t used = {read};",
+				"",
+				"\t\t\tif (used == 0u) {",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+				"\t\t\tat   += used;",
+				"\t\t\tseen += 1u;",
+				"\t\t}",
+				"\t\treturn seen;",
+			]
+			says = [
+				f"\t/* How many `{placement.varint}`s {placement.path} holds:"
+				" the whole",
+				"\t * ones from its start to the end of the frame, which is"
+				" what",
+				"\t * sizes it. One the frame cuts short is not counted"
+				" (26.742). */",
+			]
+		else:
+			total = self._count_expression(struct, placement)
+			if total is None:
+				return ["", f"\t/* {placement.path}: this backend cannot"
+				        " resolve how many elements it holds. */"]
+			counted = [f"\t\treturn static_cast<std::uint32_t>({total});"]
+			says    = [
+				f"\t/* How many `{placement.varint}`s {placement.path} holds:"
+				" the count",
+				"\t * the message declares, bounded (14.2b). */",
+			]
 
 		refuse = ([
 			"",
@@ -6760,12 +6809,10 @@ class Emitter:
 		]
 		return [
 			"",
-			f"\t/* How many `{placement.varint}`s {placement.path} holds:"
-			" the count",
-			"\t * the message declares, bounded (14.2b). */",
+			*says,
 			f"\t[[nodiscard]] std::uint32_t {name}_count() const noexcept",
 			"\t{",
-			f"\t\treturn static_cast<std::uint32_t>({total});",
+			*counted,
 			"\t}",
 			"",
 			f"\t/* How far {placement.path} reaches, in bytes: the sum of"

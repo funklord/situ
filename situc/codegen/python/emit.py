@@ -70,7 +70,6 @@ from situc.traverse import (
 	depth_limit,
 	dynamic_frame_owner,
 	element_bytes,
-	elements_are_countable,
 	enforceable_max,
 	extent_parts,
 	extern_symbol,
@@ -109,6 +108,7 @@ from situc.traverse import (
 	remaining_stride,
 	tlv_admitted_tags,
 	tlv_single_tags,
+	walks_to_the_frame_end,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -2718,10 +2718,42 @@ class Emitter:
 		`_at` walks because an element's offset is the sum of the lengths
 		before it.
 		"""
-		total = self._count_expression(struct, placement)
-		if total is None:
-			return ["", f"\t# {placement.path}: this backend cannot resolve"
-			        " how many elements it holds."]
+		# `uvar v[remaining]`: the frame says how many BYTES and nothing
+		# says how many varints, so the count is a walk to the end of the
+		# view, and an element the frame cuts short is not counted --
+		# `check` refuses that frame (26.742).
+		if walks_to_the_frame_end(placement):
+			counted = [
+				f"\t\tat    = {start}",
+				"\t\tdata  = self._span",
+				"\t\tseen  = 0",
+				"\t\twhile at < len(data):",
+				f"\t\t\tread = {read}",
+				"\t\t\tif read is None:",
+				"\t\t\t\tbreak",
+				"\t\t\t_, used = read",
+				"\t\t\tat   += used",
+				"\t\t\tseen += 1",
+				"\t\treturn seen",
+			]
+			says = [
+				f'\t\t"""How many `{placement.varint}`s {placement.path} holds:'
+				" the",
+				"\t\twhole ones from its start to the end of the frame, which",
+				"\t\tis what sizes it. One the frame cuts short is not counted",
+				'\t\t(26.742)."""',
+			]
+		else:
+			total = self._count_expression(struct, placement)
+			if total is None:
+				return ["", f"\t# {placement.path}: this backend cannot"
+				        " resolve how many elements it holds."]
+			counted = [f"\t\treturn {total}"]
+			says    = [
+				f'\t\t"""How many `{placement.varint}`s {placement.path} holds:'
+				' the',
+				'\t\tcount the message declares, bounded (14.2b)."""',
+			]
 
 		refuse = ([
 			"",
@@ -2762,11 +2794,9 @@ class Emitter:
 			"",
 			"\t@property",
 			f"\tdef {name}_count(self) -> int:",
-			f'\t\t"""How many `{placement.varint}`s {placement.path} holds:'
-			' the',
-			'\t\tcount the message declares, bounded (14.2b)."""',
+			*says,
 			"\t\tself._check()",
-			f"\t\treturn {total}",
+			*counted,
 			"",
 			"\t@property",
 			f"\tdef {name}_span(self) -> int:",
@@ -6446,6 +6476,19 @@ class Emitter:
 				f'\t\t\traise BoundsError("{placement.path}: not a whole'
 				' number of elements")',
 			]
+		# And a `[remaining]` run of varints is whole varints to the frame's
+		# end: its count stops where the frame does, so the 26.735 test
+		# below cannot fail, and what can be wrong is the last element, cut
+		# short (26.742).
+		if walks_to_the_frame_end(placement) and at is not None:
+			span = f"self.{py_name(local_name(struct, placement))}_span"
+			run_fits = run_fits + [
+				f"\t\t# {placement.path}: whole varints, the last not cut"
+				" short (26.742).",
+				f"\t\tif max(self._len - ({at}), 0) != {span}:",
+				f'\t\t\traise BoundsError("{placement.path}: the frame ends'
+				' inside an element")',
+			]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -6503,7 +6546,7 @@ class Emitter:
 		# see for the same reason: `_span` is how far the walk reached, and
 		# the walk stops at the frame. `_span_min` is more than the frame
 		# holds exactly where the walk stopped early (26.735).
-		if is_varint_run(placement) and elements_are_countable(placement):
+		if is_varint_run(placement) and not walks_to_the_frame_end(placement):
 			least = f"self.{py_name(local_name(struct, placement))}_span_min"
 			lines += [
 				f"\t\t# {placement.path}: and every varint the count declares",

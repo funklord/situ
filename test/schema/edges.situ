@@ -2207,23 +2207,19 @@ struct floor_run {
 
 // A `[remaining]` RUN OF VARINTS, which 26.691 reported and 26.733 found
 // C answering wrongly. The frame decides how far it reaches, so there is
-// no count field, and all four backends decline the member in words --
-// "this backend cannot resolve how many elements it holds".
+// no count field: the count is the whole varints from the run's start to
+// the end of the frame, a walk in all four and both walkers (26.742), and
+// a frame whose last varint is cut short is refused by `validate`.
 //
-// C emitted the four accessors anyway until 26.733, with its count
-// function returning the constant `0u`: on four bytes holding three
-// one-byte varints `situ_r_v_count` answered 0, every `_at` refused
-// because the walk it drives never ran, and `validate` returned OK. The
-// data was there and every accessor said the run was empty, which is
-// worse than the honest refusal the other three gave.
+// C emitted the four accessors with its count returning the constant `0u`
+// until 26.733: on four bytes holding three one-byte varints the count
+// answered 0, every `_at` refused, and `validate` returned OK. All four
+// then declined the member in words until the walk arrived.
 //
-// It is here so that `test_the_backends_refuse_the_same_members` can see
-// the four agree. 26.691 said in as many words that `edges.situ` had no
-// such member, so the split could not be seen -- and a split is exactly
-// what it was, with C the one that answered.
-//
-// Walking varints to the end of the view is implementable and is the
-// feature 26.691 asks for. None of the four does it yet.
+// It is here so that the differential sees the four agree, and
+// `test_the_backends_refuse_the_same_members` with it. 26.691 said that
+// `edges.situ` had no such member, so the split could not be seen -- and a
+// split is exactly what it was, with C the one that answered.
 struct countless_varints {
 	u8           lead;
 	edge_varint  loose[remaining];
