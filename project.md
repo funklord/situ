@@ -331,9 +331,12 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   protobuf (26.737). Build a protobuf-only convention only when a real
   workflow needs it.
 
-  More broadly, situ is **almost a superset** of the format descriptions it
-  sits beside: RFC layouts, schema languages and register description
-  languages. Once situ is mature, it will be one. The exact parts of a
+  More broadly, situ is **for most purposes already a superset** of the
+  format descriptions it sits beside: RFC layouts, schema languages and
+  register description languages. Once situ is mature, it will be one
+  outright. What it leaves out on purpose -- silent retention of unknown
+  fields, nesting with no declared bound -- the holder counts as poor design
+  better left behind rather than as ground to make up. The exact parts of a
   specification belong in the schema, and its abstract parts -- rationale,
   meaning, receiver behaviour -- stay as comments in the same file. Each
   known gap is an item to close rather than a boundary.

@@ -19,19 +19,57 @@ RFC, or in a schema language, such as Protocol Buffers or ASN.1. A situ
 description can serve as that definition. The exact parts -- every byte,
 every length, every rule a receiver can check -- go into the description,
 and the parts only a person can act on, such as why a field exists, stay
-beside them as comments in the same file. Situ is almost a superset of
-these ways of describing a format today; once it is mature, it will be one.
+beside them as comments in the same file. For most purposes situ is already
+a superset of these ways of describing a format, and once it is mature it
+will be one outright.
 
 Situ describes the exact byte layout of data that already has, or is being
 designed to have, a binary representation -- wire protocols, packet formats,
 on-disk records, memory-mapped registers -- and generates accessors for it in
 C, C++, Rust and Python from one schema.
 
-What separates it from the other ways to do that is what it does when it
-*cannot* generate something. A field whose bytes cannot be written in place
-gets no in-place setter, and the compiler says which property of the schema
-took it away and what to change to get it back. The absence is derived,
-explained, and assertable in the schema itself.
+It is not one more serialization format. Protobuf, FlatBuffers, Cap'n Proto
+and SBE each define an encoding of their own and describe only that; ASN.1
+needs a separate encoding (DER) to get one canonical form; Kaitai Struct
+describes existing formats but only reads them, and Construct parses and
+builds them in Python alone; SystemRDL and SVD
+describe registers and nothing else. Situ does what each of them does, in one
+language, and adds what none of them has:
+
+- **Any binary layout, existing or new.** Bit fields, mixed byte order,
+  varints, tag-length-value regions, offset tables, delimiters, padding,
+  text protocols such as HTTP and SMTP, and memory-mapped registers with
+  their side effects -- in one schema, mixed freely.
+- **Capability inference.** For every field the compiler works out what the
+  generated code can do with it -- write it in place, reach it without a
+  walk, keep a stable address, encode it one way only -- and where it cannot,
+  says which choice in the schema took that away, what it costs, and what to
+  change to get it back. The missing operation is absent from the generated
+  API, not a runtime error.
+- **Guarantees you can demand.** `require canonical(udp_header)` fails the
+  build if a later edit makes the format ambiguous; `situc map --check` and
+  `situc diff` catch a capability lost between two revisions.
+- **Canonical encoding by construction.** A positional layout has exactly
+  one valid encoding of a value, so a message can be hashed, signed or
+  MAC'd as bytes. Protobuf states that its encoding cannot be made
+  canonical.
+- **Integrity and codecs in the format.** Checksums, MACs, encryption and
+  coded regions are declared where they sit, and the generated code
+  computes and checks them.
+- **Four languages, identical bytes.** C, C++, Rust and Python from one
+  layout solver, held to agree with each other by the test suite. The C,
+  C++ and Rust code never allocates; the caller owns the memory.
+- **From a view to a protocol engine.** Zero-copy accessors by default, and
+  on request: building messages, relations between two messages, stream
+  framing, matching replies to requests, and retransmission with timeouts.
+- **The tooling around it, generated.** Golden-vector tests, fuzz
+  harnesses, a tamper harness for authenticated regions, a Wireshark
+  dissector, RFC-style layout diagrams, a language server, a `.proto`
+  importer, and a packed image that lets one small walker read any format
+  it was never compiled against.
+
+What a field cannot do is explained rather than left to a crash at run
+time:
 
 ```
 $ situc explain example/http/http.situ request_line.version
