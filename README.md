@@ -14,6 +14,14 @@ description, and produces the reading and writing code from it in four
 common programming languages. It also points out the parts of a format that
 are hard to handle safely or efficiently, and explains why.
 
+Formats like these are usually defined in a written standard, such as an
+RFC, or in a schema language, such as Protocol Buffers or ASN.1. A situ
+description can serve as that definition. The exact parts -- every byte,
+every length, every rule a receiver can check -- go into the description,
+and the parts only a person can act on, such as why a field exists, stay
+beside them as comments in the same file. Situ is almost a superset of
+these ways of describing a format today; once it is mature, it will be one.
+
 Situ describes the exact byte layout of data that already has a binary
 representation -- wire protocols, packet formats, on-disk records,
 memory-mapped registers -- and generates accessors for it in C, C++, Rust and

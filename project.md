@@ -185,8 +185,17 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
 - **Not a serialization library for language-native objects.** No reflection,
   no object graphs, no cyclic references, no interning.
 - **No automatic schema evolution.** Compatibility across versions is explicit
-  (Section 19), not implicit. Situ will never silently preserve unknown fields;
-  see Section 14.5 for why that is a security position, not an oversight.
+  (Section 19), not implicit. Situ never preserves unknown fields *silently*:
+  they are rejected by default, and Section 14.5 says why that is a security
+  position rather than an oversight.
+
+  **Retaining them is on the roadmap, at the lowest priority** -- the
+  copyright holder's decision 2026-10-29, which replaced "never". A format
+  that carries fields its reader does not understand has a smell, so this is
+  opt-in and discouraged rather than refused outright. `unknown = preserve`
+  already parses and carries an unknown TLV item. What is missing is
+  re-serialising it byte-identically in its original position, which needs
+  an ordering rule as well (9.7).
 - **No dynamic allocation in the freestanding backends.** C, C++ and Rust
   generated code does not allocate: no `malloc`, no hidden arena, no growable
   buffers, callers supply memory. This is invariant 4, and it is what makes an
@@ -301,11 +310,33 @@ protocol *less dynamic* is a supported workflow with tooling behind it.
   situ "does not run a protocol" -- and propagated the error into two other
   projects. It has since been wrong in the other direction here, reading the
   layer choice's absence from the schema as behaviour's absence from it.
-- **Not a replacement for protobuf semantics.** Situ can *describe* the
-  protobuf wire format (Section 9.7) and can import `.proto` files to produce
-  such a description (Section 19.2). It does not adopt protobuf's identity model,
-  its unknown-field retention, or its evolution story. The importer is one-way
-  and reports every construct it could not represent faithfully.
+- **~~Not a replacement for protobuf semantics.~~ Superseded: situ aims to
+  handle the protobuf use case completely** -- the copyright holder's
+  decision 2026-10-29. Situ describes the protobuf wire format (Section 9.7)
+  and imports `.proto` files to produce such a description (Section 19.2). A
+  workflow that breaks where protobuf's works is an implementation fault to
+  fix, not a limit of scope.
+
+  The earlier wording listed what situ "does not adopt": protobuf's identity
+  model, its unknown-field retention and its evolution story. Read those now
+  as **gaps, not refusals**. Unknown-field retention is the lowest-priority
+  item on the roadmap (the bullet above). Evolution stays explicit (Section
+  19) rather than implicit.
+
+  **Weigh protobuf-specific work against the chance that it stops
+  mattering.** Also the holder's, the same day. Situ may quickly supplant
+  protobuf, and work spent reproducing protobuf's own conventions is wasted
+  once people stop using it. So prefer fixes that serve every format of the
+  same shape. A `tlv` region that validates nothing hurts CoAP as much as
+  protobuf (26.737). Build a protobuf-only convention only when a real
+  workflow needs it.
+
+  More broadly, situ is **almost a superset** of the format descriptions it
+  sits beside: RFC layouts, schema languages and register description
+  languages. Once situ is mature, it will be one. The exact parts of a
+  specification belong in the schema, and its abstract parts -- rationale,
+  meaning, receiver behaviour -- stay as comments in the same file. Each
+  known gap is an item to close rather than a boundary.
 
 ## 3. Positioning
 
@@ -1967,10 +1998,11 @@ five causes with source locations. A schema language that can describe protobuf
 and then tell you precisely why protobuf cannot be canonically encoded has
 demonstrated that its capability reasoning is real rather than decorative.
 
-What Situ deliberately does *not* reproduce: field-number-as-identity for
-schema evolution (Section 19.1), and re-serialization that preserves unknown
-fields in their original positions. A Situ description of protobuf can parse and
-report unknown fields; round-tripping them byte-identically requires
+What Situ does *not* reproduce yet: field-number-as-identity for schema
+evolution (Section 19.1), and re-serialization that preserves unknown fields
+in their original positions. These were written as deliberate exclusions; since
+2026-10-29 they are gaps (Section 2). A Situ description of protobuf can parse
+and report unknown fields; round-tripping them byte-identically requires
 `unknown = preserve` plus an explicit ordering rule, and the compiler will say so.
 
 ### 9.8 A member the data positions

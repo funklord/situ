@@ -9,9 +9,9 @@
 // capability is weak, the lattice is sound. If it cannot, the lattice is
 // decorative. Section 26.6 makes passing this the gate on phase 7.
 //
-// What situ deliberately does NOT reproduce: field-number-as-identity for
-// schema evolution (section 19.1), and re-serialisation that preserves unknown
-// fields in their original positions. This description can parse and report
+// What situ does NOT reproduce yet: field-number-as-identity for schema
+// evolution (section 19.1), and re-serialisation that preserves unknown fields
+// in their original positions -- gaps rather than exclusions (section 2). This description can parse and report
 // unknown fields; round-tripping them byte-identically would need
 // `unknown = preserve` plus an explicit ordering rule, and the compiler says so.
 
