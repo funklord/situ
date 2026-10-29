@@ -131,6 +131,28 @@ struct wide {
 	item  ids[count];
 }
 
+// A COUNTED RUN OF FIXED-SIZE RECORDS, which is 26.734 and the one shape
+// every guard in `_nested_framing` let through. It is not a `while` run,
+// not delimited, and not a counted run of VARIABLE elements -- that last
+// one excludes a fixed-size element on purpose, because such a run has a
+// stride to multiply and wants arithmetic rather than a walk. So it fell
+// past all four conditions and was framed as a SINGLE `fixed_row`: two
+// rows read as complete after one.
+//
+// Reported by bbq-predictor against their `index_body`, 42 bytes an
+// entry, where a 104-byte message with `count = 2` was answered COMPLETE
+// at 62 and held it to the last byte -- a caller stops reading 42 bytes
+// early, which is the one-sided safety property.
+struct fixed_row {
+	u8  a;
+	u8  b;
+}
+
+struct counted_fixed {
+	u8         n;
+	fixed_row  rows[n];
+}
+
 struct nothing { }
 
 // The same fault behind a discriminant, which is the shape
@@ -179,6 +201,13 @@ CASES: dict[str, tuple[bytes, list[int | None]]] = {
 	             + bytes([0x01, 0x78]) + bytes([0x02, 0x79, 0x79]),
 	             [10, 10, 10, 10, 10, 10, 10, 10, 10,
 	              12, 13, 13, 15, 15, None]),
+	# `n = 2`, then two two-byte rows: five bytes whole. The count is
+	# readable from the first byte, so the answer is the truth from the
+	# first prefix -- a fixed stride needs no walk and no rounds of
+	# asking. Framed as one row it was 3, and COMPLETE at three bytes of
+	# five (26.734).
+	"counted_fixed": (bytes([0x02, 0x0A, 0x0B, 0x0C, 0x0D]),
+	                  [5, 5, 5, 5, None]),
 	# The variant answers exactly what the plain nested case does, which
 	# is the point: the discriminant costs a byte and changes nothing
 	# else about the framing.

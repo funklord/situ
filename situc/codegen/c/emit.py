@@ -79,6 +79,7 @@ from situc.traverse import (
 	frameable,
 	elements_are_countable,
 	framing_floor,
+	nests_one_struct,
 	framing_gaps,
 	has_computable_extent,
 	index_entry_bytes,
@@ -5279,11 +5280,13 @@ class Emitter:
 		if cursor is None:
 			return None
 		name = placement.type_name
-		if name is None or name not in self.resolved.structs:
-			return None
-		if placement.delimiters or placement.repeat_while is not None \
-				or is_run(placement, self.structs) \
-				or self._is_counted_run(placement):
+		# ONE nested struct, asked in `traverse` because the same four
+		# conditions stood in four emitters and all four were missing the
+		# fifth: an array of FIXED-SIZE structs is neither a run that ends
+		# where the bytes decide nor a counted run of variable elements,
+		# so `ent months[count]` was framed as a single `ent` and a
+		# message of two entries read as complete after one (26.734).
+		if not nests_one_struct(self.resolved.structs, placement):
 			return None
 		inner = self.resolved.structs[name]
 		if not frameable(self.resolved.structs, inner) \

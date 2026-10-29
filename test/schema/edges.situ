@@ -2228,3 +2228,32 @@ struct countless_varints {
 	u8           lead;
 	edge_varint  loose[remaining];
 }
+
+// A COUNTED RUN OF FIXED-SIZE RECORDS, which is 26.734 and the one shape
+// every guard in `_nested_framing` let through. It is not delimited, not
+// a `while` run, and not a counted run of VARIABLE elements -- that last
+// one excludes a fixed-size element on purpose, because such a run has a
+// stride to multiply and wants arithmetic rather than a walk. So it fell
+// past all four conditions in all four emitters and was framed as a
+// SINGLE record: a run of two read as complete after one, and `required`
+// held that answer to the last byte.
+//
+// Reported by bbq-predictor 2026-10-29 against their `index_body`, whose
+// entries are 42 bytes: a 104-byte message with `count = 2` was answered
+// COMPLETE at 62, so a caller stops reading 42 bytes early. That is the
+// one-sided safety property, the only one this tree calls one.
+//
+// Here because no committed schema had it in a frameable struct --
+// `message.situ`'s `record recs[hdr.rec_count]` is the same construct and
+// ends in `trailer[remaining]`, which makes the struct unframeable, so
+// nothing reached the branch. Measured: the corpus C output did not
+// change by one byte when the guard was added.
+struct fixed_row {
+	u16  month;
+	u8   digest[8];
+}
+
+struct counted_fixed {
+	u16        rows_held  [max = 64];
+	fixed_row  rows[rows_held];
+}

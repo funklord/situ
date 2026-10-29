@@ -1903,6 +1903,51 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
+def nests_one_struct(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> bool:
+	"""Whether a placement is ONE nested struct, framed by its own
+	`required`, rather than many or something else.
+
+	`required` delegates to a nested struct's own framing rather than
+	adding its extent, because an extent walk stops early when the bytes
+	run out and the quantity it adds therefore shrinks as the message
+	gets shorter -- `outer { u8 h; col c; }` answered complete at two
+	bytes of five, which is 26.684.
+
+	**It must be ONE, and that is what this adds.** The four emitters each
+	carried the same four conditions -- not delimited, not a `while` run,
+	not a run that ends where the bytes decide, not a counted run of
+	variable-size elements -- and all four were missing the fifth: an
+	ARRAY of fixed-size structs is none of those four and is not one
+	struct either. `is_counted_run` excludes a fixed-size element on
+	purpose, because such a run has a stride to multiply and wants
+	arithmetic rather than a walk, so `ent months[count]` fell past every
+	guard and was framed as a single `ent`.
+
+	Reported by bbq-predictor 2026-10-29 against their `index_body`,
+	whose `index_entry months[count]` is 42 bytes an element: a 104-byte
+	message with `count = 2` was reported COMPLETE at 62 -- the fixed
+	prefix and ONE entry -- and held that answer to the last byte. A
+	caller trusting it stops reading 42 bytes early, which is the
+	one-sided safety property. Reproduced here in nine lines, 86 bytes
+	answered as 44 (26.734).
+
+	Asked in one place because it was answered in four, which is the
+	third time this week that was the fix (26.728, 26.729, 26.733).
+	"""
+	name = placement.type_name
+	if name is None or name not in structs:
+		return False
+	if placement.delimiters or placement.repeat_while is not None:
+		return False
+	if is_run(placement, structs) or is_counted_run(structs, placement):
+		return False
+	# MANY, however the count is spelled: a literal `ent e[4]`, a field
+	# `ent e[count]`, or an expression over one. A single nested member
+	# declares neither.
+	return placement.array_count is None and placement.sized_by is None
+
+
 def elements_are_countable(placement: Placement) -> bool:
 	"""Whether anything can say how many elements a run holds.
 

@@ -86,6 +86,13 @@ struct corrected_nibble size=9 atomic=NonAtomic
   corrected_nibble.body                  offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   corrected_nibble.body.payload          offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct counted_fixed size=2..642 mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  counted_fixed.rows_held                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  counted_fixed.rows                     offset=AbsoluteStatic(0x02) size=Bounded(0, 640) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  counted_fixed.rows[]                   offset=FrameStatic(0x00) size=Fixed(10) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  counted_fixed.rows[].month             offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  counted_fixed.rows[].digest            offset=FrameStatic(0x02) size=Fixed(8) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
+
 struct countless_varints size=1.. access=Sequential mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   countless_varints.lead                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   countless_varints.loose                offset=AbsoluteStatic(0x01) size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=InPlaceSlack canonical=NonCanonical
@@ -156,6 +163,10 @@ struct escaped_run size=1.. access=Sequential mutate=Shifting address=Unstable c
 struct externally_stuffed size=1.. access=Sequential mutate=Shifting atomic=NonAtomic stage=TransformTime effect=EffectOnRead
   externally_stuffed.body                offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting effect=EffectOnRead
   externally_stuffed.body.content        offset=AbsoluteStatic(0x00) size=Unbounded align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting stage=TransformTime
+
+struct fixed_row size=10 repr=ValueConverted atomic=NonAtomic
+  fixed_row.month                        offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  fixed_row.digest                       offset=AbsoluteStatic(0x02) size=Fixed(8) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic
 
 struct fixed_text size=3 atomic=NonAtomic
   fixed_text.body                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic

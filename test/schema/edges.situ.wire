@@ -98,6 +98,10 @@ struct corrected_nibble size=9
   @0x0000   1         u8         head
   @0x0001   8         extended_hamming body  codec=extended_hamming
 
+struct counted_fixed size=2..642
+  @0x0000   2         u16        rows_held  big max=64
+  @0x0002   0..640    fixed_row  rows  sized-by=rows_held
+
 struct countless_varints size=1..
   @0x0000   1         u8         lead
   @0x0001   0..       edge_varint loose  sized-by=remaining varint=edge_varint
@@ -168,6 +172,10 @@ struct escaped_run size=1..
 
 struct externally_stuffed size=1..
   @0x0000   until:c0  stuffed_apart body  codec=stuffed_apart
+
+struct fixed_row size=10
+  @0x0000   2         u16        month  big
+  @0x0002   8         u8         digest  big
 
 struct fixed_text size=3
   @0x0000   3         u8         body  big encoding=ascii

@@ -5711,8 +5711,15 @@ emitter written first.
 reproduction. Three are decisions rather than work, and are the copyright
 holder's:
 
-- **`required` is settled for now, after five records in four days, and
-  what is left of it is one design question.** The function frames a
+- **`required` has seven records in four days and what is left of it is
+  one design question.** The seventh arrived from bbq-predictor after the
+  sixth was pushed: a counted run of FIXED-SIZE records was framed as a
+  single record, so a 104-byte message of two entries was reported
+  COMPLETE at 62 and held it to the last byte (26.734). `is_counted_run`
+  excludes a fixed-size element on purpose -- such a run has a stride to
+  multiply -- so the shape fell past all four guards in all four
+  emitters, and `traverse.nests_one_struct` is the one predicate they
+  ask now. The function frames a
   message from bytes a caller has and nothing has validated, and every
   fault in the run was one shape: **two quantities computed in different
   places from different things, where neither bounds the other.**
@@ -7620,6 +7627,11 @@ Moved to
 
 Moved to
 `doc/decision/26.733-c-answered-zero-elements-for-a-run-it-could-not-count.md`.
+
+### 26.734 A counted run of fixed-size records was framed as one
+
+Moved to
+`doc/decision/26.734-a-counted-run-of-fixed-records-was-framed-as-one.md`.
 
 ### 26.715 The same width in the other pointer backend
 
