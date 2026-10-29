@@ -164,11 +164,23 @@ def probe(classes: list[str], namespace: str) -> str:
 #include <cstdlib>
 #include <cstring>
 
-/* Three fills rather than one. A zero buffer reads every count as zero and
- * every walk falls out at once, so a run's own arithmetic is never reached;
- * 0xFF makes each length as large as the type allows, which is where a
- * saturating add earns its keep. */
-static const std::uint8_t FILL[] = {{ 0x00u, 0xFFu, 0x5Au }};
+/* Four fills rather than one, and each is here for a different reach.
+ * 0x00 reads every count as zero so every walk falls out at once; 0xFF
+ * makes each length as large as the type allows, which is where a
+ * saturating add earns its keep; 0x5A is neither.
+ *
+ * 0x01 IS THE ONE THAT TAKES A RUN APART, and it was added after the
+ * other three were measured unable to. A uniform fill makes a `u16`
+ * count either zero or enormous, so a run either does not start or never
+ * finishes an element inside 48 bytes -- and the arithmetic worth
+ * reaching is the step where an element AHEAD completes while the next
+ * one reports its own short bound. 0x01 gives a count of 0x0101 and
+ * elements of two bytes, so that step happens every other prefix.
+ *
+ * Measured on `edges.floor_run` against an export of `a176c43`, where
+ * 26.724 is present: `need` falls from 1032 to 1029 at eight bytes
+ * under this fill, and not at any prefix under the other three. */
+static const std::uint8_t FILL[] = {{ 0x00u, 0xFFu, 0x5Au, 0x01u }};
 
 static unsigned long asked;
 static unsigned long told_short;
@@ -299,8 +311,8 @@ def test_the_corpus_sweep_asked_something() -> None:
 
 	Measured when written: of the 46 schemas this repository builds, 40
 	were swept and 6 skipped for emitting no `required` that takes only
-	bytes, giving 31,899 calls over 49 prefix lengths and 3 fills, of
-	which 14,323 answered truncated. The rest are a complete message or
+	bytes, giving 42,924 calls over 49 prefix lengths and 4 fills, of
+	which 18,959 answered truncated. The rest are a complete message or
 	a refusal, which a 48-byte fill of 0x00 or 0xFF very often is.
 
 	The bounds are well under the figures, because a schema gaining a
@@ -313,5 +325,5 @@ def test_the_corpus_sweep_asked_something() -> None:
 	assert len(CORPUS_ASKED) >= 36, (
 		f"only {len(CORPUS_ASKED)} schemas were swept, of "
 		f"{len(SCHEMAS)} in the corpus")
-	assert calls >= 25000, f"only {calls} calls to `required`"
-	assert short >= 12000, f"only {short} truncated answers of {calls}"
+	assert calls >= 35000, f"only {calls} calls to `required`"
+	assert short >= 15000, f"only {short} truncated answers of {calls}"

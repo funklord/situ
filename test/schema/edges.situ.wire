@@ -168,6 +168,15 @@ struct externally_stuffed size=1..
 struct fixed_text size=3
   @0x0000   3         u8         body  big encoding=ascii
 
+struct floor_element size=4..33
+  @0x0000   1         u8         len  min=3 max=32
+  @0x0001   3..32     u8         body  big sized-by=len
+
+struct floor_run size=6..135174
+  @0x0000   4         u32        stamp  big
+  @0x0004   2         u16        count  big max=4096
+  @0x0006   0..135168 floor_element items  sized-by=count
+
 struct framed size=9..
   @0x0000   4         u8         magic  big
   @0x0004   until:0d0a u8         version  big cap=16

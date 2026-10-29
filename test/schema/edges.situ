@@ -2167,3 +2167,40 @@ struct nest_group [depth = 8] {
 	u8         open;
 	nest_item  items[]  until "]";
 }
+
+// A counted run whose ELEMENT'S LENGTH CARRIES A DECLARED MINIMUM, behind a
+// prefix wide enough that the count is not in the first byte. 26.725
+// measured that nothing in the tree had either half of that, and the two
+// halves are two different faults.
+//
+// `[min = 3]` makes `floor_element`'s SIZE_MIN four where its STRUCTURAL
+// minimum is one, and that gap is the whole of 26.724: the run's walk
+// credited every element it had not reached with SIZE_MIN, so a message
+// whose elements are longer than the declared minimum had its total FALL as
+// each element ahead completed and was re-counted at its own honest bound.
+// `required` may not enforce a `[min]` -- framing precedes validation, which
+// is 26.693 -- so the two numbers answered to different authorities. The
+// corpus has exactly one counted run of variable-size records, `ble`'s
+// `adv_report`, and its `data_length` is `[max = 31]` with no minimum, so
+// `test_required_over_the_corpus.py` passed on the commit before that fix.
+//
+// The wide prefix is 26.723, which `ble` did reach: `count` sits at offset
+// four, so framing has to refuse a buffer of fewer than six bytes before
+// reading it. Three backends read it anyway and C++, whose accessors are
+// not lax, read past the allocation.
+//
+// `u32` and `u16` rather than two bytes, so that the count is neither the
+// first member nor byte-aligned to it by accident -- a prefix of one byte
+// is the arrangement every shape in
+// `test_required_answers_every_prefix.py` has, and it is the arrangement in
+// which neither fault can appear.
+struct floor_element {
+	u8  len  [min = 3, max = 32];
+	u8  body[len];
+}
+
+struct floor_run {
+	u32              stamp;
+	u16              count  [max = 4096];
+	floor_element    items[count];
+}

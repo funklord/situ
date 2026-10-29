@@ -7504,6 +7504,11 @@ Moved to
 Moved to
 `doc/decision/26.726-have-plus-one-discarded-the-total-the-walk-had.md`.
 
+### 26.727 The counted run the tree did not have
+
+Moved to
+`doc/decision/26.727-the-counted-run-the-tree-did-not-have.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

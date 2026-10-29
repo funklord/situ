@@ -156,6 +156,18 @@ struct externally_stuffed size=1.. access=Sequential mutate=Shifting atomic=NonA
 struct fixed_text size=3 atomic=NonAtomic
   fixed_text.body                        offset=AbsoluteStatic(0x00) size=Fixed(3) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
 
+struct floor_element size=4..33 mutate=Shifting
+  floor_element.len                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  floor_element.body                     offset=AbsoluteStatic(0x01) size=Bounded(3, 32) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
+struct floor_run size=6..135174 access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic
+  floor_run.stamp                        offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  floor_run.count                        offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  floor_run.items                        offset=AbsoluteStatic(0x06) size=Bounded(0, 135168) align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  floor_run.items[]                      offset=FrameStatic(0x00) size=Bounded(4, 33) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  floor_run.items[].len                  offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  floor_run.items[].body                 offset=FrameStatic(0x01) size=Bounded(3, 32) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct framed size=9.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic effect=EffectOnRead
   framed.magic                           offset=AbsoluteStatic(0x00) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic
   framed.version                         offset=AbsoluteStatic(0x04) size=Bounded(2, 16) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
