@@ -1979,6 +1979,38 @@ def elements_are_countable(placement: Placement) -> bool:
 	return placement.varint is None
 
 
+def remaining_stride(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> int | None:
+	"""The width of one element of a `[remaining]` run, where it is fixed
+	and wider than a byte; None for every other member.
+
+	The frame decides how many bytes such a run holds, and the count is
+	those bytes divided by this. A remainder is bytes no element accounts
+	for, and every reader divided and dropped it: `u16 v[remaining]` over
+	three bytes was one element and a clean `validate` (26.736). `check`
+	holds the frame to a multiple of this, in all four backends and both
+	walkers.
+
+	None for a byte-wide element, which divides anything, and for an
+	element with no single size -- that run is walked, and `_fits` answers
+	for it instead.
+	"""
+	if placement.sized_by != "remaining" or placement.array_count is not None:
+		return None
+	element = structs.get(placement.type_name or "")
+	if element is not None:
+		if not element.layout.is_fixed_size:
+			return None
+		bits = element.layout.size_bits
+	elif placement.varint is not None or placement.element_bits is None:
+		return None
+	else:
+		bits = placement.element_bits
+	if bits % BITS_PER_BYTE or bits <= BITS_PER_BYTE:
+		return None
+	return bits // BITS_PER_BYTE
+
+
 def framing_floor(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct) -> int:
 	"""The fewest bytes a COMPLETE `struct` can occupy, constraints ignored.

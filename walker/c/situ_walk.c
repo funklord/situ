@@ -3969,6 +3969,64 @@ situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
 /* Defined with the evaluator, whose opcode macros it reads. */
 static int size_code_is_bytes(const situ_walk_image *image, uint32_t code_at);
 
+/* Whether a bare `x[remaining]` run is whole elements to the frame's end.
+ *
+ * Every reader divided or walked and dropped what was left: `u16
+ * v[remaining]` over three bytes was one element, and a string in mqtt's
+ * `filters[remaining]` claiming five bytes with two present was no element
+ * at all -- both validated clean, here and in all four backends (26.736). A
+ * record run walks to the end, which serves a fixed element as well as a
+ * variable one; a scalar run asks whether its width divides what is left.
+ * The walk's other answers are `counted_run_fits`' and for its reasons. */
+static situ_walk_err remaining_run_fits(const situ_walk_image *image,
+                                        const uint8_t *message, uint32_t len,
+                                        uint32_t shape, uint32_t index,
+                                        uint32_t depth,
+                                        const situ_walk_placement *held,
+                                        int *fits)
+{
+	uint32_t at = 0u;
+	situ_walk_err err = offset_bits_deep(image, message, len, shape, index,
+	                                     depth, &at);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	at /= 8u;
+
+	if (held->type_struct == SITU_WALK_NONE) {
+		const uint32_t bits = held->element_bits;
+
+		if (bits != SITU_WALK_NONE && bits % 8u == 0u && bits > 8u) {
+			*fits = (len > at ? len - at : 0u) % (bits / 8u) == 0u;
+		}
+		return SITU_WALK_OK;
+	}
+
+	while (at < len) {
+		uint32_t extent = 0u;
+
+		err = struct_extent(image, message + at, len - at,
+		                    held->type_struct, depth + 1u, &extent);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return SITU_WALK_OK;
+		}
+		if (err != SITU_WALK_OK) {
+			*fits = 0;
+			return SITU_WALK_OK;
+		}
+		if (extent == 0u) {
+			return SITU_WALK_OK;
+		}
+		if (extent > len - at) {
+			*fits = 0;
+			return SITU_WALK_OK;
+		}
+		at += extent;
+	}
+	return SITU_WALK_OK;
+}
+
 static situ_walk_err counted_run_fits(const situ_walk_image *image,
                                       const uint8_t *message, uint32_t len,
                                       uint32_t shape, uint32_t index,
@@ -4004,23 +4062,20 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 		return varint_run_bits(image, message, len, shape, index, depth,
 		                       from / 8u, &reach, fits);
 	}
+	/* A bare `x[remaining]` states BYTES rather than a count, so it is not
+	 * walked to a count below -- mqtt's `filters[remaining]` refused a
+	 * message every backend accepts when it was (26.676). It has its own
+	 * question: whether the frame is whole elements (26.736). */
+	if (varint_rules(image, index) == NULL
+	    && size_code_is_bytes(image, held.size_code)) {
+		return remaining_run_fits(image, message, len, shape, index, depth,
+		                          &held, fits);
+	}
 	if (held.size_code == SITU_WALK_NONE
 	    || held.type_struct == SITU_WALK_NONE
 	    || held.element_bits != SITU_WALK_NONE) {
 		return SITU_WALK_OK;
 	}
-	/* A bare `x[remaining]` states BYTES rather than a count of elements,
-	 * so walking `count` of them walks a byte figure as though it were a
-	 * population. The SPAN walk survives that because the frame bounds it
-	 * and an over-large count merely stops early; this loop is bounded by
-	 * the count, so the same number becomes a false refusal -- mqtt's
-	 * `mqtt_string filters[remaining]` refused a message every backend
-	 * accepts. Same figure, opposite consequence, because the two loops
-	 * have different bounds (26.676). */
-	if (size_code_is_bytes(image, held.size_code)) {
-		return SITU_WALK_OK;
-	}
-
 	err = offset_bits_deep(image, message, len, shape, index, depth, &from);
 	if (err != SITU_WALK_OK) {
 		return err;

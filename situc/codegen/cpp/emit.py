@@ -110,6 +110,7 @@ from situc.traverse import (
 	recursion_cycle,
 	region_decodes,
 	region_extent,
+	remaining_stride,
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -3585,13 +3586,10 @@ class Emitter:
 				or not is_counted_run(self.resolved.structs, placement)
 				or not has_computable_extent(self.resolved.structs, element)):
 			return []
-		# The same question the DEFINITION is gated on, and not a broader
-		# one. `is_counted_run` admits a `[remaining]` run -- mqtt's
-		# `subscription filters[remaining]` -- which has no declared count
-		# to fall short of, so the predicate is not emitted for it and the
-		# call named a function nothing defined (26.676).
-		if self._count_expression(struct, placement) is None:
-			return []
+		# `is_counted_run` admits a `[remaining]` run -- mqtt's
+		# `subscription filters[remaining]` -- and this asks no further: the
+		# definition walks one to the end of the frame (26.736). It used to
+		# decline it, as having no count to fall short of.
 		member = bare_name(local_name(struct, placement))
 		return [
 			f"\t\t/* {placement.path}: every element the count declares is",
@@ -3635,6 +3633,20 @@ class Emitter:
 					"\t\t\treturn ::situ::rt::err::bounds;",
 					"\t\t}",
 				]
+		# And what the frame leaves is whole elements, which the count's
+		# division cannot see: `u16 v[remaining]` over three bytes was one
+		# element and a byte nobody read (26.736).
+		stride = remaining_stride(self.resolved.structs, placement)
+		at     = self._offset_expression(struct, placement)
+		if stride is not None and at is not None:
+			run_fits = run_fits + [
+				f"\t\t/* {placement.path}: whole {stride}-byte elements"
+				" (26.736). */",
+				f"\t\tif (situ_remaining_u32(raw_.limit, {at}) % {stride}u"
+				" != 0u) {",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -4486,7 +4498,11 @@ class Emitter:
 				# cap or a degenerate element rather than a short frame, so
 				# the walk stopping there answers yes and leaves the message
 				# to the nesting guard.
-				*([] if count is None else [
+				#
+				# And for a `[remaining]` run, with no count: it walks to
+				# the end of the frame, and an element that runs past it is
+				# the answer no (26.736).
+				*([
 					"",
 					f"\t/* Whether every one of `{name}`'s declared elements"
 					" is inside",
@@ -4505,16 +4521,21 @@ class Emitter:
 					                   placement.type_name or "")
 					   else "() const noexcept"),
 					"\t{",
-					f"\t\tconst std::uint32_t total = {name}_count();",
-					f"\t\tstd::uint32_t at = {name}_offset();",
-					"\t\tstd::uint32_t n  = 0;",
-					"",
-					"\t\twhile (n < total) {",
-					"\t\t\tsitu_view_t raw;",
-					"",
-					"\t\t\tif (at >= raw_.limit) {",
-					"\t\t\t\treturn false;",
-					"\t\t\t}",
+					*([f"\t\tstd::uint32_t at = {name}_offset();",
+					   "",
+					   "\t\twhile (at < raw_.limit) {",
+					   "\t\t\tsitu_view_t raw;",
+					   ""] if count is None else
+					  [f"\t\tconst std::uint32_t total = {name}_count();",
+					   f"\t\tstd::uint32_t at = {name}_offset();",
+					   "\t\tstd::uint32_t n  = 0;",
+					   "",
+					   "\t\twhile (n < total) {",
+					   "\t\t\tsitu_view_t raw;",
+					   "",
+					   "\t\t\tif (at >= raw_.limit) {",
+					   "\t\t\t\treturn false;",
+					   "\t\t\t}"]),
 					"\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,",
 					"\t\t\t\t\tsitu_remaining_u32(raw_.limit, at), &raw)"
 					" != SITU_OK) {",
@@ -4534,7 +4555,7 @@ class Emitter:
 					"\t\t\t\treturn false;",
 					"\t\t\t}",
 					"\t\t\tat += size;",
-					"\t\t\tn  += 1;",
+					*([] if count is None else ["\t\t\tn  += 1;"]),
 					"\t\t}",
 					"\t\treturn true;",
 					"\t}",

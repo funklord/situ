@@ -106,6 +106,7 @@ from situc.traverse import (
 	recursion_cycle,
 	region_decodes,
 	region_extent,
+	remaining_stride,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -6606,13 +6607,10 @@ class Emitter:
 				or not is_counted_run(self.resolved.structs, placement)
 				or not has_computable_extent(self.resolved.structs, element)):
 			return []
-		# The same question the DEFINITION is gated on, and not a broader
-		# one. `is_counted_run` admits a `[remaining]` run -- mqtt's
-		# `subscription filters[remaining]` -- which has no declared count
-		# to fall short of, so the predicate is not emitted for it and the
-		# call named a function nothing defined (26.676).
-		if self._count_expression(struct, placement) is None:
-			return []
+		# `is_counted_run` admits a `[remaining]` run -- mqtt's
+		# `subscription filters[remaining]` -- and this asks no further: the
+		# definition walks one to the end of the frame (26.736). It used to
+		# decline it, as having no count to fall short of.
 		member = _ident(local_name(struct, placement) + "_fits")
 		return [
 			f"\t\t// {placement.path}: every element the count declares is",
@@ -6656,6 +6654,20 @@ class Emitter:
 					"\t\t\treturn Err(Error::Bounds);",
 					"\t\t}",
 				]
+		# And what the frame leaves is whole elements, which the count's
+		# division cannot see: `u16 v[remaining]` over three bytes was one
+		# element and a byte nobody read (26.736).
+		stride = remaining_stride(self.resolved.structs, placement)
+		at     = self._offset_expression(struct, placement)
+		if stride is not None and at is not None:
+			run_fits = run_fits + [
+				f"\t\t// {placement.path}: whole {stride}-byte elements"
+				" (26.736).",
+				f"\t\tif situ_rt::remaining(self.bytes.len(), {at})"
+				f" % {stride} != 0 {{",
+				"\t\t\treturn Err(Error::Bounds);",
+				"\t\t}",
+			]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
@@ -7598,7 +7610,11 @@ class Emitter:
 				# cap or a degenerate element rather than a short frame, so
 				# stopping there answers yes and leaves the message to the
 				# nesting guard.
-				*([] if not bound else [
+				#
+				# And for a `[remaining]` run, with no count: it walks to
+				# the end of the frame, and an element that runs past it is
+				# the answer no (26.736).
+				*([
 					"",
 					f"\t/// Whether every one of `{base}`'s declared elements"
 					" is inside",
@@ -7616,14 +7632,17 @@ class Emitter:
 					   if is_recursive(self.resolved.structs,
 					                   placement.type_name or "")
 					   else "(&self) -> bool {"),
-					f"\t\tlet total = self.{_ident(base + '_count')}();",
-					f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
-					"\t\tlet mut n  = 0usize;",
-					"",
-					"\t\twhile n < total {",
-					"\t\t\tif at >= self.bytes.len() {",
-					"\t\t\t\treturn false;",
-					"\t\t\t}",
+					*([f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
+					   "",
+					   "\t\twhile at < self.bytes.len() {"] if not bound else
+					  [f"\t\tlet total = self.{_ident(base + '_count')}();",
+					   f"\t\tlet mut at = self.{_ident(base + '_offset')}();",
+					   "\t\tlet mut n  = 0usize;",
+					   "",
+					   "\t\twhile n < total {",
+					   "\t\t\tif at >= self.bytes.len() {",
+					   "\t\t\t\treturn false;",
+					   "\t\t\t}"]),
 					f"\t\t\tlet element = {inner} {{"
 					" bytes: &self.bytes[at..] };",
 					("\t\t\tlet size    = element.extent();"
@@ -7639,7 +7658,7 @@ class Emitter:
 					"\t\t\t\treturn false;",
 					"\t\t\t}",
 					"\t\t\tat += size;",
-					"\t\t\tn  += 1;",
+					*([] if not bound else ["\t\t\tn  += 1;"]),
 					"\t\t}",
 					"\t\ttrue",
 					"\t}",

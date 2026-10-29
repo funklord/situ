@@ -105,6 +105,7 @@ from situc.traverse import (
 	readable_names,
 	recursion_cycle,
 	region_extent,
+	remaining_stride,
 	walk_order,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -6048,12 +6049,14 @@ class Emitter:
 		element = self.resolved.structs.get(nested or "")
 		if element is None or self._element_extent_call(element) is None:
 			return []
-		# A `[remaining]` run has no declared count to fall short of, and
-		# the CALL site asks the same question -- so without this the
-		# definition was emitted for one and never called, which is the
-		# fault the gate beside this change exists to catch (26.676).
-		if placement.sized_by == "remaining":
-			return []
+		# A `[remaining]` run has no declared count to fall short of, but
+		# its last element can still run past the frame: mqtt's
+		# `filters[remaining]` with a string claiming five bytes and
+		# holding two was valid with `count = 0`, the count's walk
+		# dropping what it could not place (26.736). So it walks to the
+		# end of the frame instead of to a count, and the call site asks
+		# the same predicate.
+		to_end = placement.sized_by == "remaining"
 
 		deep = self._recursive(nested or "")
 		name = ident(self.prefix, struct.name, local, "fits")
@@ -6077,17 +6080,22 @@ class Emitter:
 			+ ("_at(situ_view_t view, uint32_t depth)" if deep
 			   else "(situ_view_t view)"),
 			"{",
-			f"	const uint32_t total = {count};",
-			f"	uint32_t at = {base};",
-			"	uint32_t n  = 0u;",
-			"",
-			"	while (n < total) {",
+			*([f"	uint32_t at = {base};",
+			   "",
+			   "	while (at < view.limit) {"] if to_end else
+			  [f"	const uint32_t total = {count};",
+			   f"	uint32_t at = {base};",
+			   "	uint32_t n  = 0u;",
+			   "",
+			   "	while (n < total) {"]),
 			"		situ_view_t element;",
 			"		uint32_t    size;",
 			"",
-			"		if (at >= view.limit) {",
-			"			return 0;",
-			"		}",
+			*([] if to_end else [
+				"		if (at >= view.limit) {",
+				"			return 0;",
+				"		}",
+			]),
 			"		if (situ_view_sub(view, at,"
 			" situ_remaining_u32(view.limit, at), &element)",
 			"				!= SITU_OK) {",
@@ -6101,7 +6109,7 @@ class Emitter:
 			"			return 0;",
 			"		}",
 			"		at = at + size;",
-			"		n  = n + 1u;",
+			*([] if to_end else ["		n  = n + 1u;"]),
 			"	}",
 			"	return 1;",
 			"}",
@@ -7873,21 +7881,14 @@ class Emitter:
 				or not has_computable_extent(self.resolved.structs, element)
 				or self._element_extent_call(element) is None):
 			return []
-		# The same question the DEFINITION is gated on. `_is_counted_run`
-		# admits a `[remaining]` run, which has no declared count to fall
-		# short of (26.676).
-		#
-		# Asked as `sized_by == "remaining"`, which is `dissector.py`'s
-		# idiom, and NOT as `_count_expression(...) is None`: the other
-		# three emitters answer None there and this one returns a string
-		# always, so the guard was dead here and the predicate was emitted
-		# and called for mqtt's two `[remaining]` runs where C++ emitted
-		# neither. The four then disagreed about check numbering, which is
-		# what `test_the_backends_name_the_same_members_in_the_same_order`
-		# reported -- a divergence found by the backends counting their own
-		# checks rather than by anything reading this code.
-		if placement.sized_by == "remaining":
-			return []
+		# `_is_counted_run` admits a `[remaining]` run, and this asks no
+		# further: the definition walks one to the end of the frame
+		# (26.736). It used to decline it as having no count to fall short
+		# of, and that guard was dead here for a while -- C's
+		# `_count_expression` answers a string where the other three
+		# answer None -- so C alone checked mqtt's two runs and the four
+		# disagreed about check numbering. Both halves dropping the guard
+		# in all four at once is what keeps the numbering agreed.
 
 		name = ident(self.prefix, struct.name,
 		             local_name(struct, placement), "fits")
@@ -7953,6 +7954,8 @@ class Emitter:
 				"\t\treturn SITU_ERR_BOUNDS;",
 				"\t}",
 			]
+		run_fits = run_fits + self._remaining_divides(
+			placement, self._base_expression(struct, placement))
 
 		# The other half of the same sentence, one step further on. A member
 		# *placed* after a variable-length region has an offset that is a sum
@@ -8058,6 +8061,28 @@ class Emitter:
 			]
 
 		return run_fits + lines
+
+	def _remaining_divides(self, placement: Placement,
+			base: str) -> list[str]:
+		"""`check`'s test that a `[remaining]` run is whole elements.
+
+		The count divides what the frame leaves and drops the remainder, so
+		`u16 v[remaining]` over three bytes was one element with a byte
+		nobody read, and `check` passed it (26.736).
+		"""
+		stride = remaining_stride(self.resolved.structs, placement)
+		if stride is None:
+			return []
+		return [
+			f"\t/* {placement.path}: and what the frame leaves is whole"
+			f" {stride}-byte",
+			"\t * elements, which the count's division cannot see"
+			" (26.736). */",
+			f"\tif (situ_remaining_u32(view.limit, {base}) % {stride}u != 0u)"
+			" {",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
 
 	def _varint_run_fits(self, struct: ResolvedStruct, placement: Placement,
 			base: str) -> list[str]:

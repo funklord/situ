@@ -1881,16 +1881,16 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 	if index in view.image.varints and is_run(view.image, index) \
 			and not _sizes_in_bytes(view.image, placement.size_code):
 		return _varint_run_fits(view, index)
-	if (placement.size_code == NONE or placement.type_struct == NONE
-			or placement.element_bits != NONE):
-		return True
 	# A bare `x[remaining]` states BYTES rather than a count of elements, so
 	# walking `count` of them is walking a byte figure as though it were a
 	# population -- mqtt's `mqtt_string filters[remaining]` then refused a
-	# message every backend accepts. The backends ask the same question as
-	# `_count_expression is None`; this is the walker's spelling of it
-	# (26.676).
-	if _sizes_in_bytes(view.image, placement.size_code):
+	# message every backend accepts (26.676). It has its own question:
+	# whether the frame is whole elements (26.736).
+	if index not in view.image.varints \
+			and _sizes_in_bytes(view.image, placement.size_code):
+		return _remaining_run_fits(view, index, depth)
+	if (placement.size_code == NONE or placement.type_struct == NONE
+			or placement.element_bits != NONE):
 		return True
 
 	count = _evaluate(view, placement.size_code,
@@ -1924,6 +1924,47 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 			# True here left the walker answering OK for `oob_run` where
 			# every backend refused -- `walk.py`'s own loop treats the same
 			# exception as a reason to stop walking.
+			return False
+		if size == 0:
+			return True
+		if size > view.limit - at:
+			return False
+		at += size
+	return True
+
+
+def _remaining_run_fits(view: View, index: int, depth: int) -> bool:
+	"""Whether a bare `x[remaining]` run is whole elements to the frame's end.
+
+	Every reader divided or walked and dropped what was left: `u16
+	v[remaining]` over three bytes was one element, and a string in mqtt's
+	`filters[remaining]` claiming five bytes with two present was no
+	element at all -- both with `validate` clean, here and in all four
+	backends (26.736). A record run walks to the end, which serves a fixed
+	element as well as a variable one: a fixed element that overhangs the
+	frame is refused like any other. A scalar run asks whether its width
+	divides what is left.
+
+	The walk's other answers are `counted_run_fits`' and for its reasons:
+	a zero extent or an element nothing can measure says nothing about the
+	frame.
+	"""
+	placement = view.image.placements[index]
+	at        = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	if placement.type_struct == NONE:
+		bits = placement.element_bits
+		if bits == NONE or bits % BITS_PER_BYTE or bits <= BITS_PER_BYTE:
+			return True
+		return max(view.limit - at, 0) % (bits // BITS_PER_BYTE) == 0
+
+	while at < view.limit:
+		inner = View(view.image, view.buffer, placement.type_struct,
+		             at, view.limit)
+		try:
+			size = struct_extent(inner, depth + 1)
+		except (TooDeep, Unplaceable):
+			return True
+		except Refused:
 			return False
 		if size == 0:
 			return True

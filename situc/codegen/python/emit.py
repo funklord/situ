@@ -106,6 +106,7 @@ from situc.traverse import (
 	readable_names,
 	recursion_cycle,
 	region_extent,
+	remaining_stride,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -4763,7 +4764,11 @@ class Emitter:
 			# extent is a `[depth]` cap or a degenerate element rather than
 			# a short frame, so stopping there answers True and leaves the
 			# message to the nesting guard.
-			*([] if count is None else [
+			#
+			# And for a `[remaining]` run, with no count: it walks to the
+			# end of the frame, and an element that runs past it is the
+			# answer False (26.736).
+			*([
 				"",
 				f"	def {name}_fits(self"
 				+ (", depth: int = 0) -> bool:" if is_recursive(
@@ -4780,13 +4785,16 @@ class Emitter:
 				"		stopping there answers True and leaves it to the"
 				' nesting guard."""',
 				"		self._check()",
-				f"		total = {count}",
-				f"		at    = self.{name}_offset",
-				"		n     = 0",
-				"",
-				"		while n < total:",
-				"			if at >= self._len:",
-				"				return False",
+				*([f"		at    = self.{name}_offset",
+				   "",
+				   "		while at < self._len:"] if count is None else
+				  [f"		total = {count}",
+				   f"		at    = self.{name}_offset",
+				   "		n     = 0",
+				   "",
+				   "		while n < total:",
+				   "			if at >= self._len:",
+				   "				return False"]),
 				f"			_element = {inner}(self._msg, self._at + at,"
 				" self._len - at)",
 				("			size    = _element._extent"
@@ -4798,7 +4806,7 @@ class Emitter:
 				"			if size > self._len - at:",
 				"				return False",
 				"			at += size",
-				"			n  += 1",
+				*([] if count is None else ["			n  += 1"]),
 				"",
 				"		return True",
 			]),
@@ -6322,13 +6330,10 @@ class Emitter:
 				or not is_counted_run(self.resolved.structs, placement)
 				or not has_computable_extent(self.resolved.structs, element)):
 			return []
-		# The same question the DEFINITION is gated on, and not a broader
-		# one. `is_counted_run` admits a `[remaining]` run -- mqtt's
-		# `subscription filters[remaining]` -- which has no declared count
-		# to fall short of, so the predicate is not emitted for it and the
-		# call named a function nothing defined (26.676).
-		if self._count_expression(struct, placement) is None:
-			return []
+		# `is_counted_run` admits a `[remaining]` run -- mqtt's
+		# `subscription filters[remaining]` -- and this asks no further: the
+		# definition walks one to the end of the frame (26.736). It used to
+		# decline it, as having no count to fall short of.
 		member = local_name(struct, placement)
 		return [
 			f"\t\t# {placement.path}: every element the count declares is",
@@ -6371,6 +6376,19 @@ class Emitter:
 					f'\t\t\traise BoundsError("{placement.path}: longer'
 					f' than its declared cap of {placement.remaining_cap}")',
 				]
+		# And what the frame leaves is whole elements, which the count's
+		# division cannot see: `u16 v[remaining]` over three bytes was one
+		# element and a byte nobody read (26.736).
+		stride = remaining_stride(self.resolved.structs, placement)
+		at     = self._offset_expression(struct, placement)
+		if stride is not None and at is not None:
+			run_fits = run_fits + [
+				f"\t\t# {placement.path}: whole {stride}-byte elements"
+				" (26.736).",
+				f"\t\tif max(self._len - ({at}), 0) % {stride}:",
+				f'\t\t\traise BoundsError("{placement.path}: not a whole'
+				' number of elements")',
+			]
 
 		# A LOCATED member's bytes are not in this frame's sequence at all:
 		# `at off` puts them where the MESSAGE says, so whether the view
