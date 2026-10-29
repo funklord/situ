@@ -2760,12 +2760,17 @@ static situ_walk_err eval_tagged(const situ_walk_image *image, uint32_t at,
  * and needs no opcode of its own. */
 #define TLV_COMPUTED        4u
 
-/* The tag a `tlv` selector is evaluated over, carried to `ctx_load`'s
- * neighbour. */
-situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
-                                  const uint8_t *message, uint32_t len,
-                                  uint32_t shape, uint32_t index,
-                                  uint32_t *out)
+/* The walk `situ_walk_tlv_count` and `validate` both read: how many items,
+ * and in `*stop` why it ended short of the region's end -- SITU_WALK_BOUNDS
+ * for an item the frame cuts short, SITU_WALK_CONSTRAINT for one no rule
+ * admits, SITU_WALK_OK where it reached the end. The count stops at the
+ * first and validate refuses on it; nothing asked the second, so
+ * `example/protobuf` validated a cut varint and a wire type its own
+ * schema declares an error, each as zero items (26.737). */
+static situ_walk_err tlv_walk(const situ_walk_image *image,
+                              const uint8_t *message, uint32_t len,
+                              uint32_t shape, uint32_t index,
+                              uint32_t *out, situ_walk_err *stop)
 {
 	const uint8_t *row = table_row(image->tlvs, image->tlv_count_,
 	                               image->tlv_stride, index);
@@ -2802,12 +2807,14 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 	uint32_t at    = from / 8u;
 	uint32_t count = 0u;
 
+	*stop = SITU_WALK_OK;
 	while (at < len) {
 		uint32_t used = 0u;
 		uint64_t tag  = 0u;
 		if (decode_number(message, len, at, tag_bytes, tag_terminal,
 		                  tag_big, tag_fixed, &used, &tag) != SITU_WALK_OK
 		                || used == 0u) {
+			*stop = SITU_WALK_BOUNDS;
 			break;
 		}
 		at += used;
@@ -2840,6 +2847,7 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			found = fallback;
 		}
 		if (found == NULL) {
+			*stop = SITU_WALK_CONSTRAINT;
 			break;
 		}
 
@@ -2861,6 +2869,7 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			                  tag_big, tag_fixed, &size, &held)
 			                != SITU_WALK_OK
 			                || size == 0u) {
+				*stop = SITU_WALK_BOUNDS;
 				break;
 			}
 		} else if (rule_kind == TLV_COMPUTED) {
@@ -2870,10 +2879,12 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			 * ends. */
 			int64_t computed = 0;
 			if (image->tlv_rule_stride < TLV_RULE_COMPUTED_READS) {
+				*stop = SITU_WALK_CONSTRAINT;
 				break;
 			}
 			const uint32_t size_code = u32_at(found + 24);
 			if (size_code == SITU_WALK_NONE) {
+				*stop = SITU_WALK_CONSTRAINT;
 				break;
 			}
 			err = eval_tagged(image, size_code, ctx_load, &ctx,
@@ -2897,10 +2908,12 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			                  len_big, len_fixed, &used, &length)
 			                != SITU_WALK_OK
 			                || used == 0u) {
+				*stop = SITU_WALK_BOUNDS;
 				break;
 			}
 			at += used;
 			if (length > (uint64_t)(len - at)) {
+				*stop = SITU_WALK_BOUNDS;
 				break;
 			}
 			size = (uint32_t)length;
@@ -2908,10 +2921,12 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 			/* `default: error`, and a kind this build does not know. Both
 			 * mean the same thing here -- where the value ends is not
 			 * knowable, so the count stops. */
+			*stop = SITU_WALK_CONSTRAINT;
 			break;
 		}
 
 		if (size > len - at) {
+			*stop = SITU_WALK_BOUNDS;
 			break;
 		}
 		at    += size;
@@ -2921,6 +2936,18 @@ situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
 	*out = count;
 	return SITU_WALK_OK;
 }
+
+/* How many items a `tlv` region holds: the walk's count. */
+situ_walk_err situ_walk_tlv_count(const situ_walk_image *image,
+                                  const uint8_t *message, uint32_t len,
+                                  uint32_t shape, uint32_t index,
+                                  uint32_t *out)
+{
+	situ_walk_err stop = SITU_WALK_OK;
+
+	return tlv_walk(image, message, len, shape, index, out, &stop);
+}
+
 
 /* How many entries an `indexed` region's offset table holds (9.3).
  *
@@ -4596,6 +4623,27 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (!fits) {
 				record(why, index, CHECK_FITS_FRAME);
 				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+		}
+
+		/* And a `tlv` region's items fill it (26.737). Every placement asks
+		 * and all but a region's answer UNSUPPORTED, there being no grammar
+		 * row for them. The kinds are the nearest the image has: the frame
+		 * for a cut item, the arm for one no rule admits. */
+		{
+			uint32_t      items = 0u;
+			situ_walk_err stop  = SITU_WALK_OK;
+
+			err = tlv_walk(image, message, len, shape, index, &items,
+			               &stop);
+			if (err != SITU_WALK_OK && err != SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err == SITU_WALK_OK && stop != SITU_WALK_OK) {
+				record(why, index, stop == SITU_WALK_BOUNDS
+				                   ? CHECK_FITS_FRAME : CHECK_ARM_SELECTED);
+				*verdict = stop;
 				return SITU_WALK_OK;
 			}
 		}

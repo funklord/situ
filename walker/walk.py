@@ -1728,7 +1728,26 @@ TLV_COMPUTED = 4
 
 
 def tlv_count(view: View, index: int) -> int:
-	"""How many items a `tlv` region holds (section 9.5).
+	"""How many items a `tlv` region holds (section 9.5): `_tlv_walk`'s
+	count."""
+	return _tlv_walk(view, index)[0]
+
+
+def tlv_whole(view: View, index: int) -> str | None:
+	"""Why a `tlv` region's items do not fill it, or None where they do.
+
+	"bounds" for an item the frame cuts short and "constraint" for one no
+	rule admits -- the errors the generated `_whole` returns, which is what
+	`validate` asks in all four backends. Nothing asked it before, so
+	`example/protobuf` passed a cut varint and a wire type its own schema
+	declares an error, each as zero items (26.737).
+	"""
+	return _tlv_walk(view, index)[1]
+
+
+def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
+	"""The walk both of those read: how many items, and why it stopped
+	short of the region's end, or None where it did not.
 
 	A walk, because nothing in the region records a count: read an item's
 	tag, decode the selector out of it, take the rule that selector names,
@@ -1758,9 +1777,9 @@ def tlv_count(view: View, index: int) -> int:
 			used, tag = decode_number(view, at, tag_bytes, tag_terminal,
 			                          tag_big, tag_fixed)
 		except Refused:
-			break
+			return count, "bounds"
 		if used == 0:
-			break
+			return count, "bounds"
 		at += used
 
 		which = vm.run(
@@ -1776,7 +1795,7 @@ def tlv_count(view: View, index: int) -> int:
 		              if not one[2] and one[0] == which),
 		             next((one for one in rules if one[2]), None))
 		if found is None:
-			break
+			return count, "constraint"
 		_label, kind, _default, fixed, length_rule, size_code = found
 
 		if kind == TLV_FIXED:
@@ -1786,7 +1805,7 @@ def tlv_count(view: View, index: int) -> int:
 			# program: the parts are inlined, so `tag` is the only input and
 			# the generated code's arithmetic is this arithmetic.
 			if size_code == NONE:
-				break
+				return count, "constraint"
 			size = vm.run(
 				view.image.code, size_code,
 				load_field = lambda i: _value_of(view, i),
@@ -1811,19 +1830,19 @@ def tlv_count(view: View, index: int) -> int:
 				                            tag_terminal, tag_big,
 				                            tag_fixed)
 			except Refused:
-				break
+				return count, "bounds"
 			if size == 0:
-				break
+				return count, "bounds"
 		elif kind == TLV_PREFIXED:
 			try:
 				used, length = decode_number(view, at, *length_rule)
 			except Refused:
-				break
+				return count, "bounds"
 			if used == 0:
-				break
+				return count, "bounds"
 			at += used
 			if length > view.limit - at:
-				break
+				return count, "bounds"
 			size = length
 		else:
 			# `default: error` (TLV_ERROR), and a kind this build does not
@@ -1837,7 +1856,7 @@ def tlv_count(view: View, index: int) -> int:
 			# that branch was dead: the `else` caught the same case, so
 			# sabotaging either left the walk answering correctly and the
 			# test could not tell them apart.
-			break
+			return count, "constraint"
 
 		# The second of two bounds on a `prefixed` value, and C has both in
 		# the same order. For that kind they catch the same message: the
@@ -1847,10 +1866,10 @@ def tlv_count(view: View, index: int) -> int:
 		# the first alone does not show, and saying so here is cheaper than
 		# somebody re-deriving it.
 		if size > view.limit - at:
-			break
+			return count, "bounds"
 		at    += size
 		count += 1
-	return count
+	return count, None
 
 
 def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:

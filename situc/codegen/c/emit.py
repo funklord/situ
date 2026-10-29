@@ -2637,6 +2637,7 @@ class Emitter:
 		first = ident(self.prefix, struct.name, local, "first")
 		nxt   = ident(self.prefix, struct.name, local, "next")
 		count = ident(self.prefix, struct.name, local, "count")
+		whole = ident(self.prefix, struct.name, local, "whole")
 		base  = self._base_expression(struct, placement, gated=False)
 
 		# A carried value starts at zero and is handed on by `next`. The
@@ -2687,6 +2688,30 @@ class Emitter:
 			f"\t\terr = {nxt}(&item);",
 			"\t}",
 			"\treturn n;",
+			"}",
+			"",
+			# What `check` asks, and the count cannot say: the walk above
+			# stops at the first item it cannot read and counts what came
+			# before, so a truncated item and a `default: error` arm both
+			# read as the region ending there. Nothing validated a region
+			# at all, so `example/protobuf` passed a cut varint, a value
+			# claiming five bytes and holding two, and a wire type its own
+			# schema declares an error -- each as zero items (26.737).
+			f"/* Whether the items fill the region exactly: SITU_OK where the",
+			" * walk ends at the region's end, and otherwise the error that",
+			" * stopped it -- SITU_ERR_BOUNDS for an item the frame cuts short,",
+			" * SITU_ERR_CONSTRAINT for one the schema says is an error. */",
+			f"static inline situ_err_t {whole}(situ_view_t view)",
+			"{",
+			f"\t{item} item;",
+			f"\tuint32_t end = {base};",
+			f"\tsitu_err_t err = {first}(view, &item);",
+			"",
+			"\twhile (err == SITU_OK) {",
+			"\t\tend = item.next;",
+			f"\t\terr = {nxt}(&item);",
+			"\t}",
+			"\treturn end >= view.limit ? SITU_OK : err;",
 			"}",
 			"",
 		]
@@ -10624,7 +10649,37 @@ class Emitter:
 		          else self._fits_check(struct, entry.placement)),
 		        *self._arm_fits_check(struct, entry.placement),
 		        *self._arm_validation(struct, entry.placement),
+		        *self._tlv_check(struct, entry.placement),
 		        *self._member_checks(struct, entry)]
+
+	def _tlv_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A `tlv` region's items fill it exactly (26.737).
+
+		Through `_whole`, which the cursor block defines beside `first` and
+		`next` and which returns the error the walk stopped on -- so a cut
+		item is BOUNDS and a `default: error` arm CONSTRAINT, as each
+		accessor already reports them.
+		"""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+		grammar = placement.tlv_grammar
+		if placement.kind != "tlv" or grammar is None or not grammar.walkable:
+			return []
+		whole = ident(self.prefix, struct.name,
+		              c_name(self._local(struct, placement)), "whole")
+		return [
+			f"\t/* {placement.path}: every item is whole and admitted, to the"
+			" end",
+			"\t * of the region (26.737). */",
+			"\t{",
+			f"\t\tconst situ_err_t err = {whole}(view);",
+			"",
+			"\t\tif (err != SITU_OK) {",
+			"\t\t\treturn err;",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _arm_validation(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

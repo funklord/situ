@@ -5277,6 +5277,26 @@ class Emitter:
 			"\t\t}",
 			"\t\treturn n;",
 			"\t}",
+			"",
+			# What `check` asks and the count cannot say: the walk stops at
+			# the first item it cannot read, so a cut item and a `default:
+			# error` arm both read as the region ending there (26.737).
+			"\t/* Whether the items fill the region exactly: `ok` where the",
+			"\t * walk ends at the region's end, and otherwise the error that",
+			"\t * stopped it -- `bounds` for an item the frame cuts short,",
+			"\t * `constraint` for one the schema says is an error. */",
+			f"\t[[nodiscard]] ::situ::rt::err {name}_whole() const noexcept",
+			"\t{",
+			f"\t\t{item} item{{}};",
+			f"\t\tstd::uint32_t end = {start};",
+			f"\t\t::situ::rt::err e = {name}_first(item);",
+			"",
+			"\t\twhile (e == ::situ::rt::err::ok) {",
+			"\t\t\tend = item.next;",
+			f"\t\t\te   = {name}_next(item);",
+			"\t\t}",
+			"\t\treturn end >= raw_.limit ? ::situ::rt::err::ok : e;",
+			"\t}",
 		]
 
 	def _tlv_by_name(self, grammar: TlvGrammar, item: str,
@@ -9164,7 +9184,33 @@ class Emitter:
 		"""
 		return [*self._fits_check(struct, entry.placement),
 		        *self._arm_checks(struct, entry.placement),
+		        *self._tlv_check(struct, entry.placement),
 		        *self._member_check(struct, entry)]
+
+	def _tlv_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A `tlv` region's items fill it exactly (26.737), through the
+		`_whole` the cursor block defines beside the walk."""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+		grammar = placement.tlv_grammar
+		if placement.kind != "tlv" or grammar is None or not grammar.walkable:
+			return []
+		if self._offset_expression(struct, placement) is None:
+			return []
+		name = bare_name(local_name(struct, placement))
+		return [
+			f"\t\t/* {placement.path}: every item is whole and admitted, to"
+			" the end",
+			"\t\t * of the region (26.737). */",
+			"\t\t{",
+			f"\t\t\tconst ::situ::rt::err e = {name}_whole();",
+			"",
+			"\t\t\tif (e != ::situ::rt::err::ok) {",
+			"\t\t\t\treturn e;",
+			"\t\t\t}",
+			"\t\t}",
+		]
 
 	def _arm_checks(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

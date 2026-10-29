@@ -1287,6 +1287,29 @@ class Emitter:
 			"\t\t}",
 			"\t\tn",
 			"\t}",
+			"",
+			# What `check` asks and the count cannot say: the walk stops at
+			# the first item it cannot read, so a cut item and a `default:
+			# error` arm both read as the region ending there (26.737).
+			"\t/// Whether the items fill the region exactly: `Ok` where the",
+			"\t/// walk ends at the region's end, and otherwise the error that",
+			"\t/// stopped it -- `Bounds` for an item the frame cuts short,",
+			"\t/// `Constraint` for one the schema says is an error.",
+			f"\tpub fn {name}_whole(&self) -> Result<()> {{",
+			f"\t\tlet mut end  = {start};",
+			f"\t\tlet mut held = self.{name}_first();",
+			"",
+			"\t\tloop {",
+			"\t\t\tmatch held {",
+			"\t\t\t\tOk(item) => {",
+			"\t\t\t\t\tend  = item.next;",
+			f"\t\t\t\t\theld = self.{name}_next(&item);",
+			"\t\t\t\t}",
+			"\t\t\t\tErr(_) if end >= self.bytes.len() => return Ok(()),",
+			"\t\t\t\tErr(e) => return Err(e),",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
 		]
 
 	def _tlv_by_name(self, grammar: TlvGrammar, item: str,
@@ -6594,6 +6617,30 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _tlv_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A `tlv` region's items fill it exactly (26.737), through the
+		`_whole` the cursor block defines beside the walk."""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+		grammar = placement.tlv_grammar
+		if placement.kind != "tlv" or grammar is None or not grammar.walkable:
+			return []
+		if self._offset_expression(struct, placement) is None:
+			return []
+		name = c_name(local_name(struct, placement))
+		return [
+			f"\t\t// {placement.path}: every item is whole and admitted, to"
+			" the end",
+			"\t\t// of the region (26.737).",
+			# Not `?;`: the id is set on the line before a refusal, and a
+			# `?` line is one whether it refuses or not, so a passing check
+			# would leave `*which` naming this member rather than NO_CHECK.
+			f"\t\tif let Err(e) = self.{name}_whole() {{",
+			"\t\t\treturn Err(e);",
+			"\t\t}",
+		]
+
 	def _run_fits_call(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""`check`'s call to a counted run's `_fits`, or nothing.
@@ -8986,6 +9033,7 @@ class Emitter:
 		# `continue` here left `[must_eq]` unchecked for every
 		# dynamically placed field.
 		out.extend(self._fits_check(struct, placement))
+		out.extend(self._tlv_check(struct, placement))
 
 		# 0052: a byte run pinned to a literal is one comparison, above
 		# the dispatch because `classify_check` calls it an array.

@@ -91,6 +91,10 @@ SUFFIXES = frozenset({
 	# and a framing function may never read a shrinking quantity (26.683).
 	"span_min",
 	"terminated", "terminated_from", "valid", "value",
+	# A `tlv` region's verdict: whether its items fill it exactly, which
+	# `check` asks and the count cannot say (26.737). A member named
+	# x_whole beside a region named x would collide with it.
+	"whole",
 	# The exported value domain (26.125): a member named x makes x_value_min
 	# and x_value_max class constants, so a schema field of either name would
 	# collide with them the same way x_len collides with a getter.

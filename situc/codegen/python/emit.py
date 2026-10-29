@@ -1902,6 +1902,29 @@ class Emitter:
 			f'\t\t"""How many items are present. A walk: nothing in the region',
 			'\t\trecords a count."""',
 			f"\t\treturn sum(1 for _ in self.{name}())",
+			"",
+			# What `validate` asks and the count cannot say: the generator
+			# stops at the first item it cannot read, so a cut item and a
+			# `default: error` arm both read as the region ending there
+			# (26.737). A property because `validate` relabels an access
+			# that raises, `_ = self.x`, with the member's id.
+			"	@property",
+			f"	def {name}_whole(self) -> None:",
+			f'		"""Raise unless the items fill the region exactly: the'
+			' error that',
+			"		stopped the walk -- BoundsError for an item the frame cuts"
+			" short,",
+			'		ConstraintError for one the schema says is an error."""',
+			f"		end = {start}",
+			"		try:",
+			f"			item = self.{name}_first()",
+			"			while True:",
+			"				end  = item.next",
+			f"				item = self.{name}_next(item)",
+			"		except (BoundsError, ConstraintError):",
+			"			if end >= len(self._span):",
+			"				return",
+			"			raise",
 		]
 
 	def _tlv_by_name(self, grammar: TlvGrammar, name: str,
@@ -7482,7 +7505,27 @@ class Emitter:
 		"""
 		return [*self._fits_check(struct, entry.placement),
 		        *self._arm_checks(struct, entry.placement),
+		        *self._tlv_check(struct, entry.placement),
 		        *self._member_check(struct, entry)]
+
+	def _tlv_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A `tlv` region's items fill it exactly (26.737), through the
+		`_whole` property the cursor block defines beside the walk."""
+		if "." in placement.path[len(struct.name) + 1:]:
+			return []
+		grammar = placement.tlv_grammar
+		if placement.kind != "tlv" or grammar is None or not grammar.walkable:
+			return []
+		if self._offset_expression(struct, placement) is None:
+			return []
+		name = py_name(local_name(struct, placement))
+		return [
+			f"\t\t# {placement.path}: every item is whole and admitted, to"
+			" the end",
+			"\t\t# of the region (26.737).",
+			f"\t\t_ = self.{name}_whole",
+		]
 
 	def _arm_checks(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

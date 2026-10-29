@@ -34,7 +34,8 @@ from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
                          offset_bits, record_run_count,
                          chosen_arm, scan, size_bits, sized_run_count,
                          _count, content_bits, is_run, struct_extent,
-                         tlv_count, varint, varint_run_at, while_count)
+                         tlv_count, tlv_whole, varint, varint_run_at,
+                         while_count)
 
 #: The probe kinds this walker renders. Named rather than counted so that a
 #: kind quietly dropping out cannot look like agreement.
@@ -1095,6 +1096,20 @@ def _validate(image: Image, view: View, struct_index: int,
 		# for everything else, so this is asked of every member.
 		if not counted_run_fits(view, index):
 			return fail(ERR_BOUNDS, index, FITS_FRAME)
+
+		# And a `tlv` region's items fill it, which nothing asked: a cut
+		# item and a `default: error` arm each read as the region ending
+		# there, so `example/protobuf` validated both as zero items, here
+		# and in all four backends (26.737). The kinds are the nearest the
+		# image already has -- the frame for a cut item, the arm for one
+		# no rule admits -- rather than a new one in its numbering.
+		if index in image.tlvs and index in image.tlv_rules \
+				and image.tlvs[index][0] != NONE:
+			why = tlv_whole(view, index)
+			if why == "bounds":
+				return fail(ERR_BOUNDS, index, FITS_FRAME)
+			if why == "constraint":
+				return fail(ERR_CONSTRAINT, index, ARM_SELECTED)
 
 		# A nested member is `validate` called through, and its error is
 		# returned as it stands: C propagates the inner code rather than
