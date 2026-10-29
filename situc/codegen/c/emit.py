@@ -8038,6 +8038,7 @@ class Emitter:
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 		]
+		lines += self._varint_run_fits(struct, placement, base)
 
 
 		# And against the pin, which the frame check does not cover: it
@@ -8057,6 +8058,35 @@ class Emitter:
 			]
 
 		return run_fits + lines
+
+	def _varint_run_fits(self, struct: ResolvedStruct, placement: Placement,
+			base: str) -> list[str]:
+		"""`check`'s test that every varint a run declares is in the frame.
+
+		The comparison before it holds the frame against `_span`, which is
+		how far the walk REACHED -- and the walk stops at the limit, so it
+		can never reach past it and the comparison can never fail. `{ 3,
+		0x01, 0x01 }` against `u8 n; uvar v[n];` validated OK with two of
+		three elements present, in all four backends (26.735). That is
+		26.676 again: a run of records learned it and got `_fits`, and the
+		varint run, written seven entries later, did not.
+
+		`_span_min` is the question already answered: it is the span where
+		the walk completed and more than the frame holds where it did not,
+		so holding the frame against it refuses exactly the short run.
+		"""
+		if not is_varint_run(placement) or not elements_are_countable(placement):
+			return []
+		local = c_name(self._local(struct, placement))
+		least = ident(self.prefix, struct.name, local, "span_min")
+		return [
+			f"\t/* {placement.path}: and every element the count declares is",
+			"\t * in the frame, which the comparison above cannot see -- the",
+			"\t * span is how far the walk REACHED (26.735). */",
+			f"\tif (situ_remaining_u32(view.limit, {base}) < {least}(view)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
 
 	def _fixed_extent(self, placement: Placement) -> int | None:
 		"""How many bytes this member occupies, where that is a constant.

@@ -7665,6 +7665,11 @@ Moved to
 Moved to
 `doc/decision/26.734-a-counted-run-of-fixed-records-was-framed-as-one.md`.
 
+### 26.735 Validate held a varint run against how far it reached
+
+Moved to
+`doc/decision/26.735-validate-held-a-varint-run-against-how-far-it-reached.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

@@ -67,7 +67,10 @@ def generated(text: str, backend: str) -> str:
 	schema   = parse_text(text)
 	resolved = resolve(schema, solve(schema))
 	if backend == "c":
-		return generate_c(schema, resolved, "u").header
+		# Header AND source: `check` is in the source, so the header alone
+		# counted one caller of `_span_min` fewer than the other three.
+		emitted = generate_c(schema, resolved, "u")
+		return emitted.header + emitted.source
 	if backend == "cpp":
 		return generate_cpp(schema, resolved, "u").header
 	if backend == "rust":
@@ -114,7 +117,7 @@ def test_one_varint_is_not_a_run(backend: str) -> None:
 
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_required_asks_the_minimum_span(backend: str) -> None:
-	"""`required` asks `_span_min`, and nothing else does.
+	"""`required` and `check` ask `_span_min`, and nothing else does.
 
 	This is the assertion that would have failed on the first draft. The
 	span SHRINKS when an element is truncated -- correctly, it is the bytes
@@ -125,11 +128,13 @@ def test_required_asks_the_minimum_span(backend: str) -> None:
 	"""
 	emitted = generated(RUN, backend)
 	least   = SPELLINGS[backend][2]
-	# The definition, plus exactly one call -- `required`'s. A second
+	# The definition, plus exactly two calls -- `required`'s, and
+	# `check`'s, which holds the frame against it because `_span` is how
+	# far the walk reached and cannot exceed the frame (26.735). A third
 	# caller would mean the offset chain had taken the lower bound, which
 	# would place every member after the run too early.
-	assert emitted.count(least) == 2, \
-		f"{backend} names {least} {emitted.count(least)} times, want 2"
+	assert emitted.count(least) == 3, \
+		f"{backend} names {least} {emitted.count(least)} times, want 3"
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -156,9 +161,9 @@ def test_the_three_internal_accessors_are_called_and_at_is_not(
 	assert emitted.count(at) == 1, \
 		f"{backend} mentions {at} {emitted.count(at)} times; only the " \
 		f"caller walks a run element by element"
-	# `_span_min`'s single caller is asserted above, in
+	# `_span_min`'s two callers are asserted above, in
 	# `test_required_asks_the_minimum_span`.
-	assert emitted.count(least) == 2
+	assert emitted.count(least) == 3
 
 
 def test_a_zigzag_run_decodes_through_the_transform() -> None:

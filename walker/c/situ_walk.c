@@ -1135,12 +1135,16 @@ static int size_code_is_bytes(const situ_walk_image *image,
  * truncated element ends the walk and the extent is the bytes actually
  * there, so a short frame is reported by whatever reads the extent rather
  * than refused here. The lax reader again.
+ *
+ * `whole`, where not NULL, says whether every declared element was there:
+ * `counted_run_fits` asks it, because the extent cannot -- a walk that
+ * stopped early reaches less, and less always fits (26.735).
  */
 static situ_walk_err varint_run_bits(const situ_walk_image *image,
                                      const uint8_t *message, uint32_t len,
                                      uint32_t shape, uint32_t index,
                                      uint32_t depth, uint32_t from,
-                                     uint32_t *out)
+                                     uint32_t *out, int *whole)
 {
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
@@ -1180,6 +1184,9 @@ static situ_walk_err varint_run_bits(const situ_walk_image *image,
 			break;
 		}
 		at += consumed;
+	}
+	if (whole != NULL) {
+		*whole = i >= count;
 	}
 	*out = (at - from) * 8u;
 	return SITU_WALK_OK;
@@ -2014,7 +2021,7 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		     || held.size_code != SITU_WALK_NONE)
 		    && !size_code_is_bytes(image, held.size_code)) {
 			return varint_run_bits(image, message, len, shape, index,
-			                       depth, at / 8u, out);
+			                       depth, at / 8u, out, NULL);
 		}
 		uint32_t consumed = 0u;
 		uint64_t value    = 0u;
@@ -3977,6 +3984,25 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 	*fits = 1;
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+	/* A run of VARINTS, which the condition below lets through for having
+	 * no element struct -- so `{ 3, 0x01, 0x01 }` against `uvar v[n]`
+	 * validated clean with two of three elements present, here and in all
+	 * four backends (26.735). The span walk already counts what it placed;
+	 * this asks it whether that was all of them. */
+	if (varint_rules(image, index) != NULL
+	    && (held.array_count != SITU_WALK_NONE
+	        || held.size_code != SITU_WALK_NONE)
+	    && !size_code_is_bytes(image, held.size_code)) {
+		uint32_t reach = 0u;
+
+		err = offset_bits_deep(image, message, len, shape, index, depth,
+		                       &from);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		return varint_run_bits(image, message, len, shape, index, depth,
+		                       from / 8u, &reach, fits);
 	}
 	if (held.size_code == SITU_WALK_NONE
 	    || held.type_struct == SITU_WALK_NONE

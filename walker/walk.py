@@ -1873,6 +1873,14 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 	cannot simply ask whether the walk placed `count` elements.
 	"""
 	placement = view.image.placements[index]
+	# A run of VARINTS, which the condition below lets through for having
+	# no element struct -- so `{ 3, 0x01, 0x01 }` against `uvar v[n]`
+	# validated clean with two of three elements present, here and in all
+	# four backends (26.735). Its own walk, because an element's extent is
+	# in its own bytes rather than a struct's.
+	if index in view.image.varints and is_run(view.image, index) \
+			and not _sizes_in_bytes(view.image, placement.size_code):
+		return _varint_run_fits(view, index)
 	if (placement.size_code == NONE or placement.type_struct == NONE
 			or placement.element_bits != NONE):
 		return True
@@ -1922,6 +1930,29 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 		if size > view.limit - at:
 			return False
 		at += size
+	return True
+
+
+def _varint_run_fits(view: View, index: int) -> bool:
+	"""Whether every varint a run declares is whole inside the frame.
+
+	`_varint_run_bits`' walk with the other answer: that one stops where
+	an element is cut short and reports the bytes it reached, which is
+	right for placing what follows and is why it cannot say this.
+	"""
+	rules = view.image.varint_rules.get(index)
+	if rules is None:
+		return True
+	count = min(max(_count(view, index), 0), 0xFFFFFFFF)
+	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	for _ in range(count):
+		if at >= view.limit:
+			return False
+		try:
+			consumed, _ = decode_varint(view, at, *rules)
+		except Refused:
+			return False
+		at += consumed
 	return True
 
 

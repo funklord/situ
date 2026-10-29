@@ -73,6 +73,7 @@ from situc.traverse import (
 	depth_limit,
 	dynamic_frame_owner,
 	element_bytes,
+	elements_are_countable,
 	enforceable_max,
 	extent_parts,
 	extern_symbol,
@@ -3682,6 +3683,20 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 		]
+
+		# And every varint the count declares, which the test above cannot
+		# see for the same reason: `_span` is how far the walk reached, and
+		# the walk stops at the frame. `_span_min` is more than the frame
+		# holds exactly where the walk stopped early (26.735).
+		if is_varint_run(placement) and elements_are_countable(placement):
+			least = f"{bare_name(local_name(struct, placement))}_span_min()"
+			lines += [
+				f"\t\t/* {placement.path}: and every varint the count declares",
+				"\t\t * is in the frame (26.735). */",
+				f"\t\tif (situ_remaining_u32(raw_.limit, {start}) < {least}) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
 
 		# And whether every element the count declares is inside the frame,
 		# which the test above cannot see: it holds the frame against how
