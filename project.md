@@ -5492,17 +5492,17 @@ until the README says so.** Concretely, in the same commit as the change --
 - an attribute gains a row in *Attributes, requirements and invariants*
   where its placement rule is the interesting part;
 - a construct with a shape worth seeing gets the few lines of schema that
-  show it, beside the ones already there;
-- *Recent additions* moves the feature between **Built**, **half built**
-  and **not yet built**, and says which half is which.
+  show it, beside the ones already there.
 
-**The last is the one that rots**, because it is the only part that
-describes a STATE rather than a rule -- 0051 sat under "not yet built"
-while all six descriptions carried it, and 0050's entry said `parameter`
-was not built on the day it was. A reader trusts that section precisely
-because situ's own rule is that a description stating what the code does
-not do is worse than one that states nothing (14.5), and this file is a
-description like any other.
+**The README carries no progress section.** It had one, *Recent
+additions*, sorting features into built, half built and not yet built, and
+it was the part that rotted: 0051 sat under "not yet built" while all six
+descriptions carried it, and 0050's entry said `parameter` was not built on
+the day it was. A section describing a STATE is stale by construction, and
+the holder made that a rule for every README on 2026-10-29
+(`harmonization.md`, citing this one). State lives in section 26 and in the
+log. Removing it found one keyword, `preamble`, that only it named; it has
+a row in the construct table now.
 
 ### 25.0 Commits come in two parts, and that is deliberate
 

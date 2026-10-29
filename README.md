@@ -565,6 +565,7 @@ struct cannot describe:
 | `register` / `register_block` | an MMIO register with its bus width and access rules |
 | `pad_to(n);` | the bytes from here to the next multiple of `n` |
 | `pad_random(min, max) u8 fill[];` | a run of unpredictable length, so the extent carries no information |
+| `preamble u8[8] = "\x89PNG\r\n\x1a\n";` | fixed bytes the format requires, checked and given no accessor -- anonymous, so there is nothing to name one (decision 0052) |
 
 **Declarations** name a thing the members then use:
 
@@ -1753,125 +1754,6 @@ and `walker.report.SUPPORTED` is the subset the walker renders. Note what an
 interpreter cannot do, which is make an operation *absent*: under a walker the
 capability map stops being the shape of the interface and becomes data a
 caller may consult.
-
-## Recent additions, including the incomplete ones
-
-Situ's own rule is that a description which states what the generated code
-does not enforce is worse than one that states nothing (section 14.5). The
-same rule applied to this file means saying which of the following runs
-today and which is a written-down design.
-
-**Built.**
-
-- **A failed check has a name, in all four backends.**
-  `situ_S_check(view, &which)` reports *which member* refused, with the ids
-  as macros -- `#define SITU_UDP_HEADER_LENGTH_CHECK 0u` -- and `validate`
-  becomes `return situ_S_check(view, NULL)`. C++ publishes `check_<member>`
-  constants and a `check(std::uint32_t *)`; Rust publishes `CHECK_<MEMBER>`
-  and `check_which(&mut u32)`, which cannot be called `check` because cpio
-  has a member of that name and Rust has no overloading; Python puts the id
-  on the exception, as `which`. A test holds the four to one numbering, and
-  it found the same defect in each of them -- a member whose check
-  *propagates* rather than naming a refusal was numbered nothing, so `check`
-  returned refused with the sentinel meaning "nothing refused". It names the
-  member and not yet the check *kind*.
-- **Operations the backends define differently are refused.** A shift whose
-  amount cannot be proved inside `0..63`, and signed `/` and `%`, no longer
-  compile: C leaves them undefined or implementation-defined where Python
-  and Rust each pick something, so an expression that means four things in
-  five backends is a defect in the schema rather than a portability note
-  (decision 0049).
-- **A file target.** `target file` describes a format read from and written
-  to a file rather than a mapped buffer, which is what lets the coverage of
-  a whole-file checksum be named -- `authenticated body { u8 rest[remaining]; }`
-  is a region running to EOF whose interior is deliberately undescribed
-  (decision 0047).
-- **BCD is in the differential.** Packed decimal was excluded from the
-  cross-backend comparison by an allow-list, which hid three separate bugs
-  in the walker's reading and writing of it. It is included now.
-
-
-- **Messages a schema carries** (decision 0051), built end to end. `when`
-  states what a message *means* beyond its layout -- an identity, a
-  severity and a default sentence -- where every bound used to collapse into
-  `SITU_ERR_CONSTRAINT` with no strings at all. A `refuse` changes the
-  verdict in all six descriptions at once, which is why it could not land in
-  any one of them first. The `messages` sibling reports all three severities
-  without short-circuiting, the Wireshark dissector emits them as expert
-  info, the editor shows them per document, and `situc verify` prints them
-  beside each vector -- the ids from the generated module and the words
-  from the schema, so the module it builds carries no strings at all.
-
-- **A byte run as a value** (decision 0052). `u8 sig[4] [must_eq = "WOZ2"]`
-  is one span comparison taking one check id, `enum format : u8[2] { bmp =
-  "BM" }` is an enum whose arms are byte runs, and `preamble u8[4] =
-  "\\x8d\\x57\\x4f\\x5a"` is fixed bytes that generate no accessor at all --
-  anonymous, which is what leaves no name for an accessor to be called.
-  What they replaced was one field per byte -- which three unrelated schemas
-  arrived at independently -- generating six branches and six invented
-  member names for one fact, with comments rendering the magic in decimal.
-  cpio's `magic` is the worked case.
-
-- **A token set** (decision 0055). `tokens verb { helo = "HELO", ... }`
-  names a set of text keywords of differing length and types a delimited
-  member, which is what a byte run plus a comparison in the caller used to
-  be. What separates it from `enum m : u8[k]` is extent rather than
-  spelling: an enum decides how wide its member is, so unequal arms would
-  mean a search, while a token set is consulted after the delimiter has
-  already ended the member. All four backends generate it, and
-  `test/schema/edges.situ` carries the corpus cases the four-way
-  differential poses against them.
-
-- **A dispatch that does not consume what it reads** (decision 0057).
-  `peek u8 kind;` reads a discriminant at the cursor and contributes
-  nothing to the struct's extent, so the arm the variant selects begins
-  where the discriminant began and owns its byte. It is `before` for
-  dispatch. `example/json` is what it was built for and now uses it: a
-  JSON number's first character IS the byte that says it is a number, so
-  the number arm saw `2.5` of `12.5` and its `number` could only be a byte
-  run. It is a `scaled i64` now, reading `{"a":12.5}` as 125 and -1. The
-  cost falls on every OTHER arm, which each grew a member to own the byte
-  it is chosen by -- so json's literals are `[must_eq = "true"]` where
-  they were `[must_eq = "rue"]`.
-
-**Designed and accepted, half built.**
-
-- **External arguments** (decision 0050). A format whose shape follows a
-  fact the message does not carry -- a negotiated cipher suite, a card
-  class, a block size. `prefix(...)` was already the precedent that a caller
-  may know something the message does not. `--define name=value` sets a
-  declared `const` before the layout is solved, and every command that reads
-  a schema takes it. `parameter` and `[stream]` parse, solve, unparse and
-  are checked; the map and the wire signature name one; and the Wireshark
-  dissector reads a `[stream]` one from a preference, which is the first
-  preference that generator has ever emitted. All four views now take their
-  arguments -- Python and Rust by a field, C++ by a member, C by a trailing
-  parameter on the accessors that read it -- and none emits an accessor for
-  the parameter itself. The packed image and both walkers take it as well,
-  the per-layer generators take it or say why they cannot, and
-  `test/schema/edges.situ` carries one, so every gate now covers the
-  construct. What remains is one thing and it needs a decision rather than
-  code: a struct that takes an argument cannot be a member of another,
-  because nothing says how a parent's arguments compose with a child's, and
-  the refusal names 0050 and says to acquire it yourself. The sentence here
-  used to add that `situc gen-tamper` declines such a schema and that
-  nothing sweeps the corpus through it -- both halves were overtaken on
-  2026-09-17, and that generator's own comment says so: it skips the argued
-  struct and refuses loudly only where the skip emptied the list, and
-  `test_every_subcommand_runs_on_every_schema` runs every subcommand over
-  every schema.
-
-**Proposed.**
-
-- **Text encoding, scoped and named by the data.** `encoding` is a file
-  directive and `[encoding = ascii]` is a member attribute, with nothing in
-  between, so a region cannot carry one -- refused on purpose, and now
-  asked for. The harder half is an encoding the data names, as MIME's
-  `charset=` and an XML declaration do, where the declaration must be read
-  before its own answer is known. Situ cannot resolve that circularity, but
-  it can make the assumption writable and checkable: a bootstrap encoding
-  for the region holding the declaration, the declared one for what
-  follows, and a refusal when they disagree. Section 26.330.
 
 ## Reading further
 

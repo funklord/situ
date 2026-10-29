@@ -906,8 +906,8 @@ def test_the_readme_names_every_keyword() -> None:
 
 	assert not any(missing.values()), (
 		f"the README names no code for these: {missing}. A keyword that "
-		f"lands, lands in the README too -- the construct tables, the "
-		f"attribute table, and `Recent additions` (project.md 25.-1).")
+		f"lands, lands in the README too -- the construct tables and the "
+		f"attribute table (project.md 25.-1).")
 
 
 def test_the_readme_check_can_fail() -> None:
