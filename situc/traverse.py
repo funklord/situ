@@ -2393,6 +2393,10 @@ def is_run(placement: Placement, structs: Container[str]) -> bool:
 	            and placement.type_name in structs))
 
 
+#: `remaining` as a name in a schema expression, which no field can be.
+_READS_REMAINING = re.compile(r"\bremaining\b")
+
+
 def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		seen: frozenset[str] = frozenset()) -> bool:
 	"""Whether a whole one can be recognised in a prefix of a stream (20.3).
@@ -2465,6 +2469,19 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		# header and splits the options off the message rather than
 		# looping.
 		if placement.kind == "tlv":
+			return False
+		# A LENGTH OR A CONDITION THAT READS THE FRAME'S END. `remaining`
+		# is how far the frame reaches, and in a stream that is the very
+		# thing `required` is being asked; a prefix has none to give it.
+		# `hop step[] while (remaining > 4); u16 trail; u16 mark;` ends its
+		# run four bytes before the frame does, so on a prefix the run
+		# stopped four bytes before the PREFIX ended, and all four
+		# backends called the message complete at 8 where the walker
+		# measured 12 -- four bytes short, which is the direction a
+		# caller then parses past the end of. Found by holding `required`
+		# against the walker's extent over valid buffers (26.745).
+		if any(source is not None and _READS_REMAINING.search(source)
+		       for source in (placement.repeat_while, placement.size_expr)):
 			return False
 		# AN ARM HOLDING A COUNTED RUN, which no backend walks: an arm is
 		# emitted by a family of its own -- a scalar, a byte run, a run of

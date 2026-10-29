@@ -5639,6 +5639,15 @@ class Emitter:
 			        "\t\tsitu_rt::Framing::Complete(Self::SIZE)",
 			        "\t}"]
 
+		# `frameable` IS THE AUTHORITY, as C's `_required` says at length
+		# (26.729): this function's own conditions matched it over the
+		# corpus until 26.745 gave it a case they lack -- a run or a count
+		# that reads `remaining`, which ends where the FRAME does and so
+		# cannot be found in a prefix -- and three backends went on framing
+		# `edges.hops` four bytes short while C declined it.
+		if not frameable(self.resolved.structs, struct):
+			return self._unframeable(struct)
+
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return self._unframeable(struct)

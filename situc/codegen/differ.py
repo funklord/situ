@@ -1250,7 +1250,8 @@ def framed(resolved: ResolvedSchema) -> set[str]:
 	calling one would mean inventing a value the schema says is
 	negotiated. Measured when written: over the corpus this is every
 	struct the four emit a bytes-only `required` for and the differ
-	compares, 222 of them, and the four emit it for the same ones.
+	compares, 222 of them, and the four emit it for the same ones. 221
+	since 26.745 stopped framing a run whose condition reads `remaining`.
 
 	The line opens `required()`, which no member can be called: the walker
 	comparison keys lines by their first word, and a member named

@@ -7748,6 +7748,10 @@ Moved to `doc/decision/26.743-the-corpus-differential-asks-required.md`.
 Moved to
 `doc/decision/26.744-a-run-counted-by-arithmetic-was-framed-as-one.md`.
 
+### 26.745 A run ended by `remaining` was framed
+
+Moved to `doc/decision/26.745-a-run-ended-by-remaining-was-framed.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
