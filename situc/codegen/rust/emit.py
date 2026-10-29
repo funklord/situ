@@ -108,6 +108,7 @@ from situc.traverse import (
 	region_extent,
 	remaining_stride,
 	tlv_admitted_tags,
+	tlv_single_tags,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -1016,7 +1017,8 @@ class Emitter:
 
 		lines = list(self._tlv_read(struct, placement, grammar, item, name))
 		lines.extend(self._tlv_cursor(grammar, item, name, start,
-		                              tlv_admitted_tags(placement)))
+		                              tlv_admitted_tags(placement),
+		                              tlv_single_tags(placement)))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -1249,7 +1251,8 @@ class Emitter:
 		]
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
-			start: str, admitted: tuple[int, ...] | None = None) -> list[str]:
+			start: str, admitted: tuple[int, ...] | None = None,
+			single: tuple[int, ...] = ()) -> list[str]:
 		"""`first`, `next`, `count`, and the value's bytes."""
 		# The tag `find` matches on, decision 0023's part or the raw tag,
 		# held against every tag `known` names (26.738).
@@ -1302,12 +1305,16 @@ class Emitter:
 			"\t/// walk ends at the region's end, and otherwise the error that",
 			"\t/// stopped it -- `Bounds` for an item the frame cuts short,",
 			"\t/// `Constraint` for one the schema says is an error"
-			+ (", or" if admitted else "."),
+			+ (", or" if admitted or single else "."),
 			*(["\t/// for a tag outside `known`, which `unknown = error`"
-			   " refuses."] if admitted else []),
+			   + (" refuses, or" if single else " refuses.")]
+			  if admitted else []),
+			*(["\t/// for a second item with a tag `duplicate_tags = error`"
+			   " admits once."] if single else []),
 			f"\tpub fn {name}_whole(&self) -> Result<()> {{",
 			f"\t\tlet mut end  = {start};",
 			f"\t\tlet mut held = self.{name}_first();",
+			*[f"\t\tlet mut seen_{tag} = 0u32;" for tag in single],
 			"",
 			"\t\tloop {",
 			"\t\t\tmatch held {",
@@ -1315,6 +1322,13 @@ class Emitter:
 			*([f"\t\t\t\t\tif {unknown} {{",
 			   "\t\t\t\t\t\treturn Err(Error::Constraint);",
 			   "\t\t\t\t\t}"] if admitted else []),
+			*[line for tag in single for line in (
+				f"\t\t\t\t\tif {keyed} == {tag} {{",
+				f"\t\t\t\t\t\tseen_{tag} += 1;",
+				f"\t\t\t\t\t\tif seen_{tag} > 1 {{",
+				"\t\t\t\t\t\t\treturn Err(Error::Constraint);",
+				"\t\t\t\t\t\t}",
+				"\t\t\t\t\t}")],
 			"\t\t\t\t\tend  = item.next;",
 			f"\t\t\t\t\theld = self.{name}_next(&item);",
 			"\t\t\t\t}",

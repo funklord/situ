@@ -108,6 +108,7 @@ from situc.traverse import (
 	region_extent,
 	remaining_stride,
 	tlv_admitted_tags,
+	tlv_single_tags,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -1584,7 +1585,8 @@ class Emitter:
 		item  = self._tlv_item_name(placement)
 		lines = self._tlv_read(struct, placement, grammar, name)
 		lines.extend(self._tlv_cursor(grammar, name, start, item,
-		                              tlv_admitted_tags(placement)))
+		                              tlv_admitted_tags(placement),
+		                              tlv_single_tags(placement)))
 		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
 
@@ -1847,7 +1849,8 @@ class Emitter:
 		]
 
 	def _tlv_cursor(self, grammar: TlvGrammar, name: str, start: str,
-			item: str, admitted: tuple[int, ...] | None = None) -> list[str]:
+			item: str, admitted: tuple[int, ...] | None = None,
+			single: tuple[int, ...] = ()) -> list[str]:
 		"""The cursor, the generator over it, and the value's bytes.
 
 		Annotated, like everything else this backend emits. These were not,
@@ -1918,10 +1921,15 @@ class Emitter:
 			"\t\tstopped the walk -- BoundsError for an item the frame cuts"
 			" short,",
 			"\t\tConstraintError for one the schema says is an error"
-			+ ('."""' if not admitted else ", or"),
+			+ ('."""' if not (admitted or single) else ", or"),
 			*(["\t\tfor a tag outside `known`, which `unknown = error`"
-			   ' refuses."""'] if admitted else []),
+			   + (" refuses, or" if single else ' refuses."""')]
+			  if admitted else []),
+			*(["\t\tfor a second item with a tag `duplicate_tags = error`"
+			   ' admits once."""'] if single else []),
 			f"\t\tend = {start}",
+			# 26.740: one count per tag admitted once, in the same walk.
+			*([f"\t\tseen: dict[int, int] = {{}}"] if single else []),
 			"\t\ttry:",
 			f"\t\t\titem = self.{name}_first()",
 			"\t\t\twhile True:",
@@ -1930,6 +1938,12 @@ class Emitter:
 			   f'\t\t\t\t\traise ConstraintError(f"{name}: tag'
 			   f' {{{keyed}}} is not one `known` names")']
 			  if admitted else []),
+			*([f"\t\t\t\tif {keyed} in {set(single)!r}:",
+			   f"\t\t\t\t\tseen[{keyed}] = seen.get({keyed}, 0) + 1",
+			   f"\t\t\t\t\tif seen[{keyed}] > 1:",
+			   f'\t\t\t\t\t\traise ConstraintError(f"{name}: tag'
+			   f' {{{keyed}}} appears more than once")']
+			  if single else []),
 			"\t\t\t\tend  = item.next",
 			f"\t\t\t\titem = self.{name}_next(item)",
 			"\t\texcept (BoundsError, ConstraintError):",

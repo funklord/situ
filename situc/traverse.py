@@ -2033,6 +2033,29 @@ def tlv_admitted_tags(placement: Placement) -> tuple[int, ...] | None:
 	return tuple(sorted({known.tag for known in grammar.known}))
 
 
+def tlv_single_tags(placement: Placement) -> tuple[int, ...]:
+	"""The tags a `tlv` region admits once at most; empty where it limits
+	none.
+
+	`duplicate_tags = error` is the default (14.5), and nothing enforced it:
+	two items tagged 1 validated clean in all four backends (26.740).
+	`validate` refuses the second now, matched on decision 0023's part as
+	`find` and `tlv_admitted_tags` match.
+
+	**Only tags `known` names, and not those it marks repeated** -- the same
+	reading `tlv_admitted_tags` takes and for the same reason. A region that
+	names no tags says nothing about which may repeat, and the literal
+	reading would refuse CoAP's repeatable options; a tag declared
+	`type = u8[]` is one the schema says comes more than once.
+	`duplicate_tags = allowed` limits nothing.
+	"""
+	grammar = placement.tlv_grammar
+	if grammar is None or placement.tlv_duplicates not in (None, "error"):
+		return ()
+	return tuple(sorted({known.tag for known in grammar.known
+	                     if not known.repeated}))
+
+
 def framing_floor(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct) -> int:
 	"""The fewest bytes a COMPLETE `struct` can occupy, constraints ignored.

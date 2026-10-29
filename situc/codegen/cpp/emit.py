@@ -112,6 +112,7 @@ from situc.traverse import (
 	region_extent,
 	remaining_stride,
 	tlv_admitted_tags,
+	tlv_single_tags,
 )
 from situc.types import ScalarKind, ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -4982,7 +4983,8 @@ class Emitter:
 		lines = self._tlv_item_type(placement, grammar, item)
 		lines.extend(self._tlv_read(struct, placement, grammar, item, name))
 		lines.extend(self._tlv_cursor(grammar, item, name, start,
-		                              tlv_admitted_tags(placement)))
+		                              tlv_admitted_tags(placement),
+		                              tlv_single_tags(placement)))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -5235,7 +5237,8 @@ class Emitter:
 		]
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
-			start: str, admitted: tuple[int, ...] | None = None) -> list[str]:
+			start: str, admitted: tuple[int, ...] | None = None,
+			single: tuple[int, ...] = ()) -> list[str]:
 		"""`first`, `next` and `count`: the region walked from its own start."""
 		# The tag `find` matches on, decision 0023's part or the raw tag,
 		# held against every tag `known` names (26.738).
@@ -5292,19 +5295,27 @@ class Emitter:
 			"\t * walk ends at the region's end, and otherwise the error that",
 			"\t * stopped it -- `bounds` for an item the frame cuts short,",
 			"\t * `constraint` for one the schema says is an error"
-			+ (", or" if admitted else ". */"),
+			+ (", or" if admitted or single else ". */"),
 			*(["\t * for a tag outside `known`, which `unknown = error`"
-			   " refuses. */"] if admitted else []),
+			   + (" refuses, or" if single else " refuses. */")]
+			  if admitted else []),
+			*(["\t * for a second item with a tag `duplicate_tags = error`"
+			   " admits once. */"] if single else []),
 			f"\t[[nodiscard]] ::situ::rt::err {name}_whole() const noexcept",
 			"\t{",
 			f"\t\t{item} item{{}};",
 			f"\t\tstd::uint32_t end = {start};",
+			*[f"\t\tstd::uint32_t seen_{tag} = 0;" for tag in single],
 			f"\t\t::situ::rt::err e = {name}_first(item);",
 			"",
 			"\t\twhile (e == ::situ::rt::err::ok) {",
 			*([f"\t\t\tif ({unknown}) {{",
 			   "\t\t\t\treturn ::situ::rt::err::constraint;",
 			   "\t\t\t}"] if admitted else []),
+			*[line for tag in single for line in (
+				f"\t\t\tif ({keyed} == {tag}u && ++seen_{tag} > 1u) {{",
+				"\t\t\t\treturn ::situ::rt::err::constraint;",
+				"\t\t\t}")],
 			"\t\t\tend = item.next;",
 			f"\t\t\te   = {name}_next(item);",
 			"\t\t}",

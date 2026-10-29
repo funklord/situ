@@ -148,8 +148,9 @@ struct numbered_lenient {
 		tag_running  = { number = previous + delta },
 		tag_identity = number,
 		value_size   = switch (delta) { default: length },
-		known        = { 3 : { name = port, type = u8 } },
-		unknown      = skip,
+		known          = { 3 : { name = port, type = u8 } },
+		unknown        = skip,
+		duplicate_tags = allowed,
 	);
 }
 """
@@ -198,11 +199,91 @@ def test_the_walkers_decline_a_region_that_refuses_unknown_tags(
 	`strict` and `lenient` are the simple `length_type` form, which no
 	walker reads at all -- the image has no selector for it -- so both are
 	`cannot-say` whatever the policy, and `numbered_lenient` is the region
-	whose verdict the walkers do give."""
+	whose verdict the walkers do give -- `duplicate_tags = allowed` as well,
+	since a tag `known` admits once is one more thing the image cannot
+	carry (26.740)."""
 	blob = packed_text(KNOWN)
 	for struct, label, verdict, packet in KNOWN_CASES:
 		shape    = shape_named_text(KNOWN, struct)
 		expected = (str(verdict) if struct == "numbered_lenient"
 		            else "cannot-say")
+		assert python_verdict(blob, packet, shape) == expected, label
+		assert c_verdict(tmp_path, blob, packet, shape) == expected, label
+
+
+# -- `duplicate_tags = error` (26.740) --------------------------------------
+#
+# Also the default, also unenforced: two items tagged 1 validated clean in
+# all four. Refused for a tag `known` admits once; admitted for one it marks
+# repeated (`type = u8[]`) and under `duplicate_tags = allowed`. Every region
+# here is the selector form and `unknown = skip`, so that the walkers' half
+# can tell a region they decline from one they read.
+
+REPEATED = """target buffer;
+endian little;
+struct once {
+	u8 head;
+	tlv items (
+		tag_type     = u8,
+		tag_decode   = { delta = tag >> 4, length = tag & 0x0F },
+		tag_identity = delta,
+		value_size   = switch (delta) { default: length },
+		known        = { 1 : { name = mtu, type = u8 },
+		                 2 : { name = names, type = u8[] } },
+		unknown      = skip,
+	);
+}
+struct many {
+	u8 head;
+	tlv items (
+		tag_type       = u8,
+		tag_decode     = { delta = tag >> 4, length = tag & 0x0F },
+		tag_identity   = delta,
+		value_size     = switch (delta) { default: length },
+		known          = { 1 : { name = mtu, type = u8 } },
+		unknown        = skip,
+		duplicate_tags = allowed,
+	);
+}
+"""
+
+#: struct, label, verdict, bytes.
+REPEATED_CASES = [
+	("once", "tag 1 once", 0, bytes([0, 0x11, 9])),
+	("once", "tag 1 twice", 2, bytes([0, 0x11, 9, 0x11, 7])),
+	("once", "tag 2, declared repeated, twice", 0,
+	 bytes([0, 0x21, 9, 0x21, 7])),
+	("once", "an unknown tag twice, under `skip`", 0,
+	 bytes([0, 0x31, 9, 0x31, 7])),
+	("many", "tag 1 twice, `duplicate_tags = allowed`", 0,
+	 bytes([0, 0x11, 9, 0x11, 7])),
+]
+
+
+def test_a_repeated_tag_is_refused_by_all_four(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(REPEATED, encoding="ascii")
+	try:
+		command = fourway.build(tmp_path, schema)
+	except fourway.BuildFailed as failed:
+		pytest.skip(f"a backend could not be built here: {failed}")
+
+	for struct, label, verdict, packet in REPEATED_CASES:
+		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),
+		                        struct)
+		         for name, argv in command.items()}
+		assert set(given.values()) == {f"validate {verdict}"}, (
+			f"{struct}, {label}: {given}")
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_the_walkers_decline_a_region_that_limits_repeats(
+		tmp_path: Path) -> None:
+	"""`once` limits tag 1 to one item, which the image cannot carry, so
+	both walkers decline it; `many` limits nothing and gets its verdict."""
+	blob = packed_text(REPEATED)
+	for struct, label, verdict, packet in REPEATED_CASES:
+		shape    = shape_named_text(REPEATED, struct)
+		expected = str(verdict) if struct == "many" else "cannot-say"
 		assert python_verdict(blob, packet, shape) == expected, label
 		assert c_verdict(tmp_path, blob, packet, shape) == expected, label

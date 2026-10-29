@@ -2642,13 +2642,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 
 		if placement.tlv_grammar is not None:
 			# Bit 0: an ordering rule. Bit 1: the region names `known` tags
-			# and refuses every other (26.738) -- which a walker cannot
-			# enforce, the image carrying neither the tags nor the part they
-			# match, and so must decline rather than call such a region
-			# valid.
+			# and refuses every other (26.738). Bit 2: it admits some of
+			# those tags once at most (26.740). A walker can enforce neither,
+			# the image carrying neither the tags nor the part they match,
+			# and so must decline rather than call such a region valid.
 			regions = ((1 if placement.tlv_ordered else 0)
 			           | (2 if traverse.tlv_admitted_tags(placement) is not None
-			              else 0))
+			              else 0)
+			           | (4 if traverse.tlv_single_tags(placement) else 0))
 			tag_bytes, tag_terminal, tag_flags = _number_params(
 				varint_decls.get(placement.tlv_tag_varint or ""),
 				_tlv_tag_name(placement), placement.endian)

@@ -7724,6 +7724,11 @@ Moved to
 Moved to
 `doc/decision/26.739-rust-check-which-named-a-member-that-passed.md`.
 
+### 26.740 `duplicate_tags = error` was the default, and nothing enforced it
+
+Moved to
+`doc/decision/26.740-duplicate-tags-error-was-the-default-and-nothing-enforced-it.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

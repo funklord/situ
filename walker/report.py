@@ -1105,10 +1105,11 @@ def _validate(image: Image, view: View, struct_index: int,
 		# no rule admits -- rather than a new one in its numbering.
 		if index in image.tlvs and index in image.tlv_rules \
 				and image.tlvs[index][0] != NONE:
-			# A region that refuses tags outside `known`, which the four
-			# backends enforce and the image cannot describe: the tags are
-			# not in it. Declined rather than passed (26.738).
-			if index in image.tlv_refuses_unknown:
+			# A region that refuses tags outside `known`, or a repeat of one
+			# it admits once, which the four backends enforce and the image
+			# cannot describe: the tags are not in it. Declined rather than
+			# passed (26.738, 26.740).
+			if index in image.tlv_unenforceable:
 				return None
 			why = tlv_whole(view, index)
 			if why == "bounds":

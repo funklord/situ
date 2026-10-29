@@ -59,8 +59,14 @@ STRUCTURAL = frozenset({
 })
 
 #: What the emitter puts in front of a member's name.
-PREFIXES = frozenset({"check", "clear", "dirty", "recompute", "set",
-                      "trigger", "with"})
+PREFIXES = frozenset({
+	"check", "clear", "dirty", "recompute", "set", "trigger", "with",
+	# `seen_N`: `_whole`'s count of a tag `known` admits once (26.740). A
+	# local followed by a tag NUMBER, not a member name, so it cannot
+	# collide -- listed because the affix check reads every interpolation,
+	# as `holed` is below.
+	"seen",
+})
 
 #: What it puts after one. Some of these are halves of others -- `span` and
 #: `span_from` both appear -- because the check below matches a whole affix
