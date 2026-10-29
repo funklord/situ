@@ -366,10 +366,11 @@ a different question, and the extent comparison answers it: a run written at
 the length it already has moves nothing and is allowed, which is what makes
 the tool useful on a file. Written shorter or longer it is refused by count.
 
-A write to a tag-covered field happens and is reported stale. situ does not
-compute a checksum -- 14.1 puts that with the caller -- so recomputing one
-here would be this tool inventing a value the schema says is somebody
-else's, and refusing would make the field uneditable.
+A write to a covered field happens either way, since refusing would make the
+field uneditable. Where the schema names the codec that computes the
+checksum, the editor brings it up to date and says which span it summed; a
+cryptographic tag is reported stale instead, because 14.1 puts that
+arithmetic with the caller and situ owns no AES-GCM.
 
 Nothing reaches the file without `--out`, which is the safe default for a
 tool that edits files in place. The CLI can do everything the TUI can,
@@ -1559,12 +1560,16 @@ text files a reviewer can read.
 
 ## What it will not do
 
-- No wire format of its own. Situ describes formats that already exist.
+- No house encoding. There is no "situ format" the way there is a protobuf
+  one: every schema defines its own encoding exactly, whether the format
+  already exists or is being designed.
 - No serialization of language-native objects: no reflection, no object graphs,
   no interning.
-- No implicit schema evolution and no unknown-field retention. Compatibility is
-  explicit, and silently preserving bytes nobody validated is a security
-  position rather than an oversight (section 14.5).
+- No implicit schema evolution, and no *silent* unknown-field retention.
+  Compatibility is explicit, and unknown fields are refused by default,
+  because carrying bytes nobody validated is a malleability surface (section
+  14.5). Retaining them on request and re-serialising them in place is on the
+  roadmap at the lowest priority: a format that needs it has a smell.
 - No allocation in generated C, C++ or Rust at the default layer. Callers
   supply memory, and `--layer edit` is the explicit way to ask for more.
   Python allocates because its data model gives it no other spelling, bounded
@@ -1587,16 +1592,13 @@ text files a reviewer can read.
   than being a separate one, and it is the boundary of the derived tier rather
   than of codecs generally: a transform that keeps its output the size of its
   input, or expands it by a computable amount, situ generates.
-- **No checksum computation from a `checksum` member.** `checksum u8 crc[4]
-  covers(R)` declares two things -- which bytes are covered, and that a write
-  to them makes the sum stale -- and neither of them is the arithmetic. A
-  `checksum` member names no codec, so nothing joins it to an implementation:
-  `[codec = crc32]` is an unknown attribute and there is no `with` clause.
-  Situ will generate the algorithm, from a kernel description, if you ask it
-  separately -- `situc gen-derived` over `std/kernels.situ` emits a real
-  `situ_crc32_table[256]` and `situ_crc32()` -- but wiring that function to
-  that member is the caller's line of code today. Read the declaration as
-  coverage and staleness, not as a check that runs.
+- **No cryptographic algorithm of its own.** A `checksum` that names the
+  codec computing it -- `checksum u8 crc[4] covers(body) is crc32;` -- gets
+  generated `_compute` and `_check` functions in all four backends (decision
+  0053), because situ generates that codec from a kernel description. A
+  `tag` cannot name one: a MAC or an AEAD tag is the caller's function
+  (section 14.1), and situ checks where it sits, what it covers and that it
+  was checked, not the cryptography.
 - No behaviour the schema did not state. Situ describes conversations where a
   schema says so, and generates the machinery only when `--layer` asks for it,
   but it never supplies a fact nobody declared -- no default timeout, no
