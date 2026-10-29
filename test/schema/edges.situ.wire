@@ -98,6 +98,10 @@ struct corrected_nibble size=9
   @0x0000   1         u8         head
   @0x0001   8         extended_hamming body  codec=extended_hamming
 
+struct countless_varints size=1..
+  @0x0000   1         u8         lead
+  @0x0001   0..       edge_varint loose  sized-by=remaining varint=edge_varint
+
 struct covered_tail size=8..12
   @0x0000   1         u8         n  max=4
   @0x0001   0..4      u8         pad  sized-by=n

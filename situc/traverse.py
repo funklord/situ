@@ -1903,6 +1903,37 @@ def extent_parts(structs: dict[str, ResolvedStruct],
 	return constant_bits // BITS_PER_BYTE, variable
 
 
+def elements_are_countable(placement: Placement) -> bool:
+	"""Whether anything can say how many elements a run holds.
+
+	False for exactly one arrangement: a run of VARINTS whose extent the
+	frame decides, `uvar v[remaining]`. The frame supplies no count, and
+	varints have no stride to divide the bytes by, so the only way to the
+	number is to walk to the end of the view -- which no backend does.
+
+	Everything else answers. A literal count answers itself; a count
+	driven by a field answers from the field; and `u8 data[remaining]`
+	answers `limit - base`, because a fixed-size element divides the
+	bytes the frame leaves. A `[remaining]` run of RECORDS answers too --
+	`mqtt_string filters[remaining]` is one and C walks it.
+
+	**Asked in two places, which is why it is here.** C's `_varint_run`
+	asks it to decline the four accessors, and the `gen-checks` generator
+	asks it before emitting a call to the `_at` that would not exist.
+	They disagreed: C emitted a count returning the constant `0u` while
+	the other three declined in words, and when C was made to decline,
+	the checks harness went on calling an accessor no header declared --
+	a build failure `make test` would find and `gen-checks` would not
+	(26.733). One predicate rather than three conditions is the lesson
+	26.728 and 26.729 both paid for.
+	"""
+	if placement.array_count is not None:
+		return True
+	if placement.sized_by != "remaining":
+		return True
+	return placement.varint is None
+
+
 def framing_floor(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct) -> int:
 	"""The fewest bytes a COMPLETE `struct` can occupy, constraints ignored.

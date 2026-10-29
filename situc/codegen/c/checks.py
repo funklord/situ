@@ -44,6 +44,7 @@ from situc.traverse import (
 	Obligation,
 	covered_run,
 	data_sized,
+	elements_are_countable,
 	enclosing_arm,
 	has_computable_extent,
 	indexed_elements,
@@ -889,6 +890,24 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 				" SITU_ERR_BOUNDS);",
 				"\t}",
 			])
+			return lines
+
+		# The accessors have to EXIST before a harness calls them, and
+		# this asked the placement rather than the backend: C declines
+		# the four accessors of a `uvar v[remaining]`, because nothing
+		# can say how many elements it holds, and the harness went on
+		# calling `_at` -- a build failure `make test` would find and
+		# `gen-checks` would not (26.733).
+		if not elements_are_countable(placement):
+			lines.append(
+				f"\t/* {placement.path}: a run of varints the frame"
+				" sizes, so no")
+			lines.append(
+				"\t * backend can say how many elements it holds and"
+				" none emits the")
+			lines.append(
+				"\t * accessors. Nothing to assert about an offset"
+				" nobody resolves. */")
 			return lines
 
 		lines.extend([

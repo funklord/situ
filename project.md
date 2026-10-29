@@ -5840,8 +5840,17 @@ holder's:
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **`uvar v[remaining]` builds in C alone** (26.691). The crash is fixed;
-  three backends short of a construct is a feature.
+- **`uvar v[remaining]` is unimplemented in all four** (26.691, 26.733).
+  It was recorded as three backends short of a construct with C
+  answering; **C emitted a count returning the constant `0u`**, so on
+  four bytes holding three varints every accessor said the run was empty
+  and `validate` returned OK. Four short, with C the one that answered
+  confidently. C declines now, in the other three's words, and the
+  construct is honestly unsupported rather than wrong in one -- the
+  corpus C output is byte-identical, since no committed schema has it.
+  `edges.situ` carries one now so the agreement is witnessed.
+  **Walking varints to the end of the view is the feature, and none of
+  the four does it.**
 - **Four walker identity divergences** of one shape (26.689), where the
   guard widths want reconciling rather than listing.
 
@@ -7606,6 +7615,11 @@ Moved to
 
 Moved to
 `doc/decision/26.732-rust-framed-to-a-different-ceiling.md`.
+
+### 26.733 C answered zero elements for a run it could not count
+
+Moved to
+`doc/decision/26.733-c-answered-zero-elements-for-a-run-it-could-not-count.md`.
 
 ### 26.715 The same width in the other pointer backend
 

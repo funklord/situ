@@ -86,6 +86,10 @@ struct corrected_nibble size=9 atomic=NonAtomic
   corrected_nibble.body                  offset=AbsoluteStatic(0x01) size=Fixed(8) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
   corrected_nibble.body.payload          offset=AbsoluteStatic(0x01) size=Fixed(4) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
 
+struct countless_varints size=1.. access=Sequential mutate=InPlaceSlack repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
+  countless_varints.lead                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  countless_varints.loose                offset=AbsoluteStatic(0x01) size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=InPlaceSlack canonical=NonCanonical
+
 struct covered_tail size=8..12 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic
   covered_tail.n                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   covered_tail.pad                       offset=AbsoluteStatic(0x01) size=Bounded(0, 4) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting

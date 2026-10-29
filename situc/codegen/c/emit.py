@@ -77,6 +77,7 @@ from situc.traverse import (
 	fixed_span_bits,
 	frame_cap,
 	frameable,
+	elements_are_countable,
 	framing_floor,
 	framing_gaps,
 	has_computable_extent,
@@ -3551,6 +3552,33 @@ class Emitter:
 		span  = ident(self.prefix, struct.name, local, "span")
 		least = ident(self.prefix, struct.name, local, "span_min")
 		at_fn = ident(self.prefix, struct.name, local, "at")
+		# NO COUNT MEANS NO ACCESSORS, which is what the other three say
+		# and what this backend answered `0u` to (26.733).
+		#
+		# `uvar v[remaining]` is sized by the FRAME rather than by a
+		# field, so `_count_read` looks up a field called `remaining`,
+		# finds none, falls through to `array_count or 0` and this
+		# emitted `return (uint32_t)0u;` -- a run reported EMPTY whatever
+		# the bytes hold. Measured on `r { u8 n; uvar v[remaining]; }` and
+		# four bytes holding three one-byte varints: `situ_r_v_count`
+		# answered 0, `situ_r_v_at(view, 0, &out)` refused because the
+		# walk it drives never ran, and `validate` returned OK. So the
+		# data was there and every accessor said the run was empty.
+		#
+		# The other three decline the member in words -- "this backend
+		# cannot resolve how many elements it holds" -- which is honest,
+		# and 26.691 recorded this as three backends short of a construct.
+		# It was four: C emitted a stub and answered confidently.
+		# Declining takes nothing away, because what it answered was
+		# wrong, and it leaves the construct unimplemented in all four
+		# rather than wrong in one.
+		#
+		# Walking varints to the end of the view IS implementable and is
+		# the feature 26.691 asks for; it is not this.
+		if not elements_are_countable(placement):
+			return ["", f"\t/* {placement.path}: this backend cannot"
+			        " resolve how many elements it holds. */"]
+
 		total = self._count_expression(struct, placement, held)
 		view  = held.split(".")[0]
 
