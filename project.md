@@ -7494,6 +7494,11 @@ Moved to
 Moved to
 `doc/decision/26.724-the-run-walk-credited-a-constraint-it-could-not-enforce.md`.
 
+### 26.725 The framing layer had no corpus-wide execution
+
+Moved to
+`doc/decision/26.725-the-framing-layer-had-no-corpus-wide-execution.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
