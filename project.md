@@ -7784,6 +7784,11 @@ Moved to `doc/decision/26.749-c-named-an-offset-function-no-variant-has.md`.
 Moved to
 `doc/decision/26.750-the-gated-byte-probe-asked-for-readers-backends-split-on.md`.
 
+### 26.751 A bound read a later run's element past the view
+
+Moved to
+`doc/decision/26.751-a-bound-read-a-later-run-s-element-past-the-view.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

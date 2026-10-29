@@ -9211,11 +9211,31 @@ class Emitter:
 		target = element_target(struct, expr)
 		if target is None:
 			return None
-		run, index, _member = target
+		run, index, member = target
 		count = self._count_expression(struct, run)
 		if count is None:
 			return None
-		return self._element_guard_lines(run, index, count)
+		lines = self._element_guard_lines(run, index, count)
+		# AND THE ELEMENT'S BYTES INSIDE THE FRAME (26.751). A count says
+		# how many elements the message claims, not that the frame holds
+		# them, and the bound is compared before the run's own frame check
+		# where the bound names a run declared AFTER it: `u8 v [max =
+		# n[0].f]; u8 c; rec n[c];` over `00 01` read `base[2]`, past a
+		# two-byte view, in this backend and C's under ASan.
+		# Rust and Python read safely and answer BOUNDS; so does this now.
+		base = self._offset_expression(struct, run)
+		if base is not None and run.element_bits is not None \
+				and member.scalar is not None and member.offset_bits is not None:
+			at = (f"({base})"
+			      f" + {index * (run.element_bits // 8) + member.offset_bits // 8}u")
+			width = max(member.scalar.bits // 8, 1)
+			lines += [
+				f"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), {at},"
+				f" {width}u)) {{",
+				"\t\t\treturn ::situ::rt::err::bounds;",
+				"\t\t}",
+			]
+		return lines
 
 	def _element_guard_lines(self, run: Placement, index: int,
 			count: str) -> list[str]:

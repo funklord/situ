@@ -11507,14 +11507,32 @@ class Emitter:
 		target = element_target(struct, expr)
 		if target is None:
 			return None
-		run, index, _member = target
+		run, index, member = target
 		# No `count is None` branch: this backend's `_count_expression`
 		# returns a `str`, where the other three return `str | None`. The
 		# guard was copied across all four and is dead here -- mypy strict
 		# said so, and a branch that cannot be taken is a claim about this
 		# emitter that is not true of it.
-		return self._element_guard_lines(
+		lines = self._element_guard_lines(
 			run, index, self._count_expression(struct, run))
+		# AND THE ELEMENT'S BYTES INSIDE THE FRAME (26.751). A count says
+		# how many elements the message claims, not that the frame holds
+		# them, and the bound is compared before the run's own frame check
+		# where the bound names a run declared AFTER it: `u8 v [max =
+		# n[0].f]; u8 c; rec n[c];` over `00 01` read `base[2]`, past a
+		# two-byte view, in this backend and its C/C++ twin under ASan.
+		# Rust and Python read safely and answer BOUNDS; so does this now.
+		if run.element_bits is not None and member.scalar is not None \
+				and member.offset_bits is not None:
+			at = (f"({self._base_expression(struct, run)})"
+			      f" + {index * (run.element_bits // 8) + member.offset_bits // 8}u")
+			width = max(member.scalar.bits // 8, 1)
+			lines += [
+				f"\tif (!situ_in_bounds(view, {at}, {width}u)) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			]
+		return lines
 
 	def _element_guard_lines(self, run: Placement, index: int,
 			count: str) -> list[str]:
