@@ -4081,7 +4081,11 @@ class Emitter:
 		if entry is not None:
 			table = self._count_expression(struct, placement,
 						       leaf_bounded=leaf_bounded)
-			return None if table is None else f"({table}) * {entry}"
+			if table is None:
+				return None
+			if not leaf_bounded:
+				return f"situ_need_mul_u32({table}, {entry}u)"
+			return f"({table}) * {entry}"
 
 		count = self._count_expression(struct, placement,
 						       leaf_bounded=leaf_bounded)
@@ -4091,7 +4095,15 @@ class Emitter:
 		element = self._element_bytes(placement)
 		if element is None:
 			return None
-		return f"({count})" if element == 1 else f"({count}) * {element}"
+		if element == 1:
+			return f"({count})"
+		# Saturating for `required`, as C's twin says at length: a count
+		# times a width wrapped in `std::uint32_t`, and `pickle_wstring`
+		# answered 2578195176 where Rust and Python saturate at 4294967295
+		# (26.743).
+		if not leaf_bounded:
+			return f"situ_need_mul_u32({count}, {element}u)"
+		return f"({count}) * {element}"
 
 	def _count_expression(self, struct: ResolvedStruct,
 			placement: Placement,

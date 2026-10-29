@@ -5127,10 +5127,22 @@ class Emitter:
 					"\t}",
 				])
 
+			# WHERE THE MEMBER STARTS, which is the cursor and not `at`
+			# (26.743). `at` is a running TOTAL that already holds every
+			# fixed member after this one, so handing it over as a start
+			# scanned for `until "\0"` four bytes past where the label
+			# began: a terminator before that point was never seen, and
+			# one after it ended the label early -- C answered 162 where
+			# the other three answered 166, and called a message complete
+			# whose run had not all arrived. The corpus differential found
+			# it the first time it asked `required`. Without a cursor the
+			# fallback is the old one, which `framing_gaps` makes
+			# unreachable over the corpus.
+			start = cursor or "at"
 			if placement.delimiters:
 				terminated = ident(self.prefix, struct.name, local, "terminated")
 				steps.extend([
-					f"\tif (!{terminated}_from(view, at)) {{",
+					f"\tif (!{terminated}_from(view, {start})) {{",
 					"\t\t/* The delimiter is not in what we have. How much"
 					" more is a",
 					"\t\t * question only the sender can answer, so the honest"
@@ -5176,7 +5188,7 @@ class Emitter:
 				continue
 
 			length = self._length_expression(struct, placement,
-			                                 running="at",
+			                                 running=start,
 			                                 leaf_bounded=False)
 			if cursor is None:
 				steps.append(f"\tat = situ_need_u32(at, {length});")
@@ -8504,6 +8516,8 @@ class Emitter:
 		if entry is not None:
 			table = self._count_expression(struct, placement, held,
 			                               leaf_bounded=leaf_bounded)
+			if not leaf_bounded:
+				return f"situ_need_mul_u32((uint32_t){table}, {entry}u)"
 			return f"(uint32_t){table} * {entry}u"
 
 		element = (placement.element_bits or BITS_PER_BYTE) // BITS_PER_BYTE
@@ -8517,7 +8531,20 @@ class Emitter:
 
 		count = self._count_expression(struct, placement, held,
 		                               leaf_bounded=leaf_bounded)
-		return f"(uint32_t){count}" if element == 1 else f"(uint32_t){count} * {element}u"
+		if element == 1:
+			return f"(uint32_t){count}"
+		# `required`'s caller saturates the product as well as the sum. A
+		# count of 3436581234 two-byte elements is 6873162468 bytes, which
+		# a plain `uint32_t` product wraps to 2578195172: a need a caller
+		# CAN satisfy, where the message claims more than any can -- 26.651
+		# through the multiplication rather than the addition. Rust and
+		# Python answered 4294967295 and C and C++ the wrapped figure, and
+		# the corpus differential found it on `pickle_wstring` (26.743).
+		# The accessors keep the plain product: their count is held to
+		# `SITU_LEAF_MAX` first, which this caller asks not to be.
+		if not leaf_bounded:
+			return f"situ_need_mul_u32((uint32_t){count}, {element}u)"
+		return f"(uint32_t){count} * {element}u"
 
 	def _region_length(self, struct: ResolvedStruct, region: Placement,
 			held: str = "view") -> str | None:

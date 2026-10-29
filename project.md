@@ -5757,8 +5757,7 @@ blocks anything.
 **What a session picking this up should take first**, in order: rungs
 3, 5 and 6 of the layer ladder with 26.99 finishing rung 2, which is the
 real goal gap and is sequenced in the phases above rather than
-open-ended; then teaching `differ.py` to compare framing, which would
-fold 26.725's and 26.732's two files into the corpus differential.
+open-ended.
 
 - **`required` has seven records in four days and what is left of it is
   one design question.** The seventh arrived from bbq-predictor after the
@@ -5826,8 +5825,10 @@ fold 26.725's and 26.732's two files into the corpus differential.
 - **The framing layer had no corpus-wide execution in any backend**
   until 26.725, and `situc/codegen/differ.py` -- the differential over
   all five spellings, and the source the C++ fuzz harness is built from
-  -- still does not mention `required` or `framed`. Two files stand in
-  its place and ask different questions, which is why there are two:
+  -- did not mention `required` until 26.743. Its drivers now print a
+  `required()` line per framed struct, an answer per prefix of the
+  input, so every corpus message, random draw and C++ fuzz input
+  reaches it. Two files ask what that cannot, which is why they stay:
   - `test/unit/test_required_over_the_corpus.py` owns the PROPERTIES,
     in C and C++: every `required` taking only bytes, every prefix to
     48, four fills, each prefix in a `malloc` of exactly its own length,
@@ -5840,8 +5841,10 @@ fold 26.725's and 26.732's two files into the corpus differential.
     structs, and the divergence depended on the target's pointer width
     (26.732).
   - **Two backends agreeing wrongly is what the second cannot see**, and
-    the properties are what see it. Teaching `differ.py` itself would
-    fold both into the corpus differential and is still not done.
+    the properties are what see it. Neither is folded into the
+    differential: both sweep uniform FILLS, which make every length zero
+    or as large as its type allows, and a message or a random draw is
+    neither -- 26.732 was found by the 0xFF fill.
 - **A population is not only which schemas are swept but which bytes
   they are swept with** (26.727). The construct 26.724 needed -- a
   counted run whose element length carries a `[min]` -- was in no schema
@@ -7735,6 +7738,10 @@ Moved to
 
 Moved to
 `doc/decision/26.742-a-run-of-varints-the-frame-sizes-is-walked.md`.
+
+### 26.743 The corpus differential asks `required`
+
+Moved to `doc/decision/26.743-the-corpus-differential-asks-required.md`.
 
 ### 26.715 The same width in the other pointer backend
 

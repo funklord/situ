@@ -100,6 +100,7 @@ from enum import Enum
 
 from situc import ast
 from situc.codegen import arguments
+from situc.codegen.c.frame import framed_structs
 from situc.codegen.c.names import bare_name, c_name, ident, macro
 from situc.codegen.rust.emit import _ident as rust_ident
 from situc.codegen.python.emit import py_name
@@ -1226,7 +1227,76 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, target: str,
 	return renderer(resolved, prefix)
 
 
+#: How many prefixes of the buffer each `required` line answers for: every
+#: one from 0 to this, then the whole buffer if it is longer. A fuzz input
+#: runs to kilobytes and every prefix walks the struct again, so all of
+#: them would be the harness spending its budget on one quadratic loop.
+FRAMING_PREFIXES = 64
+
+
+def framed(resolved: ResolvedSchema) -> set[str]:
+	"""The structs whose `required` every driver asks, over prefixes.
+
+	26.725 measured that this file -- the corpus differential, and the
+	source of the C++ fuzz harness -- mentioned neither `required` nor
+	`framed`, so the framing layer, with seven records against it in two
+	weeks, was compared across the four by nothing that runs over the
+	corpus. `test_four_backends_frame_alike.py` did it from probes of its
+	own; this puts it where every real message and every fuzz input goes.
+
+	`frame.framed_structs` decides, because it is what the frame layer's
+	Reader is built from and what C's `_required` asks first (26.729); a
+	struct taking a `[stream]` argument takes it on `required` too, and
+	calling one would mean inventing a value the schema says is
+	negotiated. Measured when written: over the corpus this is every
+	struct the four emit a bytes-only `required` for and the differ
+	compares, 222 of them, and the four emit it for the same ones.
+
+	The line opens `required()`, which no member can be called: the walker
+	comparison keys lines by their first word, and a member named
+	`required` would otherwise be compared against this line.
+	"""
+	compared = {struct.name for struct in structs_of(resolved)}
+	return {struct.name for struct in framed_structs(resolved)
+	        if not arguments(struct) and struct.name in compared}
+
+
 # -- C ---------------------------------------------------------------------
+
+
+def _c_framing(prefix: str, name: str) -> list[str]:
+	"""One `required` line: an answer per prefix, each in a buffer of
+	exactly its own length, so a read past it is a sanitizer's finding
+	rather than a read of the slack behind it (26.725)."""
+	required = ident(prefix, name, "required")
+	return [
+		"\t{",
+		"\t\tuint32_t k;",
+		'\t\tprintf("required()");',
+		"\t\tfor (k = 0u; k <= n; k++) {",
+		"\t\t\tuint8_t   *part;",
+		"\t\t\tuint32_t   need = 0u;",
+		"\t\t\tsitu_err_t got;",
+		"",
+		f"\t\t\tif (k > {FRAMING_PREFIXES}u && k != n) {{",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		"\t\t\tpart = (uint8_t *)malloc(k != 0u ? k : 1u);",
+		"\t\t\tif (part == NULL) { return 3; }",
+		"\t\t\tmemcpy(part, raw, k);",
+		f"\t\t\tgot = {required}(part, k, &need);",
+		"\t\t\tfree(part);",
+		"\t\t\tif (got == SITU_OK) {",
+		'\t\t\t\tprintf(" *%u", (unsigned)need);',
+		"\t\t\t} else if (got == SITU_ERR_TRUNCATED) {",
+		'\t\t\t\tprintf(" %u", (unsigned)need);',
+		"\t\t\t} else {",
+		'\t\t\t\tprintf(" x");',
+		"\t\t\t}",
+		"\t\t}",
+		'\t\tprintf("\\n");',
+		"\t}",
+	]
 
 
 def _c(resolved: ResolvedSchema, prefix: str) -> str:
@@ -1274,6 +1344,7 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 			"",
 		])
 
+	framing = framed(resolved)
 	for struct in structs_of(resolved):
 		name   = struct.name
 		view   = ident(prefix, name, "view")
@@ -1295,6 +1366,8 @@ def _c(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t\t}",
 			"\t}",
 		])
+		if name in framing:
+			lines.extend(_c_framing(prefix, name))
 
 	lines.extend(_c_writes(resolved, prefix))
 	lines.extend(["\treturn 0;", "}"])
@@ -1597,6 +1670,36 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 # -- C++ -------------------------------------------------------------------
 
 
+def _cpp_framing(name: str) -> list[str]:
+	"""C's `required` line: each prefix copied into a vector of exactly its
+	length, which is the edge this backend reads past silently where Rust
+	panics and Python raises."""
+	return [
+		"\t{",
+		'\t\tstd::printf("required()");',
+		"\t\tfor (std::uint32_t k = 0u; k <= n; k++) {",
+		f"\t\t\tif (k > {FRAMING_PREFIXES}u && k != n) {{",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		"\t\t\tstd::vector<std::uint8_t> part(raw, raw + k);",
+		"\t\t\tstd::uint32_t need = 0u;",
+		"\t\t\tconst ::situ::rt::err got = ::situ::"
+		f"{c_name(name)}::required(part.empty() ? empty : part.data(), k,"
+		" need);",
+		"",
+		"\t\t\tif (got == ::situ::rt::err::ok) {",
+		'\t\t\t\tstd::printf(" *%u", static_cast<unsigned>(need));',
+		"\t\t\t} else if (got == ::situ::rt::err::truncated) {",
+		'\t\t\t\tstd::printf(" %u", static_cast<unsigned>(need));',
+		"\t\t\t} else {",
+		'\t\t\t\tstd::printf(" x");',
+		"\t\t\t}",
+		"\t\t}",
+		'\t\tstd::printf("\\n");',
+		"\t}",
+	]
+
+
 def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 	lines = [
 		"/* Generated by situc: what this schema says about a buffer. */",
@@ -1647,6 +1750,7 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 			"",
 		])
 
+	framing = framed(resolved)
 	for struct in structs_of(resolved):
 		name  = struct.name
 		fixed = struct.layout.is_fixed_size
@@ -1667,6 +1771,8 @@ def _cpp(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t\t}",
 			"\t}",
 		])
+		if name in framing:
+			lines.extend(_cpp_framing(name))
 
 	lines.extend(_cpp_writes(resolved))
 	lines.extend([
@@ -2027,6 +2133,28 @@ def _cpp_ask(ask: Ask) -> list[str]:
 # -- Rust ------------------------------------------------------------------
 
 
+def _rust_framing(name: str) -> list[str]:
+	"""C's `required` line, over slices of the one buffer: a slice carries
+	its own length, so its edge is real without a copy."""
+	return [
+		"\t{",
+		'\t\tlet mut line = String::from("required()");',
+		"\t\tfor k in 0..=raw.len() {",
+		f"\t\t\tif k > {FRAMING_PREFIXES} && k != raw.len() {{",
+		"\t\t\t\tcontinue;",
+		"\t\t\t}",
+		f"\t\t\tmatch unit::{_pascal(name)}::required(&raw[..k]) {{",
+		"\t\t\t\tsitu_rt::Framing::Complete(at) =>"
+		' line.push_str(&format!(" *{}", at)),',
+		"\t\t\t\tsitu_rt::Framing::Need(at) =>"
+		' line.push_str(&format!(" {}", at)),',
+		"\t\t\t}",
+		"\t\t}",
+		'\t\tprintln!("{}", line);',
+		"\t}",
+	]
+
+
 def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 	lines = [
 		"// Generated by situc: what this schema says about a buffer.",
@@ -2052,6 +2180,7 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 			"",
 		])
 
+	framing = framed(resolved)
 	for struct in structs_of(resolved):
 		name = struct.name
 		lines.extend([
@@ -2075,6 +2204,8 @@ def _rust(resolved: ResolvedSchema, prefix: str) -> str:
 			"\t\t}",
 			"\t}",
 		])
+		if name in framing:
+			lines.extend(_rust_framing(name))
 
 	lines.extend(_rust_writes(resolved))
 	lines.extend(["}"])
@@ -2305,6 +2436,24 @@ def _rust_ask(ask: Ask) -> list[str]:
 # -- Python ----------------------------------------------------------------
 
 
+def _python_framing(name: str) -> list[str]:
+	"""C's `required` line. An exception other than situ's own is left to
+	end the driver, which the differential reports as the crash it is."""
+	return [
+		'line = ["required()"]',
+		"for k in range(len(raw) + 1):",
+		f"\tif k > {FRAMING_PREFIXES} and k != len(raw):",
+		"\t\tcontinue",
+		"\ttry:",
+		f"\t\tline.append(f\"*{{unit.{c_name(name)}.required(bytes(raw[:k]))}}\")",
+		"\texcept situ_runtime.TruncatedError as short:",
+		"\t\tline.append(str(short.needed))",
+		"\texcept situ_runtime.SituError:",
+		'\t\tline.append("x")',
+		'print(" ".join(line))',
+	]
+
+
 def _python(resolved: ResolvedSchema, prefix: str) -> str:
 	lines = [
 		"# Generated by situc: what this schema says about a buffer.",
@@ -2328,6 +2477,7 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 			"",
 		])
 
+	framing = framed(resolved)
 	for struct in structs_of(resolved):
 		name  = struct.name
 		fixed = struct.layout.is_fixed_size
@@ -2357,6 +2507,8 @@ def _python(resolved: ResolvedSchema, prefix: str) -> str:
 			'\tprint("validate 9")',
 		])
 		lines.extend(f"\t{line}" for line in body)
+		if name in framing:
+			lines.extend(_python_framing(name))
 		lines.append("")
 
 	lines.extend(_python_writes(resolved))
