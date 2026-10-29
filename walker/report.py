@@ -1027,8 +1027,14 @@ def _validate(image: Image, view: View, struct_index: int,
 		# refused frames all four backends accept, because none of them
 		# emits this check for one. Three other artifacts had already made
 		# exactly this assumption (26.446).
+		#
+		# And a `[since]` member its version admits, which sits at a STATIC
+		# offset past the struct's minimum: the acquiring check never
+		# answered for it either. A version-3 message one byte short of its
+		# version-3 field validated here, in the C walker and in all four
+		# backends, while every accessor refused the field (26.746).
 		placed = image.placements[index]
-		if placed.fixed and not placed.offset_known \
+		if placed.fixed and (not placed.offset_known or since) \
 				and placed.located_code == NONE:
 			if view.at * 8 + at + wide > view.limit * 8:
 				return fail(ERR_BOUNDS, index)

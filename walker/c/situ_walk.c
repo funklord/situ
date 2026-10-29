@@ -4431,19 +4431,21 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
-		/* The frame has to reach the member -- but only where its offset is
-		 * dynamic, which is `report._validate`'s rule (`fixed and not
-		 * offset_known`) and the generated backends'. A member at a *static*
-		 * offset is either within the struct's own minimum, already checked
-		 * on entry, or a `[since]` member the version admits: the packer, the
-		 * Python walk and every backend leave that one unchecked, so a second
-		 * reader that flagged it would be the one out of six that disagreed.
+		/* The frame has to reach the member -- where its offset is dynamic,
+		 * which is `report._validate`'s rule (`fixed and not offset_known`)
+		 * and the generated backends', AND where it is a `[since]` member the
+		 * version admits. A static offset is otherwise within the struct's
+		 * own minimum, already checked on entry; a versioned one lies past
+		 * it, and a message whose version claims the field and whose frame
+		 * stops short of it is BOUNDS. All six readers left that unchecked
+		 * until 26.746 -- this comment said so, as the reason not to be the
+		 * one out of six -- while every backend's accessor refused the field.
 		 * And NOT a located member, which satisfies both flags -- `at off`
 		 * is a dynamic offset and is usually fixed-size -- while "a
 		 * `located` member reaches past the frame by construction (9.8)".
 		 * Its accessor asks the message on every call. Asking it here
 		 * refused frames all four backends accept (26.446). */
-		if ((held.flags & SITU_WALK_OFFSET_KNOWN) == 0u
+		if (((held.flags & SITU_WALK_OFFSET_KNOWN) == 0u || since != 0u)
 		                && (held.flags & SITU_WALK_SIZE_FIXED) != 0u
 		                && held.located_code == SITU_WALK_NONE
 		                && (at / 8u > len || (wide + 7u) / 8u > len - at / 8u)) {

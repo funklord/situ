@@ -4622,6 +4622,9 @@ gating a check about *value*, and it needs the struct's version member to be
 nameable at runtime -- which is why the packed image carries a table of them
 (26.91) and not merely each member's `since`. Because offsets are static the
 rest costs nothing: nothing moves, only the count of members present varies.
+**And a member the version says is carried has to be in the frame**: a
+version-3 message one byte short of its version-3 field is malformed, not
+old, and `validate` answers BOUNDS for it as the accessor does (26.746).
 
 **The accessor reports rather than guesses, in both directions.** There is no
 value to return when the field is not there, and one that handed back whatever
@@ -7751,6 +7754,11 @@ Moved to
 ### 26.745 A run ended by `remaining` was framed
 
 Moved to `doc/decision/26.745-a-run-ended-by-remaining-was-framed.md`.
+
+### 26.746 A versioned field the frame cut short validated
+
+Moved to
+`doc/decision/26.746-a-versioned-field-the-frame-cut-short-validated.md`.
 
 ### 26.715 The same width in the other pointer backend
 

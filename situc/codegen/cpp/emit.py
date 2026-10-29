@@ -9882,7 +9882,8 @@ class Emitter:
 
 		lines.extend(self._attr_checks(struct, placement, read))
 
-		if versioned and lines:
+		# Every versioned member: the accessor is the frame check (26.746).
+		if versioned:
 			return self._behind_a_version(placement, name, lines)
 
 		return lines

@@ -7963,7 +7963,20 @@ class Emitter:
 
 		lines.extend(self._attr_checks(struct, placement, read))
 
-		if versioned and lines:
+		# Every versioned member: the property is the frame check, raising
+		# BoundsError where the version claims the field and the frame is
+		# short (26.746). With nothing else to check it is read and dropped.
+		if versioned and not lines:
+			return [
+				f"\t\t# {placement.path} arrives in version {placement.since};"
+				" the frame",
+				"\t\t# must hold it wherever the version says it is carried.",
+				"\t\ttry:",
+				f"\t\t\tself.{name}",
+				"\t\texcept VersionError:",
+				"\t\t\tpass",
+			]
+		if versioned:
 			return [
 				f"\t\t# {placement.path} arrives in version {placement.since}."
 				" A message older",

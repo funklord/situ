@@ -9322,7 +9322,8 @@ class Emitter:
 
 		mine.extend(self._attr_checks(struct, placement, read))
 
-		if versioned and mine:
+		# Every versioned member: the accessor is the frame check (26.746).
+		if versioned:
 			# The accessor answers whether the field is *there*; the raw
 			# load below answers what it holds, which is how every other
 			# check in this function reads a member. Binding the accessor's

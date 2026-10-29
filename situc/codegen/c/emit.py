@@ -11394,7 +11394,14 @@ class Emitter:
 		# bounds check emitted anywhere -- which is how C came to accept a
 		# frame the other three called short, in 149 cells of the full run.
 		fits = self._fits_check(struct, placement)
-		if versioned and (lines or fits):
+		# EVERY versioned member, not only one with checks to gate. The
+		# getter IS the frame check: it answers VERSION for a message older
+		# than the field and BOUNDS for one whose version claims the field
+		# and whose frame stops short of it. Gated on having something to
+		# check, a plain `u16 extra [since = 3]` got nothing, and a version-3
+		# message one byte short of `extra` validated in all four backends
+		# while every one of their accessors refused the field (26.746).
+		if versioned:
 			return self._behind_a_version(placement, getter, local, lines,
 			                              fits)
 
