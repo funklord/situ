@@ -5773,7 +5773,11 @@ fold 26.725's and 26.732's two files into the corpus differential.
   excludes a fixed-size element on purpose -- such a run has a stride to
   multiply -- so the shape fell past all four guards in all four
   emitters, and `traverse.nests_one_struct` is the one predicate they
-  ask now. The function frames a
+  ask now. bbq-predictor confirmed the fix against `bbq.situ` at
+  714ac3c (inbox 20261029T1030Z): its reproduction traps at 601fa96 and
+  passes at 714ac3c, and a 301-second framing fuzz ran 3,679,437 cases
+  clean. Their re-vendor (their d0f551c) runs the framing case by
+  default, and they report nothing further open. The function frames a
   message from bytes a caller has and nothing has validated, and every
   fault in the run was one shape: **two quantities computed in different
   places from different things, where neither bounds the other.**
