@@ -112,7 +112,7 @@ from situc.traverse import (
 	bit_addressed_tag, covered_run, invalidating_members,
 	Member, arm_members, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, length_is_transform_output,
-	is_varint_run,
+	elements_are_countable, is_varint_run,
 	local_name, offset_unresolvable, own_entries, own_members,
 	unmeasurable_inside,
 )
@@ -589,6 +589,14 @@ def asks(struct: ResolvedStruct, structs: set[str],
 				found.append(Ask(Probe.COVERED_RANGE, local))
 		elif kind is Member.MARKER:
 			found.append(Ask(Probe.MARKER, local))
+		elif kind is Member.VARINT and not elements_are_countable(placement):
+			# Nothing to ask: all four decline `uvar v[remaining]`, and the
+			# C driver went on calling the `_count` and `_at` C stopped
+			# emitting -- so every four-way build over `edges.situ` failed
+			# to compile from 26.733 on, and three walker tests with it.
+			# The emitters ask this predicate; the driver has to ask it
+			# too (26.735).
+			pass
 		elif kind is Member.VARINT:
 			# `signed` from the placement, which carries the transform now.
 			# This generator takes a resolved schema and no `ast`, so it
