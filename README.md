@@ -22,10 +22,10 @@ and the parts only a person can act on, such as why a field exists, stay
 beside them as comments in the same file. Situ is almost a superset of
 these ways of describing a format today; once it is mature, it will be one.
 
-Situ describes the exact byte layout of data that already has a binary
-representation -- wire protocols, packet formats, on-disk records,
-memory-mapped registers -- and generates accessors for it in C, C++, Rust and
-Python from one schema.
+Situ describes the exact byte layout of data that already has, or is being
+designed to have, a binary representation -- wire protocols, packet formats,
+on-disk records, memory-mapped registers -- and generates accessors for it in
+C, C++, Rust and Python from one schema.
 
 What separates it from the other ways to do that is what it does when it
 *cannot* generate something. A field whose bytes cannot be written in place
