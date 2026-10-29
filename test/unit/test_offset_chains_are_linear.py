@@ -145,7 +145,11 @@ def test_the_chain_does_not_re_derive_what_it_has_already_summed(
 WRAPS = {
 	"c":      ("at = at +", "situ_need_u32"),
 	"cpp":    ("at = at +", "situ_need_u32"),
-	"rust":   ("at +=", "saturating_add"),
+	# `situ_rt::need`, not `saturating_add`: since 26.732 Rust saturates at
+	# `u32::MAX` as the other three do, through the runtime, and this cell
+	# still asked for the old spelling -- so the instrument check below
+	# failed on correct code from f40119f on.
+	"rust":   ("at +=", "situ_rt::need("),
 	"python": (None, None),		# arbitrary-precision ints cannot wrap
 }
 
