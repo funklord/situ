@@ -7760,6 +7760,11 @@ Moved to `doc/decision/26.745-a-run-ended-by-remaining-was-framed.md`.
 Moved to
 `doc/decision/26.746-a-versioned-field-the-frame-cut-short-validated.md`.
 
+### 26.747 A C++ arm accessor read its discriminant past the view
+
+Moved to
+`doc/decision/26.747-a-cpp-arm-read-its-discriminant-past-the-view.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

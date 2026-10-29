@@ -3478,11 +3478,23 @@ class Emitter:
 				# discriminant behind a delimited member is exactly that --
 				# and asking the placement for one asserted out of the
 				# compiler.
-				at = (None if held.offset_bits is not None
-				      else self._offset_expression(struct, held))
-				if held.offset_bits is None and at is None:
-					raise UnknownName(name)
-				return leaf(f"({self._load(held.scalar, held, at)})",
+				#
+				# At a dynamic offset, through the GETTER cast to its backing
+				# type rather than a load of its bytes. The load was not
+				# bounds-checked, and `situ_advance_u32` clamps an offset to
+				# the frame's limit -- so a discriminant the frame does not
+				# reach was read at `base[limit]`, one byte past the view, and
+				# an arm accessor answered `ok` off whatever byte that was.
+				# The getter checks and answers zero, which is what C, Rust
+				# and Python read there. Found by the composed sweep, in every
+				# arm behind a nested-struct count (26.747).
+				if held.offset_bits is None:
+					if self._offset_expression(struct, held) is None:
+						raise UnknownName(name)
+					return leaf(f"static_cast<{self._ctype(held.scalar)}>("
+					            f"this->{bare_name(name)}())",
+					            held.scalar.signed)
+				return leaf(f"({self._load(held.scalar, held, None)})",
 				            held.scalar.signed)
 			# A varint's own getter reports a truncated encoding; `_value` is
 			# the read that cannot fail, which is what the count form uses --
