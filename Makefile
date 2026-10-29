@@ -51,7 +51,7 @@ export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
 	fuzz fuzz-generated fuzz-cpp fuzz-walker \
-	veryclean distclean style style-source style-docs hooks walk-c
+	veryclean distclean style style-source style-docs hooks walk-c \
 	cross cross-test install uninstall clean help deb deb-check
 
 all: runtime
