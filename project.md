@@ -7765,6 +7765,11 @@ Moved to
 Moved to
 `doc/decision/26.747-a-cpp-arm-read-its-discriminant-past-the-view.md`.
 
+### 26.748 A Python module named `NO_CHECK` before importing it
+
+Moved to
+`doc/decision/26.748-a-python-module-named-no-check-before-importing-it.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
