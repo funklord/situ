@@ -5603,8 +5603,12 @@ class Emitter:
 					f"\t\tif probe.{width}() == 0 {{",
 					f"\t\t\t// {placement.path}: mid-varint, so one more",
 					"\t\t\t// byte and ask again.",
+					"\t\t\t// ... and never below the total the walk has",
+					"\t\t\t// already accounted: the two are different",
+					"\t\t\t// quantities and neither bounds the other",
+					"\t\t\t// (26.726).",
 					"\t\t\treturn situ_rt::Framing::Need("
-					"have.saturating_add(1));",
+					"have.saturating_add(1).max(at));",
 					"\t\t}",
 				])
 
@@ -5627,7 +5631,12 @@ class Emitter:
 					" much more",
 					"\t\t\t// is the sender's to know. One byte is the honest"
 					" bound.",
-					"\t\t\treturn situ_rt::Framing::Need(have + 1);",
+					"\t\t\t// ... and never below the total the walk has",
+					"\t\t\t// already accounted: the two are different",
+					"\t\t\t// quantities and neither bounds the other",
+					"\t\t\t// (26.726).",
+					"\t\t\treturn situ_rt::Framing::Need("
+					"(have + 1).max(at));",
 					"\t\t}",
 				])
 			# The cursor is advanced only where a LATER variable member

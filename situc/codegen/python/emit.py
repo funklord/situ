@@ -5546,8 +5546,12 @@ class Emitter:
 				width = py_name(local_name(struct, placement)) + "_len"
 				steps.extend([
 					f"\t\tif probe.{width} == 0:",
+					"\t\t\t# ... and never below the total the walk has",
+					"\t\t\t# already accounted: the two are different",
+					"\t\t\t# quantities and neither bounds the other",
+					"\t\t\t# (26.726).",
 					f'\t\t\traise TruncatedError("{placement.path}:'
-					' mid-varint", have + 1)',
+					' mid-varint", max(have + 1, at))',
 				])
 
 			# `leaf_bounded=False`, the only caller that asks: this
@@ -5569,8 +5573,12 @@ class Emitter:
 					" much more",
 					"\t\t\t# is the sender's to know. One byte is the honest"
 					" bound.",
+					"\t\t\t# ... and never below the total the walk has",
+					"\t\t\t# already accounted: the two are different",
+					"\t\t\t# quantities and neither bounds the other",
+					"\t\t\t# (26.726).",
 					f'\t\t\traise TruncatedError("{placement.path}: '
-					'no delimiter yet", have + 1)',
+					'no delimiter yet", max(have + 1, at))',
 				])
 			# Saturating at `0xFFFFFFFF`, like C's `situ_need_u32` and
 			# Rust's `saturating_add`. A plain `+=` is where this backend

@@ -59,9 +59,20 @@ from situc.layout import solve				# noqa: E402
 from situc.parser import parse				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
 
+from every_schema import SCHEMAS as ALL_SCHEMAS		# noqa: E402
+
 RUNTIME  = ROOT / "runtime"
 HOST_CXX = shutil.which("g++") or shutil.which("clang++")
-SCHEMAS  = sorted((ROOT / "example").glob("*/*.situ"))
+
+#: EVERY schema this repository builds, not `example/` only. That list is
+#: `every_schema.py`'s whole reason for existing, and its docstring names
+#: this exact mistake: six files wanted the list and four had the shorter
+#: one, so the file most likely to break a backend --
+#: `test/schema/edges.situ`, which exists to carry the constructs the
+#: worked examples happen not to have -- was the file the checks skipped.
+#: This sweep was written with the shorter one and corrected before it was
+#: committed twice, which is once more than the guard deserves.
+SCHEMAS  = list(ALL_SCHEMAS)
 
 #: The C++ backend, because its accessors are the only ones that are not
 #: lax: a static offset reads straight through `situ_get_be16`, on the
@@ -85,12 +96,20 @@ SANITIZE = ["-g", "-fsanitize=address,undefined",
 #: where a bound either exists or does not.
 LONGEST = 48
 
-#: The signature that takes bytes and nothing else. A struct with a
-#: `[stream]` argument takes it on `required` too (0050), and calling one
-#: would mean inventing a value for a fact the schema says is negotiated --
-#: so those are left to the backend's own tests rather than given a number
-#: here.
-BYTES_ONLY = "static ::situ::rt::err required(const std::uint8_t *data,"
+#: The signature that takes bytes and nothing else, in the two lines the
+#: emitter breaks it over. A struct with a `[stream]` argument takes it on
+#: `required` too (0050), and calling one would mean inventing a value for
+#: a fact the schema says is negotiated -- so those are left to the
+#: backend's own tests rather than given a number here.
+#:
+#: **BOTH lines, because the argument lands on the second one.** Matching
+#: the first alone let `edges.negotiated_signed` through, whose `required`
+#: takes `(data, have, <arg>, need)`, and the compiler refused the
+#: function pointer. That is the detector being wrong about its own
+#: subject, which is the hazard this file's own `framed_classes` docstring
+#: is about, met one line below it.
+OPENS = "static ::situ::rt::err required(const std::uint8_t *data,"
+CLOSES = "std::uint32_t have, std::uint32_t &need) noexcept"
 
 #: schema -> (calls, truncated answers), filled in as the sweep runs.
 CORPUS_ASKED: dict[str, tuple[int, int]] = {}
@@ -111,11 +130,15 @@ def framed_classes(header: str) -> list[str]:
 	"""
 	seen: list[str] = []
 	current: str | None = None
-	for line in header.splitlines():
+	lines = header.splitlines()
+	for index, line in enumerate(lines):
 		found = re.match(r"class (\w+)\b", line)
 		if found is not None:
 			current = found.group(1)
-		if BYTES_ONLY in line and current is not None:
+		if OPENS not in line or current is None:
+			continue
+		tail = lines[index + 1] if index + 1 < len(lines) else ""
+		if CLOSES in tail:
 			seen.append(current)
 	return seen
 
@@ -134,8 +157,8 @@ def probe(classes: list[str], namespace: str) -> str:
 	"""A main() sweeping every prefix of every class, each in its own
 	exact-size allocation."""
 	calls = "\n".join(
-		f'\tif (sweep("{name}", &::{namespace}::{name}::required) != 0)\n'
-		f"\t\treturn 1;" for name in classes)
+		f'\t(void)sweep("{name}", &::{namespace}::{name}::required);'
+		for name in classes)
 	return f'''#include "unit.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -149,6 +172,13 @@ static const std::uint8_t FILL[] = {{ 0x00u, 0xFFu, 0x5Au }};
 
 static unsigned long asked;
 static unsigned long told_short;
+/* EVERY struct that broke, not the first. A probe that returns on the
+ * first finding reports one fault per run of the gate, and the run after
+ * the fix is the one that finds the second -- which is how a sweep used as
+ * an instrument hides what it was built to show. Measured: `edges.situ`
+ * holds two of these, and the first masked the second until this counted
+ * instead of returning. */
+static unsigned long broken;
 
 typedef ::situ::rt::err (*ask_t)(const std::uint8_t *, std::uint32_t,
                                  std::uint32_t &);
@@ -188,7 +218,8 @@ static int sweep(const char *who, ask_t ask)
 				            "need=%u, so a caller is told to read "
 				            "%d more\\n", who, f, n, need,
 				            (int)need - (int)n);
-				return 2;
+				broken++;
+				break;
 			}}
 			/* Monotone only up to the first complete answer: past
 			 * that these fills are no longer prefixes of one
@@ -196,7 +227,8 @@ static int sweep(const char *who, ask_t ask)
 			if (!done && need < prev) {{
 				std::printf("%s fill=%u have=%u: need FELL to %u "
 				            "from %u\\n", who, f, n, need, prev);
-				return 3;
+				broken++;
+				break;
 			}}
 			if (!done) {{
 				prev = need;
@@ -210,7 +242,7 @@ int main()
 {{
 {calls}
 	std::printf("asked=%lu truncated=%lu\\n", asked, told_short);
-	return 0;
+	return broken != 0ul ? 4 : 0;
 }}
 '''
 
@@ -265,11 +297,11 @@ def test_the_corpus_sweep_asked_something() -> None:
 	"""The non-vacuity companion, since every assertion above is inside a
 	program that might have been handed no classes to call.
 
-	Measured when written: 32 schemas swept and 4 skipped for emitting
-	no `required` that takes only bytes, 14,259 calls over 49 prefix
-	lengths and 3 fills, and 7,238 of those answers truncated. The rest
-	are a complete message or a refusal, which a 48-byte fill of 0x00 or
-	0xFF very often is.
+	Measured when written: of the 46 schemas this repository builds, 40
+	were swept and 6 skipped for emitting no `required` that takes only
+	bytes, giving 31,899 calls over 49 prefix lengths and 3 fills, of
+	which 14,323 answered truncated. The rest are a complete message or
+	a refusal, which a 48-byte fill of 0x00 or 0xFF very often is.
 
 	The bounds are well under the figures, because a schema gaining a
 	struct moves all three and what is worth catching is a collapse.
@@ -278,8 +310,8 @@ def test_the_corpus_sweep_asked_something() -> None:
 		pytest.skip("the per-schema sweeps did not run")
 	calls = sum(asked for asked, _ in CORPUS_ASKED.values())
 	short = sum(told for _, told in CORPUS_ASKED.values())
-	assert len(CORPUS_ASKED) >= 30, (
+	assert len(CORPUS_ASKED) >= 36, (
 		f"only {len(CORPUS_ASKED)} schemas were swept, of "
 		f"{len(SCHEMAS)} in the corpus")
-	assert calls >= 10000, f"only {calls} calls to `required`"
-	assert short >= 6000, f"only {short} truncated answers of {calls}"
+	assert calls >= 25000, f"only {calls} calls to `required`"
+	assert short >= 12000, f"only {short} truncated answers of {calls}"
