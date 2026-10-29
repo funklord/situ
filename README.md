@@ -2,17 +2,17 @@
 
 **One description, infinite possibilities.**
 
-Computers store and exchange information as long rows of small numbers
-called bytes. When two programs talk over a network, when a program saves a
-file, or when a computer controls a piece of hardware, both sides have to
-agree on exactly what every byte means: which ones hold a name, which hold a
-date, and where one piece ends and the next begins. The code that reads and
-writes these bytes is usually written by hand, which is slow, and small
-mistakes in it are a well-known cause of crashes and security problems.
-Situ lets a programmer write that agreement down once, in a short
-description, and produces the reading and writing code from it in four
-common programming languages. It also points out the parts of a format that
-are hard to handle safely or efficiently, and explains why.
+Every program that talks over a network, saves a file or drives a piece of
+hardware has to agree with the other side on exactly what each byte means:
+which bytes hold a length, a name or a timestamp, in what order, and where
+one field ends and the next begins. That agreement is usually implemented by
+hand, as parsing and serialization code written again in every program and
+every language that needs it. It is slow to write, and it is a well-known
+source of crashes and security holes, because a parser is exactly where
+untrusted input meets assumptions about its shape. Situ lets you write the
+agreement down once, as a precise description, and generates the reading and
+writing code from it in C, C++, Rust and Python. It also works out what that
+code can and cannot safely do with each field, and tells you why.
 
 Formats like these are usually defined in a written standard, such as an
 RFC, or in a schema language, such as Protocol Buffers or ASN.1. A situ
