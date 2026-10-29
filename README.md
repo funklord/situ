@@ -1,6 +1,6 @@
 # situ
 
-**One description, infinite possibilities.**
+**Every byte accounted for, every limit explained.**
 
 Computers store and exchange information as long rows of small numbers
 called bytes. When two programs talk over a network, when a program saves a
