@@ -436,6 +436,10 @@ class Image:
 	#: carried no selector to load: an image said how to read an item's TAG
 	#: and nothing about how far its VALUE reaches.
 	tlvs: dict[int, tuple[int, int, int, bool, bool]] = field(default_factory=dict)
+	#: The regions whose row says they name `known` tags and refuse every
+	#: other (bit 1 of its flags, 26.738). The image does not carry the tags,
+	#: so a validator must decline on these rather than pass them.
+	tlv_refuses_unknown: set[int] = field(default_factory=set)
 	#: placement index -> [(label, kind, is_default, size, length_varint)],
 	#: in declaration order, which is the order a selector is matched in.
 	#: 9.5's four ways for a value to say where it ends, the last of them by
@@ -683,9 +687,11 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 	if TLVS in found:
 		at, records, stride = found[TLVS]
 		for i in range(records):
-			(where, _flags, _unknown, _dup, selector,
+			(where, flags, _unknown, _dup, selector,
 			 tag_bytes, tag_terminal, tag_flags) = _struct.unpack_from(
 				"<IBBBxIBBBx", blob, at + i * stride)
+			if flags & 2:
+				image.tlv_refuses_unknown.add(where)
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
 			                     bool(tag_flags & 2),
 			                     bool(tag_flags & 1))

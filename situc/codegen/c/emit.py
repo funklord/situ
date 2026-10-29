@@ -106,6 +106,7 @@ from situc.traverse import (
 	recursion_cycle,
 	region_extent,
 	remaining_stride,
+	tlv_admitted_tags,
 	walk_order,
 )
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -2639,6 +2640,12 @@ class Emitter:
 		count = ident(self.prefix, struct.name, local, "count")
 		whole = ident(self.prefix, struct.name, local, "whole")
 		base  = self._base_expression(struct, placement, gated=False)
+		# The tag `find` matches on, decision 0023's part or the raw tag,
+		# held against every tag `known` names (26.738).
+		admitted = tlv_admitted_tags(placement)
+		keyed    = (f"item.{c_name(grammar.identity)}" if grammar.identity
+		            else "item.tag")
+		unknown  = " && ".join(f"{keyed} != {tag}u" for tag in admitted or ())
 
 		# A carried value starts at zero and is handed on by `next`. The
 		# seed is what makes the walk the only way to a number: a caller
@@ -2700,7 +2707,10 @@ class Emitter:
 			f"/* Whether the items fill the region exactly: SITU_OK where the",
 			" * walk ends at the region's end, and otherwise the error that",
 			" * stopped it -- SITU_ERR_BOUNDS for an item the frame cuts short,",
-			" * SITU_ERR_CONSTRAINT for one the schema says is an error. */",
+			" * SITU_ERR_CONSTRAINT for one the schema says is an error"
+			+ (", or" if admitted else ". */"),
+			*([" * for a tag outside `known`, which `unknown = error` refuses",
+			   " * (26.738). */"] if admitted else []),
 			f"static inline situ_err_t {whole}(situ_view_t view)",
 			"{",
 			f"\t{item} item;",
@@ -2708,6 +2718,9 @@ class Emitter:
 			f"\tsitu_err_t err = {first}(view, &item);",
 			"",
 			"\twhile (err == SITU_OK) {",
+			*([f"\t\tif ({unknown}) {{",
+			   "\t\t\treturn SITU_ERR_CONSTRAINT;",
+			   "\t\t}"] if admitted else []),
 			"\t\tend = item.next;",
 			f"\t\terr = {nxt}(&item);",
 			"\t}",

@@ -107,6 +107,7 @@ from situc.traverse import (
 	recursion_cycle,
 	region_extent,
 	remaining_stride,
+	tlv_admitted_tags,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -1582,7 +1583,8 @@ class Emitter:
 
 		item  = self._tlv_item_name(placement)
 		lines = self._tlv_read(struct, placement, grammar, name)
-		lines.extend(self._tlv_cursor(grammar, name, start, item))
+		lines.extend(self._tlv_cursor(grammar, name, start, item,
+		                              tlv_admitted_tags(placement)))
 		lines.extend(self._tlv_by_name(grammar, name, item))
 		return lines
 
@@ -1845,7 +1847,7 @@ class Emitter:
 		]
 
 	def _tlv_cursor(self, grammar: TlvGrammar, name: str, start: str,
-			item: str) -> list[str]:
+			item: str, admitted: tuple[int, ...] | None = None) -> list[str]:
 		"""The cursor, the generator over it, and the value's bytes.
 
 		Annotated, like everything else this backend emits. These were not,
@@ -1856,6 +1858,7 @@ class Emitter:
 		seeds  = "".join(", 0" for _ in grammar.tag_running)
 		onward = "".join(f", item.{part.name}"
 		                 for part in grammar.tag_running)
+		keyed  = f"item.{grammar.identity}" if grammar.identity else "item.tag"
 		# No trailing tabs on the blank line: the generated module is held
 		# to this tree's own whitespace rules, and a docstring built by
 		# joining indented fragments is where one gets left behind.
@@ -1908,23 +1911,31 @@ class Emitter:
 			# `default: error` arm both read as the region ending there
 			# (26.737). A property because `validate` relabels an access
 			# that raises, `_ = self.x`, with the member's id.
-			"	@property",
-			f"	def {name}_whole(self) -> None:",
-			f'		"""Raise unless the items fill the region exactly: the'
+			"\t@property",
+			f"\tdef {name}_whole(self) -> None:",
+			f'\t\t"""Raise unless the items fill the region exactly: the'
 			' error that',
-			"		stopped the walk -- BoundsError for an item the frame cuts"
+			"\t\tstopped the walk -- BoundsError for an item the frame cuts"
 			" short,",
-			'		ConstraintError for one the schema says is an error."""',
-			f"		end = {start}",
-			"		try:",
-			f"			item = self.{name}_first()",
-			"			while True:",
-			"				end  = item.next",
-			f"				item = self.{name}_next(item)",
-			"		except (BoundsError, ConstraintError):",
-			"			if end >= len(self._span):",
-			"				return",
-			"			raise",
+			"\t\tConstraintError for one the schema says is an error"
+			+ ('."""' if not admitted else ", or"),
+			*(["\t\tfor a tag outside `known`, which `unknown = error`"
+			   ' refuses."""'] if admitted else []),
+			f"\t\tend = {start}",
+			"\t\ttry:",
+			f"\t\t\titem = self.{name}_first()",
+			"\t\t\twhile True:",
+			# 26.738: matched on decision 0023's part, as `find` is.
+			*([f"\t\t\t\tif {keyed} not in {set(admitted)!r}:",
+			   f'\t\t\t\t\traise ConstraintError(f"{name}: tag'
+			   f' {{{keyed}}} is not one `known` names")']
+			  if admitted else []),
+			"\t\t\t\tend  = item.next",
+			f"\t\t\t\titem = self.{name}_next(item)",
+			"\t\texcept (BoundsError, ConstraintError):",
+			"\t\t\tif end >= len(self._span):",
+			"\t\t\t\treturn",
+			"\t\t\traise",
 		]
 
 	def _tlv_by_name(self, grammar: TlvGrammar, name: str,

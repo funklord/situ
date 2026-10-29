@@ -4634,7 +4634,16 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		{
 			uint32_t      items = 0u;
 			situ_walk_err stop  = SITU_WALK_OK;
+			const uint8_t *row  = table_row(image->tlvs, image->tlv_count_,
+			                                image->tlv_stride, index);
 
+			/* A region that refuses tags outside `known` (bit 1 of its
+			 * flags): the four backends enforce it, and the image carries
+			 * neither the tags nor the part they match, so this declines
+			 * rather than passes it (26.738). */
+			if (row != NULL && (row[4] & 2u) != 0u) {
+				return SITU_WALK_UNSUPPORTED;
+			}
 			err = tlv_walk(image, message, len, shape, index, &items,
 			               &stop);
 			if (err != SITU_WALK_OK && err != SITU_WALK_UNSUPPORTED) {

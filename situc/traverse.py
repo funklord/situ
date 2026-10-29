@@ -2011,6 +2011,28 @@ def remaining_stride(structs: dict[str, ResolvedStruct],
 	return bits // BITS_PER_BYTE
 
 
+def tlv_admitted_tags(placement: Placement) -> tuple[int, ...] | None:
+	"""The tags a `tlv` region admits, where it refuses every other; None
+	where it admits any.
+
+	`unknown = error` is the default (14.5), and nothing enforced it: an item
+	tagged outside `known` validated clean in all four backends (26.738).
+	`validate` refuses one now, matched on the part decision 0023 names.
+
+	**Only where `known` names something.** A region that declares no tags
+	says nothing about which exist, so none of its items is unknown -- read
+	the other way, `unknown = error` would refuse every item of every such
+	region, CoAP's options among them, which no schema means. `skip` and
+	`preserve` admit what they do not know, by definition.
+	"""
+	grammar = placement.tlv_grammar
+	if grammar is None or not grammar.known:
+		return None
+	if placement.tlv_unknown not in (None, "error"):
+		return None
+	return tuple(sorted({known.tag for known in grammar.known}))
+
+
 def framing_floor(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct) -> int:
 	"""The fewest bytes a COMPLETE `struct` can occupy, constraints ignored.

@@ -7714,6 +7714,11 @@ Moved to
 
 Moved to `doc/decision/26.737-nothing-validated-a-tlv-region.md`.
 
+### 26.738 `unknown = error` was the default, and nothing enforced it
+
+Moved to
+`doc/decision/26.738-unknown-error-was-the-default-and-nothing-enforced-it.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

@@ -107,6 +107,7 @@ from situc.traverse import (
 	region_decodes,
 	region_extent,
 	remaining_stride,
+	tlv_admitted_tags,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -1014,7 +1015,8 @@ class Emitter:
 		item = _pascal(struct.name) + _pascal(name) + "Item"
 
 		lines = list(self._tlv_read(struct, placement, grammar, item, name))
-		lines.extend(self._tlv_cursor(grammar, item, name, start))
+		lines.extend(self._tlv_cursor(grammar, item, name, start,
+		                              tlv_admitted_tags(placement)))
 		lines.extend(self._tlv_by_name(grammar, item, name))
 		return lines
 
@@ -1247,8 +1249,13 @@ class Emitter:
 		]
 
 	def _tlv_cursor(self, grammar: TlvGrammar, item: str, name: str,
-			start: str) -> list[str]:
+			start: str, admitted: tuple[int, ...] | None = None) -> list[str]:
 		"""`first`, `next`, `count`, and the value's bytes."""
+		# The tag `find` matches on, decision 0023's part or the raw tag,
+		# held against every tag `known` names (26.738).
+		keyed   = (f"item.{_ident(grammar.identity)}" if grammar.identity
+		           else "item.tag")
+		unknown = " && ".join(f"{keyed} != {tag}" for tag in admitted or ())
 		seeds  = "".join(", 0" for _ in grammar.tag_running)
 		onward = "".join(f", item.{_ident(part.name)}"
 		                 for part in grammar.tag_running)
@@ -1294,7 +1301,10 @@ class Emitter:
 			"\t/// Whether the items fill the region exactly: `Ok` where the",
 			"\t/// walk ends at the region's end, and otherwise the error that",
 			"\t/// stopped it -- `Bounds` for an item the frame cuts short,",
-			"\t/// `Constraint` for one the schema says is an error.",
+			"\t/// `Constraint` for one the schema says is an error"
+			+ (", or" if admitted else "."),
+			*(["\t/// for a tag outside `known`, which `unknown = error`"
+			   " refuses."] if admitted else []),
 			f"\tpub fn {name}_whole(&self) -> Result<()> {{",
 			f"\t\tlet mut end  = {start};",
 			f"\t\tlet mut held = self.{name}_first();",
@@ -1302,6 +1312,9 @@ class Emitter:
 			"\t\tloop {",
 			"\t\t\tmatch held {",
 			"\t\t\t\tOk(item) => {",
+			*([f"\t\t\t\t\tif {unknown} {{",
+			   "\t\t\t\t\t\treturn Err(Error::Constraint);",
+			   "\t\t\t\t\t}"] if admitted else []),
 			"\t\t\t\t\tend  = item.next;",
 			f"\t\t\t\t\theld = self.{name}_next(&item);",
 			"\t\t\t\t}",
