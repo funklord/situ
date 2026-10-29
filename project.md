@@ -5708,8 +5708,18 @@ log rather than a running order: nothing in 26.95 through 26.98 waits for
 emitter written first.
 
 **What is open as of 2026-10-29**, with the record that carries each
-reproduction. Three are decisions rather than work, and are the copyright
-holder's:
+reproduction. **Three are decisions rather than work and are the copyright
+holder's** -- whether `required` should read every readable length
+(26.693), which walker is right about a nested struct's value (26.721),
+and the walker guard-width reconciliation (26.689). Only the second
+blocks anything.
+
+**What a session picking this up should take first**, in order: the
+`uvar v[remaining]` walk below, which is specified and blocked on nothing;
+then rungs 3, 5 and 6 of the layer ladder with 26.99 finishing rung 2,
+which is the real goal gap and is sequenced in the phases above rather
+than open-ended; then teaching `differ.py` to compare framing, which would
+fold 26.725's and 26.732's two files into the corpus differential.
 
 - **`required` has seven records in four days and what is left of it is
   one design question.** The seventh arrived from bbq-predictor after the
@@ -5859,7 +5869,29 @@ holder's:
   **Walking varints to the end of the view is the feature, and none of
   the four does it.**
 - **Four walker identity divergences** of one shape (26.689), where the
-  guard widths want reconciling rather than listing.
+  guard widths want reconciling rather than listing. **The holder's**, and
+  the parking was re-measured and confirmed 2026-10-28 rather than
+  weakened: `fits_frame` is the packer's name for an image check, and the
+  only readers of the image's check table are the two walkers, so there is
+  no third witness for check identity the way a generated backend is one
+  for a value.
+- **Which walker is right about a nested struct's value, and should either
+  answer at all?** (26.721). **The holder's**, and the one question on
+  this list that blocks work: it holds `VALUES_APART` open in
+  `test/unit/test_walker_c.py`, three `(schema, struct)` pairs, and holds
+  back dealing more packets per struct in the walker sweeps, which would
+  grow that set before the question is answered.
+
+  C reads the row's `size_bits` and the Python walk reads the measured
+  extent, and **both agree about the member's offset and its width** --
+  which is why the three older corpus sweeps cannot see it and the values
+  sweep found it on its first run. `situ_walk.h` states a contract C
+  violates while the Python walk answers a third thing. Best guess:
+  refuse in both, as the fifth of `read_scalar`'s recorded refusals. Not
+  taken, because it changes BOTH independent readers -- the only
+  independent witnesses this project has -- and fixing C alone would turn
+  a visible divergence into a silent decline, which is the vacuity 26.718
+  cost eleven weeks.
 
 **Four backends over one layout**, and the claim that matters is that they
 agree. Each is tested against the C output on the same buffer, field by field,
