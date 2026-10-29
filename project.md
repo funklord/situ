@@ -7770,6 +7770,10 @@ Moved to
 Moved to
 `doc/decision/26.748-a-python-module-named-no-check-before-importing-it.md`.
 
+### 26.749 C named an offset function no variant has
+
+Moved to `doc/decision/26.749-c-named-an-offset-function-no-variant-has.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

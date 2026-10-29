@@ -4121,6 +4121,19 @@ class Emitter:
 			if after is not None:
 				return self._base_expression(struct, after, gated)
 			return "view.limit"
+		# A VARIANT has no offset function either: C emits one per arm
+		# member, and every arm starts where the variant does. So it starts
+		# where its first arm member starts -- the authenticated region's
+		# answer above, for the same reason. Behind a variable-length member
+		# `validate`'s frame check for a variant whose arms are all one size
+		# named `situ_s_body_offset`, which nothing defines, and the source
+		# did not compile; C++, Rust and Python inline the sum (26.749).
+		if placement.kind == "variant":
+			first = next((member for _arm, member
+			              in arm_members(struct, placement)
+			              if member is not None), None)
+			if first is not None:
+				return self._base_expression(struct, first, gated)
 		local    = c_name(self._local(struct, placement))
 		argument = "gate.view" if gated else "view"
 		# The struct's arguments travel with the view (0050): an offset
