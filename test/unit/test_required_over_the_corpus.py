@@ -111,8 +111,9 @@ LONGEST = 48
 OPENS = "static ::situ::rt::err required(const std::uint8_t *data,"
 CLOSES = "std::uint32_t have, std::uint32_t &need) noexcept"
 
-#: schema -> (calls, truncated answers), filled in as the sweep runs.
-CORPUS_ASKED: dict[str, tuple[int, int]] = {}
+#: schema -> (calls, truncated answers, monotonicity comparisons made),
+#: filled in as the sweep runs.
+CORPUS_ASKED: dict[str, tuple[int, int, int]] = {}
 
 
 def ids(paths: list[Path]) -> list[str]:
@@ -191,6 +192,14 @@ static unsigned long told_short;
  * holds two of these, and the first masked the second until this counted
  * instead of returning. */
 static unsigned long broken;
+/* How many monotonicity comparisons were actually MADE. The check skips
+ * the first truncated answer of each run, having nothing to compare it
+ * to, and stops at the first complete one -- so a struct that completes
+ * early is barely checked, and nothing would say so. Measured: 18,091 of
+ * the 18,959 truncated answers, which is 95 per cent, and the figure is
+ * asserted below because a `done` that started being set early would
+ * leave every other assertion here passing. */
+static unsigned long compared;
 
 typedef ::situ::rt::err (*ask_t)(const std::uint8_t *, std::uint32_t,
                                  std::uint32_t &);
@@ -243,6 +252,9 @@ static int sweep(const char *who, ask_t ask)
 				break;
 			}}
 			if (!done) {{
+				if (prev != 0u) {{
+					compared++;
+				}}
 				prev = need;
 			}}
 		}}
@@ -253,7 +265,8 @@ static int sweep(const char *who, ask_t ask)
 int main()
 {{
 {calls}
-	std::printf("asked=%lu truncated=%lu\\n", asked, told_short);
+	std::printf("asked=%lu truncated=%lu compared=%lu\\n",
+	            asked, told_short, compared);
 	return broken != 0ul ? 4 : 0;
 }}
 '''
@@ -291,9 +304,11 @@ def test_required_reads_only_bytes_that_arrived(schema: Path,
 	                     capture_output=True, text=True)
 	assert run.returncode == 0, run.stdout + run.stderr
 
-	counts = re.search(r"asked=(\d+) truncated=(\d+)", run.stdout)
+	counts = re.search(r"asked=(\d+) truncated=(\d+) compared=(\d+)",
+	                   run.stdout)
 	assert counts is not None, run.stdout
-	CORPUS_ASKED[schema.name] = (int(counts.group(1)), int(counts.group(2)))
+	CORPUS_ASKED[schema.name] = (int(counts.group(1)), int(counts.group(2)),
+	                             int(counts.group(3)))
 
 	# Per schema rather than once at the end, so a sweep that stopped
 	# asking is named where it happened. A struct complete at zero bytes
@@ -312,7 +327,8 @@ def test_the_corpus_sweep_asked_something() -> None:
 	Measured when written: of the 46 schemas this repository builds, 40
 	were swept and 6 skipped for emitting no `required` that takes only
 	bytes, giving 42,924 calls over 49 prefix lengths and 4 fills, of
-	which 18,959 answered truncated. The rest are a complete message or
+	which 18,959 answered truncated and 18,091 were compared with the
+	answer before them. The rest are a complete message or
 	a refusal, which a 48-byte fill of 0x00 or 0xFF very often is.
 
 	The bounds are well under the figures, because a schema gaining a
@@ -320,10 +336,19 @@ def test_the_corpus_sweep_asked_something() -> None:
 	"""
 	if not CORPUS_ASKED:
 		pytest.skip("the per-schema sweeps did not run")
-	calls = sum(asked for asked, _ in CORPUS_ASKED.values())
-	short = sum(told for _, told in CORPUS_ASKED.values())
+	calls = sum(asked for asked, _, _ in CORPUS_ASKED.values())
+	short = sum(told for _, told, _ in CORPUS_ASKED.values())
+	comp  = sum(made for _, _, made in CORPUS_ASKED.values())
 	assert len(CORPUS_ASKED) >= 36, (
 		f"only {len(CORPUS_ASKED)} schemas were swept, of "
 		f"{len(SCHEMAS)} in the corpus")
 	assert calls >= 35000, f"only {calls} calls to `required`"
 	assert short >= 15000, f"only {short} truncated answers of {calls}"
+	# And the monotonicity check is the one that can go slack silently:
+	# it needs a PAIR, so a struct that completes at its first prefix
+	# contributes answers and no comparisons. 18,091 of 18,959 when
+	# written.
+	assert comp >= 14000, (
+		f"only {comp} of {short} truncated answers were compared with "
+		f"the one before, where 18,091 of 18,959 were measured; the "
+		f"monotonicity half of this sweep has stopped asking")
