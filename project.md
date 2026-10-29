@@ -5707,57 +5707,102 @@ log rather than a running order: nothing in 26.95 through 26.98 waits for
 26.99, because emitting a lower rung's files is not the same as needing its
 emitter written first.
 
-**What is open as of 2026-10-26**, with the record that carries each
+**What is open as of 2026-10-29**, with the record that carries each
 reproduction. Three are decisions rather than work, and are the copyright
 holder's:
 
-- **`required` mixes a constraint-derived floor with a data-derived
-  total** (26.693), the only live correctness bug, reproduced and
-  diagnosed 2026-10-26 against bbq-predictor's own schema. `SIZE_MIN` is
-  derived from `[min]` constraints and the total is computed from
-  unvalidated bytes, so `head_body` answers truncated-need-11 at ten
-  bytes and **complete-need-10 at eleven** -- the one-sided safety
-  property, not merely monotonicity. A framing function may not hold a
-  floor it cannot enforce: framing precedes validation, so either the
-  floor is structural with value constraints ignored, or there is no
-  floor. **Fixed 2026-10-26 on the holder's instruction that the call was
-  situ's**: the floor comes out of `required` in all four backends and
-  the walk answers, since `required` is the one function asked about
-  unvalidated prefixes. `[max]` still feeds the layout -- every static
-  buffer rests on it -- and `SIZE_MIN` keeps the view guard and the map,
-  which are statements about valid messages and are true. Gated at
-  `3df4d4f` -- 9171 passed -- and pushed. **The expected
-  cost was disproved by the gate**: the one pinned sequence that moved
-  got TIGHTER, `withtail` going from `[3, 3, ...]` to `[5, 6, ...]`,
-  because the floor counted the run as empty while the walk reads the
-  count. So the floor was the weaker bound almost everywhere and could
-  only exceed the walk where a constraint the bytes violate made it do
-  so -- the unsafe case. A bound derived from constraints is not a better
-  bound, it is a different claim. bbq-predictor found it by fuzzing situ's
-  generated C++ against four invariants situ states and does not test;
-  `need` falls as `have` rises in two of their structs. The property is
-  already written -- `test_required_answers_every_prefix` holds that the
-  answer never goes backwards -- and its six shapes are all runs of
-  records or varints, so the population is what missed it. The
-  two candidate shapes are tried and cleared -- a wide length field and
-  an alignment, the latter swept in C because the Python backend emits no
-  `required` for a `pad_to` struct. What the aligned sweep showed is the
-  mechanism: `need` rises one byte per round trip because the pad term is
-  computed from a cursor clamped against `have` rather than from the
-  length the data already gave. So the next step is to find the clamped
-  terms in `required`'s offset chain and ask of each whether a larger
-  `have` can make the total smaller, rather than trying more shapes.
-  Their third invariant, that
-  the `need` bytes answer the same need, is **not** situ's contract: all
-  six shapes break it, `required` reporting a lower bound that rises.
-  Whether it should promise it is a design question and the holder's.
-- **Rung 4 is emitted four ways and built twice** (26.692). C's frame
-  layer has been compiled since 26.260 and C++'s and Python's since
-  2026-10-26; **Rust's is still unbuilt**. Both new tests failed on their
-  first run, on five structs in four schemas whose `required` three
-  backends decline and C defines -- so the shared `frameable` is wider
-  than three backends' own `_has_length`, and closing it is three
-  emitters gaining what C has.
+- **`required` is settled for now, after five records in four days, and
+  what is left of it is one design question.** The function frames a
+  message from bytes a caller has and nothing has validated, and every
+  fault in the run was one shape: **two quantities computed in different
+  places from different things, where neither bounds the other.**
+  - 26.693, the first and the one that named the rule: a floor derived
+    from `[min]` constraints against a total computed from unvalidated
+    bytes, so bbq-predictor's `head_body` answered truncated-need-11 at
+    ten bytes and **complete-need-10 at eleven**. The floor came out of
+    `required` in all four backends on the holder's instruction. A bound
+    derived from constraints is not a better bound, it is a different
+    claim -- about valid messages, asked of a function handed invalid
+    ones.
+  - 26.723, the half of that floor nobody had written down: it was also
+    a **bounds guard**. Reported by bbq-predictor as a regression, an
+    ASan heap-buffer-overflow reading a counted run's count out of a
+    buffer too short to hold it. C emitted the guard before the run
+    branch all along; the other three emitted it after a branch that
+    `continue`s, and only C++ is unsafe because only its accessors are
+    not lax.
+  - 26.724, the same rule in the run walk: each unreached element was
+    credited `SIZE_MIN`, which is constraint-derived, and re-counted at
+    its own honest bound when reached, so `need` FELL. `framing_floor`
+    in `situc/traverse.py` is the structural figure, and the inequality
+    it rests on is asserted over the corpus rather than argued.
+  - 26.726, the same rule a third time: the varint and delimiter
+    branches answered `have + 1`, a bound on one member, discarding the
+    total the walk already held. `max(have + 1, at)` now.
+  - **The standing advice of 26.693 has been acted on and is spent.** It
+    said to find the clamped terms in the offset chain and ask whether a
+    larger `have` can make the total smaller. The answer was that the
+    clamp was never the mechanism: all three later faults are a figure
+    quoted from the wrong authority, and none involves a clamp.
+  - **What remains is the holder's**, unchanged from 26.693: whether
+    `required` should read every length that is readable, so that the
+    first answer is the last. Today it reports a lower bound that rises
+    as bytes arrive, which is every variable-length shape in this tree
+    rather than a defect in one, and a caller makes several round trips
+    for one message. Taking it would turn two round trips into one and
+    would make a tighter tail term worth writing; leaving it is sound.
+- **The population story was wrong for one of them, and the correction
+  is worth more than the fault** (26.725). 26.693 closed with "the
+  property was right and the population was not", and 26.723's record
+  borrowed that. It is false: `example/ble`'s own
+  `le_advertising_report` reproduces 26.723, and has since `ble` was
+  added for exactly that construct. **What was missing was ever handing
+  `required` a buffer whose end was real.** The one sweep there was
+  walks `example/http` out of a `const char req[]` on the stack, where
+  an over-read lands inside another object and answers from whatever is
+  in it. The general form: **a bound is only tested by an input whose
+  edge exists**, and a test that supplies a length from a buffer with
+  slack behind it has checked the arithmetic and not the bound.
+- **The framing layer had no corpus-wide execution in any backend**
+  until 26.725, and `situc/codegen/differ.py` -- the differential over
+  all five spellings, and the source the C++ fuzz harness is built from
+  -- still does not mention `required` or `framed`.
+  `test/unit/test_required_over_the_corpus.py` closes the prefix axis in
+  C++: every class whose `required` takes only bytes, every prefix to
+  48, four fills, each prefix in a `malloc` of exactly its own length,
+  under ASan and UBSan. **Teaching the differential to compare framing
+  answers across all five spellings is the larger piece of work and is
+  not done** -- it is what would make framing as well witnessed as the
+  accessors already are.
+- **A population is not only which schemas are swept but which bytes
+  they are swept with** (26.727). The construct 26.724 needed -- a
+  counted run whose element length carries a `[min]` -- was in no schema
+  in the tree, and is in `test/schema/edges.situ` now. It took the
+  construct AND a fourth fill chosen for it: a uniform fill makes a
+  `u16` count either zero or enormous, so the step the fault lives in
+  was unreachable under the first three. The same question is worth
+  asking of every corpus-driven check here, and the schemas are counted
+  where the inputs are not.
+- **Rung 4 is emitted four ways and only C's was ever compiled**
+  (26.692, measured 26.728). The other three were checked by reading
+  their text for a struct's name, and `test_relations.py` says so at
+  `test_no_reader_is_emitted_for_an_unframeable_struct`. All four are
+  compiled now, over every schema `every_schema.py` lists, by
+  `test/unit/test_the_frame_layer_compiles.py`: **C is clean on all 42,
+  and C++, Rust and Python each fail on the same five structs** --
+  `coap`, `proto_message`, `tagged_options`, `pickle_string` and
+  `byte_run`. 26.692's figure was right. The cause is that
+  `frame.framed_structs` asks the shared `traverse.frameable` while each
+  emitter's `_required` applies its own narrower conditions and emits a
+  comment instead of a function: the predicate deciding whether to emit
+  a Reader and the one deciding whether to emit what the Reader calls
+  are different predicates. **C is clean because C is the widest** -- it
+  has a pad branch in its extent chain that the other three lack
+  entirely -- so narrowing the shared predicate would take working
+  Readers away from C. **Closing it is three emitters gaining what C
+  has, which is a feature and is still open.** The twelve
+  (backend, schema) holdouts are exact, so a backend that starts
+  compiling one fails that test too and the fix cannot land unrecorded.
 - **`validate` reports a malformed message as valid** where a counted run
   sits in a variant arm (26.689). C's `check` is the struct's minimum
   length and `return SITU_OK`; every other counted run gets a `_fits`
@@ -7508,6 +7553,11 @@ Moved to
 
 Moved to
 `doc/decision/26.727-the-counted-run-the-tree-did-not-have.md`.
+
+### 26.728 Only C's frame layer was ever compiled
+
+Moved to
+`doc/decision/26.728-only-c-s-frame-layer-was-ever-compiled.md`.
 
 ### 26.715 The same width in the other pointer backend
 
