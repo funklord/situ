@@ -7743,6 +7743,11 @@ Moved to
 
 Moved to `doc/decision/26.743-the-corpus-differential-asks-required.md`.
 
+### 26.744 A run counted by arithmetic was framed as one record
+
+Moved to
+`doc/decision/26.744-a-run-counted-by-arithmetic-was-framed-as-one.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

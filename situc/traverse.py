@@ -1944,8 +1944,16 @@ def nests_one_struct(structs: dict[str, ResolvedStruct],
 		return False
 	# MANY, however the count is spelled: a literal `ent e[4]`, a field
 	# `ent e[count]`, or an expression over one. A single nested member
-	# declares neither.
-	return placement.array_count is None and placement.sized_by is None
+	# declares none of the three.
+	#
+	# The comment named all three and the condition tested two: `rec
+	# run[a + 1]` carries its count in `size_expr`, so it was framed as
+	# ONE `rec` in all four backends, and an eleven-byte message of two
+	# records was called complete at eight. All four ask this, so the
+	# corpus differential saw four agreeing answers; it surfaced while
+	# probing `required` over counts written as arithmetic (26.744).
+	return (placement.array_count is None and placement.sized_by is None
+	        and placement.size_expr is None)
 
 
 def walks_to_the_frame_end(placement: Placement) -> bool:

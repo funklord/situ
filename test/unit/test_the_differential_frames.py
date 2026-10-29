@@ -198,3 +198,25 @@ def test_a_count_times_a_width_saturates(tmp_path: Path) -> None:
 	packet = bytes([0xCC, 0xCC, 0xCC, 0xCC, 0x01, 0x02])
 	line = _required_line(tmp_path, WIDE_COUNT, "w", packet)
 	assert line.split()[-1] == "4294967295", line
+
+
+ARITHMETIC_COUNT = """target buffer;
+endian little;
+struct rec { u16 x; u8 y; }
+struct m {
+	u32  a;
+	rec  run[a + 1];
+	u8   tail;
+}
+"""
+
+
+def test_a_run_counted_by_arithmetic_is_framed_as_many(tmp_path: Path) -> None:
+	"""`traverse.nests_one_struct` named an expression as a way to spell
+	MANY and tested only a literal and a field, so `rec run[a + 1]` was
+	framed as ONE `rec` in all four backends: two records, eleven bytes,
+	called complete at eight (26.744). All four agreed, which is why the
+	differential alone could not see it -- this asserts the number."""
+	packet = bytes([1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 9])
+	line = _required_line(tmp_path, ARITHMETIC_COUNT, "m", packet)
+	assert line.split()[1:] == ["5"] * 4 + ["11"] * 7 + ["*11"], line
