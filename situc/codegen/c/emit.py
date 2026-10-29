@@ -4832,6 +4832,29 @@ class Emitter:
 		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
 			return self._required_fixed(struct)
 
+		# `frameable` IS THE AUTHORITY HERE, not a second opinion (26.729).
+		# 26.728 found the two predicates disagreeing for five structs:
+		# `frame.framed_structs` asks `frameable` and emits a Reader, while
+		# this function applied its own conditions and emitted a comment, so
+		# three backends shipped a frame layer that does not compile.
+		#
+		# Asking the same question is what keeps them in step, and it is what
+		# this function needed rather than a third condition: the one that
+		# would have caught `proto_message` is `frameable`'s new `tlv` branch,
+		# and the comment below already named that case without being able to
+		# see it -- `variable` holds the tlv placement, so `not variable` is
+		# false and the struct fell through to a walk whose only term is the
+		# literal zero.
+		#
+		# Where this function is WIDER than `frameable` -- a pad in the extent
+		# chain, which C has and the other three have not -- that is a
+		# capability the shared predicate should grow rather than one to keep
+		# by not asking. It does not reach here: `frameable` has no pad branch
+		# to disagree with, and the five structs this change declines are the
+		# three holding a tlv region and nothing else.
+		if not frameable(self.resolved.structs, struct):
+			return self._unframeable(struct)
+
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return self._unframeable(struct)
@@ -4839,8 +4862,9 @@ class Emitter:
 		constant, variable = parts
 		if constant == 0 and not variable:
 			# Nothing to frame: every buffer, including an empty one, holds a
-			# complete message. True of a bare `tlv` region and useless to
-			# say, so it is not said.
+			# complete message. Unreachable now that `frameable` is asked
+			# first, and kept because it is this function's own statement of
+			# the thing that went wrong.
 			return self._unframeable(struct, "a complete one can be zero bytes,"
 			        " so every buffer already holds one")
 

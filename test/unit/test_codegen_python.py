@@ -3284,10 +3284,16 @@ def test_every_schema_frame_layer_imports(path: Path, tmp_path: Path) -> None:
 #: 38 schemas and a held-out set with a reason is what this tree does with a
 #: gap it has measured and not yet closed. 26.692 has the reproduction and
 #: why it is not fixed here.
+#: The first three entries were here until 26.729 and were a different
+#: fault: `coap`, `proto_message` and `tagged_options` each hold a `tlv`
+#: region, which C framed at the length of its fixed members while the
+#: other three declined. `frameable` refuses a `tlv` region now, so no
+#: backend frames them and what is left is the `pad_to` construct.
+#:
+#: A frozenset would not have noticed them going, where this one's
+#: entries are now all exercised: that is the argument the C++ sibling's
+#: assert-to-fail makes, one level down.
 FRAME_REQUIRED_APART = frozenset({
-	("coap.situ", "coap"),
-	("protobuf.situ", "proto_message"),
-	("edges.situ", "tagged_options"),
 	("padded.situ", "byte_run"),
 	("padded.situ", "pickle_string"),
 })

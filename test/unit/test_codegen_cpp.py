@@ -4513,8 +4513,14 @@ def test_every_schema_frame_layer_compiles(path: Path, tmp_path: Path) -> None:
 #: Not closed here: three emitters gaining what C has is a feature, and
 #: narrowing `frameable` instead would take a working `required` away from
 #: C. 26.692 has the reproduction and the choice.
+#: `coap.situ`, `protobuf.situ` and `edges.situ` were here too until
+#: 26.729, and they were a different fault wearing this one's clothes:
+#: each holds a `tlv` region, whose reach is schema-free, so C framed them
+#: at the length of their fixed members -- zero, for `proto_message`,
+#: whose Reader then looped. `frameable` refuses a `tlv` region now, so no
+#: backend frames those three and the set is the one construct.
 FRAME_LAYER_APART = frozenset({
-	"coap.situ", "protobuf.situ", "edges.situ", "padded.situ",
+	"padded.situ",
 })
 
 

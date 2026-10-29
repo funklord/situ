@@ -2286,6 +2286,32 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		# and answered with the bound (26.35).
 		if placement.kind == "indexed":
 			return False
+		# A TLV REGION, for the same reason and with a worse symptom.
+		# `tlv` is schema-free by construction -- items arrive tagged and
+		# the region holds whatever was sent -- so how far it reaches is
+		# not a sum over what precedes it either. `extent_parts` puts it
+		# in `variable` and C's length expression for it is the literal
+		# `(uint32_t)0u`, so C framed all three of the corpus's such
+		# structs at the length of their FIXED members and the other
+		# three backends declined them (26.729).
+		#
+		# `proto_message` is the one that shows what that costs. Its
+		# constant is zero, so `situ_proto_message_required` answered
+		# `SITU_OK` with `*need = 0` for every input including an empty
+		# buffer -- and the generated Reader does `advance` (which
+		# returns at once for `ready == 0`), then `required`, then sets
+		# `ready = need`. A caller doing what the header tells it to,
+		# "call `next` until it answers SITU_ERR_TRUNCATED", loops for
+		# ever handing back zero-length views. That is the hazard
+		# `framed_structs` excludes a zero-byte struct to prevent, by a
+		# route its `is_fixed_size` test cannot see.
+		#
+		# `coap` and `edges.tagged_options` are the same fault in the
+		# harmless direction: four bytes and one, so a Reader frames the
+		# header and splits the options off the message rather than
+		# looping.
+		if placement.kind == "tlv":
+			return False
 		# AN ARM HOLDING A COUNTED RUN, which no backend walks: an arm is
 		# emitted by a family of its own -- a scalar, a byte run, a run of
 		# wide values and one fixed-size struct -- and never a run of

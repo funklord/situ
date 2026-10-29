@@ -53,6 +53,7 @@ sys.path.insert(0, str(ROOT))
 
 import pytest						# noqa: E402
 
+from situc.codegen.c import generate as generate_c	# noqa: E402
 from situc.codegen.cpp import generate as generate_cpp	# noqa: E402
 from situc.diagnostics import Source			# noqa: E402
 from situc.layout import solve				# noqa: E402
@@ -63,6 +64,7 @@ from every_schema import SCHEMAS as ALL_SCHEMAS		# noqa: E402
 
 RUNTIME  = ROOT / "runtime"
 HOST_CXX = shutil.which("g++") or shutil.which("clang++")
+HOST_CC  = shutil.which("cc") or shutil.which("gcc")
 
 #: EVERY schema this repository builds, not `example/` only. That list is
 #: `every_schema.py`'s whole reason for existing, and its docstring names
@@ -74,17 +76,30 @@ HOST_CXX = shutil.which("g++") or shutil.which("clang++")
 #: committed twice, which is once more than the guard deserves.
 SCHEMAS  = list(ALL_SCHEMAS)
 
-#: The C++ backend, because its accessors are the only ones that are not
-#: lax: a static offset reads straight through `situ_get_be16`, on the
-#: invariant that a view has passed `view()`'s `length >= size_min` guard.
-#: `required` is the one caller that builds a view without it, so this is
-#: the backend where a missing bound is a memory fault rather than a wrong
-#: number -- which is why 26.723 was C++ only and why the sanitizer has
-#: something to find here. The arithmetic is the same in all four and
-#: `test_required_answers_every_prefix.py` holds that in Python.
+#: TWO BACKENDS, and each is here for a reason the other cannot serve.
+#:
+#: C++ is where a missing bound is a MEMORY fault rather than a wrong
+#: number: its accessors are the only ones that are not lax, a static
+#: offset reading straight through `situ_get_be16` on the invariant that a
+#: view has passed `view()`'s `length >= size_min` guard, and `required`
+#: is the one caller that builds a view without it. That is why 26.723 was
+#: C++ only and why a sanitizer has anything to find.
+#:
+#: C is where the WIDEST `required` lives. 26.728 measured all four frame
+#: layers and C is the only one clean on every schema: it has a pad branch
+#: in its extent chain the other three lack entirely, so five structs are
+#: framed by C alone. Sweeping C++ therefore leaves C's widest arithmetic
+#: -- including the only `align_up` term in any `required` -- unexecuted
+#: by anything, over 42 schemas where C++ manages 40.
+#:
+#: Rust and Python are left out deliberately rather than forgotten: their
+#: readers answer zero out of bounds, so a missing bound is a wrong number
+#: there and `test_required_answers_every_prefix.py` holds the arithmetic
+#: in Python over shapes whose whole message is written out.
 WARNINGS = ["-std=c++17", "-pedantic-errors", "-O1", "-Wall", "-Wextra",
 	"-Wconversion", "-Wsign-conversion", "-Werror", "-fno-exceptions",
 	"-fno-rtti"]
+C_WARNINGS = ["-std=c11", "-O1", "-Wall", "-Wextra"]
 SANITIZE = ["-g", "-fsanitize=address,undefined",
 	# LOAD-BEARING, and `test/generated/Makefile` says why at its own
 	# fuzz flags: with recovery UBSan prints its report and the program
@@ -112,8 +127,10 @@ OPENS = "static ::situ::rt::err required(const std::uint8_t *data,"
 CLOSES = "std::uint32_t have, std::uint32_t &need) noexcept"
 
 #: schema -> (calls, truncated answers, monotonicity comparisons made),
-#: filled in as the sweep runs.
+#: filled in as the sweeps run. One per backend, so a companion can say
+#: which arm stopped asking rather than that one of them did.
 CORPUS_ASKED: dict[str, tuple[int, int, int]] = {}
+C_ASKED: dict[str, tuple[int, int, int]] = {}
 
 
 def ids(paths: list[Path]) -> list[str]:
@@ -317,6 +334,173 @@ def test_required_reads_only_bytes_that_arrived(schema: Path,
 	assert int(counts.group(2)) > 0, (
 		f"{schema.name}: {counts.group(1)} calls and not one truncated "
 		f"answer, so this schema's framing was never exercised")
+
+
+#: C's signature, which is one line rather than two. A struct with a
+#: `[stream]` argument takes it here too, so the pattern pins the whole
+#: parameter list.
+C_SIGNATURE = re.compile(
+	r"static inline situ_err_t (\w+_required)\(const uint8_t \*data,\s*"
+	r"uint32_t have, uint32_t \*need\)")
+
+
+def c_probe(names: list[str]) -> str:
+	"""The same sweep in C, over the `_required` functions a header has."""
+	calls = "\n".join(f'\tsweep("{name}", &{name});' for name in names)
+	return f'''#include "unit.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* The same four fills and the same two properties as the C++ probe above,
+ * and the same exact-size allocation, which is the whole instrument. */
+static const uint8_t FILL[] = {{ 0x00u, 0xFFu, 0x5Au, 0x01u }};
+
+static unsigned long asked;
+static unsigned long told_short;
+static unsigned long compared;
+static unsigned long broken;
+
+typedef situ_err_t (*ask_t)(const uint8_t *, uint32_t, uint32_t *);
+
+static void sweep(const char *who, ask_t ask)
+{{
+	for (unsigned f = 0; f < sizeof FILL; f++) {{
+		uint32_t prev = 0u;
+		int      done = 0;
+
+		for (uint32_t n = 0; n <= {LONGEST}u; n++) {{
+			const uint32_t size = n != 0u ? n : 1u;
+			uint8_t       *p = malloc(size);
+			uint32_t       need = 0;
+			situ_err_t     got;
+
+			if (p == NULL) {{
+				exit(1);
+			}}
+			memset(p, FILL[f], size);
+			got = ask(p, n, &need);
+			free(p);
+			asked++;
+
+			if (got == SITU_OK) {{
+				done = 1;
+				continue;
+			}}
+			if (got != SITU_ERR_TRUNCATED) {{
+				continue;
+			}}
+			told_short++;
+			if (need <= n) {{
+				printf("%s fill=%u have=%u: truncated and need=%u, "
+				       "so a caller is told to read %d more\\n",
+				       who, f, n, need, (int)need - (int)n);
+				broken++;
+				break;
+			}}
+			if (!done && need < prev) {{
+				printf("%s fill=%u have=%u: need FELL to %u from %u\\n",
+				       who, f, n, need, prev);
+				broken++;
+				break;
+			}}
+			if (!done) {{
+				if (prev != 0u) {{
+					compared++;
+				}}
+				prev = need;
+			}}
+		}}
+	}}
+}}
+
+int main(void)
+{{
+{calls}
+	printf("asked=%lu truncated=%lu compared=%lu\\n",
+	       asked, told_short, compared);
+	return broken != 0ul ? 4 : 0;
+}}
+'''
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_c_required_reads_only_bytes_that_arrived(schema: Path,
+		tmp_path: Path) -> None:
+	"""The same sweep against the backend with the widest `required`.
+
+	C holds the only `align_up` term in any `required` -- 26.693's record
+	measured that term rising one byte per round trip for `pickle_string`
+	and nothing had executed it over the corpus since -- and after 26.729
+	it frames two structs no other backend does for that reason.
+
+	**This arm found 26.729 on its first run**, through the per-schema
+	non-vacuity assertion below rather than through a property: `protobuf`
+	answered 196 calls and not one truncated, because
+	`situ_proto_message_required` returned `SITU_OK` with `*need = 0` for
+	every input and the Reader built on it looped. A sweep that only
+	checked the two properties would have passed it, twice over -- `need`
+	never fell and was never below `have`, because it was never anything.
+	"""
+	source   = Source(str(schema), schema.read_text(encoding="ascii"))
+	parsed   = parse(source)
+	resolved = resolve(parsed, solve(parsed))
+	built    = generate_c(parsed, resolved, "unit")
+
+	(tmp_path / "unit.h").write_text(built.header, encoding="ascii")
+	(tmp_path / "unit.c").write_text(built.source, encoding="ascii")
+	names = sorted(set(C_SIGNATURE.findall(built.header)))
+	if not names:
+		pytest.skip(f"{schema.name} emits no `_required` taking only bytes")
+
+	(tmp_path / "m.c").write_text(c_probe(names), encoding="ascii")
+	compiled = subprocess.run(
+		[HOST_CC or "cc", *C_WARNINGS, *SANITIZE,
+		 f"-I{RUNTIME / 'c'}", f"-I{tmp_path}", str(tmp_path / "m.c"),
+		 str(tmp_path / "unit.c"), str(RUNTIME / "c" / "situ.c"),
+		 "-o", str(tmp_path / "probe")],
+		capture_output=True, text=True)
+	if compiled.returncode != 0 and "sanitize" in compiled.stderr:
+		pytest.skip("no address sanitizer")
+	assert compiled.returncode == 0, compiled.stderr
+
+	run = subprocess.run([str(tmp_path / "probe")],
+	                     capture_output=True, text=True)
+	assert run.returncode == 0, run.stdout + run.stderr
+
+	counts = re.search(r"asked=(\d+) truncated=(\d+) compared=(\d+)",
+	                   run.stdout)
+	assert counts is not None, run.stdout
+	C_ASKED[schema.name] = (int(counts.group(1)), int(counts.group(2)),
+	                        int(counts.group(3)))
+	assert int(counts.group(2)) > 0, (
+		f"{schema.name}: {counts.group(1)} calls and not one truncated "
+		f"answer, so this schema's framing was never exercised")
+
+
+@pytest.mark.skipif(HOST_CC is None, reason="no host C compiler")
+def test_the_c_corpus_sweep_asked_something() -> None:
+	"""The C arm's own non-vacuity companion.
+
+	Measured after 26.729: 40 of the 46 schemas swept and 6 skipped for
+	emitting no `_required` taking only bytes, giving 43,316 calls, 19,222
+	truncated answers and 18,346 compared with the answer before them. It
+	was 42 schemas and 43,904 calls before that fix, `coap` and
+	`protobuf` having stopped emitting a `_required` at all.
+	"""
+	if not C_ASKED:
+		pytest.skip("the per-schema sweeps did not run")
+	calls = sum(asked for asked, _, _ in C_ASKED.values())
+	short = sum(told for _, told, _ in C_ASKED.values())
+	comp  = sum(made for _, _, made in C_ASKED.values())
+	assert len(C_ASKED) >= 36, (
+		f"only {len(C_ASKED)} schemas were swept, of {len(SCHEMAS)}")
+	assert calls >= 35000, f"only {calls} calls to `_required`"
+	assert short >= 15000, f"only {short} truncated answers of {calls}"
+	assert comp >= 14000, (
+		f"only {comp} of {short} truncated answers were compared with "
+		f"the one before, where 18,346 of 19,222 were measured")
 
 
 @pytest.mark.skipif(HOST_CXX is None, reason="no host C++ compiler")

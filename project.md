@@ -5783,26 +5783,39 @@ holder's:
   was unreachable under the first three. The same question is worth
   asking of every corpus-driven check here, and the schemas are counted
   where the inputs are not.
-- **Rung 4 is emitted four ways and only C's was ever compiled**
-  (26.692, measured 26.728). The other three were checked by reading
-  their text for a struct's name, and `test_relations.py` says so at
-  `test_no_reader_is_emitted_for_an_unframeable_struct`. All four are
-  compiled now, over every schema `every_schema.py` lists, by
-  `test/unit/test_the_frame_layer_compiles.py`: **C is clean on all 42,
-  and C++, Rust and Python each fail on the same five structs** --
-  `coap`, `proto_message`, `tagged_options`, `pickle_string` and
-  `byte_run`. 26.692's figure was right. The cause is that
-  `frame.framed_structs` asks the shared `traverse.frameable` while each
-  emitter's `_required` applies its own narrower conditions and emits a
-  comment instead of a function: the predicate deciding whether to emit
-  a Reader and the one deciding whether to emit what the Reader calls
-  are different predicates. **C is clean because C is the widest** -- it
-  has a pad branch in its extent chain that the other three lack
-  entirely -- so narrowing the shared predicate would take working
-  Readers away from C. **Closing it is three emitters gaining what C
-  has, which is a feature and is still open.** The twelve
-  (backend, schema) holdouts are exact, so a backend that starts
-  compiling one fails that test too and the fix cannot land unrecorded.
+- **Rung 4 is emitted four ways and all four are compiled now**
+  (26.692, 26.728, 26.729). C's gate has existed since 26.260 and C++'s
+  and Python's since 2026-10-26; **Rust's landed 2026-10-29** and is in
+  `test_codegen_rust.py` beside its three siblings. The entry here said
+  Rust's was unbuilt and was right; a record that said only C's had ever
+  been compiled was not, and 26.728 carries that correction.
+  - **What is left of the gap is two structs in one schema**:
+    `pickle_string` and `byte_run` in `test/schema/padded.situ`, held out
+    by name in all three non-C backends. C computes a `pad_to` alignment
+    in its extent chain and the other three have no pad branch at all, so
+    the member reaches a length expression that answers None. **Closing
+    it is three emitters gaining what C has, which is a feature and is
+    still open** -- narrowing the shared predicate instead would take a
+    working `required` away from C.
+  - **Three of the five that gap used to hold were a different fault**
+    (26.729), and the worst thing found this week. `coap`,
+    `proto_message` and `tagged_options` each hold a `tlv` region, whose
+    reach is schema-free, and C's length expression for one is the
+    literal zero -- so C framed each at the length of its FIXED members.
+    For `proto_message` that is zero: `situ_proto_message_required`
+    answered `SITU_OK` with `*need = 0` for every input, and a caller
+    doing what the header says -- *"call `next` until it answers
+    SITU_ERR_TRUNCATED"* -- **looped for ever handing back zero-length
+    views**. `frameable` refuses a `tlv` region now, beside the
+    `indexed` branch it parallels, and C's `_required` asks `frameable`
+    rather than judging again. C loses exactly three `_required`
+    functions and gains none.
+  - **A property sweep would have passed that one.** `need` never fell
+    and was never below `have`, because it was never anything. What
+    caught it is the per-schema non-vacuity floor in 26.725's C arm:
+    *this schema answered 196 calls and not one truncated*. Fourth time
+    this run that a count of what a check asked found what the check
+    could not.
 - **`validate` reports a malformed message as valid** where a counted run
   sits in a variant arm (26.689). C's `check` is the struct's minimum
   length and `return SITU_OK`; every other counted run gets a `_fits`
@@ -7554,10 +7567,15 @@ Moved to
 Moved to
 `doc/decision/26.727-the-counted-run-the-tree-did-not-have.md`.
 
-### 26.728 Only C's frame layer was ever compiled
+### 26.728 Rust's frame layer was the one nothing compiled
 
 Moved to
 `doc/decision/26.728-only-c-s-frame-layer-was-ever-compiled.md`.
+
+### 26.729 C framed a TLV region at zero bytes, and the Reader looped
+
+Moved to
+`doc/decision/26.729-c-framed-a-tlv-region-at-zero-bytes.md`.
 
 ### 26.715 The same width in the other pointer backend
 

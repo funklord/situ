@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from situc.diagnostics import SituError
+from situc.codegen.rust import frame as frame_rs
 from situc.codegen.rust import generate as generate_rs
 from situc.layout import solve
 from situc.parser import parse_text
@@ -1015,6 +1016,94 @@ def test_every_schema_compiles(schema: Path, materialize: bool,
 		 "lib", str(src / "lib.rs"), "-o", str(tmp_path / "out")],
 		capture_output=True, text=True, cwd=tmp_path)
 	assert result.returncode == 0, f"{schema.stem}: {result.stderr}"
+
+
+#: Schemas whose Rust frame layer does not compile, with the struct its
+#: `Reader` calls a `required` for that this backend declines to define.
+#: The C++ and Python siblings carry the same pair in their own sets --
+#: `pickle_string` and `byte_run` in `test/schema/padded.situ` -- and the
+#: reason is one construct: C computes a `pad_to` alignment in its extent
+#: chain and the other three have no pad branch at all, so the member
+#: reaches a length expression that answers None.
+#:
+#: Not closed here: three emitters gaining what C has is a feature, and
+#: narrowing the shared `frameable` instead would take a working
+#: `required` away from C. 26.692 has the reproduction and the choice.
+#:
+#: It held `coap.situ`, `protobuf.situ` and `edges.situ` too until 26.729,
+#: and those three were a different fault wearing this one's clothes: each
+#: holds a `tlv` region, whose reach is schema-free, and C framed them at
+#: the length of their fixed members while the other three declined. No
+#: backend frames them now.
+FRAME_LAYER_APART = frozenset({
+	("padded.situ", "PickleString"),
+	("padded.situ", "ByteRun"),
+})
+
+
+@pytest.mark.skipif(RUSTC is None, reason="no rustc")
+@pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
+def test_every_schema_frame_layer_compiles(schema: Path,
+		tmp_path: Path) -> None:
+	"""Rung 4, which this backend alone had nothing building.
+
+	C has had this since 26.260 and C++ and Python since 2026-10-26;
+	Rust's `_frame.rs` was read for a struct's name and never compiled,
+	which the open register said in as many words. So the one backend
+	whose compiler refuses a dead store outright was the one whose rung-4
+	output nothing put a compiler near.
+
+	Compiled rather than inspected, for the reason C's sibling gives: the
+	fault is a call to a function that is not there, and no assertion
+	about the text finds that for free.
+	"""
+	parsed   = load_schema(schema)
+	resolved = resolve(parsed, solve(parsed))
+	files    = frame_rs.generate(parsed, resolved, schema.stem)
+	if not files:
+		pytest.skip("no struct this schema frames")
+
+	src = tmp_path / "src"
+	src.mkdir(exist_ok=True)
+	# The runtime is `no_std` alone; as a module of a larger crate the
+	# attribute belongs to the crate root, as `build` above does it.
+	(src / "situ_rt.rs").write_text(
+		RUNTIME.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+	(src / f"{schema.stem}.rs").write_text(
+		generate_rs(parsed, resolved, schema.stem).module, encoding="ascii")
+	for name, text in files.items():
+		(src / name).write_text(text, encoding="ascii")
+	(src / "lib.rs").write_text(
+		"pub mod situ_rt;\n"
+		f'#[path = "{schema.stem}.rs"] pub mod {schema.stem};\n'
+		+ "".join(f'#[path = "{name}"] pub mod {name[:-3]};\n'
+		          for name in sorted(files)), encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-D", "warnings", "--crate-type",
+		 "lib", str(src / "lib.rs"), "-o", str(tmp_path / "out")],
+		capture_output=True, text=True, cwd=tmp_path)
+
+	apart = {struct for name, struct in FRAME_LAYER_APART
+	         if name == schema.name}
+	if apart:
+		# Asserted to FAIL, and to fail for the stated reason, which is
+		# the C++ sibling's discipline: a skip would hide the gap and an
+		# xfail would not care why, where this fails the day somebody
+		# closes it -- when the entry should go -- and fails differently
+		# if the layer breaks for a new reason.
+		assert built.returncode != 0, (
+			f"{schema.name} now builds: close its entries in "
+			f"FRAME_LAYER_APART")
+		for struct in sorted(apart):
+			assert f"for struct `{schema.stem}::{struct}`" in built.stderr, (
+				f"{schema.name} fails, but not about {struct}, which this "
+				f"set says it should:\n{built.stderr}")
+		return
+
+	assert built.returncode == 0, f"{schema.stem}: {built.stderr}"
 
 
 @pytest.mark.parametrize("schema", SCHEMAS, ids=ids(SCHEMAS))
