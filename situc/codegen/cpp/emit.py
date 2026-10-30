@@ -1498,6 +1498,13 @@ class Emitter:
 		start = self._offset_expression(struct, placement)
 		count = (str(placement.array_count) if placement.array_count is not None
 		         else self._count_expression(struct, placement))
+		# `u8 x[remaining]` inside the region: what the frame leaves after
+		# the run starts, which is how C, Rust and Python read it. The count
+		# path has no field to read for `remaining`, so this declined the
+		# member where the other three gave it a reader (26.752).
+		if count is None and placement.sized_by == "remaining" \
+				and start is not None:
+			count = f"situ_remaining_u32(raw_.limit, {start})"
 
 		if start is None or count is None:
 			return ["", f"\t\t/* {placement.path}: this backend cannot resolve"

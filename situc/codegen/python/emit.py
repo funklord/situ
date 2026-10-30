@@ -8367,7 +8367,14 @@ class Emitter:
 			# one shape a reader cannot ask about.
 			if _is_run(placement) and scalar.bits == BITS_PER_BYTE \
 					and not indexed_elements(placement):
-				length = self._length_expression(struct, placement)
+				# A fixed run's length is its count. `_length_expression`
+				# answers for a run the data sizes and has nothing for this
+				# one, so a gated `u8 x[2]` was declined -- "this backend
+				# cannot resolve its length" -- where C, C++ and Rust read
+				# it (26.752).
+				length = (str(placement.array_count)
+				          if placement.array_count is not None
+				          else self._length_expression(struct, placement))
 				start  = through if through is not None else "0"
 				if length is None:
 					lines.extend(["",

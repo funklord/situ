@@ -256,7 +256,11 @@ class Ask:
 	#: first time they were, C++ answered 60000 where the other three answered
 	#: 33 -- an unclamped span over a wire-declared length, and a heap
 	#: overflow to read (26.320).
-	inside_bytes: tuple[str, ...] = ()
+	#
+	#: Each with its declared count where the run is fixed, which C answers
+	#: as a constant: it emits `_ptr` and no `_len` for a fixed run, gated
+	#: or not, as its framed `BYTES` probe already knows (26.752).
+	inside_bytes: tuple[tuple[str, int | None], ...] = ()
 	#: For `NESTED`: the member's type, which C++ needs to declare the
 	#: out-parameter the accessor fills in.
 	inner: str = ""
@@ -1006,29 +1010,23 @@ def _interior_scalars(struct: ResolvedStruct,
 
 
 def _gated_bytes(struct: ResolvedStruct,
-		region: Placement) -> tuple[str, ...]:
-	"""Byte runs inside a region, as the names they carry on the gate.
+		region: Placement) -> tuple[tuple[str, int | None], ...]:
+	"""Byte runs inside a region, as the names they carry on the gate, each
+	with its count where the schema fixes one.
 
 	The length is the comparable answer and the last byte is what catches an
 	offset that disagrees while the length happens to match. Secrets are out
 	for the reason they are out of `_interior_scalars`: 14.6 emits no reader
 	for one at all.
 
-	**Only the runs all four read: those sized by a field OUTSIDE the
-	region** (26.750). The others split the backends, and asking for one
-	produced a driver that did not compile, in every sealed cell of the
-	composed sweep with such a run:
-
-	- a FIXED run: C and Rust give a reader, C++ and Python none, and C's
-	  has `_ptr` and no `_len`;
-	- one sized by a field INSIDE the region: Rust declines it;
-	- one sized by `remaining`: C++ declines it.
-
-	No corpus schema has any of the three, so nothing compared here before
-	is lost. Which backends should read them is recorded in 26.750 and not
-	settled by a probe.
+	**Every run all four read** (26.750, 26.752): a fixed one, one sized by
+	fields outside the region -- by one field or an expression, like
+	`fragment[length - 24]` in dtls -- and a `[remaining]` one. A run sized
+	from a field INSIDE the region is declined by all four, so it is not
+	asked. 26.750 left out the fixed and `[remaining]` runs because Python
+	declined the first and C++ the second; both read them now.
 	"""
-	found: list[str] = []
+	found: list[tuple[str, int | None]] = []
 	inside = {held.path for held in (entry.placement
 	                                 for entry in struct.entries)
 	          if held.sealed_by == region.name}
@@ -1046,23 +1044,19 @@ def _gated_bytes(struct: ResolvedStruct,
 			continue
 		if any(attr.name == "secret" for attr in placement.attrs):
 			continue
-		# What the count names: one field, or every name in an expression
-		# (`fragment[length - 24]` in dtls, which a test of `sized_by` alone
-		# dropped). None of it may be `remaining` or inside the region, and
-		# a run that names nothing is a fixed one.
+		# What the count names: one field, or every name in an expression.
+		# None of it may be inside the region; `remaining` is the frame's.
 		names = ({placement.sized_by} if placement.sized_by is not None
 		         else set(re.findall(r"[A-Za-z_][\w.]*",
 		                             placement.size_expr or "")))
-		if not names or "remaining" in names \
-				or any(f"{struct.name}.{region.name}.{name}" in inside
-				       for name in names):
+		if any(f"{struct.name}.{region.name}.{name}" in inside
+		       for name in names - {"remaining"}):
 			continue
 
-		found.append(c_name(local_name(struct, placement))
-		             [len(c_name(region.name)) + 1:])
+		found.append((c_name(local_name(struct, placement))
+		              [len(c_name(region.name)) + 1:], placement.array_count))
 
 	return tuple(found)
-
 
 def _gated(struct: ResolvedStruct, region: Placement) -> tuple[str, ...]:
 	"""Those scalars as the names they carry ON THE GATE.
@@ -1604,15 +1598,23 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        *[f'\t\t\t\t\tprintf("{one} %lld\\n", (long long)'
 		          f"{ident(prefix, struct, ask.local, one, 'get')}(held));"
 		          for one in ask.inside],
-		        *[line for one in ask.inside_bytes for line in (
+		        # A fixed run's length is its count, and its `_ptr` is NULL
+		        # unless the whole run fits -- the framed probe's own rule
+		        # (`len = held == NULL ? 0 : COUNT`). Without the NULL test
+		        # the constant read `ptr[n - 1]` off a NULL pointer, and the
+		        # driver died on a gated run past the frame (26.752).
+		        *[line for one, count in ask.inside_bytes for line in (
 			        "\t\t\t\t\t{",
+			        f"\t\t\t\t\t\tconst uint8_t *bytes ="
+			        f" {ident(prefix, struct, ask.local, one, 'ptr')}(held);",
+			        f"\t\t\t\t\t\tconst uint32_t n = bytes == NULL ? 0u"
+			        f" : {count}u;"
+			        if count is not None else
 			        f"\t\t\t\t\t\tconst uint32_t n ="
 			        f" {ident(prefix, struct, ask.local, one, 'len')}(held);",
 			        "",
 			        f'\t\t\t\t\t\tprintf("{one} len=%u last=%d\\n", n,',
-			        "\t\t\t\t\t\t\tn != 0u ? (int)"
-			        f"{ident(prefix, struct, ask.local, one, 'ptr')}(held)"
-			        "[n - 1u] : -1);",
+			        "\t\t\t\t\t\t\tn != 0u ? (int)bytes[n - 1u] : -1);",
 			        "\t\t\t\t\t}",
 		        )],
 		        "\t\t\t\t}",
@@ -2041,7 +2043,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		return ["\t\t\t{",
 		        *[f"\t\t\t\tlong long {bare_name(one)} = 0;"
 		          for one in ask.inside],
-		        *[line for one in ask.inside_bytes for line in (
+		        *[line for one, _count in ask.inside_bytes for line in (
 			        f"\t\t\t\tlong long {bare_name(one)}_len = 0;",
 			        f"\t\t\t\tlong long {bare_name(one)}_last = -1;",
 		        )],
@@ -2052,7 +2054,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        *[f"\t\t\t\t\t{bare_name(one)} ="
 		          f" static_cast<long long>(gate.{bare_name(one)}());"
 		          for one in ask.inside],
-		        *[line for one in ask.inside_bytes for line in (
+		        *[line for one, _count in ask.inside_bytes for line in (
 			        "\t\t\t\t\t{",
 			        f"\t\t\t\t\t\tconst auto held ="
 			        f" gate.{bare_name(one)}();",
@@ -2077,7 +2079,7 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		          for one in ask.inside],
 		        *[f'\t\t\t\t\tstd::printf("{one} len=%lld last=%lld\\n",'
 		          f" {bare_name(one)}_len, {bare_name(one)}_last);"
-		          for one in ask.inside_bytes],
+		          for one, _count in ask.inside_bytes],
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
@@ -2396,7 +2398,7 @@ def _rust_ask(ask: Ask) -> list[str]:
 			        *[f'\t\t\t\t\tprintln!("{one} {{}}",'
 			          f" gate.{rust_ident(one)}() as i64);"
 			          for one in ask.inside],
-			        *[line for one in ask.inside_bytes for line in (
+			        *[line for one, _count in ask.inside_bytes for line in (
 				        "\t\t\t\t\t{",
 				        f"\t\t\t\t\t\tlet held ="
 				        f" gate.{rust_ident(one)}();",
@@ -2665,7 +2667,7 @@ def _python_ask(ask: Ask) -> list[str]:
 		        "if gate is not None:",
 		        *[f'\tprint("{one} %d" % gate.{py_name(one)})'
 		          for one in ask.inside],
-		        *[line for one in ask.inside_bytes for line in (
+		        *[line for one, _count in ask.inside_bytes for line in (
 			        f"\theld = gate.{py_name(one)}",
 			        f'\tprint("{one} len=%d last=%d"'
 			        " % (len(held), held[len(held) - 1] if held else -1))",

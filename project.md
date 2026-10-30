@@ -5906,11 +5906,13 @@ open-ended.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **The backends split on readers for byte runs inside a gate** (26.750):
-  a fixed run has a reader in C and Rust only, one sized from inside the
-  region is declined by Rust, a `[remaining]` one by C++. No corpus schema
-  has any of them, so the differential probe now asks only for runs sized
-  from outside, which all four read. Emitter work in four backends.
+- **A tag after a run sized from inside its sealed region** (26.752): all
+  four decline a reader for such a run, consistently, but C then cannot
+  place the `tag` after the region either and declines that too, while
+  the differ's `TAG` probe asks the schema rather than the emitter and
+  calls it. 26.733's shape, one member over. The split 26.750 recorded is
+  otherwise closed: Python reads a gated fixed run and C++ a gated
+  `[remaining]` one.
 - **Four walker identity divergences** of one shape (26.689), where the
   guard widths want reconciling rather than listing. **The holder's**, and
   the parking was re-measured and confirmed 2026-10-28 rather than
@@ -7788,6 +7790,11 @@ Moved to
 
 Moved to
 `doc/decision/26.751-a-bound-read-a-later-run-s-element-past-the-view.md`.
+
+### 26.752 Two backends gain the gated readers they lacked
+
+Moved to
+`doc/decision/26.752-two-backends-gain-the-gated-readers-they-lacked.md`.
 
 ### 26.715 The same width in the other pointer backend
 

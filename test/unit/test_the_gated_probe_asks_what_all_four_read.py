@@ -63,6 +63,9 @@ def test_the_drivers_build_and_agree_over_a_fixed_run(tmp_path: Path) -> None:
 	first = next(iter(given.values()))
 	assert all(answer == first for answer in given.values()), given
 	assert "outside len=2 last=2" in first.splitlines(), first
+	# Asked again since 26.752: Python reads a gated fixed run now, and C
+	# answers its length as the constant it is.
+	assert "fixed len=2 last=187" in first.splitlines(), first
 
 
 def test_the_corpus_gated_probes_are_still_asked() -> None:
@@ -79,6 +82,39 @@ def test_the_corpus_gated_probes_are_still_asked() -> None:
 			for ask in differ.asks(struct, set(resolved.structs),
 			                       resolved.structs):
 				asked.update(f"{struct.name}.{one}"
-				             for one in ask.inside_bytes)
+				             for one, _count in ask.inside_bytes)
 	assert {"record.fragment", "keystore.plaintext",
 	        "packet.body"} <= asked, asked
+
+
+REMAINING = """target buffer;
+endian big;
+codec seal { length_preserving; seekable; authenticated; invertible;
+             deterministic; }
+impl seal extern "my_seal";
+struct s {
+	u8  lead;
+	sealed body(seal) {
+		u8  run[remaining];
+	}
+	tag u8 mac[16] covers(body);
+}
+"""
+
+
+def test_a_remaining_run_in_a_gate_is_read_by_all_four(tmp_path: Path) -> None:
+	"""C++ declined it -- "this backend cannot resolve its extent" -- while
+	the other three read it, and the C++ driver asking for it did not
+	compile (26.752)."""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(REMAINING, encoding="ascii")
+	try:
+		command = fourway.build(tmp_path, schema)
+	except fourway.BuildFailed as failed:
+		pytest.fail(f"a driver asked for a reader its backend lacks: {failed}")
+	for packet in (bytes([1, 0x10, 0x20, 0x30]) + bytes(16),
+	               bytes([1]) + bytes(16)):
+		given = {name: fourway.answers(argv, packet, tmp_path)
+		         for name, argv in command.items()}
+		first = next(iter(given.values()))
+		assert all(answer == first for answer in given.values()), given
