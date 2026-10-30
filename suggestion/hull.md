@@ -334,3 +334,41 @@ generates C only. And 26.680's walker divergence had no path into hull
 either: `sexpr.c` walks the forms itself and compares its `")"` against
 the generated C's extent rather than running situ's walker. situ had
 warned about both; neither applied.
+
+## 19. No octal radix, so a tar header cannot be described
+
+Written 2026-10-30 from hull, which that day moved two formats into situ
+(`engine/disc.situ`, an ISO9660 image's structures, and `core/frame.situ`,
+the Ethernet, ARP, IPv4, UDP, TCP and DNS headers hull's switch answers)
+and looked next at tar: hull reads tar from two places it does not
+control -- a layer pulled from a registry (`store/unpack.c`) and
+`hull commit --tar`, which takes `docker export`'s output -- and both read
+the 512-byte ustar header at hand-written offsets. Every number in it is
+octal text: `mode[8]`, `uid[8]`, `gid[8]`, `size[12]`, `mtime[12]`,
+`chksum[8]`, NUL- or space-terminated (POSIX 1003.1-1988, ustar). `radix`
+is `decimal | hex | scaled`, so the header can only be described as byte
+runs, with the numbers still parsed in C -- the part worth describing.
+
+An `octal` radix beside `hex`, with the terminator rule ustar uses (digits,
+then a NUL or a space, the field padded to its width with leading zeros or
+spaces), would let the header be one struct, its checksum a codec over the
+block with the checksum field read as spaces. GNU's base-256 numbers (a
+first byte with its high bit set) are a variant that header would then
+need too; hull's unpack reads both. Not urgent: hull's tar readers are
+tested, and this is a gap in coverage of a format, not a fault.
+
+## 20. A UDP sum that comes out 0 is written 0, which UDP reads as "none"
+
+Found 2026-10-30 writing `core/frame.situ` after `example/udp`. Its
+`internet_checksum` is `ones_complement(width = 16, complement)`, and the
+builder writes whatever that yields. For a datagram whose ones'
+complement sum is 0xFFFF the complement is 0x0000 -- and RFC 768 says a
+computed sum of zero "is transmitted as all ones", because a zero in that
+field means the sender computed none. So one UDP datagram in 65,536 built
+by a situ builder goes out marked unchecksummed: harmless to deliver, but
+not what was built, and a receiver that checks sums checks none on it.
+TCP has no such rule, so the codec is right for `example/tcp` and wrong
+only where a zero has that meaning. A codec option -- a zero result
+written as its complement -- or a UDP-specific codec in the example would
+close it; hull's `.1` builds its UDP answers this way and would take
+either.
