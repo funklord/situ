@@ -7248,11 +7248,20 @@ class Emitter:
 
 		if placement.since is not None and placement.version_field is not None:
 			version = c_name(placement.version_field)
+			# ...and where a tag covers it, the write marks the tag stale as
+			# the covered setter below does. This returned first and took
+			# no message, so `transmittable()` went on saying a message
+			# with a stale tag was ready to send (26.765).
+			owner = ("::situ::rt::message &owner, "
+			         if placement.covered_by else "")
+			mark  = ([f"\t\towner.mark_dirty("
+			          f"{self._dirty_bits(struct, placement)});"]
+			         if placement.covered_by else [])
 			return lines + [
 				f"\t/// Writing it to an earlier message would put these bytes",
 				"\t/// past that message's end, so this refuses.",
-				f"\t[[nodiscard]] ::situ::rt::err set_{name}({ctype} value)"
-				" noexcept",
+				f"\t[[nodiscard]] ::situ::rt::err set_{name}({owner}{ctype}"
+				" value) noexcept",
 				"\t{",
 				f"\t\tif ({version}() < {placement.since}u) {{",
 				"\t\t\treturn ::situ::rt::err::version;",
@@ -7262,6 +7271,7 @@ class Emitter:
 				# wrote four bytes past the frame.
 				*self._versioned_bounds(placement),
 				f"\t\t{self._store(scalar, placement, stored, offset)}",
+				*mark,
 				"\t\treturn ::situ::rt::err::ok;",
 				"\t}",
 			]

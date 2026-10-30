@@ -4115,6 +4115,20 @@ class Emitter:
 				"\t\t\t# the frame does not reach it.",
 				"\t\t\treturn",
 			])
+			# ...and a member present from a VERSION is not there to write
+			# in an older message. The plain setter below refuses that;
+			# this one wrote it anyway (26.765).
+			if placement.since is not None \
+					and placement.version_field is not None:
+				version = py_name(placement.version_field)
+				guard = [
+					f"\t\tif self.{version} < {placement.since}:",
+					"\t\t\traise VersionError(",
+					f'\t\t\t\tf"{placement.path} is not in a version '
+					f'{{self.{version}}} message")',
+					*self._versioned_bounds(placement, fits),
+					*guard,
+				]
 			lines.extend([
 				"",
 				f"\t# No {name} setter: writing it leaves {tags} stale.",

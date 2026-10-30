@@ -1379,6 +1379,32 @@ class Emitter:
 				if fits is not None:
 					guard = [f"\tif (!({fits})) {{", "\t\treturn;", "\t}"]
 
+			# A member present from a VERSION is not there to write in an
+			# older message, and this wrote it anyway -- past the end of a
+			# version-1 message wherever the member is last (26.765). The
+			# plain versioned setter has refused since 19.4; this is its
+			# test, with its `situ_err_t`, on the setter a tag takes over.
+			if placement.since and placement.version_field:
+				version = ident(self.prefix, struct.name,
+				                c_name(placement.version_field), "get")
+				lines.extend([
+					f"static inline situ_err_t "
+					f"{ident(self.prefix, struct.name, local, 'set')}"
+					f"(situ_msg_t *msg, {view}, {ctype} value)",
+					"{",
+					f"\tif ({version}({held}) < {placement.since}u) {{",
+					"\t\treturn SITU_ERR_VERSION;",
+					"\t}",
+					*self._versioned_bounds(placement, held),
+					*[line.replace("\t\treturn;", "\t\treturn SITU_ERR_BOUNDS;")
+					  for line in guard],
+					f"\t{self._store_statement(scalar, placement, base, 'value', offset=at)}",
+					f"\tsitu_msg_mark_dirty(msg, {mask});",
+					"\treturn SITU_OK;",
+					"}",
+				])
+				continue
+
 			lines.extend([
 				f"static inline void "
 				f"{ident(self.prefix, struct.name, local, 'set')}"

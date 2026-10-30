@@ -8400,12 +8400,20 @@ class Emitter:
 			# message's end. `Result` is `#[must_use]`, so unlike C the
 			# refusal cannot be dropped without a warning.
 			version = _ident(c_name(placement.version_field))
+			# ...and where a tag covers it, the write marks the tag stale as
+			# the covered setter below does. This returned first and took
+			# no dirty word, so a covered versioned write left the tag
+			# stale with nothing to say so (26.765).
+			dirty = ("dirty: &mut Dirty, " if placement.covered_by else "")
+			mark  = ([f"\t\tdirty.mark({self._dirty_bits(struct, placement)});"]
+			         if placement.covered_by else [])
 			return [
 				"",
 				f"\t/// Writing this to a message older than version"
 				f" {placement.since} would put",
 				"\t/// these bytes past its end, so it refuses.",
-				f"\tpub fn {setter}(&mut self, value: {rtype}) -> Result<()> {{",
+				f"\tpub fn {setter}(&mut self, {dirty}value: {rtype})"
+				" -> Result<()> {",
 				f"\t\tif self.as_ref().{version}() < {placement.since} {{",
 				"\t\t\treturn Err(Error::Version);",
 				"\t\t}",
@@ -8414,6 +8422,7 @@ class Emitter:
 				# panicked in `write_be` on the byte after the frame.
 				*self._versioned_bounds(placement, "self.bytes"),
 				f"\t\t{self._store(placement, scalar)}",
+				*mark,
 				"\t\tOk(())",
 				"\t}",
 			]
