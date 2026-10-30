@@ -50,7 +50,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
@@ -5953,6 +5953,24 @@ class Emitter:
 				])
 			steps.extend(self._gap_step(cursor, gaps, index))
 
+		# THE `[since]` TAIL, which the message's version decides and `at`
+		# is opened without (26.768): read once the version has arrived.
+		trailing = versioned_tail(self.resolved.structs, struct)
+		if trailing is not None:
+			carrier = trailing[0]
+			assert carrier.offset_bits is not None
+			constant -= trailing[1]
+			ends = (carrier.offset_bits + carrier.size_bits) // BITS_PER_BYTE
+			steps.extend([
+				"",
+				f"\t\t// The members `{struct.name}`'s version adds (19.4).",
+				f"\t\tif have < {ends} {{",
+				"\t\t\treturn situ_rt::Framing::Need(at);",
+				"\t\t}",
+				f"\t\tat = situ_rt::need(at, "
+				f"{self._version_tail(trailing, 'probe')});",
+			])
+
 		return [
 			*head,
 			# `mut` only where something adds to it. A schema whose only
@@ -6391,13 +6409,38 @@ class Emitter:
 			return None
 		constant, variable = parts
 
-		terms = [str(constant)]
+		tail = versioned_tail(self.resolved.structs, struct)
+		terms = [str(constant - (tail[1] if tail else 0))]
 		for placement in variable:
 			length = self._length_expression(struct, placement, depth=depth)
 			if length is None:
 				return None
 			terms.append(length)
+		if tail is not None:
+			terms.append(f"({self._version_tail(tail, 'self')})")
 		return " + ".join(terms)
+
+	@staticmethod
+	def _version_tail(tail: tuple[Placement, int,
+	                              tuple[tuple[int, int], ...]],
+			holder: str) -> str:
+		"""The bytes of the `[since]` tail this message's version carries.
+
+		`versioned_tail` takes the tail out of the constant and this puts
+		back what the version reaches (26.768): none where the version has
+		not arrived to be read, which is the shorter answer and the one a
+		caller then asks again about.
+		"""
+		field, _, steps = tail
+		assert field.offset_bits is not None
+		ends  = (field.offset_bits + field.size_bits) // BITS_PER_BYTE
+		read  = f"{holder}.{_ident(c_name(field.name))}() as u64"
+		chain = "0"
+		carried = 0
+		for since, added in steps:
+			carried += added
+			chain = f"if {read} >= {since} {{ {carried} }} else {{ {chain} }}"
+		return f"if {holder}.bytes.len() < {ends} {{ 0 }} else {{ {chain} }}"
 
 	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
@@ -9278,7 +9321,14 @@ class Emitter:
 		# member can be both outside the frame and constrained, and
 		# `continue` here left `[must_eq]` unchecked for every
 		# dynamically placed field.
-		out.extend(self._fits_check(struct, placement))
+		#
+		# NOT for a `[since]` member, whose versioned read below asks the
+		# same question only where the version carries it. Asked here, it
+		# refused every whole message older than the member: `u8 n; u8
+		# d[n]; u16 x [since = 2];` at version 1 has no `x` to hold, and C
+		# has asked it inside the version guard all along (26.768).
+		if not placement.since:
+			out.extend(self._fits_check(struct, placement))
 		out.extend(self._tlv_check(struct, placement))
 
 		# 0052: a byte run pinned to a literal is one comparison, above
@@ -9471,8 +9521,13 @@ class Emitter:
 
 		mine.extend(self._attr_checks(struct, placement, read))
 
+		# ...and the bounds question with them, which `_check` leaves to
+		# this for a `[since]` member: the accessor asks it at a static
+		# offset, and nothing did at a dynamic one where the version
+		# carries the member (26.768).
 		# Every versioned member: the accessor is the frame check (26.746).
 		if versioned:
+			mine[:0] = self._fits_check(struct, placement)
 			# The accessor answers whether the field is *there*; the raw
 			# load below answers what it holds, which is how every other
 			# check in this function reads a member. Binding the accessor's

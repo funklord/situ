@@ -49,7 +49,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
@@ -5850,6 +5850,24 @@ class Emitter:
 				])
 			steps.extend(self._gap_step(cursor, gaps, index))
 
+		# THE `[since]` TAIL, which the message's version decides and `at`
+		# is opened without (26.768): read once the version has arrived.
+		trailing = versioned_tail(self.resolved.structs, struct)
+		if trailing is not None:
+			carrier = trailing[0]
+			assert carrier.offset_bits is not None
+			constant -= trailing[1]
+			ends = (carrier.offset_bits + carrier.size_bits) // BITS_PER_BYTE
+			steps.extend([
+				"",
+				f"\t\t# The members `{struct.name}`'s version adds (19.4).",
+				f"\t\tif have < {ends}:",
+				f'\t\t\traise TruncatedError("{struct.name}: incomplete",'
+				" at)",
+				"\t\tat = min(at + "
+				f"{self._version_tail(trailing, 'probe')}, 0xFFFFFFFF)",
+			])
+
 		return [
 			*head,
 			f"\t\tat = {constant}",
@@ -6238,13 +6256,37 @@ class Emitter:
 			return None
 		constant, variable = parts
 
-		terms = [str(constant)]
+		tail = versioned_tail(self.resolved.structs, struct)
+		terms = [str(constant - (tail[1] if tail else 0))]
 		for placement in variable:
 			length = self._length_expression(struct, placement, depth=depth)
 			if length is None:
 				return None
 			terms.append(length)
+		if tail is not None:
+			terms.append(self._version_tail(tail, "self"))
 		return " + ".join(terms)
+
+	@staticmethod
+	def _version_tail(tail: tuple[Placement, int,
+	                              tuple[tuple[int, int], ...]],
+			holder: str) -> str:
+		"""The bytes of the `[since]` tail this message's version carries.
+
+		`versioned_tail` takes the tail out of the constant and this puts
+		back what the version reaches (26.768): none where the version has
+		not arrived to be read.
+		"""
+		field, _, steps = tail
+		assert field.offset_bits is not None
+		ends  = (field.offset_bits + field.size_bits) // BITS_PER_BYTE
+		read  = f"int({holder}.{py_name(field.name)})"
+		chain = "0"
+		carried = 0
+		for since, added in steps:
+			carried += added
+			chain = f"({carried} if {read} >= {since} else {chain})"
+		return f"(0 if {holder}._len < {ends} else {chain})"
 
 	def _extent_property(self, struct: ResolvedStruct) -> list[str]:
 		"""Emitted only for a type something walks a run of."""
@@ -7684,7 +7726,13 @@ class Emitter:
 		can be both outside the frame and constrained, and returning on the
 		first left `[must_eq]` unchecked for every dynamically placed field.
 		"""
-		return [*self._fits_check(struct, entry.placement),
+		# NOT for a `[since]` member, whose versioned read below asks the
+		# same question only where the version carries it. Asked here, it
+		# refused every whole message older than the member: `u8 n; u8
+		# d[n]; u16 x [since = 2];` at version 1 has no `x` to hold, and C
+		# has asked it inside the version guard all along (26.768).
+		return [*([] if entry.placement.since
+		          else self._fits_check(struct, entry.placement)),
 		        *self._arm_checks(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
 		        *self._member_check(struct, entry)]
@@ -8024,7 +8072,7 @@ class Emitter:
 		# ...and only where the property it reads exists, which this emitter
 		# recorded when it wrote it rather than working out again (26.74).
 		if versioned and placement.path not in self._emitted:
-			return []
+			return self._fits_check(struct, placement)
 
 		read = f"{name}_value" if versioned else f"self.{name}"
 
@@ -8057,6 +8105,13 @@ class Emitter:
 			])
 
 		lines.extend(self._attr_checks(struct, placement, read))
+
+		# ...and the bounds question with them, which `_check` leaves to
+		# this for a `[since]` member: the accessor asks it at a static
+		# offset, and nothing did at a dynamic one where the version
+		# carries the member (26.768).
+		if versioned:
+			lines[:0] = self._fits_check(struct, placement)
 
 		# Every versioned member: the property is the frame check, raising
 		# BoundsError where the version claims the field and the frame is

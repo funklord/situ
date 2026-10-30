@@ -50,7 +50,7 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bit_extractor,
@@ -4991,6 +4991,27 @@ class Emitter:
 		lines.extend(["\treturn extent;", "}"])
 		return lines
 
+	def _version_tail(self, struct: ResolvedStruct, total: str,
+			read: str, indent: str = "\t") -> list[str]:
+		"""The `[since]` tail a message's version reaches, added to `total`.
+
+		`versioned_tail` takes it out of the constant; this puts back what
+		the message's own version carries (26.768). Empty where there is
+		no such tail, so a caller can add it unconditionally.
+		"""
+		tail = versioned_tail(self.resolved.structs, struct)
+		if tail is None:
+			return []
+		lines = [f"{indent}{{",
+		         f"{indent}\tconst uint64_t version = (uint64_t)({read});",
+		         ""]
+		for since, added in tail[2]:
+			lines.extend([f"{indent}\tif (version >= {since}u) {{",
+			              f"{indent}\t\t{total} = situ_need_u32({total},"
+			              f" {added}u);",
+			              f"{indent}\t}}"])
+		return [*lines, f"{indent}}}"]
+
 	def _extent_body(self, struct: ResolvedStruct, constant: int,
 			variable: list[Placement]) -> list[str]:
 		"""The extent function itself, with `_in_extent` held by the caller.
@@ -5005,6 +5026,13 @@ class Emitter:
 			if not self._has_length(struct, placement):
 				return []
 			terms.append(self._length_expression(struct, placement))
+		tail = versioned_tail(self.resolved.structs, struct)
+		ending: list[str] = []
+		if tail is not None:
+			constant -= tail[1]
+			ending = self._version_tail(struct, "extent",
+			        f"{ident(self.prefix, struct.name, c_name(tail[0].name), 'get')}"
+			        "(view)")
 
 		name = ident(self.prefix, struct.name, "extent")
 		head = [
@@ -5041,7 +5069,8 @@ class Emitter:
 				])
 			lines.append(f"\tuint32_t extent = {constant}u;")
 			lines.extend(f"\textent = extent + ({term});" for term in terms)
-			if not terms:
+			lines.extend(ending)
+			if not terms and not ending:
 				lines.append("\t(void)view;")
 			lines.extend(["\treturn extent;", "}"])
 			return lines
@@ -5083,6 +5112,7 @@ class Emitter:
 		         "\t\treturn 0u;\t/* `[depth]`/`[limit]`, not the frame */",
 		         "\t}"]
 		lines.extend(f"\textent = extent + ({term});" for term in deep)
+		lines.extend(ending)
 		lines.extend(["\treturn extent;", "}", "",
 		              f"static inline uint32_t {name}(situ_view_t view)",
 		              "{", f"\treturn {name}_at(view, 0u);", "}"])
@@ -5162,7 +5192,8 @@ class Emitter:
 			        " so every buffer already holds one")
 
 		steps: list[str] = []
-		at = str(constant) + "u"
+		tail = versioned_tail(self.resolved.structs, struct)
+		at = str(constant - (tail[1] if tail else 0)) + "u"
 		# WHERE EACH MEMBER SITS, derived rather than asked for (26.684).
 		# `at` is a running TOTAL and includes every fixed member, the ones
 		# AFTER this one included, so it is not an offset; and the offset
@@ -5405,6 +5436,25 @@ class Emitter:
 					"\t}",
 				])
 			steps.extend(self._gap_step(cursor, gaps, index))
+
+		if tail is not None:
+			# THE `[since]` TAIL, which the message's version decides and
+			# `at` was opened without (26.768). The version has to have
+			# arrived to be read; until it has, `at` is the lower bound.
+			carrier = tail[0]
+			assert carrier.scalar is not None \
+				and carrier.offset_bits is not None
+			ends = (carrier.offset_bits + carrier.size_bits) // BITS_PER_BYTE
+			steps.extend([
+				"",
+				f"\t/* The members `{struct.name}`'s version adds (19.4). */",
+				f"\tif (have < {ends}u) {{",
+				"\t\t*need = at;",
+				"\t\treturn SITU_ERR_TRUNCATED;",
+				"\t}",
+				*self._version_tail(struct, "at", self._load_expression(
+				        carrier.scalar, carrier, "data")),
+			])
 
 		# Only where something reads through it. A length that is arithmetic
 		# over nothing -- a varint's, say -- leaves the local set and unused,

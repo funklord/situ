@@ -2161,12 +2161,20 @@ def framing_floor(structs: dict[str, ResolvedStruct],
 	none is below this, and it is EXACT for 93 -- `dnsname.question`
 	answering five where this says four and `mqtt.will_message` two where
 	this says one are the only two it is strictly below.
+
+	**A versioned tail is not in it** (26.768). `required` opens without
+	the `[since]` members a variable struct ends in, and the floor is the
+	same figure: crediting `u8 n; u8 d[n]; u16 x [since = 2];` with `x`
+	told a run of version-1 elements it needed two bytes each more than
+	they report, and the total fell as each one arrived. A fixed one's
+	`size_bytes` is already its oldest version's.
 	"""
 	parts = extent_parts(structs, struct)
 	if parts is None:
 		return int(struct.layout.size_bytes)
 	constant, _ = parts
-	return max(constant, 1)
+	tail = versioned_tail(structs, struct)
+	return max(constant - (tail[1] if tail else 0), 1)
 
 
 def framing_gaps(structs: dict[str, ResolvedStruct],
@@ -2475,6 +2483,56 @@ def version_steps(struct: ResolvedStruct) \
 		steps.append((since, max(base, *(end(held) for held in versioned
 		                                 if (held.since or 0) <= since))))
 	return field, base, tuple(steps)
+
+
+def versioned_tail(structs: dict[str, ResolvedStruct],
+		struct: ResolvedStruct) \
+		-> tuple[Placement, int, tuple[tuple[int, int], ...]] | None:
+	"""The `[since]` tail of a struct `extent_parts` measures, or None.
+
+	`version_steps` is the same question for a struct whose every member is
+	at a static offset. Where a member in front of the tail is variable --
+	`u8 n; u8 d[n]; u16 x [since = 2];` -- the constant `extent_parts`
+	returns counts `x` whatever the message's version, so a version-1
+	message was framed two bytes long and a member after a nested one read
+	from the wrong place (26.768). The walkers skip an absent tail member
+	wherever it sits, which is the answer the four now give.
+
+	Returned as the version field, the bytes the constant counts for the
+	tail, and one `(since, bytes)` per version that adds members -- the
+	bytes that version and every later one carries on top of the last.
+	Only where the version field is read at a static byte offset and every
+	step ends on a byte; anything else is None, and the caller answers as
+	it did before.
+	"""
+	if extent_parts(structs, struct) is None:
+		return None
+	members   = own_members(struct)
+	versioned = [held for held in members if held.since]
+	if not versioned or not versioned[0].version_field:
+		return None
+	own = {held.path for held in members}
+	if any(entry.placement.since and entry.placement.path not in own
+	       for entry in struct.entries):
+		return None
+	if any(not held.since or not occupies_fixed_bytes(held)
+	       for held in members[members.index(versioned[0]):]):
+		return None
+	field = next((held for held in members
+	              if held.name == versioned[0].version_field
+	              and not held.since and held.scalar is not None), None)
+	if field is None or field.offset_bits is None \
+			or field.offset_bits % BITS_PER_BYTE \
+			or field.size_bits % BITS_PER_BYTE:
+		return None
+	steps = []
+	for since in sorted({held.since or 0 for held in versioned}):
+		bits = sum(fixed_span_bits(held) for held in versioned
+		           if held.since == since)
+		if bits % BITS_PER_BYTE:
+			return None
+		steps.append((since, bits // BITS_PER_BYTE))
+	return field, sum(added for _, added in steps), tuple(steps)
 
 
 def is_run(placement: Placement, structs: Container[str]) -> bool:

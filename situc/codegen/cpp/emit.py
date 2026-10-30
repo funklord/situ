@@ -52,7 +52,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
@@ -3017,6 +3017,23 @@ class Emitter:
 				])
 			steps.extend(self._gap_step(cursor, gaps, index))
 
+		# THE `[since]` TAIL, which the message's version decides and `at`
+		# is opened without (26.768): read once the version has arrived.
+		trailing = versioned_tail(self.resolved.structs, struct)
+		if trailing is not None:
+			carrier = trailing[0]
+			assert carrier.offset_bits is not None
+			constant -= trailing[1]
+			steps.extend([
+				"",
+				f"\t\t/* The members `{struct.name}`'s version adds (19.4). */",
+				f"\t\tif (have < {(carrier.offset_bits + carrier.size_bits) // BITS_PER_BYTE}u) {{",
+				"\t\t\tneed = at;",
+				"\t\t\treturn ::situ::rt::err::truncated;",
+				"\t\t}",
+				f"\t\tat = situ_need_u32(at, {self._version_tail(trailing)});",
+			])
+
 		return [
 			*head,
 			f"\t\tstd::uint32_t at = {constant}u;",
@@ -3453,13 +3470,33 @@ class Emitter:
 			return None
 		constant, variable = parts
 
-		terms = [str(constant)]
+		tail = versioned_tail(self.resolved.structs, struct)
+		terms = [str(constant - (tail[1] if tail else 0))]
 		for placement in variable:
 			length = self._length_expression(struct, placement, depth=depth)
 			if length is None:
 				return None
 			terms.append(length)
+		if tail is not None:
+			terms.append(self._version_tail(tail))
 		return terms
+
+	@staticmethod
+	def _version_tail(tail: tuple[Placement, int,
+	                              tuple[tuple[int, int], ...]]) -> str:
+		"""The bytes of the `[since]` tail this message's version carries.
+
+		`versioned_tail` takes the tail out of the constant and this puts
+		back what the version reaches (26.768), newest step first.
+		"""
+		field, _, steps = tail
+		read  = f"static_cast<std::uint64_t>(this->{bare_name(field.name)}())"
+		chain = "0u"
+		carried = 0
+		for since, added in steps:
+			carried += added
+			chain = f"({read} >= {since}u ? {carried}u : {chain})"
+		return chain
 
 	def _extent_method(self, struct: ResolvedStruct) -> list[str]:
 		"""How many bytes one instance occupies, for a run that walks them."""
@@ -9520,7 +9557,13 @@ class Emitter:
 		can be both outside the frame and constrained, and returning on the
 		first left `[must_eq]` unchecked for every dynamically placed field.
 		"""
-		return [*self._fits_check(struct, entry.placement),
+		# NOT for a `[since]` member, whose versioned read below asks the
+		# same question only where the version carries it. Asked here, it
+		# refused every whole message older than the member: `u8 n; u8
+		# d[n]; u16 x [since = 2];` at version 1 has no `x` to hold, and C
+		# has asked it inside the version guard all along (26.768).
+		return [*([] if entry.placement.since
+		          else self._fits_check(struct, entry.placement)),
 		        *self._arm_checks(struct, entry.placement),
 		        *self._tlv_check(struct, entry.placement),
 		        *self._member_check(struct, entry)]
@@ -10069,7 +10112,7 @@ class Emitter:
 		# ...and only where the accessor it names exists, which this emitter
 		# recorded when it wrote it rather than working out again (26.74).
 		if versioned and placement.path not in self._emitted:
-			return []
+			return self._fits_check(struct, placement)
 
 		# A text number's accessor is fallible and takes an out-parameter, as
 		# a versioned member's is, so the constraints below read the
@@ -10119,9 +10162,15 @@ class Emitter:
 
 		lines.extend(self._attr_checks(struct, placement, read))
 
+		# ...and the bounds question with them, which `_check` leaves to
+		# this for a `[since]` member: the accessor asks it at a static
+		# offset, and nothing did at a dynamic one where the version
+		# carries the member (26.768).
 		# Every versioned member: the accessor is the frame check (26.746).
 		if versioned:
-			return self._behind_a_version(placement, name, lines)
+			return self._behind_a_version(
+				placement, name, [*self._fits_check(struct, placement),
+				                  *lines])
 
 		return lines
 

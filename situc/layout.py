@@ -1173,6 +1173,8 @@ class Solver:
 		earliest = _first_versioned(layout)
 		if earliest is not None:
 			layout.size_bits = earliest
+		else:
+			layout.size_bits -= _versioned_tail_bits(layout)
 
 		# A `peek` does not consume, so it advances no cursor and adds
 		# nothing to the extent -- which is right, and left the MINIMUM
@@ -3878,6 +3880,26 @@ def _first_versioned(layout: StructLayout) -> int | None:
 	starts = [placement.offset_bits for placement in layout.placements
 	          if placement.since is not None and placement.offset_bits is not None]
 	return min(starts) if starts else None
+
+
+def _versioned_tail_bits(layout: StructLayout) -> int:
+	"""What the `[since]` members add, where none of them is at a static
+	offset -- behind `u8 d[n]`, say -- so `_first_versioned` cannot say
+	where version 1 ends. Append-only puts them last, so the minimum less
+	their sizes is version 1's. The minimum carried them, and every
+	backend refused a whole version-1 message as short (26.768).
+
+	The struct's own members only: an arm's interior is in `placements`
+	under a deeper path, and it is not this struct's tail.
+	"""
+	versioned = [placement for placement in layout.placements
+	             if placement.since is not None]
+	if not versioned or any(placement.offset_bits is not None
+	                        or not placement.is_fixed_size
+	                        or placement.path.count(".") != 1
+	                        for placement in versioned):
+		return 0
+	return sum(placement.size_bits for placement in versioned)
 
 
 def _since_of(member: ast.Field | ast.Reserved) -> int | None:
