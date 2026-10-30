@@ -7347,6 +7347,14 @@ class Emitter:
 				# about the buffer: `ver = 2` in three bytes passed this and
 				# wrote four bytes past the frame.
 				*self._versioned_bounds(placement),
+				# ...and where the MESSAGE places it, the 26.27 guard every
+				# other setter at a dynamic offset has: a version-2 message
+				# that stops after `d[n]` holds no `x`, and this stored past
+				# it (26.770). The getter has had it since 26.73.
+				*([f"\t\tif (!({fits})) {{",
+				   "\t\t\treturn ::situ::rt::err::ok;"
+				   "\t/* does nothing where it does not fit (26.27) */",
+				   "\t\t}"] if fits else []),
 				f"\t\t{self._store(scalar, placement, stored, offset)}",
 				*mark,
 				"\t\treturn ::situ::rt::err::ok;",

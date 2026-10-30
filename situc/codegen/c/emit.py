@@ -10075,7 +10075,8 @@ class Emitter:
 	# -- scalars --------------------------------------------------------
 
 	def _versioned_get(self, struct: ResolvedStruct, placement: Placement,
-			ctype: str, taken: str, load: str) -> list[str]:
+			ctype: str, taken: str, load: str,
+			fits: str | None = None) -> list[str]:
 		"""A member present only from a given version (section 19.4).
 
 		Out-parameter and an error, because there is no value to return when
@@ -10087,6 +10088,12 @@ class Emitter:
 		The offset is still a constant. `[since]` is append-only, so nothing
 		before this member can move; what varies is only whether the bytes are
 		present, and that is one comparison against a field at a known offset.
+
+		**Except behind a member the message sizes** (26.770): `u8 n; u8
+		d[n]; u16 x [since = 2];` places `x` where `n` says, and a version-2
+		message that stops after `d` held no `x` -- the load read past the
+		frame. `fits` is the guard every other scalar the message places
+		has, answering zero where it does not fit (26.27, 26.73).
 		"""
 		assert placement.since is not None and placement.version_field is not None
 
@@ -10112,6 +10119,12 @@ class Emitter:
 			"		return SITU_ERR_VERSION;",
 			"	}",
 			*self._versioned_bounds(placement, held),
+			*([f"	if (!{fits}) {{",
+			   "		/* Zero where it does not fit: its offset is the"
+			   " message's (26.27). */",
+			   f"		*out = ({ctype})0;",
+			   "		return SITU_OK;",
+			   "	}"] if fits else []),
 			f"	*out = ({ctype})({load});",
 			"	return SITU_OK;",
 			"}",
@@ -10178,7 +10191,8 @@ class Emitter:
 		                  "gate.view" if gate else "view", gate is not None)
 
 		if placement.since is not None:
-			lines = self._versioned_get(struct, placement, ctype, taken, load)
+			lines = self._versioned_get(struct, placement, ctype, taken, load,
+			                            fits)
 		elif fits is not None:
 			lines = [
 				f"/* Zero where the member does not fit the view: its offset is"
@@ -10278,6 +10292,9 @@ class Emitter:
 		if placement.since is not None and placement.version_field is not None:
 			version = ident(self.prefix, struct.name,
 			                c_name(placement.version_field), "get")
+			versioned_fits = self._fits(struct, placement,
+			                            self._scalar_bytes(scalar),
+			                            self._taken_view(taken))
 			return [
 				f"/* Present from version {placement.since}. Writing it to an "
 				f"earlier message",
@@ -10295,6 +10312,14 @@ class Emitter:
 				# four bytes past the frame. Same check as the getter, and the
 				# side it matters more on.
 				*self._versioned_bounds(placement, self._taken_view(taken)),
+				# ...and where the MESSAGE places it, the 26.27 guard every
+				# other setter at a dynamic offset has: a version-2 message
+				# that stops after `d[n]` holds no `x`, and this stored past
+				# it (26.770).
+				*([f"\tif (!{versioned_fits}) {{",
+				   "\t\treturn SITU_OK;\t/* does nothing where it does not"
+				   " fit (26.27) */",
+				   "\t}"] if versioned_fits else []),
 				f"\t{store}",
 				"\treturn SITU_OK;",
 				"}",

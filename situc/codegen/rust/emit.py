@@ -8600,25 +8600,47 @@ class Emitter:
 		# other three wrote it (invariant 48).
 		covered = list(placement.covered_by)
 		what    = ", ".join(covered)
+		# A `[since]` member the message places is still versioned. This
+		# path was taken before the versioned setter's, so it stored into
+		# a version-1 message whatever followed `d[n]` -- the next
+		# message's bytes, in a stream (26.770). The version first, as the
+		# static one asks it, and then the 26.27 guard.
+		versioned = placement.since is not None \
+		            and placement.version_field is not None
+		done = "return Ok(());" if versioned else "return;"
 		return [
 			"",
 			*([] if not covered else [
 				f"\t/// Writing this leaves {what} stale, so it takes the dirty",
 				"\t/// word and marks the bit.",
 			]),
+			*([] if not versioned else [
+				f"\t/// Writing this to a message older than version"
+				f" {placement.since} would put",
+				"\t/// these bytes past its end, so it refuses.",
+			]),
 			"\t/// Does nothing where the member does not fit: its offset is a",
 			"\t/// sum of lengths the message chose, and writing past the frame",
 			"\t/// is somebody else's data. `validate` reports such a message.",
 			f"\tpub fn {setter}(&mut self,"
 			+ (" dirty: &mut Dirty," if covered else "")
-			+ f" value: {rtype}) {{",
+			+ f" value: {rtype})"
+			+ (" -> Result<()>" if versioned else "") + " {",
+			*([] if not versioned else [
+				f"\t\tif self.as_ref()."
+				f"{_ident(c_name(placement.version_field or ''))}()"
+				f" < {placement.since} {{",
+				"\t\t\treturn Err(Error::Version);",
+				"\t\t}",
+			]),
 			f"\t\tif !({reading(fits)}) {{",
-			"\t\t\treturn;",
+			f"\t\t\t{done}",
 			"\t\t}",
 			f"\t\t{reading(self._store(placement, scalar, self._unparen(offset)))}",
 			*([] if not covered else [
 				f"\t\tdirty.mark({self._dirty_bits(struct, placement)});",
 			]),
+			*(["\t\tOk(())"] if versioned else []),
 			"\t}",
 		]
 

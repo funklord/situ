@@ -7867,6 +7867,10 @@ Moved to `doc/decision/26.768-a-versioned-tail-behind-a-variable-member.md`.
 
 Moved to `doc/decision/26.769-the-dissector-frames-by-version.md`.
 
+### 26.770 A placed versioned member stays in the frame
+
+Moved to `doc/decision/26.770-a-placed-versioned-member-stays-in-the-frame.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
