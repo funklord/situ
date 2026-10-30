@@ -8433,7 +8433,12 @@ class Emitter:
 			placement = entry.placement
 			scalar    = placement.scalar
 			assert scalar is not None
-			field_name = py_name(placement.path.rsplit(".", 1)[-1])
+			# The path below the region, as C, C++ and Rust name it: the last
+			# component alone is the same name for a member of the region
+			# and a different one for anything deeper -- `p.len` came out
+			# as `len` where the other three say `p_len` (26.761).
+			field_name = py_name(placement.path[len(region.path) + 1:]
+			                     .replace(".", "_"))
 
 			if any(attr.name == "secret" for attr in placement.attrs):
 				lines.extend(["",

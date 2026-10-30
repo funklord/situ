@@ -5901,11 +5901,6 @@ nothing re-read the sentence when the records closed.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **A nested struct's run inside a sealed region** (26.759): over
-  `sealed body { piece p; }` with `piece { u8 len; u8 body[len]; }`, all
-  four decline `p.body` -- a run sized from inside the region -- and the
-  differ's gated probe asks for it, so the C driver does not compile and
-  the shape is not compared. 26.752's family.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
@@ -7832,6 +7827,11 @@ Moved to
 ### 26.760 An arm inside a sealed region is guarded
 
 Moved to `doc/decision/26.760-an-arm-inside-a-sealed-region-is-guarded.md`.
+
+### 26.761 A nested struct inside a sealed region is compared
+
+Moved to
+`doc/decision/26.761-a-nested-struct-inside-a-sealed-region-is-compared.md`.
 
 ### 26.715 The same width in the other pointer backend
 

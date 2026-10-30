@@ -1115,7 +1115,13 @@ def _gated_bytes(struct: ResolvedStruct,
 		names = ({placement.sized_by} if placement.sized_by is not None
 		         else set(re.findall(r"[A-Za-z_][\w.]*",
 		                             placement.size_expr or "")))
-		if any(f"{struct.name}.{region.name}.{name}" in inside
+		# Resolved where the run is, which is not always the region: a
+		# run in a NESTED struct inside it names its own struct's field,
+		# and checking `<region>.len` for `p.body[len]` found nothing and
+		# asked a run all four decline (26.761).
+		parent = placement.path.rsplit(".", 1)[0]
+		if any(f"{parent}.{name}" in inside
+		       or f"{struct.name}.{region.name}.{name}" in inside
 		       for name in names - {"remaining"}):
 			continue
 
