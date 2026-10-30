@@ -7861,6 +7861,10 @@ Moved to `doc/decision/26.765-a-covered-versioned-setter-does-both.md`.
 
 Moved to `doc/decision/26.766-a-message-is-as-long-as-its-version.md`.
 
+### 26.767 A driver's setter stays in the frame
+
+Moved to `doc/decision/26.767-a-driver-setter-stays-in-the-frame.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

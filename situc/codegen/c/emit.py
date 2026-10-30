@@ -1808,11 +1808,23 @@ class Emitter:
 			# takes, since a setter writes where the getter reads.
 			taken = ("situ_msg_t *msg, situ_view_t view"
 			         + self._member_tail(struct, target.placement))
+			# And where the offset is the message's, the frame is not known
+			# to hold it. The covered and plain setters have said so since
+			# 26.27 and C++, Rust and Python's setter for a driver does
+			# nothing when it does not fit; this one stored past the frame
+			# -- `located_tail.spot` behind `u8 v[n]`, one byte past an
+			# exactly-sized buffer under ASan (26.767).
+			fits = (self._fits(struct, target.placement,
+			                   self._scalar_bytes(target.placement.scalar))
+			        if target.placement.offset_bits is None else None)
+			guard = ([] if fits is None else
+			         [f"\tif (!({fits})) {{", "\t\treturn;", "\t}"])
 			lines.extend([
 				f"static inline void "
 				f"{ident(self.prefix, struct.name, local, 'set')}"
 				f"({taken}, {ctype} value)",
 				"{",
+				*guard,
 				f"\t{store}",
 				"\tsitu_msg_touch(msg);",
 				*stale,
