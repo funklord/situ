@@ -2163,8 +2163,10 @@ def _digit_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 		return None
 
 	least = _required_pattern(resolved, struct, placement) or 0
-	spelled = (f"{least:0{width}d}" if placement.radix == 10
-	           else f"{least:0{width}X}")
+	# The digits in the field's own base: `X` for hex, which the runtime
+	# writes upper, and `o` for octal (26.756).
+	spelled = format(least, f"0{width}"
+	                 + {10: "d", 16: "X", 8: "o"}[placement.radix or 10])
 	if len(spelled) != width:
 		return None		# the smallest admitted value does not fit its field
 

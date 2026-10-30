@@ -1228,15 +1228,16 @@ struct header_field {
 }
 ```
 
-A radix prefix -- `decimal`, `hex` or `scaled` -- says a number is written as
-digits rather than laid down as bytes, which is what `cpio`'s eight-character
-hex fields and HTTP's status codes need. The scalar beside it gives the
+A radix prefix -- `decimal`, `hex`, `octal` or `scaled` -- says a number is
+written as digits rather than laid down as bytes, which is what `cpio`'s
+eight-character hex fields, its portable header's octal ones and HTTP's
+status codes need. The scalar beside it gives the
 value's domain rather than its width in the buffer, so `decimal i16 offset
 until ','` is a signed number whose text is one to six bytes and whose sign
 costs a byte a fixed width cannot pay -- the leading `-` is part of the
 digits, and `[minimal]` refuses a second spelling of the same value.
 
-`scaled` is the third, and it reads a number that may carry a point and an
+`scaled` is the fourth, and it reads a number that may carry a point and an
 exponent:
 
 ```situ

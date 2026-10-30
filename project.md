@@ -600,7 +600,7 @@ field         = [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
                 [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
 located       = "at" expr ;                  (* decision 0042 *)
 repeat        = "while" "(" expr ")" [ "max" expr ] ;   (* section 8.6.6 *)
-radix         = "decimal" | "hex" | "scaled" ;   (* section 8.6.2, 0056 *)
+radix         = "decimal" | "hex" | "octal" | "scaled" ;   (* section 8.6.2, 0056 *)
 reserved      = "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 preamble      = "preamble" "u8" [ array_spec ] "=" string   (* 0052 *)
                 [ attrs ] ";" ;
@@ -1199,8 +1199,8 @@ struct message {
 }
 ```
 
-`decimal` and `hex`, and the scalar beside them gives the value's **domain,
-not its width**: "7" and "1234567" are the same kind of field at different
+`decimal`, `hex` and `octal`, and the scalar beside them gives the value's
+**domain, not its width**: "7" and "1234567" are the same kind of field at different
 widths, so a text number has no width to declare. `u32` says which values are
 representable, which is what the range check is written against.
 
@@ -5908,12 +5908,14 @@ nothing re-read the sentence when the records closed.
   calls it. 26.733's shape, one member over. The split 26.750 recorded is
   otherwise closed: Python reads a gated fixed run and C++ a gated
   `[remaining]` one.
-- **No `octal` radix, so a ustar header cannot be described**
-  (`suggestion/hull.md` section 19). Every number in the 512-byte header is
-  octal text, NUL- or space-terminated; `radix` is `decimal | hex |
-  scaled`. GNU's base-256 numbers are a variant the header would then
-  need. A gap in coverage of a format rather than a fault; hull reads tar
-  from registries and `docker export`.
+- **A ustar header's numbers end inside their width** (`suggestion/hull.md`
+  section 19). `octal` is a radix since 26.756, which describes cpio's
+  `odc` header outright; ustar's fields are octal digits then a NUL or a
+  space, padded to the field's width, and a fixed-width text number
+  refuses both. `[trim]` removes spaces and tabs from a delimited field,
+  not a NUL from a fixed one. GNU's base-256 numbers are a second variant
+  the header needs. Each is a language decision about where a fixed-width
+  number's digits stop.
 - **Four walker identity divergences** of one shape (26.689), where the
   guard widths want reconciling rather than listing. **The holder's**, and
   the parking was re-measured and confirmed 2026-10-28 rather than
@@ -7809,6 +7811,10 @@ Moved to `doc/decision/26.754-a-udp-sum-of-zero-is-sent-as-all-ones.md`.
 ### 26.755 The C walker answers a relation
 
 Moved to `doc/decision/26.755-the-c-walker-answers-a-relation.md`.
+
+### 26.756 `octal` is a radix
+
+Moved to `doc/decision/26.756-octal-is-a-radix.md`.
 
 ### 26.715 The same width in the other pointer backend
 

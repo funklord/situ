@@ -232,10 +232,13 @@ ATTRIBUTE_NAMES = frozenset({
 	"on_read", "on_write", "volatile", "no_rmw",
 })
 
-#: Section 8.6.2. The base a text-encoded number is written in. Two, because
-#: these are the two that appear in the protocols this targets; a third would
-#: need a reason beyond being arithmetically possible.
-RADIX_KEYWORDS = {"decimal": 10, "hex": 16}
+#: Section 8.6.2. The base a text-encoded number is written in. Three, each
+#: because a format this targets writes numbers that way; a fourth would need
+#: a reason beyond being arithmetically possible. `octal` had one on
+#: 2026-10-30: cpio's portable `odc` header and every number in a ustar
+#: header are octal text, and hull reads tar from registries and
+#: `docker export` (suggestion/hull.md section 19, 26.756).
+RADIX_KEYWORDS = {"decimal": 10, "hex": 16, "octal": 8}
 
 #: `scaled i64 v until ","` -- base ten, and a point and an exponent
 #: allowed (0056). In the radix slot because that is what it is: a

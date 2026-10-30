@@ -136,12 +136,13 @@ byte_set	= char { "|" char } ;
  * computed and places nothing -- section 9.8. *)
 located		= "at" expr ;
 repeat		= "while" "(" expr ")" [ "max" expr ] ;	(* section 8.6.6 *)
-(* Section 8.6.2 and decision 0056. `decimal` and `hex` read an integer;
- * `scaled` reads a decimal that may carry a point and an exponent, whose
- * value is an exact (significand, power of ten) rather than a float. In
- * one slot because all three are the same fact about a member: the digits
- * are the value, and the scalar beside them names its domain. *)
-radix		= "decimal" | "hex" | "scaled" ;
+(* Section 8.6.2 and decision 0056. `decimal`, `hex` and `octal` read an
+ * integer; `scaled` reads a decimal that may carry a point and an
+ * exponent, whose value is an exact (significand, power of ten) rather
+ * than a float. In one slot because all four are the same fact about a
+ * member: the digits are the value, and the scalar beside them names its
+ * domain. *)
+radix		= "decimal" | "hex" | "octal" | "scaled" ;
 reserved	= "reserved" scalar_type [ array_spec ] [ attrs ] ";" ;
 
 (* Section 8.4a, decision 0052. Fixed bytes nobody may read: a reserved
