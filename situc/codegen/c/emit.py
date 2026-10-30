@@ -37,6 +37,7 @@ from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
 from situc.layout import (
 	BITS_PER_BYTE, IndexTable, Placement, TagPart, TlvGrammar, ValueRule,
+	expansion_is_closed_form,
 )
 from situc.names import (UnknownName, c_spelling, expand_calls,
                          over_fields, render_delimiter)
@@ -7969,6 +7970,26 @@ class Emitter:
 				" * extent, which every backend reaches -- a run placed"
 				" directly in an",
 				" * arm is the shape none of them walks. */",
+			]
+
+		# A REGION WHOSE CODEC IS CLOSED FORM, blocked by its interior: a
+		# length read from a field inside it, or a walk over it, which from
+		# the plain view is the codec's output (26.440). The sentence below said the codec has
+		# no closed-form expansion and that a `length_preserving` one would
+		# help -- of a codec declared `length_preserving` (26.758).
+		if blocker.kind in ("coded", "sealed") and expansion_is_closed_form(
+				self.codecs.get(blocker.type_name or "")):
+			return [
+				f"/* No accessor for `{placement.name}`: it starts after "
+				f"`{blocker.name}`, whose",
+				" * length is read from its own interior -- and from outside"
+				" the region",
+				f" * those bytes are `{blocker.type_name}`'s output, so what"
+				" is read there",
+				" * is not a length of anything (26.440).",
+				" *",
+				" * A length field before the region keeps the members after"
+				" it addressable. */",
 			]
 
 		return [

@@ -666,15 +666,32 @@ def _region_walks(struct: ResolvedStruct, region: Placement,
 	not computable is the exact number, which is why everything after the
 	region is `offset=Dynamic`. Widening the shared predicate would have
 	turned a true bound into a refusal.
+
+	And a length that NAMES a field inside the region is a third way
+	(26.440): `u8 n; u16 vals[n]` both sealed puts `n` behind the gate, and
+	the arithmetic placing the tag runs on the plain view, where there is
+	none. All four decline the tag and what follows it, and this asked for
+	both, so the C driver did not compile (26.758).
 	"""
 	prefix = region.path + "."
 	inside = [entry.placement for entry in struct.entries
 	          if entry.placement.path.startswith(prefix)
 	          and "." not in entry.placement.path[len(prefix):]
 	          and entry.placement.kind != "element"]
+	interior = [placement.name for placement in inside]
 	return any(unmeasurable_inside(structs_by_name, placement)
 	           or length_is_transform_output(placement)
+	           or _names_any(placement, interior)
 	           for placement in inside)
+
+
+def _names_any(placement: Placement, names: list[str]) -> bool:
+	"""Whether this member's length is read from one of `names`."""
+	if placement.sized_by is not None and placement.sized_by in names:
+		return True
+	return placement.size_expr is not None and any(
+		re.search(rf"\b{re.escape(name)}\b", placement.size_expr)
+		for name in names)
 
 
 def _tag_accessors(struct: ResolvedStruct) -> dict[str, str]:

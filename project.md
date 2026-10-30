@@ -5901,13 +5901,6 @@ nothing re-read the sentence when the records closed.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **A tag after a run sized from inside its sealed region** (26.752): all
-  four decline a reader for such a run, consistently, but C then cannot
-  place the `tag` after the region either and declines that too, while
-  the differ's `TAG` probe asks the schema rather than the emitter and
-  calls it. 26.733's shape, one member over. The split 26.750 recorded is
-  otherwise closed: Python reads a gated fixed run and C++ a gated
-  `[remaining]` one.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
@@ -7820,6 +7813,11 @@ Moved to `doc/decision/26.756-octal-is-a-radix.md`.
 
 Moved to
 `doc/decision/26.757-a-member-after-a-terminated-run-was-framed-from-the-terminator.md`.
+
+### 26.758 Nothing is asked after a region whose run is sized inside it
+
+Moved to
+`doc/decision/26.758-nothing-is-asked-after-a-region-whose-run-is-sized-inside-it.md`.
 
 ### 26.715 The same width in the other pointer backend
 
