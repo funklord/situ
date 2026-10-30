@@ -5698,7 +5698,9 @@ class Emitter:
 			])
 			if (is_run(placement, self.structs)
 					or is_counted_run(self.resolved.structs, placement)):
-				walk = self._framing_walk(struct, placement, cursor)
+				walk = self._framing_walk(
+					struct, placement, cursor,
+					cursor if index + 1 < len(variable) else None)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
 					        " cannot be framed cannot be framed either")
@@ -5959,7 +5961,8 @@ class Emitter:
 
 	def _framing_walk(self, struct: ResolvedStruct,
 			placement: Placement,
-			cursor: str | None = None) -> list[str] | None:
+			cursor: str | None = None,
+			ahead: str | None = None) -> list[str] | None:
 		"""Framing a run: one element at a time, through the element's own
 		`required`.
 
@@ -6081,9 +6084,13 @@ class Emitter:
 				"\t\t\t# start. It belongs to this member, as a delimiter"
 				" does.",
 				f"\t\t\tif bytes(data[pos:pos + {len(delim)}]) == {delim!r}:",
-				# `at` only: the cursor is never read after this
+				# `at` always; the cursor only where something reads it after this
 				# break, and Rust's `-D warnings` says so outright.
 				f"\t\t\t\tat += {len(delim)}",
+				# The cursor too, where a member after the run reads it:
+				# framed from the terminator itself, `tail` read its
+				# atom one byte early in all four (26.757).
+				*([f"\t\t\t\tpos += {len(delim)}"] if ahead else []),
 				"\t\t\t\tbreak",
 				"",
 				*read,

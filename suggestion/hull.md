@@ -372,3 +372,39 @@ only where a zero has that meaning. A codec option -- a zero result
 written as its complement -- or a UDP-specific codec in the example would
 close it; hull's `.1` builds its UDP answers this way and would take
 either.
+
+## 21. `verify` misreads the field after an `until` run of forms
+
+Found 2026-10-30 moving hull's pin from b186326 to 5ada3e8: two of
+`core/frontend.vectors`' 46 stopped conforming, `impair` and `tamper`,
+each "the layout covers 165 of the vector's 174 bytes; 9 are surplus".
+Bisected over `git archive` copies to **1e815006** ("derive each member's
+offset, and let a nested struct frame itself"); 24084c6 before it accepts
+all 46.
+
+Minimal, with hull's `sexpr/canonical.situ` beside it:
+
+    import "canonical.situ";
+    struct tail {
+        preamble u8[3] = "(1:";
+        u8    k;
+        atom  id;
+        u8    close  [must_eq = ')'];
+    }
+    struct msg {
+        u8    open [must_eq = '('];
+        form  entries[]  until ")";
+        tail  t;
+    }
+
+`((1:a))(1:k5:alpha)` is 4 surplus, `()(1:k5:alpha)` 4, `((1:a)(1:b))(1:k3:abc)`
+2, `((1:a))(1:k1:*)` conforms -- always the trailing atom's `length` less
+one, as if `length` read 1. The same `tail` with no run before it (`(`
+then `tail`, or `(` an atom then `tail`) conforms, so the run is the
+trigger.
+
+The generated C is not affected as far as hull can see: at 5ada3e8 the
+core validates with C from `core/frontend.situ`, and hull's cli suite (519
+cases, impair and tamper among them) passes. So it is the verify walker,
+and hull's pin stays at b186326 -- with `udp_checksum` from 20 waiting on
+it -- until verify agrees again, since `make test` gates on the vectors.

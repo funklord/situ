@@ -7816,6 +7816,11 @@ Moved to `doc/decision/26.755-the-c-walker-answers-a-relation.md`.
 
 Moved to `doc/decision/26.756-octal-is-a-radix.md`.
 
+### 26.757 A member after a terminated run was framed from the terminator
+
+Moved to
+`doc/decision/26.757-a-member-after-a-terminated-run-was-framed-from-the-terminator.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

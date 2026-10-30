@@ -5100,7 +5100,9 @@ class Emitter:
 			# buffer indistinguishably from the end of the run (26.557).
 			if (is_run(placement, self.structs)
 					or self._is_counted_run(placement)):
-				walk = self._framing_walk(struct, placement, cursor)
+				walk = self._framing_walk(
+					struct, placement, cursor,
+					cursor if index + 1 < len(variable) else None)
 				if walk is None:
 					return self._unframeable(struct, "a run whose element"
 					        " cannot be framed cannot be framed either")
@@ -5549,7 +5551,8 @@ class Emitter:
 
 	def _framing_walk(self, struct: ResolvedStruct,
 			placement: Placement,
-			cursor: str | None = None) -> list[str] | None:
+			cursor: str | None = None,
+			ahead: str | None = None) -> list[str] | None:
 		"""Framing a run: one element at a time, through the element's own
 		`required`.
 
@@ -5713,9 +5716,13 @@ class Emitter:
 				"\t\t * It belongs to this member, as a delimiter does. */",
 				f"\t\tif (situ_scan(data + pos, {len(delim)}u, {sym},"
 				f" {len(delim)}u) == 0u) {{",
-				# `at` only: the cursor is never read after this
+				# `at` always; the cursor only where something reads it after this
 				# break, and Rust's `-D warnings` says so outright.
 				f"\t\t\tat = situ_need_u32(at, {len(delim)}u);",
+				# The cursor too, where a member after the run reads it:
+				# framed from the terminator itself, `tail` read its
+				# atom one byte early in all four (26.757).
+				*([f"\t\t\tpos = situ_need_u32(pos, {len(delim)}u);"] if ahead else []),
 				"\t\t\tbreak;",
 				"\t\t}",
 				"",
