@@ -7871,6 +7871,10 @@ Moved to `doc/decision/26.769-the-dissector-frames-by-version.md`.
 
 Moved to `doc/decision/26.770-a-placed-versioned-member-stays-in-the-frame.md`.
 
+### 26.772 Append-only orders every member
+
+Moved to `doc/decision/26.772-append-only-orders-every-member.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

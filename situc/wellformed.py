@@ -1225,7 +1225,18 @@ def check_versions(schema: ast.Schema) -> None:
 			)
 
 		_check_version_field(struct, version)
-		_check_append_only(struct, tagged)
+		# EVERY member that occupies bytes, not only the fields: a tag, a
+		# pad, a variant or an opaque region after a versioned member is
+		# inserted before it as surely as a field is. Only fields were
+		# ordered, so `sealed body { u8 a; u16 b [since = 2]; } tag u8
+		# mac[4] covers(body);` was accepted with its minimum taken at
+		# `b` -- two bytes -- while `mac` sat at a constant 4..8: Rust
+		# panicked and C read past the view on a whole version-1 message
+		# (26.772). A transparent block and an arm own no bytes.
+		_check_append_only(struct, [
+			(member, _since_of(member))
+			for member in _walk_members(struct.members)
+			if not isinstance(member, (*TRANSPARENT_BLOCKS, ast.VariantArm))])
 		_check_versioned_shape(tagged, {held.name for held in schema.enums()})
 
 
@@ -1316,7 +1327,7 @@ def _check_version_field(struct: ast.StructDecl, version: str) -> None:
 
 
 def _check_append_only(struct: ast.StructDecl,
-		tagged: Sequence[tuple[ast.Field | ast.Reserved, int | None]]) -> None:
+		tagged: Sequence[tuple[ast.Member, int | None]]) -> None:
 	"""Versions never decrease, so nothing is ever inserted before anything."""
 	highest = 0
 	for member, since in tagged:

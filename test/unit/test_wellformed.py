@@ -609,6 +609,26 @@ def test_a_member_may_not_arrive_before_one_declared_earlier() -> None:
 	assert "append-only" in message
 
 
+def test_a_tag_may_not_follow_a_versioned_member_either() -> None:
+	"""Every member that occupies bytes is in the order, not only fields
+	(26.772). A tag after a region holding `b [since = 2]` was accepted,
+	the minimum was taken where `b` starts, and the tag sat at a constant
+	offset past it: Rust panicked on a whole version-1 message."""
+	message = rendered(
+		"struct s [version = v] { u8 v;"
+		" authenticated part { u8 a; u16 b [since = 2]; }"
+		" tag u8 mac[4] covers(part); }")
+
+	assert "`mac` arrives in version 1, after a member that arrives in 2" \
+		in message
+
+
+def test_a_tag_before_a_versioned_region_is_fine() -> None:
+	"""The same members with the tag first: nothing follows `b`."""
+	parse_text("struct s [version = v] { u8 v; tag u8 mac[4] covers(part);"
+	           " authenticated part { u8 a; u16 b [since = 2]; } }")
+
+
 def test_a_versioned_member_needs_a_version_field() -> None:
 	"""A reader has to know which version a message is before it knows whether
 	the bytes are there."""
