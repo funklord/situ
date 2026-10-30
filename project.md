@@ -7833,6 +7833,11 @@ Moved to `doc/decision/26.760-an-arm-inside-a-sealed-region-is-guarded.md`.
 Moved to
 `doc/decision/26.761-a-nested-struct-inside-a-sealed-region-is-compared.md`.
 
+### 26.762 An encoding source is not a nested namesake
+
+Moved to
+`doc/decision/26.762-an-encoding-source-is-not-a-nested-namesake.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

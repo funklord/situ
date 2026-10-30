@@ -3159,6 +3159,32 @@ def enclosing_arm(struct: ResolvedStruct,
 	return None
 
 
+def encoding_source(structs: Container[str], struct: ResolvedStruct,
+		source: str) -> Placement | None:
+	"""The member `[encoding = from(source)]` names, or None.
+
+	One of this struct's own declarations -- `wellformed` resolves the
+	name against the members declared before the governed one, which
+	reach into a region or an arm and never into a nested struct's type.
+	All four backends matched the LAST path component over every entry
+	instead, and a nested struct's field of the same name comes first in
+	layout order: `inner h; document_charset says; u8 body[] [encoding =
+	from(says)]` with a `says` inside `inner` took that one's token set,
+	found no arm for `us-ascii`, and accepted a body that is not ASCII
+	in all four (26.762).
+	"""
+	nested = [held.path + "." for held in struct.layout.placements
+	          if held.kind == "field" and held.type_name in structs]
+	for entry in struct.entries:
+		held = entry.placement
+		if held.path.rsplit(".", 1)[-1] != source or "[]" in held.path:
+			continue
+		if any(held.path.startswith(prefix) for prefix in nested):
+			continue
+		return held
+	return None
+
+
 def in_a_region(struct: ResolvedStruct, placement: Placement) -> bool:
 	"""Whether this member sits directly in a sealed region.
 

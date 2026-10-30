@@ -49,7 +49,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, in_a_region,
+	arm_of, encoding_source, in_a_region,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -7424,11 +7424,10 @@ class Emitter:
 		if source is None:
 			return []
 
-		holder = next((one for one in struct.entries
-		               if one.placement.path.split(".")[-1] == source), None)
-		if holder is None:
+		held_by = encoding_source(self.resolved.structs, struct, source)
+		if held_by is None:
 			return []
-		decl = self.tokens.get(holder.placement.type_name or "")
+		decl = self.tokens.get(held_by.type_name or "")
 		if decl is None:
 			return []
 
