@@ -2425,6 +2425,58 @@ def offset_unresolvable(structs: dict[str, ResolvedStruct],
 	return False
 
 
+def version_steps(struct: ResolvedStruct) \
+		-> tuple[Placement, int, tuple[tuple[int, int], ...]] | None:
+	"""How long a message of this struct is at each version, or None.
+
+	19.4: "the struct's extent is a range -- v1 is three bytes, v3 is
+	nine". Every reader answered the newest version's size whatever the
+	message's own version said, so a stream of version-1 messages was
+	framed nine bytes at a time and every message after the first was read
+	from the middle of another (26.766).
+
+	Returned as the version field, the end of the members every version
+	carries, and one `(since, end)` step per version that adds members --
+	`end` being where a message of that version or later stops. Only where
+	that is the whole answer: every own member at a static byte offset and
+	of one size, the versioned ones a tail with nothing unversioned after
+	them, and no `[since]` anywhere but on an own member. Anything else is
+	None, and the caller answers as it did before.
+	"""
+	members = own_members(struct)
+	if not members or any(held.offset_bits is None or not held.is_fixed_size
+	                      or held.offset_bits % BITS_PER_BYTE
+	                      or held.size_bits % BITS_PER_BYTE
+	                      for held in members):
+		return None
+	own = {held.path for held in members}
+	if any(entry.placement.since and entry.placement.path not in own
+	       for entry in struct.entries):
+		return None
+	versioned = [held for held in members if held.since]
+	if not versioned or not versioned[0].version_field:
+		return None
+	field = next((held for held in members
+	              if held.name == versioned[0].version_field
+	              and not held.since and held.scalar is not None), None)
+	if field is None:
+		return None
+	first = min(held.offset_bits or 0 for held in versioned)
+	if any(not held.since and (held.offset_bits or 0) >= first
+	       for held in members):
+		return None
+
+	def end(held: Placement) -> int:
+		return ((held.offset_bits or 0) + held.size_bits) // BITS_PER_BYTE
+
+	base  = max((end(held) for held in members if not held.since), default=0)
+	steps = []
+	for since in sorted({held.since or 0 for held in versioned}):
+		steps.append((since, max(base, *(end(held) for held in versioned
+		                                 if (held.since or 0) <= since))))
+	return field, base, tuple(steps)
+
+
 def is_run(placement: Placement, structs: Container[str]) -> bool:
 	"""A run of elements rather than a run of bytes.
 

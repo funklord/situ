@@ -1726,6 +1726,46 @@ static situ_walk_err variant_bits(const situ_walk_image *image,
  * Zero is an answer rather than a refusal. A `name` whose first label does not
  * fit holds no labels and is zero bytes long. The guard against a zero extent
  * belongs where it stops something, which is the walk below. */
+/* Whether member `first + i` is a `[since]` member this message lacks, in
+ * a tail of versioned members (26.766). 19.4: "v1 is three bytes, v3 is
+ * nine" -- and `struct_extent` summed every member, as every backend's
+ * `required` did, so a version-1 message measured as a version-3 one. Only
+ * where every member from this one on is versioned, so nothing left out
+ * was still to be placed past it; and a version that cannot be read yet
+ * leaves the member counted, the longer answer. */
+static int absent_tail(const situ_walk_image *image, const uint8_t *message,
+                       uint32_t len, uint32_t shape, uint32_t first,
+                       uint32_t i, uint32_t count)
+{
+	const uint16_t since = u16_at(image->placements
+	                              + (first + i) * image->placement_stride
+	                              + 44u);
+	if (since == 0u) {
+		return 0;
+	}
+	for (uint32_t j = i; j < count; j++) {
+		if (u16_at(image->placements + (first + j) * image->placement_stride
+		           + 44u) == 0u) {
+			return 0;
+		}
+	}
+	uint32_t carries = SITU_WALK_NONE;
+	for (uint32_t v = 0u; v < image->version_count; v++) {
+		const uint8_t *row = image->versions + v * image->version_stride;
+		if (u32_at(row) == shape) {
+			carries = u32_at(row + 4);
+			break;
+		}
+	}
+	uint64_t version = 0u;
+	if (carries == SITU_WALK_NONE
+	    || situ_walk_read(image, message, len, shape, carries, &version)
+	       != SITU_WALK_OK) {
+		return 0;
+	}
+	return version < (uint64_t)since;
+}
+
 static situ_walk_err struct_extent(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
@@ -1770,6 +1810,9 @@ static situ_walk_err struct_extent(const situ_walk_image *image,
 			return err;
 		}
 		if (held.located_code != SITU_WALK_NONE) {
+			continue;
+		}
+		if (absent_tail(image, message, len, shape, first, i, count)) {
 			continue;
 		}
 

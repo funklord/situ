@@ -50,7 +50,8 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, within_a_region_arm,
+	arm_of, encoding_source, in_a_region, version_steps,
+	within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -5725,6 +5726,29 @@ class Emitter:
 			"\t\tlet have = data.len();",
 		]
 
+		by_version = version_steps(struct)
+		if by_version is not None and not (struct.layout.is_fixed_size
+		                                   and struct.layout.is_byte_sized):
+		# A struct whose length is its VERSION's (19.4, 26.766): the members
+		# every version carries, then each `[since]` step the message's own
+		# version reaches. It answered the newest version's length for every
+		# message, as C's did, so a stream of older messages was framed
+		# with the start of the next. Read through the same view as the
+		# rest, the version field being among the members every version
+		# carries and so inside `base`.
+			field, base, after = by_version
+			body = [f"\t\tif have < {base} {{",
+			        f"\t\t\treturn situ_rt::Framing::Need({base});", "\t\t}",
+			        f"\t\tlet probe = {_pascal(struct.name)} {{ bytes: data }};",
+			        f"\t\tlet version = probe.{_ident(c_name(field.name))}()"
+			        " as u64;", f"\t\tlet mut at = {base};"]
+			for since, end in after:
+				body.extend([f"\t\tif version >= {since} {{",
+				             f"\t\t\tat = {end};", "\t\t}"])
+			return [*head, *body, "\t\tif have < at {",
+			        "\t\t\treturn situ_rt::Framing::Need(at);", "\t\t}",
+			        "\t\tsitu_rt::Framing::Complete(at)", "\t}"]
+
 		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
 			return [*head,
 			        "\t\tif have < Self::SIZE {",
@@ -6346,6 +6370,21 @@ class Emitter:
 		# size directly and was the only backend that built such a schema.
 		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
 			return str(int(struct.layout.size_bytes))
+		# A struct whose length is its VERSION's (19.4, 26.766): it summed
+		# every member whatever the message's version said, so a nested
+		# version-1 struct pushed what follows it to where a version-3 one
+		# ends. The members every version carries, then each `[since]`
+		# step the version reaches -- and the short-frame floor every
+		# extent here has, the version field being inside it.
+		by_version = version_steps(struct)
+		if by_version is not None:
+			field, base, after = by_version
+			chain = str(base)
+			for since, end in after:
+				chain = (f"if self.{_ident(c_name(field.name))}() as u64"
+				         f" >= {since} {{ {end} }} else {{ {chain} }}")
+			return (f"if self.bytes.len() < {base} {{ {base} }}"
+			        f" else {{ {chain} }}")
 
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:

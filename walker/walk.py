@@ -2527,6 +2527,21 @@ def _sub_view(view: View, index: int, depth: int) -> View | None:
 		return None
 
 
+def _absent_tail(view: View, rest: list[int]) -> bool:
+	"""Whether `rest[0]` is a `[since]` member this message lacks, in a
+	tail of versioned members (26.766)."""
+	since = view.image.placements[rest[0]].since
+	if not since or not all(view.image.placements[one].since for one in rest):
+		return False
+	carries = view.image.versions.get(view.struct)
+	if carries is None:
+		return False
+	try:
+		return read_scalar(view, carries) < since
+	except Refused:
+		return False
+
+
 def struct_extent(view: View, depth: int = 0) -> int:
 	"""How many bytes one instance of a struct occupies, from its own bytes.
 
@@ -2553,9 +2568,19 @@ def struct_extent(view: View, depth: int = 0) -> int:
 	shape = view.shape
 	if shape.fixed:
 		return (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
-	total = 0
-	for member in view.image.members(shape):
+	total   = 0
+	members = list(view.image.members(shape))
+	for at, member in enumerate(members):
 		if view.image.placements[member].located_code != NONE:
+			continue
+		# A `[since]` member the message's own version does not reach is
+		# not in it (19.4: "v1 is three bytes, v3 is nine"), where it
+		# closes the struct -- every member after it versioned too, so
+		# nothing it leaves out was still to be placed past it. This
+		# summed every member, and so did every backend's `required`
+		# (26.766). A version that cannot be read yet leaves it counted,
+		# the longer answer.
+		if _absent_tail(view, members[at:]):
 			continue
 		total += size_bits(view, member, depth)
 	# Zero is an answer, not a refusal. A `name` whose first label does not

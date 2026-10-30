@@ -50,7 +50,8 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, within_a_region_arm,
+	arm_of, encoding_source, in_a_region, version_steps,
+	within_a_region_arm,
 	bit_addressed_tag,
 	bit_extractor,
 	bound_cannot_fail,
@@ -4932,6 +4933,9 @@ class Emitter:
 			return ["/* recursive: this struct's own extent, in flight */"]
 		# The arithmetic is shared (traverse.extent_parts); only rendering the
 		# per-member lengths is C's business.
+		by_version = version_steps(struct)
+		if by_version is not None:
+			return self._versioned_extent(struct, *by_version)
 		parts = extent_parts(self.resolved.structs, struct)
 		if parts is None:
 			return []
@@ -4942,6 +4946,38 @@ class Emitter:
 			return self._extent_body(struct, constant, variable)
 		finally:
 			self._in_extent.discard(struct.name)
+
+	def _versioned_extent(self, struct: ResolvedStruct, field: Placement,
+			base: int, steps: tuple[tuple[int, int], ...]) -> list[str]:
+		"""The extent of a struct whose length is its version's (26.766).
+
+		The members every version carries, then each `[since]` step the
+		version reaches. `extent_parts` summed every member, so a nested
+		version-1 struct pushed what follows it to where a version-3 one
+		ends. The short-frame floor every extent here has, with the version
+		field inside it.
+		"""
+		version = ident(self.prefix, struct.name, c_name(field.name), "get")
+		lines = [
+			"",
+			f"/* How many bytes one `{struct.name}` occupies at this view's"
+			" base: its",
+			" * version's length (19.4). */",
+			f"static inline uint32_t {ident(self.prefix, struct.name, 'extent')}"
+			"(situ_view_t view)",
+			"{",
+			f"\tif (!situ_in_bounds(view, 0u, {base}u)) {{",
+			f"\t\treturn {base}u;",
+			"\t}",
+			f"\tconst uint64_t version = (uint64_t){version}(view);",
+			f"\tuint32_t extent = {base}u;",
+			"",
+		]
+		for since, end in steps:
+			lines.extend([f"\tif (version >= {since}u) {{",
+			              f"\t\textent = {end}u;", "\t}"])
+		lines.extend(["\treturn extent;", "}"])
+		return lines
 
 	def _extent_body(self, struct: ResolvedStruct, constant: int,
 			variable: list[Placement]) -> list[str]:
@@ -5073,6 +5109,9 @@ class Emitter:
 		# Correct for its own purpose and the wrong question here.
 		if struct.layout.is_fixed_size and struct.layout.is_byte_sized:
 			return self._required_fixed(struct)
+		by_version = version_steps(struct)
+		if by_version is not None:
+			return self._required_versioned(struct, *by_version)
 
 		# `frameable` IS THE AUTHORITY HERE, not a second opinion (26.729).
 		# 26.728 found the two predicates disagreeing for five structs:
@@ -5923,6 +5962,53 @@ class Emitter:
 			"\t * it is whole, which is the same question one level down. */",
 			*loop,
 		]
+
+	def _required_versioned(self, struct: ResolvedStruct, field: Placement,
+			base: int, steps: tuple[tuple[int, int], ...]) -> list[str]:
+		"""Framing a struct whose length is its version's (19.4, 26.766).
+
+		The members every version carries, then each `[since]` step the
+		message's own version admits. It answered the newest version's
+		length for every message, so a version-1 message in a stream was
+		framed with the start of the next one.
+		"""
+		assert field.scalar is not None
+		read = self._load_expression(field.scalar, field, "data")
+		lines = [
+			"",
+			f"/* How many bytes a whole `{struct.name}` needs, given `have` of"
+			" them.",
+			" *",
+			" * Its length is its version's: the members every version"
+			" carries, and",
+			" * then each `[since]` member the message's own version"
+			" reaches. */",
+			f"static inline situ_err_t "
+			f"{ident(self.prefix, struct.name, 'required')}"
+			"(const uint8_t *data, uint32_t have, uint32_t *need"
+			f"{self._argument_tail(struct)})",
+			"{",
+			*self._argument_unused(struct, self._argument_tail(struct)),
+			f"\tuint32_t at = {base}u;",
+			"",
+			f"\tif (have < {base}u) {{",
+			"\t\t*need = at;",
+			"\t\treturn SITU_ERR_TRUNCATED;",
+			"\t}",
+			"\t{",
+			f"\t\tconst uint64_t version = (uint64_t)({read});",
+			"",
+		]
+		for since, end in steps:
+			lines.extend([f"\t\tif (version >= {since}u) {{",
+			              f"\t\t\tat = {end}u;", "\t\t}"])
+		lines.extend([
+			"\t}",
+			"\t*need = at;",
+			"\treturn have >= at ? SITU_OK : SITU_ERR_TRUNCATED;",
+			"}",
+		])
+		return lines
 
 	def _required_fixed(self, struct: ResolvedStruct) -> list[str]:
 		"""Framing a struct with one size: it is that size."""

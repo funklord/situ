@@ -5901,11 +5901,12 @@ nothing re-read the sentence when the records closed.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **`required` asks for a versioned member an older message lacks**
-  (26.765): `[version = ver] { u8 ver; tag u8 mac[4] covers(part);
-  authenticated part { u8 a; u8 b [since = 2]; } }` answers 7 for a
-  whole six-byte version-1 message, in all four. Either a fault or the
-  honest-lower-bound question 26.753 raised.
+- **A versioned member inside a region still frames at the newest
+  version** (26.765, 26.766): `[version = ver] { u8 ver; tag u8 mac[4]
+  covers(part); authenticated part { u8 a; u8 b [since = 2]; } }`
+  answers 7 for a whole six-byte version-1 message, in all four. 26.766
+  gave a top-level versioned tail its version's length; a `[since]`
+  below a region is outside `traverse.version_steps`.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
@@ -7855,6 +7856,10 @@ Moved to `doc/decision/26.764-a-versioned-member-inside-a-sealed-region.md`.
 ### 26.765 A covered versioned setter does both
 
 Moved to `doc/decision/26.765-a-covered-versioned-setter-does-both.md`.
+
+### 26.766 A message is as long as its version
+
+Moved to `doc/decision/26.766-a-message-is-as-long-as-its-version.md`.
 
 ### 26.715 The same width in the other pointer backend
 
