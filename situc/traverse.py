@@ -3159,6 +3159,18 @@ def enclosing_arm(struct: ResolvedStruct,
 	return None
 
 
+def in_a_region(struct: ResolvedStruct, placement: Placement) -> bool:
+	"""Whether this member sits directly in a sealed region.
+
+	Sealed only: a plain `coded` region's interior is the codec's output
+	and no backend emits an accessor into it at all, so its arms have
+	nothing to guard.
+	"""
+	parent = placement.path.rsplit(".", 1)[0]
+	return any(held.path == parent and held.kind == "sealed"
+	           for held in struct.layout.placements)
+
+
 def arm_of(struct: ResolvedStruct,
 		placement: Placement) -> tuple[Placement, Arm] | None:
 	"""The variant this member is an arm of, and which arm, or None.
@@ -3177,6 +3189,18 @@ def arm_of(struct: ResolvedStruct,
 	head = local.split(".")[0]
 	variant = next((held for held in own_members(struct)
 	                if held.kind == "variant" and held.name == head), None)
+	# ...or a variant inside one of this struct's SEALED regions, whose
+	# arms are this struct's to emit exactly as a top-level variant's are:
+	# a region is not a type. Looking only at the first path component found
+	# `body`, the region, and called its arms plain members -- so all four
+	# read an arm through the gate without asking the discriminant, and C
+	# read a two-byte arm past a message whose frame held the one-byte arm
+	# the discriminant chose (26.760).
+	if variant is None:
+		parent = placement.path.rsplit(".", 1)[0]
+		variant = next((held for held in struct.layout.placements
+		                if held.kind == "variant" and held.path == parent
+		                and in_a_region(struct, held)), None)
 	if variant is None or variant.discriminant is None:
 		return None
 

@@ -50,7 +50,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of,
+	arm_of, in_a_region,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -747,6 +747,13 @@ class Emitter:
 				continue
 			if entry.vector.get(Axis.MUTATE).base not in ("InPlaceFixed",
 			                                             "InPlaceSlack"):
+				continue
+			# Nor an arm of a variant in a sealed region: the write landed
+			# where the arm sits whatever the discriminant chose, past the
+			# frame where a shorter arm was chosen. A plain arm has no
+			# setter either (26.760).
+			found = arm_of(struct, placement)
+			if found is not None and in_a_region(struct, found[0]):
 				continue
 
 			# A sealed member is not written from out here: the interior is
@@ -4419,6 +4426,59 @@ class Emitter:
 			"\t}",
 		]
 
+	def _gated_arm(self, struct: ResolvedStruct, placement: Placement,
+			variant: Placement, arm: Arm) -> list[str]:
+		"""One arm member inside a sealed region, through the gate.
+
+		The plain arm's two questions, asked of the gate's bytes: is this
+		the arm present, and is it in the frame. Neither was asked -- the
+		member took the ordinary gated getter, which reads where the arm
+		sits whatever the discriminant says, and panicked on a message the
+		frame accepted holding the shorter arm its discriminant chose
+		(26.760). A scalar at a constant offset only; C's copy carries why.
+		"""
+		name   = _ident(self._gate_name(struct, placement))
+		scalar = placement.scalar
+		region = placement.path.rsplit(".", 2)[0] + "."
+		reads  = {held.name: f"self.{_ident(self._gate_name(struct, held))}()"
+		          for held in struct.layout.placements
+		          if held.path.startswith(region)
+		          and "." not in held.path[len(region):]
+		          and held.scalar is not None and held.array_count is None
+		          and held.sized_by is None and held.radix is None
+		          and held.varint is None}
+		if scalar is None or placement.since or _is_run(placement) \
+				or placement.delimiters or placement.offset_bits is None \
+				or placement.type_name in self.resolved.structs:
+			return ["", f"\t// {placement.path}: an arm of this shape has no",
+			        "\t// gated accessor in this backend."]
+		held = self._over_fields(struct, variant.discriminant or "", "self",
+		                         extra=reads)
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return ["", f"\t// {placement.path}: a `default` arm with no",
+				        "\t// `case` to negate has no test to write."]
+			test = " || ".join(f"{held} == {one.value}" for one in matched)
+		else:
+			test = f"{held} != {arm.value}"
+		width = (placement.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+		start = placement.offset_bytes
+		return [
+			"",
+			f"\t/// `{placement.path}`, present when the discriminant selects",
+			f"\t/// `{arm_label(arm)}`; `Error::Version` otherwise.",
+			f"\tpub fn {name}(&self) -> Result<{self._field_type(placement)}> {{",
+			f"\t\tif {test} {{",
+			"\t\t\treturn Err(Error::Version);",
+			"\t\t}",
+			f"\t\tif self.bytes.len() < {start} + {width} {{",
+			"\t\t\treturn Err(Error::Bounds);",
+			"\t\t}",
+			self._ok_wrapped(self._load(placement, scalar)),
+			"\t}",
+		]
+
 	def _gated(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement
 		scalar    = placement.scalar
@@ -4431,6 +4491,10 @@ class Emitter:
 
 		if scalar is None:
 			return []
+
+		found = arm_of(struct, placement)
+		if found is not None:
+			return self._gated_arm(struct, placement, *found)
 
 		# `data_sized`: see the note in the Python emitter (26.188).
 		if _is_run(placement):

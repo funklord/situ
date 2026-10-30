@@ -112,10 +112,10 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	bit_addressed_tag, covered_run, invalidating_members,
-	Member, arm_members, classify, containment_order, data_sized,
+	Member, arm_members, arm_of, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, length_is_transform_output,
 	is_varint_run, local_name, offset_unresolvable, own_entries, own_members,
-	length_read_inside, unmeasurable_inside,
+	length_read_inside, matched_values, unmeasurable_inside,
 )
 
 
@@ -261,6 +261,11 @@ class Ask:
 	#: as a constant: it emits `_ptr` and no `_len` for a fixed run, gated
 	#: or not, as its framed `BYTES` probe already knows (26.752).
 	inside_bytes: tuple[tuple[str, int | None], ...] = ()
+	#: For `SEALED`: the variant arms inside it, each with its width, read
+	#: through the gate the way `ARM_VALUE` reads a plain one -- `ok=` and
+	#: the value. They were plain scalars here, read whatever the
+	#: discriminant said, and C read one past the frame (26.760).
+	inside_arms: tuple[tuple[str, int, bool], ...] = ()
 	#: For `NESTED`: the member's type, which C++ needs to declare the
 	#: out-parameter the accessor fills in.
 	inner: str = ""
@@ -370,10 +375,17 @@ def asks(struct: ResolvedStruct, structs: set[str],
 						Probe.SCALAR,
 						c_name(local_name(struct, inside)),
 						bits=max(8, scalar.bits), signed=scalar.signed))
+				# ...and its arms as arms, which the plain view guards
+				# the way it guards a top-level variant's (26.760).
+				for name, bits, signed in _gated_arms(struct, placement,
+				                                      waived=True):
+					found.append(Ask(Probe.ARM_VALUE, name, None, bits,
+					                 signed))
 				continue
 			found.append(Ask(Probe.SEALED, local, None, 0, False,
 			                 _gated(struct, placement),
-			                 _gated_bytes(struct, placement)))
+			                 _gated_bytes(struct, placement),
+			                 inside_arms=_gated_arms(struct, placement)))
 			continue
 
 		# A member *inside* a sealed region is reached through the gate, which
@@ -1012,10 +1024,55 @@ def _interior_scalars(struct: ResolvedStruct,
 			continue
 		if any(attr.name == "secret" for attr in placement.attrs):
 			continue
+		# An ARM is asked as one, by `_gated_arms`: its accessor refuses
+		# when another arm is present, which a plain read cannot print.
+		if arm_of(struct, placement) is not None:
+			continue
 
 		found.append(placement)
 
 	return found
+
+
+def _gated_arms(struct: ResolvedStruct, region: Placement,
+		waived: bool = False) -> tuple[tuple[str, int, bool], ...]:
+	"""The scalar arms inside a sealed region, as the names they carry on
+	the gate -- or on the view, where the gate is `waived` -- with their
+	width and sign.
+
+	The shape each backend's `_gated_arm` emits a guarded accessor for: a
+	scalar at a constant offset, with no `[since]`, in a variant whose
+	arm has a test to write (26.760). Anything else is declined by all
+	four in words, and so not asked.
+	"""
+	found: list[tuple[str, int, bool]] = []
+	for entry in struct.entries:
+		placement = entry.placement
+		scalar    = placement.scalar
+		if placement.sealed_by != region.name or placement.kind != "field":
+			continue
+		held = arm_of(struct, placement)
+		if held is None or scalar is None:
+			continue
+		variant, arm = held
+		if arm.value is None and not matched_values(variant):
+			continue
+		if placement.since or placement.offset_bits is None \
+				or placement.array_count is not None \
+				or placement.sized_by is not None or data_sized(placement) \
+				or placement.delimiters:
+			continue
+		if scalar.is_bit_packed or scalar.is_bcd \
+				or placement.type_name not in _SCALAR_TYPES:
+			continue
+		if any(attr.name == "secret" for attr in placement.attrs):
+			continue
+		# On the gate the region's name is the gate's; a waived region's
+		# members are the view's own, and keep it.
+		local = c_name(local_name(struct, placement))
+		found.append((local if waived else local[len(c_name(region.name)) + 1:],
+		              max(8, scalar.bits), scalar.signed))
+	return tuple(found)
 
 
 def _gated_bytes(struct: ResolvedStruct,
@@ -1607,6 +1664,19 @@ def _c_ask(prefix: str, struct: str, ask: Ask) -> list[str]:
 		        *[f'\t\t\t\t\tprintf("{one} %lld\\n", (long long)'
 		          f"{ident(prefix, struct, ask.local, one, 'get')}(held));"
 		          for one in ask.inside],
+		        *[line for one, bits, signed in ask.inside_arms for line in (
+			        "\t\t\t\t\t{",
+			        f"\t\t\t\t\t\t{'int' if signed else 'uint'}{bits}_t"
+			        " value = 0;",
+			        f"\t\t\t\t\t\tconst situ_err_t e ="
+			        f" {ident(prefix, struct, ask.local, one, 'get')}"
+			        "(held, &value);",
+			        "",
+			        f'\t\t\t\t\t\tprintf("{one} ok=%d value=%lld\\n",'
+			        " e == SITU_OK ? 1 : 0,",
+			        "\t\t\t\t\t\t\t(long long)(e == SITU_OK ? value : 0));",
+			        "\t\t\t\t\t}",
+		        )],
 		        # A fixed run's length is its count, and its `_ptr` is NULL
 		        # unless the whole run fits -- the framed probe's own rule
 		        # (`len = held == NULL ? 0 : COUNT`). Without the NULL test
@@ -2056,6 +2126,10 @@ def _cpp_ask(ask: Ask) -> list[str]:
 			        f"\t\t\t\tlong long {bare_name(one)}_len = 0;",
 			        f"\t\t\t\tlong long {bare_name(one)}_last = -1;",
 		        )],
+		        *[line for one, _bits, _signed in ask.inside_arms for line in (
+			        f"\t\t\t\tint {bare_name(one)}_ok = 0;",
+			        f"\t\t\t\tlong long {bare_name(one)} = 0;",
+		        )],
 		        f"\t\t\t\tconst auto refused = view.with_{call}("
 		        "false, [](auto) {});",
 		        f"\t\t\t\tconst auto opened = view.with_{call}("
@@ -2076,6 +2150,18 @@ def _cpp_ask(ask: Ask) -> list[str]:
 			        "(held[held.size() - 1]);",
 			        "\t\t\t\t\t}",
 		        )],
+		        *[line for one, bits, signed in ask.inside_arms for line in (
+			        "\t\t\t\t\t{",
+			        f"\t\t\t\t\t\tstd::{'int' if signed else 'uint'}{bits}_t"
+			        " held = 0;",
+			        f"\t\t\t\t\t\tconst auto e = gate.{bare_name(one)}(held);",
+			        "",
+			        f"\t\t\t\t\t\t{bare_name(one)}_ok ="
+			        " e == ::situ::rt::err::ok ? 1 : 0;",
+			        f"\t\t\t\t\t\t{bare_name(one)} ="
+			        f" {bare_name(one)}_ok ? static_cast<long long>(held) : 0;",
+			        "\t\t\t\t\t}",
+		        )],
 		        "\t\t\t\t\t(void)gate;",
 		        "\t\t\t\t});",
 		        "",
@@ -2089,6 +2175,9 @@ def _cpp_ask(ask: Ask) -> list[str]:
 		        *[f'\t\t\t\t\tstd::printf("{one} len=%lld last=%lld\\n",'
 		          f" {bare_name(one)}_len, {bare_name(one)}_last);"
 		          for one, _count in ask.inside_bytes],
+		        *[f'\t\t\t\t\tstd::printf("{one} ok=%d value=%lld\\n",'
+		          f" {bare_name(one)}_ok, {bare_name(one)});"
+		          for one, _bits, _signed in ask.inside_arms],
 		        "\t\t\t\t}",
 		        "\t\t\t}"]
 	if ask.probe is Probe.VARINT:
@@ -2402,7 +2491,8 @@ def _rust_ask(ask: Ask) -> list[str]:
 		        " { 1 } else { 0 },",
 		        f"\t\t\t\t\tif view.{opener}(true).is_ok()"
 		        " { 1 } else { 0 });",
-		        *([] if not (ask.inside or ask.inside_bytes) else [
+		        *([] if not (ask.inside or ask.inside_bytes
+		                     or ask.inside_arms) else [
 			        f"\t\t\t\tif let Ok(gate) = view.{opener}(true) {{",
 			        *[f'\t\t\t\t\tprintln!("{one} {{}}",'
 			          f" gate.{rust_ident(one)}() as i64);"
@@ -2416,6 +2506,15 @@ def _rust_ask(ask: Ask) -> list[str]:
 				        "\t\t\t\t\t\t\theld.len(),",
 				        "\t\t\t\t\t\t\tif held.is_empty() { -1i64 }"
 				        " else { held[held.len() - 1] as i64 });",
+				        "\t\t\t\t\t}",
+			        )],
+			        *[line for one, _bits, _signed in ask.inside_arms
+			          for line in (
+				        f"\t\t\t\t\tmatch gate.{rust_ident(one)}() {{",
+				        f'\t\t\t\t\t\tOk(held) => println!("{one} ok=1'
+				        ' value={}", held as i64),',
+				        f'\t\t\t\t\t\tErr(_)   => println!("{one} ok=0'
+				        ' value=0"),',
 				        "\t\t\t\t\t}",
 			        )],
 			        "\t\t\t\t}",
@@ -2680,6 +2779,14 @@ def _python_ask(ask: Ask) -> list[str]:
 			        f"\theld = gate.{py_name(one)}",
 			        f'\tprint("{one} len=%d last=%d"'
 			        " % (len(held), held[len(held) - 1] if held else -1))",
+		        )],
+		        *[line for one, _bits, _signed in ask.inside_arms for line in (
+			        "\ttry:",
+			        f"\t\tvalue = gate.{py_name(one)}",
+			        "\texcept situ_runtime.SituError:",
+			        f'\t\tprint("{one} ok=0 value=0")',
+			        "\telse:",
+			        f'\t\tprint("{one} ok=1 value=%d" % value)',
 		        )],
 		        "\tpass"]
 	if ask.probe is Probe.VARINT:

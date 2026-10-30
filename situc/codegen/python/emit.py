@@ -49,7 +49,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of,
+	arm_of, in_a_region,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -3218,6 +3218,22 @@ class Emitter:
 			return "memoryview"
 		return py_name(placement.type_name or "object")
 
+	def _region_reads(self, struct: ResolvedStruct,
+			variant: Placement) -> dict[str, str] | None:
+		"""How an arm's guard reads a discriminant inside a waived sealed
+		region: its members are this view's, under the region's prefix,
+		and `_over_fields` names them by path (26.760)."""
+		if not in_a_region(struct, variant):
+			return None
+		region = variant.path.rsplit(".", 1)[0] + "."
+		return {held.name: f"self.{py_name(c_name(local_name(struct, held)))}"
+		        for held in struct.layout.placements
+		        if held.path.startswith(region)
+		        and "." not in held.path[len(region):]
+		        and held.scalar is not None and held.array_count is None
+		        and held.sized_by is None and held.radix is None
+		        and held.varint is None}
+
 	def _arm_guard(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm,
 			placement: Placement | None = None) -> tuple[str, str] | None:
@@ -3233,7 +3249,8 @@ class Emitter:
 		`_arm_member` has declined to emit an accessor for it since it was
 		written.
 		"""
-		held = self._over_fields(struct, variant.discriminant or "", "self")
+		held = self._over_fields(struct, variant.discriminant or "", "self",
+		                         extra=self._region_reads(struct, variant))
 
 		# `[since]` ON THE ARM, in both sentences (26.424). An arm the
 		# message's own version predates is ABSENT in exactly the sense
@@ -8309,6 +8326,14 @@ class Emitter:
 			"\t# verifies.",
 		]
 		for entry in inside:
+			# An ARM is its arm family's, guarded as a plain arm is: the
+			# member path read it wherever the discriminant pointed, and
+			# wrote it there too (26.760).
+			found = arm_of(struct, entry.placement)
+			if found is not None:
+				lines.extend(self._arm_member(struct, found[0], found[1],
+				                              entry.placement))
+				continue
 			lines.extend(self._explained(struct, entry))
 		for path in secret:
 			lines.extend(["",
@@ -8323,6 +8348,62 @@ class Emitter:
 			              f"\t# {path}: this backend cannot resolve where it",
 			              "\t# sits, so it has no accessor here."])
 		return lines
+
+	def _gated_arm(self, struct: ResolvedStruct, region: Placement,
+			placement: Placement, variant: Placement,
+			arm: Arm) -> list[str]:
+		"""One arm member inside a sealed region, through the gate.
+
+		Named as C, C++ and Rust name it -- the path below the region,
+		`v_a` -- where the gate's last-component name `a` dropped the
+		variant. And asked the plain arm's two questions: is this the arm
+		present, and is it in the frame. It asked neither, so it read
+		where the arm sits whatever the discriminant said (26.760). A
+		scalar at a constant offset only; C's copy carries why.
+		"""
+		name   = py_name(placement.path[len(region.path) + 1:]
+		                 .replace(".", "_"))
+		scalar = placement.scalar
+		inside = [held.name for held in struct.layout.placements
+		          if held.path.startswith(region.path + ".")
+		          and "." not in held.path[len(region.path) + 1:]
+		          and held.scalar is not None and held.array_count is None
+		          and held.sized_by is None and held.radix is None
+		          and held.varint is None]
+		declined = ["", f"\t\t# {placement.path}: an arm of this shape has no",
+		            "\t\t# gated accessor in this backend."]
+		if scalar is None or placement.since or _is_run(placement) \
+				or placement.delimiters or placement.offset_bits is None \
+				or placement.type_name in self.resolved.structs:
+			return declined
+		try:
+			held = over_fields(inside, variant.discriminant or "",
+			                   lambda one: f"self.{py_name(one)}")
+		except UnknownName:
+			return declined
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return declined
+			test = " or ".join(f"({held}) == {one.value}" for one in matched)
+		else:
+			test = f"({held}) != {arm.value}"
+		width = (placement.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+		start = placement.offset_bytes
+		load  = self._load(placement, scalar, None).replace("self.",
+		                                                     "self._view.")
+		return [
+			"", "\t\t@property",
+			f"\t\tdef {name}(self) -> {self._hint(placement)}:",
+			f'\t\t\t"""{placement.path}, present when the discriminant selects',
+			f'\t\t\t`{arm_label(arm)}`. Raises VersionError otherwise."""',
+			f"\t\t\tif {test}:",
+			f'\t\t\t\traise VersionError("{placement.path}: that arm is not'
+			' the one present")',
+			f"\t\t\tif self._view._len < {start} + {width}:",
+			f'\t\t\t\traise BoundsError("{placement.path}: outside the frame")',
+			f"\t\t\treturn {load}",
+		]
 
 	def _gate(self, struct: ResolvedStruct, region: Placement) -> list[str]:
 		name   = py_name(local_name(struct, region))
@@ -8434,6 +8515,12 @@ class Emitter:
 					f'\t\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
 					f"\t\t\treturn {through_gate(load)}",
 				])
+				continue
+
+			found = arm_of(struct, placement)
+			if found is not None:
+				lines.extend(self._gated_arm(struct, region, placement,
+				                             *found))
 				continue
 
 			lines.extend([

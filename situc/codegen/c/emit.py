@@ -50,7 +50,7 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	RESERVED_STATED,
 	arm_members,
-	arm_of,
+	arm_of, in_a_region,
 	bit_addressed_tag,
 	bit_extractor,
 	bound_cannot_fail,
@@ -1269,6 +1269,12 @@ class Emitter:
 			return "an invariant"
 		return "an obligation over these bytes"
 
+	@staticmethod
+	def _region_arm(struct: ResolvedStruct, placement: Placement) -> bool:
+		"""Whether this member is an arm of a variant in a sealed region."""
+		found = arm_of(struct, placement)
+		return found is not None and in_a_region(struct, found[0])
+
 	def _covered_setters(self, struct: ResolvedStruct) -> list[str]:
 		"""Setters that mark an obligation dirty, for the fields under one.
 
@@ -1299,6 +1305,11 @@ class Emitter:
 		           # for the same reason; a write with that name is worse
 		           # (invariant 28).
 		           and "[]" not in entry.placement.path
+		           # Nor an arm inside a sealed region, which wrote where
+		           # the arm sits whatever the discriminant chose -- past
+		           # the frame where a shorter arm was chosen (26.760). Its
+		           # getter is guarded; a plain arm has no setter either.
+		           and not self._region_arm(struct, entry.placement)
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None
 		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
@@ -1947,6 +1958,9 @@ class Emitter:
 		# An arm's members are nested by path and are this struct's to emit:
 		# an arm is not a type, so there is no other section they could go in.
 		# Each is guarded by the discriminant that selects its arm.
+		if arm_of(struct, placement) is not None \
+				and self._gate_type(struct, placement) is not None:
+			return self._gated_arm_member(struct, placement)
 		guard = self._arm_guard(struct, placement)
 		if guard is not None:
 			return self._arm_member(struct, placement, *guard)
@@ -3089,6 +3103,58 @@ class Emitter:
 			" * each arm's members are below, guarded. */",
 		]
 
+	def _gated_arm_member(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""One arm member inside a sealed region, through the gate.
+
+		The plain arm's two questions, asked of the gate's view: is this
+		the arm present, and is it in the frame. Neither was asked -- the
+		member took the ordinary gated getter, which reads where the arm
+		sits whatever the discriminant says, so a two-byte arm was read
+		past a message the frame accepted holding the one-byte arm its
+		discriminant chose (ASan, 26.760).
+
+		A scalar only. Every other arm shape is declined here in words: the
+		plain arm's families take `situ_view_t`, and a gated one that read
+		the plain view would be the bypass 26.571 closed.
+		"""
+		local  = c_name(self._local(struct, placement))
+		scalar = placement.scalar
+		guard  = self._arm_guard(struct, placement, gated=True)
+		head   = ["", f"/* {placement.path}, present when the discriminant"
+		          " selects", " * its arm, read through the gate."]
+		if guard is None or scalar is None or placement.array_count is not None \
+				or placement.sized_by is not None or data_sized(placement) \
+				or placement.delimiters or placement.offset_bits is None \
+				or placement.type_name in self.resolved.structs:
+			return [*head, " *",
+			        " * ...and this arm's shape has no gated accessor in this",
+			        " * backend, so there is none. */"]
+		test, arm = guard
+		head[-1] = f" * `{arm}`, read through the gate. */"
+		gate   = self._gate_type(struct, placement)
+		ctype  = self._field_ctype(placement)
+		base   = self._base_expression(struct, placement, gated=True)
+		loaded = self._load_expression(
+			scalar, placement, self._value_base(struct, placement, gated=True),
+			offset=self._value_offset(placement))
+		touch  = (placement.size_bits + 7) // BITS_PER_BYTE
+		return [
+			*head,
+			f"static inline situ_err_t {ident(self.prefix, struct.name, local, 'get')}"
+			f"({gate} gate, {ctype} *out)",
+			"{",
+			f"\tif ({test}) {{",
+			"\t\treturn SITU_ERR_VERSION;",
+			"\t}",
+			f"\tif (!situ_in_bounds(gate.view, {base}, {touch}u)) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+			f"\t*out = ({ctype})({loaded});",
+			"\treturn SITU_OK;",
+			"}",
+		]
+
 	def _arm_member(self, struct: ResolvedStruct, placement: Placement,
 			test: str, arm: str) -> list[str]:
 		"""One member of one variant arm, behind the test that it is present.
@@ -3504,20 +3570,50 @@ class Emitter:
 		]
 
 	def _arm_guard(self, struct: ResolvedStruct,
-			placement: Placement) -> tuple[str, str] | None:
+			placement: Placement,
+			gated: bool = False) -> tuple[str, str] | None:
 		"""The test that this arm is the one present, and the arm's name.
 
 		None where the member is not in a variant arm, or where the variant
 		is one this cannot dispatch on -- an unresolvable discriminant, or a
 		`default` arm, which is present exactly when no `case` matched and so
 		needs the negation of all of them.
+
+		An arm inside a SEALED region reads its discriminant through the
+		gate, and only `_gated_arm_member` asks for that (`gated`): every
+		other caller is a check over the plain view, which cannot read the
+		interior and never could, so they are answered None as they were
+		before `arm_of` found such an arm at all (26.760).
 		"""
 		found = arm_of(struct, placement)
 		if found is None:
 			return None
 		variant, arm = found
 
-		held = self._over_fields(struct, variant.discriminant or "", "view")
+		if (self._gate_type(struct, placement) is not None) != gated:
+			return None
+		# A variant inside a REGION names the region's members, which
+		# `_over_fields` does not read: they are this struct's, under the
+		# region's prefix, and through the gate where it is sealed.
+		interior: dict[str, str] | None = None
+		if in_a_region(struct, variant):
+			if placement.since:
+				return None
+			region   = variant.path.rsplit(".", 1)[0] + "."
+			interior = {held.name: ident(self.prefix, struct.name,
+			                             c_name(self._local(struct, held)),
+			                             "get")
+			            + ("(gate)" if gated else "(view)")
+			            for held in struct.layout.placements
+			            if held.path.startswith(region)
+			            and "." not in held.path[len(region):]
+			            and held.scalar is not None
+			            and held.array_count is None
+			            and held.sized_by is None
+			            and held.radix is None and held.varint is None}
+		held = self._over_fields(struct, variant.discriminant or "",
+		                         "gate.view" if gated else "view",
+		                         extra=interior)
 
 		# `[since]` ON THE ARM, folded into the same condition (26.424).
 		# Every arm accessor asks `_arm_guard` whether this arm is absent

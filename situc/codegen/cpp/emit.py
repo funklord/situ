@@ -52,7 +52,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of,
+	arm_of, in_a_region,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -1415,6 +1415,14 @@ class Emitter:
 					"\t * stage gate and says nothing about secrecy. */",
 				])
 				continue
+			# An ARM is its arm family's, guarded as a plain arm is: the
+			# member path read it wherever the discriminant pointed, and
+			# wrote it there too (26.760).
+			found = arm_of(struct, entry.placement)
+			if found is not None:
+				lines.extend(self._arm_member(struct, found[0], found[1],
+				                              entry.placement))
+				continue
 			lines.extend(self._member(struct, entry))
 
 		return lines
@@ -1608,6 +1616,73 @@ class Emitter:
 			return local[len(region) + 1:]
 		return local
 
+	def _gated_arm(self, struct: ResolvedStruct, placement: Placement,
+			variant: Placement, arm: Arm) -> list[str]:
+		"""One arm member inside a sealed region, through the gate.
+
+		The plain arm's shape -- an out-parameter and `err::version` -- and
+		its two questions, asked of the gate's view: is this the arm
+		present, and is it in the frame. It asked neither, so it read where
+		the arm sits whatever the discriminant said, and past a message the
+		frame accepted holding the shorter arm (26.760). A scalar at a
+		constant offset only; C's copy carries why.
+		"""
+		name   = self._gate_name(struct, placement)
+		ctype  = self._field_ctype(placement)
+		scalar = placement.scalar
+		region = placement.path.rsplit(".", 2)[0] + "."
+		inside = {held.name: self._gate_name(struct, held)
+		          for held in struct.layout.placements
+		          if held.path.startswith(region)
+		          and "." not in held.path[len(region):]
+		          and held.scalar is not None and held.array_count is None
+		          and held.sized_by is None and held.radix is None
+		          and held.varint is None}
+		declined = ["", f"\t\t/* {placement.path}: an arm of this shape has",
+		            "\t\t * no gated accessor in this backend. */"]
+		if scalar is None or placement.since or placement.array_count is not None \
+				or placement.sized_by is not None or data_sized(placement) \
+				or placement.delimiters or placement.offset_bits is None \
+				or placement.type_name in self.resolved.structs:
+			return declined
+		try:
+			held = over_fields(list(inside), variant.discriminant or "",
+			                   lambda one: f"this->{inside[one]}()")
+		except UnknownName:
+			return declined
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return declined
+			test = " || ".join(f"{held} == {one.value}u" for one in matched)
+		else:
+			test = f"{held} != {arm.value}u"
+		width = (placement.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+		start = placement.offset_bytes
+		load  = self._in_gate(
+			struct, self._raw_load(scalar, placement,
+			                       f"situ_base(raw_) + ({start})"))
+		if placement.type_name in self.enums:
+			load = f"static_cast<{ctype}>({load})"
+		return [
+			"",
+			f"\t\t/** {placement.path}, present when the discriminant"
+			f" selects `{arm_label(arm)}`.",
+			"\t\t */",
+			f"\t\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out)"
+			" const noexcept",
+			"\t\t{",
+			f"\t\t\tif ({test}) {{",
+			"\t\t\t\treturn ::situ::rt::err::version;",
+			"\t\t\t}",
+			f"\t\t\tif (!situ_in_bounds(raw_, {start}, {width}u)) {{",
+			"\t\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t\t}",
+			f"\t\t\tout = {load};",
+			"\t\t\treturn ::situ::rt::err::ok;",
+			"\t\t}",
+		]
+
 	def _gated_accessor(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
 		placement = entry.placement
@@ -1622,6 +1697,10 @@ class Emitter:
 			        f"\t\t/* {name} is [secret]: no debug accessor is generated"
 			        f" for it",
 			        "\t\t * at all (section 14.6). */"]
+
+		found = arm_of(struct, placement)
+		if found is not None:
+			return self._gated_arm(struct, placement, *found)
 
 		# Not `offset_bytes`: a scalar behind a variable-length member *inside*
 		# the region has an offset the message decides, and asking for a
@@ -5963,6 +6042,22 @@ class Emitter:
 		return (f" && {reads} >= {placement.since}u" if selected
 		        else f" || {reads} < {placement.since}u")
 
+	def _region_reads(self, struct: ResolvedStruct,
+			variant: Placement) -> dict[str, str] | None:
+		"""How an arm's guard reads a discriminant inside a waived sealed
+		region: its members are this view's, under the region's prefix,
+		and `_over_fields` names them by path (26.760)."""
+		if not in_a_region(struct, variant):
+			return None
+		region = variant.path.rsplit(".", 1)[0] + "."
+		return {held.name: f"this->{bare_name(local_name(struct, held))}()"
+		        for held in struct.layout.placements
+		        if held.path.startswith(region)
+		        and "." not in held.path[len(region):]
+		        and held.scalar is not None and held.array_count is None
+		        and held.sized_by is None and held.radix is None
+		        and held.varint is None}
+
 	def _arm_member(self, struct: ResolvedStruct, variant: Placement,
 			arm: Arm, placement: Placement) -> list[str]:
 		"""One arm member, behind the test that its arm is the one present.
@@ -5972,7 +6067,8 @@ class Emitter:
 		fault. `err::version` is what `default: error` returns, being the
 		same mistake from the other end.
 		"""
-		held = self._over_fields(struct, variant.discriminant or "")
+		held = self._over_fields(struct, variant.discriminant or "",
+		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
 			matched = matched_values(variant)
 			if not matched:
@@ -8990,7 +9086,8 @@ class Emitter:
 		if found is None:
 			return None
 		variant, arm = found
-		held = self._over_fields(struct, variant.discriminant or "")
+		held = self._over_fields(struct, variant.discriminant or "",
+		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:
 			matched = matched_values(variant)
 			if not matched:
@@ -9466,7 +9563,8 @@ class Emitter:
 			if found is None:
 				return []
 			variant, arm = found
-			held = self._over_fields(struct, variant.discriminant or "")
+			held = self._over_fields(struct, variant.discriminant or "",
+		                         extra=self._region_reads(struct, variant))
 			if arm.value is None:
 				matched = matched_values(variant)
 				if not matched:
