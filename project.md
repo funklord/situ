@@ -7796,6 +7796,11 @@ Moved to
 Moved to
 `doc/decision/26.752-two-backends-gain-the-gated-readers-they-lacked.md`.
 
+### 26.753 C's `required` read a discriminant that had not arrived
+
+Moved to
+`doc/decision/26.753-c-s-required-read-a-discriminant-that-had-not-arrived.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

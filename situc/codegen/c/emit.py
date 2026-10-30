@@ -5462,6 +5462,21 @@ class Emitter:
 			return None	# every arm fixed: the extent cannot shrink
 
 		disc  = self._over_fields(struct, placement.discriminant, "view")
+		# The discriminant read BOUNDS-CHECKED, zero where it has not
+		# arrived (26.753). A getter at a static offset trusts the view to
+		# have been acquired with the struct's minimum, and `required`'s
+		# view is whatever has arrived: `peek u8 kind` at `have = 0` read
+		# `data[0]`, a byte the caller never handed over, and chose the arm
+		# off it -- so C's answer for an empty buffer varied run to run
+		# while C++, Rust and Python, whose reads check, answered 3.
+		found = self.resolved.find(f"{struct.name}.{placement.discriminant}")
+		held  = found.placement if found is not None else None
+		if held is not None and held.offset_bits is not None \
+				and held.scalar is not None \
+				and held.offset_bits % BITS_PER_BYTE == 0:
+			reach = (held.offset_bits + held.scalar.bits + BITS_PER_BYTE - 1) \
+			        // BITS_PER_BYTE
+			disc = f"(have >= {reach}u ? {disc} : 0u)"
 		lines = [
 			"",
 			f"\t/* {placement.path}: the arm the discriminant selects frames",
