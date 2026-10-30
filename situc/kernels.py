@@ -79,6 +79,22 @@ class Derived:
 	authenticated: bool             = False
 
 
+def zero_means_none(schema: ast.Schema, codec: str | None) -> bool:
+	"""Whether a stored zero says the sender computed no sum (26.754).
+
+	RFC 768: a UDP checksum field of zero means "no checksum", so a sum that
+	COMPUTES to zero is transmitted as all ones, and a receiver accepts a
+	stored zero rather than checking it. `ones_complement(..., zero_means_none)`
+	says so, and both halves ask this: the derived kernel writes 0xFFFF for a
+	zero, and every backend's `verify` lets a stored zero through. TCP's
+	field has no such meaning and does not carry the flag.
+	"""
+	decl = next((one for one in schema.codecs() if one.name == codec), None)
+	return (decl is not None and decl.kernel is not None
+	        and decl.kernel.family is ast.KernelFamily.ONES_COMPLEMENT
+	        and decl.kernel.flag("zero_means_none"))
+
+
 def derive(decl: ast.CodecDecl) -> Derived:
 	"""The signature a kernel implies."""
 	kernel = decl.kernel
@@ -165,7 +181,8 @@ KERNEL_ARGUMENTS: dict[ast.KernelFamily, frozenset[str]] = {
 		"parity"}),
 	ast.KernelFamily.SHIFT:       frozenset({
 		"taps", "width", "seed", "feedback", "complement_feedback"}),
-	ast.KernelFamily.ONES_COMPLEMENT: frozenset({"width", "complement"}),
+	ast.KernelFamily.ONES_COMPLEMENT: frozenset({"width", "complement",
+	                                             "zero_means_none"}),
 	ast.KernelFamily.PERMUTATION: frozenset({"rows", "columns", "span"}),
 	ast.KernelFamily.STUFFING:    frozenset({
 		"worst_case", "per", "unit", "code"}),

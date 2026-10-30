@@ -533,6 +533,10 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	complement = kernel.flag("complement")
 	final      = "(uint16_t)(~sum & 0xFFFFu)" if complement \
 		else "(uint16_t)(sum & 0xFFFFu)"
+	# `zero_means_none`: a computed zero is sent as all ones, the zero
+	# being UDP's "no checksum" (RFC 768, 26.754).
+	if kernel.flag("zero_means_none"):
+		final = f"({final} == 0u ? (uint16_t)0xFFFFu : {final})"
 
 	return [
 		"",

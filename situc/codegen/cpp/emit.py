@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import arm_label, sized_shown
 from situc.codegen.c.names import KEYWORDS, bare_name, c_name
@@ -8213,7 +8214,10 @@ class Emitter:
 			f"\t\tif (!situ_in_bounds(::situ::rt::view::raw(), crc_at, {spanned}u)) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\treturn {stored} == want",
+			# A stored zero is "no sum" where the codec says so (26.754).
+			(f"\t\treturn ({stored} == 0u || {stored} == want)"
+			 if zero_means_none(self.schema, placement.tag_codec)
+			 else f"\t\treturn {stored} == want"),
 			"\t\t       ? ::situ::rt::err::ok : ::situ::rt::err::checksum;",
 			"\t}",
 		]

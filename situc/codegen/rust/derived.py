@@ -1358,6 +1358,9 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 
 	name  = _ident(prefix, decl.name)
 	final = "!(sum as u16)" if kernel.flag("complement") else "sum as u16"
+	# `zero_means_none`: a computed zero is sent as all ones (26.754).
+	if kernel.flag("zero_means_none"):
+		final = f"match {final} {{ 0 => 0xFFFF, other => other }}"
 
 	return [
 		"",

@@ -5911,13 +5911,6 @@ being named because nothing re-read the sentence when the records closed.
   calls it. 26.733's shape, one member over. The split 26.750 recorded is
   otherwise closed: Python reads a gated fixed run and C++ a gated
   `[remaining]` one.
-- **A UDP sum that comes out zero is written zero** (`suggestion/hull.md`
-  section 20, 2026-10-30). `ones_complement(width = 16, complement)`
-  writes whatever it yields, and RFC 768 sends a computed zero as all ones
-  because a zero there means "no sum": one datagram in 65,536 from a situ
-  UDP builder goes out unchecksummed, and a receiver must accept a stored
-  zero. Right for TCP, wrong where a zero has that meaning. A kernel
-  argument both halves read is the fix; hull builds UDP this way.
 - **No `octal` radix, so a ustar header cannot be described**
   (`suggestion/hull.md` section 19). Every number in the 512-byte header is
   octal text, NUL- or space-terminated; `radix` is `decimal | hex |
@@ -7811,6 +7804,10 @@ Moved to
 
 Moved to
 `doc/decision/26.753-c-s-required-read-a-discriminant-that-had-not-arrived.md`.
+
+### 26.754 A UDP sum of zero is sent as all ones
+
+Moved to `doc/decision/26.754-a-udp-sum-of-zero-is-sent-as-all-ones.md`.
 
 ### 26.715 The same width in the other pointer backend
 

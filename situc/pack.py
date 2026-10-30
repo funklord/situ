@@ -1052,9 +1052,20 @@ def _kernel_row(schema: "ast.Schema", named: str,
 			+ _struct.pack("<ii", crc_shift(width, reflect),
 			               1 if reflect else 0)
 	if family == "ONES_COMPLEMENT":
+		# The two flags the generated kernels read, in the two fields this
+		# family has no other use for (26.754). `xorout` is the final XOR,
+		# which for a 16-bit sum is exactly what `complement` does; the
+		# last word is `zero_means_none`. Both were dropped, and the
+		# walker complemented every sum -- wrong for `edges.summing`, which
+		# is uncomplemented, and silent about UDP's zero.
 		width = crc_width(decl) or 16
+		kernel = decl.kernel
+		assert kernel is not None
+		xorout = (1 << width) - 1 if kernel.flag("complement") else 0
 		return _struct.pack("<IIIII", KERNEL_ONES_COMPLEMENT, width,
-		                    0, 0, _u32(None)) + _struct.pack("<ii", 0, 0)
+		                    0, xorout, _u32(None)) \
+			+ _struct.pack("<ii", 0,
+			               1 if kernel.flag("zero_means_none") else 0)
 	return _struct.pack("<IIIII", KERNEL_NONE, 0, 0, 0, _u32(None)) \
 		+ _struct.pack("<ii", 0, 0)
 

@@ -180,4 +180,11 @@ def _ones_complement(kernel: Kernel, covered: bytes) -> int:
 
 	while total >> 16:
 		total = (total & 0xFFFF) + (total >> 16)
-	return (~total) & 0xFFFF
+	# `xorout` is the complement where the kernel asks for one, and the
+	# last word of the row is `zero_means_none` (26.754). This complemented
+	# every sum, which is wrong for an uncomplemented one and silent about
+	# UDP's rule that a computed zero is sent as all ones.
+	total = (total ^ kernel.xorout) & 0xFFFF
+	if kernel.reflect and total == 0:
+		return 0xFFFF
+	return total

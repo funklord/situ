@@ -27,6 +27,7 @@ from math import lcm
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.kernels import zero_means_none
 from situc.capability import Axis, Value
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
@@ -1076,7 +1077,10 @@ class Emitter:
 			f"\tif (!situ_in_bounds(view, crc_at, {spanned}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\treturn {stored} == want",
+			# A stored zero is "no sum" where the codec says so (26.754).
+			(f"\treturn ({stored} == 0u || {stored} == want)"
+			 if zero_means_none(self.schema, placement.tag_codec)
+			 else f"\treturn {stored} == want"),
 			"\t       ? SITU_OK : SITU_ERR_CHECKSUM;",
 			"}",
 		]

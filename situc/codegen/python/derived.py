@@ -1247,6 +1247,9 @@ def _ones_complement(decl: ast.CodecDecl, prefix: str) -> list[str] | None:
 	# 16-bit complement the RFC means, rather than a sign error nobody sees
 	# until a value happens to be printed.
 	final = "~total & 0xFFFF" if complement else "total & 0xFFFF"
+	# `zero_means_none`: a computed zero is sent as all ones (26.754).
+	if kernel.flag("zero_means_none"):
+		final = f"({final}) or 0xFFFF"
 
 	return [
 		"",

@@ -26,6 +26,7 @@ import textwrap
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import arm_label, sized_shown
 from situc.codegen.c.names import c_name
@@ -2514,7 +2515,10 @@ class Emitter:
 			 if (placement.size_bits or 0) % BITS_PER_BYTE else
 			 f"\t\tstored = int.from_bytes(bytes(self.{name}), \"{order}\")"),
 			f"\t\tfound  = self.{name}_compute({passed})",
-			"\t\tif stored != found:",
+			# A stored zero is "no sum" where the codec says so (26.754).
+			("\t\tif stored != found and stored != 0:"
+			 if zero_means_none(self.schema, placement.tag_codec)
+			 else "\t\tif stored != found:"),
 			f"\t\t\traise ChecksumError("
 			f'f"{placement.path}: stored {{stored:#x}}, '
 			'computed {found:#x}")',

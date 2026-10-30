@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 
 from situc import ast
+from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import arm_label, sized_shown
 from situc.codegen.c.names import c_name
@@ -1911,8 +1912,11 @@ class Emitter:
 			 if (placement.size_bits or 0) % BITS_PER_BYTE else
 			 f"\t\tlet held = u{width * 8}::{read}("
 			 f"self.bytes[at..at + {width}].try_into().unwrap());"),
-			f"\t\tif u32::from(held) == want {{ Ok(()) }}"
-			" else { Err(Error::Checksum) }",
+			# A stored zero is "no sum" where the codec says so (26.754).
+			(f"\t\tif held == 0 || u32::from(held) == want {{ Ok(()) }}"
+			 if zero_means_none(self.schema, placement.tag_codec)
+			 else f"\t\tif u32::from(held) == want {{ Ok(()) }}")
+			+ " else { Err(Error::Checksum) }",
 			"\t}",
 		]
 

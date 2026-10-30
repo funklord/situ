@@ -4,8 +4,14 @@
 // smallest schema that still has a length field pointing at a payload the
 // schema does not describe, which is the commonest shape in real protocols.
 
+// `zero_means_none` is UDP's rule and not TCP's: a checksum field of zero
+// says the sender computed no sum, so a sum that comes out zero is sent as
+// all ones, and a receiver accepts a stored zero rather than checking it
+// (RFC 768). Without it one datagram in 65,536 built here went out marked
+// unchecksummed -- reported by hull, which builds its switch's UDP answers
+// from this example (26.754).
 codec internet_checksum {
-	kernel = ones_complement(width = 16, complement);
+	kernel = ones_complement(width = 16, complement, zero_means_none);
 }
 impl internet_checksum derived;
 
