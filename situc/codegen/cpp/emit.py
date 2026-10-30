@@ -52,7 +52,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region,
+	arm_of, encoding_source, in_a_region, within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -1423,6 +1423,10 @@ class Emitter:
 				lines.extend(self._arm_member(struct, found[0], found[1],
 				                              entry.placement))
 				continue
+			# Inside a struct arm: the arm's sub-view is the way in, as
+			# it is for a plain arm's struct (26.763).
+			if within_a_region_arm(struct, entry.placement):
+				continue
 			lines.extend(self._member(struct, entry))
 
 		return lines
@@ -1617,7 +1621,7 @@ class Emitter:
 		return local
 
 	def _gated_arm(self, struct: ResolvedStruct, placement: Placement,
-			variant: Placement, arm: Arm) -> list[str]:
+			variant: Placement | None, arm: Arm | None) -> list[str]:
 		"""One arm member inside a sealed region, through the gate.
 
 		The plain arm's shape -- an out-parameter and `err::version` -- and
@@ -1626,6 +1630,10 @@ class Emitter:
 		the arm sits whatever the discriminant said, and past a message the
 		frame accepted holding the shorter arm (26.760). A scalar at a
 		constant offset only; C's copy carries why.
+
+		And a member present from a VERSION, with no arm (26.764): the
+		same two questions with the version field asked first. It read
+		its offset in a message older than it, past the frame.
 		"""
 		name   = self._gate_name(struct, placement)
 		ctype  = self._field_ctype(placement)
@@ -1640,23 +1648,33 @@ class Emitter:
 		          and held.varint is None}
 		declined = ["", f"\t\t/* {placement.path}: an arm of this shape has",
 		            "\t\t * no gated accessor in this backend. */"]
-		if scalar is None or placement.since or placement.array_count is not None \
+		if scalar is None or placement.array_count is not None \
 				or placement.sized_by is not None or data_sized(placement) \
 				or placement.delimiters or placement.offset_bits is None \
-				or placement.type_name in self.resolved.structs:
+				or placement.type_name in self.resolved.structs \
+				or (variant is not None and placement.since):
 			return declined
-		try:
-			held = over_fields(list(inside), variant.discriminant or "",
-			                   lambda one: f"this->{inside[one]}()")
-		except UnknownName:
-			return declined
-		if arm.value is None:
-			matched = matched_values(variant)
-			if not matched:
+		if variant is not None and arm is not None:
+			try:
+				held = over_fields(list(inside), variant.discriminant or "",
+				                   lambda one: f"this->{inside[one]}()")
+			except UnknownName:
 				return declined
-			test = " || ".join(f"{held} == {one.value}u" for one in matched)
+			if arm.value is None:
+				matched = matched_values(variant)
+				if not matched:
+					return declined
+				test = " || ".join(f"{held} == {one.value}u"
+				                   for one in matched)
+			else:
+				test = f"{held} != {arm.value}u"
+			what = f"present when the discriminant selects `{arm_label(arm)}`"
 		else:
-			test = f"{held} != {arm.value}u"
+			version = self._version_in_gate(struct, placement)
+			if version is None:
+				return declined
+			test = f"{version} < {placement.since}u"
+			what = f"present from version {placement.since}"
 		width = (placement.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		start = placement.offset_bytes
 		load  = self._in_gate(
@@ -1666,8 +1684,7 @@ class Emitter:
 			load = f"static_cast<{ctype}>({load})"
 		return [
 			"",
-			f"\t\t/** {placement.path}, present when the discriminant"
-			f" selects `{arm_label(arm)}`.",
+			f"\t\t/** {placement.path}, {what}.",
 			"\t\t */",
 			f"\t\t[[nodiscard]] ::situ::rt::err {name}({ctype} &out)"
 			" const noexcept",
@@ -1682,6 +1699,23 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::ok;",
 			"\t\t}",
 		]
+
+	def _version_in_gate(self, struct: ResolvedStruct,
+			placement: Placement) -> str | None:
+		"""The version field read through the gate, or None.
+
+		It is outside the region and plaintext, at a constant offset (19.4),
+		so it is read where it sits in the gate's own view.
+		"""
+		if not placement.since or not placement.version_field:
+			return None
+		field = next((held for held in struct.layout.placements
+		              if held.path == f"{struct.name}.{placement.version_field}"),
+		             None)
+		if field is None or field.scalar is None or field.offset_bits is None:
+			return None
+		return self._in_gate(struct, self._raw_load(
+			field.scalar, field, f"situ_base(raw_) + ({field.offset_bytes})"))
 
 	def _gated_accessor(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
@@ -1698,9 +1732,15 @@ class Emitter:
 			        f" for it",
 			        "\t\t * at all (section 14.6). */"]
 
+		if within_a_region_arm(struct, placement):
+			return ["", f"\t\t/* {placement.path}: inside an arm of a"
+			        " variant, so where", "\t\t * the arm puts it only when"
+			        " it is present (26.763). */"]
 		found = arm_of(struct, placement)
 		if found is not None:
 			return self._gated_arm(struct, placement, *found)
+		if placement.since:
+			return self._gated_arm(struct, placement, None, None)
 
 		# Not `offset_bytes`: a scalar behind a variable-length member *inside*
 		# the region has an offset the message decides, and asking for a

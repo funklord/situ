@@ -50,7 +50,7 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region,
+	arm_of, encoding_source, in_a_region, within_a_region_arm,
 	bit_addressed_tag,
 	bit_extractor,
 	bound_cannot_fail,
@@ -1273,7 +1273,8 @@ class Emitter:
 	def _region_arm(struct: ResolvedStruct, placement: Placement) -> bool:
 		"""Whether this member is an arm of a variant in a sealed region."""
 		found = arm_of(struct, placement)
-		return found is not None and in_a_region(struct, found[0])
+		return (found is not None and in_a_region(struct, found[0])) \
+			or within_a_region_arm(struct, placement)
 
 	def _covered_setters(self, struct: ResolvedStruct) -> list[str]:
 		"""Setters that mark an obligation dirty, for the fields under one.
@@ -1958,6 +1959,11 @@ class Emitter:
 		# An arm's members are nested by path and are this struct's to emit:
 		# an arm is not a type, so there is no other section they could go in.
 		# Each is guarded by the discriminant that selects its arm.
+		if within_a_region_arm(struct, placement):
+			return ["", f"/* No accessor for `{placement.path}`: it is inside"
+			        " an arm of a variant", " * in a sealed region, and is"
+			        " where that arm puts it only when the", " * arm is the"
+			        " one present (26.763). */"]
 		if arm_of(struct, placement) is not None \
 				and self._gate_type(struct, placement) is not None:
 			return self._gated_arm_member(struct, placement)
@@ -9913,6 +9919,7 @@ class Emitter:
 		local   = c_name(self._local(struct, placement))
 		version = ident(self.prefix, struct.name,
 		                c_name(placement.version_field), "get")
+		held    = self._taken_view(taken)
 
 		self._emitted.add(placement.path)
 
@@ -9927,16 +9934,29 @@ class Emitter:
 			f"{ident(self.prefix, struct.name, local, 'get')}"
 			f"({taken}, {ctype} *out)",
 			"{",
-			f"	if ({version}(view) < {placement.since}u) {{",
+			f"	if ({version}({held}) < {placement.since}u) {{",
 			"		return SITU_ERR_VERSION;",
 			"	}",
-			*self._versioned_bounds(placement),
+			*self._versioned_bounds(placement, held),
 			f"	*out = ({ctype})({load});",
 			"	return SITU_OK;",
 			"}",
 		]
 
-	def _versioned_bounds(self, placement: Placement) -> list[str]:
+	@staticmethod
+	def _taken_view(taken: str) -> str:
+		"""The view a signature's parameter names: `gate.view` for a gate.
+
+		A versioned member inside a sealed region takes the gate, and its
+		version test and bounds check named `view`, which is not in scope
+		there -- the generated C did not compile (26.764). The version field
+		itself is outside the region and plaintext, so reading it through
+		the gate's view is reading it where it is.
+		"""
+		return "gate.view" if taken.endswith(" gate") else "view"
+
+	def _versioned_bounds(self, placement: Placement,
+			held: str = "view") -> list[str]:
 		"""And the frame has to hold it, which the acquiring check did not say.
 
 		The one place 20.2's argument does not reach. Every other
@@ -9955,7 +9975,7 @@ class Emitter:
 		if not width or placement.offset_bits is None:
 			return []
 		return [
-			f"\tif (!situ_in_bounds(view, {placement.offset_bytes}u,"
+			f"\tif (!situ_in_bounds({held}, {placement.offset_bytes}u,"
 			f" {width}u)) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
@@ -10092,14 +10112,15 @@ class Emitter:
 				f"static inline situ_err_t {setter}({taken}, "
 				f"{ctype} value)",
 				"{",
-				f"\tif ({version}(view) < {placement.since}u) {{",
+				f"\tif ({version}({self._taken_view(taken)})"
+				f" < {placement.since}u) {{",
 				"\t\treturn SITU_ERR_VERSION;",
 				"\t}",
 				# The declared version is the message's claim, not a fact about
 				# the buffer: `ver = 2` in three bytes passed this and wrote
 				# four bytes past the frame. Same check as the getter, and the
 				# side it matters more on.
-				*self._versioned_bounds(placement),
+				*self._versioned_bounds(placement, self._taken_view(taken)),
 				f"\t{store}",
 				"\treturn SITU_OK;",
 				"}",
@@ -10955,6 +10976,11 @@ class Emitter:
 		"""
 		found = arm_of(struct, placement)
 		if found is None or placement.type_name not in self.structs:
+			return []
+		# Not an arm in a sealed region: `validate` runs on the plain view,
+		# where the interior is the codec's output, and the arm has no
+		# `_view` to validate through (26.763).
+		if self._region_arm(struct, placement):
 			return []
 
 		# One of them, not a run of them: `_view` is emitted for an arm that

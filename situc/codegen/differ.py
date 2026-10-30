@@ -116,6 +116,7 @@ from situc.traverse import (
 	has_computable_extent, indexed_elements, length_is_transform_output,
 	is_varint_run, local_name, offset_unresolvable, own_entries, own_members,
 	length_read_inside, matched_values, unmeasurable_inside,
+	within_a_region_arm,
 )
 
 
@@ -1026,7 +1027,11 @@ def _interior_scalars(struct: ResolvedStruct,
 			continue
 		# An ARM is asked as one, by `_gated_arms`: its accessor refuses
 		# when another arm is present, which a plain read cannot print.
-		if arm_of(struct, placement) is not None:
+		if arm_of(struct, placement) is not None \
+				or within_a_region_arm(struct, placement):
+			continue
+		# ...and so is a member present from a version (26.764).
+		if placement.since:
 			continue
 
 		found.append(placement)
@@ -1043,7 +1048,9 @@ def _gated_arms(struct: ResolvedStruct, region: Placement,
 	The shape each backend's `_gated_arm` emits a guarded accessor for: a
 	scalar at a constant offset, with no `[since]`, in a variant whose
 	arm has a test to write (26.760). Anything else is declined by all
-	four in words, and so not asked.
+	four in words, and so not asked. A scalar present from a version is
+	asked the same way, being the same question about a member that may
+	not be there (26.764).
 	"""
 	found: list[tuple[str, int, bool]] = []
 	for entry in struct.entries:
@@ -1052,12 +1059,18 @@ def _gated_arms(struct: ResolvedStruct, region: Placement,
 		if placement.sealed_by != region.name or placement.kind != "field":
 			continue
 		held = arm_of(struct, placement)
-		if held is None or scalar is None:
+		if scalar is None:
 			continue
-		variant, arm = held
-		if arm.value is None and not matched_values(variant):
+		if held is not None:
+			variant, arm = held
+			if arm.value is None and not matched_values(variant):
+				continue
+			if placement.since:
+				continue
+		elif not placement.since or not placement.version_field \
+				or within_a_region_arm(struct, placement):
 			continue
-		if placement.since or placement.offset_bits is None \
+		if placement.offset_bits is None \
 				or placement.array_count is not None \
 				or placement.sized_by is not None or data_sized(placement) \
 				or placement.delimiters:
@@ -1103,6 +1116,10 @@ def _gated_bytes(struct: ResolvedStruct,
 		if placement.sealed_by != region.name or placement.kind != "field":
 			continue
 		if "[]" in placement.path:
+			continue
+		# An arm, or a member of one, has no plain gated reader (26.763).
+		if arm_of(struct, placement) is not None \
+				or within_a_region_arm(struct, placement):
 			continue
 		if scalar is None or scalar.bits != BITS_PER_BYTE:
 			continue

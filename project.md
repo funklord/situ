@@ -7838,6 +7838,15 @@ Moved to
 Moved to
 `doc/decision/26.762-an-encoding-source-is-not-a-nested-namesake.md`.
 
+### 26.763 Nothing inside a sealed arm is read unguarded
+
+Moved to
+`doc/decision/26.763-nothing-inside-a-sealed-arm-is-read-unguarded.md`.
+
+### 26.764 A versioned member inside a sealed region
+
+Moved to `doc/decision/26.764-a-versioned-member-inside-a-sealed-region.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

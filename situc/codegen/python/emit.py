@@ -49,7 +49,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region,
+	arm_of, encoding_source, in_a_region, within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -8333,6 +8333,10 @@ class Emitter:
 				lines.extend(self._arm_member(struct, found[0], found[1],
 				                              entry.placement))
 				continue
+			# Inside a struct arm: the arm's sub-view is the way in, as
+			# it is for a plain arm's struct (26.763).
+			if within_a_region_arm(struct, entry.placement):
+				continue
 			lines.extend(self._explained(struct, entry))
 		for path in secret:
 			lines.extend(["",
@@ -8349,8 +8353,8 @@ class Emitter:
 		return lines
 
 	def _gated_arm(self, struct: ResolvedStruct, region: Placement,
-			placement: Placement, variant: Placement,
-			arm: Arm) -> list[str]:
+			placement: Placement, variant: Placement | None,
+			arm: Arm | None) -> list[str]:
 		"""One arm member inside a sealed region, through the gate.
 
 		Named as C, C++ and Rust name it -- the path below the region,
@@ -8371,22 +8375,38 @@ class Emitter:
 		          and held.varint is None]
 		declined = ["", f"\t\t# {placement.path}: an arm of this shape has no",
 		            "\t\t# gated accessor in this backend."]
-		if scalar is None or placement.since or _is_run(placement) \
+		if scalar is None or _is_run(placement) \
 				or placement.delimiters or placement.offset_bits is None \
-				or placement.type_name in self.resolved.structs:
+				or placement.type_name in self.resolved.structs \
+				or (variant is not None and placement.since):
 			return declined
-		try:
-			held = over_fields(inside, variant.discriminant or "",
-			                   lambda one: f"self.{py_name(one)}")
-		except UnknownName:
-			return declined
-		if arm.value is None:
-			matched = matched_values(variant)
-			if not matched:
+		if variant is not None and arm is not None:
+			try:
+				held = over_fields(inside, variant.discriminant or "",
+				                   lambda one: f"self.{py_name(one)}")
+			except UnknownName:
 				return declined
-			test = " or ".join(f"({held}) == {one.value}" for one in matched)
+			if arm.value is None:
+				matched = matched_values(variant)
+				if not matched:
+					return declined
+				test = " or ".join(f"({held}) == {one.value}"
+				                   for one in matched)
+			else:
+				test = f"({held}) != {arm.value}"
+			what   = (f"present when the discriminant selects\n\t\t\t"
+			          f"`{arm_label(arm)}`")
+			absent = "that arm is not the one present"
 		else:
-			test = f"({held}) != {arm.value}"
+			# A member present from a VERSION, with no arm (26.764). The
+			# version field is the enclosing view's own, outside the
+			# region and plaintext.
+			if not placement.version_field:
+				return declined
+			test   = (f"self._view."
+			          f"{py_name(placement.version_field)} < {placement.since}")
+			what   = f"present from version {placement.since}"
+			absent = "not present in this version"
 		width = (placement.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		start = placement.offset_bytes
 		load  = self._load(placement, scalar, None).replace("self.",
@@ -8394,11 +8414,10 @@ class Emitter:
 		return [
 			"", "\t\t@property",
 			f"\t\tdef {name}(self) -> {self._hint(placement)}:",
-			f'\t\t\t"""{placement.path}, present when the discriminant selects',
-			f'\t\t\t`{arm_label(arm)}`. Raises VersionError otherwise."""',
+			f'\t\t\t"""{placement.path}, {what}. Raises VersionError'
+			' otherwise."""',
 			f"\t\t\tif {test}:",
-			f'\t\t\t\traise VersionError("{placement.path}: that arm is not'
-			' the one present")',
+			f'\t\t\t\traise VersionError("{placement.path}: {absent}")',
 			f"\t\t\tif self._view._len < {start} + {width}:",
 			f'\t\t\t\traise BoundsError("{placement.path}: outside the frame")',
 			f"\t\t\treturn {load}",
@@ -8521,10 +8540,19 @@ class Emitter:
 				])
 				continue
 
+			if within_a_region_arm(struct, placement):
+				lines.extend(["", f"\t\t# {placement.path}: inside an arm of"
+				              " a variant, so where", "\t\t# the arm puts it"
+				              " only when it is present (26.763)."])
+				continue
 			found = arm_of(struct, placement)
 			if found is not None:
 				lines.extend(self._gated_arm(struct, region, placement,
 				                             *found))
+				continue
+			if placement.since:
+				lines.extend(self._gated_arm(struct, region, placement,
+				                             None, None))
 				continue
 
 			lines.extend([

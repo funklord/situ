@@ -3197,6 +3197,28 @@ def in_a_region(struct: ResolvedStruct, placement: Placement) -> bool:
 	           for held in struct.layout.placements)
 
 
+def within_a_region_arm(struct: ResolvedStruct,
+		placement: Placement) -> bool:
+	"""Whether this member lies INSIDE an arm of a variant in a sealed
+	region -- a field of `case 1: pair p;` -- rather than being the arm.
+
+	Such a member is where the arm puts it only when the arm is the one
+	present, and no backend's gated family has a guard for it: each read
+	`v_p_b` at its offset whatever the discriminant said, past the frame
+	where the shorter arm was chosen (ASan, before 26.760). The arm itself
+	is declined unless it is a scalar (26.760), and so is everything in
+	it (26.763).
+	"""
+	for variant in struct.layout.placements:
+		if variant.kind != "variant" or not in_a_region(struct, variant):
+			continue
+		for _arm, member in arm_members(struct, variant):
+			if member is not None \
+					and placement.path.startswith(member.path + "."):
+				return True
+	return False
+
+
 def arm_of(struct: ResolvedStruct,
 		placement: Placement) -> tuple[Placement, Arm] | None:
 	"""The variant this member is an arm of, and which arm, or None.

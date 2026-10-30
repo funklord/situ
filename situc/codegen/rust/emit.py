@@ -50,7 +50,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region,
+	arm_of, encoding_source, in_a_region, within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
 	byte_span,
@@ -753,7 +753,8 @@ class Emitter:
 			# frame where a shorter arm was chosen. A plain arm has no
 			# setter either (26.760).
 			found = arm_of(struct, placement)
-			if found is not None and in_a_region(struct, found[0]):
+			if (found is not None and in_a_region(struct, found[0])) \
+					or within_a_region_arm(struct, placement):
 				continue
 
 			# A sealed member is not written from out here: the interior is
@@ -4427,7 +4428,7 @@ class Emitter:
 		]
 
 	def _gated_arm(self, struct: ResolvedStruct, placement: Placement,
-			variant: Placement, arm: Arm) -> list[str]:
+			variant: Placement | None, arm: Arm | None) -> list[str]:
 		"""One arm member inside a sealed region, through the gate.
 
 		The plain arm's two questions, asked of the gate's bytes: is this
@@ -4447,27 +4448,47 @@ class Emitter:
 		          and held.scalar is not None and held.array_count is None
 		          and held.sized_by is None and held.radix is None
 		          and held.varint is None}
-		if scalar is None or placement.since or _is_run(placement) \
+		if scalar is None or _is_run(placement) \
 				or placement.delimiters or placement.offset_bits is None \
-				or placement.type_name in self.resolved.structs:
+				or placement.type_name in self.resolved.structs \
+				or (variant is not None and placement.since):
 			return ["", f"\t// {placement.path}: an arm of this shape has no",
 			        "\t// gated accessor in this backend."]
-		held = self._over_fields(struct, variant.discriminant or "", "self",
-		                         extra=reads)
-		if arm.value is None:
-			matched = matched_values(variant)
-			if not matched:
-				return ["", f"\t// {placement.path}: a `default` arm with no",
-				        "\t// `case` to negate has no test to write."]
-			test = " || ".join(f"{held} == {one.value}" for one in matched)
+		if variant is not None and arm is not None:
+			held = self._over_fields(struct, variant.discriminant or "",
+			                         "self", extra=reads)
+			if arm.value is None:
+				matched = matched_values(variant)
+				if not matched:
+					return ["", f"\t// {placement.path}: a `default` arm"
+					        " with no", "\t// `case` to negate has no test"
+					        " to write."]
+				test = " || ".join(f"{held} == {one.value}" for one in matched)
+			else:
+				test = f"{held} != {arm.value}"
+			what = [f"\t/// `{placement.path}`, present when the discriminant"
+			        " selects", f"\t/// `{arm_label(arm)}`; `Error::Version`"
+			        " otherwise."]
 		else:
-			test = f"{held} != {arm.value}"
+			# A member present from a VERSION, with no arm (26.764): the
+			# version field is outside the region and plaintext, at a
+			# constant offset, so it is read where it sits in these bytes.
+			field = next((one for one in struct.layout.placements
+			              if one.path == f"{struct.name}."
+			                             f"{placement.version_field}"), None)
+			if field is None or field.scalar is None \
+					or field.offset_bits is None:
+				return ["", f"\t// {placement.path}: its version field is not"
+				        " one", "\t// this backend reads through the gate."]
+			version = self._unparen(self._raw_load(field, field.scalar))
+			test = f"({version} as u64) < {placement.since}"
+			what = [f"\t/// `{placement.path}`, present from version"
+			        f" {placement.since};", "\t/// `Error::Version` otherwise."]
 		width = (placement.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		start = placement.offset_bytes
 		return [
 			"",
-			f"\t/// `{placement.path}`, present when the discriminant selects",
-			f"\t/// `{arm_label(arm)}`; `Error::Version` otherwise.",
+			*what,
 			f"\tpub fn {name}(&self) -> Result<{self._field_type(placement)}> {{",
 			f"\t\tif {test} {{",
 			"\t\t\treturn Err(Error::Version);",
@@ -4492,9 +4513,15 @@ class Emitter:
 		if scalar is None:
 			return []
 
+		if within_a_region_arm(struct, placement):
+			return ["", f"\t// {placement.path}: inside an arm of a variant,",
+			        "\t// so where the arm puts it only when it is present"
+			        " (26.763)."]
 		found = arm_of(struct, placement)
 		if found is not None:
 			return self._gated_arm(struct, placement, *found)
+		if placement.since:
+			return self._gated_arm(struct, placement, None, None)
 
 		# `data_sized`: see the note in the Python emitter (26.188).
 		if _is_run(placement):
