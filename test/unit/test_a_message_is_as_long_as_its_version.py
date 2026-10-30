@@ -41,6 +41,11 @@ struct many {
 	versioned  vs[n];
 	u8         after;
 }
+struct sealed [version = ver] {
+	u8   ver;
+	tag  u8 mac[4] covers(part);
+	authenticated part { u8 a; u8 b [since = 2]; }
+}
 """
 
 V1 = bytes([1, 0, 0])
@@ -56,6 +61,9 @@ CASES = {
 	("outer", V1 + b"\x07"):         ("*4", "7"),
 	("outer", V3 + b"\x07"):         ("*10", "7"),
 	("many", b"\x02" + V1 + V3 + b"\x07"): ("*14", "7"),
+	# A `[since]` inside a region counts as the struct's own tail too.
+	("sealed", bytes([1]) + bytes(5) + b"\xEE" * 3): ("*6", None),
+	("sealed", bytes([2]) + bytes(6)): ("*7", None),
 }
 
 
