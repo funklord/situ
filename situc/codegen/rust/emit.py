@@ -50,7 +50,8 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
+	versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
@@ -2098,7 +2099,19 @@ class Emitter:
 		return "self.bytes.len()"
 
 	def _region_end(self, struct: ResolvedStruct, region: Placement) -> str:
-		"""Where a region stops, taken from where the next member starts."""
+		"""Where a region stops, taken from where the next member starts.
+
+		A region holding `[since]` members is its message's version's length
+		(26.771), as C's `_region_end` says.
+		"""
+		by_version = versioned_region(struct, region)
+		if by_version is not None:
+			field, oldest, steps = by_version
+			chain = str(oldest)
+			for since, size in steps:
+				chain = (f"if self.{_ident(c_name(field.name))}() as u64"
+				         f" >= {since} {{ {size} }} else {{ {chain} }}")
+			return f"({self._region_start(struct, region)} + ({chain}))"
 		if region.is_fixed_size and region.offset_bits is not None:
 			return str(region.offset_bytes + region.size_bits // BITS_PER_BYTE)
 

@@ -2535,6 +2535,52 @@ def versioned_tail(structs: dict[str, ResolvedStruct],
 	return field, sum(added for _, added in steps), tuple(steps)
 
 
+def versioned_region(struct: ResolvedStruct, region: Placement) \
+		-> tuple[Placement, int, tuple[tuple[int, int], ...]] | None:
+	"""How long a fixed-size region holding `[since]` members is, by
+	version, or None.
+
+	A region's placement is its newest version's size, so a tag over
+	`authenticated part { u8 a; u16 b [since = 2]; }` covered three bytes
+	of a version-1 message that holds one, and every backend refused to
+	say what the tag covers of a whole version-1 message (26.771).
+
+	Returned as the version field, the region's bytes at the oldest
+	version, and one `(since, bytes)` per version that adds members to it
+	-- the region's whole size from that version on. Only where the
+	version field is read at a static byte offset and every step ends on
+	a byte.
+	"""
+	if not region.is_fixed_size or region.size_bits % BITS_PER_BYTE:
+		return None
+	inside = [entry.placement for entry in struct.entries
+	          if region.name in entry.placement.regions
+	          and entry.placement.since and entry.placement.version_field]
+	if not inside or any(not held.is_fixed_size for held in inside):
+		return None
+	field = next((entry.placement for entry in struct.entries
+	              if entry.placement.name == inside[0].version_field
+	              and not entry.placement.since
+	              and entry.placement.scalar is not None
+	              and "." not in entry.placement.path[len(struct.name) + 1:]),
+	             None)
+	if field is None or field.offset_bits is None \
+			or field.offset_bits % BITS_PER_BYTE \
+			or field.size_bits % BITS_PER_BYTE:
+		return None
+	steps = []
+	for since in sorted({held.since or 0 for held in inside}):
+		absent = sum(held.size_bits for held in inside
+		             if (held.since or 0) > since)
+		if absent % BITS_PER_BYTE:
+			return None
+		steps.append((since, (region.size_bits - absent) // BITS_PER_BYTE))
+	oldest = sum(held.size_bits for held in inside)
+	if oldest % BITS_PER_BYTE:
+		return None
+	return field, (region.size_bits - oldest) // BITS_PER_BYTE, tuple(steps)
+
+
 def is_run(placement: Placement, structs: Container[str]) -> bool:
 	"""A run of elements rather than a run of bytes.
 

@@ -52,7 +52,8 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
+	versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bound_cannot_fail,
@@ -8493,7 +8494,19 @@ class Emitter:
 		Summing the region's own contents would duplicate the solver badly:
 		a region's extent is its interior put through a codec's expansion, and
 		the interior is not addressable from outside the gate.
+
+		A region holding `[since]` members is its message's version's length
+		(26.771), as C's `_region_end` says.
 		"""
+		by_version = versioned_region(struct, region)
+		if by_version is not None:
+			field, oldest, steps = by_version
+			chain = f"{oldest}u"
+			for since, size in steps:
+				chain = (f"(static_cast<std::uint64_t>(this->"
+				         f"{bare_name(field.name)}()) >= {since}u ? {size}u"
+				         f" : {chain})")
+			return f"({self._region_start(struct, region)} + {chain})"
 		if region.is_fixed_size and region.offset_bits is not None:
 			return f"{region.offset_bytes + region.size_bits // BITS_PER_BYTE}u"
 

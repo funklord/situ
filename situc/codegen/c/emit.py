@@ -50,7 +50,8 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	RESERVED_STATED,
 	arm_members,
-	arm_of, encoding_source, in_a_region, version_steps, versioned_tail,
+	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
+	versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
 	bit_extractor,
@@ -1153,7 +1154,21 @@ class Emitter:
 		solver -- badly, since the interior is not addressable from outside the
 		gate. The member after it already knows, and if nothing follows, the
 		region runs to the end of the view.
+
+		A region holding `[since]` members is its message's version's length
+		(26.771): its size is the newest version's, so a tag over one covered
+		bytes a version-1 message does not have and every backend refused to
+		say what it covers.
 		"""
+		by_version = versioned_region(struct, region)
+		if by_version is not None:
+			field, oldest, steps = by_version
+			version = (f"(uint64_t){ident(self.prefix, struct.name, c_name(field.name), 'get')}"
+			           "(view)")
+			chain = f"{oldest}u"
+			for since, size in steps:
+				chain = f"({version} >= {since}u ? {size}u : {chain})"
+			return f"({self._base_expression(struct, region)} + {chain})"
 		if region.is_fixed_size and region.offset_bits is not None:
 			return f"{region.offset_bytes + region.size_bits // BITS_PER_BYTE}u"
 
@@ -8382,6 +8397,12 @@ class Emitter:
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)
 			if extent is None or placement.offset_bits is not None:
+				return run_fits
+			# Not a region holding `[since]` members, whose size is the
+			# newest version's: it refused every whole older message. Its
+			# members are checked one by one, the versioned ones inside
+			# their version guard, which is all the other three ask (26.771).
+			if versioned_region(struct, placement) is not None:
 				return run_fits
 			# And only where the offset exists. `validate` called the offset
 			# function of a member the emitter had just declined to place, so

@@ -7871,6 +7871,10 @@ Moved to `doc/decision/26.769-the-dissector-frames-by-version.md`.
 
 Moved to `doc/decision/26.770-a-placed-versioned-member-stays-in-the-frame.md`.
 
+### 26.771 A tag over a versioned region covers its version
+
+Moved to `doc/decision/26.771-a-tag-over-a-versioned-region.md`.
+
 ### 26.772 Append-only orders every member
 
 Moved to `doc/decision/26.772-append-only-orders-every-member.md`.
