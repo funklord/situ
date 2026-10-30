@@ -47,6 +47,7 @@ from situc.unparse import expr_to_source
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
 	extent_parts, is_counted_run, local_name, own_members, pinned_bytes,
+	version_steps, versioned_tail,
 )
 from situc.traverse import messages as messages_of
 
@@ -1752,7 +1753,7 @@ def _extent_function(resolved: ResolvedSchema,
 			"",
 			f"-- How many bytes one `{struct.name}` occupies at `at`.",
 			f"local function {_extent_name(struct)}(tvb, at)",
-			f"	return {constant}",
+			f"	return {_versioned_constant(struct, constant)}",
 			"end",
 		]
 
@@ -1787,8 +1788,12 @@ def _extent_steps(resolved: ResolvedSchema,
 	"""
 	steps: list[str] = []
 	bits  = 0
+	tail  = versioned_tail(resolved.structs, struct)
+	added = _version_term(tail) if tail is not None else None
 
 	for placement in own_members(struct):
+		if added is not None and placement.since:
+			continue		# by version, below (26.768)
 		if placement.is_fixed_size:
 			bits += placement.size_bits
 			continue
@@ -1799,7 +1804,62 @@ def _extent_steps(resolved: ResolvedSchema,
 		steps.append("0" if one is None else one)
 	if bits:
 		steps.append(str(bits // BITS_PER_BYTE))
+	if added is not None:
+		steps.append(added)
 	return steps
+
+
+def _read_version(field: Placement) -> str | None:
+	"""The version field read at `at`, or None where a capture cannot say.
+
+	`situ_uint` answers zero for a field the frame does not reach, which
+	is version zero and so the shortest length -- the answer the four
+	backends give a frame too short to say.
+	"""
+	span = byte_span(field)
+	if span is None or _host_order(field):
+		return None
+	first, count = span
+	little = "true" if field.endian is ast.Endian.LITTLE else "false"
+	return f"situ_uint(tvb, at + {first}, {count}, {little})"
+
+
+def _versioned_constant(struct: ResolvedStruct, constant: int) -> str:
+	"""A fixed-offset struct's length at the message's own version.
+
+	`extent_parts` answers the newest version's for one whose members all
+	sit at static offsets, and the four backends answer by version since
+	26.766 (`traverse.version_steps`). Without it a version-1 struct nested
+	in another placed everything after it where a newest one ends.
+	"""
+	by_version = version_steps(struct)
+	if by_version is None:
+		return str(constant)
+	field, base, after = by_version
+	read = _read_version(field)
+	if read is None:
+		return str(constant)
+	chain = str(base)
+	for since, end in after:
+		chain = f"(({read} >= {since}) and {end} or {chain})"
+	return chain
+
+
+def _version_term(tail: tuple[Placement, int,
+                              tuple[tuple[int, int], ...]]) -> str | None:
+	"""The bytes a variable struct's `[since]` tail carries at the
+	message's version (26.768), or None where the version is unreadable
+	and the tail is summed as it was."""
+	field, _, steps = tail
+	read = _read_version(field)
+	if read is None:
+		return None
+	chain   = "0"
+	carried = 0
+	for since, added in steps:
+		carried += added
+		chain = f"(({read} >= {since}) and {carried} or {chain})"
+	return chain
 
 
 def _extent_terms(resolved: ResolvedSchema,

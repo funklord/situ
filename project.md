@@ -7863,6 +7863,10 @@ Moved to `doc/decision/26.767-a-driver-setter-stays-in-the-frame.md`.
 
 Moved to `doc/decision/26.768-a-versioned-tail-behind-a-variable-member.md`.
 
+### 26.769 The dissector frames by version
+
+Moved to `doc/decision/26.769-the-dissector-frames-by-version.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

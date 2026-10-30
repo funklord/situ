@@ -1900,3 +1900,45 @@ def test_a_per_message_parameter_is_refused() -> None:
 		emit("struct frame { parameter u8 mode; u8 a [max = 3]; }")
 
 	assert "mode" in str(refused.value)
+
+
+VERSIONED = """target buffer;
+endian big;
+struct fixed [version = ver] {
+	u8   ver;
+	u16  x [since = 2];
+}
+struct varv [version = ver] {
+	u8   ver;
+	u8   n;
+	u8   d[n];
+	u16  x [since = 2];
+	u8   y [since = 3];
+}
+struct outer {
+	fixed  f;
+	varv   v;
+	u8     after;
+}
+"""
+
+
+@pytest.mark.skipif(LUA is None, reason="no Lua interpreter")
+@pytest.mark.parametrize(("packet", "after"), [
+	("01" "01020506" "07", 5),
+	("02aaaa" "02020506bbbb" "07", 9),
+	("01" "0300cccc0d" "07", 6),
+], ids=["v1", "v2", "v3-after-v1"])
+def test_a_nested_struct_is_as_long_as_its_version(packet: str, after: int,
+		tmp_path: Path) -> None:
+	"""26.766 and 26.768 in the dissector: a nested versioned struct's
+	extent was its newest version's, `fixed` three bytes and `varv` three
+	more than its count, so a version-1 one overran a whole packet and
+	nothing was shown. Now the version it carries, for a struct whose
+	members sit at static offsets and for one ending behind `d[n]`."""
+	schema = tmp_path / "versioned.situ"
+	schema.write_text(VERSIONED, encoding="ascii")
+	consumed, rows = dissect(tmp_path, schema, "outer", bytes.fromhex(packet))
+
+	assert consumed == after + 1
+	assert rows[-1] == ("outer.after", after, 1, "7")
