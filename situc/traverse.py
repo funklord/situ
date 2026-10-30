@@ -637,6 +637,50 @@ def unmeasurable_inside(structs: dict[str, "ResolvedStruct"],
 	        or is_counted_run(structs, member))
 
 
+def length_read_inside(struct: "ResolvedStruct", region: Placement,
+		member: Placement, structs: dict[str, "ResolvedStruct"]) -> bool:
+	"""Whether this interior member's length is read from inside the region.
+
+	From outside a coded region its bytes are the codec's output: stuffed
+	for a stuffing codec, ciphertext for an AEAD. So a length read there is
+	not a length of anything (26.440), and nothing after the region can be
+	placed by arithmetic over it. `unmeasurable_inside` is the walks; these
+	are the reads:
+
+	  * a count or a size expression naming a member of the region --
+	    `u8 n; u16 vals[n]`, both inside;
+	  * a variant whose discriminant is a member of the region. Every
+	    backend rendered its arm lengths over that name, found nothing to
+	    read it with, and raised `UnknownName` out of the generator;
+	  * a nested struct of no single size, whose extent is in its own
+	    bytes. Three backends placed the member after the region by
+	    reading the nested struct's length field out of the encoded bytes,
+	    and C named an extent function it never emitted (26.759).
+
+	A length driven by a field OUTSIDE the region is none of these, and is
+	the shape 26.35 wrote the extent rule for.
+	"""
+	prefix = region.path + "."
+	names  = [entry.placement.name for entry in struct.entries
+	          if entry.placement.path.startswith(prefix)]
+
+	def names_one(source: str | None) -> bool:
+		return source is not None and any(
+			re.search(rf"\b{re.escape(name)}\b", source) for name in names)
+
+	if member.sized_by is not None and member.sized_by in names:
+		return True
+	if names_one(member.size_expr):
+		return True
+	if member.kind == "variant" and names_one(member.discriminant):
+		return True
+	nested = structs.get(member.type_name or "")
+	return (member.kind == "field" and nested is not None
+	        and member.array_count is None and member.sized_by is None
+	        and member.size_expr is None and not member.delimiters
+	        and not nested.layout.is_fixed_size)
+
+
 def region_extent(struct: "ResolvedStruct", region: Placement,
 		codec: object,
 		structs: dict[str, "ResolvedStruct"] | None = None) -> RegionExtent | None:
@@ -689,6 +733,8 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 			continue
 		if unmeasurable_inside(structs or {}, member):
 			return None		# a walk over the codec's output
+		if length_read_inside(struct, region, member, structs or {}):
+			return None		# a length the plain view cannot read
 		variable.append(member)
 
 	expansion = getattr(codec, "expansion", None)

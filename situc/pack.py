@@ -35,7 +35,7 @@ from situc.capability import DOMAINS, Axis
 from situc.diagnostics import SituError
 from situc.expr import evaluate
 from situc.invariant import paths_in
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE, Placement, expansion_is_closed_form
 from situc.types import lookup
 from situc.relation import Refused as RelationRefused
 from situc.relation import plan as plan_relation
@@ -1304,8 +1304,14 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		                              codec_decls.get(placement.codec or ""),
 		                              resolved.structs)
 		if rule is None:
-			coverage.unencodable[placement.path] = \
+			# Said for the reason it is: a closed-form codec over an
+			# interior whose length is read from inside it, or walked,
+			# is the other way to have no rule (26.759).
+			coverage.unencodable[placement.path] = (
 				"the codec's expansion has no closed form"
+				if not expansion_is_closed_form(
+					codec_decls.get(placement.codec or ""))
+				else "the interior's length is read from inside the region")
 			continue
 		start = len(program.code)
 		program.emit(Op.PUSH, rule.constant, "<q")

@@ -5901,6 +5901,10 @@ nothing re-read the sentence when the records closed.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
+- **Two gated readers inside a sealed region** (26.759): Python has none
+  for a variant's arm (C, C++ and Rust do), and C has none for a member of
+  a nested struct. The differ asks both, so those sealed shapes are not
+  compared. 26.752's family.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
@@ -7818,6 +7822,11 @@ Moved to
 
 Moved to
 `doc/decision/26.758-nothing-is-asked-after-a-region-whose-run-is-sized-inside-it.md`.
+
+### 26.759 A region measured from inside places nothing after it
+
+Moved to
+`doc/decision/26.759-a-region-measured-from-inside-places-nothing-after-it.md`.
 
 ### 26.715 The same width in the other pointer backend
 
