@@ -107,6 +107,16 @@ typedef struct {
 	uint32_t       constraint_count;
 	uint32_t       constraint_stride;
 
+	/* Cross-message relations (26.95), and the programs each `must` is.
+	 * A relation row is `(name, request, response, first, count)`, the
+	 * last two indexing `relation_musts`, whose rows are code offsets. */
+	const uint8_t *relations;
+	uint32_t       relation_count;
+	uint32_t       relation_stride;
+	const uint8_t *relation_musts;
+	uint32_t       relation_must_count;
+	uint32_t       relation_must_stride;
+
 	/* One row per enum member: the values an enum admits, for the
 	 * membership check a `default = error` enum makes. */
 	const uint8_t *enum_values;
@@ -623,6 +633,16 @@ typedef struct {
 
 #define SITU_WALK_NO_CHECK 0xffu
 
+/* Whether a pair satisfies relation `which` (26.95): `*verdict` is
+ * SITU_WALK_OK or SITU_WALK_CONSTRAINT, the answer the four compiled
+ * backends give. The two messages are the caller's, in temporal order;
+ * nothing here decides which messages are a pair. UNSUPPORTED where the
+ * image carries no such relation, and whatever a read refuses otherwise. */
+situ_walk_err situ_walk_relate(const situ_walk_image *image, uint32_t which,
+                               const uint8_t *request, uint32_t request_len,
+                               const uint8_t *response, uint32_t response_len,
+                               situ_walk_err *verdict);
+
 situ_walk_err situ_walk_failed_check(const situ_walk_image *image,
                                      const uint8_t *message, uint32_t len,
                                      uint32_t shape, situ_walk_err *verdict,
@@ -651,7 +671,13 @@ typedef enum {
 	SITU_WALK_ASK_VALUE  = 0,   /* the field's own value */
 	SITU_WALK_ASK_SIZE   = 1,   /* how many bytes it occupies */
 	SITU_WALK_ASK_OFFSET = 2,   /* where it starts, in bytes */
-	SITU_WALK_ASK_COUNT  = 3    /* how many elements a run holds */
+	SITU_WALK_ASK_COUNT  = 3,   /* how many elements a run holds */
+	/* A relation's `arg_field`: the field's value in its first or its
+	 * second message (26.95). Only `situ_walk_relate` answers these; a
+	 * callback that does not know them must refuse rather than read the
+	 * message it holds, which would answer a question about another pair. */
+	SITU_WALK_ASK_ARG_REQUEST  = 4,
+	SITU_WALK_ASK_ARG_RESPONSE = 5
 } situ_walk_ask;
 
 typedef situ_walk_err (*situ_walk_load)(void *ctx, situ_walk_ask what,

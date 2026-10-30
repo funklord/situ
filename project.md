@@ -5739,14 +5739,11 @@ not any more (26.297); so is the fractional text format that stood beside
 8.6.6 in this sentence until 0056 built it (26.332). Twice now, which is the
 habit working.
 
-**The layer ladder is built.** Decision 0032 puts six rungs on one axis
-chosen at `situc build --layer`; `view` is the default. 26.95 to 26.99 built
-rungs 2 to 6 in all four backends and the walk -- each record says so in its
-status line -- and the dissector and fuzz generator know relations. **What is
-left of it is the C walker's rung 3**: it refuses `arg_field` by name,
-having no second view to read the other message of a relation from, so
-`relate` is answered by the Python walker alone. 26.95 has the shape the
-Python side took.
+**The layer ladder is built, in all four backends and both walkers.**
+Decision 0032 puts six rungs on one axis chosen at `situc build --layer`;
+`view` is the default. 26.95 to 26.99 built rungs 2 to 6 in the four
+backends and the Python walk, and 26.755 gave the C walker rung 3: it
+refused `arg_field` until it could hold the two messages of a relation.
 
 **What is open as of 2026-10-29**, with the record that carries each
 reproduction. **Three are decisions rather than work and are the copyright
@@ -5755,10 +5752,10 @@ holder's** -- whether `required` should read every readable length
 and the walker guard-width reconciliation (26.689). Only the second
 blocks anything.
 
-**What a session picking this up should take first**: the C walker's
-`relate` (above), then the open items below. The ladder that this sentence
-named as first until 2026-10-30 was finished by 26.95 to 26.99; it went on
-being named because nothing re-read the sentence when the records closed.
+**What a session picking this up should take first**: the open items
+below. The ladder this sentence named as first until 2026-10-30 was
+finished by 26.95 to 26.99 and 26.755; it went on being named because
+nothing re-read the sentence when the records closed.
 
 - **`required` has seven records in four days and what is left of it is
   one design question.** The seventh arrived from bbq-predictor after the
@@ -7808,6 +7805,10 @@ Moved to
 ### 26.754 A UDP sum of zero is sent as all ones
 
 Moved to `doc/decision/26.754-a-udp-sum-of-zero-is-sent-as-all-ones.md`.
+
+### 26.755 The C walker answers a relation
+
+Moved to `doc/decision/26.755-the-c-walker-answers-a-relation.md`.
 
 ### 26.715 The same width in the other pointer backend
 

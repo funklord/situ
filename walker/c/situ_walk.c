@@ -21,6 +21,8 @@
 #define TAG_PINNED_RUNS 20u
 #define TAG_SKIPS      22u
 #define TAG_MESSAGES   25u
+#define TAG_RELATIONS  18u
+#define TAG_RELATION_MUSTS 19u
 
 #define HEADER_BYTES  20u
 #define SECTION_BYTES 16u
@@ -174,6 +176,21 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->arms       = image + offset;
 			out->arm_count  = items;
 			out->arm_stride = stride;
+		} else if (kind == TAG_RELATIONS) {
+			/* `(name, request, response, first, count)`: five words. */
+			if (stride < 20u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->relations       = image + offset;
+			out->relation_count  = items;
+			out->relation_stride = stride;
+		} else if (kind == TAG_RELATION_MUSTS) {
+			if (stride < 4u) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->relation_musts       = image + offset;
+			out->relation_must_count  = items;
+			out->relation_must_stride = stride;
 		} else if (kind == TAG_CONSTRAINTS) {
 			if (stride < CONSTRAINT_READS) {
 				return SITU_WALK_MALFORMED;
@@ -1344,6 +1361,14 @@ static situ_walk_err ctx_load(void *raw, situ_walk_ask what, uint32_t index,
                               int32_t base, int64_t *out)
 {
 	walk_ctx *ctx = (walk_ctx *)raw;
+
+	/* A relation's `arg_field` names a message this callback does not
+	 * hold one of two of; answering from the one it does would answer a
+	 * question about another pair (26.755). */
+	if (what == SITU_WALK_ASK_ARG_REQUEST
+	    || what == SITU_WALK_ASK_ARG_RESPONSE) {
+		return SITU_WALK_UNSUPPORTED;
+	}
 
 	/* The three builtins that are not a value read. Each descends through
 	 * the same `depth` the ctx carries, for the reason the struct's own
@@ -5434,12 +5459,37 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 			continue;
 		}
 
-		/* `arg_field` reads the OTHER message of a relation, which this
-		 * build has no second view of. Refused by name rather than
-		 * guessed, which is the whole of what separates a walker that
-		 * declines from one that is wrong. */
+		/* `arg_field`: a parameter byte, then a placement index -- which
+		 * message of a relation to read the field from. The CALLBACK holds
+		 * the two messages, so this asks it by parameter, and a callback
+		 * that holds one refuses: `ctx_load` does, which is what keeps a
+		 * relation program out of an ordinary walk. Refused here by name
+		 * until `situ_walk_relate` existed (26.755). */
 		if (op == OP_ARG_FIELD) {
-			return SITU_WALK_UNSUPPORTED;
+			if (pc + 5u > image->code_len || depth >= STACK_DEPTH) {
+				return SITU_WALK_MALFORMED;
+			}
+			if (load == NULL) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			const uint8_t arg = image->code[pc];
+			int64_t value = 0;
+
+			if (arg > 1u) {
+				return SITU_WALK_MALFORMED;	/* a relation has two */
+			}
+			const situ_walk_err err = load(ctx,
+			                               arg == 0u
+			                               ? SITU_WALK_ASK_ARG_REQUEST
+			                               : SITU_WALK_ASK_ARG_RESPONSE,
+			                               u32_at(image->code + pc + 1u),
+			                               0, &value);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			stack[depth++] = value;
+			pc += 5u;
+			continue;
 		}
 
 		if (op == 0x1au || op == 0x1bu) {		/* NEG, NOT */
@@ -5511,4 +5561,79 @@ static situ_walk_err eval_lazy(const situ_walk_image *image, uint32_t at,
 	}
 
 	return SITU_WALK_MALFORMED;	/* ran off the end without END */
+}
+
+/* -- relations (rung 3, 26.95) ----------------------------------------- */
+
+/* Both messages of a pair, each as the walk context `ctx_load` reads. */
+typedef struct {
+	walk_ctx request;
+	walk_ctx response;
+} relate_ctx;
+
+/* `walker/report.py`'s `relate` callbacks, in one: a plain field and the
+ * builtins read the request, `arg_field` reads the message its parameter
+ * names, and `count` answers zero as the Python walk's does. Every read
+ * goes through `ctx_load`, so a relation compares exactly the values the
+ * rest of this walker reads -- signs, scaling and the lax text number
+ * included. */
+static situ_walk_err relate_load(void *raw, situ_walk_ask what,
+                                 uint32_t index, int32_t base, int64_t *out)
+{
+	relate_ctx *pair = (relate_ctx *)raw;
+
+	if (what == SITU_WALK_ASK_ARG_REQUEST) {
+		return ctx_load(&pair->request, SITU_WALK_ASK_VALUE, index, base,
+		                out);
+	}
+	if (what == SITU_WALK_ASK_ARG_RESPONSE) {
+		return ctx_load(&pair->response, SITU_WALK_ASK_VALUE, index, base,
+		                out);
+	}
+	if (what == SITU_WALK_ASK_COUNT) {
+		*out = 0;
+		return SITU_WALK_OK;
+	}
+	return ctx_load(&pair->request, what, index, base, out);
+}
+
+situ_walk_err situ_walk_relate(const situ_walk_image *image, uint32_t which,
+                               const uint8_t *request, uint32_t request_len,
+                               const uint8_t *response, uint32_t response_len,
+                               situ_walk_err *verdict)
+{
+	if (which >= image->relation_count) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	const uint8_t *row   = image->relations + which * image->relation_stride;
+	const uint32_t first = u32_at(row + 12);
+	const uint32_t count = u32_at(row + 16);
+
+	if ((uint64_t)first + count > image->relation_must_count) {
+		return SITU_WALK_MALFORMED;
+	}
+
+	relate_ctx pair = {
+		{image, request, request_len, u32_at(row + 4), 0u},
+		{image, response, response_len, u32_at(row + 8), 0u},
+	};
+
+	*verdict = SITU_WALK_OK;
+	for (uint32_t i = 0u; i < count; i++) {
+		const uint32_t code_at = u32_at(image->relation_musts
+		                                + (first + i)
+		                                  * image->relation_must_stride);
+		int64_t held = 0;
+		const situ_walk_err err = situ_walk_eval(image, code_at,
+		                                         relate_load, &pair,
+		                                         0, &held);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (held == 0) {
+			*verdict = SITU_WALK_CONSTRAINT;
+			return SITU_WALK_OK;
+		}
+	}
+	return SITU_WALK_OK;
 }
