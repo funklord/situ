@@ -7360,7 +7360,11 @@ class Emitter:
 		if rule.kind == "add":
 			return f"situ_rt::nonneg({wide} + {rule.add})"
 		if rule.kind == "ratio":
-			return (f"situ_rt::nonneg(({wide} * {rule.out})"
+			# `wide` is a SUM, so it is parenthesised: `2 + n * 2`
+			# doubled only the variable part of `u8 c[n]; u16 x;` and
+			# the region was two bytes short of what C and Python say
+			# (26.773).
+			return (f"situ_rt::nonneg((({wide}) * {rule.out})"
 			        f" / {rule.into})")
 		return (f"situ_rt::nonneg((({wide} + {rule.group_in - 1})"
 		        f" / {rule.group_in}) * {rule.group_out})")
