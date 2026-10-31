@@ -7907,6 +7907,10 @@ Moved to `doc/decision/26.776-a-coded-region-must-fit-the-frame.md`.
 
 Moved to `doc/decision/26.777-the-selected-arm-must-fit-the-frame.md`.
 
+### 26.778 A varint must be whole
+
+Moved to `doc/decision/26.778-a-varint-must-be-whole.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

@@ -8333,6 +8333,29 @@ class Emitter:
 			"\t}",
 		]
 
+	def _varint_whole(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A single varint has to be whole inside the frame.
+
+		Its length is in its own bytes, so it declares none `_fits_check`
+		can hold against the frame, and at a constant offset it was not
+		asked about at all -- the shape of 26.776 and 26.777 once more.
+		`u8 k; lv v;` with `01 80`, a continuation byte and then the end,
+		validated clean in all four while `required` asked for a third
+		byte. `_len` answers zero for a varint it cannot read whole, which
+		is the test (26.778). A run of them has its own (26.742).
+		"""
+		if placement.varint is None or is_varint_run(placement):
+			return []
+		width = ident(self.prefix, struct.name, c_name(self._local(struct, placement)), "len") + "(view)"
+		return [
+			f"\t/* {placement.path}: a varint whose bytes run out before it",
+			"\t * ends is not one (26.778). */",
+			f"\tif ({width} == 0u) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
+
 	def _variant_fits(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""The arm a variant selects must fit the frame it is in.
@@ -8449,6 +8472,7 @@ class Emitter:
 		# past a 62-byte view.
 		run_fits = run_fits + self._region_fits(struct, placement)
 		run_fits = run_fits + self._variant_fits(struct, placement)
+		run_fits = run_fits + self._varint_whole(struct, placement)
 
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)
