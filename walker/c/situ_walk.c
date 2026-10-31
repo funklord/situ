@@ -3989,6 +3989,11 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	 * element is held to the frame instead, as the four backends' `check`
 	 * walks it; none of them validates a run's elements' own constraints,
 	 * so neither does this (26.689). */
+	if ((arm.size_code != SITU_WALK_NONE
+	     || arm.array_count != SITU_WALK_NONE)
+	    && arm.element_bits != SITU_WALK_NONE) {
+		return SITU_WALK_OK;	/* fixed records: the variant's size held them */
+	}
 	if (arm.size_code != SITU_WALK_NONE
 	    && arm.element_bits == SITU_WALK_NONE) {
 		int fits = 1;

@@ -7910,6 +7910,10 @@ Moved to `doc/decision/26.778-a-varint-must-be-whole.md`.
 
 Moved to `doc/decision/26.779-validate-walks-a-run-in-an-arm.md`.
 
+### 26.780 No arm accessor reads one record of a run
+
+Moved to `doc/decision/26.780-no-arm-accessor-reads-one-record-of-a-run.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

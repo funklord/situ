@@ -1201,12 +1201,12 @@ def _validate(image: Image, view: View, struct_index: int,
 				# of reading what C emits.
 				# Nor a RUN of records, which is not one record: an
 				# empty one is shorter than the element's minimum and was
-				# refused for it. `_arm_validates` walks the run (26.689).
+				# refused for it. `_arm_validates` walks the run (26.779).
 				if arm_placement.type_struct != NONE \
 						and image.structs[
 							arm_placement.type_struct].measurable \
-						and not (arm_placement.size_code != NONE
-						         and arm_placement.element_bits == NONE):
+						and arm_placement.size_code == NONE \
+						and arm_placement.array_count == NONE:
 					# THE VARIANT'S offset and span, not the arm's, which
 					# is `_arm_bits`' own rule: "the arm starts where the
 					# variant does ... and asking `offset_bits` for the
@@ -1823,9 +1823,12 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 	# Every element is held to the frame instead, as the four backends'
 	# `check` now walks it; no backend validates the elements' own
 	# constraints in a run, so neither does this (26.689).
-	if image.placements[chosen].size_code != NONE \
-			and image.placements[chosen].element_bits == NONE:
-		if not counted_run_fits(view, chosen, start_bits=at):
+	# A run of fixed-size records is held to the frame by the variant's
+	# size above, and its elements are not validated either.
+	run = image.placements[chosen]
+	if run.size_code != NONE or run.array_count != NONE:
+		if run.element_bits == NONE \
+				and not counted_run_fits(view, chosen, start_bits=at):
 			return ERR_BOUNDS
 		return OK
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)

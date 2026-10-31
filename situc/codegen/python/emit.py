@@ -91,6 +91,7 @@ from situc.traverse import (
 	is_counted_run,
 	is_own_member,
 	is_recursive,
+	is_struct_run,
 	is_run,
 	is_varint_run,
 	length_is_transform_output,
@@ -3555,7 +3556,7 @@ class Emitter:
 		# element, and a `validate` that checked that element and no other.
 		# C, C++ and Rust decline it with this sentence; `validate` walks
 		# the run itself (26.689).
-		if is_counted_run(self.resolved.structs, placement):
+		if is_struct_run(self.resolved.structs, placement):
 			return [
 				f"\t# ...and `{placement.name}` is not a shape this backend "
 				f"reaches into yet.",
@@ -8001,9 +8002,10 @@ class Emitter:
 		if not inner.layout.is_fixed_size \
 				and not has_computable_extent(self.resolved.structs, inner):
 			return []
-		# A run of records has no accessor to validate through; the
-		# variant's own check walks it (26.689).
-		if is_counted_run(self.resolved.structs, placement):
+		# A run has no accessor to validate through, and no backend
+		# validates a run's elements; the variant's own check holds it to
+		# the frame (26.779).
+		if is_struct_run(self.resolved.structs, placement):
 			return []
 
 		# A name per arm, not one `arm` reused: the arms have different

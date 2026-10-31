@@ -90,6 +90,7 @@ from situc.traverse import (
 	is_counted_run,
 	is_own_member,
 	is_recursive,
+	is_struct_run,
 	is_run,
 	is_varint_run,
 	length_is_transform_output,
@@ -3266,7 +3267,7 @@ class Emitter:
 		# took `piece recs[n]` for a single `piece` and handed back the
 		# first element under the run's name; C declines it with this
 		# sentence, and `validate` walks the run itself (26.779).
-		if is_counted_run(self.resolved.structs, placement):
+		if is_struct_run(self.resolved.structs, placement):
 			return ["", f"\t// ...and `{placement.name}` is not a shape this "
 			        f"backend reaches into yet."]
 

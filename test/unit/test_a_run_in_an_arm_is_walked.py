@@ -79,7 +79,40 @@ TAILED_CASES = {
 	"3e4f757b00":       "0",
 }
 
-SHAPES = [(SCHEMA, CASES), (TAILED, TAILED_CASES)]
+#: The other runs of structs an arm can hold: a literal count, and fixed
+#: records counted and literal. The accessor family took each for its first
+#: element too, and Python and both walkers validated that element alone --
+#: so `[max]` on element 0 refused where C, C++ and Rust accepted, and on
+#: element 1 nobody refused. A run's elements are not validated in any
+#: backend; `check` holds the run to the frame (26.779).
+RUNS = """target buffer;
+endian big;
+struct piece { u8 len; u8 body[len]; }
+struct pt { u8 x; u8 y [max = 9]; }
+struct arms {
+	u8 kind;
+	u8 n;
+	variant body switch (kind) {
+		case 1:  piece  two[2];
+		case 2:  pt     pts[n];
+		case 3:  pt     q[2];
+		default: u8     raw;
+	}
+	u16 after;
+}
+"""
+
+RUNS_CASES = {
+	"0100010200aabb":     "0",
+	"01000102":           "1",
+	"02020102030ff0aabb": "0",
+	"0202010203":         "1",
+	"0202010a0304aabb":   "0",	# element 0 is over its `[max]`
+	"030001020305":       "1",
+	"030001ff0304aabb":   "0",	# and here
+}
+
+SHAPES = [(SCHEMA, CASES), (TAILED, TAILED_CASES), (RUNS, RUNS_CASES)]
 
 
 def _arms_verdict(answers: str) -> str:
@@ -88,7 +121,7 @@ def _arms_verdict(answers: str) -> str:
 	            if line.startswith("validate"))
 
 
-@pytest.mark.parametrize("text, cases", SHAPES, ids=["last", "tailed"])
+@pytest.mark.parametrize("text, cases", SHAPES, ids=["last", "tailed", "runs"])
 def test_all_four_walk_the_run(text: str, cases: dict[str, str],
 		tmp_path: Path) -> None:
 	schema = tmp_path / "unit.situ"
@@ -102,7 +135,7 @@ def test_all_four_walk_the_run(text: str, cases: dict[str, str],
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-@pytest.mark.parametrize("text, cases", SHAPES, ids=["last", "tailed"])
+@pytest.mark.parametrize("text, cases", SHAPES, ids=["last", "tailed", "runs"])
 def test_both_walkers_walk_the_run(text: str, cases: dict[str, str],
 		tmp_path: Path) -> None:
 	blob  = _inline_image(text)
@@ -121,7 +154,12 @@ def test_no_backend_offers_an_accessor_that_reads_one_record() -> None:
 	handed back the first record under the run's name, and
 	`body_recs_extent` measured that one.
 	"""
-	parsed   = parse_text(SCHEMA)
+	for text, names in ((SCHEMA, ("recs",)), (RUNS, ("two", "pts", "q"))):
+		_declined_in_all_four(text, names)
+
+
+def _declined_in_all_four(text: str, names: tuple[str, ...]) -> None:
+	parsed   = parse_text(text)
 	resolved = resolve(parsed, solve(parsed))
 	emitted  = {
 		"c":      generate_c(parsed, resolved, "unit").header,
@@ -129,10 +167,12 @@ def test_no_backend_offers_an_accessor_that_reads_one_record() -> None:
 		"rust":   generate_rs(parsed, resolved, "unit").module,
 		"python": generate_py(parsed, resolved, "unit").module,
 	}
-	for name, text in emitted.items():
-		# Accessors by their definitions: `validate`'s own walk names its
-		# locals after the member.
-		for defined in ("body_recs(", "body_recs_extent", "body_recs_get",
-		                "def body_recs"):
-			assert defined not in text, (name, defined)
-		assert "`recs` is not a shape this backend reaches into yet" in text, name
+	for name, emitted_text in emitted.items():
+		for run in names:
+			# Accessors by their definitions: `validate`'s own walk names
+			# its locals after the member.
+			for defined in (f"body_{run}(", f"body_{run}_extent",
+			                f"body_{run}_get", f"def body_{run}"):
+				assert defined not in emitted_text, (name, defined)
+			assert (f"`{run}` is not a shape this backend reaches into yet"
+			        in emitted_text), (name, run)

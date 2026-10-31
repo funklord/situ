@@ -2416,6 +2416,20 @@ def is_counted_run(structs: dict[str, ResolvedStruct],
 	return inner is not None and not inner.layout.is_fixed_size
 
 
+def is_struct_run(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> bool:
+	"""`T x[n]` where `T` is a struct, of one size or not.
+
+	A variant arm's accessor family reaches one struct and never a run of
+	them, and C++, Rust and Python each took a run for its first element:
+	`body_pts` handed back one `pt` under the run's name (26.779). C asks
+	nothing narrower, so the four decline the same set.
+	"""
+	return (placement.kind != "indexed"
+	        and placement.type_name in structs
+	        and (placement.array_count is not None or data_sized(placement)))
+
+
 def fixed_tail_bytes(struct: ResolvedStruct, placement: Placement) -> int | None:
 	"""How many bytes the members after `placement` take, or None.
 
