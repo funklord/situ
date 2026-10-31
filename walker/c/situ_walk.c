@@ -4023,6 +4023,15 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		}
 		return SITU_WALK_OK;
 	}
+	/* And a run that a condition or a terminator ends, which carries
+	 * neither a count nor a size program: it was validated as its first
+	 * record, so a cut `kv` in `kv kvs[] until "\n"` was a missing
+	 * delimiter where the four hold only the run's reach to the frame --
+	 * which the variant's size above already did (26.785). */
+	if (arm.repeat_code != SITU_WALK_NONE
+	    || delimiter_rules(image, chosen) != NULL) {
+		return SITU_WALK_OK;
+	}
 	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
 	                     depth + 1u, verdict, why);
 }

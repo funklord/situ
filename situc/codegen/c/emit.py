@@ -8432,6 +8432,16 @@ class Emitter:
 					"\t}",
 				])
 				continue
+			walk = self._arm_ended_walk(struct, member, base, tail)
+			if walk is not None:
+				lines.extend([
+					f"\t/* {member.path}: what follows the variant is in the",
+					"\t * frame, after the run as far as it reaches (26.785). */",
+					f"\tif ({when}) {{",
+					*walk,
+					"\t}",
+				])
+				continue
 			if member.is_fixed_size and member.size_bits == 0:
 				continue		# nothing to fit
 			if member.is_fixed_size:
@@ -8504,6 +8514,62 @@ class Emitter:
 				"\t\t}",
 			]),
 		]
+
+	def _arm_ended_walk(self, struct: ResolvedStruct, member: Placement,
+			base: str, tail: int) -> list[str] | None:
+		"""The tail after an arm's `while` or delimited run of records.
+
+		Such a run has no length any backend computes for an arm, so the
+		members after the variant were held to the frame by nothing --
+		while both walkers measured the run and refused a message whose
+		tail the frame cuts short (26.785). The walk is the run's own
+		`_span_from`, which an arm does not emit: an element the frame does
+		not hold ends the run rather than refusing it (26.680, and netlink's
+		reason in `walk._while_walk`), so the tail is all there is to hold.
+		"""
+		element = self.resolved.structs.get(member.type_name or "")
+		if (not tail or element is None
+				or not is_struct_run(self.resolved.structs, member)
+				or (member.repeat_while is None and not member.delimiters)
+				or self._recursive(element.name)):
+			return None
+		extent = self._element_extent_call(element)
+		if extent is None:
+			return None
+		if member.repeat_while is not None:
+			cap  = ("" if member.repeat_cap is None
+			        else f" && n < {member.repeat_cap}u")
+			cond = self._element_condition(element, member)
+			body = [
+				*self._walk_prologue(base, cap, extent),
+				"\t\tat = at + size;",
+				"\t\tn  = n + 1u;",
+				f"\t\tif (!({cond})) {{",
+				"\t\t\tbreak;",
+				"\t\t}",
+				"\t}",
+			]
+		else:
+			delim  = member.delimiter
+			bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+			body = [
+				f"\tstatic const uint8_t terminator[{len(delim)}] ="
+				f" {{{bytes_}}};",
+				*self._record_prologue(base, delim, "terminator", extent),
+				"\t\tat = at + size;",
+				"\t\tn  = n + 1u;",
+				"\t}",
+				f"\tif (at + {len(delim)}u <= view.limit) {{",
+				f"\t\tat = at + {len(delim)}u;",
+				"\t}",
+			]
+		body.extend([
+			"\t(void)n;",
+			f"\tif (situ_remaining_u32(view.limit, at) < {tail}u) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		])
+		return [f"\t{line}" if line else line for line in body]
 
 	def _region_fits(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:

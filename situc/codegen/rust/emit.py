@@ -7045,6 +7045,17 @@ class Emitter:
 					"\t\t}",
 				])
 				continue
+			walk = self._arm_ended_walk(struct, member, base, tail)
+			if walk is not None:
+				lines.extend([
+					f"\t\t// {member.path}: what follows the variant is in",
+					"\t\t// the frame, after the run as far as it reaches",
+					"\t\t// (26.785).",
+					f"\t\tif {when} {{",
+					*walk,
+					"\t\t}",
+				])
+				continue
 			if member.is_fixed_size and member.size_bits == 0:
 				continue		# nothing to fit
 			if member.is_fixed_size:
@@ -7063,6 +7074,73 @@ class Emitter:
 				"\t\t}",
 			])
 		return lines
+
+	def _arm_ended_walk(self, struct: ResolvedStruct, member: Placement,
+			base: str, tail: int) -> list[str] | None:
+		"""The tail after an arm's `while` or delimited run of records.
+
+		C's `_arm_ended_walk` says why: the run's own span walk, which an
+		arm does not emit, and then the fixed members after the variant
+		(26.785).
+		"""
+		element = self.resolved.structs.get(member.type_name or "")
+		if (not tail or element is None
+				or not is_struct_run(self.resolved.structs, member)
+				or (member.repeat_while is None
+				    and len(member.delimiters) != 1)
+				or is_recursive(self.resolved.structs, element.name)
+				or self._extent_expression(element) is None):
+			return None
+		inner = _pascal(element.name)
+		scan: list[str] = []
+		if member.repeat_while is not None:
+			cap   = ("" if member.repeat_cap is None
+			         else f" && n < {member.repeat_cap}")
+			cond  = self._element_condition(element, member,
+			                                "self.bytes.len()")
+			loop  = f"\t\t\twhile at < self.bytes.len(){cap} {{"
+			after = [
+				f"\t\t\t\tif !({cond}) {{",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+				"\t\t\t}",
+			]
+		else:
+			delim  = member.delimiter
+			bytes_ = ("b\"" + "".join(f"\\x{byte:02x}" for byte in delim)
+			          + "\"")
+			loop   = f"\t\t\twhile at + {len(delim)} <= self.bytes.len() {{"
+			scan   = [
+				f"\t\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+			]
+			after  = [
+				"\t\t\t}",
+				f"\t\t\tif at + {len(delim)} <= self.bytes.len() {{",
+				f"\t\t\t\tat += {len(delim)};",
+				"\t\t\t}",
+			]
+		return [
+			f"\t\t\tlet mut at = {self._unparen(base)};",
+			"\t\t\tlet mut n  = 0usize;",
+			"",
+			loop,
+			*scan,
+			f"\t\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			"\t\t\t\tlet size    = element.extent();",
+			"\t\t\t\tif size == 0"
+			" || size > situ_rt::remaining(self.bytes.len(), at) {",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
+			"\t\t\t\tat += size;",
+			"\t\t\t\tn  += 1;",
+			*after,
+			"\t\t\tlet _ = n;",
+			f"\t\t\tif situ_rt::remaining(self.bytes.len(), at) < {tail} {{",
+			"\t\t\t\treturn Err(Error::Bounds);",
+			"\t\t\t}",
+		]
 
 	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
 			base: str, tail: int = 0) -> list[str] | None:

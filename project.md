@@ -7930,6 +7930,10 @@ Moved to `doc/decision/26.783-a-remaining-run-in-an-arm-is-walked.md`.
 
 Moved to `doc/decision/26.784-a-while-cap-is-n-elements-in-python.md`.
 
+### 26.785 The tail after an arm's `while` or delimited run
+
+Moved to `doc/decision/26.785-the-tail-after-an-ended-run-in-an-arm.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

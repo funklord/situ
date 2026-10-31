@@ -1202,11 +1202,15 @@ def _validate(image: Image, view: View, struct_index: int,
 				# Nor a RUN of records, which is not one record: an
 				# empty one is shorter than the element's minimum and was
 				# refused for it. `_arm_validates` walks the run (26.779).
+				# A run a condition or a terminator ends is one too, and
+				# had its first record validated here (26.785).
 				if arm_placement.type_struct != NONE \
 						and image.structs[
 							arm_placement.type_struct].measurable \
 						and arm_placement.size_code == NONE \
-						and arm_placement.array_count == NONE:
+						and arm_placement.array_count == NONE \
+						and arm_placement.repeat_code == NONE \
+						and arm not in image.delimiters:
 					# THE VARIANT'S offset and span, not the arm's, which
 					# is `_arm_bits`' own rule: "the arm starts where the
 					# variant does ... and asking `offset_bits` for the
@@ -1830,6 +1834,13 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 		if run.element_bits == NONE \
 				and not counted_run_fits(view, chosen, start_bits=at):
 			return ERR_BOUNDS
+		return OK
+	# And a run that a condition or a terminator ends, which carries
+	# neither a count nor a size program: it was validated as its first
+	# record, so `kv kvs[] until "\n"` refused a cut `kv` as a missing
+	# delimiter where the four hold only the run's reach to the frame --
+	# which the variant's size above already did (26.785).
+	if run.repeat_code != NONE or chosen in image.delimiters:
 		return OK
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
 	return _validate(image, inner, arm_type) or OK

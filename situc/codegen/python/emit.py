@@ -6698,6 +6698,16 @@ class Emitter:
 					*walk,
 				])
 				continue
+			walk = self._arm_ended_walk(struct, member, base, tail)
+			if walk is not None:
+				lines.extend([
+					f"\t\t# {member.path}: what follows the variant is in",
+					"\t\t# the frame, after the run as far as it reaches",
+					"\t\t# (26.785).",
+					f"\t\tif {when}:",
+					*walk,
+				])
+				continue
 			if member.is_fixed_size and member.size_bits == 0:
 				continue		# nothing to fit
 			if member.is_fixed_size:
@@ -6716,6 +6726,70 @@ class Emitter:
 				' selects is outside the frame")',
 			])
 		return lines
+
+	def _arm_ended_walk(self, struct: ResolvedStruct, member: Placement,
+			base: str, tail: int) -> list[str] | None:
+		"""The tail after an arm's `while` or delimited run of records.
+
+		C's `_arm_ended_walk` says why: the run's own walk, which an arm
+		does not emit, and then the fixed members after the variant
+		(26.785).
+		"""
+		element = self.resolved.structs.get(member.type_name or "")
+		if (not tail or element is None
+				or not is_struct_run(self.resolved.structs, member)
+				or (member.repeat_while is None
+				    and len(member.delimiters) != 1)
+				or is_recursive(self.resolved.structs, element.name)
+				or self._extent_expression(element) is None):
+			return None
+		inner = py_name(element.name)
+		local = py_name(local_name(struct, member)).replace(".", "_")
+		# Named for the member, as `_arm_run_walk`'s are: `validate` is one
+		# long function and mypy reads a rebinding as a type error.
+		at, n = f"{local}_at", f"{local}_n"
+		why   = (f'"{member.path}: what follows the variant is outside'
+		         ' the frame"')
+		scan: list[str] = []
+		if member.repeat_while is not None:
+			cap   = ("" if member.repeat_cap is None
+			         else f" and {n} < {member.repeat_cap}")
+			cond  = self._element_condition(element, member, at,
+			                                "self._len")
+			loop  = f"\t\t\twhile {at} < self._len{cap}:"
+			after = [
+				f"\t\t\t\tif not ({cond}):",
+				"\t\t\t\t\tbreak",
+			]
+		else:
+			delim = member.delimiter
+			loop  = f"\t\t\twhile {at} + {len(delim)} <= self._len:"
+			scan  = [
+				f"\t\t\t\tif bytes(self._msg.buffer[self._at + {at}:"
+				f"self._at + {at} + {len(delim)}]) == {delim!r}:",
+				"\t\t\t\t\tbreak",
+			]
+			after = []
+		return [
+			f"\t\t\t{at} = {base}",
+			f"\t\t\t{n} = 0",
+			loop,
+			*scan,
+			f"\t\t\t\t_element = {inner}(self._msg, self._at + {at},"
+			f" self._len - {at})",
+			"\t\t\t\tsize = _element._extent",
+			f"\t\t\t\tif size == 0 or size > self._len - {at}:",
+			"\t\t\t\t\tbreak",
+			f"\t\t\t\t{at} += size",
+			f"\t\t\t\t{n} += 1",
+			*after,
+			*([] if member.repeat_while is not None else [
+				f"\t\t\tif {at} + {len(member.delimiter)} <= self._len:",
+				f"\t\t\t\t{at} += {len(member.delimiter)}",
+			]),
+			f"\t\t\tif self._len - {at} < {tail}:",
+			f"\t\t\t\traise BoundsError({why})",
+		]
 
 	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
 			base: str, tail: int = 0) -> list[str] | None:

@@ -3929,6 +3929,17 @@ class Emitter:
 					"\t\t}",
 				])
 				continue
+			walk = self._arm_ended_walk(struct, member, base, tail)
+			if walk is not None:
+				lines.extend([
+					f"\t\t/* {member.path}: what follows the variant is in",
+					"\t\t * the frame, after the run as far as it reaches",
+					"\t\t * (26.785). */",
+					f"\t\tif ({when}) {{",
+					*walk,
+					"\t\t}",
+				])
+				continue
 			if member.is_fixed_size and member.size_bits == 0:
 				continue		# nothing to fit
 			if member.is_fixed_size:
@@ -3947,6 +3958,79 @@ class Emitter:
 				"\t\t}",
 			])
 		return lines
+
+	def _arm_ended_walk(self, struct: ResolvedStruct, member: Placement,
+			base: str, tail: int) -> list[str] | None:
+		"""The tail after an arm's `while` or delimited run of records.
+
+		C's `_arm_ended_walk` says why: the run's own span walk, which an
+		arm does not emit, and then the fixed members after the variant
+		(26.785).
+		"""
+		element = self.resolved.structs.get(member.type_name or "")
+		if (not tail or element is None
+				or not is_struct_run(self.resolved.structs, member)
+				or (member.repeat_while is None
+				    and len(member.delimiters) != 1)
+				or is_recursive(self.resolved.structs, element.name)
+				or self._extent_terms(element) is None):
+			return None
+		inner = self._struct_class(element.name)
+		head: list[str] = []
+		scan: list[str] = []
+		if member.repeat_while is not None:
+			cap   = ("" if member.repeat_cap is None
+			         else f" && n < {member.repeat_cap}u")
+			loop  = f"\t\t\twhile (at < raw_.limit{cap}) {{"
+			after = [
+				f"\t\t\t\tif (!({self._element_cond(element, member)})) {{",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+				"\t\t\t}",
+			]
+		else:
+			delim = member.delimiter
+			array = self._delimiter_array(member)
+			head  = [self._delimiter_decl(member, "\t\t\t")]
+			loop  = f"\t\t\twhile (at + {len(delim)}u <= raw_.limit) {{"
+			scan  = [
+				f"\t\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u,"
+				f" {array}, {len(delim)}u) == 0u) {{",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+			]
+			after = [
+				"\t\t\t}",
+				f"\t\t\tif (at + {len(delim)}u <= raw_.limit) {{",
+				f"\t\t\t\tat += {len(delim)}u;",
+				"\t\t\t}",
+			]
+		return [
+			*head,
+			f"\t\t\tstd::uint32_t at = {base};",
+			"\t\t\tstd::uint32_t n  = 0;",
+			"",
+			loop,
+			*scan,
+			"\t\t\t\tsitu_view_t raw;",
+			"\t\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,"
+			" situ_remaining_u32(raw_.limit, at), &raw) != SITU_OK) {",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
+			f"\t\t\t\tconst ::{self.namespace}::{inner} element(raw);",
+			"\t\t\t\tconst std::uint32_t size = element.extent();",
+			"\t\t\t\tif (size == 0u"
+			" || size > situ_remaining_u32(raw_.limit, at)) {",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
+			"\t\t\t\tat += size;",
+			"\t\t\t\tn  += 1;",
+			*after,
+			"\t\t\t(void)n;",
+			f"\t\t\tif (situ_remaining_u32(raw_.limit, at) < {tail}u) {{",
+			"\t\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t\t}",
+		]
 
 	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
 			base: str, tail: int = 0) -> list[str] | None:

@@ -2493,8 +2493,9 @@ def offset_unresolvable(structs: dict[str, ResolvedStruct],
 	  `dynamic_cause_codec`. `edges.situ`'s `stuffed_opaque_tail`;
 	- a counted run of variable-length elements, whose reach is the sum of
 	  what a walk stepped over;
-	- a variant with an arm holding such a run, which no backend walks
-	  because an arm is emitted by a family of its own. `edges.situ`'s
+	- a variant with an arm holding such a run, or a run of records that a
+	  condition or a delimiter ends, which no backend walks because an arm
+	  is emitted by a family of its own. `edges.situ`'s
 	  `unwalkable_arm`, back in the corpus since `validate` walks the run
 	  (26.779).
 
@@ -2523,10 +2524,14 @@ def offset_unresolvable(structs: dict[str, ResolvedStruct],
 			if element is None or not has_computable_extent(structs, element):
 				return True
 		# In an ARM it blocks whatever the element is, because an arm is
-		# emitted by a family of its own that writes no walk at all.
+		# emitted by a family of its own that writes no walk at all -- and
+		# so does a run of records a condition or a delimiter ends, which
+		# asked `is_counted_run` and was missed: the driver called a
+		# setter for the member after such a variant that no backend
+		# emits (26.785).
 		if other.kind == "variant" \
 				and any(member is not None
-				        and is_counted_run(structs, member)
+				        and is_unmeasured_run(structs, member)
 				        for _arm, member in arm_members(struct, other)):
 			return True
 	return False
