@@ -1328,6 +1328,21 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 		for inside in rule.variable:
 			program.emit(Op.SIZE, placement_index[inside.path])
 			program.emit(Op.ADD)
+		# The `[since]` tail the message's version carries (26.774):
+		# `(version >= since) * bytes`, a comparison being 0 or 1.
+		if rule.version is not None:
+			if rule.version.path not in placement_index:
+				del program.code[start:]
+				coverage.unencodable[placement.path] = \
+					f"the version field `{rule.version.path}` is not in the table"
+				continue
+			for since, added in rule.steps:
+				program.emit(Op.FIELD, placement_index[rule.version.path])
+				program.emit(Op.PUSH, since, "<q")
+				program.emit(Op.GE)
+				program.emit(Op.PUSH, added, "<q")
+				program.emit(Op.MUL)
+				program.emit(Op.ADD)
 		if True:
 			if rule.kind == "add":
 				program.emit(Op.PUSH, rule.add, "<q")

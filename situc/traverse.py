@@ -610,6 +610,12 @@ class RegionExtent:
 	#: For "padded", in bytes: a partial group still costs a whole one.
 	group_in: int		= 0
 	group_out: int		= 0
+	#: The version field, where the interior ends in `[since]` members,
+	#: and one `(since, bytes)` per version that adds to it: `constant`
+	#: is the oldest version's, and a message of version `since` or later
+	#: carries `bytes` more (26.774).
+	version: Placement | None			= None
+	steps: tuple[tuple[int, int], ...]	= ()
 
 
 def unmeasurable_inside(structs: dict[str, "ResolvedStruct"],
@@ -725,6 +731,36 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 	            and "." not in entry.placement.path[len(prefix):]
 	            and entry.placement.kind != "element"]
 
+	# A `[since]` tail is the message's version's (26.774): counted in
+	# `constant`, a version-1 message carrying none of it was told its
+	# region held it. Only where it is a tail of fixed members and the
+	# version is read at a constant byte offset; any other versioned
+	# interior declines rather than counting what may not be there.
+	versioned = [member for member in interior if member.since]
+	version: Placement | None = None
+	steps: tuple[tuple[int, int], ...] = ()
+	if versioned:
+		first = interior.index(versioned[0])
+		field = next((entry.placement for entry in struct.entries
+		              if entry.placement.name == versioned[0].version_field
+		              and not entry.placement.since
+		              and entry.placement.scalar is not None
+		              and "." not in entry.placement.path[len(struct.name) + 1:]),
+		             None)
+		if any(not member.since or not member.is_fixed_size
+		       or member.size_bits % BITS_PER_BYTE
+		       for member in interior[first:]) \
+				or field is None or field.offset_bits is None \
+				or field.offset_bits % BITS_PER_BYTE \
+				or field.size_bits % BITS_PER_BYTE:
+			return None
+		version = field
+		steps   = tuple(
+			(since, sum(member.size_bits for member in versioned
+			            if member.since == since) // BITS_PER_BYTE)
+			for since in sorted({member.since or 0 for member in versioned}))
+		interior = interior[:first]
+
 	constant = 0
 	variable = []
 	for member in interior:
@@ -742,7 +778,8 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 	ratio     = getattr(codec, "ratio", None)
 
 	if name == "length_preserving":
-		return RegionExtent(constant, tuple(variable), "preserving")
+		return RegionExtent(constant, tuple(variable), "preserving",
+		                    version=version, steps=steps)
 	if name == "fixed_add":
 		# A region's size program is BYTE-valued: `pack.py` emits this as a
 		# `PUSH` of a byte count and both walkers evaluate it that way. So a
@@ -758,17 +795,20 @@ def region_extent(struct: "ResolvedStruct", region: Placement,
 		if bits % BITS_PER_BYTE:
 			return None
 		return RegionExtent(constant, tuple(variable), "add",
-		                    add=bits // BITS_PER_BYTE)
+		                    add=bits // BITS_PER_BYTE,
+		                    version=version, steps=steps)
 	if name == "ratio_exact" and ratio is not None:
 		return RegionExtent(constant, tuple(variable), "ratio",
-		                    out=ratio[0], into=ratio[1])
+		                    out=ratio[0], into=ratio[1],
+		                    version=version, steps=steps)
 	if name == "ratio_padded" and ratio is not None:
 		out, into = ratio
 		group_in  = lcm(BITS_PER_BYTE, into)
 		return RegionExtent(constant, tuple(variable), "padded",
 		                    out=out, into=into,
 		                    group_in=group_in // BITS_PER_BYTE,
-		                    group_out=group_in // into * out // BITS_PER_BYTE)
+		                    group_out=group_in // into * out // BITS_PER_BYTE,
+		                    version=version, steps=steps)
 
 	return None
 

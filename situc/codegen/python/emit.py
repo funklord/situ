@@ -6885,6 +6885,10 @@ class Emitter:
 			if length is None:
 				return None
 			terms.append(f"({length})")
+		# The `[since]` tail the message's version carries (26.774).
+		if rule.version is not None:
+			terms.extend(f"({added} if int(self.{py_name(rule.version.name)})"
+			             f" >= {since} else 0)" for since, added in rule.steps)
 		inner = " + ".join(terms)
 
 		# `preserving` adds too, wherever the interior has a constant

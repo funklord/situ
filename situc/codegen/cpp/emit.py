@@ -4082,6 +4082,14 @@ class Emitter:
 				return None
 			terms.append(f"({length})")
 			wides.append(f"static_cast<std::int64_t>({length})")
+		# The `[since]` tail the message's version carries (26.774).
+		if rule.version is not None:
+			for since, added in rule.steps:
+				term = (f"(static_cast<std::uint64_t>(this->"
+				        f"{bare_name(rule.version.name)}()) >= {since}u"
+				        f" ? {added}u : 0u)")
+				terms.append(term)
+				wides.append(f"static_cast<std::int64_t>{term}")
 		inner = " + ".join(terms)
 		wide  = " + ".join(wides)
 

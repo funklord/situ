@@ -1393,6 +1393,16 @@ class Solver:
 		interior_lo = inner.cursor.lo - cursor.lo
 		interior_hi = (None if inner.cursor.hi is None or cursor.hi is None
 		               else inner.cursor.hi - cursor.hi)
+		# Its oldest version carries none of its `[since]` members, so the
+		# minimum is without them -- what `_versioned_tail_bits` says of a
+		# struct's own tail. Counted, a whole version-1 message was refused
+		# as short of bytes it never had (26.774).
+		inside = f"{prefix}.{region.name}."
+		interior_lo -= sum(
+			held.size_bits for held in layout.placements[slot:]
+			if held.since is not None and held.is_fixed_size
+			and held.path.startswith(inside)
+			and "." not in held.path[len(inside):])
 		interior    = Interval(interior_lo, interior_hi)
 		# Whole bytes: a ratio can land between them and a member cannot
 		# sit on half a byte. See `_whole_bytes` for what the floor below

@@ -7334,6 +7334,13 @@ class Emitter:
 				return None
 			terms.append(f"({length})")
 			wides.append(f"(({length}) as i64)")
+		# The `[since]` tail the message's version carries (26.774).
+		if rule.version is not None:
+			for since, added in rule.steps:
+				term = (f"(if self.{_ident(c_name(rule.version.name))}() as u64"
+				        f" >= {since} {{ {added} }} else {{ 0 }})")
+				terms.append(term)
+				wides.append(f"({term} as i64)")
 		inner = " + ".join(terms)
 		wide  = " + ".join(wides)
 

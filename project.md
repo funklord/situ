@@ -5901,13 +5901,6 @@ nothing re-read the sentence when the records closed.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
-- **A coded region holding a `[since]` member is its newest version's
-  length** (26.773's probe): `coded body(doubling) { u8 content[n]; u16
-  x [since = 2]; }` gives a version-1 message, which carries no `x`, a
-  four-byte body where it has none, in all four. `traverse.region_extent`
-  counts every interior member; 26.768's `versioned_tail` is the same
-  question outside a region, and a fix needs the walkers' size program
-  as well as the four.
 - **Does a variant arm a message's version predates occupy bytes?**
   `variant held switch (pick) { case 1: u8 always; case 2: u32 later
   [since = 2]; }` with `pick = 2` in a version-1 message: all four
@@ -7897,6 +7890,10 @@ Moved to `doc/decision/26.772-append-only-orders-every-member.md`.
 ### 26.773 A ratio region expands its fixed bytes too
 
 Moved to `doc/decision/26.773-a-ratio-region-doubles-its-constant.md`.
+
+### 26.774 A coded region is as long as its version
+
+Moved to `doc/decision/26.774-a-coded-region-is-as-long-as-its-version.md`.
 
 ### 26.715 The same width in the other pointer backend
 

@@ -8961,6 +8961,12 @@ class Emitter:
 
 		lengths = [self._length_expression(struct, member, held)
 		           for member in rule.variable]
+		# The `[since]` tail the message's version carries (26.774).
+		if rule.version is not None:
+			version = ident(self.prefix, struct.name,
+			                c_name(rule.version.name), "get")
+			lengths += [f"((uint64_t){version}({held}) >= {since}u"
+			            f" ? {added}u : 0u)" for since, added in rule.steps]
 		inner   = " + ".join([f"{rule.constant}u"]
 		                     + [f"({length})" for length in lengths])
 		wide    = " + ".join([f"(int64_t){rule.constant}"]
