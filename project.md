@@ -7938,6 +7938,10 @@ Moved to `doc/decision/26.785-the-tail-after-an-ended-run-in-an-arm.md`.
 
 Moved to `doc/decision/26.786-a-recursive-run-in-an-arm-is-walked.md`.
 
+### 26.787 The C walker walks a run of records a terminator ends
+
+Moved to `doc/decision/26.787-the-c-walker-walks-a-terminated-run.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

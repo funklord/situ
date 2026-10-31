@@ -1965,6 +1965,119 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
+/* Which of a run's terminators stands at `at`, as its width, or zero. The
+ * first in table order, as `walk._record_run_walk` asks; one that would run
+ * past the frame does not stand there. */
+static uint32_t terminator_at(const situ_walk_image *image,
+                              const uint8_t *rules, uint32_t alts,
+                              const uint8_t *message, uint32_t len,
+                              uint32_t at)
+{
+	const uint32_t stride = image->delimiter_stride;
+
+	for (uint32_t d = 0u; d < alts; d++) {
+		const uint8_t *row  = rules + (size_t)d * stride;
+		const uint32_t wide = row[16];
+
+		if (wide <= len - at && delimiter_at(message + at, row + 18, wide)) {
+			return wide;
+		}
+	}
+	return 0u;
+}
+
+/* A run of records that ENDS at a terminator, `T x[] until "D"` (8.6.3):
+ * how many records it holds and how far it reaches.
+ *
+ * `size_bits_deep` had no branch for one and measured it as ONE record --
+ * the nested-struct branch, reached because the record carries no count
+ * and no size program -- so a member after the run was placed at the
+ * wrong offset and a frame cutting it short validated clean here, while
+ * the four backends and `walk.py` refused it (26.787).
+ *
+ * `walk._record_run_walk` line for line, which is held to the generated C:
+ * the terminator only terminates where an element would start, a
+ * zero-extent element or one past the frame ends the run, and the
+ * terminator is counted where it stands. */
+static situ_walk_err record_run_walk(const situ_walk_image *image,
+                                     const uint8_t *message, uint32_t len,
+                                     uint32_t shape, uint32_t index,
+                                     uint32_t depth, uint32_t *count,
+                                     uint32_t *bytes)
+{
+	situ_walk_placement held;
+	const uint8_t      *rules = NULL;
+	uint32_t            alts  = 0u;
+	uint32_t            room  = 0u;
+	situ_walk_err       err   = situ_walk_placement_at(image, index, &held);
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	delimiter_span(image, index, &rules, &alts);
+	if (held.type_struct == SITU_WALK_NONE || rules == NULL) {
+		return SITU_WALK_UNSUPPORTED;	/* not a run of records */
+	}
+	if (depth > depth_ceiling(image, held.type_struct)) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	for (uint32_t d = 0u; d < alts; d++) {
+		const uint32_t wide = rules[(size_t)d * image->delimiter_stride + 16];
+
+		if (wide == 0u || wide > DELIMITER_MAX) {
+			return SITU_WALK_MALFORMED;
+		}
+		if (wide > room) {
+			room = wide;
+		}
+	}
+
+	uint32_t start = 0u;
+	err = offset_bits_deep(image, message, len, shape, index, depth,
+	                       &start);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (start % 8u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	start /= 8u;
+	if (start > len) {
+		return SITU_WALK_BOUNDS;
+	}
+
+	uint32_t at = start;
+	uint32_t n  = 0u;
+
+	/* `at + room <= len`, the generated C's guard: below it there is no
+	 * room for the terminator to stand, so there is nothing to ask. */
+	while (room <= len - at) {
+		uint32_t extent = 0u;
+
+		if (terminator_at(image, rules, alts, message, len, at) != 0u) {
+			break;
+		}
+		err = struct_extent(image, message + at, len - at, held.type_struct,
+		                    depth + 1u, &extent);
+		/* `while_walk`'s two errors, for its reasons: this build being
+		 * unable to measure the record travels, and anything else is the
+		 * data running out. */
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK || extent == 0u || extent > len - at) {
+			break;
+		}
+		at += extent;
+		n  += 1u;
+	}
+
+	*count = n;
+	*bytes = (at - start) + terminator_at(image, rules, alts, message, len,
+	                                      at);
+	return SITU_WALK_OK;
+}
+
 situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
                                   const uint8_t *message, uint32_t len,
                                   uint32_t shape, uint32_t index,
@@ -2096,6 +2209,21 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 		uint32_t bytes = 0u;
 		err = while_walk(image, message, len, shape, index, depth,
 		                 &count, &bytes);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		*out = bytes * 8u;
+		return SITU_WALK_OK;
+	}
+
+	/* And a run of records a terminator ends, which fell through to the
+	 * nested-struct branch below and was measured as one record (26.787). */
+	if (held.type_struct != SITU_WALK_NONE
+	    && delimiter_rules(image, index) != NULL) {
+		uint32_t count = 0u;
+		uint32_t bytes = 0u;
+		err = record_run_walk(image, message, len, shape, index, depth,
+		                      &count, &bytes);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}

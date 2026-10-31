@@ -120,12 +120,6 @@ TAILED_CASES = {
 	"ffccaabb":               "0",
 }
 
-#: The C walker measures a delimited run of records as one record, at the
-#: top level too, so the tail after kinds 2 and 3 is asked of the wrong
-#: offset there; that is its own fault, not an arm's.
-DELIMITED_KINDS = ("02", "03")
-
-
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
 def test_all_four_hold_the_tail(tmp_path: Path) -> None:
 	schema = tmp_path / "unit.situ"
@@ -145,8 +139,7 @@ def test_both_walkers_hold_the_tail(tmp_path: Path) -> None:
 	for message, verdict in TAILED_CASES.items():
 		raw = bytes.fromhex(message)
 		assert python_verdict(blob, raw, shape) == verdict, message
-		if message[:2] not in DELIMITED_KINDS:
-			assert c_verdict(tmp_path, blob, raw, shape) == verdict, message
+		assert c_verdict(tmp_path, blob, raw, shape) == verdict, message
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
@@ -161,3 +154,32 @@ def test_both_walkers_leave_the_records_alone(arm: str,
 		raw = bytes.fromhex(message)
 		assert python_verdict(blob, raw, shape) == "0", message
 		assert c_verdict(tmp_path, blob, raw, shape) == "0", message
+
+
+#: And at the top level, which is where the C walker's half was: it had no
+#: walk for a delimited run of records and measured one as a single record,
+#: so `after` was asked of the wrong offset and a frame cutting it short
+#: validated clean there alone (26.787).
+TOP = HEAD + """struct tpt { u8 k; pt recs[] until "\\n"; u16 after; }
+struct tkv { u8 k; kv recs[] until "\\n"; u16 after; }
+"""
+
+TOP_CASES = {
+	"tpt": {"0001020aaabb": "0", "0001020aaa": "1", "000102aabb": "1",
+	        "0001020304050aaabb": "1", "000aaabb": "0"},
+	"tkv": {"00613a623b0aaabb": "0", "00613a62aabb": "1",
+	        "00613a623b0aaa": "1"},
+}
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("name", TOP_CASES)
+def test_both_walkers_measure_a_terminated_run(name: str,
+		tmp_path: Path) -> None:
+	blob  = _inline_image(TOP)
+	shape = shape_named_text(TOP, name)
+	for message, verdict in TOP_CASES[name].items():
+		raw = bytes.fromhex(message)
+		in_python = python_verdict(blob, raw, shape)
+		in_c      = c_verdict(tmp_path, blob, raw, shape)
+		assert in_python == in_c == verdict, (message, in_python, in_c)
