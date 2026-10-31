@@ -8333,6 +8333,32 @@ class Emitter:
 			"\t}",
 		]
 
+	def _variant_fits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""The arm a variant selects must fit the frame it is in.
+
+		A variant whose arms differ in size declares no length and may sit
+		at a constant offset, so it fell between both branches of
+		`_fits_check` as a coded region did (26.776): `case 1: u32 four;`
+		selected in a two-byte message validated clean in all four while
+		the arm's own accessor refused it and `required` asked for five
+		bytes (26.777). An arm that is itself variable is clamped inside
+		`_variant_length`, which is 26.689's case and still open.
+		"""
+		if placement.kind != "variant" or placement.is_fixed_size:
+			return []
+		length = self._variant_length(struct, placement)
+		base   = self._base_expression(struct, placement)
+		if length is None or base is None:
+			return []
+		return [
+			f"\t/* {placement.path}: the arm the discriminant selects has to",
+			"\t * fit the frame (26.777). */",
+			f"\tif (situ_remaining_u32(view.limit, {base}) < ({length})) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
+
 	def _region_fits(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A region's computed extent must fit the frame it is in.
@@ -8422,6 +8448,7 @@ class Emitter:
 		# `example/packet`'s tag is sixteen fixed bytes and was 65 kilobytes
 		# past a 62-byte view.
 		run_fits = run_fits + self._region_fits(struct, placement)
+		run_fits = run_fits + self._variant_fits(struct, placement)
 
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)

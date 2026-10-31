@@ -7903,6 +7903,10 @@ Moved to `doc/decision/26.775-one-set-of-hooks-for-every-driver.md`.
 
 Moved to `doc/decision/26.776-a-coded-region-must-fit-the-frame.md`.
 
+### 26.777 The selected arm must fit the frame
+
+Moved to `doc/decision/26.777-the-selected-arm-must-fit-the-frame.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

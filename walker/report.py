@@ -1820,8 +1820,13 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 	if chosen == NONE:
 		return OK
 
+	# Only a struct that cannot be measured is let off the fit check. A
+	# scalar or byte-run arm returned here before it, so netlink's default
+	# `opaque rest[nlmsg_len - 16]` claiming far more than the frame
+	# validated clean -- the shortcut the C walk's `arm_validates` records
+	# removing for `dnsname.label`, left behind on this side (26.777).
 	arm_type = image.placements[chosen].type_struct
-	if arm_type == NONE or not image.structs[arm_type].measurable:
+	if arm_type != NONE and not image.structs[arm_type].measurable:
 		return OK
 
 	# Measured through the variant *member*, not the arm: an arm is not in
@@ -1834,6 +1839,8 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 	if view.at * 8 + at + wide > view.limit * 8:
 		return ERR_BOUNDS
 
+	if arm_type == NONE:
+		return _arm_constraints(image, view, chosen)
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
 	return _validate(image, inner, arm_type) or OK
 
