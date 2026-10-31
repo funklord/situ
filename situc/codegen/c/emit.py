@@ -8333,6 +8333,33 @@ class Emitter:
 			"\t}",
 		]
 
+	def _region_fits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A region's computed extent must fit the frame it is in.
+
+		A coded or sealed region declares no length of its own -- its
+		extent is the interior put through the codec's expansion -- so it
+		fell between both branches of `_fits_check` and nothing held it to
+		the frame: `coded body(doubling) { u8 c[n]; }` with `n = 2` and a
+		three-byte body validated clean in all four (26.776).
+		"""
+		if placement.kind not in ("coded", "sealed") \
+				or placement.delimiters or placement.is_fixed_size:
+			return []
+		length = self._region_length(struct, placement)
+		base   = self._base_expression(struct, placement)
+		if length is None or base is None:
+			return []
+		path = placement.path
+		return [
+			f"\t/* {path}: the extent its codec gives the interior has to fit",
+			"\t * the frame. The accessor clamps; this is where a region that",
+			"\t * does not fit is called malformed (26.776). */",
+			f"\tif (situ_remaining_u32(view.limit, {base}) < ({length})) {{",
+			"\t\treturn SITU_ERR_BOUNDS;",
+			"\t}",
+		]
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -8394,6 +8421,8 @@ class Emitter:
 		# question the acquiring bounds check did not answer for it either.
 		# `example/packet`'s tag is sixteen fixed bytes and was 65 kilobytes
 		# past a 62-byte view.
+		run_fits = run_fits + self._region_fits(struct, placement)
+
 		if not declares_its_own_length(placement):
 			extent = self._fixed_extent(placement)
 			if extent is None or placement.offset_bits is not None:

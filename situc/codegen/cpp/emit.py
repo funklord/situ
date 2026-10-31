@@ -3836,6 +3836,32 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _region_fits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A region's computed extent must fit the frame it is in.
+
+		A coded or sealed region declares no length of its own -- its
+		extent is the interior put through the codec's expansion -- so it
+		fell between both branches of `_fits_check` and nothing held it to
+		the frame: `coded body(doubling) { u8 c[n]; }` with `n = 2` and a
+		three-byte body validated clean in all four (26.776).
+		"""
+		if placement.kind not in ("coded", "sealed") \
+				or placement.delimiters or placement.is_fixed_size:
+			return []
+		length = self._region_length(struct, placement)
+		base   = self._offset_expression(struct, placement)
+		if length is None or base is None:
+			return []
+		path = placement.path
+		return [
+			f"\t\t/* {path}: the extent its codec gives the interior has to",
+			"\t\t * fit the frame (26.776). */",
+			f"\t\tif (situ_remaining_u32(raw_.limit, {base}) < ({length})) {{",
+			"\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t}",
+		]
+
 	def _fits_check(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A length the message declares must fit the frame it is in.
@@ -3915,6 +3941,8 @@ class Emitter:
 		# The other half of the same sentence: a member *placed* after a
 		# variable-length region has an offset the message chose, so whether
 		# the frame contains it is not something the acquiring check settled.
+		run_fits = run_fits + self._region_fits(struct, placement)
+
 		if not declares_its_own_length(placement):
 			extent = (placement.size_bits // BITS_PER_BYTE
 			          if placement.is_fixed_size

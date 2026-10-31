@@ -7899,6 +7899,10 @@ Moved to `doc/decision/26.774-a-coded-region-is-as-long-as-its-version.md`.
 
 Moved to `doc/decision/26.775-one-set-of-hooks-for-every-driver.md`.
 
+### 26.776 A coded region must fit the frame
+
+Moved to `doc/decision/26.776-a-coded-region-must-fit-the-frame.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
