@@ -2424,10 +2424,33 @@ def is_struct_run(structs: dict[str, ResolvedStruct],
 	them, and C++, Rust and Python each took a run for its first element:
 	`body_pts` handed back one `pt` under the run's name (26.779). C asks
 	nothing narrower, so the four decline the same set.
+
+	A run that a condition or a delimiter ends is one too. Neither sets a
+	count, so `pt recs[] while (x != 0)` and `kv recs[] until "\\n"` read
+	as one struct, and all four -- C as well, through `_view` -- handed
+	back the first record (26.781).
 	"""
 	return (placement.kind != "indexed"
 	        and placement.type_name in structs
-	        and (placement.array_count is not None or data_sized(placement)))
+	        and (placement.array_count is not None or data_sized(placement)
+	             or placement.repeat_while is not None
+	             or bool(placement.delimiters)))
+
+
+def is_unmeasured_run(structs: dict[str, ResolvedStruct],
+		placement: Placement) -> bool:
+	"""A run of records whose length is a walk rather than a product.
+
+	A counted run of variable records, or a run of any records that a
+	condition or a delimiter ends. In a variant arm none of the four has a
+	length for one -- the arm family emits no span -- so the variant has
+	none either, and `frameable` and each backend's arm length ask this
+	one question rather than four versions of it (26.781).
+	"""
+	return (is_counted_run(structs, placement)
+	        or (is_struct_run(structs, placement)
+	            and (placement.repeat_while is not None
+	                 or bool(placement.delimiters))))
 
 
 def fixed_tail_bytes(struct: ResolvedStruct, placement: Placement) -> int | None:
@@ -2771,9 +2794,14 @@ def frameable(structs: dict[str, ResolvedStruct], struct: ResolvedStruct,
 		# C's frame layer is the only one a test compiles and that is how
 		# it was caught -- the same shape as slip's, one blocker over
 		# (26.689).
+		#
+		# And an arm holding a run that a condition or a delimiter ends,
+		# which C's `_required` declines for the same reason while this
+		# said yes: the driver called `arms_required` and C did not
+		# compile (26.781).
 		if placement.kind == "variant" \
 				and any(member is not None
-				        and is_counted_run(structs, member)
+				        and is_unmeasured_run(structs, member)
 				        for _arm, member in arm_members(struct, placement)):
 			return False
 		if not is_run(placement, structs):

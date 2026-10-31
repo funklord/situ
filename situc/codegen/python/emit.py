@@ -92,6 +92,7 @@ from situc.traverse import (
 	is_own_member,
 	is_recursive,
 	is_struct_run,
+	is_unmeasured_run,
 	is_run,
 	is_varint_run,
 	length_is_transform_output,
@@ -7191,8 +7192,13 @@ class Emitter:
 		# `separated_arm.after` and `wide_delim_arm.after` -- so the wider
 		# guard those three carry would have made this backend the lone
 		# refuser of three members it gets right.
+		#
+		# And a run of RECORDS that a condition or a delimiter ends, which
+		# the arm family declines as it declines a counted one: the
+		# variant's length named `body_recs_span`, which nothing defines
+		# once no accessor reaches into the run (26.781).
 		if arm_of(struct, placement) is not None \
-				and is_counted_run(self.resolved.structs, placement):
+				and is_unmeasured_run(self.resolved.structs, placement):
 			return None
 
 		# A delimited member's extent is wherever the delimiter turns out to
@@ -8093,7 +8099,12 @@ class Emitter:
 		# schema could declare `[encoding = utf8]` on an arm and no
 		# description of six enforced it, while `edges` carried a delimited
 		# arm and an encoded member for months and never the two together.
-		if placement.delimiters:
+		#
+		# A delimited run of RECORDS has no `_terminated` to ask: no
+		# accessor reaches into one, and the variant's check walks it
+		# (26.781).
+		if placement.delimiters \
+				and not is_struct_run(self.resolved.structs, placement):
 			inner = self._delimiter_check(struct, placement, for_arm=True)
 			if not inner:
 				return []

@@ -95,6 +95,7 @@ from situc.traverse import (
 	is_own_member,
 	is_recursive,
 	is_struct_run,
+	is_unmeasured_run,
 	is_run,
 	is_varint_run,
 	length_is_transform_output,
@@ -4226,6 +4227,11 @@ class Emitter:
 				continue		# `default: error`; falls to the zero above
 			if member.is_fixed_size:
 				length = f"{member.size_bits // BITS_PER_BYTE}u"
+			elif is_unmeasured_run(self.resolved.structs, member):
+				# A delimited run of RECORDS is not a delimited byte run:
+				# no accessor reaches into one, so no `_span` is emitted
+				# for the branch below to name (26.781).
+				return None
 			elif member.delimiters:
 				# A DELIMITED arm's extent is its scan plus the delimiter,
 				# which is what `_span` answers (26.423). `_length_expression`

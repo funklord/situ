@@ -172,7 +172,8 @@ def _declined_in_all_four(text: str, names: tuple[str, ...]) -> None:
 			# Accessors by their definitions: `validate`'s own walk names
 			# its locals after the member.
 			for defined in (f"body_{run}(", f"body_{run}_extent",
-			                f"body_{run}_get", f"def body_{run}"):
+			                f"body_{run}_view", f"body_{run}_get",
+			                f"def body_{run}"):
 				assert defined not in emitted_text, (name, defined)
 			assert (f"`{run}` is not a shape this backend reaches into yet"
 			        in emitted_text), (name, run)

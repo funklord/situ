@@ -93,6 +93,7 @@ from situc.traverse import (
 	is_own_member,
 	is_recursive,
 	is_run,
+	is_struct_run,
 	is_varint_run,
 	length_is_transform_output,
 	local_name,
@@ -3455,9 +3456,14 @@ class Emitter:
 		# exotic one. A sub-view over it, guarded the same way -- the arm's
 		# own members are its type's to emit, which is what makes this the
 		# whole of the work.
+		#
+		# Not a RUN of them, whatever ends it: `pt recs[] while (x != 0)`
+		# sets no count and no driving field, and was handed back as one
+		# `pt` through `_view` (26.781).
 		nested = self.resolved.structs.get(placement.type_name or "")
 		if nested is not None and placement.array_count is None \
-				and placement.sized_by is None:
+				and placement.sized_by is None \
+				and not is_struct_run(self.resolved.structs, placement):
 			if nested.layout.is_fixed_size:
 				size = macro(self.prefix, nested.name, "SIZE_FIXED")
 			elif self._struct_extent(nested):
@@ -11605,9 +11611,14 @@ class Emitter:
 			if guard is None:
 				return []
 			test, _name = guard
+			# A run of records in an arm has no `_terminated`: no accessor
+			# reaches into one, and the variant's own check walks it
+			# (26.781).
 			term = (ident(self.prefix, struct.name,
 			              c_name(self._local(struct, placement)), "terminated")
-			        if must_be_terminated(placement) else None)
+			        if must_be_terminated(placement)
+			        and not is_struct_run(self.resolved.structs, placement)
+			        else None)
 			inner = [
 				*([f"\t/* `{placement.name}` runs to"
 				   f" {render_delimiter(placement.delimiter)}, and a frame",
