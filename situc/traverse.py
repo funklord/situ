@@ -2416,6 +2416,28 @@ def is_counted_run(structs: dict[str, ResolvedStruct],
 	return inner is not None and not inner.layout.is_fixed_size
 
 
+def fixed_tail_bytes(struct: ResolvedStruct, placement: Placement) -> int | None:
+	"""How many bytes the members after `placement` take, or None.
+
+	Only where every one is fixed-size and the total is whole bytes. A
+	variant no backend can measure leaves those members unplaceable, so
+	nothing else holds them to the frame: `validate` asks it of each arm
+	instead, as the arm's length plus this (26.779).
+	"""
+	members = own_members(struct)
+	paths   = [member.path for member in members]
+	if placement.path not in paths:
+		return None
+	bits = 0
+	for member in members[paths.index(placement.path) + 1:]:
+		if not member.is_fixed_size:
+			return None
+		bits += member.size_bits
+	if bits % BITS_PER_BYTE:
+		return None
+	return bits // BITS_PER_BYTE
+
+
 def offset_unresolvable(structs: dict[str, ResolvedStruct],
 		struct: ResolvedStruct, placement: Placement) -> bool:
 	"""Whether nothing can compute where this member starts.
@@ -2435,9 +2457,9 @@ def offset_unresolvable(structs: dict[str, ResolvedStruct],
 	- a counted run of variable-length elements, whose reach is the sum of
 	  what a walk stepped over;
 	- a variant with an arm holding such a run, which no backend walks
-	  because an arm is emitted by a family of its own. No corpus schema has
-	  that shape -- `test_relations.py` covers it, and 26.689 says why it is
-	  not in `edges.situ`.
+	  because an arm is emitted by a family of its own. `edges.situ`'s
+	  `unwalkable_arm`, back in the corpus since `validate` walks the run
+	  (26.779).
 
 	`test_nothing_claimed_unplaceable_gets_an_accessor` holds this against
 	what the backends actually emit, over every corpus schema: a member this

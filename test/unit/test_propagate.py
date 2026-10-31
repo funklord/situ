@@ -526,6 +526,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"data-placed",
 		"dynamic-predecessor",
 		"coded-predecessor",
+		"unwalked-arm-predecessor",
 		"frame-relative",
 		"bounded-size",
 		"unbounded-size",
@@ -923,6 +924,41 @@ def test_a_bounded_ratio_blames_the_codec_and_not_the_length() -> None:
 	blame = entries(body)["S.t"].blame(Axis.OFFSET)[0]
 	assert "`c`'s output" in blame.effect.because
 	assert "until" in blame.rule.remedy
+
+
+UNWALKED = """struct piece { u8 len; u8 body[len]; }
+struct S {
+	u8 kind;
+	u8 n;
+	variant body switch (kind) {
+		case 1:  piece recs[n];
+		default: u8    raw;
+	}
+	u16 after;
+}
+"""
+
+
+def test_a_member_after_an_unwalked_arm_has_no_setter_to_claim() -> None:
+	"""No backend walks a run in an arm, so nothing places `after` and none
+	emits a setter for it; the map said `InPlaceFixed` and `Random`, which
+	26.689 named as the gap a later schema would hit (26.779).
+
+	And only `after`: the variant's own members are where they always were.
+	"""
+	assert axis_of(UNWALKED, "S.after", Axis.MUTATE) == Value("Immutable")
+	assert axis_of(UNWALKED, "S.after", Axis.ACCESS) == Value("Sequential")
+	assert rules_for(UNWALKED, "S.after", Axis.MUTATE) \
+		== ["unwalked-arm-predecessor"]
+	assert "unwalked-arm-predecessor" \
+		not in rules_for(UNWALKED, "S.kind", Axis.MUTATE)
+
+	# The control: the same run in a struct, and the struct in the arm,
+	# which every backend measures. That is the row's own remedy.
+	walked = UNWALKED.replace("case 1:  piece recs[n];", "case 1:  runs  recs;") \
+		.replace("struct S {", "struct runs { u8 n; piece r[n]; }\nstruct S {")
+	assert "unwalked-arm-predecessor" \
+		not in rules_for(walked, "S.after", Axis.MUTATE)
 
 
 def test_a_closed_form_expansion_keeps_the_generic_row() -> None:

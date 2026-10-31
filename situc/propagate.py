@@ -112,6 +112,11 @@ class Context:
 	# Where the bytes are worked on, and whether the file may grow (0047).
 	target: ast.TargetKind = ast.TargetKind.BUFFER
 	append: bool = False
+	# The variant before this member whose arm holds a run no backend walks
+	# for an accessor, where that is why nothing can place it (26.779).
+	# Filled in by `resolve` once every struct is known, because whether an
+	# arm's element can be measured is a fact about another struct.
+	unwalked_arm: str | None = None
 
 
 def _align_value(placement: Placement) -> Value:
@@ -1108,6 +1113,30 @@ TABLE: tuple[Row, ...] = (
 			blames_cause = True,
 		),
 		applies = _has_dynamic_offset,
+	),
+	Row(
+		rule = Rule(
+			name      = "unwalked-arm-predecessor",
+			construct = "a variant earlier in the same frame with an arm "
+			            "holding a counted run of variable records",
+			effects   = (
+				# 26.689 left this row out because the arm's element was
+				# not known when the variant was placed, and said the
+				# setter gate would fail for the first schema with the
+				# shape. `edges.situ`'s `unwalkable_arm` is that schema.
+				Effect(Axis.MUTATE, Value("Immutable"),
+				       "no backend walks a run in a variant arm, so nothing "
+				       "says where the variant ends and there is nothing for "
+				       "a setter to address"),
+				Effect(Axis.ACCESS, Value("Sequential"),
+				       "nothing reaches this field by arithmetic: the run in "
+				       "the arm has to be walked record by record first"),
+			),
+			remedy    = "put the run in a struct and the struct in the arm, "
+			            "which every backend measures; or make the variant "
+			            "the last member",
+		),
+		applies = lambda context: context.unwalked_arm is not None,
 	),
 	Row(
 		rule = Rule(

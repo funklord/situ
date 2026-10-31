@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from situc import ast
 from situc.invariant import negative_value
@@ -90,6 +90,9 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 			# nothing (section 11.2).
 			vector  = _struct_vector(struct_layout, entries),
 		)
+
+	_mark_unwalked_arms(result, schema, structs, enums, codecs, lenient,
+	                    target, append)
 
 	# After the loop, because it needs the resolved struct the loop builds --
 	# and here rather than in a backend, because a schema whose invariant has
@@ -266,6 +269,50 @@ def _target_of(schema: ast.Schema) -> tuple[ast.TargetKind, bool]:
 				and decl.span.source.path == schema.root:
 			return decl.kind, decl.append
 	return ast.TargetKind.BUFFER, False
+
+
+def _mark_unwalked_arms(result: ResolvedSchema, schema: ast.Schema,
+		structs: dict[str, ast.StructDecl],
+		enums: dict[str, ast.EnumDecl],
+		codecs: dict[str, ast.CodecDecl], lenient: bool,
+		target: ast.TargetKind, append: bool) -> None:
+	"""Re-apply the rows to a member no backend can place for an arm's run.
+
+	A second pass, because the question -- is this arm's element a struct
+	with no single size -- is about another struct, and the first pass
+	resolves them in declaration order. A codec is the other way a member
+	becomes unplaceable and has its own row already (26.689, 26.779).
+	"""
+	from situc.traverse import (arm_members, is_counted_run,
+	                            offset_unresolvable, own_members)
+
+	for name, struct in list(result.structs.items()):
+		variants = [held for held in own_members(struct)
+		            if held.kind == "variant"
+		            and any(member is not None
+		                    and is_counted_run(result.structs, member)
+		                    for _arm, member in arm_members(struct, held))]
+		if not variants:
+			continue
+		decl = structs[name]
+		entries = []
+		for entry in struct.entries:
+			placement = entry.placement
+			if placement.dynamic_cause_codec is None \
+					and offset_unresolvable(result.structs, struct,
+					                        placement):
+				entry = apply(replace(
+					_context(placement, decl, structs, enums, codecs,
+					         lenient, target, append),
+					unwalked_arm = variants[0].path))
+			entries.append(entry)
+		_meet_aggregates(entries, structs)
+		result.structs[name] = ResolvedStruct(
+			name    = name,
+			layout  = struct.layout,
+			entries = entries,
+			vector  = _struct_vector(struct.layout, entries),
+		)
 
 
 def _context(placement: Placement, decl: ast.StructDecl,

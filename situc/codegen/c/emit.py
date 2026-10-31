@@ -50,6 +50,7 @@ from situc.traverse import (
 	NOT_A_MEMBER,
 	RESERVED_STATED,
 	arm_members,
+	fixed_tail_bytes,
 	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
 	versioned_tail,
 	within_a_region_arm,
@@ -8365,21 +8366,128 @@ class Emitter:
 		`_fits_check` as a coded region did (26.776): `case 1: u32 four;`
 		selected in a two-byte message validated clean in all four while
 		the arm's own accessor refused it and `required` asked for five
-		bytes (26.777). An arm that is itself variable is clamped inside
-		`_variant_length`, which is 26.689's case and still open.
+		bytes (26.777).
+
+		Where no single length covers every arm -- an arm holding a counted
+		run of records, which no backend walks for an accessor -- each arm
+		is asked on its own instead (26.689).
 		"""
 		if placement.kind != "variant" or placement.is_fixed_size:
 			return []
 		length = self._variant_length(struct, placement)
 		base   = self._base_expression(struct, placement)
-		if length is None or base is None:
-			return []
+		if length is None:
+			return self._arms_fit(struct, placement, base)
 		return [
 			f"\t/* {placement.path}: the arm the discriminant selects has to",
 			"\t * fit the frame (26.777). */",
 			f"\tif (situ_remaining_u32(view.limit, {base}) < ({length})) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
+		]
+
+	def _arms_fit(self, struct: ResolvedStruct, placement: Placement,
+			base: str) -> list[str]:
+		"""Each arm held to the frame on its own, where no one length can be.
+
+		An arm holding a counted run of records has no closed-form length,
+		so `_variant_length` declines the whole variant and `check` said
+		nothing about any arm: a record declaring more bytes than the
+		message holds validated clean in C, C++ and Rust while both walkers
+		refused it (26.689). The run is walked here as `_run_fits` walks a
+		top-level one, and every arm that does have a length gets
+		`_variant_fits`'s test under its own discriminant value.
+		"""
+		disc  = self._over_fields(struct, placement.discriminant or "", "view")
+		arms  = arm_members(struct, placement)
+		named = [arm.value for arm, _ in arms if arm.value is not None]
+		# What follows the variant is placed by nothing, so it is held to
+		# the frame here, arm by arm, where it is fixed-size (26.779).
+		tail  = fixed_tail_bytes(struct, placement) or 0
+		lines: list[str] = []
+		for arm, member in arms:
+			if member is None:
+				continue
+			if arm.value is not None:
+				when = f"{disc} == {arm.value}u"
+			elif named:
+				when = " && ".join(f"{disc} != {value}u" for value in named)
+			else:
+				when = "1"
+			walk = self._arm_run_walk(struct, member, base, tail)
+			if walk is not None:
+				lines.extend([
+					f"\t/* {member.path}: every record the count declares is"
+					" in the",
+					"\t * frame. No accessor walks a run in an arm, so this"
+					" does (26.689). */",
+					f"\tif ({when}) {{",
+					*walk,
+					"\t}",
+				])
+				continue
+			if member.is_fixed_size and member.size_bits == 0:
+				continue		# nothing to fit
+			if member.is_fixed_size:
+				length = f"{member.size_bits // BITS_PER_BYTE}u"
+			elif self._has_length(struct, member):
+				length = self._length_expression(struct, member)
+			else:
+				continue
+			lines.extend([
+				f"\t/* {member.path}: the arm the discriminant selects has to",
+				"\t * fit the frame (26.777, 26.689). */",
+				f"\tif (({when}) && situ_remaining_u32(view.limit, {base})"
+				f" < ({length}){f' + {tail}u' if tail else ''}) {{",
+				"\t\treturn SITU_ERR_BOUNDS;",
+				"\t}",
+			])
+		return lines
+
+	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
+			base: str, tail: int = 0) -> list[str] | None:
+		"""The walk over a counted run of records in an arm, or None.
+
+		Only the shape `_run_fits` walks at the top level and with no
+		recursion: a counted run of an element with an extent. A recursive
+		element needs the depth counter `check` does not carry here.
+		"""
+		element = self.resolved.structs.get(member.type_name or "")
+		if (element is None or not self._is_counted_run(member)
+				or member.sized_by == "remaining" or member.delimiters
+				or member.repeat_while is not None
+				or self._recursive(element.name)
+				or element.layout.is_fixed_size
+				or self._element_extent_call(element) is None):
+			return None
+		return [
+			f"\t\tconst uint32_t total = {self._count_expression(struct, member)};",
+			f"\t\tuint32_t at = {base};",
+			"\t\tuint32_t n  = 0u;",
+			"",
+			"\t\twhile (n < total) {",
+			"\t\t\tsitu_view_t element;",
+			"\t\t\tuint32_t    size;",
+			"",
+			"\t\t\tif (at >= view.limit || situ_view_sub(view, at,"
+			" situ_remaining_u32(view.limit, at), &element) != SITU_OK) {",
+			"\t\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t\t}",
+			f"\t\t\tsize = {self._element_extent_call(element)};",
+			"\t\t\tif (size == 0u) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			"\t\t\tif (size > situ_remaining_u32(view.limit, at)) {",
+			"\t\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t\t}",
+			"\t\t\tat = at + size;",
+			"\t\t\tn  = n + 1u;",
+			"\t\t}",
+			*([] if not tail else [
+				f"\t\tif (situ_remaining_u32(view.limit, at) < {tail}u) {{",
+				"\t\t\treturn SITU_ERR_BOUNDS;",
+				"\t\t}",
+			]),
 		]
 
 	def _region_fits(self, struct: ResolvedStruct,

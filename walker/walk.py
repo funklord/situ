@@ -1901,7 +1901,8 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 	return count, None
 
 
-def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
+def counted_run_fits(view: View, index: int, depth: int = 0,
+		start_bits: int | None = None) -> bool:
 	"""Whether every element a counted run declares is inside the frame.
 
 	The sixth implementation of the verdict 26.676 is about, and the fifth
@@ -1919,6 +1920,10 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 	degenerate element rather than a short frame, and a message past the
 	cap is refused by the nesting answer instead -- which is why this
 	cannot simply ask whether the walk placed `count` elements.
+
+	`start_bits` is where the run starts, for a run in a variant arm: an
+	arm is not in the struct's member chain, so `offset_bits` refuses one,
+	and the arm starts where its variant does (26.689).
 	"""
 	placement = view.image.placements[index]
 	# A run of VARINTS, which the condition below lets through for having
@@ -1942,10 +1947,11 @@ def counted_run_fits(view: View, index: int, depth: int = 0) -> bool:
 			or placement.element_bits != NONE):
 		return True
 
-	count = _evaluate(view, placement.size_code,
-	                  lambda: offset_bits(view, index) // BITS_PER_BYTE)
+	first = (offset_bits(view, index) if start_bits is None
+	         else start_bits) // BITS_PER_BYTE
+	count = _evaluate(view, placement.size_code, lambda: first)
 	count = min(max(count, 0), 0xFFFFFFFF)
-	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	at    = view.at + first
 
 	for _ in range(count):
 		if at >= view.limit:

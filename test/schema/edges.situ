@@ -712,14 +712,23 @@ struct externally_stuffed {
 // be decoded before anything after it can be found, and a member nothing
 // can locate is a member nothing can write.
 //
-// A third struct was here and is not. `unwalkable_arm` put a counted run
-// of variable records in a variant arm -- the shape no backend walks --
-// and it found a fault in `validate` that is nobody's to settle in
-// passing: C's `check` verifies only the struct's minimum length for it
-// and reports a message whose arm overruns the frame as valid, where the
-// walker reports it malformed. `validate` being sound is what every
-// framing argument here rests on. The shape, the reproduction and the
-// decision it needs are in 26.689.
+// A MEMBER AFTER A VARIANT NO ARM CHAIN CAN MEASURE. An arm holding a
+// counted run of variable records is the shape no backend walks for an
+// accessor, so the variant has no length and every backend declines
+// `after` and says why. It was taken out once, because C's `check` then
+// verified only the struct's minimum and called a message whose run
+// overran the frame valid; `validate` now walks the run in all four and
+// in both walkers, and the shape is back (26.689).
+struct unwalkable_arm {
+	u8  kind;
+	u8  n;
+	variant body switch (kind) {
+		case 1:  piece recs[n];
+		default: u8    raw;
+	}
+	u16 after;
+}
+
 struct stuffed_then_field {
 	u8  n;
 	coded body(stuffed_apart) until "\xC0" {

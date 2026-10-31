@@ -1199,9 +1199,14 @@ def _validate(image: Image, view: View, struct_index: int,
 				# three schemas C accepts, which is the second thing this
 				# check got wrong by reasoning from the field case instead
 				# of reading what C emits.
+				# Nor a RUN of records, which is not one record: an
+				# empty one is shorter than the element's minimum and was
+				# refused for it. `_arm_validates` walks the run (26.689).
 				if arm_placement.type_struct != NONE \
 						and image.structs[
-							arm_placement.type_struct].measurable:
+							arm_placement.type_struct].measurable \
+						and not (arm_placement.size_code != NONE
+						         and arm_placement.element_bits == NONE):
 					# THE VARIANT'S offset and span, not the arm's, which
 					# is `_arm_bits`' own rule: "the arm starts where the
 					# variant does ... and asking `offset_bits` for the
@@ -1624,40 +1629,11 @@ def _arm_selects(image: Image, view: View, index: int,
 		# The arm the discriminant selects has to fit the frame. The
 		# accessor clamps; this is where a message that does not fit is
 		# called malformed, and it is BOUNDS rather than VERSION -- the
-		# discriminant was fine and the bytes behind it were not.
-		if chosen == NONE:
-			return OK
-
-		# An arm whose type cannot be measured from its own bytes has no
-		# sub-view, so nothing asks whether it fits the frame either --
-		# there is nothing to compare against. `packet.body.publish` is
-		# that arm, and measuring it anyway called a three-byte MQTT
-		# publish malformed where C called it fine.
-		arm_type = image.placements[chosen].type_struct
-		if arm_type != NONE and not image.structs[arm_type].measurable:
-			return OK
-
-		# Measured through the variant *member*, not the arm. An arm is
-		# not in the struct's member chain, so asking `offset_bits` for
-		# one refuses -- which made every mqtt packet BOUNDS where C said
-		# OK. `size_bits` on the member routes to `_variant_bits`, which
-		# resolves the same arm this loop just chose.
-		try:
-			at   = offset_bits(view, index)
-			wide = size_bits(view, index)
-		except Refused:
-			return ERR_BOUNDS
-		if view.at * 8 + at + wide > view.limit * 8:
-			return ERR_BOUNDS
-
-		# A struct-typed arm carries its own constraints and its own
-		# validator is what knows them. A different arm is nothing to
-		# check, which is why this asks only the one selected.
-		if arm_type != NONE:
-			inner = View(image, view.buffer, arm_type,
-			             view.at + at // 8, view.limit)
-			return _validate(image, inner, arm_type) or OK
-		return _arm_constraints(image, view, chosen)
+		# discriminant was fine and the bytes behind it were not. One
+		# copy of that, shared with the default arm below: this path kept
+		# its own, and a run in an arm was fixed in one of the two first
+		# (26.689).
+		return _arm_validates(image, view, index, chosen)
 
 	# No `case` matched. Where the schema wrote `default: <member>` that is
 	# not a refusal, and the member it selects is the one that has to
@@ -1841,6 +1817,17 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 
 	if arm_type == NONE:
 		return _arm_constraints(image, view, chosen)
+	# A RUN of records in the arm is not one record: it was validated as
+	# its first element, and a later one overrunning the frame went
+	# unseen while the variant's size, walked and clamped, still fit.
+	# Every element is held to the frame instead, as the four backends'
+	# `check` now walks it; no backend validates the elements' own
+	# constraints in a run, so neither does this (26.689).
+	if image.placements[chosen].size_code != NONE \
+			and image.placements[chosen].element_bits == NONE:
+		if not counted_run_fits(view, chosen, start_bits=at):
+			return ERR_BOUNDS
+		return OK
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
 	return _validate(image, inner, arm_type) or OK
 

@@ -2233,6 +2233,7 @@ output can be read against this table directly.
 | `data-placed` | a member the data positions, rather than the members before it | `offset := DataPlaced`, `address := Unstable` |
 | `dynamic-predecessor` | a dynamically sized member earlier in the same frame | `offset := Dynamic`, `address := Unstable` |
 | `coded-predecessor` | a coded region earlier in the same frame whose codec has no closed-form expansion | computed from the construct |
+| `unwalked-arm-predecessor` | a variant earlier in the same frame with an arm holding a counted run of variable records | `mutate := Immutable`, `access := Sequential` |
 | `frame-relative` | a member of a frame, addressed from the frame base | `offset := FrameStatic` |
 | `dynamic-element-type` | an array whose element type is variable-sized | `access := Sequential` |
 | `variant-unequal-arms` | a variant whose arms are not the same size | computed from the construct |
@@ -5892,12 +5893,6 @@ nothing re-read the sentence when the records closed.
     *this schema answered 196 calls and not one truncated*. Fourth time
     this run that a count of what a check asked found what the check
     could not.
-- **`validate` reports a malformed message as valid** where a counted run
-  sits in a variant arm (26.689). C's `check` is the struct's minimum
-  length and `return SITU_OK`; every other counted run gets a `_fits`
-  predicate and a call to it. An absent `validate` or a walk for arm
-  members are different decisions, so `edges.situ` carries no such struct
-  rather than carrying an unsound verdict silently.
 - **No axis says "unreachable"** (26.689). `offset`, `stage`, `mutate` and
   `access` each carry part of it for a member no backend can place, and
   nothing says the whole.
@@ -7910,6 +7905,10 @@ Moved to `doc/decision/26.777-the-selected-arm-must-fit-the-frame.md`.
 ### 26.778 A varint must be whole
 
 Moved to `doc/decision/26.778-a-varint-must-be-whole.md`.
+
+### 26.779 `validate` walks a run in an arm
+
+Moved to `doc/decision/26.779-validate-walks-a-run-in-an-arm.md`.
 
 ### 26.715 The same width in the other pointer backend
 

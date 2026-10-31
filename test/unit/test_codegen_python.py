@@ -3193,9 +3193,13 @@ def test_a_counted_run_in_an_arm_is_declined_rather_than_named() -> None:
 	assert "body_recs_span" not in module
 	assert "arms.after: its offset cannot be resolved" in module
 
-	# And the shape is still reached: a run in an arm that this backend DOES
-	# write, so the guard above cannot be passing by declining everything.
-	assert "body_recs_extent" in module
+	# And the run itself is declined, as the other three decline it: this
+	# backend took it for ONE `piece` and named an extent for that record
+	# (26.779). `validate` walks the run instead, so the variant's check is
+	# still there -- the guard cannot be passing by declining everything.
+	assert "body_recs_extent" not in module
+	assert "`recs` is not a shape this backend reaches into yet" in module
+	assert "CHECK_BODY" in module
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))

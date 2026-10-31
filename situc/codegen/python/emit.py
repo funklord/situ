@@ -49,6 +49,7 @@ from situc.traverse import (
 	Member,
 	RESERVED_STATED,
 	arm_members,
+	fixed_tail_bytes,
 	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
 	versioned_tail,
 	within_a_region_arm,
@@ -3548,6 +3549,18 @@ class Emitter:
 		# one of those is the whole of the work.
 		nested = self.resolved.structs.get(placement.type_name or "")
 
+		# A RUN of records in an arm is not one record. The branch below
+		# took `piece recs[n]` for a single `piece` -- an accessor handing
+		# back the first element under the run's name, an extent of one
+		# element, and a `validate` that checked that element and no other.
+		# C, C++ and Rust decline it with this sentence; `validate` walks
+		# the run itself (26.689).
+		if is_counted_run(self.resolved.structs, placement):
+			return [
+				f"\t# ...and `{placement.name}` is not a shape this backend "
+				f"reaches into yet.",
+			]
+
 		# A *variable-size* struct arm, measured from its own bytes. C has
 		# emitted one since variants landed and the other three required the
 		# arm's type to have a single size -- while `validate` called the
@@ -6623,21 +6636,124 @@ class Emitter:
 		`_fits_check` as a coded region did (26.776): `case 1: u32 four;`
 		selected in a two-byte message validated clean in all four while
 		the arm's own accessor refused it and `required` asked for five
-		bytes (26.777). An arm that is itself variable is clamped inside
-		`_variant_length`, which is 26.689's case and still open.
+		bytes (26.777).
+
+		Where no single length covers every arm -- an arm holding a counted
+		run of records, which no backend walks for an accessor -- each arm
+		is asked on its own instead (26.689).
 		"""
 		if placement.kind != "variant" or placement.is_fixed_size:
 			return []
 		length = self._variant_length(struct, placement)
 		base   = self._offset_expression(struct, placement)
-		if length is None or base is None:
+		if base is None:
 			return []
+		if length is None:
+			return self._arms_fit(struct, placement, base)
 		return [
 			f"\t\t# {placement.path}: the arm the discriminant selects",
 			"\t\t# has to fit the frame (26.777).",
 			f"\t\tif self._len - ({base}) < ({length}):",
 			f'\t\t\traise BoundsError("{placement.path}: the arm it selects is'
 				' outside the frame")',
+		]
+
+	def _arms_fit(self, struct: ResolvedStruct, placement: Placement,
+			base: str) -> list[str]:
+		"""Each arm held to the frame on its own, where no one length can be.
+
+		C's `_arms_fit` says why: an arm holding a counted run of records
+		has no closed-form length, so `check` said nothing about any arm
+		and a record overrunning the message validated clean (26.689).
+		"""
+		disc  = self._over_fields(struct, placement.discriminant or "", "self")
+		arms  = arm_members(struct, placement)
+		named = [arm.value for arm, _ in arms if arm.value is not None]
+		# What follows the variant is placed by nothing, so it is held to
+		# the frame here, arm by arm, where it is fixed-size (26.779).
+		tail  = fixed_tail_bytes(struct, placement) or 0
+		lines: list[str] = []
+		for arm, member in arms:
+			if member is None:
+				continue
+			if arm.value is not None:
+				when = f"{disc} == {arm.value}"
+			elif named:
+				when = " and ".join(f"{disc} != {value}" for value in named)
+			else:
+				when = "True"
+			walk = self._arm_run_walk(struct, member, base, tail)
+			if walk is not None:
+				lines.extend([
+					f"\t\t# {member.path}: every record the count declares",
+					"\t\t# is in the frame. No accessor walks a run in an",
+					"\t\t# arm, so this does (26.689).",
+					f"\t\tif {when}:",
+					*walk,
+				])
+				continue
+			if member.is_fixed_size and member.size_bits == 0:
+				continue		# nothing to fit
+			if member.is_fixed_size:
+				length = str(member.size_bits // BITS_PER_BYTE)
+			else:
+				rendered = self._length_expression(struct, member)
+				if rendered is None:
+					continue
+				length = rendered
+			lines.extend([
+				f"\t\t# {member.path}: the arm the discriminant selects",
+				"\t\t# has to fit the frame (26.777, 26.689).",
+				f"\t\tif ({when}) and self._len - ({base}) < ({length})"
+				f"{f' + {tail}' if tail else ''}:",
+				f'\t\t\traise BoundsError("{placement.path}: the arm it'
+				' selects is outside the frame")',
+			])
+		return lines
+
+	def _arm_run_walk(self, struct: ResolvedStruct, member: Placement,
+			base: str, tail: int = 0) -> list[str] | None:
+		"""The walk over a counted run of records in an arm, or None.
+
+		The shape C's `_arm_run_walk` takes: a counted run of a variable,
+		non-recursive element with an extent.
+		"""
+		element = self.resolved.structs.get(member.type_name or "")
+		count   = self._count_expression(struct, member)
+		if (element is None or count is None
+				or not is_counted_run(self.resolved.structs, member)
+				or member.sized_by == "remaining" or member.delimiters
+				or member.repeat_while is not None
+				or is_recursive(self.resolved.structs, element.name)
+				or element.layout.is_fixed_size
+				or not has_computable_extent(self.resolved.structs, element)):
+			return None
+		inner = py_name(element.name)
+		why   = (f'"{member.path}: a record the count declares is outside'
+		         ' the frame"')
+		# Named for the member, not `at` and `n`: `validate` is one long
+		# function and mypy reads a second binding of a short local as a
+		# type error rather than as a new variable.
+		at = f"{py_name(local_name(struct, member)).replace('.', '_')}_at"
+		n  = f"{py_name(local_name(struct, member)).replace('.', '_')}_n"
+		return [
+			f"\t\t\t{at} = {base}",
+			f"\t\t\t{n} = 0",
+			f"\t\t\twhile {n} < ({count}):",
+			f"\t\t\t\tif {at} >= self._len:",
+			f"\t\t\t\t\traise BoundsError({why})",
+			f"\t\t\t\tsize = {inner}(self._msg, self._at + {at},",
+			f"\t\t\t\t\tself._len - {at})._extent",
+			"\t\t\t\tif size == 0:",
+			"\t\t\t\t\tbreak",
+			f"\t\t\t\tif size > self._len - {at}:",
+			f"\t\t\t\t\traise BoundsError({why})",
+			f"\t\t\t\t{at} += size",
+			f"\t\t\t\t{n} += 1",
+			*([] if not tail else [
+				f"\t\t\tif self._len - {at} < {tail}:",
+				f"\t\t\t\traise BoundsError({why})",
+			]),
 		]
 
 	def _region_fits(self, struct: ResolvedStruct,
@@ -7884,6 +8000,10 @@ class Emitter:
 			return []
 		if not inner.layout.is_fixed_size \
 				and not has_computable_extent(self.resolved.structs, inner):
+			return []
+		# A run of records has no accessor to validate through; the
+		# variant's own check walks it (26.689).
+		if is_counted_run(self.resolved.structs, placement):
 			return []
 
 		# A name per arm, not one `arm` reused: the arms have different

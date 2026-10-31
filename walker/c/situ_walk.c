@@ -3846,6 +3846,12 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
+static situ_walk_err counted_run_walk(const situ_walk_image *image,
+                                      const uint8_t *message, uint32_t len,
+                                      uint32_t shape, uint32_t depth,
+                                      const situ_walk_placement *run,
+                                      uint32_t from, int *fits);
+
 /* The selected arm's own `validate`, through its own type.
  *
  * Split out because the matched and the default paths reach it the same way
@@ -3976,6 +3982,27 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	if (arm_type == SITU_WALK_NONE) {
 		return arm_constraints(image, message, len, shape, chosen, &arm,
 		                       verdict, why);
+	}
+	/* A RUN of records in the arm is not one record: it was validated as
+	 * its first element, and a later one overrunning the frame went unseen
+	 * while the variant's size, walked and clamped, still fit. Every
+	 * element is held to the frame instead, as the four backends' `check`
+	 * walks it; none of them validates a run's elements' own constraints,
+	 * so neither does this (26.689). */
+	if (arm.size_code != SITU_WALK_NONE
+	    && arm.element_bits == SITU_WALK_NONE) {
+		int fits = 1;
+
+		err = counted_run_walk(image, message, len, shape, depth, &arm,
+		                       at / 8u, &fits);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK || !fits) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+		}
+		return SITU_WALK_OK;
 	}
 	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
 	                     depth + 1u, verdict, why);
@@ -4178,9 +4205,6 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 	situ_walk_placement held;
 	situ_walk_err err = situ_walk_placement_at(image, index, &held);
 	uint32_t from = 0u;
-	uint32_t at;
-	int64_t  count = 0;
-	int64_t  i;
 
 	*fits = 1;
 	if (err != SITU_WALK_OK) {
@@ -4223,12 +4247,29 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	from /= 8u;
+	return counted_run_walk(image, message, len, shape, depth, &held,
+	                        from / 8u, fits);
+}
 
+/* `counted_run_fits`' walk, from a start the caller has: a run in a variant
+ * arm starts where its variant does, and an arm is not in the member chain
+ * an offset is asked of (26.689). */
+static situ_walk_err counted_run_walk(const situ_walk_image *image,
+                                      const uint8_t *message, uint32_t len,
+                                      uint32_t shape, uint32_t depth,
+                                      const situ_walk_placement *run,
+                                      uint32_t from, int *fits)
+{
+	situ_walk_err err;
+	uint32_t at;
+	int64_t  count = 0;
+	int64_t  i;
+
+	*fits = 1;
 	{
 		walk_ctx ctx = {image, message, len, shape, depth};
 
-		err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+		err = situ_walk_eval(image, run->size_code, ctx_load, &ctx,
 		                     (int64_t)(len > from ? len - from : 0u), &count);
 		if (err != SITU_WALK_OK) {
 			return err;
@@ -4247,7 +4288,7 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 			return SITU_WALK_OK;
 		}
 		err = struct_extent(image, message + at, len - at,
-		                    held.type_struct, depth + 1u, &extent);
+		                    run->type_struct, depth + 1u, &extent);
 		if (err == SITU_WALK_UNSUPPORTED) {
 			/* This build cannot measure the element, which is what the
 			 * walk propagates rather than reporting as a short run.
