@@ -50,6 +50,7 @@ from situc.traverse import (
 	RESERVED_STATED,
 	arm_members,
 	fixed_tail_bytes,
+	arguments,
 	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
 	versioned_tail,
 	within_a_region_arm,
@@ -242,8 +243,11 @@ _REFUSES = re.compile(r"\s*raise \w+Error\(")
 #: number, whose accessor parses the digits and raises where they are not
 #: digits. The second is `_ = self.ino` -- a statement whose whole purpose
 #: is the exception it may raise, which reads as doing nothing at all.
+#: And a third, an element of a run, held under a local named for the run
+#: (26.789).
 _PROPAGATES = re.compile(
-	r"\s*(?:self\.[\w.]+(?:\(\))?\.validate\(\)|_ = self\.\w+)\s*$")
+	r"\s*(?:self\.[\w.]+(?:\(\))?\.validate\(\)|_ = self\.\w+"
+	r"|_\w+_element\.validate\(\))\s*$")
 
 
 def _name_the_member(lines: list[str], const: str) -> list[str]:
@@ -6727,6 +6731,76 @@ class Emitter:
 			])
 		return lines
 
+	def _element_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element of a run of structs, through its own validator.
+
+		C's `_element_validation` says why and what is left out: the run's
+		own walk, each element at the extent that walk gives it, and a
+		refusal naming the run (26.789). Every local is named for the run,
+		because `validate` is one function and mypy reads a rebinding to
+		another type as an error.
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		base    = self._offset_expression(struct, placement)
+		if (element is None or base is None
+				or is_recursive(self.resolved.structs, element.name)
+				or arguments(element)
+				or not any(name for name, _ in self._check_groups(element))
+				or (placement.delimiters and len(placement.delimiters) != 1)
+				or (not element.layout.is_fixed_size
+				    and self._extent_expression(element) is None)):
+			return []
+		inner = py_name(element.name)
+		local = py_name(local_name(struct, placement)).replace(".", "_")
+		at, n = f"_{local}_at", f"_{local}_n"
+		held  = f"_{local}_element"
+		size  = (str(element.layout.size_bits // BITS_PER_BYTE)
+		         if element.layout.is_fixed_size else f"{held}._extent")
+		step  = [f"\t\t\t{at} += _{local}_size", f"\t\t\t{n} += 1"]
+		scan: list[str] = []
+		if placement.repeat_while is not None:
+			cap  = ("" if placement.repeat_cap is None
+			        else f" and {n} < {placement.repeat_cap}")
+			cond = re.sub(r"\b_element\b", held,
+			              self._element_condition(element, placement, at,
+			                                      "self._len"))
+			head = [f"\t\twhile {at} < self._len{cap}:"]
+			step = [*step, f"\t\t\tif not ({cond}):", "\t\t\t\tbreak"]
+		elif placement.delimiters:
+			delim = placement.delimiter
+			head  = [f"\t\twhile {at} + {len(delim)} <= self._len:"]
+			scan  = [
+				f"\t\t\tif bytes(self._msg.buffer[self._at + {at}:"
+				f"self._at + {at} + {len(delim)}]) == {delim!r}:",
+				"\t\t\t\tbreak",
+			]
+		elif placement.sized_by == "remaining":
+			head = [f"\t\twhile {at} < self._len:"]
+		else:
+			count = self._count_expression(struct, placement)
+			if count is None:
+				return []
+			head = [f"\t\twhile {n} < ({count}) and {at} < self._len:"]
+		return [
+			f"\t\t# {placement.path}: each `{element.name}` the run holds,",
+			"\t\t# through its own validator. A refusal names the run",
+			"\t\t# (26.789).",
+			f"\t\t{at} = {base}",
+			f"\t\t{n} = 0",
+			*head,
+			*scan,
+			f"\t\t\t{held} = {inner}(self._msg, self._at + {at},"
+			f" self._len - {at})",
+			f"\t\t\t_{local}_size = {size}",
+			f"\t\t\tif _{local}_size == 0 or _{local}_size > self._len - {at}:",
+			"\t\t\t\tbreak",
+			f"\t\t\t{held} = {inner}(self._msg, self._at + {at},"
+			f" _{local}_size)",
+			f"\t\t\t{held}.validate()",
+			*step,
+		]
+
 	def _arm_ended_walk(self, struct: ResolvedStruct, member: Placement,
 			base: str, tail: int) -> list[str] | None:
 		"""The tail after an arm's `while` or delimited run of records.
@@ -8310,6 +8384,13 @@ class Emitter:
 		pinned = pinned_runs(placement)
 		if pinned is not None:
 			return self._pinned_run_check(struct, placement, pinned)
+
+		# A RUN of structs: each element through its own validator, which
+		# C's `_element_validation` says why (26.789).
+		if is_struct_run(self.resolved.structs, placement) \
+				and arm_of(struct, placement) is None \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			return self._element_validation(struct, placement)
 
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)

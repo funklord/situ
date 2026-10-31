@@ -99,21 +99,23 @@ struct id3_tag {
 	}
 
 	// 4. The frames, each sized by its own synchsafe header, running until
-	// one begins with a zero byte -- which is 3.1's padding, a frame
+	// one would begin with a zero byte -- which is 3.1's padding, a frame
 	// identifier being four characters from `A-Z0-9`.
 	//
-	// THE CAVEAT IS NETLINK'S, and it is the same one for the same reason:
-	// situ's run ends *after* the element that fails the test, so this
-	// walks the first ten bytes of the padding as a frame and `validate`
-	// refuses it. The element is malformed either way, and a run with no
-	// stopping rule at all would not terminate.
+	// `until` and not `while`, and the difference is 3.1's rule exactly:
+	// `until` asks about the byte where the next frame would start, and
+	// `while` about the frame just read, so a `while` run took the first
+	// ten bytes of the padding as its last frame. That was harmless while
+	// a run's elements went unvalidated; once they are, a frame of zeros
+	// fails its identifier's bound and every padded tag was refused
+	// (26.789). The padding after the run is the tag's and nothing reads it.
 	//
 	// What bounds it is the frame: the tag is `10 + size` bytes and the
 	// caller acquires a view of exactly that, so the run cannot reach the
 	// audio even in a tag with no padding at all. That is 3.1's own rule
 	// rather than a restatement of how situ works -- a reader that reads
 	// past the tag size has left the tag.
-	id3_frame  frames[] while (identifier_0 != 0);
+	id3_frame  frames[] until "\0";
 }
 
 struct nothing {

@@ -10881,14 +10881,11 @@ class Emitter:
 		if self._is_record_run(placement):
 			# A run's terminator is checked by the walk that finds it, and a
 			# run that ran out of buffer has no elements to be wrong about --
-			# `_count` simply stops. Validating each element is a cost the
-			# caller chooses, as it is for any other array of structs.
-			return [
-				f"\t/* `{placement.name}` is a run of records. Whether its",
-				f"\t * terminator was reached is `{ident(self.prefix, struct.name, local, 'span')}`'s",
-				"\t * answer, and validating each element is the caller's",
-				"\t * choice, as with any other array of structs. */",
-			]
+			# `_count` simply stops. Its elements are validated, as any run
+			# of structs' are (26.789).
+			if "." in placement.path[len(struct.name) + 1:]:
+				return []
+			return self._element_validation(struct, placement)
 
 		# `before` asks for nothing here: the delimiter belongs to what
 		# follows, so its absence means there is nothing after this member
@@ -12993,13 +12990,9 @@ class Emitter:
 
 		# The same predicate the accessors use: an array is a placement with an
 		# element entry beside it, which is not the same as one with a count.
-		if self._is_array(placement):
-			return [
-				f"\t/* {placement.path} is an array of `{nested}`. Its elements are",
-				"\t * not validated here: that is a loop on every parse, and a",
-				"\t * caller who wants it should walk the elements and call",
-				f"\t * {ident(self.prefix, nested, 'validate')}() on each. */",
-			]
+		if self._is_array(placement) or self._is_record_run(placement) \
+				or placement.repeat_while is not None:
+			return self._element_validation(struct, placement)
 
 		return [
 			f"\t/* {placement.path} : {nested} -- its own constraints */",
@@ -13020,6 +13013,114 @@ class Emitter:
 			"\t\tif (err != SITU_OK) {",
 			"\t\t\treturn err;",
 			"\t\t}",
+			"\t}",
+		]
+
+	def _element_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element of a run of structs, through its own validator.
+
+		This said "a loop on every parse, and a caller who wants it should
+		walk the elements", and so a DNS label, an HTTP header field, a
+		netlink attribute or an id3 frame was checked as a member and never
+		as an element of the run that carries them -- 21 of the corpus's 26
+		runs of structs hold an element with checks of its own. Set by the
+		copyright holder: `validate` validates a run's elements (26.789).
+
+		One walk, the run's own: an element is what the run's walk steps
+		over, with the extent that walk gives it, so a record the frame
+		does not hold ends the walk here as it ends the run (26.680). A
+		refusal names the RUN, as a nested member's names the member --
+		`which` says which member of this struct refused.
+
+		Only where the element can refuse something, which keeps a run of
+		plain records from gaining an id that can never be reported. A
+		recursive element and one taking arguments are not walked yet.
+		"""
+		nested  = placement.type_name or ""
+		element = self.resolved.structs.get(nested)
+		check   = ident(self.prefix, nested, "check")
+		if element is None:
+			return []
+		if self._recursive(nested) or self._arguments(element) \
+				or not any(name for name, _ in self._check_groups(element)):
+			return [
+				f"\t/* {placement.path} is a run of `{nested}`. Its elements are",
+				"\t * not validated here: one has nothing to refuse, names",
+				"\t * itself, or takes arguments (26.789). */",
+			]
+		extent = self._element_extent_call(element)
+		if extent is None:
+			return []
+		base  = self._base_expression(struct, placement, gated=False)
+		step  = [
+			"\t\tat = at + size;",
+			"\t\tn  = n + 1u;",
+		]
+		if placement.repeat_while is not None:
+			cap  = ("" if placement.repeat_cap is None
+			        else f" && n < {placement.repeat_cap}u")
+			head = self._walk_prologue(base, cap, extent)
+			step = [*step,
+			        f"\t\tif (!({self._element_condition(element, placement)})) {{",
+			        "\t\t\tbreak;",
+			        "\t\t}"]
+		elif placement.delimiters:
+			if len(placement.delimiters) != 1:
+				return []
+			delim  = placement.delimiter
+			bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
+			head = [
+				f"\tstatic const uint8_t terminator[{len(delim)}] ="
+				f" {{{bytes_}}};",
+				*self._record_prologue(base, delim, "terminator", extent),
+			]
+		else:
+			to_end = placement.sized_by == "remaining"
+			head = [
+				*([] if to_end else [
+					f"\tconst uint32_t total = "
+					f"{self._count_expression(struct, placement)};"]),
+				f"\tuint32_t at = {base};",
+				"\tuint32_t n  = 0u;",
+				"",
+				("\twhile (at < view.limit) {" if to_end
+				 else "\twhile (n < total && at < view.limit) {"),
+				"\t\tsitu_view_t element;",
+				"\t\tuint32_t    size;",
+				"",
+				"\t\tif (situ_view_sub(view, at, situ_remaining_u32(view.limit,"
+				" at), &element) != SITU_OK) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+				f"\t\tsize = {extent};",
+				"\t\tif (size == 0u || size > situ_remaining_u32(view.limit,"
+				" at)) {",
+				"\t\t\tbreak;",
+				"\t\t}",
+			]
+		body = [
+			*head,
+			"\t\t{",
+			"\t\t\tsitu_view_t one;",
+			"\t\t\tsitu_err_t  err = situ_view_sub(view, at, size, &one);",
+			"",
+			"\t\t\tif (err == SITU_OK) {",
+			f"\t\t\t\terr = {check}(one, NULL);",
+			"\t\t\t}",
+			"\t\t\tif (err != SITU_OK) {",
+			"\t\t\t\treturn err;",
+			"\t\t\t}",
+			"\t\t}",
+			*step,
+			"\t}",
+			"\t(void)n;",
+		]
+		return [
+			f"\t/* {placement.path}: each `{nested}` the run holds, through its",
+			"\t * own validator. A refusal names the run (26.789). */",
+			"\t{",
+			*[f"\t{line}" if line else line for line in body],
 			"\t}",
 		]
 

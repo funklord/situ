@@ -288,12 +288,12 @@ def id3_says(audio: bytes, tmp: Path) -> object:
 def id3_situ(module: object, audio: bytes) -> object:
 	"""The same, through the generated accessors.
 
-	The run stops at the padding rather than before it, which is what the
-	schema's own comment says and netlink's caveat before that: situ's run
-	ends AFTER the element failing its test. So the last element is the first
-	ten bytes of the padding, and this asserts it is refused -- which turns
-	that comment into a checked claim. ffmpeg leaves padding, so the case is
-	reached on every run.
+	The run stops where the padding starts: `until "\\0"` asks about the
+	byte where the next frame would begin, which is 3.1's rule. It was a
+	`while` run that took the padding's first ten bytes as its last frame,
+	and once a run's elements were validated that frame refused every
+	padded tag (26.789). ffmpeg leaves padding, so the case is reached on
+	every run, and `validate` accepting the tag is the check that it stops.
 	"""
 	from situ_runtime import Message
 
@@ -306,24 +306,11 @@ def id3_situ(module: object, audio: bytes) -> object:
 	        | (int(tag.size_2) << 7) | int(tag.size_3))
 
 	found: list[tuple[str, str]] = []
-	padding = 0
 	for index in range(tag.frames_count):
 		frame = tag.frames(index)
 		ident = bytes(int(getattr(frame, f"identifier_{n}"))
 		              for n in range(4))
-		if ident[0] == 0:
-			# The padding element. It must be REFUSED rather than merely
-			# skipped here: a frame identifier is `A-Z0-9` by 4, so a
-			# reader that accepted this one would be accepting a frame
-			# whose length and flags are whatever the padding holds.
-			try:
-				frame.validate()
-			except Exception:
-				padding += 1
-				continue
-			raise AssertionError(
-				"id3: the padding was accepted as a frame, so the run's "
-				"stopping rule is not being checked by anything")
+		assert ident[0] != 0, "id3: the padding was taken as a frame"
 		body = bytes(frame.content)
 		# The encoding byte, then the text. 0 is ISO-8859-1 and 3 is UTF-8;
 		# ffmpeg writes 3 for everything, so the other three encodings are
@@ -332,9 +319,6 @@ def id3_situ(module: object, audio: bytes) -> object:
 			"utf-8" if body[:1] == b"\x03" else "latin-1")
 		found.append((ident.decode("latin-1"), text))
 
-	assert padding == 1, (
-		f"id3: expected one padding element at the end of the run, "
-		f"found {padding}")
 	return (10 + held, sorted(found))
 
 

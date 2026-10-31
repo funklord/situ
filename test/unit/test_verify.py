@@ -380,21 +380,22 @@ struct outer {
 
 def test_an_unwalked_array_qualifies_the_report(tmp_path: Path,
 		capsys: pytest.CaptureFixture[str]) -> None:
-	"""Neither `07` as a `k` nor `05` where `must_eq = 9` is refused, and
-	that is deliberate: an array of structs gets an accessor per element and
-	no per-element validation, "because walking every element on every parse
-	is a cost the caller should choose" (`traverse.Check`). All four backends
-	agree, so this does not change it.
+	"""`07` as a `k` is not refused, and that is deliberate: an enum array's
+	membership is not read, in any of the four.
 
 	What it changes is the sentence. A conformance tool that prints an
 	unqualified "1 vectors conform" while inheriting a documented gap is
 	claiming more than it checked.
+
+	`outer.many` used to be named here too. Its elements are validated since
+	26.789, so the vector that held `05` where `must_eq = 9` is refused, and
+	the note names the enum array alone.
 	"""
 	schema = tmp_path / "arrays.situ"
 	schema.write_text(ARRAYS, encoding="ascii")
 
 	vectors = tmp_path / "arrays.vectors"
-	vectors.write_text("outer bad 01 07 09 05\n", encoding="ascii")
+	vectors.write_text("outer good 01 07 09 09\n", encoding="ascii")
 
 	assert main(["verify", str(schema), str(vectors)]) == 0, \
 		"the report is qualified; the behaviour is not changed"
@@ -403,7 +404,20 @@ def test_an_unwalked_array_qualifies_the_report(tmp_path: Path,
 	assert "1 vectors conform" in out
 	assert "except inside arrays" in out
 	assert "`outer.kinds`: every element is a `k`" in out
-	assert "`outer.many`: every `inner` in it carries constraints" in out
+	assert "`outer.many`" not in out
+
+
+def test_an_array_of_structs_is_validated_element_by_element(tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	"""The second `inner` holds `05` where `must_eq = 9` (26.789)."""
+	schema = tmp_path / "arrays.situ"
+	schema.write_text(ARRAYS, encoding="ascii")
+
+	vectors = tmp_path / "arrays.vectors"
+	vectors.write_text("outer bad 01 07 09 05\n", encoding="ascii")
+
+	assert main(["verify", str(schema), str(vectors)]) == 1
+	assert "do not conform" in capsys.readouterr().out
 
 
 def test_a_schema_without_arrays_is_not_qualified(

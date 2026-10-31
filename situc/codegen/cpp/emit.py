@@ -51,6 +51,7 @@ from situc.traverse import (
 	Check,
 	Member,
 	RESERVED_STATED,
+	arguments,
 	arm_members,
 	fixed_tail_bytes,
 	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
@@ -10264,6 +10265,92 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _element_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element of a run of structs, through its own validator.
+
+		C's `_element_validation` says why and what is left out: the run's
+		own walk, each element at the extent that walk gives it, and a
+		refusal naming the run (26.789).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		base    = self._offset_expression(struct, placement)
+		if (element is None or base is None
+				or is_recursive(self.resolved.structs, element.name)
+				or arguments(element)
+				or not any(name for name, _ in self._check_groups(element))
+				or (placement.delimiters and len(placement.delimiters) != 1)
+				or (not element.layout.is_fixed_size
+				    and self._extent_terms(element) is None)):
+			return []
+		inner = f"::{self.namespace}::{self._struct_class(element.name)}"
+		step  = ["\t\t\t\tat += size;", "\t\t\t\tn  += 1;"]
+		scan: list[str] = []
+		if placement.repeat_while is not None:
+			cap  = ("" if placement.repeat_cap is None
+			        else f" && n < {placement.repeat_cap}u")
+			head = [f"\t\t\twhile (at < raw_.limit{cap}) {{"]
+			step = [*step,
+			        f"\t\t\t\tif (!({self._element_cond(element, placement)})) {{",
+			        "\t\t\t\t\tbreak;",
+			        "\t\t\t\t}"]
+		elif placement.delimiters:
+			delim = placement.delimiter
+			array = self._delimiter_array(placement)
+			head  = [self._delimiter_decl(placement, "\t\t\t"),
+			         f"\t\t\twhile (at + {len(delim)}u <= raw_.limit) {{"]
+			scan  = [
+				f"\t\t\t\tif (situ_scan(situ_base(raw_) + at, {len(delim)}u,"
+				f" {array}, {len(delim)}u) == 0u) {{",
+				"\t\t\t\t\tbreak;",
+				"\t\t\t\t}",
+			]
+		elif placement.sized_by == "remaining":
+			head = ["\t\t\twhile (at < raw_.limit) {"]
+		else:
+			count = self._count_expression(struct, placement)
+			if count is None:
+				return []
+			head = [f"\t\t\tconst std::uint32_t total = {count};",
+			        "\t\t\twhile (n < total && at < raw_.limit) {"]
+		return [
+			f"\t\t/* {placement.path}: each `{element.name}` the run holds,",
+			"\t\t * through its own validator. A refusal names the run",
+			"\t\t * (26.789). */",
+			"\t\t{",
+			f"\t\t\tstd::uint32_t at = {base};",
+			"\t\t\tstd::uint32_t n  = 0;",
+			"",
+			*head,
+			*scan,
+			"\t\t\t\tsitu_view_t raw;",
+			"\t\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at,"
+			" situ_remaining_u32(raw_.limit, at), &raw) != SITU_OK) {",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
+			f"\t\t\t\tconst {inner} element(raw);",
+			(f"\t\t\t\tconst std::uint32_t size = {inner}::size_bytes;"
+			 if element.layout.is_fixed_size else
+			 "\t\t\t\tconst std::uint32_t size = element.extent();"),
+			"\t\t\t\tif (size == 0u"
+			" || size > situ_remaining_u32(raw_.limit, at)) {",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
+			"\t\t\t\tsitu_view_t one;",
+			"\t\t\t\tif (situ_view_sub(::situ::rt::view::raw(), at, size,"
+			" &one) != SITU_OK) {",
+			"\t\t\t\t\tbreak;",
+			"\t\t\t\t}",
+			f"\t\t\t\tif (const ::situ::rt::err e = {inner}(one).validate();"
+			" e != ::situ::rt::err::ok) {",
+			"\t\t\t\t\treturn e;",
+			"\t\t\t\t}",
+			*step,
+			"\t\t\t}",
+			"\t\t\t(void)n;",
+			"\t\t}",
+		]
+
 	def _is_arm_struct(self, placement: Placement) -> bool:
 		"""Whether an arm is one struct rather than a run of them.
 
@@ -10329,6 +10416,13 @@ class Emitter:
 			return self._pinned_run_check(struct, placement, pinned)
 
 		check = classify_check(struct, placement, self.structs)
+
+		# A RUN of structs: each element through its own validator, which
+		# C's `_element_validation` says why (26.789).
+		if is_struct_run(self.resolved.structs, placement) \
+				and arm_of(struct, placement) is None \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			return self._element_validation(struct, placement)
 
 		if check is Check.NOTHING:
 			return []

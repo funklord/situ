@@ -7946,6 +7946,10 @@ Moved to `doc/decision/26.787-the-c-walker-walks-a-terminated-run.md`.
 
 Moved to `doc/decision/26.788-the-map-row-for-an-ended-run-in-an-arm.md`.
 
+### 26.789 `validate` validates every element of a run of structs
+
+Moved to `doc/decision/26.789-a-run-validates-its-elements.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

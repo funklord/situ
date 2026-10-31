@@ -13,7 +13,6 @@ what makes it get run.
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -276,16 +275,20 @@ def test_a_nested_struct_constraint_is_enforced(tmp_path: Path) -> None:
 	assert "check_outer_hdr_version_must_eq_is_enforced" in emitted
 
 
-def test_an_array_of_structs_says_it_is_not_walked() -> None:
-	"""Validating every element on every parse is a cost worth stating."""
+def test_an_array_of_structs_is_walked() -> None:
+	"""Every element through its own `check`, naming the run (26.789).
+
+	This said the elements were not validated, "a cost worth stating"; the
+	copyright holder set the other answer.
+	"""
 	schema   = parse_text(PREAMBLE + "struct r { u8 v [must_eq = 1]; }\n"
 	                                 "struct s { u8 n; r recs[4]; }\n")
 	resolved = resolve(schema, solve(schema))
 	source   = generate(schema, resolved, "unit").source
 
-	assert "is an array of `r`" in source
-	assert "not validated here" in source
-	assert re.search(r"situ_r_validate\(\) on each", source)
+	assert "each `r` the run holds" in source
+	assert "err = situ_r_check(one, NULL);" in source
+	assert "*which = SITU_S_RECS_CHECK;" in source
 
 
 @pytest.mark.skipif(HOST_CC is None, reason="no host compiler")

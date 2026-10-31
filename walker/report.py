@@ -1101,6 +1101,29 @@ def _validate(image: Image, view: View, struct_index: int,
 		if not counted_run_fits(view, index):
 			return fail(ERR_BOUNDS, index, FITS_FRAME)
 
+		# And every element of a run of structs, through its own validator,
+		# as the four backends now ask -- a refusal names the run (26.789).
+		elements = _run_elements(view, index)
+		if elements is not None:
+			floor = image.structs[
+				image.placements[index].type_struct].size_min_bits
+			for at, size in elements:
+				# The element's own MINIMUM against the extent the walk
+				# gave it, which every backend's `check` asks first and
+				# `_validate` does not for a variable struct -- the nested
+				# member's reason, 26.577.
+				if floor != NONE and size * BITS_PER_BYTE < floor:
+					return fail(ERR_BOUNDS, index)
+				verdict = _validate(
+					image, View(image, view.buffer,
+					            image.placements[index].type_struct,
+					            at, at + size),
+					image.placements[index].type_struct)
+				if verdict is None:
+					return None
+				if verdict:
+					return fail(verdict, index)
+
 		# And a `tlv` region's items fill it, which nothing asked: a cut
 		# item and a `default: error` arm each read as the region ending
 		# there, so `example/protobuf` validated both as zero items, here
@@ -1844,6 +1867,98 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 		return OK
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
 	return _validate(image, inner, arm_type) or OK
+
+
+def _run_elements(view: View, index: int) -> list[tuple[int, int]] | None:
+	"""Where each element of a run of structs is, as `(at, size)` in bytes.
+
+	None where the run is not one this validates the elements of: the four
+	backends' `_element_validation` decline a recursive element, one taking
+	arguments, and a run in a variant arm, and so does this. Each element is
+	what the run's own walk steps over, at the extent that walk gives it, so
+	a record the frame does not hold ends the list as it ends the run
+	(26.680, 26.789).
+	"""
+	image     = view.image
+	placement = image.placements[index]
+	element   = placement.type_struct
+	if element == NONE or placement.kind != FIELD or index in image.varints:
+		return None
+	# An arm is a member of the variant, not of this struct's chain.
+	if any(chosen == index for _selects, arms in image.arms.values()
+	       for _case, chosen, _flags in arms):
+		return None
+	runs = (placement.repeat_code != NONE or index in image.delimiters
+	        or placement.size_code != NONE or placement.array_count != NONE)
+	if not runs or element in image.depths:
+		return None
+	shape = image.structs[element]
+	if any(image.placements[one].parameter for one in
+	       range(shape.first_placement,
+	             shape.first_placement + shape.placement_count)):
+		return None
+
+	def measure(at: int) -> int:
+		if shape.fixed:
+			return shape.size_bits // BITS_PER_BYTE
+		return struct_extent(View(image, view.buffer, element, at,
+		                          view.limit), 1)
+
+	try:
+		first = view.at + offset_bits(view, index) // BITS_PER_BYTE
+	except Refused:
+		return None
+	found: list[tuple[int, int]] = []
+	at = first
+	try:
+		if placement.repeat_code != NONE:
+			cap = placement.repeat_cap or 0xFFFF
+			while len(found) < cap and at < view.limit:
+				size = measure(at)
+				if size <= 0 or at + size > view.limit:
+					break
+				found.append((at, size))
+				at += size
+				sub = View(image, view.buffer, element, at - size, view.limit)
+				if not _evaluate(sub, placement.repeat_code, size):
+					break
+		elif index in image.delimiters:
+			delims = image.delimiters[index]
+			room   = max(len(one) for one in delims)
+			while at + room <= view.limit:
+				if any(view.buffer[at:at + len(one)] == one
+				       for one in delims):
+					break
+				size = measure(at)
+				if size <= 0 or at + size > view.limit:
+					break
+				found.append((at, size))
+				at += size
+		elif _sizes_in_bytes(image, placement.size_code):
+			while at < view.limit:
+				size = measure(at)
+				if size <= 0 or at + size > view.limit:
+					break
+				found.append((at, size))
+				at += size
+		else:
+			count = (placement.array_count
+			         if placement.array_count != NONE else
+			         _evaluate(view, placement.size_code,
+			                   lambda: first - view.at))
+			for _ in range(min(max(count, 0), 0xFFFFFFFF)):
+				if at >= view.limit:
+					break
+				size = measure(at)
+				if size <= 0 or at + size > view.limit:
+					break
+				found.append((at, size))
+				at += size
+	except Unplaceable:
+		return None
+	except Refused:
+		pass
+	return found
 
 
 def _members(image: Image, view: View, struct_index: int) -> list[str]:

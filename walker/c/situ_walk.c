@@ -4482,6 +4482,200 @@ static situ_walk_err counted_run_walk(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
+/* Whether a struct's validator is one this walks a run's elements into:
+ * not one naming itself, which declares `[depth]`, and not one taking
+ * arguments -- the four backends decline both (26.789). */
+static int element_validatable(const situ_walk_image *image, uint32_t shape)
+{
+	uint32_t first = 0u;
+	uint32_t count = 0u;
+
+	for (uint32_t i = 0u; i < image->depth_count; i++) {
+		if (u32_at(image->depths + (size_t)i * image->depth_stride)
+		    == shape) {
+			return 0;
+		}
+	}
+	if (situ_walk_members(image, shape, &first, &count) != SITU_WALK_OK) {
+		return 0;
+	}
+	for (uint32_t i = first; i < first + count; i++) {
+		situ_walk_placement one;
+
+		if (situ_walk_placement_at(image, i, &one) != SITU_WALK_OK
+		    || (one.text_flags & SITU_WALK_PARAMETER) != 0u) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* Every element of a run of structs, through its own validator.
+ *
+ * The four backends' `_element_validation` and `report._run_elements`, one
+ * walk per shape -- a count, `[remaining]`, `while` and a terminator --
+ * each element at the extent the run's own walk gives it, so a record the
+ * frame does not hold ends the walk as it ends the run (26.680). A refusal
+ * is the element's own code and names the run (26.789). */
+static situ_walk_err run_elements_validate(const situ_walk_image *image,
+                                           const uint8_t *message,
+                                           uint32_t len, uint32_t shape,
+                                           uint32_t index, uint32_t depth,
+                                           situ_walk_err *verdict,
+                                           situ_walk_why *why)
+{
+	situ_walk_placement held;
+	situ_walk_err       err = situ_walk_placement_at(image, index, &held);
+	const uint8_t      *rules = NULL;
+	uint32_t            alts  = 0u;
+	uint32_t            room  = 0u;
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	delimiter_span(image, index, &rules, &alts);
+	if (held.type_struct == SITU_WALK_NONE
+	    || held.type_struct >= image->struct_count
+	    || varint_rules(image, index) != NULL
+	    || (held.repeat_code == SITU_WALK_NONE && rules == NULL
+	        && held.size_code == SITU_WALK_NONE
+	        && held.array_count == SITU_WALK_NONE)
+	    || !element_validatable(image, held.type_struct)) {
+		return SITU_WALK_OK;
+	}
+	/* An arm is a member of its variant, not of this struct's chain. */
+	for (uint32_t i = 0u; i < image->arm_count; i++) {
+		if (u32_at(image->arms + (size_t)i * image->arm_stride + 4u)
+		    == index) {
+			return SITU_WALK_OK;
+		}
+	}
+	for (uint32_t d = 0u; d < alts; d++) {
+		const uint32_t wide = rules[(size_t)d * image->delimiter_stride + 16];
+
+		if (wide > room) {
+			room = wide;
+		}
+	}
+
+	uint32_t start = 0u;
+	err = offset_bits_deep(image, message, len, shape, index, depth,
+	                       &start);
+	if (err != SITU_WALK_OK) {
+		return err == SITU_WALK_UNSUPPORTED ? err : SITU_WALK_OK;
+	}
+	if (start % 8u) {
+		return SITU_WALK_UNSUPPORTED;
+	}
+	start /= 8u;
+
+	const uint8_t *inner = image->structs
+	                       + held.type_struct * image->struct_stride;
+	const uint32_t fixed = u32_at(inner + 8);
+	const int      bytes = rules == NULL
+	                       && held.repeat_code == SITU_WALK_NONE
+	                       && held.size_code != SITU_WALK_NONE
+	                       && size_code_is_bytes(image, held.size_code);
+	int64_t        count = 0;
+	uint32_t       cap   = 0xffffu;
+
+	if (held.repeat_code != SITU_WALK_NONE) {
+		cap = held.repeat_cap != 0u ? held.repeat_cap : 0xffffu;
+	} else if (rules == NULL && !bytes) {
+		if (held.array_count != SITU_WALK_NONE) {
+			count = held.array_count;
+		} else {
+			walk_ctx ctx = {image, message, len, shape, depth};
+
+			err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+			                     (int64_t)(len > start ? len - start : 0u),
+			                     &count);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+		}
+		if (count < 0) {
+			count = 0;
+		}
+	}
+
+	uint32_t at = start;
+	uint32_t n  = 0u;
+
+	while (at < len) {
+		uint32_t extent = 0u;
+
+		if (held.repeat_code != SITU_WALK_NONE && n >= cap) {
+			break;
+		}
+		if (rules != NULL) {
+			if (room > len - at
+			    || terminator_at(image, rules, alts, message, len, at)
+			       != 0u) {
+				break;
+			}
+		}
+		if (rules == NULL && held.repeat_code == SITU_WALK_NONE && !bytes
+		    && (int64_t)n >= count) {
+			break;
+		}
+		if (fixed != SITU_WALK_NONE) {
+			extent = fixed / 8u;
+		} else {
+			err = struct_extent(image, message + at, len - at,
+			                    held.type_struct, depth + 1u, &extent);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				break;
+			}
+		}
+		if (extent == 0u || extent > len - at) {
+			break;
+		}
+
+		situ_walk_err inner_verdict = SITU_WALK_OK;
+		/* The row's fifth word, where the image carries it (26.577). */
+		const uint32_t floor = image->struct_stride >= 20u
+		                       ? u32_at(inner + 16) : SITU_WALK_NONE;
+
+		/* The element's own minimum against the extent the walk gave it,
+		 * which every backend's `check` asks first: a nested member's
+		 * reason (26.577), met by an element. */
+		if (floor != SITU_WALK_NONE && extent * 8u < floor) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		err = validate_deep(image, message + at, extent, held.type_struct,
+		                    depth + 1u, &inner_verdict, NULL);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (inner_verdict != SITU_WALK_OK) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = inner_verdict;
+			return SITU_WALK_OK;
+		}
+		at += extent;
+		n  += 1u;
+
+		if (held.repeat_code != SITU_WALK_NONE) {
+			walk_ctx ctx  = {image, message + at - extent, len - at + extent,
+			                 held.type_struct, depth + 1u};
+			int64_t  more = 0;
+
+			err = situ_walk_eval(image, held.repeat_code, ctx_load, &ctx,
+			                     (int64_t)(len - at), &more);
+			if (err != SITU_WALK_OK || more == 0) {
+				break;
+			}
+		}
+	}
+	return SITU_WALK_OK;
+}
+
 static situ_walk_err validate_deep(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
@@ -4950,6 +5144,27 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (!fits) {
 				record(why, index, CHECK_FITS_FRAME);
 				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+		}
+
+		/* And every element of a run of structs, through its own
+		 * validator, as the four backends now ask; a refusal names the
+		 * run (26.789). */
+		{
+			situ_walk_err element = SITU_WALK_OK;
+
+			/* Its own verdict, because `*verdict` may already hold one
+			 * an earlier member set while the loop goes on to a check
+			 * that outranks it -- returning on that cut the walk short
+			 * and named the wrong check. */
+			err = run_elements_validate(image, message, len, shape, index,
+			                            depth, &element, why);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (element != SITU_WALK_OK) {
+				*verdict = element;
 				return SITU_WALK_OK;
 			}
 		}

@@ -167,7 +167,9 @@ struct tkv { u8 k; kv recs[] until "\\n"; u16 after; }
 TOP_CASES = {
 	"tpt": {"0001020aaabb": "0", "0001020aaa": "1", "000102aabb": "1",
 	        "0001020304050aaabb": "1", "000aaabb": "0"},
-	"tkv": {"00613a623b0aaabb": "0", "00613a62aabb": "1",
+	# A `kv` whose value has no `;` is the run's one record, and the run's
+	# elements are validated before `after` is placed (26.789).
+	"tkv": {"00613a623b0aaabb": "0", "00613a62aabb": "2",
 	        "00613a623b0aaa": "1"},
 }
 

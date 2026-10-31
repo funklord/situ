@@ -51,6 +51,7 @@ from situc.traverse import (
 	RESERVED_STATED,
 	arm_members,
 	fixed_tail_bytes,
+	arguments,
 	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
 	versioned_tail,
 	within_a_region_arm,
@@ -7075,6 +7076,89 @@ class Emitter:
 			])
 		return lines
 
+	def _element_validation(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element of a run of structs, through its own validator.
+
+		C's `_element_validation` says why and what is left out: the run's
+		own walk, each element at the extent that walk gives it, and a
+		refusal naming the run (26.789).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		base    = self._offset_expression(struct, placement)
+		if (element is None or base is None
+				or is_recursive(self.resolved.structs, element.name)
+				or arguments(element)
+				or not any(name for name, _ in self._check_groups(element))
+				or (placement.delimiters and len(placement.delimiters) != 1)
+				or (not element.layout.is_fixed_size
+				    and self._extent_expression(element) is None)):
+			return []
+		inner = _pascal(element.name)
+		step  = ["\t\t\tat += size;", "\t\t\tn  += 1;"]
+		scan: list[str] = []
+		if placement.repeat_while is not None:
+			cap  = ("" if placement.repeat_cap is None
+			        else f" && n < {placement.repeat_cap}")
+			cond = self._element_condition(element, placement,
+			                               "self.bytes.len()")
+			head = [f"\t\twhile at < self.bytes.len(){cap} {{"]
+			step = [*step,
+			        f"\t\t\tif !({cond}) {{",
+			        "\t\t\t\tbreak;",
+			        "\t\t\t}"]
+		elif placement.delimiters:
+			delim  = placement.delimiter
+			bytes_ = ("b\"" + "".join(f"\\x{byte:02x}" for byte in delim)
+			          + "\"")
+			head = [f"\t\twhile at + {len(delim)} <= self.bytes.len() {{"]
+			scan = [
+				f"\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
+				"\t\t\t\tbreak;",
+				"\t\t\t}",
+			]
+		elif placement.sized_by == "remaining":
+			head = ["\t\twhile at < self.bytes.len() {"]
+		else:
+			count = self._count_expression(struct, placement)
+			if count is None:
+				return []
+			head = [f"\t\tlet total: usize = {self._unparen(count)};",
+			        "\t\twhile n < total && at < self.bytes.len() {"]
+		size = (f"{inner}::SIZE" if element.layout.is_fixed_size
+		        else "element.extent()")
+		body = [
+			f"\t\tlet mut at = {self._unparen(base)};",
+			"\t\tlet mut n  = 0usize;",
+			*head,
+			*scan,
+			# Bound only where something reads it: a fixed element's
+			# size is a constant and only a condition asks its fields.
+			*([] if element.layout.is_fixed_size
+			  and placement.repeat_while is None else
+			  [f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};"]),
+			f"\t\t\tlet size    = {size};",
+			"\t\t\tif size == 0"
+			" || size > situ_rt::remaining(self.bytes.len(), at) {",
+			"\t\t\t\tbreak;",
+			"\t\t\t}",
+			f"\t\t\tif let Err(e) = ({inner} {{ bytes: &self.bytes[at..at + size] }})"
+			".validate() {",
+			"\t\t\t\treturn Err(e);",
+			"\t\t\t}",
+			*step,
+			"\t\t}",
+			"\t\tlet _ = n;",
+		]
+		return [
+			f"\t\t// {placement.path}: each `{element.name}` the run holds,",
+			"\t\t// through its own validator. A refusal names the run",
+			"\t\t// (26.789).",
+			"\t\t{",
+			*[f"\t{line}" for line in body],
+			"\t\t}",
+		]
+
 	def _arm_ended_walk(self, struct: ResolvedStruct, member: Placement,
 			base: str, tail: int) -> list[str] | None:
 		"""The tail after an arm's `while` or delimited run of records.
@@ -9699,6 +9783,14 @@ class Emitter:
 					out.extend(self._arm_validation(struct, member))
 					out.extend(self._arm_member_checks(
 						struct, placement, arm, member))
+			return out
+
+		# A RUN of structs: each element through its own validator, which
+		# C's `_element_validation` says why (26.789).
+		if is_struct_run(self.resolved.structs, placement) \
+				and arm_of(struct, placement) is None \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			out.extend(self._element_validation(struct, placement))
 			return out
 
 		if check is Check.NOTHING:

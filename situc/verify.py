@@ -57,7 +57,8 @@ from situc.codegen.python.emit import py_name
 from situc.diagnostics import Source
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import traverse
-from situc.traverse import Check, classify_check, data_sized
+from situc.traverse import (Check, arguments, arm_of, classify_check,
+                            data_sized, is_recursive)
 
 
 @dataclass
@@ -487,12 +488,11 @@ def _enum_macros(schema: ast.Schema, resolved: ResolvedSchema) -> dict[str, int]
 def _unwalked(resolved: ResolvedSchema, struct: ResolvedStruct) -> tuple[str, ...]:
 	"""Arrays whose elements carry constraints that `validate` does not read.
 
-	Deliberate, documented, and shared by all four backends: an array of
-	structs gets an accessor per element and no per-element validation,
-	"because walking every element on every parse is a cost the caller should
-	choose" (`traverse.Check`). An enum array is the same bargain -- an
-	out-of-range `k` in `k kinds[2]` passes -- and so is a run walked to a
-	terminator.
+	Shared by all four backends. A run of structs is validated element by
+	element since 26.789, except in a variant arm, where its element names
+	its own type, or where it takes arguments -- and those are what this
+	still names. An enum array is not: an out-of-range `k` in `k kinds[2]`
+	passes.
 
 	Nothing here changes that. What it changes is the report: a command whose
 	whole purpose is telling CI that bytes conform must not print an
@@ -533,6 +533,15 @@ def _gather(resolved: ResolvedSchema, struct: ResolvedStruct, found: list[str],
 		            or bool(placement.delimiters))
 
 		if repeated:
+			# Validated now, element by element, where the four backends
+			# walk it (26.789): a top-level run of a struct that neither
+			# names itself nor takes arguments. What is inside one is
+			# asked of the element, as of a nested member.
+			if inner is not None and arm_of(struct, placement) is None \
+					and not is_recursive(resolved.structs, inner.name) \
+					and not arguments(inner):
+				_gather(resolved, inner, found, seen)
+				continue
 			if inner is not None and _has_checks(resolved, inner, set()):
 				found.append(f"`{placement.path}`: every `{placement.type_name}` "
 				             f"in it carries constraints, and none was read")
@@ -647,8 +656,9 @@ def render(found: list[Outcome], schema_path: str, vectors_path: str) -> str:
 		lines.append(f"situc: {len(found)} vectors conform to {schema_path}")
 
 	if found and arrays:
-		lines.append("note: an array's elements are validated by the caller "
-		             "that chooses to walk them (traverse.Check), so these "
+		lines.append("note: `validate` does not read these elements -- an "
+		             "enum array's, and a run's that is in a variant arm, "
+		             "names its own type or takes arguments -- so these "
 		             "were not read:")
 		lines.extend(f"    = {one}" for one in arrays)
 

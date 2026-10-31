@@ -416,10 +416,10 @@ class Check(Enum):
 	"""What `validate` has to check for one member.
 
 	A separate order from `Member`, and separate for a reason: an array of
-	structs gets an *accessor* per element and no per-element validation,
-	because walking every element on every parse is a cost the caller should
-	choose. So `REPEATED` comes before `NESTED` here too, but means something
-	different from `ARRAY` above.
+	structs is not one nested struct, so `REPEATED` comes before `NESTED`
+	here too, but means something different from `ARRAY` above. Its
+	elements are validated by the run's own walk in each backend's
+	`_element_validation`, not through `NESTED` (26.789).
 	"""
 
 	#: Its own `validate`, called through.
