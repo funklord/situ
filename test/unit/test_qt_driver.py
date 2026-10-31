@@ -5,9 +5,10 @@ runtime, and the first that is not C. Qt's event loop belongs to the
 application, so the driver does not own one: it installs a QSocketNotifier
 and a single-shot QTimer, wires them to the rung-6 state machine, and
 returns. This drives the generated code inside a real QCoreApplication over
-an AF_UNIX datagram socketpair and asserts the two behaviours the loop
-exists for -- it retransmits an unanswered query and then correlates the
-reply, and it expires an exchange once the retry budget is spent.
+an AF_UNIX datagram socketpair and asks for every hook the pump calls --
+a reply read through its view, an expiry, an unmatched reply, a short and
+an oversized datagram, `stop()` from a hook, and `on_done` exactly once --
+the cases `c_driver_harness` puts to the six C drivers (26.775).
 
 Qt's own headers do not survive `-Wconversion -Werror`, so they are included
 with `-isystem`: situ's generated code is still held to the repository's
@@ -69,9 +70,9 @@ WARNINGS = ("-std=c++17", "-O1", "-Wall", "-Wextra", "-Wconversion",
 
 HARNESS = r"""
 /* Drives the generated `--driver qt` artifact inside a real Qt event loop,
- * over an AF_UNIX datagram socketpair. Two cases: the peer drops the first
- * two datagrams then echoes the third (retransmit, then correlate), and the
- * peer never replies (expire after the retry budget). */
+ * over an AF_UNIX datagram socketpair, and asks for every hook the pump
+ * calls -- the same cases `c_driver_harness` puts to the six C drivers,
+ * since the hooks are the same by name (26.775). */
 #include <QtCore/QCoreApplication>
 #include <QtCore/QTimer>
 
@@ -81,19 +82,24 @@ HARNESS = r"""
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <unistd.h>
 
 #include "dns_qt.hpp"
 
 namespace {
 
+enum { ECHO, SILENT, WRONG_ID, SHORT_FIRST, HUGE_FIRST, ONLY_GARBAGE };
+
 struct peer_state {
 	int fd;
+	int mode;
 	unsigned drop_first;
-	int do_echo;
 	volatile sig_atomic_t stop;
 	unsigned seen;
 };
+
+std::uint8_t huge[70000];
 
 void *peer_main(void *arg)
 {
@@ -105,21 +111,47 @@ void *peer_main(void *arg)
 			continue;	/* SO_RCVTIMEO expiry: re-check the stop flag */
 		}
 		p->seen += 1u;
-		if (p->do_echo != 0 && p->seen > p->drop_first) {
-			(void)::send(p->fd, buf, static_cast<size_t>(got), 0);
+		if (p->mode == SILENT || p->seen <= p->drop_first) {
+			continue;
 		}
+		if (p->mode == WRONG_ID) {
+			buf[1] = static_cast<std::uint8_t>(buf[1] + 1u);
+		}
+		if (p->seen == p->drop_first + 1u && p->mode == SHORT_FIRST) {
+			(void)::send(p->fd, buf, 3u, 0);
+		}
+		if (p->seen == p->drop_first + 1u && p->mode == HUGE_FIRST) {
+			(void)::send(p->fd, huge, sizeof huge, 0);
+		}
+		if (p->mode == ONLY_GARBAGE) {
+			(void)::send(p->fd, buf, 3u, 0);
+			continue;
+		}
+		(void)::send(p->fd, buf, static_cast<size_t>(got), 0);
 	}
 	return nullptr;
 }
 
-int run_case(const char *name, unsigned drop_first, int do_echo,
-             unsigned want_replies, unsigned want_expired, unsigned want_min)
+struct results {
+	unsigned replies = 0u, expired = 0u, unmatched = 0u, malformed = 0u;
+	unsigned errors = 0u, done = 0u, seen = 0u;
+	std::uint32_t id = 0u, view_id = 0u;
+	::situ::rt::err malformed_why = ::situ::rt::err::ok;
+	::situ::rt::err done_rc = ::situ::rt::err::bounds;
+	bool timed_out = false;
+};
+
+int run_case(const char *name, int mode, unsigned drop_first,
+             bool stop_on_malformed, results &r)
 {
 	int sp[2];
 	if (::socketpair(AF_UNIX, SOCK_DGRAM, 0, sp) != 0) {
 		std::fprintf(stderr, "%s: socketpair failed\n", name);
 		return 1;
 	}
+	int big = 1 << 20;
+	(void)::setsockopt(sp[1], SOL_SOCKET, SO_SNDBUF, &big, sizeof big);
+	(void)::setsockopt(sp[0], SOL_SOCKET, SO_RCVBUF, &big, sizeof big);
 	struct timeval tv;
 	tv.tv_sec = 0;
 	tv.tv_usec = 50 * 1000;
@@ -128,118 +160,138 @@ int run_case(const char *name, unsigned drop_first, int do_echo,
 	peer_state peer;
 	std::memset(&peer, 0, sizeof peer);
 	peer.fd = sp[1];
+	peer.mode = mode;
 	peer.drop_first = drop_first;
-	peer.do_echo = do_echo;
-
 	pthread_t th;
 	if (::pthread_create(&th, nullptr, peer_main, &peer) != 0) {
 		std::fprintf(stderr, "%s: pthread_create failed\n", name);
 		return 1;
 	}
 
-	/* A 12-byte dns_header. The peer echoes these bytes, so the reply's
-	 * id and opcode equal the query's and the exchange correlates. */
 	std::uint8_t req[12];
 	std::memset(req, 0, sizeof req);
 	req[0] = 0x4eu;
 	req[1] = 0x4fu;
-
 	::situ::rt::message owner(req, static_cast<std::uint32_t>(sizeof req));
 	::situ::dns_header query;
 	if (::situ::dns_header::at(owner, 0u, query) != ::situ::rt::err::ok) {
 		std::fprintf(stderr, "%s: could not acquire the query view\n", name);
-		peer.stop = 1;
-		(void)::pthread_join(th, nullptr);
 		return 1;
 	}
-
 	::situ::qt_io sink(sp[0]);
 	::situ::reply_to_driver::slot store[4];
 	::situ::reply_to_driver drive(store, 4u, sink, 40u, 2u);
-
-	const std::uint32_t handle = 0x1234u;
 	if (drive.send(query, req, static_cast<std::uint32_t>(sizeof req),
-	               handle, ::situ::qt_now_ms()) != ::situ::rt::err::ok) {
+	               0x1234u, ::situ::qt_now_ms()) != ::situ::rt::err::ok) {
 		std::fprintf(stderr, "%s: send failed\n", name);
-		peer.stop = 1;
-		(void)::pthread_join(th, nullptr);
 		return 1;
 	}
 
-	unsigned replies = 0u;
-	unsigned expiries = 0u;
-	std::uint32_t got_id = 0u;
-	bool done = false;
+	::situ::qt_reply_to_pump *pump = nullptr;
+	::situ::qt_reply_to_hooks hooks;
+	hooks.on_reply = [&](std::uint32_t id, const ::situ::dns_header &reply) {
+		r.replies += 1u;
+		r.id = id;
+		r.view_id = reply.id();
+	};
+	hooks.on_unmatched = [&](const ::situ::dns_header &, ::situ::rt::err) {
+		r.unmatched += 1u;
+	};
+	hooks.on_malformed = [&](const std::uint8_t *, std::uint32_t,
+	                         ::situ::rt::err why) {
+		r.malformed += 1u;
+		r.malformed_why = why;
+		if (stop_on_malformed && pump != nullptr) {
+			pump->stop();
+		}
+	};
+	hooks.on_expired = [&](std::uint32_t n) { r.expired += n; };
+	hooks.on_error = [&](::situ::rt::err, int) { r.errors += 1u; };
+	hooks.on_done = [&](::situ::rt::err rc) {
+		r.done += 1u;
+		r.done_rc = rc;
+		QCoreApplication::quit();
+	};
 
-	const ::situ::rt::err armed = ::situ::qt_reply_to_run(
-		sp[0], drive,
-		[&](std::uint32_t id) { replies += 1u; got_id = id; },
-		[&](std::uint32_t n) { expiries += n; },
-		[&](::situ::rt::err) { done = true; QCoreApplication::quit(); });
-	if (armed != ::situ::rt::err::ok) {
+	/* The pump itself rather than `qt_reply_to_run`, so a hook can reach
+	 * `stop()`; the runner is the same pump, heap-allocated. */
+	auto owned = std::make_unique<::situ::qt_reply_to_pump>(sp[0], drive,
+	                                                        hooks);
+	pump = owned.get();
+	if (pump->start() != ::situ::rt::err::ok) {
 		std::fprintf(stderr, "%s: arming failed\n", name);
-		peer.stop = 1;
-		(void)::pthread_join(th, nullptr);
 		return 1;
 	}
-
 	/* A watchdog, so a loop that never completes fails rather than hangs. */
-	bool timed_out = false;
-	QTimer::singleShot(3000, [&]() { timed_out = true;
+	QTimer::singleShot(3000, [&]() { r.timed_out = true;
 	                                 QCoreApplication::quit(); });
 	QCoreApplication::exec();
 
 	peer.stop = 1;
 	(void)::pthread_join(th, nullptr);
+	r.seen = peer.seen;
+	owned.reset();
 	(void)::close(sp[0]);
 	(void)::close(sp[1]);
-
-	int fail = 0;
-	if (timed_out) {
-		std::fprintf(stderr, "%s: watchdog fired; the loop never finished\n",
-		             name);
-		fail = 1;
-	}
-	if (!done) {
-		std::fprintf(stderr, "%s: on_done never fired\n", name);
-		fail = 1;
-	}
-	if (replies != want_replies) {
-		std::fprintf(stderr, "%s: replies=%u want %u\n", name, replies,
-		             want_replies);
-		fail = 1;
-	}
-	if (want_replies != 0u && got_id != handle) {
-		std::fprintf(stderr, "%s: id=0x%x want 0x%x\n", name, got_id, handle);
-		fail = 1;
-	}
-	if (expiries != want_expired) {
-		std::fprintf(stderr, "%s: expired=%u want %u\n", name, expiries,
-		             want_expired);
-		fail = 1;
-	}
-	if (peer.seen < want_min) {
-		std::fprintf(stderr, "%s: peer saw %u datagrams, want >= %u\n", name,
-		             peer.seen, want_min);
-		fail = 1;
-	}
-	if (fail == 0) {
-		std::printf("PASS %s: replies=%u id=0x%x expired=%u datagrams=%u\n",
-		            name, replies, got_id, expiries, peer.seen);
-	}
-	return fail;
+	return 0;
 }
 
 }  /* namespace */
 
+#define CHECK(cond) do { if (!(cond)) { \
+	std::fprintf(stderr, "%s: %s failed (replies=%u view_id=0x%x " \
+	             "expired=%u unmatched=%u malformed=%u errors=%u done=%u)\n", \
+	             name, #cond, r.replies, r.view_id, r.expired, r.unmatched, \
+	             r.malformed, r.errors, r.done); \
+	fail = 1; } } while (0)
+
 int main(int argc, char **argv)
 {
 	QCoreApplication app(argc, argv);
-
 	int fail = 0;
-	fail |= run_case("retransmit-then-correlate", 2u, 1, 1u, 0u, 3u);
-	fail |= run_case("expire", 0u, 0, 0u, 1u, 3u);
-
+	const char *name;
+	{
+		name = "retransmit-then-reply";
+		results r;
+		if (run_case(name, ECHO, 2u, false, r) != 0) return 1;
+		CHECK(!r.timed_out && r.replies == 1u && r.id == 0x1234u);
+		CHECK(r.view_id == 0x4e4fu && r.expired == 0u && r.seen >= 3u);
+		CHECK(r.done == 1u && r.done_rc == ::situ::rt::err::ok);
+	}
+	{
+		name = "expire";
+		results r;
+		if (run_case(name, SILENT, 0u, false, r) != 0) return 1;
+		CHECK(!r.timed_out && r.replies == 0u && r.expired == 1u);
+		CHECK(r.done == 1u && r.errors == 0u);
+	}
+	{
+		name = "unmatched";
+		results r;
+		if (run_case(name, WRONG_ID, 0u, false, r) != 0) return 1;
+		CHECK(!r.timed_out && r.unmatched >= 1u && r.expired == 1u);
+	}
+	{
+		name = "short-datagram";
+		results r;
+		if (run_case(name, SHORT_FIRST, 0u, false, r) != 0) return 1;
+		CHECK(!r.timed_out && r.malformed == 1u && r.replies == 1u);
+	}
+	{
+		name = "oversized-datagram";
+		results r;
+		if (run_case(name, HUGE_FIRST, 0u, false, r) != 0) return 1;
+		CHECK(!r.timed_out && r.malformed == 1u && r.replies == 1u);
+		CHECK(r.malformed_why == ::situ::rt::err::bounds);
+	}
+	{
+		name = "stop";
+		results r;
+		if (run_case(name, ONLY_GARBAGE, 0u, true, r) != 0) return 1;
+		CHECK(!r.timed_out && r.malformed == 1u && r.replies == 0u);
+		CHECK(r.expired == 0u && r.done == 1u);
+		CHECK(r.done_rc == ::situ::rt::err::ok);
+	}
 	if (fail == 0) {
 		std::printf("ALL PASS\n");
 	}
@@ -250,7 +302,7 @@ int main(int argc, char **argv)
 
 @pytest.mark.skipif(CXX is None or QT_CFLAGS is None,
                     reason="needs a C++ compiler and Qt6Core")
-def test_qt_driver_retransmits_and_expires(tmp_path: Path) -> None:
+def test_qt_driver_calls_every_hook(tmp_path: Path) -> None:
 	"""Generate the Qt driver, drive it inside a real QCoreApplication over a
 	socketpair, and prove both behaviours: a retransmit that then correlates,
 	and an expiry after the retry budget."""

@@ -7895,6 +7895,10 @@ Moved to `doc/decision/26.773-a-ratio-region-doubles-its-constant.md`.
 
 Moved to `doc/decision/26.774-a-coded-region-is-as-long-as-its-version.md`.
 
+### 26.775 One set of hooks for every driver
+
+Moved to `doc/decision/26.775-one-set-of-hooks-for-every-driver.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

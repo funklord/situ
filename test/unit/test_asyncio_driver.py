@@ -8,9 +8,10 @@ rather than a completion callback: a coroutine is the runtime's own way of
 saying "this finishes later", which C++ had no equivalent of.
 
 This runs the generated coroutine on a real event loop over an AF_UNIX
-datagram socketpair and asserts the two behaviours the loop exists for -- it
-retransmits an unanswered query and then correlates the reply, and it expires
-an exchange once the retry budget is spent. The peer is a thread bounded by a
+datagram socketpair and asks for every hook it calls -- a reply read
+through its view, an expiry, an unmatched reply, a short and an oversized
+datagram, `stop` from a hook, and `on_done` exactly once -- the cases
+`c_driver_harness` puts to the six C drivers (26.775). The peer is a thread bounded by a
 socket timeout and a stop flag, so no external process is opened and it
 always terminates.
 
@@ -38,71 +39,128 @@ import socket
 import sys
 import threading
 
-from situ_runtime import Message
+from situ_runtime import BoundsError, Message
 from dns import dns_header
 from dns_drive import reply_to_driver
-from dns_asyncio import run_reply_to, submit_to, _now_ms
+from dns_asyncio import reply_to_hooks, run_reply_to, submit_to, _now_ms
+
+ECHO, SILENT, WRONG_ID, SHORT_FIRST, HUGE_FIRST, ONLY_GARBAGE = range(6)
 
 
-def peer(sock, drop_first, echo, state, stop):
-	"""Reads datagrams, counts them, and echoes everything after the first
-	`drop_first`. The timeout is what lets it see the stop flag."""
+def peer(sock, mode, drop_first, state, stop):
+	# The same peer `c_driver_harness` runs: the timeout is what lets it
+	# see the stop flag.
 	sock.settimeout(0.05)
 	while not stop.is_set():
 		try:
-			data = sock.recv(65535)
+			data = bytearray(sock.recv(65535))
 		except (socket.timeout, OSError):
 			continue
 		state["seen"] += 1
-		if echo and state["seen"] > drop_first:
-			try:
-				sock.send(data)
-			except OSError:
-				pass
+		if mode == SILENT or state["seen"] <= drop_first:
+			continue
+		first = state["seen"] == drop_first + 1
+		try:
+			if mode == WRONG_ID:
+				data[1] = (data[1] + 1) & 0xFF
+			if first and mode == SHORT_FIRST:
+				sock.send(bytes(data[:3]))
+			if first and mode == HUGE_FIRST:
+				sock.send(bytes(70000))
+			if mode == ONLY_GARBAGE:
+				sock.send(bytes(data[:3]))
+				continue
+			sock.send(bytes(data))
+		except OSError:
+			pass
 
 
-async def case(name, drop_first, echo, want_replies, want_expired, want_min):
+class recorder(reply_to_hooks):
+	def __init__(self, stop_on_malformed):
+		self.replies, self.view_ids, self.expired = [], [], 0
+		self.unmatched = self.malformed = self.errors = self.done = 0
+		self.malformed_why = None
+		self.stop_on_malformed = stop_on_malformed
+
+	def on_reply(self, id, reply):
+		self.replies.append(id)
+		self.view_ids.append(reply.id)
+
+	def on_unmatched(self, reply, why):
+		self.unmatched += 1
+
+	def on_malformed(self, data, why):
+		self.malformed += 1
+		self.malformed_why = why
+		if self.stop_on_malformed:
+			self.stop = True
+
+	def on_expired(self, count):
+		self.expired += count
+
+	def on_error(self, error):
+		self.errors += 1
+
+	def on_done(self, error):
+		self.done += 1
+
+
+async def case(name, mode, drop_first, stop_on_malformed=False):
 	a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+	b.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
+	a.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
 	state, stop = {"seen": 0}, threading.Event()
-	th = threading.Thread(target=peer, args=(b, drop_first, echo, state, stop))
+	th = threading.Thread(target=peer, args=(b, mode, drop_first, state, stop))
 	th.start()
 
-	# Twelve bytes of dns_header. The peer echoes them, so the reply's id and
-	# opcode equal the query's and the exchange correlates.
 	req = bytes([0x4E, 0x4F] + [0] * 10)
 	query = dns_header.at(Message(bytearray(req)), 0)
 	drive = reply_to_driver(submit_to(a), 4, 40, 2)
 	drive.send(query, req, 0x1234, _now_ms())
 
-	replies, expiries = [], []
+	hooks = recorder(stop_on_malformed)
 	timed_out = False
 	try:
 		# A watchdog, so a coroutine that never finishes fails rather than
 		# hangs the suite.
-		await asyncio.wait_for(
-			run_reply_to(a, drive, lambda i: replies.append(i),
-			             lambda n: expiries.append(n)), 5.0)
+		await asyncio.wait_for(run_reply_to(a, drive, hooks), 5.0)
 	except asyncio.TimeoutError:
 		timed_out = True
 	stop.set()
 	th.join()
 	a.close()
 	b.close()
+	return hooks, state["seen"], timed_out
 
-	ok = (not timed_out
-	      and len(replies) == want_replies
-	      and sum(expiries) == want_expired
-	      and state["seen"] >= want_min
-	      and (not want_replies or replies[0] == 0x1234))
-	print("{} {}: replies={} expired={} datagrams={}{}".format(
-		"PASS" if ok else "FAIL", name, replies, sum(expiries),
-		state["seen"], " WATCHDOG" if timed_out else ""))
-	return 0 if ok else 1
+
+def check(name, cond, hooks):
+	if not cond:
+		print("FAIL", name, vars(hooks))
+	return 0 if cond else 1
 
 
 async def main():
-	bad = await case("retransmit-then-correlate", 2, True, 1, 0, 3)
-	bad |= await case("expire", 0, False, 0, 1, 3)
+	bad = 0
+	h, seen, late = await case("retransmit", ECHO, 2)
+	bad |= check("retransmit", not late and h.replies == [0x1234]
+	             and h.view_ids == [0x4E4F] and h.expired == 0 and seen >= 3
+	             and h.done == 1 and h.errors == 0, h)
+	h, seen, late = await case("expire", SILENT, 0)
+	bad |= check("expire", not late and not h.replies and h.expired == 1
+	             and h.done == 1, h)
+	h, seen, late = await case("unmatched", WRONG_ID, 0)
+	bad |= check("unmatched", not late and h.unmatched >= 1
+	             and h.expired == 1 and h.done == 1, h)
+	h, seen, late = await case("short", SHORT_FIRST, 0)
+	bad |= check("short", not late and h.malformed == 1
+	             and h.replies == [0x1234], h)
+	h, seen, late = await case("oversized", HUGE_FIRST, 0)
+	bad |= check("oversized", not late and h.malformed == 1
+	             and isinstance(h.malformed_why, BoundsError)
+	             and h.replies == [0x1234], h)
+	h, seen, late = await case("stop", ONLY_GARBAGE, 0, True)
+	bad |= check("stop", not late and h.malformed == 1 and not h.replies
+	             and h.expired == 0 and h.done == 1, h)
 	if not bad:
 		print("ALL PASS")
 	return bad
@@ -130,10 +188,9 @@ def _generate(tmp_path: Path) -> Path:
 	return gen
 
 
-def test_asyncio_driver_retransmits_and_expires(tmp_path: Path) -> None:
-	"""Drive the generated coroutine on a real event loop and prove both
-	behaviours: a retransmit that then correlates, and an expiry after the
-	retry budget."""
+def test_asyncio_driver_calls_every_hook(tmp_path: Path) -> None:
+	"""Drive the generated coroutine on a real event loop and ask for every
+	hook."""
 	gen = _generate(tmp_path)
 	(gen / "harness.py").write_text(HARNESS, encoding="ascii")
 
