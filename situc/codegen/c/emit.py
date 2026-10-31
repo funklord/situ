@@ -8464,9 +8464,11 @@ class Emitter:
 			base: str, tail: int = 0) -> list[str] | None:
 		"""The walk over a counted run of records in an arm, or None.
 
-		Only the shape `_run_fits` walks at the top level and with no
-		recursion: a counted run of an element with an extent. A recursive
-		element needs the depth counter `check` does not carry here.
+		The shape `_run_fits` walks at the top level: a counted run of an
+		element with an extent.
+		A recursive element spends the depth as the top-level `_run_fits_at`
+		does from `check`'s zero: each element is measured at depth one, and
+		a `[depth]` cap answers zero, which ends the walk (26.786).
 
 		A `[remaining]` run walks to the end of the frame instead of to a
 		count, as `_run_fits` does (26.736). Nothing follows one (26.782),
@@ -8476,11 +8478,13 @@ class Emitter:
 		if (element is None or not self._is_counted_run(member)
 				or member.delimiters
 				or member.repeat_while is not None
-				or self._recursive(element.name)
 				or element.layout.is_fixed_size
 				or self._element_extent_call(element) is None):
 			return None
 		to_end = member.sized_by == "remaining"
+		size   = (f"{ident(self.prefix, element.name, 'extent')}"
+		          "_at(element, 1u)" if self._recursive(element.name)
+		          else self._element_extent_call(element))
 		return [
 			*([f"\t\tuint32_t at = {base};",
 			   "",
@@ -8498,7 +8502,7 @@ class Emitter:
 			" situ_remaining_u32(view.limit, at), &element) != SITU_OK) {",
 			"\t\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t\t}",
-			f"\t\t\tsize = {self._element_extent_call(element)};",
+			f"\t\t\tsize = {size};",
 			"\t\t\tif (size == 0u) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",

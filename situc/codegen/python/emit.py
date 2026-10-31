@@ -6795,8 +6795,10 @@ class Emitter:
 			base: str, tail: int = 0) -> list[str] | None:
 		"""The walk over a counted run of records in an arm, or None.
 
-		The shape C's `_arm_run_walk` takes: a counted run of a variable,
-		non-recursive element with an extent.
+		The shape C's `_arm_run_walk` takes: a counted run of a variable
+		element with an extent.
+		A recursive element is measured at depth one, as the top-level walk
+		measures it from `check`'s zero (26.786).
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
 		count   = self._count_expression(struct, member)
@@ -6807,10 +6809,11 @@ class Emitter:
 				or not is_counted_run(self.resolved.structs, member)
 				or member.delimiters
 				or member.repeat_while is not None
-				or is_recursive(self.resolved.structs, element.name)
 				or element.layout.is_fixed_size
 				or not has_computable_extent(self.resolved.structs, element)):
 			return None
+		step = ("_extent_at(1)" if is_recursive(self.resolved.structs, element.name)
+		        else "_extent")
 		inner = py_name(element.name)
 		why   = (f'"{member.path}: a record the count declares is outside'
 		         ' the frame"')
@@ -6828,7 +6831,7 @@ class Emitter:
 			f"\t\t\t\tif {at} >= self._len:",
 			f"\t\t\t\t\traise BoundsError({why})",
 			f"\t\t\t\tsize = {inner}(self._msg, self._at + {at},",
-			f"\t\t\t\t\tself._len - {at})._extent",
+			f"\t\t\t\t\tself._len - {at}).{step}",
 			"\t\t\t\tif size == 0:",
 			"\t\t\t\t\tbreak",
 			f"\t\t\t\tif size > self._len - {at}:",

@@ -7934,6 +7934,10 @@ Moved to `doc/decision/26.784-a-while-cap-is-n-elements-in-python.md`.
 
 Moved to `doc/decision/26.785-the-tail-after-an-ended-run-in-an-arm.md`.
 
+### 26.786 A run of a recursive element in an arm is walked
+
+Moved to `doc/decision/26.786-a-recursive-run-in-an-arm-is-walked.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

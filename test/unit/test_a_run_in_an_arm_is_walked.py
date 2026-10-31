@@ -128,9 +128,42 @@ REMAINING_CASES = {
 	"01000003":           "1",
 }
 
+#: A run of a RECURSIVE element, which the four declined for want of the
+#: depth `check` does not carry: a second record the frame does not hold,
+#: and a tail cut short, validated clean while both walkers refused them.
+#: Each element is measured at depth one, as the top-level `_run_fits_at`
+#: measures it from `check`'s zero (26.786). An element's own overrun is
+#: not refused here or at the top level -- elements are not validated --
+#: and a tree past `[depth]` is the walkers' `cannot-say`, so neither is
+#: asked.
+RECURSIVE = """target buffer;
+endian big;
+struct node [depth = 4] { u8 n; node kids[n]; }
+struct arms {
+	u8 kind;
+	u8 n;
+	variant body switch (kind) {
+		case 1:  node  recs[n];
+		default: u8    raw;
+	}
+	u16 after;
+}
+"""
+
+RECURSIVE_CASES = {
+	"0102000100aabb":   "0",
+	"0102000100aa":     "1",	# `after` is one byte short
+	"01020001":         "1",	# the second node's kid takes `after`
+	"010200aabb":       "1",	# `aa` is the second node's count: no tail
+	"010200aa":         "1",
+	"0101010100aabb":   "0",
+	"0300ccaabb":       "0",
+	"0300ccaa":         "1",
+}
+
 SHAPES = [(SCHEMA, CASES), (TAILED, TAILED_CASES), (RUNS, RUNS_CASES),
-          (REMAINING, REMAINING_CASES)]
-IDS    = ["last", "tailed", "runs", "remaining"]
+          (REMAINING, REMAINING_CASES), (RECURSIVE, RECURSIVE_CASES)]
+IDS    = ["last", "tailed", "runs", "remaining", "recursive"]
 
 
 def _arms_verdict(answers: str) -> str:
