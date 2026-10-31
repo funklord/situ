@@ -1103,26 +1103,11 @@ def _validate(image: Image, view: View, struct_index: int,
 
 		# And every element of a run of structs, through its own validator,
 		# as the four backends now ask -- a refusal names the run (26.789).
-		elements = _run_elements(view, index)
-		if elements is not None:
-			floor = image.structs[
-				image.placements[index].type_struct].size_min_bits
-			for at, size in elements:
-				# The element's own MINIMUM against the extent the walk
-				# gave it, which every backend's `check` asks first and
-				# `_validate` does not for a variable struct -- the nested
-				# member's reason, 26.577.
-				if floor != NONE and size * BITS_PER_BYTE < floor:
-					return fail(ERR_BOUNDS, index)
-				verdict = _validate(
-					image, View(image, view.buffer,
-					            image.placements[index].type_struct,
-					            at, at + size),
-					image.placements[index].type_struct)
-				if verdict is None:
-					return None
-				if verdict:
-					return fail(verdict, index)
+		verdict = _elements_validate(view, index, _run_elements(view, index))
+		if verdict is None:
+			return None
+		if verdict:
+			return fail(verdict, index)
 
 		# And a `tlv` region's items fill it, which nothing asked: a cut
 		# item and a `default: error` arm each read as the region ending
@@ -1280,7 +1265,9 @@ def _validate(image: Image, view: View, struct_index: int,
 			if check != ARM_SELECTED:
 				continue
 			verdict = _arm_selects(image, view, index, bool(against))
-			if verdict:
+			# None is an element this image cannot validate (26.790), which
+			# is no answer at all rather than a clean one.
+			if verdict is None or verdict:
 				return verdict
 
 		# A text number, in the runtime's own order: the spelling before
@@ -1598,7 +1585,7 @@ ALL_CHECKS = frozenset({
 
 
 def _arm_selects(image: Image, view: View, index: int,
-		permissive: bool = False) -> int:
+		permissive: bool = False) -> int | None:
 	"""Whether the discriminant names an arm, and whether that arm validates.
 
 	`default: error` is the refusal the first half asks about: a value naming
@@ -1811,7 +1798,8 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	return OK
 
 
-def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
+def _arm_validates(image: Image, view: View, index: int,
+		chosen: int) -> int | None:
 	"""The selected arm's own `validate`, through its own type.
 
 	Split out because the matched and the default paths reach it the same
@@ -1848,28 +1836,54 @@ def _arm_validates(image: Image, view: View, index: int, chosen: int) -> int:
 	# its first element, and a later one overrunning the frame went
 	# unseen while the variant's size, walked and clamped, still fit.
 	# Every element is held to the frame instead, as the four backends'
-	# `check` now walks it; no backend validates the elements' own
-	# constraints in a run, so neither does this (26.689).
-	# A run of fixed-size records is held to the frame by the variant's
-	# size above, and its elements are not validated either.
+	# `check` now walks it (26.689), and then validated through its own
+	# type (26.790). A run of fixed-size records is held to the frame by
+	# the variant's size above.
 	run = image.placements[chosen]
 	if run.size_code != NONE or run.array_count != NONE:
 		if run.element_bits == NONE \
 				and not counted_run_fits(view, chosen, start_bits=at):
 			return ERR_BOUNDS
-		return OK
+		return _elements_validate(view, chosen,
+		                          _run_elements(view, chosen, at))
 	# And a run that a condition or a terminator ends, which carries
 	# neither a count nor a size program: it was validated as its first
 	# record, so `kv kvs[] until "\n"` refused a cut `kv` as a missing
 	# delimiter where the four hold only the run's reach to the frame --
-	# which the variant's size above already did (26.785).
+	# which the variant's size above already did (26.785). Its elements are
+	# validated through the run's own walk now (26.790).
 	if run.repeat_code != NONE or chosen in image.delimiters:
-		return OK
+		return _elements_validate(view, chosen,
+		                          _run_elements(view, chosen, at))
 	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
 	return _validate(image, inner, arm_type) or OK
 
 
-def _run_elements(view: View, index: int) -> list[tuple[int, int]] | None:
+def _elements_validate(view: View, index: int,
+		elements: list[tuple[int, int]] | None) -> int | None:
+	"""Each element `_run_elements` found, through its own validator.
+
+	The element's own MINIMUM against the extent the walk gave it first,
+	which every backend's `check` asks and `_validate` does not for a
+	variable struct -- the nested member's reason, 26.577.
+	"""
+	if elements is None:
+		return OK
+	image   = view.image
+	element = image.placements[index].type_struct
+	floor   = image.structs[element].size_min_bits
+	for at, size in elements:
+		if floor != NONE and size * BITS_PER_BYTE < floor:
+			return ERR_BOUNDS
+		verdict = _validate(image, View(image, view.buffer, element,
+		                                at, at + size), element)
+		if verdict is None or verdict:
+			return verdict
+	return OK
+
+
+def _run_elements(view: View, index: int, start_bits: int | None = None
+		) -> list[tuple[int, int]] | None:
 	"""Where each element of a run of structs is, as `(at, size)` in bytes.
 
 	None where the run is not one this validates the elements of: the four
@@ -1884,9 +1898,11 @@ def _run_elements(view: View, index: int) -> list[tuple[int, int]] | None:
 	element   = placement.type_struct
 	if element == NONE or placement.kind != FIELD or index in image.varints:
 		return None
-	# An arm is a member of the variant, not of this struct's chain.
-	if any(chosen == index for _selects, arms in image.arms.values()
-	       for _case, chosen, _flags in arms):
+	# An arm is a member of the variant, not of this struct's chain: the
+	# arm's own path asks with the variant's start (26.790).
+	if start_bits is None and any(
+			chosen == index for _selects, arms in image.arms.values()
+			for _case, chosen, _flags in arms):
 		return None
 	runs = (placement.repeat_code != NONE or index in image.delimiters
 	        or placement.size_code != NONE or placement.array_count != NONE)
@@ -1905,7 +1921,8 @@ def _run_elements(view: View, index: int) -> list[tuple[int, int]] | None:
 		                          view.limit), 1)
 
 	try:
-		first = view.at + offset_bits(view, index) // BITS_PER_BYTE
+		first = view.at + (offset_bits(view, index) if start_bits is None
+		                   else start_bits) // BITS_PER_BYTE
 	except Refused:
 		return None
 	found: list[tuple[int, int]] = []

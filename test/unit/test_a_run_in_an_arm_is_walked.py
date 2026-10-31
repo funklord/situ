@@ -83,8 +83,8 @@ TAILED_CASES = {
 #: records counted and literal. The accessor family took each for its first
 #: element too, and Python and both walkers validated that element alone --
 #: so `[max]` on element 0 refused where C, C++ and Rust accepted, and on
-#: element 1 nobody refused. A run's elements are not validated in any
-#: backend; `check` holds the run to the frame (26.779).
+#: element 1 nobody refused (26.779). All six validate every element now,
+#: in an arm as outside one (26.790).
 RUNS = """target buffer;
 endian big;
 struct piece { u8 len; u8 body[len]; }
@@ -105,11 +105,12 @@ struct arms {
 RUNS_CASES = {
 	"0100010200aabb":     "0",
 	"01000102":           "1",
-	"02020102030ff0aabb": "0",
+	"020201020309aabb":   "0",
+	"02020102030ff0aabb": "2",	# element 1 is over its `[max]`
 	"0202010203":         "1",
-	"0202010a0304aabb":   "0",	# element 0 is over its `[max]`
+	"0202010a0304aabb":   "2",	# ...and element 0
 	"030001020305":       "1",
-	"030001ff0304aabb":   "0",	# and here
+	"030001ff0304aabb":   "2",	# and here
 }
 
 #: A `[remaining]` run, which walks to the frame's end rather than to a

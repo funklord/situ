@@ -3984,6 +3984,13 @@ static situ_walk_err remaining_run_walk(const situ_walk_image *image,
                                         uint32_t depth,
                                         const situ_walk_placement *held,
                                         uint32_t at, int *fits);
+static situ_walk_err run_elements_validate(const situ_walk_image *image,
+                                           const uint8_t *message,
+                                           uint32_t len, uint32_t shape,
+                                           uint32_t index, uint32_t depth,
+                                           uint32_t from, uint32_t named,
+                                           situ_walk_err *verdict,
+                                           situ_walk_why *why);
 
 /* The selected arm's own `validate`, through its own type.
  *
@@ -4120,12 +4127,15 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	 * its first element, and a later one overrunning the frame went unseen
 	 * while the variant's size, walked and clamped, still fit. Every
 	 * element is held to the frame instead, as the four backends' `check`
-	 * walks it; none of them validates a run's elements' own constraints,
-	 * so neither does this (26.689). */
+	 * walks it (26.689), and then validated through its own type
+	 * (26.790). */
 	if ((arm.size_code != SITU_WALK_NONE
 	     || arm.array_count != SITU_WALK_NONE)
 	    && arm.element_bits != SITU_WALK_NONE) {
-		return SITU_WALK_OK;	/* fixed records: the variant's size held them */
+		/* Fixed records: the variant's size held them to the frame, and
+		 * each is validated through its own type (26.790). */
+		return run_elements_validate(image, message, len, shape, chosen,
+		                             depth, at / 8u, index, verdict, why);
 	}
 	if (arm.size_code != SITU_WALK_NONE
 	    && arm.element_bits == SITU_WALK_NONE) {
@@ -4148,8 +4158,10 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		if (err != SITU_WALK_OK || !fits) {
 			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
 		}
-		return SITU_WALK_OK;
+		return run_elements_validate(image, message, len, shape, chosen,
+		                             depth, at / 8u, index, verdict, why);
 	}
 	/* And a run that a condition or a terminator ends, which carries
 	 * neither a count nor a size program: it was validated as its first
@@ -4158,7 +4170,8 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	 * which the variant's size above already did (26.785). */
 	if (arm.repeat_code != SITU_WALK_NONE
 	    || delimiter_rules(image, chosen) != NULL) {
-		return SITU_WALK_OK;
+		return run_elements_validate(image, message, len, shape, chosen,
+		                             depth, at / 8u, index, verdict, why);
 	}
 	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
 	                     depth + 1u, verdict, why);
@@ -4521,6 +4534,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
                                            const uint8_t *message,
                                            uint32_t len, uint32_t shape,
                                            uint32_t index, uint32_t depth,
+                                           uint32_t from, uint32_t named,
                                            situ_walk_err *verdict,
                                            situ_walk_why *why)
 {
@@ -4543,8 +4557,10 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 	    || !element_validatable(image, held.type_struct)) {
 		return SITU_WALK_OK;
 	}
-	/* An arm is a member of its variant, not of this struct's chain. */
-	for (uint32_t i = 0u; i < image->arm_count; i++) {
+	/* An arm is a member of its variant, not of this struct's chain: the
+	 * arm's own path asks with the variant's start, `from` (26.790). */
+	for (uint32_t i = 0u; from == SITU_WALK_NONE && i < image->arm_count;
+	     i++) {
 		if (u32_at(image->arms + (size_t)i * image->arm_stride + 4u)
 		    == index) {
 			return SITU_WALK_OK;
@@ -4558,16 +4574,18 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 		}
 	}
 
-	uint32_t start = 0u;
-	err = offset_bits_deep(image, message, len, shape, index, depth,
-	                       &start);
-	if (err != SITU_WALK_OK) {
-		return err == SITU_WALK_UNSUPPORTED ? err : SITU_WALK_OK;
+	uint32_t start = from;
+	if (start == SITU_WALK_NONE) {
+		err = offset_bits_deep(image, message, len, shape, index, depth,
+		                       &start);
+		if (err != SITU_WALK_OK) {
+			return err == SITU_WALK_UNSUPPORTED ? err : SITU_WALK_OK;
+		}
+		if (start % 8u) {
+			return SITU_WALK_UNSUPPORTED;
+		}
+		start /= 8u;
 	}
-	if (start % 8u) {
-		return SITU_WALK_UNSUPPORTED;
-	}
-	start /= 8u;
 
 	const uint8_t *inner = image->structs
 	                       + held.type_struct * image->struct_stride;
@@ -4644,7 +4662,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 		 * which every backend's `check` asks first: a nested member's
 		 * reason (26.577), met by an element. */
 		if (floor != SITU_WALK_NONE && extent * 8u < floor) {
-			record(why, index, SITU_WALK_NO_CHECK);
+			record(why, named, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
@@ -4654,7 +4672,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 			return err;
 		}
 		if (inner_verdict != SITU_WALK_OK) {
-			record(why, index, SITU_WALK_NO_CHECK);
+			record(why, named, SITU_WALK_NO_CHECK);
 			*verdict = inner_verdict;
 			return SITU_WALK_OK;
 		}
@@ -5159,7 +5177,8 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			 * that outranks it -- returning on that cut the walk short
 			 * and named the wrong check. */
 			err = run_elements_validate(image, message, len, shape, index,
-			                            depth, &element, why);
+			                            depth, SITU_WALK_NONE, index,
+			                            &element, why);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}

@@ -85,3 +85,62 @@ def test_both_walkers_validate_the_elements(name: str,
 		in_python = python_verdict(blob, raw, shape)
 		in_c      = c_verdict(tmp_path, blob, raw, shape)
 		assert in_python == in_c == verdict, (message, in_python, in_c)
+
+
+#: And in a variant arm, under the value that selects it, after the arm is
+#: held to the frame: a refusal names the variant, as every other refusal
+#: about an arm does (26.790).
+ARMS = """target buffer;
+endian big;
+struct pt { u8 x; u8 y [max = 9]; }
+struct piece { u8 len [max = 4]; u8 body[len]; }
+struct arms {
+	u8 kind;
+	u8 n;
+	variant body switch (kind) {
+		case 1:  piece recs[n];
+		case 2:  pt    pts[n];
+		case 3:  pt    q[2];
+		case 4:  piece wh[] while (len != 0) max 4;
+		case 5:  piece de[] until ";";
+		default: u8    raw;
+	}
+}
+"""
+
+ARM_CASES = {
+	"01020100":             "1",	# the frame before any element
+	"0102010005aaaaaaaaaa": "2",
+	"02020102030a":         "2",
+	"020201020309":         "0",
+	"0300010a0304":         "2",
+	"030001020304":         "0",
+	"040001aa00":           "0",
+	"040005aaaaaaaaaa00":   "2",
+	"050005aaaaaaaaaa3b":   "2",
+	"0500":                 "0",
+	"ff00cc":               "0",
+}
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_all_four_validate_an_arms_elements(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(ARMS, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for message, verdict in ARM_CASES.items():
+		given = {backend: _verdict(fourway.answers(
+		                 argv, bytes.fromhex(message), tmp_path), "arms")
+		         for backend, argv in command.items()}
+		assert set(given.values()) == {verdict}, (message, given)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_both_walkers_validate_an_arms_elements(tmp_path: Path) -> None:
+	blob  = _inline_image(ARMS)
+	shape = shape_named_text(ARMS, "arms")
+	for message, verdict in ARM_CASES.items():
+		raw = bytes.fromhex(message)
+		in_python = python_verdict(blob, raw, shape)
+		in_c      = c_verdict(tmp_path, blob, raw, shape)
+		assert in_python == in_c == verdict, (message, in_python, in_c)

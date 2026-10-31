@@ -3895,8 +3895,27 @@ class Emitter:
 			"\t\t}",
 		]
 
+	def _arm_tails(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""What follows a variant no backend measures, after its elements.
+
+		`_arms_fit`'s second pass. The members after such a variant are
+		placed by nothing, so the arm's check holds them; it did so in the
+		same pass as the arm's own frame, which put them ahead of the arm's
+		elements -- where both walkers, like the top level, reach them
+		last. A cut `kv` in an arm then answered BOUNDS for the tail in the
+		four and CONSTRAINT for the record in the walkers (26.790).
+		"""
+		if placement.kind != "variant" or placement.is_fixed_size \
+				or self._variant_length(struct, placement) is not None:
+			return []
+		base = self._offset_expression(struct, placement)
+		if base is None:
+			return []
+		return self._arms_fit(struct, placement, base, tails=True)
+
 	def _arms_fit(self, struct: ResolvedStruct, placement: Placement,
-			base: str) -> list[str]:
+			base: str, tails: bool = False) -> list[str]:
 		"""Each arm held to the frame on its own, where no one length can be.
 
 		C's `_arms_fit` says why: an arm holding a counted run of records
@@ -3909,6 +3928,12 @@ class Emitter:
 		# What follows the variant is placed by nothing, so it is held to
 		# the frame here, arm by arm, where it is fixed-size (26.779).
 		tail  = fixed_tail_bytes(struct, placement) or 0
+		# Two passes: the arm's own frame first, and the tail only after
+		# the arm's elements, in `_arm_tails` (26.790).
+		if not tails:
+			tail = 0
+		elif not tail:
+			return []
 		lines: list[str] = []
 		for arm, member in arms:
 			if member is None:
@@ -4200,6 +4225,8 @@ class Emitter:
 		# the frame contains it is not something the acquiring check settled.
 		run_fits = run_fits + self._region_fits(struct, placement)
 		run_fits = run_fits + self._variant_fits(struct, placement)
+		run_fits = run_fits + self._arm_run_elements(struct, placement)
+		run_fits = run_fits + self._arm_tails(struct, placement)
 		run_fits = run_fits + self._varint_whole(struct, placement)
 
 		if not declares_its_own_length(placement):
@@ -10265,8 +10292,47 @@ class Emitter:
 			"\t\t}",
 		]
 
-	def _element_validation(self, struct: ResolvedStruct,
+	def _arm_run_elements(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
+		"""Every element of a run of structs in an arm, under its value.
+
+		C's `_arm_run_elements` says why: the element walk from where the
+		variant starts, after the arm is held to the frame, naming the
+		variant (26.790).
+		"""
+		if placement.kind != "variant" or "." in placement.path[
+				len(struct.name) + 1:]:
+			return []
+		base = self._offset_expression(struct, placement)
+		if base is None:
+			return []
+		disc  = self._over_fields(struct, placement.discriminant or "")
+		arms  = arm_members(struct, placement)
+		named = [arm.value for arm, _ in arms if arm.value is not None]
+		lines: list[str] = []
+		for arm, member in arms:
+			if member is None or not is_struct_run(self.resolved.structs,
+			                                       member):
+				continue
+			walk = self._element_validation(struct, member, base)
+			if not any(_REFUSES.match(one) for one in walk):
+				continue
+			if arm.value is not None:
+				when = f"{disc} == {arm.value}u"
+			elif named:
+				when = " && ".join(f"{disc} != {value}u"
+				                for value in named)
+			else:
+				when = "true"
+			lines.extend([
+				f"\t\tif ({when}) {{",
+				*[f"\t{line}" if line else line for line in walk],
+				"\t\t}",
+			])
+		return lines
+
+	def _element_validation(self, struct: ResolvedStruct,
+			placement: Placement, base: str | None = None) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
 
 		C's `_element_validation` says why and what is left out: the run's
@@ -10274,7 +10340,8 @@ class Emitter:
 		refusal naming the run (26.789).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
-		base    = self._offset_expression(struct, placement)
+		if base is None:
+			base = self._offset_expression(struct, placement)
 		if (element is None or base is None
 				or is_recursive(self.resolved.structs, element.name)
 				or arguments(element)
@@ -10316,7 +10383,7 @@ class Emitter:
 		return [
 			f"\t\t/* {placement.path}: each `{element.name}` the run holds,",
 			"\t\t * through its own validator. A refusal names the run",
-			"\t\t * (26.789). */",
+			"\t\t * or the variant it is an arm of (26.789, 26.790). */",
 			"\t\t{",
 			f"\t\t\tstd::uint32_t at = {base};",
 			"\t\t\tstd::uint32_t n  = 0;",

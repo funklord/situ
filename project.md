@@ -7950,6 +7950,10 @@ Moved to `doc/decision/26.788-the-map-row-for-an-ended-run-in-an-arm.md`.
 
 Moved to `doc/decision/26.789-a-run-validates-its-elements.md`.
 
+### 26.790 A run of structs in a variant arm validates its elements
+
+Moved to `doc/decision/26.790-an-arms-run-validates-its-elements.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

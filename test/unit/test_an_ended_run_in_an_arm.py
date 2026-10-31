@@ -114,7 +114,9 @@ TAILED_CASES = {
 	"0201020304aabb":         "1",	# no terminator: the run takes `after`
 	"03613a623b0aaabb":       "0",
 	"03613a623b0aaa":         "1",
-	"03613a62aabb":           "1",	# a cut `kv` ends the run, not a refusal
+	# A `kv` whose value has no `;` is the run's one record, validated
+	# before the tail is reached (26.790).
+	"03613a62aabb":           "2",
 	"04010203aa":             "0",	# one `pt`, then two left: it stops
 	"04010203aabb":           "1",
 	"ffccaabb":               "0",
@@ -142,18 +144,28 @@ def test_both_walkers_hold_the_tail(tmp_path: Path) -> None:
 		assert c_verdict(tmp_path, blob, raw, shape) == verdict, message
 
 
+#: No tail: each record the run holds is validated (26.790). `kv`'s value
+#: needs its `;` and a `kv` is two bytes at least, so the delimited run of
+#: `kv` refuses where a run of `piece` or `pt` holds nothing to refuse.
+ALONE = {
+	"while":       {"01003a": "0", "0100013b": "0", "01000105": "0"},
+	"while_fixed": {"01003a": "0", "0100013b": "0", "01000105": "0"},
+	"until":       {"01003a": "1", "0100013b": "2", "01000105": "2"},
+	"until_fixed": {"01003a": "0", "0100013b": "0", "01000105": "0"},
+}
+
+
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-@pytest.mark.parametrize("arm", ARMS.values(), ids=ARMS.keys())
-def test_both_walkers_leave_the_records_alone(arm: str,
+@pytest.mark.parametrize("name", ARMS)
+def test_both_walkers_validate_the_records(name: str,
 		tmp_path: Path) -> None:
-	"""No tail: a cut record ends the run, and nothing refuses."""
-	text  = _schema(arm)
+	text  = _schema(ARMS[name])
 	blob  = _inline_image(text)
 	shape = shape_named_text(text, "arms")
-	for message in ("01003a", "0100013b", "01000105"):
+	for message, verdict in ALONE[name].items():
 		raw = bytes.fromhex(message)
-		assert python_verdict(blob, raw, shape) == "0", message
-		assert c_verdict(tmp_path, blob, raw, shape) == "0", message
+		assert python_verdict(blob, raw, shape) == verdict, message
+		assert c_verdict(tmp_path, blob, raw, shape) == verdict, message
 
 
 #: And at the top level, which is where the C walker's half was: it had no
