@@ -961,6 +961,26 @@ def test_a_member_after_an_unwalked_arm_has_no_setter_to_claim() -> None:
 		not in rules_for(walked, "S.after", Axis.MUTATE)
 
 
+@pytest.mark.parametrize("arm", [
+	"piece recs[] while (len != 0);",
+	"pt    recs[] while (x != 0) max 4;",
+	"piece recs[] until \"\\n\";",
+	"pt    recs[] until \"\\n\";",
+], ids=["while", "while_fixed", "until", "until_fixed"])
+def test_an_arm_run_a_condition_or_terminator_ends_is_unwalked_too(
+		arm: str) -> None:
+	"""The row asked `is_counted_run` while `offset_unresolvable` -- what
+	the backends and the driver ask -- covers these too since 26.785, so the
+	map gave `after` a setter that no backend emits (26.788).
+	"""
+	body = UNWALKED.replace("case 1:  piece recs[n];", f"case 1:  {arm}") \
+		.replace("struct S {", "struct pt { u8 x; u8 y; }\nstruct S {")
+	assert axis_of(body, "S.after", Axis.MUTATE) == Value("Immutable")
+	assert axis_of(body, "S.after", Axis.ACCESS) == Value("Sequential")
+	assert rules_for(body, "S.after", Axis.MUTATE) \
+		== ["unwalked-arm-predecessor"]
+
+
 def test_a_closed_form_expansion_keeps_the_generic_row() -> None:
 	"""The control, and it is the one that separates the two rules.
 

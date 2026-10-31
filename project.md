@@ -7942,6 +7942,10 @@ Moved to `doc/decision/26.786-a-recursive-run-in-an-arm-is-walked.md`.
 
 Moved to `doc/decision/26.787-the-c-walker-walks-a-terminated-run.md`.
 
+### 26.788 The map says a member after an arm's ended run has no setter
+
+Moved to `doc/decision/26.788-the-map-row-for-an-ended-run-in-an-arm.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

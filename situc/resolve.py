@@ -283,14 +283,18 @@ def _mark_unwalked_arms(result: ResolvedSchema, schema: ast.Schema,
 	resolves them in declaration order. A codec is the other way a member
 	becomes unplaceable and has its own row already (26.689, 26.779).
 	"""
-	from situc.traverse import (arm_members, is_counted_run,
+	from situc.traverse import (arm_members, is_unmeasured_run,
 	                            offset_unresolvable, own_members)
 
+	# `is_unmeasured_run`, the question `offset_unresolvable` asks of an
+	# arm: a run of records a condition or a terminator ends is one too,
+	# and asking `is_counted_run` here left the member after such a
+	# variant claiming a setter no backend emits (26.788).
 	for name, struct in list(result.structs.items()):
 		variants = [held for held in own_members(struct)
 		            if held.kind == "variant"
 		            and any(member is not None
-		                    and is_counted_run(result.structs, member)
+		                    and is_unmeasured_run(result.structs, member)
 		                    for _arm, member in arm_members(struct, held))]
 		if not variants:
 			continue
