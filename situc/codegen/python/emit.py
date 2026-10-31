@@ -5395,8 +5395,12 @@ class Emitter:
 			        " where the run starts."]
 
 		cond = self._element_condition(element, placement, "at", "self._len")
+		# `starts` holds the elements read so far, so the cap is `<`: with
+		# `<=` this walk took one element more than `max N` allows and than
+		# C, C++, Rust and both walkers take, and read whatever followed the
+		# run from the wrong bytes (26.784).
 		cap  = ("" if placement.repeat_cap is None
-		        else f" and len(starts) <= {placement.repeat_cap}")
+		        else f" and len(starts) < {placement.repeat_cap}")
 
 		# A `while` run of a recursive element carries the depth, exactly as
 		# the counted run's span does. It did not: `_extent_at` called

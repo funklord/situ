@@ -7926,6 +7926,10 @@ Moved to `doc/decision/26.782-remaining-in-an-arm-is-last.md`.
 
 Moved to `doc/decision/26.783-a-remaining-run-in-an-arm-is-walked.md`.
 
+### 26.784 `max N` on a `while` run is N elements in Python too
+
+Moved to `doc/decision/26.784-a-while-cap-is-n-elements-in-python.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
