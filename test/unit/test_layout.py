@@ -492,6 +492,20 @@ def test_nothing_may_follow_remaining_even_indirectly() -> None:
 	assert "must be the last member" in report
 
 
+def test_nothing_may_follow_remaining_in_an_arm() -> None:
+	"""An arm is placed as a list of one, so its member was always "last".
+
+	`case 1: u8 rest[remaining];` with `u16 z` after the variant was
+	accepted, and the run swallowed the bytes `z` was to occupy (26.782).
+	"""
+	arms = ("variant v switch (k) { case 1: u8 rest[remaining];"
+	        " default: u8 one; }")
+	report = rendered(f"struct S {{ u8 k; {arms} u16 z; }}")
+	assert "must be the last member" in report
+	# ...and is still accepted where the variant is the frame's last.
+	assert layout(f"struct S {{ u8 k; {arms} }}").structs["S"]
+
+
 def test_array_of_structs_records_its_elements_once() -> None:
 	body   = "struct R { u32 id; u16 v; } struct S { u8 n; R rs[n]; }"
 	solved = layout(body)

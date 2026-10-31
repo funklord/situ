@@ -1221,7 +1221,15 @@ class Solver:
 		return layout
 
 	def place_members(self, decl: ast.StructDecl, members: tuple[ast.Member, ...],
-			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk,
+			last_in_frame: bool = True) -> None:
+		"""Place each member in turn.
+
+		`last_in_frame` says whether anything follows these members in the
+		frame. An arm is placed as a list of one, so its member was always
+		"last" and `[remaining]` there was accepted with a member after the
+		variant -- which a `[remaining]` run swallows (26.782).
+		"""
 		for index, member in enumerate(members):
 			if isinstance(member, ast.PositionalBlock):
 				# A positional block is a staticness assertion, not a frame: its
@@ -1240,7 +1248,8 @@ class Solver:
 						         "move the dynamic member outside the block"],
 					)
 			elif isinstance(member, ast.Variant):
-				self.place_variant(decl, member, scope, layout, prefix, state)
+				self.place_variant(decl, member, scope, layout, prefix, state,
+				                   last_in_frame and index == len(members) - 1)
 			elif isinstance(member, ast.Opaque):
 				self.place_opaque(member, scope, layout, prefix, state)
 			elif isinstance(member, ast.Tlv):
@@ -1258,7 +1267,7 @@ class Solver:
 			elif isinstance(member, ast.Pad):
 				self.place_pad(member, scope, layout, prefix, state)
 			elif isinstance(member, (ast.Field, ast.Reserved)):
-				last = index == len(members) - 1
+				last = last_in_frame and index == len(members) - 1
 				self.place_one(decl, member, scope, layout, prefix, state, last)
 
 	def place_opaque(self, member: ast.Opaque, scope: Scope,
@@ -2038,7 +2047,8 @@ class Solver:
 		state.cursor = cursor.advance(Interval(table.lo, None))
 
 	def place_variant(self, decl: ast.StructDecl, variant: ast.Variant,
-			scope: Scope, layout: StructLayout, prefix: str, state: Walk) -> None:
+			scope: Scope, layout: StructLayout, prefix: str, state: Walk,
+			last_in_frame: bool = True) -> None:
 		"""A variant occupies the extent of whichever arm is selected.
 
 		Section 9.6: the size is the size of the selected arm, so unless every
@@ -2083,7 +2093,8 @@ class Solver:
 
 			arm_cases.append(Arm(source, value,
 			                     f"{prefix}.{variant.name}.{_arm_name(arm)}"))
-			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant, state)
+			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant,
+			                         state, last_in_frame)
 			# AN ARM IS A WHOLE NUMBER OF BYTES (26.435), which is what makes
 			# the byte-aligned start above worth checking: everything after
 			# the variant then lands on a byte boundary whichever arm the
@@ -2167,7 +2178,7 @@ class Solver:
 
 	def arm_extent(self, decl: ast.StructDecl, arm: ast.VariantArm, scope: Scope,
 			layout: StructLayout, prefix: str, variant: ast.Variant,
-			state: Walk) -> Interval:
+			state: Walk, last_in_frame: bool = True) -> Interval:
 		"""Lay one arm out at the variant's base and report its extent.
 
 		Every arm starts where the variant starts: exactly one is present, so
@@ -2180,7 +2191,7 @@ class Solver:
 		before    = state.cursor
 
 		self.place_members(decl, (arm.member,), scope, layout,
-		                   f"{prefix}.{variant.name}", arm_state)
+		                   f"{prefix}.{variant.name}", arm_state, last_in_frame)
 
 		lo = arm_state.cursor.lo - before.lo
 		hi = (None if arm_state.cursor.hi is None or before.hi is None

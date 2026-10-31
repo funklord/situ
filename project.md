@@ -7918,6 +7918,10 @@ Moved to `doc/decision/26.780-no-arm-accessor-reads-one-record-of-a-run.md`.
 
 Moved to `doc/decision/26.781-an-ended-run-in-an-arm-compiles.md`.
 
+### 26.782 `[remaining]` in an arm must be last in its frame
+
+Moved to `doc/decision/26.782-remaining-in-an-arm-is-last.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
