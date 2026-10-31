@@ -3851,6 +3851,11 @@ static situ_walk_err counted_run_walk(const situ_walk_image *image,
                                       uint32_t shape, uint32_t depth,
                                       const situ_walk_placement *run,
                                       uint32_t from, int *fits);
+static situ_walk_err remaining_run_walk(const situ_walk_image *image,
+                                        const uint8_t *message, uint32_t len,
+                                        uint32_t depth,
+                                        const situ_walk_placement *held,
+                                        uint32_t at, int *fits);
 
 /* The selected arm's own `validate`, through its own type.
  *
@@ -3998,8 +4003,17 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 	    && arm.element_bits == SITU_WALK_NONE) {
 		int fits = 1;
 
-		err = counted_run_walk(image, message, len, shape, depth, &arm,
-		                       at / 8u, &fits);
+		/* A `[remaining]` run states BYTES, not a count: walked as a count
+		 * it reached for a second record in `01 00 01 05`, where the one
+		 * record is the whole frame, and refused a message every backend
+		 * accepts. It walks to the frame's end instead (26.783). */
+		if (size_code_is_bytes(image, arm.size_code)) {
+			err = remaining_run_walk(image, message, len, depth, &arm,
+			                         at / 8u, &fits);
+		} else {
+			err = counted_run_walk(image, message, len, shape, depth,
+			                       &arm, at / 8u, &fits);
+		}
 		if (err == SITU_WALK_UNSUPPORTED) {
 			return err;
 		}
@@ -4167,7 +4181,19 @@ static situ_walk_err remaining_run_fits(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	at /= 8u;
+	return remaining_run_walk(image, message, len, depth, held, at / 8u,
+	                          fits);
+}
+
+/* `remaining_run_fits`' walk, from a start the caller has: a run in a
+ * variant arm starts where its variant does (26.783). */
+static situ_walk_err remaining_run_walk(const situ_walk_image *image,
+                                        const uint8_t *message, uint32_t len,
+                                        uint32_t depth,
+                                        const situ_walk_placement *held,
+                                        uint32_t at, int *fits)
+{
+	situ_walk_err err;
 
 	if (held->type_struct == SITU_WALK_NONE) {
 		const uint32_t bits = held->element_bits;

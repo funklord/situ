@@ -7922,6 +7922,10 @@ Moved to `doc/decision/26.781-an-ended-run-in-an-arm-compiles.md`.
 
 Moved to `doc/decision/26.782-remaining-in-an-arm-is-last.md`.
 
+### 26.783 A `[remaining]` run in an arm is walked
+
+Moved to `doc/decision/26.783-a-remaining-run-in-an-arm-is-walked.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

@@ -7073,9 +7073,12 @@ class Emitter:
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
 		count   = self._count_expression(struct, member)
-		if (element is None or count is None
+		# A `[remaining]` run walks to the end of the frame rather than to
+		# a count, as C's does; nothing follows one (26.782).
+		to_end  = member.sized_by == "remaining"
+		if (element is None or (count is None and not to_end)
 				or not is_counted_run(self.resolved.structs, member)
-				or member.sized_by == "remaining" or member.delimiters
+				or member.delimiters
 				or member.repeat_while is not None
 				or is_recursive(self.resolved.structs, element.name)
 				or element.layout.is_fixed_size
@@ -7083,11 +7086,14 @@ class Emitter:
 			return None
 		inner = _pascal(element.name)
 		return [
-			f"\t\t\tlet total: usize = {self._unparen(count)};",
-			f"\t\t\tlet mut at = {self._unparen(base)};",
-			"\t\t\tlet mut n  = 0usize;",
-			"",
-			"\t\t\twhile n < total {",
+			*([f"\t\t\tlet mut at = {self._unparen(base)};",
+			   "",
+			   "\t\t\twhile at < self.bytes.len() {"] if to_end else
+			  [f"\t\t\tlet total: usize = {self._unparen(count or '0')};",
+			   f"\t\t\tlet mut at = {self._unparen(base)};",
+			   "\t\t\tlet mut n  = 0usize;",
+			   "",
+			   "\t\t\twhile n < total {"]),
 			"\t\t\t\tif at >= self.bytes.len() {",
 			"\t\t\t\t\treturn Err(Error::Bounds);",
 			"\t\t\t\t}",
@@ -7101,7 +7107,7 @@ class Emitter:
 			"\t\t\t\t\treturn Err(Error::Bounds);",
 			"\t\t\t\t}",
 			"\t\t\t\tat += size;",
-			"\t\t\t\tn  += 1;",
+			*([] if to_end else ["\t\t\t\tn  += 1;"]),
 			"\t\t\t}",
 			*([] if not tail else [
 				f"\t\t\tif situ_rt::remaining(self.bytes.len(), at) < {tail} {{",

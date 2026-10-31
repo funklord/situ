@@ -3957,9 +3957,12 @@ class Emitter:
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
 		count   = self._count_expression(struct, member)
-		if (element is None or count is None
+		# A `[remaining]` run walks to the end of the frame rather than to
+		# a count, as C's does; nothing follows one (26.782).
+		to_end  = member.sized_by == "remaining"
+		if (element is None or (count is None and not to_end)
 				or not is_counted_run(self.resolved.structs, member)
-				or member.sized_by == "remaining" or member.delimiters
+				or member.delimiters
 				or member.repeat_while is not None
 				or is_recursive(self.resolved.structs, element.name)
 				or element.layout.is_fixed_size
@@ -3967,11 +3970,14 @@ class Emitter:
 			return None
 		inner = self._struct_class(element.name)
 		return [
-			f"\t\t\tconst std::uint32_t total = {count};",
-			f"\t\t\tstd::uint32_t at = {base};",
-			"\t\t\tstd::uint32_t n  = 0;",
-			"",
-			"\t\t\twhile (n < total) {",
+			*([f"\t\t\tstd::uint32_t at = {base};",
+			   "",
+			   "\t\t\twhile (at < raw_.limit) {"] if to_end else
+			  [f"\t\t\tconst std::uint32_t total = {count};",
+			   f"\t\t\tstd::uint32_t at = {base};",
+			   "\t\t\tstd::uint32_t n  = 0;",
+			   "",
+			   "\t\t\twhile (n < total) {"]),
 			"\t\t\t\tsitu_view_t raw;",
 			"",
 			"\t\t\t\tif (at >= raw_.limit || situ_view_sub("
@@ -3990,7 +3996,7 @@ class Emitter:
 			"\t\t\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t\t\t}",
 			"\t\t\t\tat += size;",
-			"\t\t\t\tn  += 1;",
+			*([] if to_end else ["\t\t\t\tn  += 1;"]),
 			"\t\t\t}",
 			*([] if not tail else [
 				f"\t\t\tif (situ_remaining_u32(raw_.limit, at) < {tail}u) {{",

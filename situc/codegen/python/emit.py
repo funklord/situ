@@ -6722,9 +6722,12 @@ class Emitter:
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
 		count   = self._count_expression(struct, member)
-		if (element is None or count is None
+		# A `[remaining]` run walks to the end of the frame rather than to
+		# a count, as C's does; nothing follows one (26.782).
+		to_end  = member.sized_by == "remaining"
+		if (element is None or (count is None and not to_end)
 				or not is_counted_run(self.resolved.structs, member)
-				or member.sized_by == "remaining" or member.delimiters
+				or member.delimiters
 				or member.repeat_while is not None
 				or is_recursive(self.resolved.structs, element.name)
 				or element.layout.is_fixed_size
@@ -6739,9 +6742,11 @@ class Emitter:
 		at = f"{py_name(local_name(struct, member)).replace('.', '_')}_at"
 		n  = f"{py_name(local_name(struct, member)).replace('.', '_')}_n"
 		return [
-			f"\t\t\t{at} = {base}",
-			f"\t\t\t{n} = 0",
-			f"\t\t\twhile {n} < ({count}):",
+			*([f"\t\t\t{at} = {base}",
+			   f"\t\t\twhile {at} < self._len:"] if to_end else
+			  [f"\t\t\t{at} = {base}",
+			   f"\t\t\t{n} = 0",
+			   f"\t\t\twhile {n} < ({count}):"]),
 			f"\t\t\t\tif {at} >= self._len:",
 			f"\t\t\t\t\traise BoundsError({why})",
 			f"\t\t\t\tsize = {inner}(self._msg, self._at + {at},",
@@ -6751,7 +6756,7 @@ class Emitter:
 			f"\t\t\t\tif size > self._len - {at}:",
 			f"\t\t\t\t\traise BoundsError({why})",
 			f"\t\t\t\t{at} += size",
-			f"\t\t\t\t{n} += 1",
+			*([] if to_end else [f"\t\t\t\t{n} += 1"]),
 			*([] if not tail else [
 				f"\t\t\tif self._len - {at} < {tail}:",
 				f"\t\t\t\traise BoundsError({why})",

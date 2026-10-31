@@ -112,7 +112,25 @@ RUNS_CASES = {
 	"030001ff0304aabb":   "0",	# and here
 }
 
-SHAPES = [(SCHEMA, CASES), (TAILED, TAILED_CASES), (RUNS, RUNS_CASES)]
+#: A `[remaining]` run, which walks to the frame's end rather than to a
+#: count. The four declined it, so a record overrunning the frame validated
+#: clean; the C walker took the byte count for a record count and reached
+#: for a second record where one was the whole frame (26.783).
+REMAINING = SCHEMA.replace("piece  recs[n]", "piece  recs[remaining]")
+
+REMAINING_CASES = {
+	"0100010501":         "1",	# the second record declares a byte not here
+	"01000105":           "0",	# one record, and it is the whole frame
+	"010001050102030405": "1",	# the third declares three and has two
+	"01000201":           "1",
+	"010000":             "0",
+	"0100000000":         "0",
+	"01000003":           "1",
+}
+
+SHAPES = [(SCHEMA, CASES), (TAILED, TAILED_CASES), (RUNS, RUNS_CASES),
+          (REMAINING, REMAINING_CASES)]
+IDS    = ["last", "tailed", "runs", "remaining"]
 
 
 def _arms_verdict(answers: str) -> str:
@@ -121,7 +139,7 @@ def _arms_verdict(answers: str) -> str:
 	            if line.startswith("validate"))
 
 
-@pytest.mark.parametrize("text, cases", SHAPES, ids=["last", "tailed", "runs"])
+@pytest.mark.parametrize("text, cases", SHAPES, ids=IDS)
 def test_all_four_walk_the_run(text: str, cases: dict[str, str],
 		tmp_path: Path) -> None:
 	schema = tmp_path / "unit.situ"
@@ -135,7 +153,7 @@ def test_all_four_walk_the_run(text: str, cases: dict[str, str],
 
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
-@pytest.mark.parametrize("text, cases", SHAPES, ids=["last", "tailed", "runs"])
+@pytest.mark.parametrize("text, cases", SHAPES, ids=IDS)
 def test_both_walkers_walk_the_run(text: str, cases: dict[str, str],
 		tmp_path: Path) -> None:
 	blob  = _inline_image(text)

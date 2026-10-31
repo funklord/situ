@@ -8457,21 +8457,30 @@ class Emitter:
 		Only the shape `_run_fits` walks at the top level and with no
 		recursion: a counted run of an element with an extent. A recursive
 		element needs the depth counter `check` does not carry here.
+
+		A `[remaining]` run walks to the end of the frame instead of to a
+		count, as `_run_fits` does (26.736). Nothing follows one (26.782),
+		so it has no tail to hold.
 		"""
 		element = self.resolved.structs.get(member.type_name or "")
 		if (element is None or not self._is_counted_run(member)
-				or member.sized_by == "remaining" or member.delimiters
+				or member.delimiters
 				or member.repeat_while is not None
 				or self._recursive(element.name)
 				or element.layout.is_fixed_size
 				or self._element_extent_call(element) is None):
 			return None
+		to_end = member.sized_by == "remaining"
 		return [
-			f"\t\tconst uint32_t total = {self._count_expression(struct, member)};",
-			f"\t\tuint32_t at = {base};",
-			"\t\tuint32_t n  = 0u;",
-			"",
-			"\t\twhile (n < total) {",
+			*([f"\t\tuint32_t at = {base};",
+			   "",
+			   "\t\twhile (at < view.limit) {"] if to_end else
+			  [f"\t\tconst uint32_t total = "
+			   f"{self._count_expression(struct, member)};",
+			   f"\t\tuint32_t at = {base};",
+			   "\t\tuint32_t n  = 0u;",
+			   "",
+			   "\t\twhile (n < total) {"]),
 			"\t\t\tsitu_view_t element;",
 			"\t\t\tuint32_t    size;",
 			"",
@@ -8487,7 +8496,7 @@ class Emitter:
 			"\t\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t\t}",
 			"\t\t\tat = at + size;",
-			"\t\t\tn  = n + 1u;",
+			*([] if to_end else ["\t\t\tn  = n + 1u;"]),
 			"\t\t}",
 			*([] if not tail else [
 				f"\t\tif (situ_remaining_u32(view.limit, at) < {tail}u) {{",
