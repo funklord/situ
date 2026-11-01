@@ -7966,6 +7966,10 @@ Moved to `doc/decision/26.792-an-indexed-regions-elements-are-validated.md`.
 
 Moved to `doc/decision/26.793-a-run-of-one-size-records-fits-in-the-walkers.md`.
 
+### 26.794 A struct that takes an argument cannot name itself yet
+
+Moved to `doc/decision/26.794-a-struct-taking-an-argument-cannot-name-itself.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

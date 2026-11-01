@@ -2754,6 +2754,20 @@ def test_a_struct_that_takes_an_argument_cannot_be_a_variant_arm() -> None:
 	assert "outer.it" in refused.value.diagnostic.render()
 
 
+def test_a_struct_that_takes_an_argument_cannot_name_itself_yet() -> None:
+	"""Its child is a view the parent's accessor builds, like any member's.
+
+	The refusal let a struct naming itself through, and C then declared
+	`node_required` taking the argument and called it without one -- a
+	header that does not compile, for a schema `situc` accepted (26.794).
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + "struct node [depth = 4] { parameter u8 b; "
+		           "u8 n; node kids[n]; }")
+
+	assert "cannot be a member yet" in str(refused.value)
+
+
 def test_a_parameter_that_moves_a_variant_arm_must_be_stream() -> None:
 	"""The `[stream]` refusal, reached through an arm (26.432).
 

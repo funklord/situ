@@ -3359,7 +3359,12 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 	for struct in schema.structs():
 		for member in _members_and_arms(struct):
 			named = getattr(getattr(member, "type_ref", None), "name", None)
-			if named not in takes or struct.name == named:
+			# A struct naming ITSELF too: its child is a view the parent's
+			# accessor builds like any other, with no argument to pass. It
+			# was let through, and `struct node { parameter u8 b; u8 n;
+			# node kids[n]; }` generated C declaring `node_required` with
+			# the argument and calling it without (26.794).
+			if named not in takes:
 				continue
 			raise error(
 				f"`{named}` takes an argument, so it cannot be a member yet",
