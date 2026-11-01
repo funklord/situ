@@ -4420,13 +4420,37 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 		                          &held, fits);
 	}
 	if (held.size_code == SITU_WALK_NONE
-	    || held.type_struct == SITU_WALK_NONE
-	    || held.element_bits != SITU_WALK_NONE) {
+	    || held.type_struct == SITU_WALK_NONE) {
 		return SITU_WALK_OK;
 	}
 	err = offset_bits_deep(image, message, len, shape, index, depth, &from);
 	if (err != SITU_WALK_OK) {
 		return err;
+	}
+	/* Records of ONE size: the count times that size has to fit. This
+	 * answered yes for every such run, so `{ u8 n; pt r[n]; }` declaring
+	 * two records over one validated clean in both walkers while the four
+	 * refused it -- their "length the message declares has to fit"
+	 * (26.793). */
+	if (held.element_bits != SITU_WALK_NONE) {
+		walk_ctx ctx   = {image, message, len, shape, depth};
+		int64_t  count = 0;
+		const uint32_t start = from / 8u;
+
+		err = situ_walk_eval(image, held.size_code, ctx_load, &ctx,
+		                     (int64_t)(len > start ? len - start : 0u),
+		                     &count);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (count < 0) {
+			count = 0;
+		}
+		if (start > len || (uint64_t)count * (held.element_bits / 8u)
+		                   > (uint64_t)(len - start)) {
+			*fits = 0;
+		}
+		return SITU_WALK_OK;
 	}
 	return counted_run_walk(image, message, len, shape, depth, &held,
 	                        from / 8u, fits);

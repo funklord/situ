@@ -7962,6 +7962,10 @@ Moved to `doc/decision/26.791-a-recursive-element-is-validated.md`.
 
 Moved to `doc/decision/26.792-an-indexed-regions-elements-are-validated.md`.
 
+### 26.793 Both walkers hold a counted run of one-size records to the frame
+
+Moved to `doc/decision/26.793-a-run-of-one-size-records-fits-in-the-walkers.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

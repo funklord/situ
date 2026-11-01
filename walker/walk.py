@@ -1943,8 +1943,7 @@ def counted_run_fits(view: View, index: int, depth: int = 0,
 	if index not in view.image.varints \
 			and _sizes_in_bytes(view.image, placement.size_code):
 		return _remaining_run_fits(view, index, depth)
-	if (placement.size_code == NONE or placement.type_struct == NONE
-			or placement.element_bits != NONE):
+	if placement.size_code == NONE or placement.type_struct == NONE:
 		return True
 
 	first = (offset_bits(view, index) if start_bits is None
@@ -1952,6 +1951,14 @@ def counted_run_fits(view: View, index: int, depth: int = 0,
 	count = _evaluate(view, placement.size_code, lambda: first)
 	count = min(max(count, 0), 0xFFFFFFFF)
 	at    = view.at + first
+
+	# Records of ONE size: the count times that size has to fit. Answered
+	# True for every such run, so `{ u8 n; pt r[n]; }` declaring two
+	# records over one validated clean in both walkers while the four
+	# refused it -- their "length the message declares has to fit" (26.793).
+	if placement.element_bits != NONE:
+		return at + count * (placement.element_bits // BITS_PER_BYTE) \
+			<= view.limit
 
 	for _ in range(count):
 		if at >= view.limit:

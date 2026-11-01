@@ -43,7 +43,11 @@ struct s_rest { u8 k; piece r[remaining]; }
 #: constraint broken.
 CASES = {
 	"s_fixed": {"0201020304": "0", "020102030a": "2",	# the last element
-	            "02010a0304": "2", "00": "0"},		# ...and the first
+	            "02010a0304": "2", "00": "0",		# ...and the first
+	            # Two records declared over one, and three over half of
+	            # one: both walkers took a run of one-size records as fitting
+	            # whatever the count said (26.793).
+	            "020102": "1", "0301": "1"},
 	"s_lit":   {"01020304": "0", "010a0304": "2", "0102030a": "2"},
 	"s_var":   {"0201aa00": "0", "0205aaaaaaaaaa00": "2",
 	            "0201aa05": "1"},				# the frame first
