@@ -4503,12 +4503,6 @@ static int element_validatable(const situ_walk_image *image, uint32_t shape)
 	uint32_t first = 0u;
 	uint32_t count = 0u;
 
-	for (uint32_t i = 0u; i < image->depth_count; i++) {
-		if (u32_at(image->depths + (size_t)i * image->depth_stride)
-		    == shape) {
-			return 0;
-		}
-	}
 	if (situ_walk_members(image, shape, &first, &count) != SITU_WALK_OK) {
 		return 0;
 	}
@@ -4703,7 +4697,11 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 	if (shape >= image->struct_count) {
 		return SITU_WALK_BOUNDS;
 	}
-	if (depth >= depth_ceiling(image, shape)) {
+	/* `>`, as `struct_extent` and `while_walk` ask it: `[limit = N]`
+	 * counts edges, so N + 1 structs are inside it (26.288). That change
+	 * left this one at `>=`, which nothing reached until a run's elements
+	 * were validated and the deepest of nine was refused (26.791). */
+	if (depth > depth_ceiling(image, shape)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -4934,10 +4932,16 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * `located` member reaches past the frame by construction (9.8)".
 		 * Its accessor asks the message on every call. Asking it here
 		 * refused frames all four backends accept (26.446). */
+		/* The member's own width, not its span: `at` is past its lead and
+		 * `wide` counts the lead again, so the two overran by the lead --
+		 * invisible while a frame had bytes after the member, and exposed
+		 * when an element's view ends exactly at it, sexpr's `kind` after
+		 * whitespace (26.791). The backends ask `in_bounds(offset, size)`. */
 		if (((held.flags & SITU_WALK_OFFSET_KNOWN) == 0u || since != 0u)
 		                && (held.flags & SITU_WALK_SIZE_FIXED) != 0u
 		                && held.located_code == SITU_WALK_NONE
-		                && (at / 8u > len || (wide + 7u) / 8u > len - at / 8u)) {
+		                && (at / 8u > len
+		                    || (held.size_bits + 7u) / 8u > len - at / 8u)) {
 			record(why, index, SITU_WALK_NO_CHECK);
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
@@ -5125,8 +5129,9 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 			{
 				uint32_t held_bits = 0u;
-				err = situ_walk_size_bits(image, message, len, shape, index,
-				                          &held_bits);
+				/* The content, for the reason the check above gives. */
+				err = content_bits_deep(image, message, len, shape, index,
+				                        depth, &held_bits);
 				if (err != SITU_WALK_OK) {
 					return err;
 				}

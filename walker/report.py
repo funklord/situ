@@ -973,7 +973,14 @@ def _validate(image: Image, view: View, struct_index: int,
 		# backend answered 1.
 		try:
 			at   = offset_bits(view, index)
-			wide = size_bits(view, index)
+			# Where the member's own bytes END: its offset is past its
+			# lead, and its span -- `size_bits`, which this added -- counts
+			# the lead again, so the sum overran by the lead. Invisible while a frame had bytes
+			# after the member, and exposed when an element's view ends
+			# exactly at it -- sexpr's `kind` after whitespace (26.791).
+			# What the backends ask is `in_bounds(offset, size)`.
+			reach = at + (0 if image.placements[index].parameter
+			              else content_bits(view, index))
 		except TooDeep:
 			# The ceiling, which is a statement about this walker and not
 			# about the message: past `[limit]` a message is well formed
@@ -1036,7 +1043,7 @@ def _validate(image: Image, view: View, struct_index: int,
 		placed = image.placements[index]
 		if placed.fixed and (not placed.offset_known or since) \
 				and placed.located_code == NONE:
-			if view.at * 8 + at + wide > view.limit * 8:
+			if view.at * 8 + reach > view.limit * 8:
 				return fail(ERR_BOUNDS, index)
 
 		# An `indexed` region's offset table is `count` entries of
@@ -1083,7 +1090,7 @@ def _validate(image: Image, view: View, struct_index: int,
 		# run do not.
 		if any(check == FITS_FRAME
 		       for check, _ in image.constraints.get(index, ())):
-			if view.at * 8 + at + wide > view.limit * 8:
+			if view.at * 8 + reach > view.limit * 8:
 				return fail(ERR_BOUNDS, index, FITS_FRAME)
 
 		# And every element a counted run declares, which no span check can
@@ -1906,7 +1913,7 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 		return None
 	runs = (placement.repeat_code != NONE or index in image.delimiters
 	        or placement.size_code != NONE or placement.array_count != NONE)
-	if not runs or element in image.depths:
+	if not runs:
 		return None
 	shape = image.structs[element]
 	if any(image.placements[one].parameter for one in

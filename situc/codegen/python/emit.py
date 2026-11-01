@@ -367,6 +367,7 @@ class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
 			basename: str, materialize: bool = False,
 			messages: bool = False) -> None:
+		self._refuses_memo: dict[str, bool] = {}
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
@@ -6794,6 +6795,22 @@ class Emitter:
 			])
 		return lines
 
+	def _element_refuses(self, element: ResolvedStruct) -> bool:
+		"""Whether `element`'s `check` can refuse anything, so a run of it
+		gains an id (26.789).
+
+		Memoised, and a struct already on the path answers yes: a recursive
+		element's checks include its own run's element walk, which asks
+		this again, so the question has to be cut where it meets itself --
+		as `has_computable_extent` cuts it (26.791).
+		"""
+		memo = self._refuses_memo
+		if element.name not in memo:
+			memo[element.name] = True
+			memo[element.name] = any(
+				name for name, _ in self._check_groups(element))
+		return memo[element.name]
+
 	def _element_validation(self, struct: ResolvedStruct,
 			placement: Placement, base: str | None = None) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
@@ -6808,9 +6825,8 @@ class Emitter:
 		if base is None:
 			base = self._offset_expression(struct, placement)
 		if (element is None or base is None
-				or is_recursive(self.resolved.structs, element.name)
 				or arguments(element)
-				or not any(name for name, _ in self._check_groups(element))
+				or not self._element_refuses(element)
 				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
 				    and self._extent_expression(element) is None)):

@@ -144,3 +144,51 @@ def test_both_walkers_validate_an_arms_elements(tmp_path: Path) -> None:
 		in_python = python_verdict(blob, raw, shape)
 		in_c      = c_verdict(tmp_path, blob, raw, shape)
 		assert in_python == in_c == verdict, (message, in_python, in_c)
+
+
+#: A run of a RECURSIVE element, declined until the can-refuse question was
+#: cut where it meets itself (26.791). The element's own `check` opens with
+#: its nesting probe, so the descent is bounded by `[depth]` before anything
+#: recurses. A tree past the cap inside a run answers BOUNDS rather than
+#: the CONSTRAINT `node` itself gives: the element is measured with the
+#: cap, so its view is short of the tree. The walkers cannot say there.
+RECURSIVE = """target buffer;
+endian big;
+struct node [depth = 4] { u8 n [max = 3]; node kids[n]; }
+struct top { u8 k; node recs[k]; }
+"""
+
+RECURSIVE_CASES = {
+	"0100":           "0",
+	"01020000":       "0",
+	"01040000000000": "2",	# the element itself is over its `[max]`
+	"0102000400":     "2",	# ...and the second element
+	"0101040000000000": "2",	# ...and a kid of the first
+	"010101010100":   "0",
+}
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_all_four_validate_a_recursive_element(tmp_path: Path) -> None:
+	schema = tmp_path / "unit.situ"
+	schema.write_text(RECURSIVE, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+	for message, verdict in [*RECURSIVE_CASES.items(),
+	                         ("01010101010100", "1")]:
+		given = {backend: _verdict(fourway.answers(
+		                 argv, bytes.fromhex(message), tmp_path), "top")
+		         for backend, argv in command.items()}
+		assert set(given.values()) == {verdict}, (message, given)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_both_walkers_validate_a_recursive_element(tmp_path: Path) -> None:
+	blob  = _inline_image(RECURSIVE)
+	shape = shape_named_text(RECURSIVE, "top")
+	for message, verdict in RECURSIVE_CASES.items():
+		if message == "010101010100":
+			continue		# past the walkers' own ceiling: cannot say
+		raw = bytes.fromhex(message)
+		in_python = python_verdict(blob, raw, shape)
+		in_c      = c_verdict(tmp_path, blob, raw, shape)
+		assert in_python == in_c == verdict, (message, in_python, in_c)

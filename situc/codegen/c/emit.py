@@ -199,6 +199,7 @@ class Emitter:
 	def __init__(self, schema: ast.Schema, resolved: ResolvedSchema,
 			basename: str, prefix: str, materialize: bool = False,
 			messages: bool = False) -> None:
+		self._refuses_memo: dict[str, bool] = {}
 		self.schema   = schema
 		self.resolved = resolved
 		self.basename = basename
@@ -13079,6 +13080,22 @@ class Emitter:
 			])
 		return lines
 
+	def _element_refuses(self, element: ResolvedStruct) -> bool:
+		"""Whether `element`'s `check` can refuse anything, so a run of it
+		gains an id (26.789).
+
+		Memoised, and a struct already on the path answers yes: a recursive
+		element's checks include its own run's element walk, which asks
+		this again, so the question has to be cut where it meets itself --
+		as `has_computable_extent` cuts it (26.791).
+		"""
+		memo = self._refuses_memo
+		if element.name not in memo:
+			memo[element.name] = True
+			memo[element.name] = any(
+				name for name, _ in self._check_groups(element))
+		return memo[element.name]
+
 	def _element_validation(self, struct: ResolvedStruct,
 			placement: Placement, base: str | None = None) -> list[str]:
 		"""Every element of a run of structs, through its own validator.
@@ -13105,8 +13122,8 @@ class Emitter:
 		check   = ident(self.prefix, nested, "check")
 		if element is None:
 			return []
-		if self._recursive(nested) or self._arguments(element) \
-				or not any(name for name, _ in self._check_groups(element)):
+		if self._arguments(element) \
+				or not self._element_refuses(element):
 			return [
 				f"\t/* {placement.path} is a run of `{nested}`. Its elements are",
 				"\t * not validated here: one has nothing to refuse, names",

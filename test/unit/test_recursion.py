@@ -626,6 +626,19 @@ EXPECTED = {
 }
 
 
+def _validates(shape: str, valid: bool) -> bool:
+	"""Whether `validate` accepts a message `EXPECTED` calls inside the bound.
+
+	Not the same question for the `while` shape. A `while` run is never
+	empty, so a node is two bytes at least, and the leaf each of its
+	messages ends on is one -- `00`, its run cut off by the frame. Validated
+	as an element of its parent's run, it is short of its own minimum and
+	refused (26.791), as a nested member already is (26.577). Inside the
+	bound is still what `EXPECTED` says, and what the walkers' extent asks.
+	"""
+	return valid and shape != "while"
+
+
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 def test_the_generated_python_bounds_every_recursive_shape(
 		tmp_path: Path, shape: str) -> None:
@@ -666,7 +679,7 @@ def test_the_generated_python_bounds_every_recursive_shape(
 		one  = held(module.Message(bytearray(data)), 0, len(data))
 		assert one._extent == extent, (shape, k, one._extent)
 		assert one.nesting == nesting, (shape, k, one.nesting)
-		if valid:
+		if _validates(shape, valid):
 			one.validate()
 		else:
 			with pytest.raises(Exception):
@@ -693,7 +706,8 @@ def test_the_four_agree_about_every_recursive_shape(
 	schema.write_text(PREAMBLE + body, encoding="ascii")
 
 	rows = "\n".join(
-		f"\t\t{{ {k}u, {len(build(k))}u, {e}u, {n}u, {int(v)} }},"
+		f"\t\t{{ {k}u, {len(build(k))}u, {e}u, {n}u,"
+		f" {int(_validates(shape, v))} }},"
 		for k, (e, n, v) in EXPECTED[shape].items())
 
 	ran = 0
@@ -862,7 +876,8 @@ def _compare(ran: "subprocess.CompletedProcess[str]", shape: str,
 	assert ran.returncode == 0, ran.stderr
 	rows = [tuple(int(n) for n in line.split())
 	        for line in ran.stdout.split("\n") if line]
-	want = [(e, n, int(v)) for e, n, v in EXPECTED[shape].values()]
+	want = [(e, n, int(_validates(shape, v)))
+	        for e, n, v in EXPECTED[shape].values()]
 	assert rows == want, f"{language} {shape}: {rows} != {want}"
 
 

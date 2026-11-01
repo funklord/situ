@@ -7954,6 +7954,10 @@ Moved to `doc/decision/26.789-a-run-validates-its-elements.md`.
 
 Moved to `doc/decision/26.790-an-arms-run-validates-its-elements.md`.
 
+### 26.791 A run of a recursive element validates its elements
+
+Moved to `doc/decision/26.791-a-recursive-element-is-validated.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
