@@ -7970,6 +7970,10 @@ Moved to `doc/decision/26.793-a-run-of-one-size-records-fits-in-the-walkers.md`.
 
 Moved to `doc/decision/26.794-a-struct-taking-an-argument-cannot-name-itself.md`.
 
+### 26.795 A parent supplies a child's arguments, by name, at the member (proposed)
+
+Moved to `doc/decision/0068-a-parent-supplies-a-child-s-arguments.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
