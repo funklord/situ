@@ -6795,6 +6795,41 @@ class Emitter:
 			])
 		return lines
 
+	def _indexed_elements(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element an `indexed` region's table reaches, validated.
+
+		C's `_indexed_elements` says why, and why an entry the frame holds no
+		element at is BOUNDS (26.792).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is None or arguments(element)
+				or not self._element_refuses(element)
+				or (not element.layout.is_fixed_size
+				    and not has_computable_extent(self.resolved.structs,
+				                                  element))):
+			return []
+		name = py_name(local_name(struct, placement))
+		held = f"_{name}_element"
+		return [
+			f"\t\t# {placement.path}: each `{element.name}` its table"
+			" reaches,",
+			"\t\t# through its own validator (26.792).",
+			f"\t\tfor _{name}_i in range(self.{name}_count):",
+			"\t\t\ttry:",
+			f"\t\t\t\t{held} = self.{name}_at(_{name}_i)",
+			"\t\t\texcept BoundsError:",
+			f'\t\t\t\traise BoundsError("{placement.path}: an element its'
+			' table points at is outside the frame")',
+			# `_at` narrows to the element's extent without asking whether
+			# the region holds it, where the other three refuse one that
+			# runs past it: a cell whose payload overran the page.
+			f"\t\t\tif {held}._at + {held}._len > self._at + self._len:",
+			f'\t\t\t\traise BoundsError("{placement.path}: an element its'
+			' table points at runs past the frame")',
+			f"\t\t\t{held}.validate()",
+		]
+
 	def _element_refuses(self, element: ResolvedStruct) -> bool:
 		"""Whether `element`'s `check` can refuse anything, so a run of it
 		gains an id (26.789).
@@ -8473,6 +8508,11 @@ class Emitter:
 				and arm_of(struct, placement) is None \
 				and "." not in placement.path[len(struct.name) + 1:]:
 			return self._element_validation(struct, placement)
+		# An `indexed` region's elements, through the region's `_at`
+		# (26.792).
+		if placement.kind == "indexed" \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			return self._indexed_elements(struct, placement)
 
 		if check is Check.DISCRIMINANT:
 			return self._discriminant_check(struct, placement)

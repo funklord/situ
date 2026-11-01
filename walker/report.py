@@ -1880,6 +1880,10 @@ def _elements_validate(view: View, index: int,
 	element = image.placements[index].type_struct
 	floor   = image.structs[element].size_min_bits
 	for at, size in elements:
+		# Past the frame: only an indexed table's entry can point there,
+		# the runs' own walks stopping at it (26.792).
+		if at + size > view.limit:
+			return ERR_BOUNDS
 		if floor != NONE and size * BITS_PER_BYTE < floor:
 			return ERR_BOUNDS
 		verdict = _validate(image, View(image, view.buffer, element,
@@ -1887,6 +1891,66 @@ def _elements_validate(view: View, index: int,
 		if verdict is None or verdict:
 			return verdict
 	return OK
+
+
+def _indexed_elements(view: View, index: int) -> list[tuple[int, int]] | None:
+	"""Where each element an `indexed` region's table points at is.
+
+	Each entry read in the region's own terms and measured from its base,
+	then the element measured there -- what each backend's `_at` does. One
+	the frame does not hold is listed as it stands, past the frame, and
+	`_elements_validate` refuses it: BOUNDS, as an element of a counted run
+	the frame does not hold is (26.676, 26.792).
+	"""
+	image   = view.image
+	element = image.placements[index].type_struct
+	entry_bits, count_code, measured_from = image.indexes[index]
+	if entry_bits == NONE or count_code == NONE:
+		return None
+	shape = image.structs[element]
+	if any(image.placements[one].parameter for one in
+	       range(shape.first_placement,
+	             shape.first_placement + shape.placement_count)):
+		return None
+	# What the offsets are measured from: the region (0), the message (1)
+	# or a member (2), which the image names since 26.792.
+	try:
+		table = offset_bits(view, index)
+		if measured_from == 0:
+			base = table // BITS_PER_BYTE
+		elif measured_from == 1:
+			base = 0
+		else:
+			member = image.index_bases.get(index, NONE)
+			if member == NONE:
+				return None
+			base = offset_bits(view, member) // BITS_PER_BYTE
+		count = _evaluate(view, count_code, table // BITS_PER_BYTE)
+	except Refused:
+		return None
+	found: list[tuple[int, int]] = []
+	for i in range(max(count, 0)):
+		try:
+			start = view.at + base + _read_at(
+				view, index, table + i * entry_bits, entry_bits)
+		except Refused:
+			return None		# the table's own check refused it already
+		if start >= view.limit:
+			found.append((start, 1))
+			break
+		if shape.fixed:
+			size = shape.size_bits // BITS_PER_BYTE
+		else:
+			try:
+				size = struct_extent(View(image, view.buffer, element,
+				                          start, view.limit), 1)
+			except Unplaceable:
+				return None
+			except Refused:
+				found.append((start, view.limit - start + 1))
+				break
+		found.append((start, size))
+	return found
 
 
 def _run_elements(view: View, index: int, start_bits: int | None = None
@@ -1903,6 +1967,8 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 	image     = view.image
 	placement = image.placements[index]
 	element   = placement.type_struct
+	if element != NONE and index in image.indexes and start_bits is None:
+		return _indexed_elements(view, index)
 	if element == NONE or placement.kind != FIELD or index in image.varints:
 		return None
 	# An arm is a member of the variant, not of this struct's chain: the

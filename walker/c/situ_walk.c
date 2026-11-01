@@ -4688,6 +4688,107 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 	return SITU_WALK_OK;
 }
 
+/* Every element an `indexed` region's table points at, validated.
+ *
+ * `report._indexed_elements` line for line, and each backend's `_at`: an
+ * entry read in the region's own terms, measured from the region, the
+ * message or the member the row names, and the element measured there. One
+ * the frame does not hold is BOUNDS, as an element of a counted run the
+ * frame does not hold is (26.676, 26.792). */
+static situ_walk_err indexed_elements_validate(const situ_walk_image *image,
+                                               const uint8_t *message,
+                                               uint32_t len, uint32_t shape,
+                                               uint32_t index, uint32_t depth,
+                                               const uint8_t *row,
+                                               uint32_t table_bits,
+                                               uint32_t count,
+                                               situ_walk_err *verdict,
+                                               situ_walk_why *why)
+{
+	situ_walk_placement held;
+	situ_walk_err       err = situ_walk_placement_at(image, index, &held);
+	const uint32_t      entry_bits = u32_at(row + 4);
+	uint32_t            base = 0u;
+
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (held.type_struct == SITU_WALK_NONE
+	    || held.type_struct >= image->struct_count
+	    || !element_validatable(image, held.type_struct)) {
+		return SITU_WALK_OK;
+	}
+	if (row[12] == 0u) {
+		base = table_bits / 8u;
+	} else if (row[12] != 1u) {
+		const uint32_t member = image->index_stride >= 20u
+		                        ? u32_at(row + 16) : SITU_WALK_NONE;
+		uint32_t       bits   = 0u;
+
+		if (member == SITU_WALK_NONE
+		    || offset_bits_deep(image, message, len, shape, member, depth,
+		                        &bits) != SITU_WALK_OK) {
+			return SITU_WALK_OK;
+		}
+		base = bits / 8u;
+	}
+
+	const uint8_t *inner = image->structs
+	                       + held.type_struct * image->struct_stride;
+	const uint32_t fixed = u32_at(inner + 8);
+	const uint32_t floor = image->struct_stride >= 20u
+	                       ? u32_at(inner + 16) : SITU_WALK_NONE;
+
+	for (uint32_t i = 0u; i < count; i++) {
+		uint64_t      value  = 0u;
+		uint32_t      extent = 0u;
+		uint32_t      start;
+		situ_walk_err inner_verdict = SITU_WALK_OK;
+
+		if (read_at(message, len, &held, table_bits + i * entry_bits,
+		            entry_bits, &value) != SITU_WALK_OK) {
+			return SITU_WALK_OK;	/* the table's own check said so */
+		}
+		if (value >= len || base >= len - (uint32_t)value) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		start = base + (uint32_t)value;
+		if (fixed != SITU_WALK_NONE) {
+			extent = fixed / 8u;
+		} else {
+			err = struct_extent(image, message + start, len - start,
+			                    held.type_struct, depth + 1u, &extent);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+		}
+		if (extent > len - start
+		    || (floor != SITU_WALK_NONE && extent * 8u < floor)) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = SITU_WALK_BOUNDS;
+			return SITU_WALK_OK;
+		}
+		err = validate_deep(image, message + start, extent, held.type_struct,
+		                    depth + 1u, &inner_verdict, NULL);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (inner_verdict != SITU_WALK_OK) {
+			record(why, index, SITU_WALK_NO_CHECK);
+			*verdict = inner_verdict;
+			return SITU_WALK_OK;
+		}
+	}
+	return SITU_WALK_OK;
+}
+
 static situ_walk_err validate_deep(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t depth,
@@ -5005,6 +5106,24 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 					record(why, index, SITU_WALK_NO_CHECK);
 					*verdict = SITU_WALK_BOUNDS;
 					return SITU_WALK_OK;
+				}
+
+				/* And every element the table points at (26.792). */
+				{
+					situ_walk_err element = SITU_WALK_OK;
+
+					err = indexed_elements_validate(image, message, len,
+					                                shape, index, depth,
+					                                row, at,
+					                                (uint32_t)how_many,
+					                                &element, why);
+					if (err != SITU_WALK_OK) {
+						return err;
+					}
+					if (element != SITU_WALK_OK) {
+						*verdict = element;
+						return SITU_WALK_OK;
+					}
 				}
 			}
 		}

@@ -464,6 +464,9 @@ class Image:
 	#: is still a deferral rather than a silent pass: a table whose size
 	#: nothing states cannot be bounds-checked by anybody.
 	indexes: dict[int, tuple[int, int, int]] = field(default_factory=dict)
+	#: placement index -> the member a `base = <member>` table's offsets are
+	#: measured from, or `NONE` (26.792).
+	index_bases: dict[int, int] = field(default_factory=dict)
 	#: Per recursive struct, `(depth, limit)`: what the format allows and
 	#: what the schema asks a reader to spend (0054). Absent for a struct
 	#: that does not name itself, which is nearly all of them -- so an
@@ -723,7 +726,12 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 		for i in range(records):
 			where, entry_bits, count_code, base = _struct.unpack_from(
 				"<IIIB", blob, at + i * stride)
+			# The member a `base = <member>` table is measured from, where
+			# the row carries it (26.792); `NONE` from an older image.
+			member = (_struct.unpack_from("<I", blob, at + i * stride + 16)[0]
+			          if stride >= 20 else NONE)
 			image.indexes[where] = (entry_bits, count_code, base)
+			image.index_bases[where] = member
 
 	if DEPTHS in found:
 		at, records, stride = found[DEPTHS]

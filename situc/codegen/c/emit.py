@@ -13005,6 +13005,8 @@ class Emitter:
 		"""
 		if "." in placement.path[len(struct.name) + 1 :]:
 			return []		# reached through its parent, not directly
+		if placement.kind == "indexed":
+			return self._indexed_elements(struct, placement)
 		if placement.kind != "field":
 			# Only a plain member has a sub-view accessor to delegate through.
 			# An element describes a whole array at once, and a region -- an
@@ -13079,6 +13081,52 @@ class Emitter:
 				"\t}",
 			])
 		return lines
+
+	def _indexed_elements(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element an `indexed` region's table reaches, validated.
+
+		Through the region's own `_at`, which finds each one by its offset
+		and narrows to its extent. An entry pointing where the frame does
+		not hold an element is BOUNDS, as an element of a counted run the
+		frame does not hold is (26.676): skipping it, as this first did,
+		passed a cell whose payload overran the page (26.792).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is None or self._arguments(element)
+				or not self._element_refuses(element)):
+			return []
+		local = c_name(self._local(struct, placement))
+		count = ident(self.prefix, struct.name, local, "count")
+		at    = ident(self.prefix, struct.name, local, "at")
+		check = ident(self.prefix, element.name, "check")
+		# `_at` narrows to the element's extent, so it exists only where
+		# one can be measured.
+		if not element.layout.is_fixed_size \
+				and not has_computable_extent(self.resolved.structs, element):
+			return []
+		return [
+			f"\t/* {placement.path}: each `{element.name}` its table"
+			" reaches, through",
+			"\t * its own validator (26.792). */",
+			"\t{",
+			f"\t\tconst uint32_t total = {count}(view);",
+			"\t\tuint32_t i;",
+			"",
+			"\t\tfor (i = 0u; i < total; i++) {",
+			"\t\t\tsitu_view_t one;",
+			"\t\t\tsitu_err_t  err;",
+			"",
+			f"\t\t\tif ({at}(view, i, &one) != SITU_OK) {{",
+			"\t\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t\t}",
+			f"\t\t\terr = {check}(one, NULL);",
+			"\t\t\tif (err != SITU_OK) {",
+			"\t\t\t\treturn err;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
 
 	def _element_refuses(self, element: ResolvedStruct) -> bool:
 		"""Whether `element`'s `check` can refuse anything, so a run of it

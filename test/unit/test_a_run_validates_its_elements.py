@@ -192,3 +192,42 @@ def test_both_walkers_validate_a_recursive_element(tmp_path: Path) -> None:
 		in_python = python_verdict(blob, raw, shape)
 		in_c      = c_verdict(tmp_path, blob, raw, shape)
 		assert in_python == in_c == verdict, (message, in_python, in_c)
+
+
+#: An `indexed` region's elements, which each backend reaches through the
+#: region's `_at`: sqlite's leaf page, whose cells the table points at.
+#: An entry pointing where the frame holds no whole cell is BOUNDS, as an
+#: element of a counted run the frame does not hold is (26.792).
+SQLITE = Path(__file__).resolve().parents[2] / "example/sqlite/sqlite.situ"
+
+SQLITE_CASES = {
+	"0d00000001000000000a0201aabb":         "0",
+	"0d00000002000000000c00100201aabb0101cc": "0",
+	"0d00000001000000000a0501aabb":         "1",	# the cell runs past the page
+	"0d00000002000000000c00100201aabb0501cc": "1",	# ...the second one
+	"0d00000001000000002a0201aabb":         "1",	# the entry points past it
+}
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+def test_all_four_validate_an_indexed_regions_elements(tmp_path: Path) -> None:
+	command = fourway.build(tmp_path, SQLITE)
+	for message, verdict in SQLITE_CASES.items():
+		given = {backend: _verdict(fourway.answers(
+		                 argv, bytes.fromhex(message), tmp_path),
+		                 "btree_leaf_page")
+		         for backend, argv in command.items()}
+		assert set(given.values()) == {verdict}, (message, given)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_both_walkers_validate_an_indexed_regions_elements(
+		tmp_path: Path) -> None:
+	text  = SQLITE.read_text(encoding="ascii")
+	blob  = _inline_image(text)
+	shape = shape_named_text(text, "btree_leaf_page")
+	for message, verdict in SQLITE_CASES.items():
+		raw = bytes.fromhex(message)
+		in_python = python_verdict(blob, raw, shape)
+		in_c      = c_verdict(tmp_path, blob, raw, shape)
+		assert in_python == in_c == verdict, (message, in_python, in_c)

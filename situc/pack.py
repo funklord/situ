@@ -64,7 +64,7 @@ TLV_BYTES	= 16
 #: that arm's program. The reader takes the row by stride, so a
 #: shorter one still reads.
 TLV_RULE_BYTES	= 28
-INDEX_BYTES	= 16
+INDEX_BYTES	= 20
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
@@ -2718,11 +2718,20 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					_u32(tlv_size_at.get((placement.path, value_rule.label))))
 		if placement.index_table is not None:
 			entry_bytes = traverse.index_entry_bytes(placement)
+			# And WHICH member a `base = <member>` table is measured
+			# from, which the kind alone did not say: a walker could
+			# not find an element without it, and an element's
+			# validation needs one (26.792). A fifth word, so an image
+			# packed before it reads by stride and finds `NONE`.
+			base_member = getattr(placement.index_table, "base_member", None)
+			base_at = next((i for i, (_held_owner, held) in enumerate(rows)
+			                if base_member is not None
+			                and held.path == f"{owner}.{base_member}"), None)
 			index_blob += _struct.pack(
-				"<IIIB3x", at,
+				"<IIIB3xI", at,
 				_u32(None if entry_bytes is None else entry_bytes * 8),
 				_u32(index_count_at.get(placement.path)),
-				_index_base(placement))
+				_index_base(placement), _u32(base_at))
 
 	# Which member carries each struct's version. `Placement.version_field`
 	# already names it -- the layout resolves `[version = ver]` onto every

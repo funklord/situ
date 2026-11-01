@@ -7141,6 +7141,36 @@ class Emitter:
 			])
 		return lines
 
+	def _indexed_elements(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""Every element an `indexed` region's table reaches, validated.
+
+		C's `_indexed_elements` says why, and why an entry the frame holds no
+		element at is BOUNDS (26.792).
+		"""
+		element = self.resolved.structs.get(placement.type_name or "")
+		if (element is None or arguments(element)
+				or not self._element_refuses(element)
+				or (not element.layout.is_fixed_size
+				    and not has_computable_extent(self.resolved.structs,
+				                                  element))):
+			return []
+		name = c_name(local_name(struct, placement))
+		return [
+			f"\t\t// {placement.path}: each `{element.name}` its table"
+			" reaches,",
+			"\t\t// through its own validator (26.792).",
+			f"\t\tfor i in 0..self.{_ident(f'{name}_count')}() {{",
+			f"\t\t\tlet one = match self.{_ident(f'{name}_at')}(i) {{",
+			"\t\t\t\tOk(one) => one,",
+			"\t\t\t\tErr(_) => return Err(Error::Bounds),",
+			"\t\t\t};",
+			"\t\t\tif let Err(e) = one.validate() {",
+			"\t\t\t\treturn Err(e);",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _element_refuses(self, element: ResolvedStruct) -> bool:
 		"""Whether `element`'s `check` can refuse anything, so a run of it
 		gains an id (26.789).
@@ -9874,6 +9904,12 @@ class Emitter:
 				and arm_of(struct, placement) is None \
 				and "." not in placement.path[len(struct.name) + 1:]:
 			out.extend(self._element_validation(struct, placement))
+			return out
+		# An `indexed` region's elements, through the region's `_at`
+		# (26.792).
+		if placement.kind == "indexed" \
+				and "." not in placement.path[len(struct.name) + 1:]:
+			out.extend(self._indexed_elements(struct, placement))
 			return out
 
 		if check is Check.NOTHING:

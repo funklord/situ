@@ -7958,6 +7958,10 @@ Moved to `doc/decision/26.790-an-arms-run-validates-its-elements.md`.
 
 Moved to `doc/decision/26.791-a-recursive-element-is-validated.md`.
 
+### 26.792 An `indexed` region's elements are validated
+
+Moved to `doc/decision/26.792-an-indexed-regions-elements-are-validated.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
