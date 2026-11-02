@@ -3292,6 +3292,10 @@ class Emitter:
 				continue
 			for arm, member in arm_members(struct, variant):
 				if member is not None:
+					# An argued run in an arm builds its elements through
+					# `_make_<member>` as a run of the struct's own does
+					# (0068 step 4), and the arm's walks call it.
+					lines.extend(self._maker(struct, member))
 					lines.extend(self._arm_member(struct, variant, arm, member))
 		return lines
 
@@ -3680,17 +3684,17 @@ class Emitter:
 				f'\t\t"""How many bytes {placement.path} occupies here."""',
 				*([f"\t\treturn self.{base}_extent_at(0)"] if deep else [
 					f"\t\tstart = {start}",
-					f"\t\treturn {inner}(self._msg, self._at + start,",
-					"\t\t\tmax(0, self._len - start))._extent",
+					f"\t\treturn {self._child(struct, placement)[0] if placement.arguments else inner}(self._msg, self._at + start,",
+					f"\t\t\tmax(0, self._len - start){self._child(struct, placement)[1]})._extent",
 				]),
 				*head,
-				f"\t\twhole = {inner}(self._msg, self._at + ({start}),",
-				f"\t\t\tmax(0, self._len - ({start})))",
+				f"\t\twhole = {self._child(struct, placement)[0] if placement.arguments else inner}(self._msg, self._at + ({start}),",
+				f"\t\t\tmax(0, self._len - ({start})){self._child(struct, placement)[1]})",
 				"\t\tsize  = whole._extent",
 				f"\t\tif self._len - ({start}) < size:",
 				f'\t\t\traise BoundsError("{placement.path}: the frame does'
 				' not reach it")',
-				f"\t\treturn {inner}(self._msg, self._at + ({start}), size)",
+				f"\t\treturn {self._child(struct, placement)[0] if placement.arguments else inner}(self._msg, self._at + ({start}), size{self._child(struct, placement)[1]})",
 			]
 
 		if nested is not None and nested.layout.is_fixed_size:
@@ -3704,8 +3708,8 @@ class Emitter:
 				f"\t\tif self._len - ({start}) < {inner}.SIZE_BYTES:",
 				f'\t\t\traise BoundsError("{placement.path}: the frame does'
 				' not reach it")',
-				f"\t\treturn {inner}(self._msg, self._at + ({start}),",
-				f"\t\t\t{inner}.SIZE_BYTES)",
+				f"\t\treturn {self._child(struct, placement)[0] if placement.arguments else inner}(self._msg, self._at + ({start}),",
+				f"\t\t\t{inner}.SIZE_BYTES{self._child(struct, placement)[1]})",
 			]
 
 		# Said rather than skipped, which is C's rule next door: "a header
@@ -7045,8 +7049,8 @@ class Emitter:
 			f"\t\t\t{n} = 0",
 			loop,
 			*scan,
-			f"\t\t\t\t_element = {inner}(self._msg, self._at + {at},"
-			f" self._len - {at})",
+			f"\t\t\t\t_element = {self._child(struct, member)[0] if member.arguments else inner}(self._msg, self._at + {at},"
+			f" self._len - {at}{self._child(struct, member)[1]})",
 			"\t\t\t\tsize = _element._extent",
 			f"\t\t\t\tif size == 0 or size > self._len - {at}:",
 			"\t\t\t\t\tbreak",
@@ -7100,8 +7104,8 @@ class Emitter:
 			   f"\t\t\twhile {n} < ({count}):"]),
 			f"\t\t\t\tif {at} >= self._len:",
 			f"\t\t\t\t\traise BoundsError({why})",
-			f"\t\t\t\tsize = {inner}(self._msg, self._at + {at},",
-			f"\t\t\t\t\tself._len - {at}).{step}",
+			f"\t\t\t\tsize = {self._child(struct, member)[0] if member.arguments else inner}(self._msg, self._at + {at},",
+			f"\t\t\t\t\tself._len - {at}{self._child(struct, member)[1]}).{step}",
 			"\t\t\t\tif size == 0:",
 			"\t\t\t\t\tbreak",
 			f"\t\t\t\tif size > self._len - {at}:",

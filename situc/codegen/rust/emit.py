@@ -3301,7 +3301,7 @@ class Emitter:
 					"\t\tif self.bytes.len() < at {",
 					"\t\t\treturn 0;",
 					"\t\t}",
-					f"\t\t{inner} {{ bytes: &self.bytes[at..] }}"
+					f"\t\t{inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }}"
 					".extent_at(depth + 1)",
 					"\t}",
 					"",
@@ -3318,7 +3318,7 @@ class Emitter:
 					"\t\tif self.bytes.len() < at {",
 					"\t\t\treturn 0;",
 					"\t\t}",
-					f"\t\t{inner} {{ bytes: &self.bytes[at..] }}.extent()",
+					f"\t\t{inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }}.extent()",
 					"\t}",
 					"",
 				]),
@@ -3345,12 +3345,12 @@ class Emitter:
 				"",
 				"\t\t// Twice: once over what is left, to give the extent",
 				"\t\t// something to measure, and once at the size it says.",
-				f"\t\tlet whole = {inner} {{ bytes: &self.bytes[at..] }};",
+				f"\t\tlet whole = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 				"\t\tlet size  = whole.extent();",
 				"\t\tif self.bytes.len() - at < size {",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
-				f"\t\tOk({inner} {{ bytes: &self.bytes[at..at + size] }})",
+				f"\t\tOk({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})",
 				"\t}",
 			]
 
@@ -3369,7 +3369,7 @@ class Emitter:
 				f" || self.bytes.len() - at < {inner}::SIZE {{",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
-				f"\t\t{inner}::new(&self.bytes[at..at + {inner}::SIZE])",
+				f"\t\t{inner}::new(&self.bytes[at..at + {inner}::SIZE]{self._child_args(struct, placement)})",
 				"\t}",
 			]
 
@@ -7329,7 +7329,7 @@ class Emitter:
 			"",
 			loop,
 			*scan,
-			f"\t\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			f"\t\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, member)} }};",
 			"\t\t\t\tlet size    = element.extent();",
 			"\t\t\t\tif size == 0"
 			" || size > situ_rt::remaining(self.bytes.len(), at) {",
@@ -7380,7 +7380,7 @@ class Emitter:
 			"\t\t\t\tif at >= self.bytes.len() {",
 			"\t\t\t\t\treturn Err(Error::Bounds);",
 			"\t\t\t\t}",
-			f"\t\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			f"\t\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, member)} }};",
 			f"\t\t\t\tlet size    = element.{step};",
 			"",
 			"\t\t\t\tif size == 0 {",

@@ -223,6 +223,37 @@ struct hands_on size=12..1034 mutate=Shifting address=Unstable repr=ValueConvert
   hands_on.fixed.carried.flag            offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
   hands_on.after                         offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
+struct hands_on_arms size=4..2068 access=Sequential mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic
+  hands_on_arms.block                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  hands_on_arms.kind                     offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  hands_on_arms.n                        offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  hands_on_arms.body                     offset=AbsoluteStatic(0x03) size=Bounded(0, 2064) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  hands_on_arms.body.one                 offset=AbsoluteStatic(0x03) size=Bounded(5, 516) align=Aligned(1) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.one.block           parameter
+  hands_on_arms.body.one.payload         offset=AbsoluteStatic(0x03) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  hands_on_arms.body.one.trailer         offset=Dynamic size=Bounded(1, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.one.checksum        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.one.kind            offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.one.carried         offset=Dynamic size=Bounded(1, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.one.carried.marker  offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.one.carried.marker.tag offset=FrameStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on_arms.body.one.carried.marker.body offset=FrameStatic(0x04) size=Fixed(1) align=Aligned(4) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on_arms.body.one.carried.flag    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many                offset=AbsoluteStatic(0x03) size=Bounded(0, 2064) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Shifting
+  hands_on_arms.body.many[]              offset=FrameStatic(0x00) size=Bounded(5, 516) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many[].block        parameter
+  hands_on_arms.body.many[].payload      offset=FrameStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  hands_on_arms.body.many[].trailer      offset=Dynamic size=Bounded(1, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many[].checksum     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many[].kind         offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many[].carried      offset=Dynamic size=Bounded(1, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many[].carried.marker offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.many[].carried.marker.tag offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on_arms.body.many[].carried.marker.body offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on_arms.body.many[].carried.flag offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+  hands_on_arms.body.raw                 offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  hands_on_arms.after                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
+
 struct hands_on_runs size=2.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   hands_on_runs.block                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   hands_on_runs.n                        offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

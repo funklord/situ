@@ -3524,7 +3524,8 @@ class Emitter:
 					"\t\treturn SITU_ERR_BOUNDS;",
 					"\t}",
 					f"\tconst uint32_t size = "
-					f"{ident(self.prefix, nested.name, 'extent')}(whole);",
+					f"{ident(self.prefix, nested.name, 'extent')}"
+					f"(whole{self._child_args(struct, placement)});",
 				])
 			lines.extend([
 				f"\treturn situ_view_sub(view, {base}, {size}, out);",
@@ -3561,7 +3562,8 @@ class Emitter:
 			"\t\treturn 0u;",
 			"\t}",
 			(f"\treturn {extent}_at(whole, depth + 1u);" if deep
-			 else f"\treturn {extent}(whole);"),
+			 else f"\treturn {extent}"
+			      f"(whole{self._child_args(struct, placement)});"),
 			"}",
 		]
 		return [
@@ -8534,7 +8536,8 @@ class Emitter:
 		to_end = member.sized_by == "remaining"
 		size   = (f"{ident(self.prefix, element.name, 'extent')}"
 		          "_at(element, 1u)" if self._recursive(element.name)
-		          else self._element_extent_call(element))
+		          else self._element_extent_call(
+		                  element, self._child_args(struct, member)))
 		return [
 			*([f"\t\tuint32_t at = {base};",
 			   "",
@@ -8587,7 +8590,8 @@ class Emitter:
 				or (member.repeat_while is None and not member.delimiters)
 				or self._recursive(element.name)):
 			return None
-		extent = self._element_extent_call(element)
+		extent = self._element_extent_call(
+			element, self._child_args(struct, member))
 		if extent is None:
 			return None
 		if member.repeat_while is not None:
@@ -11564,7 +11568,8 @@ class Emitter:
 			"",
 			"\t\tif (got == SITU_OK) {",
 			f"\t\t\tconst situ_err_t err = "
-			f"{ident(self.prefix, placement.type_name or '', 'validate')}(arm);",
+			f"{ident(self.prefix, placement.type_name or '', 'validate')}"
+			f"(arm{self._child_args(struct, placement)});",
 			"",
 			"\t\t\tif (err != SITU_OK) {",
 			"\t\t\t\treturn err;",

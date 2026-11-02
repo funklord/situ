@@ -1258,7 +1258,8 @@ def _validate(image: Image, view: View, struct_index: int,
 						return fail(ERR_BOUNDS, arm)
 					verdict = _validate(
 						image, View(image, view.buffer, inner_struct,
-						            at, min(view.limit, at + wide)),
+						            at, min(view.limit, at + wide),
+						            child_args(view, arm)),
 						inner_struct)
 					if verdict:
 						return verdict
@@ -1871,7 +1872,8 @@ def _arm_validates(image: Image, view: View, index: int,
 	if run.repeat_code != NONE or chosen in image.delimiters:
 		return _elements_validate(view, chosen,
 		                          _run_elements(view, chosen, at))
-	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit)
+	inner = View(image, view.buffer, arm_type, view.at + at // 8, view.limit,
+	             child_args(view, chosen))
 	return _validate(image, inner, arm_type) or OK
 
 

@@ -2049,6 +2049,21 @@ struct hands_on_runs {
 	negotiated(block = 1) rest[remaining];
 }
 
+// And through a variant arm (0068 step 4): a single member and a counted
+// run, each measured with the argument where the arm is chosen, and a
+// member after the variant to be placed by it.
+struct hands_on_arms {
+	u8 block [max = 16];
+	u8 kind;
+	u8 n [max = 4];
+	variant body switch (kind) {
+		case 1:  negotiated(block = block) one;
+		case 2:  negotiated(block = 3) many[n];
+		default: u8 raw;
+	}
+	u8 after;
+}
+
 // A region name a struct SHARES with the type of one of its members, which
 // is the shape every "which region does this name mean" lookup has been
 // wrong about. `tag_covers`, `regions` and `covered_by` all hold BARE

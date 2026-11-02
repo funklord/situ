@@ -8000,6 +8000,10 @@ Moved to `doc/decision/26.800-a-cut-nested-member-is-bounds-in-the-walkers.md`.
 
 Moved to `doc/decision/26.801-0068-step-3-a-run-hands-its-elements-arguments.md`.
 
+### 26.802 0068 step 4: a variant arm hands its member the arguments
+
+Moved to `doc/decision/26.802-0068-step-4-an-arm-hands-its-member-arguments.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

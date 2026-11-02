@@ -1633,8 +1633,16 @@ static situ_walk_err arm_bits(const situ_walk_image *image,
 				return SITU_WALK_BOUNDS;
 			}
 
+			int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+			situ_walk_image bound;
+			err = child_binding(image, message, len, shape, chosen, depth,
+			                    held.type_struct, handed, &bound);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+
 			uint32_t extent = 0u;
-			err = struct_extent(image, message + at, len - at,
+			err = struct_extent(&bound, message + at, len - at,
 			                    held.type_struct, depth + 1u, &extent);
 			if (err != SITU_WALK_OK) {
 				return err;
@@ -4278,11 +4286,19 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		 * it reached for a second record in `01 00 01 05`, where the one
 		 * record is the whole frame, and refused a message every backend
 		 * accepts. It walks to the frame's end instead (26.783). */
+		/* What the arm hands each element (0068). */
+		int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+		situ_walk_image elements;
+		err = child_binding(image, message, len, shape, chosen, depth,
+		                    arm.type_struct, handed, &elements);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
 		if (size_code_is_bytes(image, arm.size_code)) {
-			err = remaining_run_walk(image, message, len, depth,
+			err = remaining_run_walk(&elements, message, len, depth,
 			                         &arm, at / 8u, &fits);
 		} else {
-			err = counted_run_walk(image, image, message, len, shape,
+			err = counted_run_walk(image, &elements, message, len, shape,
 			                       depth, &arm, at / 8u, &fits);
 		}
 		if (err == SITU_WALK_UNSUPPORTED) {
@@ -4306,7 +4322,15 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		return run_elements_validate(image, message, len, shape, chosen,
 		                             depth, at / 8u, index, verdict, why);
 	}
-	return validate_deep(image, message + at / 8u, len - at / 8u, arm_type,
+	/* What the arm hands its struct (0068). */
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image bound;
+	err = child_binding(image, message, len, shape, chosen, depth,
+	                    arm_type, handed, &bound);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	return validate_deep(&bound, message + at / 8u, len - at / 8u, arm_type,
 	                     depth + 1u, verdict, why);
 }
 

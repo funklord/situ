@@ -660,7 +660,7 @@ def _arm_bits(view: View, variant: int, chosen: int, depth: int) -> int:
 		if at > view.limit:
 			raise Refused(f"arm {chosen} starts past the frame")
 		inner = View(view.image, view.buffer, placement.type_struct, at,
-		             view.limit)
+		             view.limit, child_args(view, chosen))
 		return struct_extent(inner, depth + 1) * BITS_PER_BYTE
 	return size_bits(view, chosen, depth)
 

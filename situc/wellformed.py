@@ -3485,12 +3485,13 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# the argument and calling it without (26.794).
 			if named not in takes:
 				continue
-			# 0068 steps 2 and 3: a member of the struct itself, one or a
-			# run of them, named with its arguments, of a struct other than
-			# this one. An arm, a block, an `indexed` element and a struct
-			# naming itself are later steps.
+			# 0068 steps 2 to 4: a member of the struct itself or of one of
+			# its variant's arms, one or a run of them, named with its
+			# arguments, of a struct other than this one. A block, an
+			# `indexed` element and a struct naming itself are later.
 			if isinstance(member, ast.Field) and member.arguments \
-					and member in struct.members \
+					and (member in struct.members
+					     or member in arms_of(struct)) \
 					and member.located is None and named != struct.name \
 					and not _reads_a_parameter(struct, member) \
 					and named not in cyclic:
@@ -3511,6 +3512,13 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					"hand it one; that form is checked and not yet built "
 					"(decision 0068)",
 				])
+
+
+def arms_of(struct: ast.StructDecl) -> list[ast.Member]:
+	"""The member each arm of the struct's own variants holds (0068 step 4)."""
+	return [arm.member for member in struct.members
+	        if isinstance(member, ast.Variant)
+	        for arm in member.arms if arm.member is not None]
 
 
 def _reads_a_parameter(struct: ast.StructDecl, member: ast.Field) -> bool:
