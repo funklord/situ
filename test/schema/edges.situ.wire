@@ -201,6 +201,20 @@ struct framed_tail size=6..10
   ~         3         beacon     head  big
   ~         2         u16        tail  big
 
+struct hands_on size=12..1034
+  @0x0000   1         u8         block  max=16
+  @0x0001   5..516    negotiated carried  args block=block big
+  ~         5..516    negotiated fixed  args block=2 big
+  ~         1         u8         after
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+
 struct hop size=2
   @0x0000   1         u8         kind
   @0x0001   1         u8         value

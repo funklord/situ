@@ -70,6 +70,7 @@ enum image_section_tag : u32 {
 	whitespace   = 23,     // what `[trim]` removes, for the whole schema
 	tlv_rules    = 24,     // how a `tlv` item's value says where it ends
 	messages     = 25,     // what a schema says about a message (0051)
+	arguments    = 28,     // what a parent hands a child (0068)
 	names        = 12,     // tail: struct and placement names, for printing
 	vectors      = 13,     // tail: capability vectors, for printing
 	default      = pass,
@@ -557,6 +558,18 @@ struct image_marker {
 	u32  placement;
 	i64  little_value;
 	u32  marker_pad;
+}
+
+// One argument a parent hands a nested member (0068). `placement` is the
+// member, `parameter` the child's parameter it supplies, and `code` the
+// program computing the value, compiled against the PARENT -- so a walker
+// evaluates it over the view it holds before descending, and hands the
+// value to the child view as a caller would at the top.
+struct image_argument {
+	u32  placement;
+	u32  parameter;
+	u32  code;
+	u32  argument_pad;
 }
 
 struct image_index {

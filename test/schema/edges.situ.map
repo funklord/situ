@@ -197,6 +197,32 @@ struct framed_tail size=6..10 mutate=Shifting address=Unstable repr=ValueConvert
   framed_tail.head.flags                 offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   framed_tail.tail                       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct hands_on size=12..1034 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  hands_on.block                         offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  hands_on.carried                       offset=AbsoluteStatic(0x01) size=Bounded(5, 516) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  hands_on.carried.block                 parameter
+  hands_on.carried.payload               offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  hands_on.carried.trailer               offset=Dynamic size=Bounded(1, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  hands_on.carried.checksum              offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  hands_on.carried.kind                  offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  hands_on.carried.carried               offset=Dynamic size=Bounded(1, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  hands_on.carried.carried.marker        offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  hands_on.carried.carried.marker.tag    offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on.carried.carried.marker.body   offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on.carried.carried.flag          offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  hands_on.fixed                         offset=Dynamic size=Bounded(5, 516) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  hands_on.fixed.block                   parameter
+  hands_on.fixed.payload                 offset=FrameStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  hands_on.fixed.trailer                 offset=Dynamic size=Bounded(1, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  hands_on.fixed.checksum                offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  hands_on.fixed.kind                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  hands_on.fixed.carried                 offset=Dynamic size=Bounded(1, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  hands_on.fixed.carried.marker          offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  hands_on.fixed.carried.marker.tag      offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on.fixed.carried.marker.body     offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  hands_on.fixed.carried.flag            offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  hands_on.after                         offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
 struct hop size=2
   hop.kind                               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   hop.value                              offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

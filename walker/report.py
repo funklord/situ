@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from walker import vm
 from walker.image import FRAME_CAP, NONE, Image, _string_at
 from walker.walk import (BITS_PER_BYTE, Refused, TooDeep, Unplaceable,
-                         Unsupplied, View,
+                         Unsupplied, View, child_args,
                          acquire, digits_of,
                          parse_digits, parse_scaled_digits,
                          read_bytes, read_scalar,
@@ -1171,7 +1171,8 @@ def _validate(image: Image, view: View, struct_index: int,
 			except Refused:
 				return fail(ERR_BOUNDS, index)
 			inner = View(image, view.buffer, placement.type_struct,
-			             inner_at, min(view.limit, inner_at + reach))
+			             inner_at, min(view.limit, inner_at + reach),
+			             child_args(view, index))
 
 			# The nested struct's own MINIMUM against the extent it
 			# measures, which is the check every backend makes and this
@@ -2085,7 +2086,8 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 		local = _local(image, index)
 		try:
 			sub = View(image, view.buffer, image.placements[index].type_struct,
-			           view.at + offset_bits(view, index) // 8, view.limit)
+			           view.at + offset_bits(view, index) // 8, view.limit,
+			           child_args(view, index))
 			extent = struct_extent(sub)
 			if extent < 0 or sub.at + extent > view.limit:
 				raise Refused("the frame does not hold the nested struct")

@@ -65,6 +65,7 @@ TLV_BYTES	= 16
 #: shorter one still reads.
 TLV_RULE_BYTES	= 28
 INDEX_BYTES	= 20
+ARGUMENT_BYTES	= 16
 MARKER_BYTES	= 16
 CONSTRAINT_BYTES = 16
 ENUM_VALUE_BYTES = 16
@@ -142,6 +143,9 @@ SECTION_VECTORS		= 13
 #: every other section exactly as before.
 SECTION_TAGS		= 26
 SECTION_KERNEL_TABLES	= 27
+#: What a parent hands a child (0068): `image_argument`, one row per
+#: (member, child parameter).
+SECTION_ARGUMENTS	= 28
 
 #: `image_placement.flags`
 OFFSET_KNOWN		= 1 << 0
@@ -1401,6 +1405,32 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				continue
 			program.emit(Op.END)
 			target[placement.path] = start
+			coverage.expressions += 1
+
+	# What a parent hands a nested member (0068). Compiled against the
+	# OWNER, which is the struct the expression was written in; the row
+	# names the child's parameter by its placement, which is what a walker
+	# keys a view's arguments on.
+	arguments_blob = bytearray()
+	for owner, placement in rows:
+		for name, expr in placement.arguments_ast:
+			parameter = placement_index.get(
+				f"{placement.type_name}.{name}")
+			if parameter is None:
+				coverage.unencodable[placement.path] = (
+					f"argument `{name}` names no placement")
+				continue
+			start = len(program.code)
+			try:
+				program.compile(expr, lambda p: resolve_path(p, owner),
+				                consts, enum_members)
+			except PackError as why:
+				del program.code[start:]
+				coverage.unencodable[placement.path] = str(why)
+				continue
+			program.emit(Op.END)
+			arguments_blob += _struct.pack(
+				"<IIII", placement_index[placement.path], parameter, start, 0)
 			coverage.expressions += 1
 
 	# How many entries an `indexed` region's offset table holds (section
@@ -2858,6 +2888,7 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			(SECTION_TLVS, tlvs_blob, TLV_BYTES),
 			(SECTION_TLV_RULES, tlv_rules_blob, TLV_RULE_BYTES),
 			(SECTION_INDEXES, index_blob, INDEX_BYTES),
+			(SECTION_ARGUMENTS, arguments_blob, ARGUMENT_BYTES),
 			(SECTION_MARKERS, markers_blob, MARKER_BYTES),
 			(SECTION_CONSTRAINTS, constraints_blob, CONSTRAINT_BYTES),
 			(SECTION_ENUM_VALUES, enum_blob, ENUM_VALUE_BYTES),

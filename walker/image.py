@@ -37,6 +37,7 @@ CONSTRAINTS, ENUM_VALUES, VERSIONS = 15, 16, 17
 DEPTHS = 21
 RELATIONS, RELATION_MUSTS = 18, 19
 MESSAGES = 25
+ARGUMENTS = 28
 PINNED_RUNS = 20
 
 #: `image_check`
@@ -467,6 +468,10 @@ class Image:
 	#: placement index -> the member a `base = <member>` table's offsets are
 	#: measured from, or `NONE` (26.792).
 	index_bases: dict[int, int] = field(default_factory=dict)
+	#: What a parent hands a nested member (0068): member placement ->
+	#: [(the child's parameter placement, the program computing it)],
+	#: the program compiled against the parent.
+	arguments: dict[int, list[tuple[int, int]]] = field(default_factory=dict)
 	#: Per recursive struct, `(depth, limit)`: what the format allows and
 	#: what the schema asks a reader to spend (0054). Absent for a struct
 	#: that does not name itself, which is nearly all of them -- so an
@@ -732,6 +737,13 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			          if stride >= 20 else NONE)
 			image.indexes[where] = (entry_bits, count_code, base)
 			image.index_bases[where] = member
+
+	if ARGUMENTS in found:
+		at, records, stride = found[ARGUMENTS]
+		for i in range(records):
+			where, parameter, code = _struct.unpack_from(
+				"<III", blob, at + i * stride)
+			image.arguments.setdefault(where, []).append((parameter, code))
 
 	if DEPTHS in found:
 		at, records, stride = found[DEPTHS]

@@ -110,11 +110,9 @@ class View:
 	#: a placement index and nothing else -- an ordinal would be a second
 	#: numbering to keep in step with the first.
 	#:
-	#: It does not travel into a SUB-view, and that is not an oversight: a
-	#: struct that takes an argument cannot yet be a member, because the
-	#: parent's accessor has no argument to pass and would build the nested
-	#: view with whatever a missing one means. Refused by name in
-	#: `wellformed` rather than guessed at here.
+	#: It does not travel into a SUB-view: a child's arguments are the
+	#: ones its parent hands it (0068), computed by `child_args` from the
+	#: image's ARGUMENTS rows, and never the parent's own.
 	args: dict[int, int] = field(default_factory=dict)
 
 	@property
@@ -543,7 +541,7 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 				"from its own bytes")
 		inner = View(view.image, view.buffer, placement.type_struct,
 		             view.at + offset_bits(view, index) // BITS_PER_BYTE,
-		             view.limit)
+		             view.limit, child_args(view, index))
 		return struct_extent(inner, depth + 1) * BITS_PER_BYTE
 
 	if placement.size_bits == NONE:
@@ -793,6 +791,18 @@ def _count(view: View, index: int) -> int:
 			view, placement.size_code,
 			lambda: offset_bits(view, index) // BITS_PER_BYTE)
 	raise Refused(f"placement {index} has no count this image carries")
+
+
+def child_args(view: View, index: int) -> dict[int, int]:
+	"""What the parent hands the nested member at `index` (0068).
+
+	Each program is the parent's expression, so it is evaluated over the
+	parent's view, before descending -- the value a caller would have
+	passed to `acquire` had the child been the top. Empty for a member
+	whose type takes none, which is what a sub-view always had.
+	"""
+	return {parameter: _evaluate(view, code)
+	        for parameter, code in view.image.arguments.get(index, ())}
 
 
 def argument(view: View, index: int) -> int:

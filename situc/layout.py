@@ -413,6 +413,13 @@ class Placement:
 	#: from the start of the message. It joins no offset chain and contributes
 	#: nothing to the enclosing extent -- see section 9.8.
 	located: str | None		= None
+	#: `entry(block = hdr.block) e`: what the parent hands the child, as
+	#: (parameter, source) in the order written (0068). Source text, as
+	#: `located` is, because every backend renders it with `_over_fields`
+	#: in the PARENT. Empty for every member whose type takes none.
+	arguments: tuple[tuple[str, str], ...]	= ()
+	#: The same, as trees, for the packer's bytecode.
+	arguments_ast: tuple[tuple[str, ast.Expr], ...]	= ()
 	#: `until "\r\n"`: the member ends at the first occurrence of these bytes,
 	#: found by scanning rather than computed. Everything after it has
 	#: `offset = Scanned` rather than `Dynamic` -- a search that can fail,
@@ -2527,6 +2534,11 @@ class Solver:
 			scan_cause_span    = state.scan[1] if state.scan else None,
 			located            = _located_source(member),
 			located_ast        = _located_tree(member),
+			arguments          = self.arguments_of(member, state),
+			arguments_ast      = tuple(
+				(arg.name, arg.value)
+				for arg in getattr(member, "arguments", ())
+				if arg.value is not None),
 		))
 
 		if member.until is not None and state.scan is None:
@@ -2930,6 +2942,52 @@ class Solver:
 			return "remaining"
 		from situc.expr import path_text
 		return path_text(member.array.size)
+
+	def arguments_of(self, member: ast.Field | ast.Reserved,
+			state: Walk) -> tuple[tuple[str, str], ...]:
+		"""The arguments a parent hands this member, each held to its
+		parameter's type (0068).
+
+		Here rather than in `wellformed` because the question needs the
+		solver: an argument's range is its interval over the fields declared
+		before it. A value the parameter cannot hold would be truncated by C
+		and C++, wrapped by Rust and kept whole by Python -- four answers to
+		one message -- so it is refused rather than converted.
+		"""
+		from situc.unparse import expr_to_source
+
+		given = getattr(member, "arguments", ())
+		if not given:
+			return ()
+		decl = self.structs[member.type_ref.name]
+		wanted = {held.name: held for held in decl.members
+		          if isinstance(held, ast.Field) and held.parameter}
+
+		env = self.result.env.with_layout(
+			self.result.lookup, self.result.explain).with_fields(state.fields)
+		found: list[tuple[str, str]] = []
+		for arg in given:
+			assert arg.value is not None
+			scalar = wanted[arg.name].type_ref.scalar
+			assert scalar is not None, "check_parameters refuses a struct"
+			value  = interval_of(arg.value, env)
+			room   = scalar_interval(scalar.bits, scalar.signed)
+			if not value.lo_known or value.hi is None \
+					or room.hi is None or value.lo < room.lo or value.hi > room.hi:
+				raise error(
+					f"`{arg.name}` may not hold this argument",
+					arg.value.span,
+					label = f"range is {value.render()}",
+					notes = [f"`{decl.name}.{arg.name}` is a "
+					         f"`{wanted[arg.name].type_ref.name}`, which "
+					         f"holds {room.render()}",
+					         "a value it cannot hold would be truncated by "
+					         "some backends and kept by others, so it is "
+					         "refused rather than converted (decision 0068)",
+					         "bound the field it reads with `[max]`, or widen "
+					         "the parameter"])
+			found.append((arg.name, expr_to_source(arg.value)))
+		return tuple(found)
 
 	def absorb_nested(self, member: ast.Field, layout: StructLayout, path: str,
 			cursor: Extent, element: Interval, parent: Placement) -> None:

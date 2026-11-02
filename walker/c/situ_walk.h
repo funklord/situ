@@ -202,6 +202,15 @@ typedef struct {
 	uint32_t       depth_count;
 	uint32_t       depth_stride;
 
+	/* What a parent hands a nested member (decision 0068): one row per
+	 * (member, child parameter), each with the program that computes the
+	 * value over the PARENT. A descent into such a member walks the child
+	 * under a copy of this binding carrying those values, as though a
+	 * caller had acquired the child with them. */
+	const uint8_t *arguments;
+	uint32_t       argument_count;
+	uint32_t       argument_stride;
+
 	/* What the schema says about a message beyond its layout (0051): one
 	 * row per `when`, keyed by the shape whose members its predicate
 	 * reads. Only the `refuse` rows change a verdict -- `warn` and `note`

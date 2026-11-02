@@ -1084,6 +1084,21 @@ class Emitter:
 		return [held for held in own_members(struct)
 		        if held.parameter and held.scalar is not None]
 
+	def _child_args(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""What this member hands its type, as trailing arguments (0068).
+
+		Rendered in the PARENT, in the order the child declares its
+		parameters -- which is the order its constructor and `required`
+		take them. Empty for a member whose type takes none.
+		"""
+		if not placement.arguments:
+			return ""
+		inner = self.resolved.structs[placement.type_name or ""]
+		given = dict(placement.arguments)
+		return "".join(f", {self._over_fields(struct, given[held.name])}"
+		               for held in self._arguments(inner))
+
 	def _argument_signature(self, struct: ResolvedStruct) -> str:
 		"""What `at`, `required` and the constructor add for them.
 
@@ -3129,7 +3144,8 @@ class Emitter:
 			"\t\t\t}",
 			f"\t\t\tconst ::situ::rt::err e = {call}(",
 			f"\t\t\t\tsitu_base(raw_) + {cursor},",
-			f"\t\t\t\tsitu_remaining_u32(have, {cursor}), part);",
+			f"\t\t\t\tsitu_remaining_u32(have, {cursor})"
+			f"{self._child_args(struct, placement)}, part);",
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -8049,7 +8065,8 @@ class Emitter:
 					" != SITU_OK) {",
 					"\t\t\treturn 0u;",
 					"\t\t}",
-					f"\t\treturn {nested}(whole).extent();",
+					f"\t\treturn {nested}(whole"
+					f"{self._child_args(struct, placement)}).extent();",
 					"\t}",
 				]),
 				f"\t[[nodiscard]] std::uint32_t {name}_extent() const noexcept",
@@ -8063,7 +8080,8 @@ class Emitter:
 				        else [f"\t\treturn {name}_extent_from({start});"])),
 				"\t}",
 				*self._nested_accessor(name, nested, f"({start})",
-				                       f"{name}_extent()"),
+				                       f"{name}_extent()",
+				                       self._child_args(struct, placement)),
 			]
 
 		# A fixed-size nested struct at whatever offset the members before it
@@ -8085,11 +8103,12 @@ class Emitter:
 			f"\t/* {placement.path}, at an offset the message decides. Its own class",
 			"\t * carries its accessors; this is where the parent puts it. */",
 			*self._nested_accessor(name, nested, where,
-			                       f"{nested}::size_bytes"),
+			                       f"{nested}::size_bytes",
+			                       self._child_args(struct, placement)),
 		]
 
 	def _nested_accessor(self, name: str, nested: str, start: str,
-			extent: str) -> list[str]:
+			extent: str, args: str = "") -> list[str]:
 		"""A sub-view, refused where the parent does not contain it.
 
 		It handed one back unchecked: a view claiming the nested struct's size
@@ -8113,7 +8132,7 @@ class Emitter:
 			f" {extent}, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
-			f"\t\t\tout = {nested}(raw);",
+			f"\t\t\tout = {nested}(raw{args});",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",

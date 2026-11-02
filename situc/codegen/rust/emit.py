@@ -3756,7 +3756,8 @@ class Emitter:
 						"\t\tif self.bytes.len() < at {",
 						"\t\t\treturn 0;",
 						"\t\t}",
-						f"\t\t{nested} {{ bytes: &self.bytes[at..] }}.extent()",
+						f"\t\t{nested} {{ bytes: &self.bytes[at..]"
+						f"{self._child_fields(struct, placement)} }}.extent()",
 						"\t}",
 						"",
 					]),
@@ -3789,7 +3790,8 @@ class Emitter:
 					"\t\tif self.bytes.len() < at || self.bytes.len() - at < n {",
 					"\t\t\treturn Err(Error::Bounds);",
 					"\t\t}",
-					f"\t\tOk({nested} {{ bytes: &self.bytes[at..at + n] }})",
+					f"\t\tOk({nested} {{ bytes: &self.bytes[at..at + n]"
+					f"{self._child_fields(struct, placement)} }})",
 					"\t}",
 				]
 
@@ -3817,7 +3819,8 @@ class Emitter:
 				f" || self.bytes.len() - at < {nested}::SIZE {{",
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
-				f"\t\tOk({nested} {{ bytes: &self.bytes[at..] }})",
+				f"\t\tOk({nested} {{ bytes: &self.bytes[at..]"
+				f"{self._child_fields(struct, placement)} }})",
 				"\t}",
 			]
 
@@ -6084,7 +6087,8 @@ class Emitter:
 			"\t\t\treturn situ_rt::Framing::Need(at);",
 			"\t\t}",
 			f"\t\tlet len_ = match {_pascal(inner.name)}"
-			f"::required(&data[{cursor}..]) {{",
+			f"::required(&data[{cursor}..]"
+			f"{self._child_args(struct, placement, 'probe')}) {{",
 			"\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\tsitu_rt::Framing::Need(n) =>",
 			"\t\t\t\treturn situ_rt::Framing::Need("
@@ -9227,6 +9231,38 @@ class Emitter:
 		return "".join(
 			f", {self._argument_ident(one)}: {self._rust_type(one.scalar)}"
 			for one in self._arguments(struct) if one.scalar is not None)
+
+	def _child_values(self, struct: ResolvedStruct, placement: Placement,
+			held: str) -> list[tuple[str, str]]:
+		"""What this member hands its type, as (field, value) (0068).
+
+		Rendered in the PARENT over `held`, in the order the child declares
+		its parameters, each cast to the parameter's own type -- which the
+		layout has already shown it fits.
+		"""
+		if not placement.arguments:
+			return []
+		inner = self.resolved.structs[placement.type_name or ""]
+		given = dict(placement.arguments)
+		found = []
+		for one in self._arguments(inner):
+			assert one.scalar is not None
+			value = self._over_fields(struct, given[one.name], held,
+			                          cast=self._rust_type(one.scalar))
+			found.append((self._argument_ident(one), self._unparen(value)))
+		return found
+
+	def _child_fields(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "self") -> str:
+		"""The same, as a struct literal's trailing fields."""
+		return "".join(f", {field}: {value}" for field, value
+		               in self._child_values(struct, placement, held))
+
+	def _child_args(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "self") -> str:
+		"""The same, as a call's trailing arguments."""
+		return "".join(f", {value}" for _, value
+		               in self._child_values(struct, placement, held))
 
 	def _argument_fields(self, struct: ResolvedStruct) -> str:
 		return "".join(f", {self._argument_ident(one)}"

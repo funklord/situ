@@ -21,6 +21,7 @@
 #define TAG_PINNED_RUNS 20u
 #define TAG_SKIPS      22u
 #define TAG_MESSAGES   25u
+#define TAG_ARGUMENTS  28u
 #define TAG_RELATIONS  18u
 #define TAG_RELATION_MUSTS 19u
 
@@ -46,6 +47,7 @@
 /* `<IIIIB`: name, text, owner shape, code offset, severity (0051). */
 #define MESSAGE_READS   17u
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
+#define ARGUMENT_READS  12u	/* `<III`: placement, parameter, code */
 #define TLV_READS       15u	/* to the tag's decode parameters */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
 #define TLV_RULE_COMPUTED_READS 28u	/* to a computed size's program */
@@ -240,6 +242,13 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 			out->indexes       = image + offset;
 			out->index_count   = items;
 			out->index_stride  = stride;
+		} else if (kind == TAG_ARGUMENTS) {
+			if (stride < ARGUMENT_READS) {
+				return SITU_WALK_MALFORMED;
+			}
+			out->arguments       = image + offset;
+			out->argument_count  = items;
+			out->argument_stride = stride;
 		} else if (kind == TAG_DEPTHS) {
 			if (stride < DEPTH_READS) {
 				return SITU_WALK_MALFORMED;
@@ -2086,6 +2095,75 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
 	return size_bits_deep(image, message, len, shape, index, 0u, out);
 }
 
+/* The binding the member at `index` hands its child (decision 0068).
+ *
+ * A copy of `image` whose arguments are the child's, each computed by the
+ * row's program over the PARENT -- the frame this walk is in -- and stored
+ * at the ordinal the child declares it at, so `argument_of` reads it as it
+ * reads a caller's. A member with no rows gets `image` unchanged: its child
+ * takes nothing, and a parent's own arguments never travel down, which
+ * `argument_of`'s shape check already holds.
+ *
+ * `values` is the caller's, sized `SITU_WALK_ARGUMENTS_MAX`; a child taking
+ * more is UNSUPPORTED rather than truncated. */
+#define SITU_WALK_ARGUMENTS_MAX 8u
+
+static situ_walk_err child_binding(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t depth, uint32_t child,
+                                   int64_t *values, situ_walk_image *out)
+{
+	uint32_t i;
+	uint32_t held = 0u;
+	int      any  = 0;
+
+	*out = *image;
+	for (i = 0u; i < image->argument_count; i++) {
+		const uint8_t *row = image->arguments + i * image->argument_stride;
+		if (u32_at(row) != index) {
+			continue;
+		}
+		if (!any) {
+			situ_walk_err err = parameters_of(image, child,
+			                                  SITU_WALK_NONE, &held, NULL);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			if (held > SITU_WALK_ARGUMENTS_MAX) {
+				return SITU_WALK_UNSUPPORTED;
+			}
+			any = 1;
+		}
+
+		uint32_t count   = 0u;
+		uint32_t ordinal = SITU_WALK_NONE;
+		situ_walk_err err = parameters_of(image, child, u32_at(row + 4),
+		                                  &count, &ordinal);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		if (ordinal == SITU_WALK_NONE || ordinal >= held) {
+			return SITU_WALK_MALFORMED;
+		}
+
+		walk_ctx  ctx    = {image, message, len, shape, depth};
+		walk_from anchor = {image, message, len, shape, index, depth};
+		err = eval_lazy(image, u32_at(row + 8), ctx_load, &ctx,
+		                remaining_from_member, &anchor, 0, 0,
+		                &values[ordinal]);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+	}
+	if (any) {
+		out->args      = values;
+		out->arg_count = held;
+		out->arg_shape = child;
+	}
+	return SITU_WALK_OK;
+}
+
 /* How many bits a member occupies, its lead included.
  *
  * The SPAN rather than the size, because this is what the offset chain sums:
@@ -2379,8 +2457,17 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 					return SITU_WALK_BOUNDS;
 				}
 
+				int64_t          values[SITU_WALK_ARGUMENTS_MAX];
+				situ_walk_image  bound;
+				err = child_binding(image, message, len, shape, index,
+				                    depth, held.type_struct, values,
+				                    &bound);
+				if (err != SITU_WALK_OK) {
+					return err;
+				}
+
 				uint32_t extent = 0u;
-				err = struct_extent(image, message + at, len - at,
+				err = struct_extent(&bound, message + at, len - at,
 				                    held.type_struct, depth + 1u, &extent);
 				if (err != SITU_WALK_OK) {
 					return err;
@@ -5158,8 +5245,15 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 		 * enclosing struct validated nothing at all -- a header whose own
 		 * version field was wrong parsed clean. */
 		if (nested) {
-			situ_walk_err inner = SITU_WALK_OK;
-			err = validate_deep(image, message + at / 8u, len - at / 8u,
+			situ_walk_err    inner = SITU_WALK_OK;
+			int64_t          values[SITU_WALK_ARGUMENTS_MAX];
+			situ_walk_image  bound;
+			err = child_binding(image, message, len, shape, index, depth,
+			                    held.type_struct, values, &bound);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
+			err = validate_deep(&bound, message + at / 8u, len - at / 8u,
 			                    held.type_struct, depth + 1u, &inner, why);
 			if (err != SITU_WALK_OK) {
 				return err;

@@ -892,7 +892,13 @@ def invalidating_members(
 		locals_ = [local_name(struct, placement) for placement in members]
 
 		for index, other in enumerate(members):
-			sources = [other.size_expr, other.located]
+			# An argument the parent hands a child (0068) is read where
+			# the child's extent is: a write to the field it names can
+			# move every member after the child, as a length can. All of
+			# them, not only `[stream]` ones -- a meaning-only argument
+			# moves nothing, and invalidating on it is the safe side.
+			sources = [other.size_expr, other.located,
+			           *(source for _, source in other.arguments)]
 			named   = ({other.sized_by} if other.sized_by
 			           and other.sized_by != "remaining" else set())
 			if other.discriminant and len(other.arm_widths) > 1:

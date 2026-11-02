@@ -1346,6 +1346,7 @@ class Emitter:
 				"  # type: ignore[assignment]",
 				*store,
 				"\t\treturn view",
+				*self._over(struct),
 			]
 
 		return [
@@ -1370,7 +1371,48 @@ class Emitter:
 				"  # type: ignore[assignment]",
 				*store,
 				"\t\treturn view"]),
+			*self._over(struct),
 		]
+
+	def _over(self, struct: ResolvedStruct) -> list[str]:
+		"""How a PARENT builds this view over its member (0068).
+
+		Not `at`: a parent's accessor has already held the member to its
+		frame, as it does for every nested struct, and measuring one asks
+		over whatever is left -- which `at`'s minimum would refuse. What `at`
+		does that a bare constructor does not is put the arguments on, so
+		this is that and nothing else.
+		"""
+		store = self._argument_store(struct)
+		if not store:
+			return []
+		return [
+			"",
+			"\t@classmethod",
+			"\tdef _over(cls, msg: Message, offset: int, length: int"
+			f"{self._argument_signature(struct)}) -> \"{py_name(struct.name)}\":",
+			"\t\tview = cls(msg, offset, length)",
+			*store,
+			"\t\treturn view",
+		]
+
+	def _child(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "self") -> tuple[str, str]:
+		"""What builds this member's view, and the arguments it takes.
+
+		`entry(block = hdr.block) e` (0068): the class's `_over` and each
+		argument rendered in the PARENT over `held`. A member whose type
+		takes none is built by its class, as it always was.
+		"""
+		nested = py_name(placement.type_name or "")
+		if not placement.arguments:
+			return nested, ""
+		inner = self.resolved.structs[placement.type_name or ""]
+		given = dict(placement.arguments)
+		return f"{nested}._over", "".join(
+			f", {self._argument_ident(one)}="
+			f"{self._over_fields(struct, given[one.name], held)}"
+			for one in self._arguments(inner))
 
 	# -- members -------------------------------------------------------
 
@@ -4477,6 +4519,7 @@ class Emitter:
 		nested = py_name(placement.type_name or "")
 		inner  = self.resolved.structs.get(placement.type_name or "")
 		start  = self._offset_expression(struct, placement)
+		make, args = self._child(struct, placement)
 
 		if inner is not None and not inner.layout.is_fixed_size and start is not None:
 			# `SIZE_BYTES` is a class attribute only where a struct has one
@@ -4520,8 +4563,8 @@ class Emitter:
 					"\t\tlinear. Without it `_extent` re-derived its own",
 					"\t\tstart, and each earlier member did the same, so one",
 					'\t\taccess cost 3**k (26.555)."""',
-					f"\t\treturn {nested}(self._msg, self._at + start,",
-					"\t\t\tself._len - start)._extent",
+					f"\t\treturn {make}(self._msg, self._at + start,",
+					f"\t\t\tself._len - start{args})._extent",
 				]),
 				"", "\t@property",
 				f"\tdef {name}_extent(self) -> int:",
@@ -4553,8 +4596,8 @@ class Emitter:
 				f"\t\tif self._len - ({start}) < self.{name}_extent:",
 				f'\t\t\traise BoundsError("{placement.path}: the frame does'
 				' not reach it")',
-				f"\t\treturn {nested}(self._msg, self._at + ({start}),",
-				f"\t\t\tself.{name}_extent)",
+				f"\t\treturn {make}(self._msg, self._at + ({start}),",
+				f"\t\t\tself.{name}_extent{args})",
 			]
 
 		# A fixed-size nested struct, at whatever offset the members before it
@@ -4579,8 +4622,8 @@ class Emitter:
 			f"\t\tif self._len - {where} < {nested}.SIZE_BYTES:",
 			f'\t\t\traise BoundsError("{placement.path}: the frame does not'
 			' reach it")',
-			f"\t\treturn {nested}(self._msg, self._at + {where},",
-			f"\t\t\t{nested}.SIZE_BYTES)",
+			f"\t\treturn {make}(self._msg, self._at + {where},",
+			f"\t\t\t{nested}.SIZE_BYTES{args})",
 		]
 
 	def _scalar_array(self, struct: ResolvedStruct, placement: Placement,
@@ -5985,7 +6028,7 @@ class Emitter:
 			' incomplete", at)',
 			"\t\ttry:",
 			f"\t\t\tlen_ = {py_name(inner.name)}.required"
-			f"(data[{cursor}:])",
+			f"(data[{cursor}:]{self._child(struct, placement, 'probe')[1]})",
 			"\t\texcept TruncatedError as short:",
 			f'\t\t\traise TruncatedError("{placement.path}: incomplete",',
 			"\t\t\t\tat + short.needed) from None",

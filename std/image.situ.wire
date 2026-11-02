@@ -19,7 +19,7 @@ endian little
 target buffer
 
 enum image_section_tag : u32 unknown=pass
-  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 names=12 vectors=13
+  structs=1 placements=2 code=3 strings=4 arms=5 delimiters=6 regions=7 codecs=8 varints=9 tlvs=10 indexes=11 markers=14 constraints=15 enum_values=16 versions=17 relations=18 relation_musts=19 pinned_runs=20 depths=21 skips=22 whitespace=23 tlv_rules=24 messages=25 arguments=28 names=12 vectors=13
 
 enum image_kind : u8 unknown=error
   field=0 reserved=1 marker=2 region=3 variant=4 tlv=5 indexed=6 opaque=7
@@ -41,6 +41,12 @@ enum image_severity : u8 unknown=error
 
 struct image size=20
   @0x0000   20        image_header head  little
+
+struct image_argument size=16
+  @0x0000   4         u32        placement  little
+  @0x0004   4         u32        parameter  little
+  @0x0008   4         u32        code  little
+  @0x000c   4         u32        argument_pad  little
 
 struct image_arm size=24
   @0x0000   4         u32        placement  little

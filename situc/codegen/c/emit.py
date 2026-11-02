@@ -5073,7 +5073,12 @@ class Emitter:
 		]
 
 		if not self._recursive(struct.name):
-			lines = [*head, f"static inline uint32_t {name}(situ_view_t view)",
+			# The argument tail, since a length here may read one (0050) --
+			# which nothing reached until a parent could hand one down
+			# (0068): no parent measured a struct that takes one.
+			taken = self._argument_tail(struct)
+			lines = [*head,
+			         f"static inline uint32_t {name}(situ_view_t view{taken})",
 			         "{"]
 			# The lengths below are read OUT OF the fixed prefix, so the
 			# prefix has to be here before any of them is touched. It was
@@ -5100,6 +5105,8 @@ class Emitter:
 			lines.extend(ending)
 			if not terms and not ending:
 				lines.append("\t(void)view;")
+			lines.extend(self._argument_unused(
+				struct, taken, *(str(term) for term in terms), *ending))
 			lines.extend(["\treturn extent;", "}"])
 			return lines
 
@@ -5666,7 +5673,7 @@ class Emitter:
 			"\t\t}",
 			f"\t\te = {required}(data + {cursor},",
 			f"\t\t                situ_remaining_u32(have, {cursor}),"
-			" &part);",
+			f" &part{self._child_args(struct, placement)});",
 			"\t\tif (e != SITU_OK) {",
 			"\t\t\t*need = situ_need_u32(at, part);",
 			"\t\t\treturn SITU_ERR_TRUNCATED;",
@@ -10109,8 +10116,9 @@ class Emitter:
 			deep   = self._recursive(nested or "")
 			taken  = "(situ_view_t view, uint32_t depth)" if deep \
 			         else "(situ_view_t view)"
+			args   = self._child_args(struct, placement)
 			passed = f"{extent}_at(whole, depth + 1u)" if deep \
-			         else f"{extent}(whole)"
+			         else f"{extent}(whole{args})"
 			# `_from` takes the offset its caller already has, which is what
 			# makes an offset chain one forward pass instead of a tree.
 			# Without it `_offset(k)` sums `_extent(i)` for every earlier
@@ -10141,7 +10149,7 @@ class Emitter:
 				" != SITU_OK) {",
 				"\t\treturn 0u;",
 				"\t}",
-				f"\treturn {extent}(whole);",
+				f"\treturn {extent}(whole{args});",
 				"}",
 				"",
 			]
@@ -10191,7 +10199,8 @@ class Emitter:
 				"\tif (e != SITU_OK) {",
 				"\t\treturn e;",
 				"\t}",
-				f"\treturn situ_view_sub(view, base, {extent}(whole), out);",
+				f"\treturn situ_view_sub(view, base, {extent}(whole{args}),"
+				" out);",
 				"}",
 			]
 
@@ -12769,6 +12778,23 @@ class Emitter:
 		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
 		           for held in self._arguments(struct))
 
+	def _child_args(self, struct: ResolvedStruct, placement: Placement,
+			held: str = "view") -> str:
+		"""What this member hands its type, as a call's trailing arguments.
+
+		`entry(block = hdr.block) e` (0068): each argument rendered in the
+		PARENT over the view named by `held`, in the order the child declares
+		its parameters, which is the order its tail takes them. Empty for a
+		member whose type takes none.
+		"""
+		if not placement.arguments:
+			return ""
+		inner = self.resolved.structs[placement.type_name or ""]
+		given = dict(placement.arguments)
+		return "".join(
+			f", {self._over_fields(struct, given[held_at.name], held)}"
+			for held_at in self._arguments(inner))
+
 	def _member_tail(self, struct: ResolvedStruct,
 			placement: Placement) -> str:
 		"""What this member's accessors add to their signature."""
@@ -13043,7 +13069,8 @@ class Emitter:
 			"\t\tif (err != SITU_OK) {",
 			"\t\t\treturn err;",
 			"\t\t}",
-			f"\t\terr = {ident(self.prefix, nested, 'validate')}(nested);",
+			f"\t\terr = {ident(self.prefix, nested, 'validate')}"
+			f"(nested{self._child_args(struct, placement)});",
 			"\t\tif (err != SITU_OK) {",
 			"\t\t\treturn err;",
 			"\t\t}",

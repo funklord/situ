@@ -54,12 +54,16 @@ def test_a_missing_argument_is_refused() -> None:
 		PREAMBLE + two + "struct vol { two(a = 1) t; }\n")
 
 
-def test_well_formed_arguments_reach_the_nesting_refusal() -> None:
+def test_well_formed_arguments_are_accepted_or_wait_for_their_step() -> None:
 	"""Every source rule 5 allows, and a meaning-only parameter fed from a
-	per-message one -- which rule 5 does not reach."""
+	per-message one -- which rule 5 does not reach. A field and a constant
+	are built (step 2); handing on the parent's own parameter waits for
+	step 5, with recursion."""
 	for source in (
 			ENTRY + "struct vol { u16 block; entry(block = block) e; }\n",
-			ENTRY + "const BLK = 512;\nstruct vol { entry(block = BLK) e; }\n",
+			ENTRY + "const BLK = 512;\nstruct vol { entry(block = BLK) e; }\n"):
+		parse_text(PREAMBLE + source)
+	for source in (
 			ENTRY + "struct vol { parameter u16 b [stream]; "
 			        "entry(block = b) e; }\n",
 			MEANS + "struct vol { parameter u8 m; note(mode = m) e; }\n"):

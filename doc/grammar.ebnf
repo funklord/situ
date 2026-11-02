@@ -120,8 +120,13 @@ pad		= "pad_to" "(" digits ")" [ attrs ] ";"
  * None of the forms that ask where the bytes are: there are none. *)
 parameter	= "parameter" [ radix ] scalar_type ident [ attrs ] ";" ;
 
-field		= [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
-		  [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
+field		= [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
+		  [ skip ] [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
+(* Decision 0068. What a parent hands a struct that takes `parameter`s:
+ * each one by name, exactly once, as an expression over the members
+ * declared before this one, a `const` or an enum member. *)
+arguments	= "(" argument { "," argument } ")" ;
+argument	= ident "=" expr ;
 (* Section 8.6.8. A run of bytes that may precede the member and belongs to
  * it -- read before `until`, because the two are read in the order the bytes
  * are: a lead says where the member begins and a delimiter where it ends.

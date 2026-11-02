@@ -273,7 +273,13 @@ def _member(placement: Placement, env: Env) -> str:
 		placement.type_name.ljust(10),
 		placement.name,
 	]
-	facts = _constraints(placement, env)
+	# What a parent hands the child (0068) is part of the contract: the
+	# child's extent and rules follow it, so `note(mode = 3)` becoming
+	# `note(mode = 4)` changes what a peer must send even though no row of
+	# the child moves.
+	facts = [*(f"args {name}={source.replace(' ', '')}"
+	           for name, source in placement.arguments),
+	         *_constraints(placement, env)]
 	return " ".join(parts).rstrip() + (f"  {' '.join(facts)}" if facts else "")
 
 

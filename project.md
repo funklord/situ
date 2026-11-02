@@ -596,8 +596,10 @@ pad           = "pad_to" "(" digits ")" [ attrs ] ";"   (* section 8.4 *)
 parameter     = "parameter" [ radix ] scalar_type ident [ attrs ] ";" ;
                                                  (* decision 0050 *)
 
-field         = [ "peek" ] [ radix ] type_ref ident [ array_spec ] [ skip ]
-                [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
+field         = [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
+                [ skip ] [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
+arguments     = "(" argument { "," argument } ")" ;   (* decision 0068 *)
+argument      = ident "=" expr ;
 located       = "at" expr ;                  (* decision 0042 *)
 repeat        = "while" "(" expr ")" [ "max" expr ] ;   (* section 8.6.6 *)
 radix         = "decimal" | "hex" | "octal" | "scaled" ;   (* section 8.6.2, 0056 *)
@@ -7985,6 +7987,10 @@ Moved to `doc/decision/26.797-0068-step-1-arguments-parsed-and-checked.md`.
 ### 26.798 A constraint's bound may name a `parameter`
 
 Moved to `doc/decision/26.798-a-bound-may-name-a-parameter.md`.
+
+### 26.799 0068 step 2: a nested member takes its arguments
+
+Moved to `doc/decision/26.799-0068-step-2-a-nested-member-takes-arguments.md`.
 
 ### 26.715 The same width in the other pointer backend
 

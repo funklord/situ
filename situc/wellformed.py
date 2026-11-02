@@ -3474,6 +3474,7 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 	if not takes:
 		return
 
+	cyclic = _cyclic_structs(schema)
 	for struct in schema.structs():
 		for member in _members_and_arms(struct):
 			named = getattr(getattr(member, "type_ref", None), "name", None)
@@ -3483,6 +3484,16 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# node kids[n]; }` generated C declaring `node_required` with
 			# the argument and calling it without (26.794).
 			if named not in takes:
+				continue
+			# 0068 step 2: a single member of the struct itself, named with
+			# its arguments, of a struct other than this one. A run, an
+			# arm, a block and a struct naming itself are later steps.
+			if isinstance(member, ast.Field) and member.arguments \
+					and member in struct.members and member.array is None \
+					and member.until is None and member.repeat is None \
+					and member.located is None and named != struct.name \
+					and not _reads_a_parameter(struct, member) \
+					and named not in cyclic:
 				continue
 			raise error(
 				f"`{named}` takes an argument, so it cannot be a member yet",
@@ -3500,6 +3511,48 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					"hand it one; that form is checked and not yet built "
 					"(decision 0068)",
 				])
+
+
+def _reads_a_parameter(struct: ast.StructDecl, member: ast.Field) -> bool:
+	"""Whether an argument hands on one of the parent's own (0068 step 2).
+
+	Built with a struct naming itself (step 5): the parent's accessor then
+	needs its own argument tail wherever the child is measured, which is
+	every offset after it.
+	"""
+	own = {held.name for held in struct.members
+	       if isinstance(held, ast.Field) and held.parameter}
+	return any(path.split(".")[0] in own
+	           for arg in member.arguments if arg.value is not None
+	           for path in paths_in(arg.value))
+
+
+def _cyclic_structs(schema: ast.Schema) -> set[str]:
+	"""Every struct that can contain itself, through any chain of members.
+
+	A recursive child is measured with a depth (`_extent_at`), and handing
+	arguments down that path is step 5's (0068).
+	"""
+	edges: dict[str, set[str]] = {}
+	for struct in schema.structs():
+		edges[struct.name] = {
+			member.type_ref.name for member in _walk_members(struct.members)
+			if isinstance(member, ast.Field) and member.type_ref.scalar is None}
+
+	found: set[str] = set()
+	for start in edges:
+		seen: set[str] = set()
+		todo = list(edges[start])
+		while todo:
+			name = todo.pop()
+			if name == start:
+				found.add(start)
+				break
+			if name in seen:
+				continue
+			seen.add(name)
+			todo.extend(edges.get(name, ()))
+	return found
 
 
 def _moving_expressions(member: ast.Member) -> list[tuple[ast.Expr, str]]:

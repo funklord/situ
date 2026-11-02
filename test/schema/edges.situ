@@ -2023,6 +2023,21 @@ struct negotiated_signed {
 	checksum u8 sig[2] covers(signed_body);
 }
 
+// A parent handing `negotiated` its argument (0068), once from a field of
+// its own and once as a constant. The parent takes no argument itself, so
+// every sweep that skips a parameterised struct still reaches this one --
+// and so every generator that builds a call into `negotiated` from a
+// parent has to carry the argument there, or fail here.
+//
+// `after` sits behind both, so a child measured with the wrong argument
+// shows up as a wrong byte rather than as nothing.
+struct hands_on {
+	u8 block [max = 16];
+	negotiated(block = block) carried;
+	negotiated(block = 2) fixed;
+	u8 after;
+}
+
 // A region name a struct SHARES with the type of one of its members, which
 // is the shape every "which region does this name mean" lookup has been
 // wrong about. `tag_covers`, `regions` and `covered_by` all hold BARE
