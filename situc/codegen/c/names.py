@@ -54,8 +54,9 @@ KEYWORDS = CPP_KEYWORDS | frozenset({
 #: drifted.
 RUNTIME_SYMBOLS = frozenset({
 	"SITU_ALWAYS_INLINE", "SITU_H", "SITU_HOST_BIG", "SITU_LEAF_MAX",
-	"SITU_NO_BYTE", "SITU_STALE", "SITU_VERSION_MAJOR",
-	"SITU_VERSION_MINOR", "situ_adler32", "situ_advance_u32",
+	"SITU_NO_BYTE", "SITU_RUNTIME_ABI", "SITU_STALE",
+	"SITU_VERSION_MAJOR", "SITU_VERSION_MINOR",
+	"situ_adler32", "situ_advance_u32",
 	"situ_align_up_u32", "situ_ascii_ci_eq", "situ_ascii_fold",
 	"situ_ascii_valid", "situ_base", "situ_bcd_decode",
 	"situ_bcd_encode", "situ_bcd_valid", "situ_bits_get_lsb",
