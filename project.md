@@ -8024,6 +8024,10 @@ Moved to `doc/decision/26.806-a-member-named-e-compiles-in-cpp.md`.
 
 Moved to `doc/decision/26.807-c-names-what-a-parent-hands-a-child.md`.
 
+### 26.808 A dissector's extent counts a `parameter` as nothing
+
+Moved to `doc/decision/26.808-a-dissector-extent-spans-no-parameter.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

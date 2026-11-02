@@ -46,8 +46,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
-	extent_parts, is_counted_run, local_name, nests_one_struct, own_members,
-	pinned_bytes,
+	extent_parts, fixed_span_bits, is_counted_run, local_name,
+	nests_one_struct, occupies_fixed_bytes, own_members, pinned_bytes,
 	version_steps, versioned_tail,
 )
 from situc.traverse import messages as messages_of
@@ -1889,8 +1889,12 @@ def _extent_steps(resolved: ResolvedSchema,
 	for placement in own_members(struct):
 		if added is not None and placement.since:
 			continue		# by version, below (26.768)
-		if placement.is_fixed_size:
-			bits += placement.size_bits
+		# The SPAN, as every other function that adds members up asks it
+		# (`traverse.fixed_span_bits`): a `parameter` and a `peek` occupy
+		# nothing. This added `size_bits`, so `entry`'s extent counted its
+		# `parameter u16 block` as two bytes of the message (26.808).
+		if occupies_fixed_bytes(placement):
+			bits += fixed_span_bits(placement)
 			continue
 		if bits:
 			steps.append(str(bits // BITS_PER_BYTE))
