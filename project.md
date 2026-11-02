@@ -8130,6 +8130,10 @@ Moved to
 Moved to
 `doc/decision/26.818-a-setter-for-a-parameter-wrote-a-real-byte.md`.
 
+### 26.819 0068's region refusal is load-bearing, measured
+
+Moved to `doc/decision/26.819-the-region-refusal-is-load-bearing.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

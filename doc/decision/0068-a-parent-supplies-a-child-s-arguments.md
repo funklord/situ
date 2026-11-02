@@ -216,5 +216,26 @@ built (26.797, 26.799, 26.801, 26.802, 26.804, 26.809). What is not:
 - **A member inside a sealed or coded region, and an `indexed` region's
   element**, that take arguments are refused. One inside a `positional`
   or `authenticated` block is built (26.811).
+
+  **How far from built each is was measured rather than guessed**
+  (26.819), by lifting the refusal in a throwaway export the obvious way
+  -- admitting the interior to `wellformed._transparent_members`, which
+  is the route 26.811 took. The three answers differ:
+
+  - **`sealed` compiles and reads the wrong byte.** The interior's
+    accessors sum the extents in front of a member as though it were the
+    struct's own, so `k.mark` inside `kid(b = b) k` lands at `2b + 1`
+    where it sits at `b` -- inside the authentication tag, with
+    `situ_in_bounds` passing. That is the refusal earning its keep, and
+    `_transparent_members`' own docstring had already said why: a
+    region's interior is a transform's input and is placed against the
+    nested member's view, not the parent's.
+  - **`indexed` is one missing argument**: the `_at` emitter calls the
+    element's extent without `_child_args`.
+  - **`coded` emits no interior accessors at all**, so the lifting
+    produced no evidence either way.
+
+  A refusal lifted that compiles is the dangerous outcome rather than the
+  encouraging one: the compiler cannot see a wrong offset.
 - Rule 4 rejects per-element arguments. If a format needs the element's
   index, that is a later record.
