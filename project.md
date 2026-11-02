@@ -5964,11 +5964,36 @@ nothing re-read the sentence when the records closed.
 - **A ustar header's numbers end inside their width** (`suggestion/hull.md`
   section 19). `octal` is a radix since 26.756, which describes cpio's
   `odc` header outright; ustar's fields are octal digits then a NUL or a
-  space, padded to the field's width, and a fixed-width text number
-  refuses both. `[trim]` removes spaces and tabs from a delimited field,
-  not a NUL from a fixed one. GNU's base-256 numbers are a second variant
-  the header needs. Each is a language decision about where a fixed-width
-  number's digits stop.
+  space, padded to the field's width.
+
+  **Measured 2026-11-03, both available spellings against the four byte
+  patterns a real `mode[8]` takes.** `octal u32 mode[8]` wants exactly
+  eight octal digits:
+
+  | the eight bytes | `octal u32 mode[8]` | `octal u32 mode until "\x00"` |
+  |---|---|---|
+  | `0000644` + NUL | refused, "not 8 digits in base 8" | 0o644 |
+  | `0000644` + space | refused | refused, "not a u32 written in base 8" |
+  | `00000644` | 0o644 | refused, no NUL to end at |
+  | `000644` + NUL + NUL | refused | 0o644, and see below |
+
+  So the fixed form accepts exactly the one spelling ustar never writes,
+  and the delimited form **ends where the digits do**: with six digits
+  and two padding bytes the member after `mode` reads offset 7 rather
+  than 8, which misplaces every field after it in the header. That is
+  this entry's title, demonstrated rather than asserted.
+
+  `[trim]` is refused outright on a fixed-width field -- "`[trim]` means
+  nothing here" -- and `[8] until "\x00"` is refused as saying the width
+  twice, which is the language being consistent rather than a gap: a
+  fixed width and a terminator are two answers to one question today.
+  GNU's base-256 numbers, a first byte with its high bit set, are a
+  second variant the header needs.
+
+  **Still the holder's**: where a fixed-width text number's digits stop
+  is a language decision, and the measurement above is only the cost of
+  not making it. hull's own tar readers are tested, so this is coverage
+  of a format rather than a fault.
 - **Four walker identity divergences** of one shape (26.689), where the
   guard widths want reconciling rather than listing. **The holder's**, and
   the parking was re-measured and confirmed 2026-10-28 rather than
