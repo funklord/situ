@@ -8008,6 +8008,10 @@ Moved to `doc/decision/26.802-0068-step-4-an-arm-hands-its-member-arguments.md`.
 
 Moved to `doc/decision/26.803-the-dissector-declines-an-argued-member.md`.
 
+### 26.804 0068 step 6: the dissector hands a nested member its arguments
+
+Moved to `doc/decision/26.804-0068-step-6-the-dissector-hands-a-child-its-arguments.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

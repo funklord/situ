@@ -46,7 +46,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
-	extent_parts, is_counted_run, local_name, own_members, pinned_bytes,
+	extent_parts, is_counted_run, local_name, nests_one_struct, own_members,
+	pinned_bytes,
 	version_steps, versioned_tail,
 )
 from situc.traverse import messages as messages_of
@@ -128,7 +129,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend(["",
 		              "-- Declared before the extent functions below, which",
 		              "-- read an argument off a protocol's preferences.",
-		              *(f"local {_lua(name)}" for name in roots)])
+		              *(f"local {_lua(name)}" for name in roots),
+		              *_argument_tables(resolved, roots)])
 
 	lines.extend(_extent_functions(resolved))
 
@@ -775,6 +777,71 @@ def _bitmask(placement: Placement, width: int) -> int | None:
 _LOST = "\t-- (the cursor stops here)"
 
 
+def _argument_tables(resolved: ResolvedSchema, roots: list[str]) -> list[str]:
+	"""Where a struct's reads of its parameters go (0068).
+
+	`<s>_arg.<name>` rather than `<s>.prefs.<name>`: the preference is
+	the answer at the top of a capture, and a parent that hands the
+	argument sets it here for the length of one call. Wireshark's
+	`Dissector:call` takes no arguments, so a value travels this way or
+	not at all -- set before the call and restored after it, by `handing`,
+	which restores even when the call raises.
+	"""
+	taking = [name for name in roots
+	          if traverse.arguments(resolved.structs[name])]
+	if not taking:
+		return []
+	lines = ["",
+	         "-- What a parent hands a child (0068): read through these, which",
+	         "-- fall back to the child's own preferences.",
+	         *(f"local {_lua(name)}_arg = setmetatable({{}}, {{__index ="
+	           f" function(_, k) return {_lua(name)}.prefs[k] end}})"
+	           for name in taking),
+	         "",
+	         "local function handing(args, values, f, ...)",
+	         "\tlocal saved = {}",
+	         "\tfor k, v in pairs(values) do",
+	         "\t\tsaved[k] = rawget(args, k)",
+	         "\t\targs[k] = v",
+	         "\tend",
+	         "\tlocal result = table.pack(pcall(f, ...))",
+	         "\tfor k in pairs(values) do",
+	         "\t\targs[k] = saved[k]",
+	         "\tend",
+	         "\tif not result[1] then",
+	         "\t\terror(result[2], 0)",
+	         "\tend",
+	         "\treturn table.unpack(result, 2, result.n)",
+	         "end"]
+	return lines
+
+
+def _handed(struct: ResolvedStruct, placement: Placement,
+		base: str) -> str | None:
+	"""What a member hands its child, as a Lua table over `base` (0068).
+
+	None where an argument reads something this file cannot, and the
+	caller then declines the member, as it does any length it cannot read.
+	"""
+	parts = []
+	for name, source in placement.arguments:
+		value = _over_fields(struct, source, base)
+		if value is None:
+			return None
+		parts.append(f"{_lua(name)} = {value}")
+	return "{" + ", ".join(parts) + "}"
+
+
+def _handing_call(struct: ResolvedStruct, placement: Placement, base: str,
+		call: str, *args: str) -> str | None:
+	"""`call(args...)` with this member's arguments handed to its type."""
+	values = _handed(struct, placement, base)
+	if values is None:
+		return None
+	table = f"{_lua(placement.type_name or '')}_arg"
+	return f"handing({table}, {values}, {', '.join([call, *args])})"
+
+
 def _uncomputable(path: str, why: str) -> list[str]:
 	"""A member this dissector cannot step over, said once and acted on.
 
@@ -1166,11 +1233,12 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# so this read `entry.prefs.block` where the message said `vol.block`,
 	# and placed everything after the member on that. Declined, which
 	# stops the walk honestly, until the arguments are passed.
-	if placement.arguments:
+	if placement.arguments \
+			and not nests_one_struct(resolved.structs, placement):
 		return _uncomputable(
 			placement.path,
-			"its parent hands it arguments, which this dissector does not"
-			" pass yet (0068)")
+			"a run its parent hands arguments, which this dissector does"
+			" not pass to a run's elements yet (0068)")
 
 	# `at expr`: the message says where this member is, so the cursor is the
 	# wrong answer and advancing past it is a second wrong answer. Section 9.8
@@ -1252,12 +1320,27 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 			size = "size"
 
 		lines = [f"\t-- {placement.path}", *seek]
+		dissect = (f"Dissector.get(\"{placement.type_name}\"):call("
+		           f"tvb(at, {size}):tvb(), pinfo, subtree)")
+		measure = f"{_extent_name(nested)}(tvb, at)"
+		if placement.arguments:
+			# The child's reads go through `<type>_arg`, so the call is
+			# made with this member's arguments set there (0068).
+			got = _handing_call(
+				struct, placement, "0", "function()"
+				f" return {dissect} end")
+			sized = _handing_call(struct, placement, "0",
+			                      _extent_name(nested), "tvb", "at")
+			if got is None or sized is None:
+				return _uncomputable(placement.path, "an argument it is"
+				                     " handed reads what this dissector"
+				                     " cannot")
+			dissect, measure = got, sized
 		if size == "size":
-			lines.append(f"\tlocal size = {_extent_name(nested)}(tvb, at)")
+			lines.append(f"\tlocal size = {measure}")
 		lines.extend([
 			f"\tif tvb:len() >= at + {size} then",
-			f"\t\tDissector.get(\"{placement.type_name}\"):call("
-			f"tvb(at, {size}):tvb(), pinfo, subtree)",
+			f"\t\t{dissect}",
 			"\tend",
 			f"\tat = at + {size}",
 		])
@@ -1542,7 +1625,7 @@ def _over_fields(struct: ResolvedStruct, source: str, base: str,
 		# capture carries an argument, which is why a per-message one
 		# cannot reach a dissector at all and is refused before this.
 		if held.parameter:
-			reads[local] = f"{_lua(struct.name)}.prefs.{_lua(held.name)}"
+			reads[local] = f"{_lua(struct.name)}_arg.{_lua(held.name)}"
 			continue
 		one = _read(held, base)
 		if one is not None:
@@ -1911,9 +1994,9 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	frame.
 	"""
 	where = base if where is None else where
-	# Measured with the child's preferences, it would be the wrong length
-	# (0068): see `_member_body`.
-	if placement.arguments:
+	# A run is not handed its arguments yet (0068): see `_member_body`.
+	if placement.arguments \
+			and not nests_one_struct(resolved.structs, placement):
 		return None
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
@@ -1956,6 +2039,9 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# arm of a variant, so the variant's own length reached for it.
 		if _extent_terms(resolved, nested) is None:
 			return None
+		if placement.arguments:
+			return _handing_call(struct, placement, base,
+			                     _extent_name(nested), "tvb", where)
 		return f"{_extent_name(nested)}(tvb, {where})"
 
 	if placement.is_fixed_size and placement.size_bits % BITS_PER_BYTE == 0:
@@ -2379,7 +2465,7 @@ def _count_expression(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# construct disagreed, and the plain `body[n]` was the one that was
 	# wrong (0050).
 	if driver.placement.parameter:
-		return f"{_lua(struct.name)}.prefs.{_lua(driver.placement.name)}"
+		return f"{_lua(struct.name)}_arg.{_lua(driver.placement.name)}"
 
 	# `_read`, rather than a second reader beside it. This hand-rolled the
 	# load and said so -- "`_read` above says the same thing for the same
