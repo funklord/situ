@@ -2626,10 +2626,11 @@ class Parser:
 		                 parameter = True)
 
 	def parse_field(self) -> ast.Field:
-		start    = self.current
-		type_ref = self.parse_type_ref()
-		name     = self.expect_ident("a field name")
-		array    = self.parse_array_spec()
+		start     = self.current
+		type_ref  = self.parse_type_ref()
+		arguments = self.parse_member_arguments()
+		name      = self.expect_ident("a field name")
+		array     = self.parse_array_spec()
 		# Before `until`, because it is read in the order the bytes are: a
 		# skip says where the member begins and a delimiter where it ends.
 		skip     = self.parse_skip()
@@ -2640,7 +2641,40 @@ class Parser:
 		attrs    = self.parse_attrs()
 		self._expect_field_terminator(array)
 		return ast.Field(self.span_from(start), name.text, type_ref, array, pin,
-		                 attrs, until, repeat, located=located, skip=skip)
+		                 attrs, until, repeat, located=located, skip=skip,
+		                 arguments=arguments)
+
+	def parse_member_arguments(self) -> tuple[ast.Attr, ...]:
+		"""`entry(block = hdr.block)`: what a parent hands its child (0068).
+
+		Nothing else opens a member's type with `(` -- the members that do
+		(`pad_to`, `indexed`) are keywords, read before any type -- so this
+		is new grammar rather than a second reading of old. Every argument
+		is `name = expr`: named, as `indexed(...)` takes its own, so that
+		reordering a child's parameters cannot rebind a call.
+		"""
+		if not self.current.is_symbol("("):
+			return ()
+		self.advance()
+
+		found: list[ast.Attr] = []
+		while not self.current.is_symbol(")"):
+			name = self.expect_ident("a parameter name")
+			if self.accept_symbol("=") is None:
+				raise error(
+					f"an argument is written `{name.text} = <expression>`",
+					self.current.span,
+					label = "expected `=`",
+					notes = ["arguments are named, so the call still means "
+					         "the same when the child's parameters are "
+					         "reordered (decision 0068)"])
+			value = self.parse_expr()
+			found.append(ast.Attr(self.span_from(name), name.text, value))
+			if self.accept_symbol(",") is None:
+				break
+
+		self.expect_symbol(")", "after the arguments")
+		return tuple(found)
 
 	#: The words a newcomer reaches for to size a run, none of which situ
 	#: uses: the length goes inside the brackets. `suggestion/hydra.md` -- the

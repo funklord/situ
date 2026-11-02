@@ -72,6 +72,7 @@ def check(schema: ast.Schema) -> None:
 	check_located_names(schema)
 	check_peeked_members(schema)
 	check_parameters(schema)
+	check_member_arguments(schema)
 	check_parameter_nesting(schema)
 	check_varint_arms(schema)
 	check_checksum_codecs(schema)
@@ -3337,6 +3338,122 @@ def _members_and_arms(struct: ast.StructDecl) -> list[ast.Member]:
 	return _walk_members(struct.members)
 
 
+def check_member_arguments(schema: ast.Schema) -> None:
+	"""What a parent may hand a child, and how (0068).
+
+	The rules that need no layout: the type takes these parameters, each is
+	named exactly once, every one is given, an argument is arithmetic over
+	names in the parent's scope, and a child parameter that moves bytes is
+	fed only from what every reader can know. Whether a value FITS the
+	parameter's type is the layout's, which holds the intervals.
+	"""
+	takes: dict[str, dict[str, ast.Field]] = {}
+	for struct in schema.structs():
+		held = {member.name: member for member in struct.members
+		        if isinstance(member, ast.Field) and member.parameter}
+		if held:
+			takes[struct.name] = held
+
+	consts = {decl.name for decl in schema.consts()}
+	enums  = {member.name for decl in schema.enums()
+	          for member in decl.members}
+	enums |= {decl.name for decl in schema.enums()}
+
+	for struct in schema.structs():
+		own  = takes.get(struct.name, {})
+		seen: set[str] = set()
+		for member in _walk_members(struct.members):
+			given = getattr(member, "arguments", ())
+			if isinstance(member, ast.Field) and given:
+				_check_arguments(struct, member, takes, own,
+				                 seen | consts | enums)
+			named = getattr(member, "name", None)
+			if named is not None:
+				seen.add(named)
+
+
+def _check_arguments(struct: ast.StructDecl, member: ast.Field,
+		takes: dict[str, dict[str, ast.Field]], own: dict[str, ast.Field],
+		known: set[str]) -> None:
+	child  = member.type_ref.name
+	wanted = takes.get(child)
+	if wanted is None:
+		raise error(
+			f"`{child}` takes no arguments",
+			member.arguments[0].span,
+			f"`{struct.name}.{member.name}` hands it one",
+			[f"only a struct that declares a `parameter` takes arguments "
+			 "(decisions 0050, 0068)"])
+
+	given: dict[str, ast.Attr] = {}
+	for arg in member.arguments:
+		if arg.name not in wanted:
+			raise error(
+				f"`{child}` has no parameter `{arg.name}`",
+				arg.span,
+				"unknown parameter",
+				[f"its parameters are "
+				 f"{', '.join(f'`{name}`' for name in wanted)}"])
+		if arg.name in given:
+			raise error(
+				f"`{arg.name}` is given twice",
+				arg.span,
+				"repeated here",
+				["each parameter takes exactly one value (decision 0068)"])
+		given[arg.name] = arg
+
+	missing = [name for name in wanted if name not in given]
+	if missing:
+		raise error(
+			f"`{child}` needs `{missing[0]}` as well",
+			member.span,
+			f"`{struct.name}.{member.name}` does not give it",
+			["every parameter is given exactly once, and none has a default: "
+			 "a default is a value nobody states, which is what a parameter "
+			 "exists to prevent (decisions 0050, 0068)"])
+
+	for arg in member.arguments:
+		assert arg.value is not None
+		for call in _calls_in(arg.value):
+			raise error(
+				f"`{call.name}` is not something an argument may call",
+				call.span,
+				"not a value here",
+				["an argument is arithmetic over the parent's fields, its "
+				 "parameters, a `const` or an enum member (decision 0068)"])
+		for path in paths_in(arg.value):
+			head = path.split(".")[0]
+			if head not in known:
+				listed = ", ".join(sorted(known)[:6]) or "nothing"
+				raise error(
+					f"`{path}` is not in scope here",
+					arg.value.span,
+					"cannot be resolved",
+					["an argument names a member declared before this one, "
+					 "a `const`, or an enum member -- as a size does, since "
+					 "every reader needs the value before it can place the "
+					 "child (decision 0068)",
+					 f"in scope here: {listed}"])
+			# Rule 5: a parameter that moves bytes is fed only from what
+			# every reader of the stream can know.
+			if not _has(wanted[arg.name].attrs, "stream"):
+				continue
+			source = own.get(head)
+			if source is None or _has(source.attrs, "stream"):
+				continue
+			raise error(
+				f"`parameter {head}` is a per-message argument, so it cannot "
+				f"feed `{child}.{arg.name}`",
+				arg.value.span,
+				f"`{child}.{arg.name}` is `[stream]`",
+				["a `[stream]` parameter decides where bytes sit, so its "
+				 "value must be one a dissector can know: a constant, a "
+				 "field of the message, or a `[stream]` parameter "
+				 "(decisions 0050, 0068)",
+				 f"declare `parameter {source.type_ref.name} {head} "
+				 "[stream];` if it is fixed for a stream"])
+
+
 def check_parameter_nesting(schema: ast.Schema) -> None:
 	"""A struct that takes an argument is not a member yet (0050).
 
@@ -3379,6 +3496,9 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					"a struct that takes a `parameter` is a top-level "
 					"message for now: acquire it yourself and hand it the "
 					"argument",
+					f"`{named}(name = expr) member` is how a parent will "
+					"hand it one; that form is checked and not yet built "
+					"(decision 0068)",
 				])
 
 

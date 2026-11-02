@@ -422,6 +422,11 @@ class Field(Member):
 	#: where the member *begins*, and the two are read in the order the
 	#: bytes are.
 	skip: Skip | None		= None
+	#: `entry(block = hdr.block) files[n];` -- the arguments a parent hands
+	#: a struct that takes `parameter`s (0068). Named, every parameter
+	#: once, each an expression in the PARENT's scope at this member. Empty
+	#: for every member whose type takes none, which is nearly all of them.
+	arguments: tuple[Attr, ...]	= ()
 
 
 @dataclass(frozen=True)

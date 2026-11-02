@@ -426,7 +426,9 @@ def member_to_source(member: ast.Member) -> str:
 		         "peek " if getattr(member, "peek", False) else "",
 		         _radix_to_source(getattr(member, "radix", None),
 		                          bool(getattr(member, "scaled", False))),
-		         member.type_ref.name, " ", member.name,
+		         member.type_ref.name,
+		         _member_arguments_to_source(getattr(member, "arguments", ())),
+		         " ", member.name,
 		         _array_to_source(member.array),
 		         _skip_to_source(getattr(member, "skip", None)),
 		         _until_to_source(getattr(member, "until", None)),
@@ -522,6 +524,11 @@ def _variant_lines(variant: ast.Variant, depth: int) -> list[str]:
 
 	lines.append(f"{indent}}}")
 	return lines
+
+
+def _member_arguments_to_source(args: tuple[ast.Attr, ...]) -> str:
+	"""`(block = hdr.block)`, or nothing for a member whose type takes none."""
+	return f"({_args_to_source(args)})" if args else ""
 
 
 def _args_to_source(args: tuple[ast.Attr, ...]) -> str:

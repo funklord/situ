@@ -1,7 +1,8 @@
 # 0068: A parent supplies a child's arguments, by name, at the member
 
-Status: proposed 2026-11-01 -- designed at the copyright holder's request
-("design element arguments for runs"); not built
+Status: accepted 2026-11-02 -- designed at the copyright holder's request
+("design element arguments for runs") and accepted by the same ("build
+0068"); built in the steps below, each recorded from 26.797 on
 Date: 2026-11-01
 Supersedes: nothing. Settles the half 0050 left open ("lifting the refusal
 on a struct that takes an argument being a member of another, which needs
