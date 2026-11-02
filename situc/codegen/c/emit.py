@@ -3554,8 +3554,18 @@ class Emitter:
 		# and through an ordinary nested member; without it the counter
 		# restarts at every level of the tree and `[depth]` bounds nothing.
 		deep  = self._recursive(nested)
-		taken = "(situ_view_t view, uint32_t depth)" if deep \
-		        else "(situ_view_t view)"
+		# This helper DERIVES the arm's offset, so it takes the wide tail
+		# (26.817). It had a hard-coded parameter list over a body that
+		# embeds both `base` and `_child_args`, while the offset chain that
+		# places whatever follows the variant called it with the tail --
+		# three errors for the handed spelling and two for the base-only
+		# one. The arm's `_view`, emitted thirty lines above by the same
+		# method, already carries a tail, and the comment there already
+		# states the rule: an arm reads two things that can reach an
+		# argument, its own offset and the discriminant it tests.
+		reach = self._reaching_tail(struct, placement)
+		taken = f"(situ_view_t view, uint32_t depth{reach})" if deep \
+		        else f"(situ_view_t view{reach})"
 		body  = [
 			"\tsitu_view_t whole;",
 			"",
@@ -3576,9 +3586,10 @@ class Emitter:
 			*body,
 		] + ([
 			"",
-			f"static inline uint32_t {site}(situ_view_t view)",
+			f"static inline uint32_t {site}(situ_view_t view{reach})",
 			"{",
-			f"\treturn {site}_at(view, 0u);",
+			f"\treturn {site}_at(view, 0u"
+			f"{self._reaching_call(struct, placement)});",
 			"}",
 		] if deep else [])
 
@@ -5742,7 +5753,11 @@ class Emitter:
 		# planned entry, because mypy reads a rebind as narrowing and
 		# because two meanings on one name is what this tree keeps
 		# catching.
-		plan: list[tuple[object, str | None, str]] = []
+		# The fourth slot is what the arm hands its type, which the other
+		# four `required` call sites in this emitter have always passed and
+		# this one dropped: `situ_kid_required(data + pos, ..., &part)`
+		# against a definition taking a trailing argument (26.817).
+		plan: list[tuple[object, str | None, str, str]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
 			if inner is not None and not member.delimiters \
@@ -5751,13 +5766,14 @@ class Emitter:
 					and frameable(self.resolved.structs, inner) \
 					and self._frames_itself(inner):
 				plan.append((arm, ident(self.prefix, inner.name,
-				                        "required"), ""))
+				                        "required"), "",
+				             self._child_args(struct, member)))
 			elif member.is_fixed_size:
 				plan.append((arm, None,
-				             f"{member.size_bits // BITS_PER_BYTE}u"))
+				             f"{member.size_bits // BITS_PER_BYTE}u", ""))
 			else:
 				return None	# an arm this cannot frame
-		if not any(call for _, call, _ in plan):
+		if not any(call for _, call, _, _ in plan):
 			return None	# every arm fixed: the extent cannot shrink
 
 		disc  = self._over_fields(struct, placement.discriminant, "view")
@@ -5792,7 +5808,7 @@ class Emitter:
 			"\t\t}",
 		]
 		opened = False
-		for case, call, size in plan:
+		for case, call, size, handed in plan:
 			# `default:` matches anything, so it is the final `else`.
 			value = getattr(case, "value", None)
 			if value is None:
@@ -5809,7 +5825,7 @@ class Emitter:
 				lines.extend([
 					f"\t\t\te = {call}(data + {cursor},",
 					"\t\t\t                situ_remaining_u32(have,"
-					f" {cursor}), &part);",
+					f" {cursor}), &part{handed});",
 					"\t\t\tif (e != SITU_OK) {",
 					"\t\t\t\t*need = situ_need_u32(at, part);",
 					"\t\t\t\treturn SITU_ERR_TRUNCATED;",
@@ -6545,9 +6561,9 @@ class Emitter:
 			# signature and every call to it cannot disagree (26.815).
 			f"static inline int {name}"
 			+ (f"_at(situ_view_t view, uint32_t depth"
-			   f"{self._handed_tail(struct, placement)})" if deep
+			   f"{self._reaching_tail(struct, placement)})" if deep
 			   else f"(situ_view_t view"
-			        f"{self._handed_tail(struct, placement)})"),
+			        f"{self._reaching_tail(struct, placement)})"),
 			"{",
 			*([f"	uint32_t at = {base};",
 			   "",
@@ -6594,7 +6610,8 @@ class Emitter:
 		]
 
 	def _span_entries(self, span: str, base: str, deep: bool,
-			tail: str = "", handed: str = "") -> list[str]:
+			tail: str = "", handed: str = "",
+			reach: str = "", reached: str = "") -> list[str]:
 		"""The entry points over a run's `_from` walk.
 
 		Four where the element is recursive and two where it is not: the
@@ -6613,27 +6630,34 @@ class Emitter:
 		argument, whose `_span` walk is threaded through the shared
 		`_span_entries`". It has neither the struct nor the placement in
 		scope -- that is what being shared by three emitters costs -- so
-		the caller that has them passes the two texts in (26.815).
+		the caller that has them passes the texts in (26.815).
+
+		`reach` and `reached` are the WIDE pair, for the forms whose body
+		embeds `base` rather than taking a start: an offset call carries
+		the struct's whole argument list, so those signatures need the tail
+		whether or not the element is handed one (26.817). The `_from`
+		forms keep the narrow pair, and the calls they make pass `handed`
+		because what they call takes a start too.
 		"""
 		if not deep:
 			return ["",
 			        f"static inline uint32_t {span}"
-			        f"(situ_view_t view{tail})",
+			        f"(situ_view_t view{reach})",
 			        "{",
-			        f"\treturn {span}_from(view, {base}{handed});",
+			        f"\treturn {span}_from(view, {base}{reached});",
 			        "}"]
 		return [
 			"",
 			f"static inline uint32_t {span}_from"
 			f"(situ_view_t view, uint32_t start{tail})",
 			"{",
-			f"\treturn {span}_from_at(view, start, 0u{handed});",
+			f"\treturn {span}_from_at(view, start, 0u{reached});",
 			"}",
 			"",
 			f"static inline uint32_t {span}_at"
-			f"(situ_view_t view, uint32_t depth{tail})",
+			f"(situ_view_t view, uint32_t depth{reach})",
 			"{",
-			f"\treturn {span}_from_at(view, {base}, depth{handed});",
+			f"\treturn {span}_from_at(view, {base}, depth{reached});",
 			"}",
 			"",
 			f"static inline uint32_t {span}(situ_view_t view{tail})",
@@ -8410,7 +8434,7 @@ class Emitter:
 			"\t * REACHED, and a walk that gave up early reaches less"
 			" (26.676). */",
 			f"\tif (!{name}(view"
-			f"{self._handed_call(struct, placement)})) {{",
+			f"{self._reaching_call(struct, placement)})) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 		]
@@ -9150,10 +9174,15 @@ class Emitter:
 			deep = depth is not None and self._recursive(
 				placement.type_name or "")
 			# The parent's tail where the run hands its element one of
-			# the parent's own parameters (0068 step 5). `_handed_call`
-			# never asks the length renderer, so naming it here cannot
-			# cycle the way the wider predicate did (26.815).
-			handed = self._handed_call(struct, placement)
+			# the parent's own parameters (0068 step 5). Neither predicate
+			# asks the length renderer, so naming one here cannot cycle
+			# the way the wider `_member_reads_arguments` did (26.815).
+			#
+			# The wide one, because every span form in this family needs
+			# it: the two that embed `base` for the obvious reason, and
+			# the `_from` pair because their walk condition calls this
+			# run's `_count`, which takes the wide tail itself (26.817).
+			handed = self._reaching_call(struct, placement)
 			if running is not None:
 				return (f"{span}_from_at({held}, {running}, {depth}{handed})"
 				        if deep
@@ -9198,10 +9227,13 @@ class Emitter:
 				if running is not None and not self._recursive(nested.name):
 					return (f"{site}_from({held}, {running}"
 					        f"{self._handed_call(struct, placement)})")
+				# `{site}` and `{site}_at` derive this member's offset, so
+				# they take the wide tail; `_from` above is handed it and
+				# takes the narrow one (26.817).
 				return (f"{site}({held}"
-				        f"{self._handed_call(struct, placement)})")
+				        f"{self._reaching_call(struct, placement)})")
 			return (f"{site}_at({held}, {depth}"
-			        f"{self._handed_call(struct, placement)})")
+			        f"{self._reaching_call(struct, placement)})")
 
 		if placement.kind == "variant":
 			chain = self._variant_length(struct, placement, held, depth)
@@ -9892,7 +9924,7 @@ class Emitter:
 			" * means walking them. */",
 			f"static inline uint32_t "
 			f"{ident(self.prefix, struct.name, local, 'count')}"
-			f"(situ_view_t view{self._handed_tail(struct, placement)})",
+			f"(situ_view_t view{self._reaching_tail(struct, placement)})",
 			"{",
 			f"\tuint32_t at = {base};",
 			"\tuint32_t n  = 0u;",
@@ -9995,7 +10027,7 @@ class Emitter:
 			# `None` into the same accessor, which at least did not compile.
 			lines.extend(self._remaining_count(struct, placement, local,
 			                                   base, nested or ""))
-			count_args = self._handed_call(struct, placement)
+			count_args = self._reaching_call(struct, placement)
 		else:
 			# The caller's argument where this run's count follows one
 			# (0050) -- `item items[n]` is the same length in a different
@@ -10072,7 +10104,7 @@ class Emitter:
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'at')}"
 				f"(situ_view_t view, uint32_t index, situ_view_t *out"
-				f"{self._handed_tail(struct, placement)})",
+				f"{self._reaching_tail(struct, placement)})",
 				"{",
 				f"\tuint32_t at = {base};",
 				"\tuint32_t n  = 0u;",
@@ -10125,11 +10157,17 @@ class Emitter:
 				" (26.46). */",
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'span')}_from"
+				# The wide tail although it takes a start: the walk's
+				# condition calls this run's `_count`, which takes the
+				# wide tail itself, so the body names the argument through
+				# that call. `_extent_from` is the one `_from` in this
+				# family that is genuinely narrow -- its body is the
+				# child's extent call and nothing else (26.817).
 				+ (f"(situ_view_t view, uint32_t start"
-				   f"{self._handed_tail(struct, placement)})"
+				   f"{self._reaching_tail(struct, placement)})"
 				   if not self._recursive(nested or "") else
 				   f"_at(situ_view_t view, uint32_t start, uint32_t depth"
-				   f"{self._handed_tail(struct, placement)})"),
+				   f"{self._reaching_tail(struct, placement)})"),
 				"{",
 				"\tuint32_t at = start;",
 				"\tuint32_t n  = 0u;",
@@ -10160,7 +10198,9 @@ class Emitter:
 			lines.extend(self._span_entries(
 				span_name, base, self._recursive(nested or ""),
 				self._handed_tail(struct, placement),
-				self._handed_call(struct, placement)))
+				self._handed_call(struct, placement),
+				self._reaching_tail(struct, placement),
+				self._reaching_call(struct, placement)))
 			lines.extend(self._run_fits(struct, placement, local, base,
 			                            count, nested))
 			return lines
@@ -10208,13 +10248,21 @@ class Emitter:
 			# nothing at all for a mutual pair.
 			deep   = self._recursive(nested or "")
 			# The member's own tail, where what it hands the child names
-			# one of this struct's arguments (0068 step 5). `_member_tail`
-			# and `_member_args` are one predicate, so the three signatures
-			# below and every call to them cannot disagree.
+			# one of this struct's arguments (0068 step 5).
+			#
+			# TWO questions, not one, which cost 26.817. `_from` takes the
+			# offset as a parameter, so it reaches an argument only through
+			# what it hands the child; `_extent` and `_extent_at` derive
+			# the offset, and `_base_expression` renders that call with the
+			# struct's whole argument list. So the narrow pair is `_from`'s
+			# and every call to it, and the wide pair is the other two's.
+			# One tail for all three over-declared `_from`, which is an
+			# unused parameter and an error under this project's flags.
 			tail   = self._handed_tail(struct, placement)
 			handed = self._handed_call(struct, placement)
-			taken  = (f"(situ_view_t view, uint32_t depth{tail})" if deep
-			          else f"(situ_view_t view{tail})")
+			reach  = self._reaching_tail(struct, placement)
+			taken  = (f"(situ_view_t view, uint32_t depth{reach})" if deep
+			          else f"(situ_view_t view{reach})")
 			args   = self._child_args(struct, placement)
 			passed = f"{extent}_at(whole, depth + 1u)" if deep \
 			         else f"{extent}(whole{args})"
@@ -10276,9 +10324,10 @@ class Emitter:
 				"}",
 			]) + ([
 				"",
-				f"static inline uint32_t {site}(situ_view_t view{tail})",
+				f"static inline uint32_t {site}(situ_view_t view{reach})",
 				"{",
-				f"\treturn {site}_at(view, 0u{handed});",
+				f"\treturn {site}_at(view, 0u"
+				f"{self._reaching_call(struct, placement)});",
 				"}",
 			] if deep else []) + [
 				"",
@@ -12957,10 +13006,47 @@ class Emitter:
 		to `_extent_from`, and deciding that call's tail asked the predicate
 		again. Python recursed until it ran out of stack. One question per
 		signature, and the narrow one is cycle-free by construction.
+
+		**This is `_extent_from`'s question and not its siblings'**, which
+		the first version of this docstring got wrong by answering for all
+		three at once: it said the base "arrives as a parameter", which is
+		true of `_extent_from` alone. `_extent` and `_extent_at` DERIVE
+		their offset, and `_reaches_own_argument` below is their question.
 		"""
 		if not self._arguments(struct):
 			return False
 		text = self._child_args(struct, placement)
+		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
+		           for held in self._arguments(struct))
+
+	def _reaches_own_argument(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""The same question for a helper that DERIVES this member's offset
+		rather than taking it as a parameter (26.817).
+
+		`_base_expression` renders the offset call with the struct's whole
+		argument list, unconditionally -- the comment there says why: one
+		call site in the tree, kept in step with one definition. So a body
+		that embeds an offset call names every argument the struct has,
+		whatever the member hands its child.
+
+		That is how `u8 head[b]; kid(b = 2) k;` broke. The child is handed
+		a constant, so `_hands_own_argument` says no on both sides and says
+		it correctly; the argument arrives through `head[b]` making the
+		member's offset dynamic, and the body read `arg_b` under a
+		signature declaring nothing. All three of a plain member, a counted
+		run and a variant arm were wrong the same way, which is what said
+		the fault was this predicate's rather than any one emitter's.
+
+		Safe where the length renderer is not, and for a structural reason:
+		a member's offset is a sum over the members BEFORE it, so asking
+		for it cannot reach this member's own length and the cycle
+		`_hands_own_argument` exists to avoid cannot form.
+		"""
+		if not self._arguments(struct):
+			return False
+		text = "\n".join([self._child_args(struct, placement),
+		                  self._base_expression(struct, placement)])
 		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
 		           for held in self._arguments(struct))
 
@@ -12976,6 +13062,18 @@ class Emitter:
 		"""The same, as a call site's trailing arguments."""
 		return (self._argument_args(struct)
 		        if self._hands_own_argument(struct, placement) else "")
+
+	def _reaching_tail(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""`_reaches_own_argument`, as a signature's trailing parameters."""
+		return (self._argument_tail(struct)
+		        if self._reaches_own_argument(struct, placement) else "")
+
+	def _reaching_call(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The same, as a call site's trailing arguments."""
+		return (self._argument_args(struct)
+		        if self._reaches_own_argument(struct, placement) else "")
 
 	def _member_tail(self, struct: ResolvedStruct,
 			placement: Placement) -> str:

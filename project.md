@@ -8097,6 +8097,11 @@ Moved to
 Moved to
 `doc/decision/26.816-a-stale-installed-runtime-shadows-the-tree-s.md`.
 
+### 26.817 A signature that derives its own offset needs the argument
+
+Moved to
+`doc/decision/26.817-a-signature-that-derives-its-own-offset.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
