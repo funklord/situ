@@ -7,8 +7,8 @@ A struct's reads of its parameters go through `<s>_arg`, which falls back
 to its own preference at the top of a capture. A parent sets the value
 there for the length of one call -- `Dissector:call` takes no arguments
 -- and `handing` restores it after. So `ent` is sized by `vol.block` and
-`after` is shown where the walker reads it. A run of argued elements is
-still declined (26.803), and says so.
+`after` is shown where the walker reads it. A run's lines run inside one
+`handing`, so every element finds the same values (rule 4).
 """
 
 from __future__ import annotations
@@ -33,7 +33,10 @@ struct arms { u8 block [max = 6]; u8 k;
               variant body switch (k) { case 1: entry(block = block) one;
                                         default: u8 raw; }
               u8 after; }
-struct runs { u8 block; u8 n; entry(block = block) many[n]; u8 after; }
+struct runs { u8 block [max = 6]; u8 n; entry(block = block) many[n];
+              u8 after; }
+struct wh { u8 block [max = 6]; entry(block = block) w[] while (tag != 0);
+            u8 after; }
 """
 
 
@@ -51,9 +54,11 @@ def test_the_dissector_agrees_with_the_walker(tmp_path: Path) -> None:
 	assert result.compared > 0
 
 
-def test_the_parent_hands_the_value_and_a_run_is_declined() -> None:
+def test_the_parent_hands_the_value_to_a_member_and_a_run() -> None:
 	lua = _lua()
 	assert "handing(entry_arg, {block = situ_uint(tvb, 0, 2, false)}" in lua
-	assert "runs.many: a run its parent hands arguments" in lua
+	# A run is dissected inside one `handing`, so every element finds it.
+	assert "handing(entry_arg, {block = situ_uint(tvb, 0, 1, false)}," \
+	       " function()" in lua
 	# The child at the top of a capture still reads its preference.
 	assert "__index = function(_, k) return entry.prefs[k] end" in lua

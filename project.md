@@ -8028,6 +8028,10 @@ Moved to `doc/decision/26.807-c-names-what-a-parent-hands-a-child.md`.
 
 Moved to `doc/decision/26.808-a-dissector-extent-spans-no-parameter.md`.
 
+### 26.809 0068 step 6: the dissector hands a run its arguments
+
+Moved to `doc/decision/26.809-0068-step-6-the-dissector-hands-a-run-its-arguments.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

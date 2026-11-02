@@ -29,6 +29,8 @@ bytes with a note rather than guessed at.
 
 from __future__ import annotations
 
+import dataclasses
+
 from situc import traverse
 from situc.diagnostics import not_yet_implemented
 from situc import __version__
@@ -842,6 +844,31 @@ def _handing_call(struct: ResolvedStruct, placement: Placement, base: str,
 	return f"handing({table}, {values}, {', '.join([call, *args])})"
 
 
+def _handing_run(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> list[str]:
+	"""A run whose elements its parent hands arguments, dissected (0068).
+
+	Every element gets the same values (rule 4), so the run's own lines
+	are emitted as for any run and run inside one `handing` call: each
+	element's extent and dissector read `<type>_arg` and find the parent's
+	values there. `at` is the enclosing function's, so the closure moves
+	it as the lines would have.
+	"""
+	values = _handed(struct, placement, "0")
+	if values is None:
+		return _uncomputable(placement.path, "an argument it is handed"
+		                     " reads what this dissector cannot")
+	inner = _member_body(resolved, struct,
+	                     dataclasses.replace(placement, arguments=()))
+	lost  = _LOST in inner
+	body  = [line for line in inner if line != _LOST]
+	return [f"\thanding({_lua(placement.type_name or '')}_arg, {values},"
+	        " function()",
+	        *(f"\t{line}" if line else line for line in body),
+	        "\tend)",
+	        *([_LOST] if lost else [])]
+
+
 def _uncomputable(path: str, why: str) -> list[str]:
 	"""A member this dissector cannot step over, said once and acted on.
 
@@ -1235,10 +1262,7 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# stops the walk honestly, until the arguments are passed.
 	if placement.arguments \
 			and not nests_one_struct(resolved.structs, placement):
-		return _uncomputable(
-			placement.path,
-			"a run its parent hands arguments, which this dissector does"
-			" not pass to a run's elements yet (0068)")
+		return _handing_run(resolved, struct, placement)
 
 	# `at expr`: the message says where this member is, so the cursor is the
 	# wrong answer and advancing past it is a second wrong answer. Section 9.8
@@ -1998,10 +2022,19 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	frame.
 	"""
 	where = base if where is None else where
-	# A run is not handed its arguments yet (0068): see `_member_body`.
+	# A run measures every element with what the parent hands it (0068):
+	# the whole measurement runs with the values set, as `_handing_run`
+	# dissects it.
 	if placement.arguments \
 			and not nests_one_struct(resolved.structs, placement):
-		return None
+		values = _handed(struct, placement, base)
+		plain  = _length(resolved, struct,
+		                 dataclasses.replace(placement, arguments=()),
+		                 base, where)
+		if values is None or plain is None:
+			return None
+		return (f"handing({_lua(placement.type_name or '')}_arg, {values},"
+		        f" function() return {plain} end)")
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
 
