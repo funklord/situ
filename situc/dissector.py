@@ -1160,6 +1160,18 @@ def _member_body(resolved: ResolvedSchema, struct: ResolvedStruct,
 	# early, which is the disagreement with the walker that found this.
 	seek = seek + _lead(placement)
 
+	# A member its parent hands arguments (0068). The child's reads of its
+	# parameters are its own PREFERENCES here, which is right when it is the
+	# top of a capture and wrong under a parent that says what they are --
+	# so this read `entry.prefs.block` where the message said `vol.block`,
+	# and placed everything after the member on that. Declined, which
+	# stops the walk honestly, until the arguments are passed.
+	if placement.arguments:
+		return _uncomputable(
+			placement.path,
+			"its parent hands it arguments, which this dissector does not"
+			" pass yet (0068)")
+
 	# `at expr`: the message says where this member is, so the cursor is the
 	# wrong answer and advancing past it is a second wrong answer. Section 9.8
 	# is explicit -- a located member "joins no offset chain: it contributes
@@ -1899,6 +1911,10 @@ def _length(resolved: ResolvedSchema, struct: ResolvedStruct,
 	frame.
 	"""
 	where = base if where is None else where
+	# Measured with the child's preferences, it would be the wrong length
+	# (0068): see `_member_body`.
+	if placement.arguments:
+		return None
 	if placement.kind == "variant":
 		return _variant_length(resolved, struct, placement, base)
 
@@ -1993,9 +2009,13 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 	copies of one rule is a second thing to be wrong, and the first version
 	of this fix repeated it.
 	"""
+	# Both declines below go through `_uncomputable`, which stops the
+	# cursor: a bare comment left `at` where the variant began, and every
+	# member after it was placed there (26.803).
 	held = _over_fields(struct, placement.discriminant or "", "0")
 	if held is None:
-		return [f"\t-- {placement.path}: {_unreadable(struct, placement.discriminant)}"]
+		return _uncomputable(placement.path,
+		                     _unreadable(struct, placement.discriminant))
 
 	lines = [f"\t-- {placement.path}: whichever arm"
 	         f" `{placement.discriminant}` selects", *seek,
@@ -2007,8 +2027,8 @@ def _variant(resolved: ResolvedSchema, struct: ResolvedStruct,
 			continue		# `default: error`; nothing to show
 		length = _length(resolved, struct, member, "0")
 		if length is None:
-			return [f"\t-- {placement.path}: one arm has no length this"
-			        " dissector can compute"]
+			return _uncomputable(placement.path, "one arm has no length"
+			                     " this dissector can compute")
 
 		name  = _lua(_local(struct, member))
 		field = f"{_lua(struct.name)}.fields.{name}"
