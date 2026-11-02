@@ -529,6 +529,7 @@ class Emitter:
 		lines.extend(self._nesting_probe(struct))
 		lines.extend(self._required(struct))
 		lines.extend(self._offsets(struct))
+		lines.extend(self._handed_arguments(struct))
 
 		# After `_offsets`, for the reason `_struct_extent` above gives and
 		# from the same failure. A tag's covered span may end at a member's
@@ -12798,6 +12799,45 @@ class Emitter:
 		text = "\n".join(texts)
 		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
 		           for held in self._arguments(struct))
+
+	def _handed_arguments(self, struct: ResolvedStruct) -> list[str]:
+		"""What each member hands its type, as a function a C caller can ask.
+
+		A C view carries no arguments (`_argument_tail`'s reasons), so a
+		caller holding `situ_vol_ent_view`'s result has to pass the child's
+		argument to every accessor on it -- and had no way to learn what
+		the parent hands it but to re-derive the schema's expression by
+		hand. This is that expression, in one place (0068).
+		"""
+		held = [placement for placement in own_members(struct)
+		        if placement.arguments]
+		for variant in own_members(struct):
+			if variant.kind == "variant":
+				held.extend(member for _, member in arm_members(struct, variant)
+				            if member is not None and member.arguments)
+		lines: list[str] = []
+		for placement in held:
+			inner = self.resolved.structs[placement.type_name or ""]
+			wanted = {one.name: one for one in self._arguments(inner)}
+			local = c_name(self._local(struct, placement))
+			for name, source in placement.arguments:
+				scalar = wanted[name].scalar
+				assert scalar is not None
+				value = self._over_fields(struct, source, "view")
+				tail  = self._argument_tail_in(struct, value)
+				lines.extend([
+					"",
+					f"/* What `{placement.path}` hands `{inner.name}.{name}`: pass",
+					" * it to the accessors on the view you take of it. */",
+					f"static inline {self._ctype(scalar)} "
+					f"{ident(self.prefix, struct.name, local, 'arg', name)}"
+					f"(situ_view_t view{tail})",
+					"{",
+					*(["\t(void)view;"] if "view" not in value else []),
+					f"\treturn ({self._ctype(scalar)})({value});",
+					"}",
+				])
+		return lines
 
 	def _child_args(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "view") -> str:
