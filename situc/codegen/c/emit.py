@@ -31,8 +31,8 @@ from situc.kernels import zero_means_none
 from situc.capability import Axis, Value
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
-	c_name, check_collisions, check_runtime_collisions, entities, ident,
-	macro)
+	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
+	entities, ident, macro)
 from situc.diagnostics import Diagnostic, SituError
 from situc.expr import Env
 from situc.layout import (
@@ -269,6 +269,7 @@ class Emitter:
 			f"#define {guard}",
 			"",
 			'#include "situ.h"',
+			*RUNTIME_GUARD,
 			"",
 			"#ifdef __cplusplus",
 			'extern "C" {',

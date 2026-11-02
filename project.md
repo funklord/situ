@@ -8092,6 +8092,11 @@ Moved to
 Moved to
 `doc/decision/26.815-a-counted-run-hands-its-elements-the-parent-s-parameter.md`.
 
+### 26.816 A stale installed runtime shadows the tree's, and nothing said so
+
+Moved to
+`doc/decision/26.816-a-stale-installed-runtime-shadows-the-tree-s.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

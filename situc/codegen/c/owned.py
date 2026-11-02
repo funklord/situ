@@ -39,7 +39,8 @@ from collections.abc import Mapping
 
 from situc import ast
 from situc.types import ScalarKind
-from situc.codegen.c.names import bare_name, c_name, ident, macro
+from situc.codegen.c.names import (
+	RUNTIME_GUARD, bare_name, c_name, ident, macro)
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (RESERVED_OPEN, bit_extractor, own_entries,
@@ -611,6 +612,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, basename: str,
 		"#include <string.h>",
 		"",
 		'#include "situ.h"',
+		*RUNTIME_GUARD,
 		f'#include "{basename}.h"',
 		"",
 	]

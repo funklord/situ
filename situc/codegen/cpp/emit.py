@@ -31,7 +31,8 @@ from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
 from situc.codegen import arm_label, sized_shown
-from situc.codegen.c.names import KEYWORDS, bare_name, c_name
+from situc.codegen.c.names import (
+	KEYWORDS, RUNTIME_GUARD, bare_name, c_name)
 from situc.codegen.cpp.names import check_collisions, class_name, renamed
 from situc.codegen.doc import extractable
 from situc.diagnostics import Diagnostic, error
@@ -298,6 +299,7 @@ class Emitter:
 			f"#define {guard}",
 			"",
 			'#include "situ.hpp"',
+			*RUNTIME_GUARD,
 			"",
 			*self._codec_prototypes(),
 			f"namespace {self.namespace} {{",

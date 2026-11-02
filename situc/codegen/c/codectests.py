@@ -41,6 +41,7 @@ from math import lcm
 from situc import ast
 from situc.layout import BITS_PER_BYTE
 from situc.codegen.c.derived import DIGEST_FAMILIES, pair_of
+from situc.codegen.c.names import RUNTIME_GUARD
 from situc.traverse import decode_counts_bits, extern_symbol,\
 	table_is_padded
 
@@ -77,6 +78,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		"#include <cmocka.h>",
 		"",
 		'#include "situ.h"',
+		*RUNTIME_GUARD,
 		"",
 	]
 

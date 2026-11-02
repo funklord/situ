@@ -87,6 +87,32 @@ RUNTIME_SYMBOLS = frozenset({
 })
 
 
+#: The runtime ABI serial that generated C and C++ require. One source
+#: for the number: `runtime/c/situ.h` carries the matching `#define`, and
+#: `test_a_generated_header_names_its_runtime.py` fails when the two
+#: drift. 26.816 has what a silent mismatch cost.
+RUNTIME_ABI = 1
+
+#: What a generated header puts after its runtime include. A mismatch has
+#: to name the include path rather than the symbol that happened to
+#: change, because the symbol is in the wrong file and a reader goes
+#: looking there. The `defined()` arm comes first so that a runtime
+#: predating the serial fails on the one arm that can describe it.
+RUNTIME_GUARD = (
+	"",
+	"#if !defined(SITU_RUNTIME_ABI)",
+	'#error "the situ.h on the include path predates SITU_RUNTIME_ABI, so'
+	" it is older than this generated header. An installed libsitu-dev"
+	" shadows a tree's own runtime/c/situ.h whenever it comes first on"
+	' the include path."',
+	f"#elif SITU_RUNTIME_ABI != {RUNTIME_ABI}",
+	'#error "the situ.h on the include path is a different runtime ABI'
+	" than this header was generated for. Regenerate against the runtime"
+	' you link, or put that runtime first on the include path."',
+	"#endif",
+)
+
+
 def defined_symbols(text: str) -> frozenset[str]:
 	"""The `situ_`-prefixed names a piece of C DEFINES, not the ones it calls.
 

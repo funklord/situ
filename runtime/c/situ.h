@@ -29,6 +29,23 @@ extern "C" {
 #define SITU_VERSION_MAJOR	0
 #define SITU_VERSION_MINOR	1
 
+/* The C ABI generated code sees, as one integer. It increments whenever
+ * anything below changes in a way a generated header can observe -- a
+ * signature, a structure layout, a macro's meaning -- and generated
+ * headers refuse to compile against a runtime whose serial is not the
+ * one they were generated for.
+ *
+ * It exists because `SITU_VERSION_MINOR` did not move when
+ * `situ_view_check` lost a parameter, and nothing else could tell a
+ * stale installed `situ.h` from this one: a quoted `#include "situ.h"`
+ * resolves against whatever the caller put on the include path, and an
+ * old libsitu-dev wins silently. The failure then arrives as a dozen
+ * type errors naming the wrong file (26.816).
+ *
+ * `SITU_VERSION_*` is the published version and is not this; moving it
+ * is a release decision. This is an internal serial with one job. */
+#define SITU_RUNTIME_ABI	1
+
 /* Failure classes. One code per class; generated code never sets errno and
  * never longjmps. */
 typedef enum situ_err {
