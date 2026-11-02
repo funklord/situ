@@ -1075,7 +1075,9 @@ def test_c_and_rust_validate_the_same_arms(path: Path) -> None:
 	name     = path.stem
 
 	built = generate_c(schema, resolved, name)
-	in_c  = (built.header + built.source).count("_validate(arm)")
+	# `(arm` and then `)` or `,`: an arm whose struct takes arguments is
+	# validated with them, `_validate(arm, <value>)` (0068).
+	in_c  = len(re.findall(r"_validate\(arm[,)]", built.header + built.source))
 	in_rs = generate_rs(schema, resolved, name).module.count("arm.validate()?")
 
 	assert in_c == in_rs, (

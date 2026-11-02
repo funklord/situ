@@ -76,7 +76,8 @@ SUBTRACTION = re.compile(r"\blimit\s*-\s*(?!=)|\.len\(\)\s*-\s*(?!=)")
 #: 26.679, back to 131 when that was reverted, and to 132 when
 #: `edges.situ` gained one for 26.680, and to 134 when `edges.situ`
 #: gained `hands_on` for 0068 -- two nested accessors through the
-#: template every variable-size nested member already gets. A floor on
+#: template every variable-size nested member already gets -- and to 135
+#: for `hands_on_arms`, whose struct arm takes the arm template's. A floor on
 #: a sum cannot tell "the emitter regressed" from "there is more to
 #: generate", so every corpus addition asks a reader to decide which it
 #: was. The honest form is a per-schema census compared against a recorded
@@ -84,7 +85,7 @@ SUBTRACTION = re.compile(r"\blimit\s*-\s*(?!=)|\.len\(\)\s*-\s*(?!=)")
 #: is more machinery than this gate has earned while the count is small,
 #: and the reason it has not been built is recorded here rather than
 #: rediscovered the next time the number moves.
-RUST_PINNED = 134
+RUST_PINNED = 135
 
 
 def generated(path, backend: str) -> str:  # type: ignore[no-untyped-def]
