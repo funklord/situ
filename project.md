@@ -5431,6 +5431,38 @@ are used only to check the compiler. `situc` itself must run from a bare
 interpreter with nothing installed, which is what makes the toolchain vendor
 into an embedded build environment (Section 22).
 
+**`fmake` builds this tree too, and the README says so, which makes it a
+claim worth re-measuring.** `project-attribution` asks that a README showing
+`make` show `fmake` beside it, so README lines 211 and 1630 offer
+
+    python3 ~/src/fmake/fmake    # libsitu.a and situ-walk-c
+
+Verified end to end 2026-11-02 against fmake `9d1aaaa`, from a
+`git archive HEAD` export -- which is the case the README describes, a fresh
+clone -- rather than from this working tree: exit 0, no refusals, both
+artifacts produced, `situ-walk-c` printing its usage and `libsitu.a` holding
+six defined symbols.
+
+**A dry run cannot verify that claim, and says so itself.** `fmake -C . -n`
+exits 0 over this tree and prints, twice, that it has not closed the link
+sets and resolves no libraries -- "the lines above are the plan a build would
+start from, not a claim that it finishes". So a re-check with `-n` passes
+without testing what the README promises. It is the right instrument for one
+narrower question, whether fmake still *refuses* the tree, because it writes
+nothing: measured, `git status --porcelain` is unchanged across a dry run.
+For the README's claim, build the export and look for the two artifacts.
+
+For a window before `9d1aaaa` that line did refuse, and **nothing in this
+tree was wrong**: `dh_install` leaves a copy of every corpus schema under
+both `debian/tmp/` and `debian/situc/`, `.gitignore` names both and
+`git check-ignore` agreed, and fmake filtered its source set by gitignore
+while its schema walk did not ask -- so two ignored copies of `bmp.situ`
+read as a collision. Reported from fmake 2026-11-02 and 2026-11-03 and
+recorded there as its section 562, with a minimal fixture and a control
+holding that two TRACKED schemas which collide still refuse. It is here only
+so that a reader who meets the old report does not come looking in this
+tree.
+
 ### 24.1 Packaging
 
 `make deb` produces two packages, and they are two because they do not have the
