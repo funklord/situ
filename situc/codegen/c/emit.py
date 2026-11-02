@@ -9144,9 +9144,12 @@ class Emitter:
 				# is an implicit declaration -- which `json.situ` found at
 				# once, being recursive through a run.
 				if running is not None and not self._recursive(nested.name):
-					return f"{site}_from({held}, {running})"
-				return f"{site}({held})"
-			return f"{site}_at({held}, {depth})"
+					return (f"{site}_from({held}, {running}"
+					        f"{self._handed_call(struct, placement)})")
+				return (f"{site}({held}"
+				        f"{self._handed_call(struct, placement)})")
+			return (f"{site}_at({held}, {depth}"
+			        f"{self._handed_call(struct, placement)})")
 
 		if placement.kind == "variant":
 			chain = self._variant_length(struct, placement, held, depth)
@@ -10135,8 +10138,14 @@ class Emitter:
 			# Without it the cycle's counter reset here and `[depth]` bought
 			# nothing at all for a mutual pair.
 			deep   = self._recursive(nested or "")
-			taken  = "(situ_view_t view, uint32_t depth)" if deep \
-			         else "(situ_view_t view)"
+			# The member's own tail, where what it hands the child names
+			# one of this struct's arguments (0068 step 5). `_member_tail`
+			# and `_member_args` are one predicate, so the three signatures
+			# below and every call to them cannot disagree.
+			tail   = self._handed_tail(struct, placement)
+			handed = self._handed_call(struct, placement)
+			taken  = (f"(situ_view_t view, uint32_t depth{tail})" if deep
+			          else f"(situ_view_t view{tail})")
 			args   = self._child_args(struct, placement)
 			passed = f"{extent}_at(whole, depth + 1u)" if deep \
 			         else f"{extent}(whole{args})"
@@ -10161,7 +10170,7 @@ class Emitter:
 				" * offset the caller already knows. Summing these forward is",
 				" * what keeps an offset chain linear. */",
 				f"static inline uint32_t {site}_from(situ_view_t view,"
-				" uint32_t base)",
+				f" uint32_t base{tail})",
 				"{",
 				"\tsitu_view_t whole;",
 				"",
@@ -10183,7 +10192,7 @@ class Emitter:
 				+ ("_at" if deep else "") + taken,
 				"{",
 			] + ([
-				f"\treturn {site}_from(view, {base});",
+				f"\treturn {site}_from(view, {base}{handed});",
 				"}",
 			] if not deep else [
 				f"\tconst uint32_t base = {base};",
@@ -10198,9 +10207,9 @@ class Emitter:
 				"}",
 			]) + ([
 				"",
-				f"static inline uint32_t {site}(situ_view_t view)",
+				f"static inline uint32_t {site}(situ_view_t view{tail})",
 				"{",
-				f"\treturn {site}_at(view, 0u);",
+				f"\treturn {site}_at(view, 0u{handed});",
 				"}",
 			] if deep else []) + [
 				"",
@@ -12861,6 +12870,43 @@ class Emitter:
 		return "".join(
 			f", {self._over_fields(struct, given[held_at.name], held)}"
 			for held_at in self._arguments(inner))
+
+	def _hands_own_argument(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether what this member hands its child names one of THIS
+		struct's arguments (0068 step 5).
+
+		**Narrower than `_member_reads_arguments`, and deliberately so: it
+		cannot ask the length renderer.** The nested-extent helpers --
+		`_extent_from`, `_extent` and `_extent_at` -- reach an argument only
+		through what they hand the child, because their base arrives as a
+		parameter and their length IS the child's own extent call. So this
+		is the whole question for their three signatures.
+
+		Asking the wider predicate there was a cycle: it renders the length
+		expression, the length expression for a nested member renders a call
+		to `_extent_from`, and deciding that call's tail asked the predicate
+		again. Python recursed until it ran out of stack. One question per
+		signature, and the narrow one is cycle-free by construction.
+		"""
+		if not self._arguments(struct):
+			return False
+		text = self._child_args(struct, placement)
+		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
+		           for held in self._arguments(struct))
+
+	def _handed_tail(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The nested-extent helpers' tail: this struct's arguments where
+		the member hands one on."""
+		return (self._argument_tail(struct)
+		        if self._hands_own_argument(struct, placement) else "")
+
+	def _handed_call(self, struct: ResolvedStruct,
+			placement: Placement) -> str:
+		"""The same, as a call site's trailing arguments."""
+		return (self._argument_args(struct)
+		        if self._hands_own_argument(struct, placement) else "")
 
 	def _member_tail(self, struct: ResolvedStruct,
 			placement: Placement) -> str:

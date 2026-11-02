@@ -521,6 +521,21 @@ struct ranged_code size=1.. access=Sequential mutate=Shifting address=Unstable r
   ranged_code.code                       offset=AbsoluteStatic(0x00) size=Bounded(1, 4) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   ranged_code.rest                       offset=Scanned size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Shifting address=Unstable
 
+struct relays_on size=6..517 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  relays_on.block                        parameter
+  relays_on.one                          offset=AbsoluteStatic(0x00) size=Bounded(5, 516) align=Aligned(8) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  relays_on.one.block                    parameter
+  relays_on.one.payload                  offset=AbsoluteStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  relays_on.one.trailer                  offset=Dynamic size=Bounded(1, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+  relays_on.one.checksum                 offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  relays_on.one.kind                     offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  relays_on.one.carried                  offset=Dynamic size=Bounded(1, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  relays_on.one.carried.marker           offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  relays_on.one.carried.marker.tag       offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  relays_on.one.carried.marker.body      offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+  relays_on.one.carried.flag             offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  relays_on.after                        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
 struct scoped_text size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   scoped_text.name                       offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
   scoped_text.raw                        offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic

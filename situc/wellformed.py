@@ -3490,12 +3490,31 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# block, one or a run of them, named with its arguments, of a
 			# struct other than this one. A sealed or coded interior, an
 			# `indexed` element and a struct naming itself are later.
+			#
+			# AND STEP 5 FOR A SINGLE NESTED MEMBER: an argument that hands
+			# on one of the parent's OWN parameters. In C that is the only
+			# case where the difference bites -- a parent FIELD is read from
+			# the view, so the helpers measuring the child already had it,
+			# while a parameter lives in the parent's trailing arguments and
+			# has to be threaded into every helper that measures or places
+			# the child. For a single nested member that is the
+			# `_extent_from`, `_extent` and `_view` trio and their calls,
+			# which is built and verified in all four backends (26.812).
+			#
+			# A RUN of them is not: its `_count`, `_at`, `_span_from` and
+			# `_fits` reach the argument through a second set of helpers,
+			# and threading those is the rest of this step. The refusal
+			# below is what keeps that honest, because an unplumbed path in
+			# C is a compile error rather than a wrong byte -- which is
+			# exactly what the whole-schema refusal bought and what
+			# `_argument_tail`'s note promises to keep.
 			if isinstance(member, ast.Field) and member.arguments \
 					and (member in struct.members
 					     or member in arms_of(struct)
 					     or member in _transparent_members(struct)) \
 					and member.located is None and named != struct.name \
-					and not _reads_a_parameter(struct, member) \
+					and not (member.array is not None
+					         and _reads_a_parameter(struct, member)) \
 					and named not in cyclic:
 				continue
 			raise error(

@@ -2049,6 +2049,25 @@ struct hands_on_runs {
 	negotiated(block = 1) rest[remaining];
 }
 
+// A parent handing on its OWN parameter (0068 step 5). Every case above
+// hands a constant or a field of the parent's; this hands the argument the
+// parent was itself given, which is the half the record called not started.
+//
+// In C the difference is the whole of it: a field is read from the view, so
+// the helpers that measure the child already had everything they needed,
+// while a parameter lives in the parent's trailing arguments and has to be
+// threaded into every helper that measures or places the child -- and into
+// every call to one. The signature and the body were decided from different
+// text, so `situ_relay_one_extent_from` embedded `arg_block` without taking
+// it and gcc said so twice (26.812).
+//
+// `after` sits behind the child so a wrong extent shows as a wrong byte.
+struct relays_on {
+	parameter u8  block [stream];
+	negotiated(block = block)  one;
+	u8            after;
+}
+
 // And through a variant arm (0068 step 4): a single member and a counted
 // run, each measured with the argument where the arm is chosen, and a
 // member after the variant to be placed by it.

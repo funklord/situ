@@ -456,6 +456,15 @@ struct ranged_code size=1..
   @0x0000   until:20  u32        code  radix=10 cap=4 min=200 max=599
   ~         0..       u8         rest  sized-by=remaining
 
+struct relays_on size=6..517
+  parameter -         u8         block [stream]
+  @0x0000   5..516    negotiated one  args block=block big
+  ~         1         u8         after
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+
 struct scoped_text size=22
   @0x0000   16        u8         name  big nul_terminated encoding=utf8
   @0x0010   4         u8         raw  big encoding=ascii

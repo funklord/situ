@@ -161,16 +161,41 @@ just closed.
 The syntax was accepted on 2026-11-02, and steps 1, 2, 3, 4 and 6 are
 built (26.797, 26.799, 26.801, 26.802, 26.804, 26.809). What is not:
 
-- **Step 5: an argument that hands on the parent's own parameter, and a
-  struct naming itself.** Both are refused as "cannot be a member yet".
-  In C++, Rust and Python the parent's argument is already on its view.
-  C carries arguments as trailing parameters, so every function that
-  measures or walks the child (the site extent, the run's `_at`, `_span`,
-  `_fits` and index, element validation, and framing) would take the
-  parent's tail, and each call would pass it. A child that can contain
-  itself through any chain needs the depth-carrying `_at` forms passed
-  the same way. That is one refactor of C's run plumbing, and it was not
-  started.
+- **Step 5 for a SINGLE nested member is built** (26.812): an argument
+  that hands on one of the parent's own parameters, where the member is
+  one nested struct rather than a run. C++, Rust and Python needed
+  nothing -- the parent's argument is already on its view -- and C needed
+  the `_extent_from`, `_extent`/`_extent_at` and `_view` trio to take the
+  parent's tail, with every call to them passing it.
+
+  **What made it a defect rather than a gap is worth keeping**: the
+  signature and the body were decided from different text.
+  `_member_reads_arguments` asked the member's base and length
+  expressions, while the bodies it decides the signature for are built
+  from those AND `_child_args` -- so for `relay { parameter u8 block;
+  negotiated(block = block) one; }` the base is `0u`, the length is a
+  call into the helper, and the argument appeared only inside that
+  helper. The predicate said no, the signature took no tail, and the body
+  embedded `arg_block` anyway. Widening that predicate was the wrong fix
+  and is recorded because it looked right: it is shared with the member's
+  other accessors, and a run's `_count` reads the count field rather than
+  the argument, so widening made its call sites pass a tail it does not
+  take. The narrow, cycle-free `_hands_own_argument` answers only what the
+  three helpers need. Cycle-free matters: asking the wider predicate there
+  recursed without end, because it renders the length expression and a
+  nested member's length expression renders a call whose tail that
+  predicate decides.
+
+- **Step 5 for a RUN of them is not**, and the refusal is narrowed to
+  exactly that. Its `_count`, `_at`, `_span_from` and `_fits` reach the
+  argument through a second set of helpers; `_child_args` has 21 call
+  sites in C's emitter and threading the rest is the remainder of this
+  step. The refusal is what keeps it honest, because an unplumbed path in
+  C is a compile error rather than a wrong byte.
+
+- **A struct naming itself** is still refused, as is one that can contain
+  itself through any chain: a recursive child is measured with a depth,
+  and handing arguments down that path is the other half of step 5.
 - **A member inside a sealed or coded region, and an `indexed` region's
   element**, that take arguments are refused. One inside a `positional`
   or `authenticated` block is built (26.811).
