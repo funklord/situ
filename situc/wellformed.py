@@ -3513,8 +3513,6 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					     or member in arms_of(struct)
 					     or member in _transparent_members(struct)) \
 					and member.located is None and named != struct.name \
-					and not (member.array is not None
-					         and _reads_a_parameter(struct, member)) \
 					and named not in cyclic:
 				continue
 			raise error(

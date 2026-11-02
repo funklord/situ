@@ -6538,9 +6538,15 @@ class Emitter:
 			" * short frame, so the walk stopping there answers yes and"
 			" leaves the",
 			" * message to the nesting guard above. */",
+			# The parent's tail where this walk hands the element an
+			# argument of the parent's own (0068 step 5, the run half).
+			# `_handed_tail` and `_handed_call` are one predicate, so this
+			# signature and every call to it cannot disagree (26.815).
 			f"static inline int {name}"
-			+ ("_at(situ_view_t view, uint32_t depth)" if deep
-			   else "(situ_view_t view)"),
+			+ (f"_at(situ_view_t view, uint32_t depth"
+			   f"{self._handed_tail(struct, placement)})" if deep
+			   else f"(situ_view_t view"
+			        f"{self._handed_tail(struct, placement)})"),
 			"{",
 			*([f"	uint32_t at = {base};",
 			   "",
@@ -6586,7 +6592,8 @@ class Emitter:
 			"}",
 		]
 
-	def _span_entries(self, span: str, base: str, deep: bool) -> list[str]:
+	def _span_entries(self, span: str, base: str, deep: bool,
+			tail: str = "", handed: str = "") -> list[str]:
 		"""The entry points over a run's `_from` walk.
 
 		Four where the element is recursive and two where it is not: the
@@ -6594,30 +6601,43 @@ class Emitter:
 		for a caller who has no business knowing it exists. Shared because
 		the three run emitters had grown their own answers to this and only
 		one of them had the recursive half.
+
+		`tail` and `handed` are the parent's argument tail and the matching
+		call, for a run whose element is handed one of the parent's own
+		parameters (0068 step 5). They default to empty, so a run that
+		hands nothing reads byte for byte as it did.
+
+		**This is the shape `_argument_tail`'s own note predicted would
+		still be unplumbed**: "a run of VARIABLE-sized structs sized by an
+		argument, whose `_span` walk is threaded through the shared
+		`_span_entries`". It has neither the struct nor the placement in
+		scope -- that is what being shared by three emitters costs -- so
+		the caller that has them passes the two texts in (26.815).
 		"""
 		if not deep:
 			return ["",
-			        f"static inline uint32_t {span}(situ_view_t view)",
+			        f"static inline uint32_t {span}"
+			        f"(situ_view_t view{tail})",
 			        "{",
-			        f"\treturn {span}_from(view, {base});",
+			        f"\treturn {span}_from(view, {base}{handed});",
 			        "}"]
 		return [
 			"",
 			f"static inline uint32_t {span}_from"
-			"(situ_view_t view, uint32_t start)",
+			f"(situ_view_t view, uint32_t start{tail})",
 			"{",
-			f"\treturn {span}_from_at(view, start, 0u);",
+			f"\treturn {span}_from_at(view, start, 0u{handed});",
 			"}",
 			"",
 			f"static inline uint32_t {span}_at"
-			"(situ_view_t view, uint32_t depth)",
+			f"(situ_view_t view, uint32_t depth{tail})",
 			"{",
-			f"\treturn {span}_from_at(view, {base}, depth);",
+			f"\treturn {span}_from_at(view, {base}, depth{handed});",
 			"}",
 			"",
-			f"static inline uint32_t {span}(situ_view_t view)",
+			f"static inline uint32_t {span}(situ_view_t view{tail})",
 			"{",
-			f"\treturn {span}_from_at(view, {base}, 0u);",
+			f"\treturn {span}_from_at(view, {base}, 0u{handed});",
 			"}",
 		]
 
@@ -8388,7 +8408,8 @@ class Emitter:
 			" run",
 			"\t * REACHED, and a walk that gave up early reaches less"
 			" (26.676). */",
-			f"\tif (!{name}(view)) {{",
+			f"\tif (!{name}(view"
+			f"{self._handed_call(struct, placement)})) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
 		]
@@ -9127,11 +9148,17 @@ class Emitter:
 			# this repository.
 			deep = depth is not None and self._recursive(
 				placement.type_name or "")
+			# The parent's tail where the run hands its element one of
+			# the parent's own parameters (0068 step 5). `_handed_call`
+			# never asks the length renderer, so naming it here cannot
+			# cycle the way the wider predicate did (26.815).
+			handed = self._handed_call(struct, placement)
 			if running is not None:
-				return (f"{span}_from_at({held}, {running}, {depth})" if deep
-				        else f"{span}_from({held}, {running})")
-			return (f"{span}_at({held}, {depth})" if deep
-			        else f"{span}({held})")
+				return (f"{span}_from_at({held}, {running}, {depth}{handed})"
+				        if deep
+				        else f"{span}_from({held}, {running}{handed})")
+			return (f"{span}_at({held}, {depth}{handed})" if deep
+			        else f"{span}({held}{handed})")
 
 		# A nested struct with no single size. Its own `_extent` needs a view
 		# positioned at the member, which is not something an expression can
@@ -9863,7 +9890,8 @@ class Emitter:
 			" them",
 			" * means walking them. */",
 			f"static inline uint32_t "
-			f"{ident(self.prefix, struct.name, local, 'count')}(situ_view_t view)",
+			f"{ident(self.prefix, struct.name, local, 'count')}"
+			f"(situ_view_t view{self._handed_tail(struct, placement)})",
 			"{",
 			f"\tuint32_t at = {base};",
 			"\tuint32_t n  = 0u;",
@@ -9919,6 +9947,13 @@ class Emitter:
 		           and inner_struct.layout.is_fixed_size
 		           and placement.array_count is None)
 
+		# What `_count` takes, decided per branch below rather than from
+		# the member's own length expression. The counted branch derives
+		# its signature from the count expression's text, and the call
+		# site asking a wider question handed it a parameter it does not
+		# declare (26.815).
+		count_args = ""
+
 		if placement.array_count is not None:
 			lines.append(f"#define {macro(self.prefix, struct.name, local, 'COUNT')} "
 			             f"{placement.array_count}u")
@@ -9948,6 +9983,7 @@ class Emitter:
 				f"\treturn (situ_remaining_u32(view.limit, base)) / {size};",
 				"}",
 			])
+			count_args = self._argument_args_in(struct, base)
 		elif walked:
 			# `x[remaining]` over elements with no single size: the bytes left
 			# are known and the number of elements in them is not, so the
@@ -9958,6 +9994,7 @@ class Emitter:
 			# `None` into the same accessor, which at least did not compile.
 			lines.extend(self._remaining_count(struct, placement, local,
 			                                   base, nested or ""))
+			count_args = self._handed_call(struct, placement)
 		else:
 			# The caller's argument where this run's count follows one
 			# (0050) -- `item items[n]` is the same length in a different
@@ -9974,6 +10011,7 @@ class Emitter:
 				f"\treturn (uint32_t){counted};",
 				"}",
 			])
+			count_args = self._argument_args_in(struct, counted)
 
 		# The element count, not just the message extent. `situ_view_sub` bounds
 		# against the view, which is a weaker claim: an array that does not run
@@ -9983,7 +10021,7 @@ class Emitter:
 		count = (macro(self.prefix, struct.name, local, "COUNT")
 		         if placement.array_count is not None
 		         else f"{ident(self.prefix, struct.name, local, 'count')}"
-		              f"(view{self._member_args(struct, placement)})")
+		              f"(view{count_args})")
 
 		inner = self.resolved.structs.get(nested or "")
 		fixed = inner is not None and inner.layout.is_fixed_size
@@ -10032,7 +10070,8 @@ class Emitter:
 				" */",
 				f"static inline situ_err_t "
 				f"{ident(self.prefix, struct.name, local, 'at')}"
-				"(situ_view_t view, uint32_t index, situ_view_t *out)",
+				f"(situ_view_t view, uint32_t index, situ_view_t *out"
+				f"{self._handed_tail(struct, placement)})",
 				"{",
 				f"\tuint32_t at = {base};",
 				"\tuint32_t n  = 0u;",
@@ -10085,9 +10124,11 @@ class Emitter:
 				" (26.46). */",
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'span')}_from"
-				+ ("(situ_view_t view, uint32_t start)"
+				+ (f"(situ_view_t view, uint32_t start"
+				   f"{self._handed_tail(struct, placement)})"
 				   if not self._recursive(nested or "") else
-				   "_at(situ_view_t view, uint32_t start, uint32_t depth)"),
+				   f"_at(situ_view_t view, uint32_t start, uint32_t depth"
+				   f"{self._handed_tail(struct, placement)})"),
 				"{",
 				"\tuint32_t at = start;",
 				"\tuint32_t n  = 0u;",
@@ -10116,7 +10157,9 @@ class Emitter:
 			])
 			span_name = ident(self.prefix, struct.name, local, "span")
 			lines.extend(self._span_entries(
-				span_name, base, self._recursive(nested or "")))
+				span_name, base, self._recursive(nested or ""),
+				self._handed_tail(struct, placement),
+				self._handed_call(struct, placement)))
 			lines.extend(self._run_fits(struct, placement, local, base,
 			                            count, nested))
 			return lines

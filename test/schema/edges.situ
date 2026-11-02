@@ -2091,6 +2091,36 @@ struct relays_on {
 	u8            after;
 }
 
+// The same hand-on through a COUNTED RUN, which is a second shape rather
+// than a repetition: a run's `_count`, `_at`, `_span_from`, `_span` and
+// `_fits` are five more emitters, and C decided each one's signature from
+// a different text than it built the body from. The wide predicate --
+// "does this member's length expression name an argument" -- answers yes
+// here, and the counted `_count` reads only `n`, so asking it at the
+// count call handed `_count` a parameter it does not declare (26.815).
+struct relays_on_runs {
+	parameter u8  block [stream];
+	u8            n [max = 4];
+	negotiated(block = block)  counted[n];
+	u8            after;
+}
+
+// `_count`'s other two branches, which emit different signatures again: a
+// LITERAL count is a macro with no function at all, and `[remaining]`
+// over elements with no single size is a walk. Each has its own call
+// sites, so a construct that reaches one proves nothing about the others.
+struct relays_on_fixed {
+	parameter u8  block [stream];
+	negotiated(block = block)  four[4];
+	u8            after;
+}
+
+struct relays_on_rest {
+	parameter u8  block [stream];
+	u8            lead;
+	negotiated(block = block)  rest[remaining];
+}
+
 // A `[remaining]` run of FIXED elements after a member the argument
 // sizes. The count is a division rather than a walk -- `beacon` is three
 // bytes, so it is `(limit - base) / 3` -- and this is the one of

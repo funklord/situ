@@ -479,6 +479,34 @@ struct relays_on_divided size=0..
   @0x0000   0..255    u8         head  sized-by=block
   ~         0..       beacon     rest  sized-by=remaining
 
+struct relays_on_fixed size=21..2065
+  parameter -         u8         block [stream]
+  @0x0000   20..2064  negotiated four  args block=block big
+  ~         1         u8         after
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+
+struct relays_on_rest size=1..
+  parameter -         u8         block [stream]
+  @0x0000   1         u8         lead
+  @0x0001   0..       negotiated rest  args block=block sized-by=remaining
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+
+struct relays_on_runs size=2..2066
+  parameter -         u8         block [stream]
+  @0x0000   1         u8         n  max=4
+  @0x0001   0..2064   negotiated counted  args block=block sized-by=n
+  ~         1         u8         after
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+
 struct scoped_text size=22
   @0x0000   16        u8         name  big nul_terminated encoding=utf8
   @0x0010   4         u8         raw  big encoding=ascii

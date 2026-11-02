@@ -87,15 +87,14 @@ def test_well_formed_arguments_are_accepted_or_wait_for_their_step() -> None:
 			        "entry(block = b) e; }\n",
 			# Rule 5, last sentence: a meaning-only child parameter may take
 			# a per-message one, because it moves no bytes.
-			MEANS + "struct vol { parameter u8 m; note(mode = m) e; }\n"):
-		parse_text(PREAMBLE + source)
-	for source in (
-			# A run of them is step 5's other half.
+			MEANS + "struct vol { parameter u8 m; note(mode = m) e; }\n",
+			# And as a run of them, step 5's other half (26.815).
 			ENTRY + "struct vol { parameter u16 b [stream]; u8 n; "
-			        "entry(block = b) e[n]; }\n",
-			# Rule 6: a struct that names itself, or reaches itself through
-			# any chain, is measured with a depth, and handing arguments
-			# down that path is the rest of step 5.
-			"struct self { parameter u8 b [stream]; u8 n; "
-			"self(b = b) kid; }\n"):
-		assert "cannot be a member yet" in _refused(PREAMBLE + source)
+			        "entry(block = b) e[n]; }\n"):
+		parse_text(PREAMBLE + source)
+	# Rule 6 is written and not built: a struct that names itself, or
+	# reaches itself through any chain, is measured with a depth, and
+	# handing arguments down that path is the rest of step 5.
+	assert "cannot be a member yet" in _refused(
+		PREAMBLE + "struct self { parameter u8 b [stream]; u8 n; "
+		           "self(b = b) kid; }\n")

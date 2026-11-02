@@ -8087,6 +8087,11 @@ Moved to
 Moved to
 `doc/decision/26.814-a-divided-run-s-count-took-no-argument.md`.
 
+### 26.815 A counted run hands its elements the parent's parameter
+
+Moved to
+`doc/decision/26.815-a-counted-run-hands-its-elements-the-parent-s-parameter.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

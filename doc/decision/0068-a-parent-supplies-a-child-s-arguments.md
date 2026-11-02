@@ -186,12 +186,29 @@ built (26.797, 26.799, 26.801, 26.802, 26.804, 26.809). What is not:
   nested member's length expression renders a call whose tail that
   predicate decides.
 
-- **Step 5 for a RUN of them is not**, and the refusal is narrowed to
-  exactly that. Its `_count`, `_at`, `_span_from` and `_fits` reach the
-  argument through a second set of helpers; `_child_args` has 21 call
-  sites in C's emitter and threading the rest is the remainder of this
-  step. The refusal is what keeps it honest, because an unplumbed path in
-  C is a compile error rather than a wrong byte.
+- **Step 5 for a RUN of them is built too** (26.815). `_count`, `_at`,
+  `_span_from`, `_span` and `_fits` all take the parent's tail now, and
+  the refusal for a run is gone from `check_parameter_nesting`.
+
+  `_count` was the work. It has four branches -- a literal count is a
+  `#define` with no function, `[remaining]` over elements of one size is
+  a division, `[remaining]` over elements of no single size is a walk,
+  and a counted run is an expression over the count field -- and each is
+  a different function, so one predicate cannot answer for all four. The
+  branch that emits the definition now records what to pass and the call
+  site reads that, rather than asking the member a wider question whose
+  answer happens to differ.
+
+  Two things found by the compiler rather than by reading: `check`'s call
+  to a run's `_fits` passed a bare `view` while the line below it passed
+  the argument to `_span`, two adjacent lines of one emitted function
+  disagreeing; and the division branch was broken for a run whose
+  element takes no argument at all, which is 26.814 and is not part of
+  this step.
+
+  `edges.situ` carries three of the four branches (`relays_on_runs`,
+  `relays_on_fixed`, `relays_on_rest`) and 26.814 carries the fourth.
+  The bytes were read back through C and through Python independently.
 
 - **A struct naming itself** is still refused, as is one that can contain
   itself through any chain: a recursive child is measured with a depth,
