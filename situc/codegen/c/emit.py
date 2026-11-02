@@ -9937,7 +9937,8 @@ class Emitter:
 				" * division would answer a very large number. */",
 				f"static inline uint32_t "
 				f"{ident(self.prefix, struct.name, local, 'count')}"
-				f"(situ_view_t view)",
+				f"(situ_view_t view"
+				f"{self._argument_tail_in(struct, base)})",
 				"{",
 				f"\tconst uint32_t base = {base};",
 				"",

@@ -547,6 +547,14 @@ struct relays_on size=6..517 mutate=Shifting address=Unstable repr=ValueConverte
   relays_on.one.carried.flag             offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
   relays_on.after                        offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
+struct relays_on_divided size=0.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  relays_on_divided.block                parameter
+  relays_on_divided.head                 offset=AbsoluteStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  relays_on_divided.rest                 offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  relays_on_divided.rest[]               offset=FrameStatic(0x00) size=Fixed(3) align=Aligned(8) repr=ValueConverted atomic=NonAtomic address=FrameStable
+  relays_on_divided.rest[].seq           offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  relays_on_divided.rest[].flags         offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
+
 struct scoped_text size=22 repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   scoped_text.name                       offset=AbsoluteStatic(0x00) size=Fixed(16) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic canonical=NonCanonical
   scoped_text.raw                        offset=AbsoluteStatic(0x10) size=Fixed(4) align=Aligned(8) repr=MemoryIdentical atomic=NonAtomic

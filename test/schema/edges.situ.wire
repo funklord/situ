@@ -474,6 +474,11 @@ struct relays_on size=6..517
   carried case 2: flag
   carried case default: error
 
+struct relays_on_divided size=0..
+  parameter -         u8         block [stream]
+  @0x0000   0..255    u8         head  sized-by=block
+  ~         0..       beacon     rest  sized-by=remaining
+
 struct scoped_text size=22
   @0x0000   16        u8         name  big nul_terminated encoding=utf8
   @0x0010   4         u8         raw  big encoding=ascii

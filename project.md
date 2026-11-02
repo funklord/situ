@@ -8082,6 +8082,11 @@ Moved to
 Moved to
 `doc/decision/26.813-an-extent-that-is-all-argument-left-view-unused.md`.
 
+### 26.814 A divided run's `_count` took no argument
+
+Moved to
+`doc/decision/26.814-a-divided-run-s-count-took-no-argument.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

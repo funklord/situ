@@ -2091,6 +2091,19 @@ struct relays_on {
 	u8            after;
 }
 
+// A `[remaining]` run of FIXED elements after a member the argument
+// sizes. The count is a division rather than a walk -- `beacon` is three
+// bytes, so it is `(limit - base) / 3` -- and this is the one of
+// `_count`'s four branches where the ELEMENT takes no argument at all.
+// Nothing else in the tree reaches it: the branch wrote a signature
+// saying `(situ_view_t view)` over a body whose `base` is `arg_block`,
+// because `head` is sized by the argument (26.814).
+struct relays_on_divided {
+	parameter u8  block [stream];
+	u8            head[block];
+	beacon        rest[remaining];
+}
+
 // And through a variant arm (0068 step 4): a single member and a counted
 // run, each measured with the argument where the arm is chosen, and a
 // member after the variant to be placed by it.
