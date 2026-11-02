@@ -2535,7 +2535,13 @@ def offset_unresolvable(structs: dict[str, ResolvedStruct],
 		# asked `is_counted_run` and was missed: the driver called a
 		# setter for the member after such a variant that no backend
 		# emits (26.785).
+		# ...but not the variant that HOLDS this member. Its arms' walks
+		# decide where the member after the variant sits, not where one
+		# inside an arm does: `hands_on_arms.body.one.trailer` was called
+		# unplaceable because a SIBLING arm is a counted run, while all four
+		# backends place it through `one`'s own view (26.810).
 		if other.kind == "variant" \
+				and not placement.path.startswith(other.path + ".") \
 				and any(member is not None
 				        and is_unmeasured_run(structs, member)
 				        for _arm, member in arm_members(struct, other)):

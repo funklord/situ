@@ -8032,6 +8032,10 @@ Moved to `doc/decision/26.808-a-dissector-extent-spans-no-parameter.md`.
 
 Moved to `doc/decision/26.809-0068-step-6-the-dissector-hands-a-run-its-arguments.md`.
 
+### 26.810 An arm's interior is not behind its own variant
+
+Moved to `doc/decision/26.810-an-arm-s-interior-is-not-behind-its-variant.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
