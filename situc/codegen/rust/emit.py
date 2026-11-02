@@ -5269,7 +5269,7 @@ class Emitter:
 			"\t\tlet mut n  = 0usize;",
 			"",
 			f"\t\twhile at < self.bytes.len(){cap} {{",
-			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 			f"\t\t\tlet size = {step};",
 			"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
 			"\t\t\t\tbreak;",
@@ -5301,7 +5301,7 @@ class Emitter:
 			f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
 			*walk,
 			"\t\t\tif n == index {",
-			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size] }});",
+			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }});",
 			"\t\t\t}",
 			*tail,
 			"\t\tErr(Error::Bounds)",
@@ -5384,7 +5384,7 @@ class Emitter:
 			f"\t\t\tif &self.bytes[at..at + {len(delim)}] == {bytes_} {{",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 			("\t\t\tlet size = element.extent();" if depth is None else
 			 f"\t\t\tlet size = element.extent_at({depth} + 1);"),
 			"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
@@ -5415,7 +5415,7 @@ class Emitter:
 			f"\tpub fn {_ident(base)}(&self, index: usize) -> Result<{inner}<'_>> {{",
 			*walk,
 			"\t\t\tif n == index {",
-			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size] }});",
+			f"\t\t\t\treturn Ok({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }});",
 			"\t\t\t}",
 			"\t\t\tat += size;",
 			"\t\t\tn  += 1;",
@@ -6232,7 +6232,7 @@ class Emitter:
 			"\t\t\tif have < pos {",
 			"\t\t\t\treturn situ_rt::Framing::Need(at);",
 			"\t\t\t}",
-			f"\t\t\tlet part = match {inner}::required(&data[pos..]) {{",
+			f"\t\t\tlet part = match {inner}::required(&data[pos..]{self._child_args(struct, placement, 'probe')}) {{",
 			"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 			"\t\t\t\tsitu_rt::Framing::Need(n) =>",
 			"\t\t\t\t\treturn situ_rt::Framing::Need("
@@ -6260,7 +6260,8 @@ class Emitter:
 				# is generated code that fails for the user. Same test as
 				# the `probe` above, for the same reason.
 				*([f"\t\t\tlet element = {inner} {{"
-				   " bytes: &data[pos..pos + part] };"]
+				   " bytes: &data[pos..pos + part]"
+				   f"{self._child_fields(struct, placement, 'probe')} }};"]
 				  if "element." in cond else []),
 				"\t\t\tat  = situ_rt::need(at, part);",
 				"\t\t\tpos = situ_rt::need(pos, part);",
@@ -6295,7 +6296,7 @@ class Emitter:
 				"\t\t\tif have < pos {",
 				"\t\t\t\treturn situ_rt::Framing::Need(at);",
 				"\t\t\t}",
-				f"\t\t\tlet part = match {inner}::required(&data[pos..]) {{",
+				f"\t\t\tlet part = match {inner}::required(&data[pos..]{self._child_args(struct, placement, 'probe')}) {{",
 				"\t\t\t\tsitu_rt::Framing::Complete(n) => n,",
 				"\t\t\t\tsitu_rt::Framing::Need(n) => {",
 				"\t\t\t\t\t// The element is short, so its own lower bound"
@@ -7203,7 +7204,9 @@ class Emitter:
 		if base is None:
 			base = self._offset_expression(struct, placement)
 		if (element is None or base is None
-				or arguments(element)
+				# An element taking arguments is validated with the ones
+				# the run hands it (0068).
+				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
 				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
@@ -7251,13 +7254,13 @@ class Emitter:
 			# size is a constant and only a condition asks its fields.
 			*([] if element.layout.is_fixed_size
 			  and placement.repeat_while is None else
-			  [f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};"]),
+			  [f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};"]),
 			f"\t\t\tlet size    = {size};",
 			"\t\t\tif size == 0"
 			" || size > situ_rt::remaining(self.bytes.len(), at) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-			f"\t\t\tif let Err(e) = ({inner} {{ bytes: &self.bytes[at..at + size] }})"
+			f"\t\t\tif let Err(e) = ({inner} {{ bytes: &self.bytes[at..at + size]{self._child_fields(struct, placement)} }})"
 			".validate() {",
 			"\t\t\t\treturn Err(e);",
 			"\t\t\t}",
@@ -8329,7 +8332,7 @@ class Emitter:
 			   "\t\tlet mut n  = 0usize;",
 			   "",
 			   "\t\twhile at < self.bytes.len() {",
-			   f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+			   f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 			   "\t\t\tlet size    = element.extent();",
 			   "",
 			   "\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
@@ -8383,7 +8386,7 @@ class Emitter:
 				"\t\tlet mut n  = 0usize;",
 				"",
 				"\t\twhile at < self.bytes.len() {",
-				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 				"\t\t\tlet size    = element.extent();",
 				"",
 				"\t\t\tif size == 0 || size > situ_rt::remaining(self.bytes.len(), at) {",
@@ -8392,7 +8395,8 @@ class Emitter:
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"\t\t\tif n == index {",
-				f"\t\t\t\treturn {inner}::new(&self.bytes[at..at + size]);",
+				f"\t\t\t\treturn {inner}::new(&self.bytes[at..at + size]"
+				f"{self._child_args(struct, placement)});",
 				"\t\t\t}",
 				"\t\t\tat += size;",
 				"\t\t\tn  += 1;",
@@ -8425,7 +8429,7 @@ class Emitter:
 				*([] if not bound else ["\t\tlet mut n  = 0usize;"]),
 				"",
 				f"\t\twhile {bound}at < self.bytes.len() {{",
-				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..] }};",
+				f"\t\t\tlet element = {inner} {{ bytes: &self.bytes[at..]{self._child_fields(struct, placement)} }};",
 				("\t\t\tlet size    = element.extent();"
 				 if not is_recursive(self.resolved.structs,
 				                     placement.type_name or "") else
@@ -8480,7 +8484,8 @@ class Emitter:
 					   "\t\t\t\treturn false;",
 					   "\t\t\t}"]),
 					f"\t\t\tlet element = {inner} {{"
-					" bytes: &self.bytes[at..] };",
+					" bytes: &self.bytes[at..]"
+					f"{self._child_fields(struct, placement)} }};",
 					("\t\t\tlet size    = element.extent();"
 					 if not is_recursive(self.resolved.structs,
 					                     placement.type_name or "") else

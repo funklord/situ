@@ -1896,7 +1896,8 @@ def _elements_validate(view: View, index: int,
 		if floor != NONE and size * BITS_PER_BYTE < floor:
 			return ERR_BOUNDS
 		verdict = _validate(image, View(image, view.buffer, element,
-		                                at, at + size), element)
+		                                at, at + size,
+		                                child_args(view, index)), element)
 		if verdict is None or verdict:
 			return verdict
 	return OK
@@ -1991,16 +1992,19 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 	if not runs:
 		return None
 	shape = image.structs[element]
-	if any(image.placements[one].parameter for one in
-	       range(shape.first_placement,
-	             shape.first_placement + shape.placement_count)):
+	# An element taking parameters is walked with the arguments the run
+	# hands it (0068), and only then.
+	if index not in image.arguments and any(
+			image.placements[one].parameter for one in
+			range(shape.first_placement,
+			      shape.first_placement + shape.placement_count)):
 		return None
 
 	def measure(at: int) -> int:
 		if shape.fixed:
 			return shape.size_bits // BITS_PER_BYTE
 		return struct_extent(View(image, view.buffer, element, at,
-		                          view.limit), 1)
+		                          view.limit, child_args(view, index)), 1)
 
 	try:
 		first = view.at + (offset_bits(view, index) if start_bits is None
@@ -2018,7 +2022,8 @@ def _run_elements(view: View, index: int, start_bits: int | None = None
 					break
 				found.append((at, size))
 				at += size
-				sub = View(image, view.buffer, element, at - size, view.limit)
+				sub = View(image, view.buffer, element, at - size, view.limit,
+				           child_args(view, index))
 				if not _evaluate(sub, placement.repeat_code, size):
 					break
 		elif index in image.delimiters:

@@ -5882,7 +5882,8 @@ class Emitter:
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
 				f"\t\te = {required}(data + pos,"
-				" situ_remaining_u32(have, pos), &part);",
+				" situ_remaining_u32(have, pos),"
+				f" &part{self._child_args(struct, placement)});",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
@@ -5937,7 +5938,8 @@ class Emitter:
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
 				f"\t\te = {required}(data + pos,"
-				" situ_remaining_u32(have, pos), &part);",
+				" situ_remaining_u32(have, pos),"
+				f" &part{self._child_args(struct, placement)});",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t/* The element is short, so its own lower bound is"
 				" part of",
@@ -6002,7 +6004,8 @@ class Emitter:
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
 				"\t\t}",
 				f"\t\te = {required}(data + pos,"
-				" situ_remaining_u32(have, pos), &part);",
+				" situ_remaining_u32(have, pos),"
+				f" &part{self._child_args(struct, placement)});",
 				"\t\tif (e != SITU_OK) {",
 				"\t\t\t*need = situ_need_u32(at, part);",
 				"\t\t\treturn SITU_ERR_TRUNCATED;",
@@ -6234,7 +6237,8 @@ class Emitter:
 		# is quadratic again, which is the whole thing it exists to avoid.
 		element = self.resolved.structs.get(placement.type_name or "")
 		extent  = (None if element is None
-		           else self._element_extent_call(element))
+		           else self._element_extent_call(
+		                   element, self._child_args(struct, placement)))
 		if element is None or extent is None:
 			return []
 
@@ -6361,7 +6365,8 @@ class Emitter:
 		if element is None:
 			return []
 
-		extent = self._element_extent_call(element)
+		extent = self._element_extent_call(
+			element, self._child_args(struct, placement))
 		if extent is None:
 			return [
 				f"/* No accessors for `{placement.name}`: one"
@@ -6491,7 +6496,8 @@ class Emitter:
 		name = ident(self.prefix, struct.name, local, "fits")
 		size = (f"{ident(self.prefix, nested or '', 'extent')}_at"
 		        "(element, depth + 1u)" if deep else
-		        f"{ident(self.prefix, nested or '', 'extent')}(element)")
+		        f"{ident(self.prefix, nested or '', 'extent')}"
+		        f"(element{self._child_args(struct, placement)})")
 		body = [
 			"",
 			f"/* Whether every one of `{placement.path}`'s declared elements"
@@ -6588,13 +6594,19 @@ class Emitter:
 			"}",
 		]
 
-	def _element_extent_call(self, element: ResolvedStruct) -> str | None:
-		"""How one element's length is read, as an expression over `element`."""
+	def _element_extent_call(self, element: ResolvedStruct,
+			args: str = "") -> str | None:
+		"""How one element's length is read, as an expression over `element`.
+
+		`args` is what the run hands each element (0068), from `_child_args`
+		-- one value for every element, rendered over the parent's `view`,
+		which every run walk holds beside `element`.
+		"""
 		if element.layout.is_fixed_size:
 			return f"{macro(self.prefix, element.name, 'SIZE_FIXED')}"
 		if not self._struct_extent(element):
 			return None
-		return f"{ident(self.prefix, element.name, 'extent')}(element)"
+		return f"{ident(self.prefix, element.name, 'extent')}(element{args})"
 
 	def _element_condition(self, element: ResolvedStruct,
 			placement: Placement) -> str:
@@ -6819,7 +6831,8 @@ class Emitter:
 		bytes_ = ", ".join(f"0x{byte:02X}u" for byte in delim)
 		base   = self._base_expression(struct, placement, gated=False)
 		extent = (macro(self.prefix, element.name, "SIZE_FIXED") if fixed
-		          else f"{ident(self.prefix, element.name, 'extent')}(element)")
+		          else f"{ident(self.prefix, element.name, 'extent')}"
+		               f"(element{self._child_args(struct, placement)})")
 
 		sym   = ident(self.prefix, struct.name, local, "delim")
 		count = ident(self.prefix, struct.name, local, "count")
@@ -9831,7 +9844,8 @@ class Emitter:
 			" != SITU_OK) {",
 			"\t\t\tbreak;",
 			"\t\t}",
-			f"\t\tsize = {ident(self.prefix, nested, 'extent')}(element);",
+			f"\t\tsize = {ident(self.prefix, nested, 'extent')}"
+			f"(element{self._child_args(struct, placement)});",
 			"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 			"\t\t\tbreak;",
 			"\t\t}",
@@ -10002,7 +10016,8 @@ class Emitter:
 				" != SITU_OK) {",
 				"\t\t\tbreak;",
 				"\t\t}",
-				f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}(element);",
+				f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}"
+				f"(element{self._child_args(struct, placement)});",
 				"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
 				"\t\t\t/* A zero-extent element would walk here forever, and"
 				" one",
@@ -10053,7 +10068,8 @@ class Emitter:
 				"\t\t\tbreak;",
 				"\t\t}",
 				(f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}"
-				 "(element);" if not self._recursive(nested or "") else
+				 f"(element{self._child_args(struct, placement)});"
+				 if not self._recursive(nested or "") else
 				 f"\t\tsize = {ident(self.prefix, nested or '', 'extent')}"
 				 "_at(element, depth + 1u);"),
 				"\t\tif (size == 0u || size > situ_remaining_u32(view.limit, at)) {",
@@ -13202,14 +13218,17 @@ class Emitter:
 		check   = ident(self.prefix, nested, "check")
 		if element is None:
 			return []
-		if self._arguments(element) \
+		# An element taking arguments is validated with the ones the run
+		# hands it (0068); one with none to hand is not walked yet.
+		args = self._child_args(struct, placement)
+		if (self._arguments(element) and not args) \
 				or not self._element_refuses(element):
 			return [
 				f"\t/* {placement.path} is a run of `{nested}`. Its elements are",
 				"\t * not validated here: one has nothing to refuse, names",
 				"\t * itself, or takes arguments (26.789). */",
 			]
-		extent = self._element_extent_call(element)
+		extent = self._element_extent_call(element, args)
 		if extent is None:
 			return []
 		if base is None:
@@ -13267,7 +13286,7 @@ class Emitter:
 			"\t\t\tsitu_err_t  err = situ_view_sub(view, at, size, &one);",
 			"",
 			"\t\t\tif (err == SITU_OK) {",
-			f"\t\t\t\terr = {check}(one, NULL);",
+			f"\t\t\t\terr = {check}(one, NULL{args});",
 			"\t\t\t}",
 			"\t\t\tif (err != SITU_OK) {",
 			"\t\t\t\treturn err;",

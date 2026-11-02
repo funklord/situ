@@ -48,6 +48,9 @@
 #define MESSAGE_READS   17u
 #define INDEX_READS     13u	/* `<IIIB`: placement, bits, code, base */
 #define ARGUMENT_READS  12u	/* `<III`: placement, parameter, code */
+/* How many arguments a parent may hand one child (0068), which sizes the
+ * array a descent keeps them in. A child taking more is UNSUPPORTED. */
+#define SITU_WALK_ARGUMENTS_MAX 8u
 #define TLV_READS       15u	/* to the tag's decode parameters */
 #define TLV_RULE_READS  23u	/* to the length's, likewise */
 #define TLV_RULE_COMPUTED_READS 28u	/* to a computed size's program */
@@ -1324,6 +1327,12 @@ static situ_walk_err struct_extent(const situ_walk_image *image,
                                    uint32_t shape, uint32_t depth,
                                    uint32_t *out);
 
+static situ_walk_err child_binding(const situ_walk_image *image,
+                                   const uint8_t *message, uint32_t len,
+                                   uint32_t shape, uint32_t index,
+                                   uint32_t depth, uint32_t child,
+                                   int64_t *values, situ_walk_image *out);
+
 /* A field of a struct nested `base` bytes into this frame.
  *
  * `read_deep` resolves a placement's offset within its own struct, which is
@@ -1897,6 +1906,15 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 	                || held.type_struct == SITU_WALK_NONE) {
 		return SITU_WALK_UNSUPPORTED;	/* not a `while` run */
 	}
+	/* What the run hands each element (0068): one binding, the same
+	 * values for every element. */
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image elements;
+	err = child_binding(image, message, len, shape, index, depth,
+	                    held.type_struct, handed, &elements);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
 	/* The ELEMENT's ceiling, because that is what the walk descends into --
 	 * a `while` run of a recursive struct is bounded by what that struct
 	 * declares, not by what the struct holding the run declares. */
@@ -1924,8 +1942,8 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 
 	while (n < cap && at < len) {
 		uint32_t extent = 0u;
-		err = struct_extent(image, message + at, len - at, held.type_struct,
-		                    depth + 1u, &extent);
+		err = struct_extent(&elements, message + at, len - at,
+		                    held.type_struct, depth + 1u, &extent);
 		/* Two different things wear one error here, and folding them
 		 * together is how a walk answers a wrong length confidently. "This
 		 * build cannot measure that element" is a limit of the walker and
@@ -2027,6 +2045,15 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 	if (held.type_struct == SITU_WALK_NONE || rules == NULL) {
 		return SITU_WALK_UNSUPPORTED;	/* not a run of records */
 	}
+	/* What the run hands each element (0068): one binding, the same
+	 * values for every element. */
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image elements;
+	err = child_binding(image, message, len, shape, index, depth,
+	                    held.type_struct, handed, &elements);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
 	if (depth > depth_ceiling(image, held.type_struct)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
@@ -2066,8 +2093,8 @@ static situ_walk_err record_run_walk(const situ_walk_image *image,
 		if (terminator_at(image, rules, alts, message, len, at) != 0u) {
 			break;
 		}
-		err = struct_extent(image, message + at, len - at, held.type_struct,
-		                    depth + 1u, &extent);
+		err = struct_extent(&elements, message + at, len - at,
+		                    held.type_struct, depth + 1u, &extent);
 		/* `while_walk`'s two errors, for its reasons: this build being
 		 * unable to measure the record travels, and anything else is the
 		 * data running out. */
@@ -2106,7 +2133,18 @@ situ_walk_err situ_walk_size_bits(const situ_walk_image *image,
  *
  * `values` is the caller's, sized `SITU_WALK_ARGUMENTS_MAX`; a child taking
  * more is UNSUPPORTED rather than truncated. */
-#define SITU_WALK_ARGUMENTS_MAX 8u
+
+/* Whether a parent hands the member at `index` any arguments (0068). An
+ * element that takes parameters is validatable only where it does. */
+static int argument_rows(const situ_walk_image *image, uint32_t index)
+{
+	for (uint32_t i = 0u; i < image->argument_count; i++) {
+		if (u32_at(image->arguments + i * image->argument_stride) == index) {
+			return 1;
+		}
+	}
+	return 0;
+}
 
 static situ_walk_err child_binding(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
@@ -2578,9 +2616,16 @@ static situ_walk_err content_bits_deep(const situ_walk_image *image,
 			}
 			at = from;
 
+			int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+			situ_walk_image elements;
+			err = child_binding(image, message, len, shape, index, depth,
+			                    held.type_struct, handed, &elements);
+			if (err != SITU_WALK_OK) {
+				return err;
+			}
 			for (i = 0; i < count && at < len; i++) {
 				uint32_t extent = 0u;
-				err = struct_extent(image, message + at, len - at,
+				err = struct_extent(&elements, message + at, len - at,
 				                    held.type_struct, depth + 1u,
 				                    &extent);
 				if (err == SITU_WALK_UNSUPPORTED) {
@@ -4062,11 +4107,12 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 }
 
 static situ_walk_err counted_run_walk(const situ_walk_image *image,
+                                      const situ_walk_image *elements,
                                       const uint8_t *message, uint32_t len,
                                       uint32_t shape, uint32_t depth,
                                       const situ_walk_placement *run,
                                       uint32_t from, int *fits);
-static situ_walk_err remaining_run_walk(const situ_walk_image *image,
+static situ_walk_err remaining_run_walk(const situ_walk_image *elements,
                                         const uint8_t *message, uint32_t len,
                                         uint32_t depth,
                                         const situ_walk_placement *held,
@@ -4233,11 +4279,11 @@ static situ_walk_err arm_validates(const situ_walk_image *image,
 		 * record is the whole frame, and refused a message every backend
 		 * accepts. It walks to the frame's end instead (26.783). */
 		if (size_code_is_bytes(image, arm.size_code)) {
-			err = remaining_run_walk(image, message, len, depth, &arm,
-			                         at / 8u, &fits);
+			err = remaining_run_walk(image, message, len, depth,
+			                         &arm, at / 8u, &fits);
 		} else {
-			err = counted_run_walk(image, message, len, shape, depth,
-			                       &arm, at / 8u, &fits);
+			err = counted_run_walk(image, image, message, len, shape,
+			                       depth, &arm, at / 8u, &fits);
 		}
 		if (err == SITU_WALK_UNSUPPORTED) {
 			return err;
@@ -4418,13 +4464,21 @@ static situ_walk_err remaining_run_fits(const situ_walk_image *image,
 	if (err != SITU_WALK_OK) {
 		return err;
 	}
-	return remaining_run_walk(image, message, len, depth, held, at / 8u,
-	                          fits);
+
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image elements;
+	err = child_binding(image, message, len, shape, index, depth,
+	                    held->type_struct, handed, &elements);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	return remaining_run_walk(&elements, message, len, depth, held,
+	                          at / 8u, fits);
 }
 
 /* `remaining_run_fits`' walk, from a start the caller has: a run in a
  * variant arm starts where its variant does (26.783). */
-static situ_walk_err remaining_run_walk(const situ_walk_image *image,
+static situ_walk_err remaining_run_walk(const situ_walk_image *elements,
                                         const uint8_t *message, uint32_t len,
                                         uint32_t depth,
                                         const situ_walk_placement *held,
@@ -4444,7 +4498,7 @@ static situ_walk_err remaining_run_walk(const situ_walk_image *image,
 	while (at < len) {
 		uint32_t extent = 0u;
 
-		err = struct_extent(image, message + at, len - at,
+		err = struct_extent(elements, message + at, len - at,
 		                    held->type_struct, depth + 1u, &extent);
 		if (err == SITU_WALK_UNSUPPORTED) {
 			return SITU_WALK_OK;
@@ -4539,14 +4593,22 @@ static situ_walk_err counted_run_fits(const situ_walk_image *image,
 		}
 		return SITU_WALK_OK;
 	}
-	return counted_run_walk(image, message, len, shape, depth, &held,
-	                        from / 8u, fits);
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image elements;
+	err = child_binding(image, message, len, shape, index, depth,
+	                    held.type_struct, handed, &elements);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	return counted_run_walk(image, &elements, message, len, shape, depth,
+	                        &held, from / 8u, fits);
 }
 
 /* `counted_run_fits`' walk, from a start the caller has: a run in a variant
  * arm starts where its variant does, and an arm is not in the member chain
  * an offset is asked of (26.689). */
 static situ_walk_err counted_run_walk(const situ_walk_image *image,
+                                      const situ_walk_image *elements,
                                       const uint8_t *message, uint32_t len,
                                       uint32_t shape, uint32_t depth,
                                       const situ_walk_placement *run,
@@ -4579,7 +4641,7 @@ static situ_walk_err counted_run_walk(const situ_walk_image *image,
 			*fits = 0;
 			return SITU_WALK_OK;
 		}
-		err = struct_extent(image, message + at, len - at,
+		err = struct_extent(elements, message + at, len - at,
 		                    run->type_struct, depth + 1u, &extent);
 		if (err == SITU_WALK_UNSUPPORTED) {
 			/* This build cannot measure the element, which is what the
@@ -4659,8 +4721,17 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 	    || (held.repeat_code == SITU_WALK_NONE && rules == NULL
 	        && held.size_code == SITU_WALK_NONE
 	        && held.array_count == SITU_WALK_NONE)
-	    || !element_validatable(image, held.type_struct)) {
+	    || (!element_validatable(image, held.type_struct)
+	        && !argument_rows(image, index))) {
 		return SITU_WALK_OK;
+	}
+	/* What the run hands each element (0068). */
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image elements;
+	err = child_binding(image, message, len, shape, index, depth,
+	                    held.type_struct, handed, &elements);
+	if (err != SITU_WALK_OK) {
+		return err;
 	}
 	/* An arm is a member of its variant, not of this struct's chain: the
 	 * arm's own path asks with the variant's start, `from` (26.790). */
@@ -4745,7 +4816,7 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 		if (fixed != SITU_WALK_NONE) {
 			extent = fixed / 8u;
 		} else {
-			err = struct_extent(image, message + at, len - at,
+			err = struct_extent(&elements, message + at, len - at,
 			                    held.type_struct, depth + 1u, &extent);
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
@@ -4771,8 +4842,9 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
-		err = validate_deep(image, message + at, extent, held.type_struct,
-		                    depth + 1u, &inner_verdict, NULL);
+		err = validate_deep(&elements, message + at, extent,
+		                    held.type_struct, depth + 1u, &inner_verdict,
+		                    NULL);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}

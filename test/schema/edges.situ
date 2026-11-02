@@ -2038,6 +2038,17 @@ struct hands_on {
 	u8 after;
 }
 
+// The same handed to every element of a run (0068 step 3): once counted,
+// once to the end of the frame. Each element is measured with the
+// argument, so a backend that forgot it on one walk places every element
+// after the first at the wrong byte.
+struct hands_on_runs {
+	u8 block [max = 16];
+	u8 n [max = 4];
+	negotiated(block = block) counted[n];
+	negotiated(block = 1) rest[remaining];
+}
+
 // A region name a struct SHARES with the type of one of its members, which
 // is the shape every "which region does this name mean" lookup has been
 // wrong about. `tag_covers`, `regions` and `covered_by` all hold BARE

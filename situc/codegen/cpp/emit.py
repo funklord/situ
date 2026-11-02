@@ -2391,7 +2391,7 @@ class Emitter:
 			"\t\tif (e != SITU_OK) {",
 			"\t\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t\t}",
-			f"\t\tout = ::{self.namespace}::{inner}(raw);",
+			f"\t\tout = ::{self.namespace}::{inner}(raw{self._child_args(struct, placement)});",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		]
@@ -2434,7 +2434,7 @@ class Emitter:
 			" != SITU_OK) {",
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
-			f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
+			f"\t\t\tconst ::{self.namespace}::{inner} element(raw{self._child_args(struct, placement)});",
 			f"\t\t\tconst std::uint32_t size = {step};",
 			"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)) {",
 			"\t\t\t\tbreak;",
@@ -2474,7 +2474,7 @@ class Emitter:
 			" size, &found);",
 			"",
 			"\t\t\t\tif (e == SITU_OK) {",
-			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found);",
+			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found{self._child_args(struct, placement)});",
 			"\t\t\t\t}",
 			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t\t\t}",
@@ -2637,7 +2637,7 @@ class Emitter:
 			"\t\t\t\tbreak;",
 			"\t\t\t}",
 			(f"\t\t\tconst std::uint32_t size = "
-			 f"::{self.namespace}::{inner}(raw).extent();"
+			 f"::{self.namespace}::{inner}(raw{self._child_args(struct, placement)}).extent();"
 			 if depth is None else
 			 f"\t\t\tconst std::uint32_t size = "
 			 f"::{self.namespace}::{inner}(raw).extent_at({depth} + 1);"),
@@ -2675,7 +2675,7 @@ class Emitter:
 			" &found);",
 			"",
 			"\t\t\t\tif (e == SITU_OK) {",
-			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found);",
+			f"\t\t\t\t\tout = ::{self.namespace}::{inner}(found{self._child_args(struct, placement)});",
 			"\t\t\t\t}",
 			"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t\t\t}",
@@ -3289,7 +3289,7 @@ class Emitter:
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
 			"\t\t\t}",
 			call + "situ_base(raw_) + pos,",
-			"\t\t\t\tsitu_remaining_u32(have, pos), part);",
+			f"\t\t\t\tsitu_remaining_u32(have, pos){self._child_args(struct, placement)}, part);",
 			"\t\t\tif (e != ::situ::rt::err::ok) {",
 			"\t\t\t\tneed = situ_need_u32(at, part);",
 			"\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -3321,7 +3321,7 @@ class Emitter:
 				" != SITU_OK) {",
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
-				f"\t\t\tconst ::{self.namespace}::{inner} element(raw);",
+				f"\t\t\tconst ::{self.namespace}::{inner} element(raw{self._child_args(struct, placement)});",
 				"\t\t\tat  = situ_need_u32(at, part);",
 				"\t\t\tpos = situ_need_u32(pos, part);",
 				"",
@@ -3358,7 +3358,7 @@ class Emitter:
 				"\t\t\t\treturn ::situ::rt::err::truncated;",
 				"\t\t\t}",
 				call + "situ_base(raw_) + pos,",
-				"\t\t\t\tsitu_remaining_u32(have, pos), part);",
+				f"\t\t\t\tsitu_remaining_u32(have, pos){self._child_args(struct, placement)}, part);",
 				"\t\t\tif (e != ::situ::rt::err::ok) {",
 				"\t\t\t\t/* The element is short, so its own lower bound is"
 				" part",
@@ -4963,7 +4963,7 @@ class Emitter:
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
-				f"\t\t\tconst {inner} element(raw);",
+				f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
 				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
@@ -5045,7 +5045,7 @@ class Emitter:
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
-				f"\t\t\tconst {inner} element(raw);",
+				f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 				"\t\t\tconst std::uint32_t size = element.extent();",
 				"",
 				"\t\t\tif (size == 0 || size > situ_remaining_u32(raw_.limit, at)) {",
@@ -5059,7 +5059,7 @@ class Emitter:
 				"\t\t\t\t\tsitu_view_sub(::situ::rt::view::raw(), at, size, &narrowed);",
 				"",
 				"\t\t\t\tif (e == SITU_OK) {",
-				f"\t\t\t\t\tout = {inner}(narrowed);",
+				f"\t\t\t\t\tout = {inner}(narrowed{self._child_args(struct, placement)});",
 				"\t\t\t\t}",
 				"\t\t\t\treturn static_cast<::situ::rt::err>(e);",
 				"\t\t\t}",
@@ -5091,7 +5091,7 @@ class Emitter:
 				"\t\t\t\tbreak;",
 				"\t\t\t}",
 				"",
-				f"\t\t\tconst {inner} element(raw);",
+				f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 				("\t\t\tconst std::uint32_t size = element.extent();"
 				 if not is_recursive(self.resolved.structs, placement.type_name or "")
 				 else "\t\t\tconst std::uint32_t size ="
@@ -5155,7 +5155,7 @@ class Emitter:
 					" != SITU_OK) {",
 					"\t\t\t\treturn false;",
 					"\t\t\t}",
-					f"\t\t\tconst {inner} element(raw);",
+					f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 					("\t\t\tconst std::uint32_t size = element.extent();"
 					 if not is_recursive(self.resolved.structs,
 					                     placement.type_name or "") else
@@ -5232,7 +5232,7 @@ class Emitter:
 			f"\t\t\t{inner}::size_bytes, &raw);",
 			"",
 			"\t\tif (e == SITU_OK) {",
-			f"\t\t\tout = {inner}(raw);",
+			f"\t\t\tout = {inner}(raw{self._child_args(struct, placement)});",
 			"\t\t}",
 			"\t\treturn static_cast<::situ::rt::err>(e);",
 			"\t}",
@@ -9222,7 +9222,7 @@ class Emitter:
 			" &raw) != SITU_OK) {",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tout = ::{self.namespace}::{inner}(raw);",
+			f"\t\tout = ::{self.namespace}::{inner}(raw{self._child_args(struct, placement)});",
 			"\t\treturn ::situ::rt::err::ok;",
 			"\t}",
 		]
@@ -10417,7 +10417,9 @@ class Emitter:
 		if base is None:
 			base = self._offset_expression(struct, placement)
 		if (element is None or base is None
-				or arguments(element)
+				# An element taking arguments is validated with the ones
+				# the run hands it (0068).
+				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
 				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
@@ -10468,7 +10470,7 @@ class Emitter:
 			" situ_remaining_u32(raw_.limit, at), &raw) != SITU_OK) {",
 			"\t\t\t\t\tbreak;",
 			"\t\t\t\t}",
-			f"\t\t\t\tconst {inner} element(raw);",
+			f"\t\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 			(f"\t\t\t\tconst std::uint32_t size = {inner}::size_bytes;"
 			 if element.layout.is_fixed_size else
 			 "\t\t\t\tconst std::uint32_t size = element.extent();"),
@@ -10481,7 +10483,8 @@ class Emitter:
 			" &one) != SITU_OK) {",
 			"\t\t\t\t\tbreak;",
 			"\t\t\t\t}",
-			f"\t\t\t\tif (const ::situ::rt::err e = {inner}(one).validate();"
+			f"\t\t\t\tif (const ::situ::rt::err e = {inner}(one"
+			f"{self._child_args(struct, placement)}).validate();"
 			" e != ::situ::rt::err::ok) {",
 			"\t\t\t\t\treturn e;",
 			"\t\t\t\t}",

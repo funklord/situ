@@ -1396,6 +1396,36 @@ class Emitter:
 			"\t\treturn view",
 		]
 
+	def _maker(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""How a RUN builds each element with the arguments it hands it.
+
+		One method per argued run (0068), because a run's walk constructs its
+		elements in a dozen places and each would otherwise spell the
+		arguments again. Every element gets the same values, rendered over
+		the parent's `self`. A single nested member builds its child through
+		`_child` directly and needs none.
+		"""
+		if not placement.arguments \
+				or nests_one_struct(self.resolved.structs, placement):
+			return []
+		make, args = self._child(struct, placement)
+		name = py_name(local_name(struct, placement))
+		return [
+			"",
+			f"\tdef _make_{name}(self, msg: Message, offset: int,"
+			f" length: int) -> \"{py_name(placement.type_name or '')}\":",
+			f'\t\t"""One element of {placement.path}, with its arguments."""',
+			f"\t\treturn {make}(msg, offset, length{args})",
+		]
+
+	def _made(self, struct: ResolvedStruct, placement: Placement,
+			inner: str) -> str:
+		"""What builds one element of this run: its class, or `_maker`'s."""
+		if not placement.arguments:
+			return inner
+		return f"self._make_{py_name(local_name(struct, placement))}"
+
 	def _child(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "self") -> tuple[str, str]:
 		"""What builds this member's view, and the arguments it takes.
@@ -3789,7 +3819,8 @@ class Emitter:
 		and said nothing for a delimited or variable member, which is the
 		commonest case there is (26.35).
 		"""
-		lines  = self._member(struct, entry)
+		lines  = [*self._maker(struct, entry.placement),
+		          *self._member(struct, entry)]
 		mutate = entry.vector.get(Axis.MUTATE)
 
 		if not lines or mutate.base in ("InPlaceFixed", "InPlaceSlack"):
@@ -4860,7 +4891,7 @@ class Emitter:
 			  ]),
 			f"\t\tif not 0 <= index < self.{name}_count:",
 			f"\t\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
-			*([f"\t\treturn {inner}(self._msg,",
+			*([f"\t\treturn {self._made(struct, placement, inner)}(self._msg,",
 			   f"\t\t\tself._at + self.{name}_offset"
 			   f" + index * {inner}.SIZE_BYTES,",
 			   f"\t\t\t{inner}.SIZE_BYTES)"]
@@ -4871,7 +4902,7 @@ class Emitter:
 				"\t\tn  = 0",
 				"",
 				"\t\twhile at < self._len:",
-				f"\t\t\t_element = {inner}(self._msg, self._at + at,",
+				f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg, self._at + at,",
 				"\t\t\t\tself._len - at)",
 				"\t\t\tsize    = _element._extent",
 				"\t\t\tif size == 0 or size > self._len - at:",
@@ -4879,7 +4910,7 @@ class Emitter:
 				"\t\t\t\t# and one past the limit was never in this frame.",
 				"\t\t\t\tbreak",
 				"\t\t\tif n == index:",
-				f"\t\t\t\treturn {inner}(self._msg, self._at + at, size)",
+				f"\t\t\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + at, size)",
 				"\t\t\tat += size",
 				"\t\t\tn  += 1",
 				f"\t\traise IndexError(f\"{placement.path}[{{index}}]\")",
@@ -4960,7 +4991,7 @@ class Emitter:
 			"		n  = 0",
 			"",
 			f"		while {stop}at < self._len:",
-			f"			_element = {inner}(self._msg, self._at + at,"
+			f"			_element = {self._made(struct, placement, inner)}(self._msg, self._at + at,"
 			" self._len - at)",
 			("			size    = _element._extent"
 			 if not is_recursive(self.resolved.structs,
@@ -5011,7 +5042,7 @@ class Emitter:
 				   "		while n < total:",
 				   "			if at >= self._len:",
 				   "				return False"]),
-				f"			_element = {inner}(self._msg, self._at + at,"
+				f"			_element = {self._made(struct, placement, inner)}(self._msg, self._at + at,"
 				" self._len - at)",
 				("			size    = _element._extent"
 				 if not is_recursive(self.resolved.structs,
@@ -5484,7 +5515,7 @@ class Emitter:
 			"\t\tstarts: _situ_list[int] = []",
 			"",
 			f"\t\twhile at < self._len{cap}:",
-			f"\t\t\t_element = {inner}(self._msg, self._at + at, self._len - at)",
+			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg, self._at + at, self._len - at)",
 			f"\t\t\tsize    = {step}",
 			"\t\t\tif size == 0 or size > self._len - at:",
 			"\t\t\t\tbreak",
@@ -5524,7 +5555,7 @@ class Emitter:
 			f"\t\tstarts = self._{name}_walk()",
 			"\t\tif not 0 <= index < len(starts) - 1:",
 			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
-			f"\t\treturn {inner}(self._msg, self._at + starts[index],",
+			f"\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + starts[index],",
 			"\t\t\tstarts[index + 1] - starts[index])",
 			*self._run_index(struct, placement, inner),
 		]
@@ -5556,7 +5587,7 @@ class Emitter:
 			"\t\twhich is the cost of reaching element N by reading the N-1",
 			'\t\tbefore it -- paid once here rather than once per index."""',
 			f"\t\tstarts = self._{name}_walk()",
-			f"\t\treturn [{inner}(self._msg, self._at + starts[i],",
+			f"\t\treturn [{self._made(struct, placement, inner)}(self._msg, self._at + starts[i],",
 			"\t\t\tstarts[i + 1] - starts[i])",
 			"\t\t\tfor i in range(len(starts) - 1)]",
 		]
@@ -5607,7 +5638,7 @@ class Emitter:
 			f"\t\t\tif bytes(self._msg.buffer[self._at + at:"
 			f"self._at + at + {len(delim)}]) == {delim!r}:",
 			"\t\t\t\tbreak",
-			f"\t\t\t_element = {inner}(self._msg, self._at + at, self._len - at)",
+			f"\t\t\t_element = {self._made(struct, placement, inner)}(self._msg, self._at + at, self._len - at)",
 			("\t\t\tsize    = _element._extent" if not deep else
 			 "\t\t\tsize    = _element._extent_at(depth + 1)"),
 			"\t\t\tif size == 0 or size > self._len - at:",
@@ -5660,7 +5691,7 @@ class Emitter:
 			f"\t\tstarts = self._{name}_walk()",
 			"\t\tif not 0 <= index < len(starts) - 1:",
 			f'\t\t\traise IndexError(f"{placement.path}[{{index}}]")',
-			f"\t\treturn {inner}(self._msg, self._at + starts[index],",
+			f"\t\treturn {self._made(struct, placement, inner)}(self._msg, self._at + starts[index],",
 			"\t\t\tstarts[index + 1] - starts[index])",
 		]
 
@@ -6160,7 +6191,7 @@ class Emitter:
 			'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
 				'f"{have} here", at)',
 			"\t\t\ttry:",
-			f"\t\t\t\tpart = {inner}.required(data[pos:])",
+			f"\t\t\t\tpart = {inner}.required(data[pos:]{self._child(struct, placement, 'probe')[1]})",
 			"\t\t\texcept TruncatedError as short:",
 			f'\t\t\t\traise TruncatedError("{placement.path}: incomplete",',
 			"\t\t\t\t\tat + short.needed) from None",
@@ -6209,7 +6240,7 @@ class Emitter:
 				'\t\t\t\traise TruncatedError(f"{at} bytes needed, "'
 					'f"{have} here", at)',
 				"\t\t\ttry:",
-				f"\t\t\t\tpart = {inner}.required(data[pos:])",
+				f"\t\t\t\tpart = {inner}.required(data[pos:]{self._child(struct, placement, 'probe')[1]})",
 				"\t\t\texcept TruncatedError as short:",
 				"\t\t\t\t# The element is short, so its own lower bound is"
 				" part of",
@@ -6908,7 +6939,9 @@ class Emitter:
 		if base is None:
 			base = self._offset_expression(struct, placement)
 		if (element is None or base is None
-				or arguments(element)
+				# An element taking arguments is validated with the ones
+				# the run hands it (0068).
+				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
 				or (placement.delimiters and len(placement.delimiters) != 1)
 				or (not element.layout.is_fixed_size
@@ -6953,12 +6986,12 @@ class Emitter:
 			f"\t\t{n} = 0",
 			*head,
 			*scan,
-			f"\t\t\t{held} = {inner}(self._msg, self._at + {at},"
+			f"\t\t\t{held} = {self._made(struct, placement, inner)}(self._msg, self._at + {at},"
 			f" self._len - {at})",
 			f"\t\t\t_{local}_size = {size}",
 			f"\t\t\tif _{local}_size == 0 or _{local}_size > self._len - {at}:",
 			"\t\t\t\tbreak",
-			f"\t\t\t{held} = {inner}(self._msg, self._at + {at},"
+			f"\t\t\t{held} = {self._made(struct, placement, inner)}(self._msg, self._at + {at},"
 			f" _{local}_size)",
 			f"\t\t\t{held}.validate()",
 			*step,

@@ -451,7 +451,7 @@ def content_bits(view: View, index: int, depth: int = 0) -> int:
 				if at >= view.limit:
 					break
 				inner = View(view.image, view.buffer, placement.type_struct,
-				             at, view.limit)
+				             at, view.limit, child_args(view, index))
 				try:
 					# The depth travels with the descent. Without
 					# it the counter restarts here and bounds
@@ -1974,7 +1974,7 @@ def counted_run_fits(view: View, index: int, depth: int = 0,
 		if at >= view.limit:
 			return False
 		inner = View(view.image, view.buffer, placement.type_struct,
-		             at, view.limit)
+		             at, view.limit, child_args(view, index))
 		try:
 			size = struct_extent(inner, depth + 1)
 		except TooDeep:
@@ -2031,7 +2031,7 @@ def _remaining_run_fits(view: View, index: int, depth: int) -> bool:
 
 	while at < view.limit:
 		inner = View(view.image, view.buffer, placement.type_struct,
-		             at, view.limit)
+		             at, view.limit, child_args(view, index))
 		try:
 			size = struct_extent(inner, depth + 1)
 		except (TooDeep, Unplaceable):
@@ -2125,7 +2125,8 @@ def _record_run_walk(view: View, index: int,
 	while at + room <= view.limit:
 		if any(view.buffer[at:at + len(one)] == one for one in delims):
 			break			# the terminator stands here
-		sub = View(view.image, view.buffer, element, at, view.limit)
+		sub = View(view.image, view.buffer, element, at, view.limit,
+		           child_args(view, index))
 		try:
 			extent = struct_extent(sub, depth + 1)
 		except Unplaceable:
@@ -2231,7 +2232,8 @@ def sized_run_count(view: View, index: int, depth: int = 0) -> int:
 	end   = min(at + reach, view.limit)
 	count = 0
 	while at < end:
-		sub = View(view.image, view.buffer, element, at, end)
+		sub = View(view.image, view.buffer, element, at, end,
+		           child_args(view, index))
 		try:
 			extent = struct_extent(sub, depth + 1)
 		except Unplaceable:
@@ -2270,7 +2272,8 @@ def _while_walk(view: View, index: int,
 
 	start = at
 	while count < cap and at < view.limit:
-		sub = View(view.image, view.buffer, element, at, view.limit)
+		sub = View(view.image, view.buffer, element, at, view.limit,
+		           child_args(view, index))
 		try:
 			# The depth travels with the descent, or the counter restarts
 			# one level down and bounds nothing (26.112).

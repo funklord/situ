@@ -7996,6 +7996,10 @@ Moved to `doc/decision/26.799-0068-step-2-a-nested-member-takes-arguments.md`.
 
 Moved to `doc/decision/26.800-a-cut-nested-member-is-bounds-in-the-walkers.md`.
 
+### 26.801 0068 step 3: a run hands every element its arguments
+
+Moved to `doc/decision/26.801-0068-step-3-a-run-hands-its-elements-arguments.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

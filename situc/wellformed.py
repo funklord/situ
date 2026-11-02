@@ -3485,12 +3485,12 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# the argument and calling it without (26.794).
 			if named not in takes:
 				continue
-			# 0068 step 2: a single member of the struct itself, named with
-			# its arguments, of a struct other than this one. A run, an
-			# arm, a block and a struct naming itself are later steps.
+			# 0068 steps 2 and 3: a member of the struct itself, one or a
+			# run of them, named with its arguments, of a struct other than
+			# this one. An arm, a block, an `indexed` element and a struct
+			# naming itself are later steps.
 			if isinstance(member, ast.Field) and member.arguments \
-					and member in struct.members and member.array is None \
-					and member.until is None and member.repeat is None \
+					and member in struct.members \
 					and member.located is None and named != struct.name \
 					and not _reads_a_parameter(struct, member) \
 					and named not in cyclic:

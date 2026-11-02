@@ -105,8 +105,9 @@ def test_both_walkers_take_the_argument_from_the_image(tmp_path: Path) -> None:
 	("u16 n; note(mode = n) k;", "may not hold this argument"),
 	# Handing on the parent's own parameter is step 5's, with recursion.
 	("parameter u8 m; note(mode = m) k;", "cannot be a member yet"),
-	# A run of them is step 3's.
-	("u8 n; note(mode = 1) ks[n];", "cannot be a member yet"),
+	# An arm is step 4's.
+	("u8 k; variant v switch (k) { case 1: note(mode = 1) a; "
+	 "default: error; }", "cannot be a member yet"),
 ])
 def test_what_step_2_does_not_build_is_refused(member: str,
 		words: str) -> None:
