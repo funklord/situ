@@ -11464,6 +11464,12 @@ class Emitter:
 		early on the first left `[must_eq]` unchecked for every dynamically
 		placed field the moment the offset check landed.
 		"""
+		# A parameter's own bound is the solver's (26.545): it bounds the
+		# argument the caller supplies, and no backend checks it -- Python
+		# and Rust never did, and this read it through a getter nobody
+		# emits, so the header did not compile (26.805).
+		if entry.placement.parameter:
+			return []
 		# A versioned member's fit is asked *inside* its version gate, not
 		# ahead of it. Asked ahead, a version 1 message was rejected as
 		# truncated for not carrying a member version 1 does not have -- which

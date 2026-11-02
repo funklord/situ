@@ -8012,7 +8012,7 @@ Moved to `doc/decision/26.803-the-dissector-declines-an-argued-member.md`.
 
 Moved to `doc/decision/26.804-0068-step-6-the-dissector-hands-a-child-its-arguments.md`.
 
-### 26.805 A value rule on a `parameter` is refused
+### 26.805 A bound on a `parameter` itself builds, and no backend checks it
 
 Moved to `doc/decision/26.805-a-parameter-takes-no-value-rule.md`.
 

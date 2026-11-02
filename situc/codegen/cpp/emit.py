@@ -9946,6 +9946,12 @@ class Emitter:
 		can be both outside the frame and constrained, and returning on the
 		first left `[must_eq]` unchecked for every dynamically placed field.
 		"""
+		# A parameter's own bound is the solver's (26.545): it bounds the
+		# argument the caller supplies, and no backend checks it -- Python
+		# and Rust never did, and this read it through a getter nobody
+		# emits, so the header did not compile (26.805).
+		if entry.placement.parameter:
+			return []
 		# NOT for a `[since]` member, whose versioned read below asks the
 		# same question only where the version carries it. Asked here, it
 		# refused every whole message older than the member: `u8 n; u8
