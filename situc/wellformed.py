@@ -3182,6 +3182,24 @@ def check_parameters(schema: ast.Schema) -> None:
 			continue
 
 		for held in named.values():
+			# A rule on the ARGUMENT (26.805). C and C++ read it as a member
+			# -- `situ_t_b_get`, which nobody emits, and `this->b()` -- and
+			# did not compile; Python and Rust emitted no check at all. Four
+			# backends, three answers, for a schema stating a rule the
+			# generated code does not hold, which 14.5 says is worse than
+			# stating nothing. Refused until `validate` checks arguments.
+			ruled = next((attr for attr in held.attrs
+			              if attr.name in ("must_eq", "min", "max")), None)
+			if ruled is not None:
+				raise error(
+					f"`[{ruled.name}]` cannot constrain `parameter "
+					f"{held.name}` yet",
+					ruled.span,
+					"a rule on an argument, which nothing checks",
+					["`validate` reads the message, and an argument is not "
+					 "in it, so no backend holds this rule (26.805)",
+					 "give the parameter a narrower type, or check the "
+					 "value before handing it in"])
 			if held.type_ref.scalar is None:
 				raise error(
 					f"`parameter {held.name}` must be a scalar",
