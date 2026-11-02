@@ -1028,6 +1028,12 @@ class Emitter:
 			return None
 		if not is_own_member(struct, placement):
 			return None
+		# A parameter is the caller's argument (0050), not a member the
+		# view holds bytes for: reading it through the getter named an
+		# accessor no backend emits (26.798).
+		if placement.parameter:
+			return (f"static_cast<std::int64_t>("
+			        f"this->{self._argument_member(struct, placement)})")
 		return f"static_cast<std::int64_t>(this->{local_name(struct, placement)}())"
 
 	def element_value(self, struct: ResolvedStruct, run: Placement,

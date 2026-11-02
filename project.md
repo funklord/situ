@@ -7982,6 +7982,10 @@ Moved to `doc/decision/26.796-a-block-hid-members-from-the-parameter-rules.md`.
 
 Moved to `doc/decision/26.797-0068-step-1-arguments-parsed-and-checked.md`.
 
+### 26.798 A constraint's bound may name a `parameter`
+
+Moved to `doc/decision/26.798-a-bound-may-name-a-parameter.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

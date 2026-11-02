@@ -8921,6 +8921,11 @@ class Emitter:
 			return None
 		if not is_own_member(struct, placement):
 			return None
+		# A parameter is the caller's argument (0050), not a member the
+		# view holds bytes for: reading it through the getter named an
+		# accessor no backend emits (26.798).
+		if placement.parameter:
+			return f"(self.{self._argument_ident(placement)} as i64)"
 		name = _ident(local_name(struct, placement))
 		if placement.type_name in self.enums:
 			name = f"{name}_bits"
