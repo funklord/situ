@@ -5253,6 +5253,14 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
+			/* Cut short by the frame: BOUNDS before anything inside is
+			 * asked, as every backend's `situ_view_sub(view, base,
+			 * extent, out)` refuses it (26.800). */
+			if (at / 8u > len || (wide + 7u) / 8u > len - at / 8u) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
 			err = validate_deep(&bound, message + at / 8u, len - at / 8u,
 			                    held.type_struct, depth + 1u, &inner, why);
 			if (err != SITU_WALK_OK) {

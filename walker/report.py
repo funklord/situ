@@ -1170,8 +1170,16 @@ def _validate(image: Image, view: View, struct_index: int,
 				break
 			except Refused:
 				return fail(ERR_BOUNDS, index)
+			# A member the frame cuts short is BOUNDS before anything inside
+			# it is asked (26.800): every backend acquires it with
+			# `situ_view_sub(view, base, extent, out)`, which refuses an
+			# extent past the limit, so a broken rule inside a truncated
+			# member is never reached. Clamping the inner frame instead
+			# answered CONSTRAINT for it.
+			if inner_at + reach > view.limit:
+				return fail(ERR_BOUNDS, index)
 			inner = View(image, view.buffer, placement.type_struct,
-			             inner_at, min(view.limit, inner_at + reach),
+			             inner_at, inner_at + reach,
 			             child_args(view, index))
 
 			# The nested struct's own MINIMUM against the extent it

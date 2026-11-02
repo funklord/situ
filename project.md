@@ -7992,6 +7992,10 @@ Moved to `doc/decision/26.798-a-bound-may-name-a-parameter.md`.
 
 Moved to `doc/decision/26.799-0068-step-2-a-nested-member-takes-arguments.md`.
 
+### 26.800 A nested member the frame cuts short is BOUNDS in both walkers
+
+Moved to `doc/decision/26.800-a-cut-nested-member-is-bounds-in-the-walkers.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
