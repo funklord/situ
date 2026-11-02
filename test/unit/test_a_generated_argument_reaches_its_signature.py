@@ -20,12 +20,13 @@ broken", for the reason the Rust census in
 tell "this regressed" from "there is more here now". Per case it can, and a
 case that improves has to be written down or the table stops measuring.
 
-One case is recorded BROKEN: an argued child inside a transparent block,
-where the parent flattens the child's members into its own accessors and
-that path emits a setter calling an offset function nothing defines. It is
-a missing emission rather than a wrong signature, and 26.817 has it.
-Fixing it fails this test with "good news", which is the prompt to move
-its row.
+No case is recorded BROKEN now. The last one was an argued child inside a
+transparent block, where the parent flattened the child's members into its
+own accessors: 26.818, and its compile error was hiding a worse fault --
+one of those flattened setters stored at the nested member's base under
+the name of a `parameter`, which occupies no bytes. A row recorded broken
+that starts working fails this test with "good news", which is the prompt
+to move it and close the record; that is how this one was closed.
 
 The table is the instrument rather than a test of one construct: step 4 and
 26.811 both used a parent FIELD, which needs none of the plumbing a
@@ -122,7 +123,7 @@ TABLE: dict[str, tuple[str, str]] = {
 		KID + "struct p { parameter u8 b [stream];\n"
 		      "\tauthenticated body {\n\t\tkid(b = b) k;\n\t}\n"
 		      "\ttag u8 mac[16] covers(body);\n}\n",
-		"broken 26.817"),
+		"compiles"),
 	"sealed region": (
 		AEAD + KID + "struct p { parameter u8 b [stream];\n"
 		             "\tsealed body(sealing) {\n\t\tkid(b = b) k;\n\t}\n"

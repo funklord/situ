@@ -8102,6 +8102,11 @@ Moved to
 Moved to
 `doc/decision/26.817-a-signature-that-derives-its-own-offset.md`.
 
+### 26.818 A setter for a `parameter` wrote a real byte
+
+Moved to
+`doc/decision/26.818-a-setter-for-a-parameter-wrote-a-real-byte.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

@@ -1337,6 +1337,30 @@ class Emitter:
 		           # the frame where a shorter arm was chosen (26.760). Its
 		           # getter is guarded; a plain arm has no setter either.
 		           and not self._region_arm(struct, entry.placement)
+		           # Nor a `parameter`, which is not a field: it occupies no
+		           # bytes and the caller supplies it. It arrives here with
+		           # `offset_bits` 0 like anything at the start of its
+		           # struct, so this emitter wrote a setter that stored at
+		           # the nested member's BASE -- `situ_p_k_b_set` writing
+		           # byte zero of `kid.body` under the name of a parameter.
+		           # The child's own emitter declines it and says so in a
+		           # comment; only this path got it wrong (26.818).
+		           and not entry.placement.parameter
+		           # Nor a field inside a nested MEMBER at a dynamic offset.
+		           # The `[]` test above is this rule for a run's element;
+		           # the general case is any nested struct, because the
+		           # parent emits offset functions for ITS members and not
+		           # for the interior of one of them -- that member's own
+		           # type does, on a sub-view. Where the interior is at a
+		           # static offset the parent addresses it with constants
+		           # and this is fine, which is why the test is the offset
+		           # rather than the nesting: 18 covered fields in the
+		           # corpus are inside a fixed-size nested member and
+		           # work. A dynamic one made this emitter call
+		           # `situ_p_k_mark_offset`, which nothing defines (26.818).
+		           and not (entry.placement.offset_bits is None
+		                    and self._inside_a_nested_member(
+		                        struct, entry.placement))
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None
 		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
@@ -13018,6 +13042,30 @@ class Emitter:
 		text = self._child_args(struct, placement)
 		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
 		           for held in self._arguments(struct))
+
+	def _inside_a_nested_member(self, struct: ResolvedStruct,
+			placement: Placement) -> bool:
+		"""Whether this field lies inside a nested struct MEMBER of
+		`struct`, rather than inside a transparent region of it.
+
+		The distinction decides who can address it. A region -- `sealed`,
+		`coded`, `authenticated`, `positional` -- holds the struct's own
+		members, so the struct emits their offset functions; a nested
+		member holds its TYPE's members, and that type emits them against
+		a sub-view. Four covered fields in the corpus are inside a sealed
+		region at a dynamic offset and are addressed correctly; none is
+		inside a nested member at a dynamic offset, which is the case that
+		had no offset function at all (26.818).
+		"""
+		parts = placement.path.split(".")
+		for cut in range(2, len(parts)):
+			found = self.resolved.find(".".join(parts[:cut]))
+			if found is None:
+				continue
+			above = found.placement
+			if above.kind == "field" and above.type_name in self.resolved.structs:
+				return True
+		return False
 
 	def _reaches_own_argument(self, struct: ResolvedStruct,
 			placement: Placement) -> bool:
