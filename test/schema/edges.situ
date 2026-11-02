@@ -2049,6 +2049,29 @@ struct hands_on_runs {
 	negotiated(block = 1) rest[remaining];
 }
 
+// A struct whose ENTIRE extent is its argument, nested by a parent that
+// hands it a constant. 26.813: C's extent function then names only
+// `arg_block` in its body, so `view` was an unused parameter and the
+// generated header did not compile under this project's own
+// `-Wall -Wextra -Werror` -- a legal schema whose C refuses to build.
+//
+// `edges.negotiated` cannot show it: its extent also reads a `[max]`-capped
+// member, so `view` is named. The shape needs a child with NOTHING else to
+// measure, which is this one. The parent hands a constant, so this has been
+// reachable since 0068 step 2 rather than only since step 5.
+//
+// `trailer` sits behind it so a wrong extent is a wrong byte, not nothing.
+struct arg_only {
+	parameter u8  width [stream];
+	u8            body[width];
+}
+
+struct holds_arg_only {
+	u8                    lead;
+	arg_only(width = 2)   one;
+	u8                    trailer;
+}
+
 // A parent handing on its OWN parameter (0068 step 5). Every case above
 // hands a constant or a field of the parent's; this hands the argument the
 // parent was itself given, which is the half the record called not started.

@@ -24,6 +24,10 @@ codec sealing_aead trusted length_preserving seekable=linear granularity=stream 
 codec stuffed_apart trusted expansion=ratio_bounded(2,1)+1 seekable=none granularity=byte invertible deterministic
 codec summing derived expansion=+2 seekable=linear granularity=block systematic deterministic
 
+struct arg_only size=0..255 mutate=Shifting
+  arg_only.width                         parameter
+  arg_only.body                          offset=AbsoluteStatic(0x00) size=Bounded(0, 255) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+
 struct arithmetic size=14..43 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   arithmetic.units                       offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   arithmetic.halved                      offset=AbsoluteStatic(0x01) size=Bounded(1, 3) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
@@ -281,6 +285,13 @@ struct hands_on_runs size=2.. access=Sequential mutate=Shifting address=Unstable
   hands_on_runs.rest[].carried.marker.tag offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   hands_on_runs.rest[].carried.marker.body offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   hands_on_runs.rest[].carried.flag      offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
+struct holds_arg_only size=2..257 mutate=Shifting address=Unstable atomic=NonAtomic
+  holds_arg_only.lead                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  holds_arg_only.one                     offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  holds_arg_only.one.width               parameter
+  holds_arg_only.one.body                offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  holds_arg_only.trailer                 offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
 
 struct hop size=2
   hop.kind                               offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

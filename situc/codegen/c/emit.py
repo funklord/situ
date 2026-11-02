@@ -5095,21 +5095,45 @@ class Emitter:
 			# caller reads it as "not an element" and breaks. Refusing would
 			# need a second return channel in eleven callers to say what a
 			# short tail already means.
+			body: list[str] = []
 			if constant and terms:
-				lines.extend([
+				body.extend([
 					f"\tif (!situ_in_bounds(view, 0u, {constant}u)) {{",
 					f"\t\treturn {constant}u;\t/* the lengths below are not"
 					" here to read */",
 					"\t}",
 					"",
 				])
-			lines.append(f"\tuint32_t extent = {constant}u;")
-			lines.extend(f"\textent = extent + ({term});" for term in terms)
-			lines.extend(ending)
-			if not terms and not ending:
+			body.append(f"\tuint32_t extent = {constant}u;")
+			body.extend(f"\textent = extent + ({term});" for term in terms)
+			body.extend(ending)
+			lines.extend(body)
+			# `(void)view;` WHERE THE BODY DOES NOT NAME IT, read off the
+			# body rather than guessed from its shape.
+			#
+			# The test was `not terms and not ending` -- no variable member
+			# at all -- and that is not the same question. A struct whose
+			# whole extent is its ARGUMENT has a term, and that term reads
+			# `arg_block` rather than the view:
+			#
+			#     struct negotiated { parameter u8 block [stream];
+			#                         u8 body[block]; }
+			#     struct holder { u8 blk; negotiated(block = 2) one; u8 b; }
+			#
+			# emitted `situ_negotiated_extent(situ_view_t view, uint8_t
+			# arg_block)` whose body names only `arg_block`, so gcc refused
+			# the generated header under this project's own
+			# `-Wall -Wextra -Werror`: a legal schema that does not compile.
+			# Reachable since 0068 step 2 gave a parent a way to hand a
+			# constant down, and the bounds check above hid it wherever the
+			# struct also had a fixed prefix -- that line names `view`, and
+			# it is emitted only `if constant and terms` (26.813).
+			#
+			# The same rule as `_argument_unused` below, which reads its own
+			# signature and body for exactly this reason and says so.
+			if not re.search(r"\bview\b", "\n".join(body)):
 				lines.append("\t(void)view;")
-			lines.extend(self._argument_unused(
-				struct, taken, *(str(term) for term in terms), *ending))
+			lines.extend(self._argument_unused(struct, taken, *body))
 			lines.extend(["\treturn extent;", "}"])
 			return lines
 

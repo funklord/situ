@@ -8072,6 +8072,16 @@ Moved to `doc/decision/26.810-an-arm-s-interior-is-not-behind-its-variant.md`.
 
 Moved to `doc/decision/26.811-a-block-s-member-takes-its-arguments.md`.
 
+### 26.812 A nested member takes the parent's own parameter
+
+Moved to
+`doc/decision/26.812-a-nested-member-takes-the-parent-s-own-parameter.md`.
+
+### 26.813 An extent that is all argument left `view` unused
+
+Moved to
+`doc/decision/26.813-an-extent-that-is-all-argument-left-view-unused.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
