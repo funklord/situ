@@ -171,8 +171,8 @@ built (26.797, 26.799, 26.801, 26.802, 26.804, 26.809). What is not:
   itself through any chain needs the depth-carrying `_at` forms passed
   the same way. That is one refactor of C's run plumbing, and it was not
   started.
-- **A member inside a block** (`positional`, `authenticated`, sealed or
-  coded) **and an `indexed` region's element** that take arguments are
-  refused.
+- **A member inside a sealed or coded region, and an `indexed` region's
+  element**, that take arguments are refused. One inside a `positional`
+  or `authenticated` block is built (26.811).
 - Rule 4 rejects per-element arguments. If a format needs the element's
   index, that is a later record.

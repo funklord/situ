@@ -8036,6 +8036,10 @@ Moved to `doc/decision/26.809-0068-step-6-the-dissector-hands-a-run-its-argument
 
 Moved to `doc/decision/26.810-an-arm-s-interior-is-not-behind-its-variant.md`.
 
+### 26.811 An argued member inside a `positional` or `authenticated` block
+
+Moved to `doc/decision/26.811-a-block-s-member-takes-its-arguments.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

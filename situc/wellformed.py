@@ -3503,13 +3503,15 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# the argument and calling it without (26.794).
 			if named not in takes:
 				continue
-			# 0068 steps 2 to 4: a member of the struct itself or of one of
-			# its variant's arms, one or a run of them, named with its
-			# arguments, of a struct other than this one. A block, an
+			# 0068 steps 2 to 4: a member of the struct itself, of one of
+			# its variant's arms, or of a `positional` or `authenticated`
+			# block, one or a run of them, named with its arguments, of a
+			# struct other than this one. A sealed or coded interior, an
 			# `indexed` element and a struct naming itself are later.
 			if isinstance(member, ast.Field) and member.arguments \
 					and (member in struct.members
-					     or member in arms_of(struct)) \
+					     or member in arms_of(struct)
+					     or member in _transparent_members(struct)) \
 					and member.located is None and named != struct.name \
 					and not _reads_a_parameter(struct, member) \
 					and named not in cyclic:
@@ -3530,6 +3532,21 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					"hand it one; that form is checked and not yet built "
 					"(decision 0068)",
 				])
+
+
+def _transparent_members(struct: ast.StructDecl) -> list[ast.Member]:
+	"""What a `positional` or `authenticated` block holds (0068).
+
+	Both hold the struct's own members, placed as though the block were not
+	there -- one asserts staticness, the other marks what a tag covers --
+	so a member in one is built as one outside it is. A sealed or coded
+	region's interior is a transform's input and is not among them.
+	"""
+	found: list[ast.Member] = []
+	for member in struct.members:
+		if isinstance(member, (ast.PositionalBlock, ast.Authenticated)):
+			found.extend(member.members)
+	return found
 
 
 def arms_of(struct: ast.StructDecl) -> list[ast.Member]:
