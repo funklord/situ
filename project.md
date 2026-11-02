@@ -7974,6 +7974,10 @@ Moved to `doc/decision/26.794-a-struct-taking-an-argument-cannot-name-itself.md`
 
 Moved to `doc/decision/0068-a-parent-supplies-a-child-s-arguments.md`.
 
+### 26.796 A block hid its members from the parameter rules
+
+Moved to `doc/decision/26.796-a-block-hid-members-from-the-parameter-rules.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

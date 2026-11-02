@@ -2768,6 +2768,31 @@ def test_a_struct_that_takes_an_argument_cannot_name_itself_yet() -> None:
 	assert "cannot be a member yet" in str(refused.value)
 
 
+def test_a_block_does_not_hide_a_member_from_the_parameter_rules() -> None:
+	"""`positional` and `authenticated` hold members the rules must see.
+
+	Both checks walked a struct's members and its arms and stopped there,
+	so a block was a way past them (26.796): `positional { e inner; }`
+	reached C as `situ_e_validate(nested)` with no argument and did not
+	compile, and `authenticated { u8 body[n]; }` let a parameter with no
+	`[stream]` move a member. The control is the `[stream]` form, which
+	must still be accepted.
+	"""
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + "struct e { parameter u8 b; u8 x; }\n"
+		           "struct s { u8 a; positional { e inner; } }")
+	assert "cannot be a member yet" in str(refused.value)
+
+	sealed = ("struct s {{ parameter u8 n{}; u8 a; "
+	          "authenticated {{ u8 body[n]; u8 after; }} "
+	          "tag u8[16] covers(authenticated); }}")
+	with pytest.raises(SituError) as refused:
+		parse_text(PREAMBLE + sealed.format(""))
+	assert "must be `[stream]`" in str(refused.value)
+
+	parse_text(PREAMBLE + sealed.format(" [stream]"))
+
+
 def test_a_parameter_that_moves_a_variant_arm_must_be_stream() -> None:
 	"""The `[stream]` refusal, reached through an arm (26.432).
 

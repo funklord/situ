@@ -3326,14 +3326,15 @@ def _members_and_arms(struct: ast.StructDecl) -> list[ast.Member]:
 	refusal below covered `kid inner;` and not `case 1: kid inner;`, so a
 	schema situc had decided it could not compile was accepted, and C
 	emitted a header naming an undeclared `arg_n`.
+
+	**And a block is the same hole one level out** (26.796). This walked
+	`struct.members` and each arm and stopped there, so `positional { e
+	inner; }` reached C as a call to `situ_e_validate` with no argument,
+	and `authenticated { u8 body[n]; }` let a parameter without `[stream]`
+	move a member. `_walk_members` descends every container through
+	`nested`, which is the one place that knows what a container is.
 	"""
-	found: list[ast.Member] = []
-	for member in struct.members:
-		found.append(member)
-		if isinstance(member, ast.Variant):
-			found.extend(arm.member for arm in member.arms
-			             if arm.member is not None)
-	return found
+	return _walk_members(struct.members)
 
 
 def check_parameter_nesting(schema: ast.Schema) -> None:
