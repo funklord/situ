@@ -1,10 +1,14 @@
 """A parent hands a child its arguments, by name, at the member (0068).
 
 Step 1 of the record's build: the grammar and the rules that need no
-layout. Nothing here is generated yet -- the nesting refusal still stands
-for every shape -- so what these hold is that a schema reaches that refusal
-only once its arguments are well formed, and that each malformed one is
-refused naming what is wrong.
+layout. What these hold is that a schema's arguments are well formed
+before anything else looks at them, and that each malformed one is refused
+naming what is wrong.
+
+The nesting refusal no longer stands for every shape -- steps 2, 4, 5 and
+6 are built -- so the acceptance test below tracks which shapes generate
+and which are still waiting. It is the file that goes stale when a step
+lands, and twice it did (26.815).
 """
 
 from __future__ import annotations
@@ -55,16 +59,43 @@ def test_a_missing_argument_is_refused() -> None:
 
 
 def test_well_formed_arguments_are_accepted_or_wait_for_their_step() -> None:
-	"""Every source rule 5 allows, and a meaning-only parameter fed from a
-	per-message one -- which rule 5 does not reach. A field and a constant
-	are built (step 2); handing on the parent's own parameter waits for
-	step 5, with recursion."""
+	"""Every source rule 5 allows, and the shapes still waiting.
+
+	**This asserted two refusals the document does not ask for.** Rule 5's
+	last sentence is "a child parameter without `[stream]` (meaning only)
+	may take any of them", so `note(mode = m)` is allowed and the previous
+	docstring's "which rule 5 does not reach" read it backwards. The other
+	was a real refusal that stopped being one when step 5a landed in
+	`c43b57f`: this file was not re-run, because `-x` had stopped the suite
+	in an earlier test, so master carried a red assertion about a refusal
+	the code had deliberately lifted.
+
+	Rule 5's refusal is not lost by narrowing this. A per-message parent
+	parameter feeding a byte-moving child is one of
+	`test_a_malformed_argument_is_refused`'s cases, which is where a
+	refusal belongs: a test named for acceptance that also carries
+	refusals is a test nobody re-reads when the acceptance set grows, and
+	that is exactly how this one went stale.
+	"""
 	for source in (
+			# Step 2: a parent field, and a constant.
 			ENTRY + "struct vol { u16 block; entry(block = block) e; }\n",
-			ENTRY + "const BLK = 512;\nstruct vol { entry(block = BLK) e; }\n"):
-		parse_text(PREAMBLE + source)
-	for source in (
+			ENTRY + "const BLK = 512;\nstruct vol { entry(block = BLK) e; }\n",
+			# Step 5: the parent's own `[stream]` parameter handed on to a
+			# single nested member (26.812).
 			ENTRY + "struct vol { parameter u16 b [stream]; "
 			        "entry(block = b) e; }\n",
+			# Rule 5, last sentence: a meaning-only child parameter may take
+			# a per-message one, because it moves no bytes.
 			MEANS + "struct vol { parameter u8 m; note(mode = m) e; }\n"):
+		parse_text(PREAMBLE + source)
+	for source in (
+			# A run of them is step 5's other half.
+			ENTRY + "struct vol { parameter u16 b [stream]; u8 n; "
+			        "entry(block = b) e[n]; }\n",
+			# Rule 6: a struct that names itself, or reaches itself through
+			# any chain, is measured with a depth, and handing arguments
+			# down that path is the rest of step 5.
+			"struct self { parameter u8 b [stream]; u8 n; "
+			"self(b = b) kid; }\n"):
 		assert "cannot be a member yet" in _refused(PREAMBLE + source)
