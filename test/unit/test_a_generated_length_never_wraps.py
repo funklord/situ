@@ -61,31 +61,61 @@ from situc.resolve import resolve
 #: arithmetic in the backend whose slice panics on the result.
 SUBTRACTION = re.compile(r"\blimit\s*-\s*(?!=)|\.len\(\)\s*-\s*(?!=)")
 
-#: Rust's count, pinned rather than zero. Its sites are a different hazard:
-#: a wrapped `usize` makes the slice panic, which 26.27 already records as a
-#: denial of service rather than a mitigation -- bad, but not the read past
-#: the end that C++ performed. Sweeping them wants `situ_rt::remaining`,
-#: which does not exist yet, so the floor stops the count growing while that
-#: is its own piece of work.
+#: Rust's sites, per schema rather than as one total. They are a different
+#: hazard from C's and C++'s: a wrapped `usize` makes the slice panic, which
+#: 26.27 already records as a denial of service rather than a mitigation --
+#: bad, but not the read past the end that C++ performed. Sweeping them wants
+#: `situ_rt::remaining`, which does not exist yet, so this records where they
+#: are while that is its own piece of work.
 #:
-#: Re-measure with this test rather than by hand: it prints the number.
+#: Re-measure with this test rather than by hand: it prints each row that
+#: moved and what to set it to.
 #:
-#: **A floor on a TOTAL is corpus-sensitive, which is this test's weakness
-#: and is worth stating.** It has moved twice for corpus reasons with the
-#: emitter untouched: to 134 when `shared.situ` briefly gained a pair for
-#: 26.679, back to 131 when that was reverted, and to 132 when
-#: `edges.situ` gained one for 26.680, and to 134 when `edges.situ`
-#: gained `hands_on` for 0068 -- two nested accessors through the
-#: template every variable-size nested member already gets -- and to 135
-#: for `hands_on_arms`, whose struct arm takes the arm template's. A floor on
-#: a sum cannot tell "the emitter regressed" from "there is more to
-#: generate", so every corpus addition asks a reader to decide which it
-#: was. The honest form is a per-schema census compared against a recorded
-#: map, where a new schema is a new row rather than a bigger number. That
-#: is more machinery than this gate has earned while the count is small,
-#: and the reason it has not been built is recorded here rather than
-#: rediscovered the next time the number moves.
-RUST_PINNED = 135
+#: **It is a census and not a floor on the total, because a floor cannot tell
+#: "the emitter regressed" from "there is more to generate".** The total
+#: moved five times for corpus reasons with the emitter untouched -- 134 when
+#: `shared.situ` briefly gained a pair for 26.679, back to 131 when that was
+#: reverted, 132 when `edges.situ` gained one for 26.680, 134 for `hands_on`
+#: and 135 for `hands_on_arms` (0068), then 136 for `relays_on` and 137 for
+#: `arg_only` -- and each move asked a reader to decide which it was. The
+#: last two were not decided: both landed in commits that did not re-measure,
+#: so master was red on this test for two commits and the failure said only
+#: that a number had grown.
+#:
+#: Per schema the two are distinguishable without anybody deciding. An
+#: existing row growing is the emitter, which is what this gate is for; a
+#: schema absent from the map is a new row to add. A row shrinking is good
+#: news that has to be written down, as the floor already required, or the
+#: gate stops measuring what it claims to.
+RUST_CENSUS = {
+	"bmp.situ": 3,
+	"coap.situ": 1,
+	"cpio.situ": 1,
+	"dnsname.situ": 1,
+	"edges.situ": 29,
+	"ethernet.situ": 2,
+	"header.situ": 1,
+	"http.situ": 2,
+	"icmp.situ": 5,
+	"id3.situ": 3,
+	"image.situ": 1,
+	"importer.situ": 2,
+	"ipv4.situ": 2,
+	"ipv6ext.situ": 1,
+	"json.situ": 9,
+	"keystore.situ": 2,
+	"message.situ": 3,
+	"modbus.situ": 30,
+	"mqtt.situ": 21,
+	"netlink.situ": 4,
+	"ntp.situ": 4,
+	"packet.situ": 1,
+	"protobuf.situ": 1,
+	"rtc.situ": 2,
+	"sexpr.situ": 3,
+	"tcp.situ": 2,
+	"telemetry.situ": 1,
+}
 
 
 def generated(path, backend: str) -> str:  # type: ignore[no-untyped-def]
@@ -120,18 +150,38 @@ def test_no_generated_length_is_a_bare_subtraction(path, backend) -> None:  # ty
 
 
 def test_the_rust_backend_does_not_grow_more_of_them() -> None:
-	"""A floor, not a clean bill. See `RUST_PINNED`."""
-	total = sum(len(SUBTRACTION.findall(generated(path, "rust")))
-	            for path in SCHEMAS)
-	assert total <= RUST_PINNED, (
-		f"the Rust backend now computes {total} lengths by subtraction, up "
-		f"from {RUST_PINNED}. Each one panics rather than reading out of "
-		f"bounds, so this is a denial of service rather than a disclosure "
-		f"-- but it is the same arithmetic and the floor is not for growing")
-	assert total == RUST_PINNED, (
-		f"the Rust count is {total}, below the pinned {RUST_PINNED}. Good "
-		f"news needs the floor lowered to keep the test honest: set "
-		f"RUST_PINNED to {total}")
+	"""A census, not a floor. See `RUST_CENSUS`."""
+	now = {path.name: len(SUBTRACTION.findall(generated(path, "rust")))
+	       for path in SCHEMAS}
+	now = {name: count for name, count in now.items() if count}
+
+	grew = sorted((name, RUST_CENSUS[name], count)
+	              for name, count in now.items()
+	              if name in RUST_CENSUS and count > RUST_CENSUS[name])
+	assert not grew, (
+		"the Rust backend computes more lengths by subtraction than it did, "
+		"in schemas that have not changed shape -- which is the emitter "
+		"rather than the corpus, and is what this gate is for: "
+		+ ", ".join(f"{name} {was} -> {is_}" for name, was, is_ in grew)
+		+ ". Each one panics rather than reading out of bounds, so this is a "
+		"denial of service rather than a disclosure -- but it is the same "
+		"arithmetic -- 26.675")
+
+	fresh = sorted(name for name in now if name not in RUST_CENSUS)
+	assert not fresh, (
+		"these schemas have sites and no row in the census: "
+		+ ", ".join(f"{name} {now[name]}" for name in fresh)
+		+ ". A schema the corpus did not have before is a new row rather "
+		"than a regression -- read the count for sanity and add it to "
+		"RUST_CENSUS")
+
+	shrank = sorted((name, count) for name, count in RUST_CENSUS.items()
+	                if now.get(name, 0) < count)
+	assert not shrank, (
+		"these rows are below what the census records, which is good news "
+		"that has to be written down or the gate stops measuring: "
+		+ ", ".join(f"{name} {was} -> {now.get(name, 0)}"
+		            for name, was in shrank))
 
 
 def test_every_emitted_predicate_is_called_and_every_call_defined() -> None:
