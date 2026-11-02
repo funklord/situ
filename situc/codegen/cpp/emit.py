@@ -9806,7 +9806,10 @@ class Emitter:
 			"\t\t{",
 			f"\t\t\t{self._ctype(scalar)} parsed;",
 			*(["\t\t\tstd::int32_t power;"] if placement.scaled else []),
-			f"\t\t\tif (const ::situ::rt::err e = {name}(parsed"
+			# `this->`, because the local is named `e` and in scope from
+			# its own initialiser: a member named `e` was the local
+			# called as a function, and did not compile (26.806).
+			f"\t\t\tif (const ::situ::rt::err e = this->{name}(parsed"
 			+ (", power); " if placement.scaled else "); ")
 			+ "e != ::situ::rt::err::ok) {",
 			"\t\t\t\treturn e;",
@@ -10603,7 +10606,10 @@ class Emitter:
 			return [
 				"\t\t{",
 				f"\t\t\t{held} _held;",
-				f"\t\t\tif (const ::situ::rt::err e = {name}(_held);"
+				# `this->`: the local `e` is in scope from its own
+				# initialiser, so a member named `e` was not reachable by
+				# its bare name (26.806).
+				f"\t\t\tif (const ::situ::rt::err e = this->{name}(_held);"
 				" e != ::situ::rt::err::ok) {",
 				"\t\t\t\treturn e;",
 				"\t\t\t}",

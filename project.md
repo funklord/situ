@@ -8016,6 +8016,10 @@ Moved to `doc/decision/26.804-0068-step-6-the-dissector-hands-a-child-its-argume
 
 Moved to `doc/decision/26.805-a-parameter-takes-no-value-rule.md`.
 
+### 26.806 A member named `e` compiles in C++
+
+Moved to `doc/decision/26.806-a-member-named-e-compiles-in-cpp.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
