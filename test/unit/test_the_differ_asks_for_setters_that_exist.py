@@ -40,9 +40,10 @@ import pytest
 from every_schema import SCHEMAS, ids, load_schema
 from situc.codegen import differ
 from situc.codegen.c import generate as generate_c
-from situc.codegen.c.names import ident
+from situc.codegen.c.names import c_name, ident
 from situc.layout import solve
 from situc.resolve import resolve
+from situc.traverse import local_name
 
 #: `static inline void situ_<struct>_<local>_set(` and the error-returning
 #: form beside it. The name is what a driver writes, so the name is what
@@ -96,3 +97,47 @@ def test_the_comparison_is_not_vacuous() -> None:
 	            if ask.probe in (differ.Probe.WRITE, differ.Probe.COVERED)]
 	assert len(defined) > 50, f"only {len(defined)} setters in the header"
 	assert len(asked) > 20, f"the differ asks only {len(asked)} writes"
+
+
+@pytest.mark.parametrize("path", SCHEMAS, ids=ids(SCHEMAS))
+def test_the_differ_asks_no_write_for_a_parameter(path) -> None:  # type: ignore[no-untyped-def]
+	"""A `parameter` occupies no bytes, so no write of one can be right.
+
+	All four backends emitted a setter for a `parameter` reached through a
+	transparent block, and all four stored at the nested member's base --
+	the first byte of the member after it. C's was caught because a driver
+	called a function the compiler could not find; the other three are
+	methods on a view, so they were silent (26.818, 26.821).
+
+	**The differ is where this is asked rather than the four emitted
+	texts, and that was a correction.** The first version searched each
+	backend's output for the setter's name, and the other three name a
+	method by the member alone -- so `set_block(`, emitted legitimately
+	for `hands_on_arms.block`, a real `u8` field, matched for every struct
+	whose PARAMETER is also called `block`. It reported fourteen faults in
+	`edges.situ` and every one was its own search. Scoping the search to
+	each struct's class or impl needs Rust's PascalCase and its `Mut` type
+	reconstructed from the schema's name, which is a second guess on top
+	of the first.
+
+	So this asks the thing all four obey. The drivers write what the
+	differ asks, so a write the differ does not ask for is one no driver
+	makes -- and the four backends were measured to agree on every covered
+	write the differ asks over the whole corpus, which is what makes this
+	one question rather than four.
+	"""
+	schema   = load_schema(path)
+	resolved = resolve(schema, solve(schema))
+
+	wrong = []
+	for struct in differ.structs_of(resolved):
+		local_of = {c_name(local_name(struct, entry.placement))
+		            for entry in struct.entries if entry.placement.parameter}
+		for ask in differ.writes(struct, resolved.structs):
+			if ask.local in local_of:
+				wrong.append(f"{struct.name}.{ask.local}")
+	assert not wrong, (
+		f"{path.name}: the differ asks the drivers to write a `parameter`, "
+		f"which occupies no bytes -- the write lands on whatever byte its "
+		f"offset of zero points at, which is the first byte of the member "
+		f"after it: {wrong}")

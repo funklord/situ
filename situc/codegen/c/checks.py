@@ -53,6 +53,7 @@ from situc.traverse import (
 	obligations,
 	own_members,
 	reserved_constraint,
+	inside_a_nested_member,
 )
 
 WORD_WIDTHS = (8, 16, 32, 64)
@@ -2855,6 +2856,16 @@ def _coverage_checks(suite: Suite, schema: ast.Schema,
 		              if one.label in entry.placement.covered_by
 		              and entry.placement.scalar is not None
 		              and entry.placement.kind == "field"
+		              # Not a `parameter`, and not a nested member's
+		              # interior at a dynamic offset: neither has a setter
+		              # on this struct, for the reasons 26.818 gives. This
+		              # is the SIXTH place that enumerates a covered write
+		              # -- four backends, the differ, and here -- and it
+		              # was found by the corpus gaining `blocked_arg`,
+		              # which is what that construct is for (26.821).
+		              and not entry.placement.parameter
+		              and not inside_a_nested_member(
+		                  struct, resolved.structs, entry.placement)
 		              and entry.placement.array_count is None
 		              and entry.placement.sized_by is None
 		              and entry.placement.sealed_by is None

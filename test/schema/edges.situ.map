@@ -64,6 +64,22 @@ struct beats size=4..14 access=Sequential mutate=Shifting address=Unstable repr=
   beats.pulse[].payload                  offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   beats.after                            offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct blocked_arg size=10..521 mutate=Immutable address=Unstable repr=ValueConverted atomic=NonAtomic
+  blocked_arg.block                      offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  blocked_arg.body                       offset=AbsoluteStatic(0x01) size=Bounded(5, 516) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting auth=Covered(tag)
+  blocked_arg.one                        offset=AbsoluteStatic(0x01) size=Bounded(5, 516) align=Aligned(1) repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(tag)
+  blocked_arg.one.block                  parameter
+  blocked_arg.one.payload                offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting auth=Covered(tag)
+  blocked_arg.one.trailer                offset=Dynamic size=Bounded(1, 256) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable auth=Covered(tag)
+  blocked_arg.one.checksum               offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable auth=Covered(tag)
+  blocked_arg.one.kind                   offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable auth=Covered(tag)
+  blocked_arg.one.carried                offset=Dynamic size=Bounded(1, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable auth=Covered(tag)
+  blocked_arg.one.carried.marker         offset=Dynamic size=Fixed(2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable auth=Covered(tag)
+  blocked_arg.one.carried.marker.tag     offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable auth=Covered(tag)
+  blocked_arg.one.carried.marker.body    offset=FrameStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord address=FrameStable auth=Covered(tag)
+  blocked_arg.one.carried.flag           offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable auth=Covered(tag)
+  blocked_arg.tag                        offset=Dynamic size=Fixed(4) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
+
 struct bounded_varint size=3..19 mutate=InPlaceSlack address=Unstable repr=ValueConverted atomic=NonAtomic canonical=NonCanonical
   bounded_varint.small                   offset=AbsoluteStatic(0x00) size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack canonical=NonCanonical
   bounded_varint.large                   offset=Dynamic size=Bounded(1, 9) align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=InPlaceSlack address=Unstable canonical=NonCanonical

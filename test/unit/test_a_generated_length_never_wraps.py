@@ -92,7 +92,7 @@ RUST_CENSUS = {
 	"coap.situ": 1,
 	"cpio.situ": 1,
 	"dnsname.situ": 1,
-	"edges.situ": 29,
+	"edges.situ": 30,
 	"ethernet.situ": 2,
 	"header.situ": 1,
 	"http.situ": 2,
@@ -159,13 +159,17 @@ def test_the_rust_backend_does_not_grow_more_of_them() -> None:
 	              for name, count in now.items()
 	              if name in RUST_CENSUS and count > RUST_CENSUS[name])
 	assert not grew, (
-		"the Rust backend computes more lengths by subtraction than it did, "
-		"in schemas that have not changed shape -- which is the emitter "
-		"rather than the corpus, and is what this gate is for: "
+		"the Rust backend computes more lengths by subtraction in these "
+		"schemas than the census records: "
 		+ ", ".join(f"{name} {was} -> {is_}" for name, was, is_ in grew)
-		+ ". Each one panics rather than reading out of bounds, so this is a "
-		"denial of service rather than a disclosure -- but it is the same "
-		"arithmetic -- 26.675")
+		+ ". Either the emitter regressed or that schema gained a construct "
+		"-- a row cannot tell those apart and this message used to claim it "
+		"could, which is a count inheriting its detector one level finer "
+		"than the floor it replaced. What the row DOES buy is that the "
+		"question is about one schema and not about the corpus: read that "
+		"schema's diff. Each site panics rather than reading out of bounds, "
+		"so this is a denial of service rather than a disclosure -- but it "
+		"is the same arithmetic -- 26.675")
 
 	fresh = sorted(name for name in now if name not in RUST_CENSUS)
 	assert not fresh, (

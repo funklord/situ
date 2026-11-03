@@ -51,7 +51,8 @@ from situc.traverse import (
 	RESERVED_STATED,
 	arm_members,
 	fixed_tail_bytes,
-	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
+	arm_of, encoding_source, in_a_region, inside_a_nested_member,
+	version_steps, versioned_region,
 	versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
@@ -1358,9 +1359,8 @@ class Emitter:
 		           # corpus are inside a fixed-size nested member and
 		           # work. A dynamic one made this emitter call
 		           # `situ_p_k_mark_offset`, which nothing defines (26.818).
-		           and not (entry.placement.offset_bits is None
-		                    and self._inside_a_nested_member(
-		                        struct, entry.placement))
+		           and not inside_a_nested_member(
+		               struct, self.resolved.structs, entry.placement)
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None
 		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",
@@ -13042,30 +13042,6 @@ class Emitter:
 		text = self._child_args(struct, placement)
 		return any(re.search(rf"\b{self._argument_name(held)}\b", text)
 		           for held in self._arguments(struct))
-
-	def _inside_a_nested_member(self, struct: ResolvedStruct,
-			placement: Placement) -> bool:
-		"""Whether this field lies inside a nested struct MEMBER of
-		`struct`, rather than inside a transparent region of it.
-
-		The distinction decides who can address it. A region -- `sealed`,
-		`coded`, `authenticated`, `positional` -- holds the struct's own
-		members, so the struct emits their offset functions; a nested
-		member holds its TYPE's members, and that type emits them against
-		a sub-view. Four covered fields in the corpus are inside a sealed
-		region at a dynamic offset and are addressed correctly; none is
-		inside a nested member at a dynamic offset, which is the case that
-		had no offset function at all (26.818).
-		"""
-		parts = placement.path.split(".")
-		for cut in range(2, len(parts)):
-			found = self.resolved.find(".".join(parts[:cut]))
-			if found is None:
-				continue
-			above = found.placement
-			if above.kind == "field" and above.type_name in self.resolved.structs:
-				return True
-		return False
 
 	def _reaches_own_argument(self, struct: ResolvedStruct,
 			placement: Placement) -> bool:

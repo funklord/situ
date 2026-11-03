@@ -116,6 +116,7 @@ from situc.traverse import (
 	tlv_admitted_tags,
 	tlv_single_tags,
 	walks_to_the_frame_end,
+	inside_a_nested_member,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -965,6 +966,22 @@ class Emitter:
 			if not placement.covered_by or scalar is None:
 				continue
 			if placement.kind != "field" or placement.array_count is not None:
+				continue
+			# Not a `parameter`: it occupies no bytes and the caller
+			# supplies it, so there is nothing to write. It arrives with
+			# `offset_bits` 0 like anything at the start of its struct, so
+			# this emitted `set_k_b` writing the nested member's base --
+			# the first byte of the member after it (26.818 in C, 26.821
+			# here).
+			if placement.parameter:
+				continue
+			# Nor a nested member's interior at a dynamic offset: this
+			# struct knows offsets for ITS members, not for the interior
+			# of one of them. `set_k_mark` summed the parent's chain and
+			# came out `advance(16, k_extent)`, where 16 is the TAG's
+			# width, so the bounds check refused every write in silence.
+			if inside_a_nested_member(struct, self.resolved.structs,
+					placement):
 				continue
 			if placement.sized_by is not None:
 				continue

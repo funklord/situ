@@ -116,6 +116,7 @@ from situc.traverse import (
 	tlv_admitted_tags,
 	tlv_single_tags,
 	walks_to_the_frame_end,
+	inside_a_nested_member,
 )
 from situc.types import ScalarType, lookup, pinned_shown
 from situc.unparse import expr_to_source as unparse_expr
@@ -754,6 +755,24 @@ class Emitter:
 				continue
 			if entry.vector.get(Axis.MUTATE).base not in ("InPlaceFixed",
 			                                             "InPlaceSlack"):
+				continue
+			# Not a `parameter`: it occupies no bytes and the caller
+			# supplies it, so there is nothing to write. It arrives with
+			# `offset_bits` 0 like anything at the start of its struct,
+			# so this emitted `set_k_b` storing at the nested member's
+			# base -- the first byte of the member after it (26.818 in C,
+			# 26.821 here).
+			if placement.parameter:
+				continue
+			# Nor a nested member's interior at a dynamic offset: this
+			# struct emits offsets for ITS members, not for the interior
+			# of one of them, so what was summed here was the parent's
+			# chain. `set_k_mark` came out `advance(16, k_extent())`,
+			# where 16 is the TAG's width, against an answer of `k`'s
+			# offset plus `mark`'s offset inside `kid` -- and the bounds
+			# check then refused every write, silently.
+			if inside_a_nested_member(struct, self.resolved.structs,
+					placement):
 				continue
 			# Nor an arm of a variant in a sealed region: the write landed
 			# where the arm sits whatever the discriminant chose, past the

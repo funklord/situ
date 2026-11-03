@@ -55,7 +55,8 @@ from situc.traverse import (
 	arguments,
 	arm_members,
 	fixed_tail_bytes,
-	arm_of, encoding_source, in_a_region, version_steps, versioned_region,
+	arm_of, encoding_source, in_a_region, inside_a_nested_member,
+	version_steps, versioned_region,
 	versioned_tail,
 	within_a_region_arm,
 	bit_addressed_tag,
@@ -6394,6 +6395,22 @@ class Emitter:
 		           and entry.placement.covered_by
 		           and entry.placement.scalar is not None
 		           and entry.placement.kind == "field"
+		           # Not a `parameter`: it occupies no bytes and the caller
+		           # supplies it, so there is nothing to write. It arrives
+		           # with `offset_bits` 0 like anything at the start of its
+		           # struct, so this emitted `set_k_b` storing at the
+		           # nested member's base -- the first byte of the member
+		           # after it (26.818 in C, 26.821 here).
+		           and not entry.placement.parameter
+		           # Nor a nested member's interior at a dynamic offset:
+		           # this struct emits offset functions for ITS members,
+		           # not for the interior of one of them, so the offset it
+		           # summed here was the parent's chain and not the child's.
+		           # `set_k_mark` came out `16 + k_extent()`, where 16 is
+		           # the TAG's width, against an answer of `k`'s offset
+		           # plus `mark`'s offset inside `kid`.
+		           and not inside_a_nested_member(
+		               struct, self.resolved.structs, entry.placement)
 		           and entry.placement.array_count is None
 		           and entry.placement.sized_by is None
 		           and entry.vector.get(Axis.MUTATE).base in ("InPlaceFixed",

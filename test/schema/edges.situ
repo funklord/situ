@@ -2121,6 +2121,35 @@ struct relays_on_rest {
 	negotiated(block = block)  rest[remaining];
 }
 
+// An argued child inside a TRANSPARENT BLOCK, which is the shape that
+// made every backend write a byte it had no business writing (26.818,
+// 26.821). A block holds the struct's own members, so the parent emits
+// stale-marking setters that reach THROUGH `one` into `negotiated`'s
+// fields -- and it got two of them wrong: a writer for `block`, which is
+// a parameter and occupies nothing, storing at `one`'s base; and one for
+// a field at a dynamic offset, whose offset it summed from its own chain
+// rather than the child's.
+//
+// Here because the gates for it were vacuous without it. The construct
+// lived in `test_a_block_s_member_takes_its_arguments.py` alone, so
+// reverting either fix left the corpus-wide checks green -- measured,
+// twice, which is what put it here rather than an argument that it
+// belonged.
+//
+// `block` is a FIELD and not this struct's own parameter, which is the
+// difference between a construct that asks the question and one that
+// does not: the four-way driver has one argument list for a whole
+// listing, so it skips a struct that declares a `parameter` -- written
+// the other way first, and the gate stayed green through a revert for
+// that reason alone. Step 5's own shapes are `relays_on*` above.
+struct blocked_arg {
+	u8            block;
+	authenticated body {
+		negotiated(block = block)  one;
+	}
+	tag u8[4] covers(body);
+}
+
 // A `[remaining]` run of FIXED elements after a member the argument
 // sizes. The count is a division rather than a walk -- `beacon` is three
 // bytes, so it is `(limit - base) / 3` -- and this is the one of

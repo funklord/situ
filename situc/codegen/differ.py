@@ -113,7 +113,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (
 	bit_addressed_tag, covered_run, invalidating_members,
 	Member, arm_members, arm_of, classify, containment_order, data_sized,
-	has_computable_extent, indexed_elements, length_is_transform_output,
+	has_computable_extent, indexed_elements, inside_a_nested_member,
+	length_is_transform_output,
 	is_varint_run, local_name, offset_unresolvable, own_entries, own_members,
 	length_read_inside, matched_values, unmeasurable_inside,
 	within_a_region_arm,
@@ -718,36 +719,6 @@ def _tag_accessors(struct: ResolvedStruct) -> dict[str, str]:
 	return found
 
 
-def _inside_a_nested_member(struct: ResolvedStruct,
-		structs: dict[str, ResolvedStruct],
-		placement: Placement) -> bool:
-	"""Whether this field lies inside a nested struct MEMBER rather than
-	inside a transparent region (26.818).
-
-	A region -- `sealed`, `coded`, `authenticated`, `positional` -- holds
-	the struct's own members, so the struct emits their offset functions; a
-	nested member holds its TYPE's members, emitted against a sub-view. The
-	parent's accessor for a nested member's interior exists only where that
-	interior is at a static offset.
-
-	Asked of the struct's own entries rather than of a path lookup: a path
-	component is a MEMBER name and the thing to test is that member's
-	TYPE, so `au.e.block` has to find `au.e` and ask whether `entry` is a
-	struct. Testing the component against `structs` finds nothing, because
-	`e` is not a type name -- written that way first.
-	"""
-	parts = placement.path.split(".")
-	for cut in range(2, len(parts)):
-		prefix = ".".join(parts[:cut])
-		for entry in struct.entries:
-			above = entry.placement
-			if above.path != prefix:
-				continue
-			if above.kind == "field" and above.type_name in structs:
-				return True
-	return False
-
-
 def writes(struct: ResolvedStruct,
 		structs_by_name: dict[str, ResolvedStruct] | None = None) -> list[Ask]:
 	"""Which members this struct can be *written*, in declaration order.
@@ -906,8 +877,7 @@ def writes(struct: ResolvedStruct,
 		# emits offset functions for ITS members, not for the interior of
 		# one of them. A static interior it addresses with constants, which
 		# is why the test is the offset and not the nesting (26.818).
-		if placement.offset_bits is None and _inside_a_nested_member(
-				struct, structs_by_name or {}, placement):
+		if inside_a_nested_member(struct, structs_by_name or {}, placement):
 			continue
 		if scalar is None or placement.kind != "field":
 			continue
