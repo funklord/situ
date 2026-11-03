@@ -894,10 +894,17 @@ def _find_driven_lengths(resolved: ResolvedSchema) -> list[Suggestion]:
 			else:
 				summary = (f"bound `{placement.sized_by}` with `[max = N]`, "
 				           f"then pin it")
+				# "a number no caller can allocate" was the first wording
+				# and it is false at 255, which a `u8` length gives: the
+				# clause was written looking at sqlite's 2^64 and ipv4's
+				# 2^32 and read as true because nothing smaller was in
+				# front of it. What holds at every width is where the
+				# number CAME FROM, which is also the argument.
 				detail  = (f"{shared}. Nothing bounds `{placement.sized_by}` "
 				           f"but its own width, so the worst case this member "
-				           f"reports is {_count(slack, 'byte')} -- a number no "
-				           f"caller can allocate and not one anybody chose")
+				           f"reports is {_count(slack, 'byte')} -- the range "
+				           f"of the length field's type rather than a number "
+				           f"anybody chose")
 				cost    = Cost(unknown=True,
 				               basis="the bound chosen for "
 				                     f"`{placement.sized_by}`, and then the "

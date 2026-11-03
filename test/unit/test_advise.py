@@ -449,7 +449,25 @@ def test_a_driven_length_with_no_declared_bound_is_told_to_bound_it_first()\
 
 	assert found.summary == "bound `n` with `[max = N]`, then pin it"
 	assert found.cost.unknown
-	assert "4294967295 bytes -- a number no caller can allocate" in found.detail
+	assert ("4294967295 bytes -- the range of the length field's type"
+	        in found.detail)
+
+
+def test_the_unbounded_branch_says_nothing_false_about_a_small_width() -> None:
+	"""The clause read "a number no caller can allocate", which is true of
+	sqlite's 2^64 and ipv4's 2^32 and false of the 255 a `u8` length gives.
+
+	It was written looking at the large cases and read as true because
+	nothing smaller was in front of it. What holds at every width is where
+	the number came from, and that is the argument anyway: the bound is the
+	type's range rather than a decision. Found by reading the rendered
+	output, like the straddle clause above.
+	"""
+	found = only("struct s { u8 n; u8 body[n]; u16 t; }",
+	             "pin-a-driven-length")
+
+	assert "255 bytes -- the range of the length field's type" in found.detail
+	assert "no caller can allocate" not in found.detail
 
 
 def test_a_parameter_is_not_a_length_anything_can_pin() -> None:
