@@ -61,7 +61,7 @@ struct arm_holder size=2
   @0x0000   1         u8         kind
   @0x0001   1         variant    body
   body switch: kind
-  body case 1: arm
+  body case 1: <reserved0> u8
   body case default: other u8
 
 struct arm_run size=2..8
