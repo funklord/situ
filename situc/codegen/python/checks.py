@@ -24,7 +24,9 @@ from __future__ import annotations
 from situc import __version__, ast
 from situc.codegen import refuse_parameters
 from situc.codegen.python.emit import py_name
+from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
+from situc.traverse import own_entries
 
 #: The nine kinds `--target c` emits, so the generated file can name the
 #: eight it does not. Written out rather than derived, because the C emitter
@@ -68,6 +70,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	for struct in checked:
 		lines.extend(_short_buffer(basename, struct))
+		for entry in own_entries(struct):
+			lines.extend(_occupies(basename, struct, entry.placement))
 
 	lines.extend([
 		"",
@@ -116,16 +120,21 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"",
 		f"    python3 -m unittest {basename}_checks",
 		"",
-		f"**One of the nine kinds `situc gen-checks --target c` emits**, over",
-		f"{structs} struct(s): a buffer one byte short of a struct's minimum",
-		"must not yield a view. Section 12.3 calls that the single check",
-		"everything after it trusts, which is why it is the one to port",
-		"first -- a backend that got it wrong would have every other",
-		"guarantee resting on nothing.",
+		f"**Two of the nine kinds `situc gen-checks --target c` emits**,",
+		f"over {structs} struct(s):",
 		"",
-		"The eight `--target c` also emits and this does not:",
+		"  - a buffer one byte short of a struct's minimum must not yield a",
+		"    view. Section 12.3 calls that the single check everything after",
+		"    it trusts, which is why it was the one to port first -- a",
+		"    backend that got it wrong would have every other guarantee",
+		"    resting on nothing.",
+		"  - a field occupies exactly the bytes the map claims. Each of them",
+		"    must reach the value and nothing else may, which is checked by",
+		"    flipping every byte of the buffer in turn.",
 		"",
-		*[f"  - {kind}" for kind in C_KINDS[1:]],
+		"The seven `--target c` also emits and this does not:",
+		"",
+		*[f"  - {kind}" for kind in C_KINDS[2:]],
 		"",
 		"Saying which rather than leaving them out silently: a suite that",
 		"checks one of nine things and does not say so reads as the whole",
@@ -142,6 +151,91 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"",
 		"",
 		"class Checks(unittest.TestCase):",
+	]
+
+
+def _occupies(basename: str, struct: ResolvedStruct,
+		placement: Placement) -> list[str]:
+	"""A field reads exactly the bytes the map claims for it, and no others.
+
+	The heart of the artifact: the map is a claim about which bytes a value
+	comes from, and this is the only check that reads it back. Flipping each
+	byte in turn and asking whether the getter noticed tests the claim from
+	outside, which is what makes it independent of how the accessor was
+	emitted.
+
+	`noticed` rather than "every claimed byte changes the value": a field
+	narrower than its byte, or one whose value does not depend on every bit
+	of it, legitimately does not notice a flip in a bit it does not use. The
+	C version makes the same distinction and for the same reason -- the
+	claim is that the value comes from THESE bytes and from no others, not
+	that it uses all of them.
+
+	Declined where the claim cannot be read back:
+
+	- a dynamic offset, where the map has no byte to name;
+	- a field with no getter -- `reserved`, a marker, a `parameter`;
+	- a text number, whose getter RAISES on digits that are not digits, so
+	  flipping a byte does not change the value but refuses to produce one,
+	  and the check would read a refusal as a change;
+	- **a field whose extent is not fixed**, which has no definite claimed
+	  range to flip. `udp_header.payload` is `[remaining]`, so at the
+	  struct's minimum it is ZERO bytes long and flipping its range changes
+	  nothing -- the check asserted that some claimed byte reaches the value
+	  and 22 of the corpus's 42 schemas said otherwise, every one of them
+	  correctly. The map claims a byte range for a field at a static offset
+	  with a fixed extent, and for no other.
+	"""
+	if placement.offset_bits is None or placement.kind != "field":
+		return []
+	if placement.scalar is None or placement.radix is not None:
+		return []
+	if placement.size_max_bits != placement.size_bits:
+		return []
+	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		return []
+
+	first = placement.offset_bits // BITS_PER_BYTE
+	last  = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
+	size  = struct.layout.size_bytes
+	if last >= size:
+		return []
+
+	# A byte run's property is a `memoryview`, which compares equal to
+	# bytes; `bytes(...)` is what makes a difference printable and is the
+	# same cast the vector suites use.
+	read = f"view.{py_name(placement.name)}"
+	if placement.array_count is not None:
+		read = f"bytes({read})"
+
+	name = py_name(f"{struct.name}_{placement.name}")
+	return [
+		f"	def test_{name}_occupies_its_claimed_bytes(self) -> None:",
+		f'		"""The map claims bytes {first}..{last} of'
+		f' `{struct.name}` for `{placement.name}`."""',
+		f"		raw = bytearray({size})",
+		"		msg = situ_runtime.Message(raw)",
+		f"		view = {basename}.{py_name(struct.name)}.at(msg, 0"
+		+ ("" if struct.layout.is_fixed_size else f", {size}") + ")",
+		"",
+		f"		before = {read}",
+		"		noticed = False",
+		f"		for i in range({first}, {last} + 1):",
+		"			raw[i] ^= 0xFF",
+		f"			if {read} != before:",
+		"				noticed = True",
+		"			raw[i] ^= 0xFF",
+		f'		self.assertTrue(noticed, "no claimed byte reaches'
+		f' {placement.name}")',
+		"",
+		f"		for i in range({size}):",
+		f"			if {first} <= i <= {last}:",
+		"				continue",
+		"			raw[i] ^= 0xFF",
+		f"			self.assertEqual({read}, before,"
+		f' f"byte {{i}} must not reach {placement.name}")',
+		"			raw[i] ^= 0xFF",
+		"",
 	]
 
 

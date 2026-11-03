@@ -233,9 +233,62 @@ def test_gen_checks_writes_a_python_bounds_suite(
 	assert "def test_header_refuses_a_short_buffer(self) -> None:" in text
 	assert "`header` needs 9 bytes; 8 must refuse." in text
 	assert "with self.assertRaises(situ_runtime.BoundsError):" in text
-	# The eight it declines, named rather than absent.
-	assert "The eight `--target c` also emits and this does not:" in text
-	assert "a field occupies its claimed bytes" in text
+	# The seven it declines, named rather than absent -- and the count moved
+	# when the claimed-byte kind landed, which is the entry saying so.
+	assert "The seven `--target c` also emits and this does not:" in text
+	assert "a field round-trips in place" in text
+
+
+def test_gen_checks_holds_a_field_to_its_claimed_bytes(
+	tmp_path: Path,
+) -> None:
+	"""The second of the nine kinds, and the heart of the artifact: the map
+	is a claim about which bytes a value comes from, and this is the only
+	check that reads that claim back.
+
+	Each claimed byte must be able to reach the value and nothing else may,
+	tested by flipping every byte of the buffer in turn -- from outside, so
+	it is independent of how the accessor was emitted.
+
+	Watched discriminating: changing `header.length`'s getter to read bytes
+	5..6 where the map claims 3..4 fails exactly that field's check with
+	`AssertionError: False is not true : no claimed byte reaches length`.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert "def test_header_length_occupies_its_claimed_bytes" in text
+	assert "The map claims bytes 3..4 of `header` for `length`." in text
+	# Both halves: some claimed byte reaches it, and no other byte does.
+	assert 'self.assertTrue(noticed, "no claimed byte reaches length")' in text
+	assert "must not reach length" in text
+	assert "raw[i] ^= 0xFF" in text
+
+
+def test_gen_checks_skips_a_field_with_no_fixed_claim(
+	tmp_path: Path,
+) -> None:
+	"""A field whose extent is not fixed has no definite claimed range.
+
+	`udp_header.payload` is `[remaining]`, so at the struct's minimum it is
+	zero bytes long and flipping its range changes nothing. The check
+	asserted that some claimed byte reaches the value, and 22 of the
+	corpus's 42 schemas said otherwise -- every one of them correctly. The
+	map claims a byte range for a field at a static offset with a fixed
+	extent, and for no other.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nstruct s {\n\tu16 fixed;\n"
+		"\tu8 rest[remaining];\n}\n", encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "test_s_fixed_occupies_its_claimed_bytes" in text
+	assert "test_s_rest_occupies_its_claimed_bytes" not in text
 
 
 def test_gen_checks_skips_a_register_and_a_zero_minimum(
