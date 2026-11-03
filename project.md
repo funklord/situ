@@ -8239,6 +8239,17 @@ Moved to
 Moved to
 `doc/decision/26.829-the-fourth-artifact-reached-one-language.md`.
 
+### 26.830 Situ may carry settled reference data
+
+Raised by the copyright holder 2026-11-03 and recorded as
+`doc/decision/0069-situ-may-carry-settled-reference-data.md`, which is
+`Status: proposed`: situ could ship very settled, authoritative lists --
+country codes, timezones -- the way it already ships codecs, so that a
+situ-based protocol evolves by a situ update rather than by every user
+updating their software. **Nothing is decided or designed.** The holder
+asked for it to be marked and discussed heavily first, and 0069 holds the
+questions a discussion would have to settle.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
