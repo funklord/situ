@@ -679,6 +679,43 @@ def test_rust_declines_an_enum_value_that_names_no_variant(
 	assert "names no variant" in text
 
 
+def test_cpp_compares_a_text_number_through_its_out_parameter(
+	tmp_path: Path,
+) -> None:
+	"""The last expectation class, and the one whose cost was not in the
+	emitter.
+
+	A text number's C++ getter is fallible as in C: an out-parameter and an
+	error code, where every other getter returns the value. So it needs its
+	own block AND the out-parameter's type -- which is `cpp/emit.py`'s
+	`ctype`, extracted from a method to a module function for this rather
+	than written a second time. Nineteen `self._ctype(...)` call sites
+	delegate and are unchanged.
+
+	The parse failing is reported as its own finding rather than as a
+	mismatch: a vector whose digits are not digits is claiming something
+	the bytes do not say, which is a different fault from claiming the
+	wrong number.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		'endian big;\n\nstruct s {\n\tdecimal u32 count until ",";\n'
+		"\tu8 n;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text("s one 31 35 30 30 2C 07\n\tcount = 1500\n\tn = 7\n",
+	                   encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "cpp",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.cpp").read_text(encoding="ascii")
+
+	# The out-parameter, named by the backend's own type rule.
+	assert "std::uint32_t got = 0;" in text
+	assert "view.count(got) != ::situ::rt::err::ok" in text
+	assert "count does not parse" in text
+	assert "2 field expectation(s) are compared" in text
+
+
 def test_python_compares_a_text_number_and_a_negative(
 	tmp_path: Path,
 ) -> None:

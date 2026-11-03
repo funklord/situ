@@ -28,6 +28,7 @@ from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_parameters, tally)
 from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
+from situc.codegen.cpp.emit import ctype
 from situc.resolve import ResolvedSchema
 
 
@@ -58,7 +59,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# passing it, its accessor taking an out-parameter rather than
 	# returning one -- where Rust chains an `expect` and Python chains a
 	# dot. Three languages, three shapes, one question.
-	compared, declined = tally(resolved, cases, constants, nested=True)
+	# `text=True`: a text number's getter is fallible here as in C, taking
+	# an out-parameter and returning an error, so it needs a block and the
+	# out-parameter's type -- which is `cpp/emit.py`'s `ctype`, extracted
+	# to a function for this rather than written a second time.
+	compared, declined = tally(resolved, cases, constants, nested=True,
+	                          text=True)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
@@ -255,12 +261,47 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 			continue
 
 		literal = comparable(resolved, case, path, value, constants,
-		                     nested=True)
+		                     nested=True, text=True)
 		if literal is None:
 			continue
 		if not lines:
 			lines.append("")
 		reach, holder, leaf = _reach(resolved, case, path)
+
+		# A text number's getter is fallible: an out-parameter and a code,
+		# where every other getter here returns the value. So its own block,
+		# and the parse failing is a finding rather than a mismatch -- a
+		# vector whose digits are not digits is a vector claiming something
+		# the bytes do not say.
+		found = resolved.find(f"{case.struct}.{path}")
+		if (found is not None and found.placement.radix is not None
+		    and found.placement.scalar is not None):
+			if not lines:
+				lines.append("")
+			kind = ctype(found.placement.scalar)
+			lines.extend([
+				"\t{",
+				*reach,
+				f"\t\t{kind} got = 0;",
+				"",
+				f"\t\tif ({holder}.{c_name(leaf)}(got)"
+				" != ::situ::rt::err::ok) {",
+				f"\t\t\tstd::printf(\"FAIL {case.struct} {case.name}:"
+				f" {path} does not parse\\n\");",
+				"\t\t\tsitu_failures++;",
+				f"\t\t}} else if (static_cast<unsigned long long>(got)",
+				f"\t\t           != static_cast<unsigned long long>"
+				f"({literal})) {{",
+				f"\t\t\tstd::printf(\"FAIL {case.struct} {case.name}:"
+				f" {path} is %llu, expected %llu\\n\",",
+				"\t\t\t\tstatic_cast<unsigned long long>(got),",
+				f"\t\t\t\tstatic_cast<unsigned long long>({literal}));",
+				"\t\t\tsitu_failures++;",
+				"\t\t}",
+				"\t}",
+			])
+			continue
+
 		got = f"static_cast<unsigned long long>({holder}.{c_name(leaf)}())"
 		want = f"static_cast<unsigned long long>({literal})"
 		if reach:

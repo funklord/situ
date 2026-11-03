@@ -11089,10 +11089,26 @@ class Emitter:
 		return self._ctype(scalar)
 
 	def _ctype(self, scalar: ScalarType) -> str:
-		if scalar.kind is ScalarKind.FLOAT:
-			return {16: "std::uint16_t", 32: "float", 64: "double"}[scalar.bits]
-		width = _storage_width(scalar.bits)
-		return f"std::int{width}_t" if scalar.signed else f"std::uint{width}_t"
+		return ctype(scalar)
+
+
+def ctype(scalar: ScalarType) -> str:
+	"""The C++ type a scalar is read as.
+
+	Module-level and public because a second emitter needs it: `cpp/vectors.py`
+	declares an out-parameter for a text number's fallible getter, and the
+	only way to name its type is this rule. It was a method, and the
+	alternatives were to import a private method or to write the two lines
+	again -- the second being the fault this run spent four commits removing,
+	one question answered in two places from different text.
+
+	The nineteen `self._ctype(...)` call sites are unchanged; the method
+	delegates.
+	"""
+	if scalar.kind is ScalarKind.FLOAT:
+		return {16: "std::uint16_t", 32: "float", 64: "double"}[scalar.bits]
+	width = _storage_width(scalar.bits)
+	return f"std::int{width}_t" if scalar.signed else f"std::uint{width}_t"
 
 
 def _storage_width(bits: int) -> int:
