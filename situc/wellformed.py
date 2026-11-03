@@ -329,9 +329,17 @@ def _check_one_text_number(member: ast.Field) -> None:
 			         "field and spell different values",
 			         "a format whose point is always in the same place is a "
 			         "plain integer with a scale the reader applies: "
+			         # `.span.text()` and not the node: an f-string over an
+			         # AST node gives its REPR, and a `Span` carries its
+			         # `Source`, which carries the whole file -- so this
+			         # note printed the entire schema back at the author,
+			         # inside a sentence suggesting a spelling. Measured on
+			         # `case 1: scaled i64 code[5];`. The span is also the
+			         # better answer where the size is an expression:
+			         # `[n + 1]` reads back as written.
 			         f"`decimal {member.type_ref.name} {member.name}"
-			         f"[{member.array.size}]` reads the digits, and the "
-			         "schema says in a comment where the point is",
+			         f"[{member.array.size.span.text()}]` reads the digits,"
+			         " and the schema says in a comment where the point is",
 			         f'`scaled {member.type_ref.name} {member.name} '
 			         'until "D"` is framed by its delimiter, where the '
 			         "spelling IS the number"],

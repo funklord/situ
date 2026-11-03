@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.851 A note that printed the whole schema back
+
+Moved to
+`doc/decision/26.851-a-note-that-printed-the-whole-schema-back.md`.
+
 ### 26.850 A text number in an arm states what nobody enforces
 
 Moved to
