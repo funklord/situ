@@ -57,6 +57,13 @@ struct arithmetic size=14..43
   ~         1..4      u8         padded  sized-by=align_up(units,4)-units+1
   ~         2         u16        tail  big
 
+struct arm_holder size=2
+  @0x0000   1         u8         kind
+  @0x0001   1         variant    body
+  body switch: kind
+  body case 1: arm
+  body case default: other u8
+
 struct arm_run size=2..8
   @0x0000   1         arm_shape  which
   @0x0001   1         u8         n  max=3

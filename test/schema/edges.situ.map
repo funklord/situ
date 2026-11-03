@@ -41,6 +41,12 @@ struct arithmetic size=14..43 mutate=Shifting address=Unstable repr=ValueConvert
   arithmetic.padded                      offset=Dynamic size=Bounded(1, 4) align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
   arithmetic.tail                        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
 
+struct arm_holder size=2 atomic=NonAtomic
+  arm_holder.kind                        offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  arm_holder.body                        offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  arm_holder.body.<reserved0>            offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  arm_holder.body.other                  offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+
 struct arm_run size=2..8 mutate=Shifting repr=ValueConverted atomic=NonAtomic
   arm_run.which                          offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   arm_run.n                              offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

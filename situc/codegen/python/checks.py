@@ -34,7 +34,7 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (enclosing_arm, has_computable_extent,
-                            own_entries)
+                            inside_an_unresolved_arm, own_entries)
 from situc.types import ScalarKind
 
 #: The nine kinds `--target c` emits, so the generated file can name the
@@ -86,8 +86,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			lines.extend(_decodes(basename, enums, struct, entry.placement))
 			lines.extend(_nested_start(basename, resolved, struct,
 			                           entry.placement))
-			lines.extend(_reserved(basename, resolved, struct,
-			                       entry.placement))
+		# **Once per struct and over `struct.entries`, not `own_entries`**,
+		# which is what reaches a reserved field inside a variant arm --
+		# and `--target c` has always iterated the same way. The arm is
+		# selected by `_prelude` before the field is broken, so the
+		# refusal is about that field in a message that carries it.
+		lines.extend(_reserved_checks(basename, resolved, struct))
 
 	lines.extend([
 		"",
@@ -185,12 +189,10 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"    lets a sender vary bytes the format calls fixed. The first kind",
 		"    here to need a BASELINE -- every other constraint satisfied",
 		"    before this one is broken -- without which breaking a field in",
-		"    an already-invalid buffer would prove nothing. It reaches a",
-		"    struct's own members: of the corpus's 83 reserved fields it",
-		"    sees 53, the rest being array elements (whose own `validate`",
-		"    is where that check belongs) or members of a variant arm,",
-		"    which `--target c` selects before breaking and this does not",
-		"    yet.",
+		"    an already-invalid buffer would prove nothing. A field inside",
+		"    a variant arm is reached too: the arm is selected first, so",
+		"    the refusal is about that field in a message that carries it.",
+		"    Each field this declines says which and why below."
 		"",
 		f"The {_COUNT_WORD[len(C_KINDS) - DONE].lower()} `--target c` also emits and this does not:",
 		"",
@@ -242,27 +244,164 @@ def _break_to(placement: Placement, wrong: int) -> list[str] | None:
 	        for at in sorted(mask)]
 
 
-def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
-		placement: Placement) -> list[str]:
-	"""A reserved field must hold what its policy says, and `validate` must
-	refuse it when it does not.
+def _select_arm(struct: ResolvedStruct, placement: Placement,
+		extent: int) -> list[str] | None:
+	"""Statements putting the discriminant where this member exists.
+
+	Empty where the member is in no variant arm, which is most of them.
+	`None` where the arm cannot be selected from here, so the caller drops
+	the check rather than asserting about bytes nobody selected.
+	"""
+	found = enclosing_arm(struct, placement)
+	if found is None:
+		return []
+
+	variant, arm = found
+	if arm.value is None:
+		return None			# the default arm: no value selects it
+
+	held = next((entry.placement for entry in struct.entries
+	             if entry.placement.name == variant.discriminant), None)
+	if held is None or held.offset_bits is None or held.scalar is None:
+		return None
+
+	placed = placed_bytes(held.offset_bits, held.size_bits, arm.value,
+	                      held.endian, held.bit_order,
+	                      held.scalar.is_bit_packed)
+	mask = placed_bytes(held.offset_bits, held.size_bits,
+	                    (1 << held.size_bits) - 1, held.endian,
+	                    held.bit_order, held.scalar.is_bit_packed)
+	if placed is None or mask is None or max(placed) >= extent:
+		return None
+
+	# **Clear the bits and write, rather than OR the value in.** The
+	# baseline has already been here: an enum discriminant with
+	# `default = error` gets its lowest member written to make the buffer
+	# valid, and OR-ing 0x02 over that 0x01 selects arm three.
+	return [f"\t\t# Select the arm this member is in:"
+	        f" {variant.discriminant} = {arm.value}.",
+	        *(f"\t\traw[{at}] = {placed[at]:#04x}" if mask[at] == 0xFF
+	          else f"\t\traw[{at}] = (raw[{at}] & {0xFF ^ mask[at]:#04x})"
+	               f" | {placed[at]:#04x}"
+	          for at in sorted(mask))]
+
+
+def _reach_version(struct: ResolvedStruct, extent: int) -> list[str] | None:
+	"""Put the version field where every versioned member is present.
+
+	The same job `_select_arm` does for an arm: a member behind
+	`[since = 3]` is not in a message whose version byte is zero, so a
+	check that poked its bytes and asserted `validate` would refuse them
+	would be asserting about a field the message does not carry --
+	`validate` accepts it, correctly.
+
+	The HIGHEST version in the struct rather than this member's own, so
+	that the baseline, which satisfies every versioned member's
+	constraints, describes a message that actually exists.
+	"""
+	versioned = [held.placement.since for held in struct.entries
+	             if held.placement.since is not None]
+	if not versioned:
+		return []
+
+	name = next((held.placement.version_field for held in struct.entries
+	             if held.placement.version_field is not None), None)
+	held = next((held.placement for held in struct.entries
+	             if held.placement.name == name), None)
+	if held is None or held.offset_bits is None or held.scalar is None:
+		return None
+
+	placed = placed_bytes(held.offset_bits, held.size_bits, max(versioned),
+	                      held.endian, held.bit_order,
+	                      held.scalar.is_bit_packed)
+	if placed is None or max(placed) >= extent:
+		return None
+
+	return [f"\t\t# Version {max(versioned)}, so every versioned member"
+	        " is here.",
+	        *(f"\t\traw[{at}] = {placed[at]:#04x}"
+	          for at in sorted(placed))]
+
+
+def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, extent: int) -> list[str] | None:
+	"""The buffer as a check on this member needs it before breaking it.
+
+	Three things, asked in one place: every constraint that applies to THIS
+	message satisfied, the version put where every versioned member is
+	present, and the arm this member lives in selected. A member inside an
+	arm needs the last two as well as the first -- the baseline that
+	satisfies its siblings, and the discriminant that puts them in the
+	message at all.
+
+	`None` where any of the three cannot be arranged, so the caller drops
+	the check rather than asserting about bytes nobody selected.
+	"""
+	select = _select_arm(struct, placement, extent)
+	if select is None:
+		return None
+
+	found = enclosing_arm(struct, placement)
+	inside = found[1].member if found is not None else None
+	base = _baseline(resolved, struct, extent, inside)
+	if base is None:
+		return None
+
+	reach = _reach_version(struct, extent)
+	if reach is None:
+		return None
+
+	lines: list[str] = []
+	if base:
+		lines += ["\t\t# Every constraint satisfied, so the refusal below is"
+		          " about",
+		          "\t\t# the field this check breaks and nothing else.",
+		          *base, ""]
+	if reach:
+		lines += [*reach, ""]
+	if select:
+		lines += [*select, ""]
+	return lines
+
+
+def _reserved_checks(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> list[str]:
+	"""Every reserved field in this struct, held to its policy.
 
 	**Section 8.8's reason, which is not pedantry**: reserved bits are
 	malleability control. A receiver that ignores them lets a sender vary
 	bytes the format calls fixed, which is a signature-bypass primitive in
 	anything authenticated.
 
-	This is the first kind here to need a BASELINE, and the baseline is what
-	makes it mean anything: breaking a field in a buffer that was already
-	invalid proves nothing, and for `must_be_one` a zeroed buffer breaks the
-	policy before the check touches it -- so the check would pass against a
-	validator that did nothing. `view.validate()` has to succeed first.
+	Over `struct.entries` rather than `own_entries`, which is what reaches
+	a field inside a variant arm -- `_prelude` selects the arm before the
+	field is broken, so the refusal is about that field in a message that
+	carries it. `--target c` has always iterated this way, and the first
+	version of this did not: it was called per own-entry, so 9 of the
+	corpus's reserved fields were invisible to it and a per-field decline
+	naming them could never fire.
 
-	Four declines, named in the module rather than left silent. 56 of the
-	corpus's 76 reserved fields are reachable here; the other 20 need arm
-	selection or version reach, which `--target c` has and this does not
-	yet.
+	The baseline is what makes any of it mean something. Breaking a field
+	in a buffer that was already invalid proves nothing, and for
+	`must_be_one` a zeroed buffer breaks the policy before the check
+	touches it -- so the check would pass against a validator that did
+	nothing. `view.validate()` has to succeed first.
 	"""
+	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		return []
+
+	extent = struct.layout.size_bytes
+	lines: list[str] = []
+	for entry in struct.entries:
+		lines.extend(_one_reserved(basename, resolved, struct,
+		                           entry.placement, extent))
+	return lines
+
+
+def _one_reserved(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct, placement: Placement,
+		extent: int) -> list[str]:
+	"""One reserved field's check, or a named decline, or nothing."""
 	policy = reserved_policy(placement)
 	if policy is None or placement.offset_bits is None:
 		return []
@@ -271,21 +410,21 @@ def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
 		# check and nothing a reader could mistake for one. Silent on
 		# purpose, unlike the declines below.
 		return []
-	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
-		return []
 
-	# **No branch here for an array element or a variant arm**, and that is
-	# measured rather than assumed: of the corpus's 83 reserved fields,
-	# `own_entries` yields 53, and the 30 it does not are 10 array
-	# elements, 9 inside variant arms and 11 excluded for other reasons.
-	# None of them reaches this function, so a reason naming them would be
-	# a branch nobody can take -- the first version had two and a fixture
-	# putting a reserved field in an arm produced neither. The preamble
-	# names those populations instead, where a reader of the module will
-	# meet them.
-	extent = struct.layout.size_bytes
 	reason = None
-	if placement.pinned_runs:
+	if inside_an_unresolved_arm(struct, placement):
+		# `enclosing_arm` says "no arm" for a member in an arm it cannot
+		# name as well as for one in no arm, and reading the first as the
+		# second emits a check about bytes nobody selected (26.839).
+		reason = ("it is inside a variant arm this backend cannot name, so"
+		          " no message can be built that carries it")
+	elif "[]" in placement.path:
+		# Deliberate: walking every element on every parse is a cost the
+		# caller should choose, so the element type's own `validate` is
+		# where that check lives. Demanding it here would fail a design
+		# decision rather than a bug.
+		reason = "it is an array element, which validates its own"
+	elif placement.pinned_runs:
 		reason = ("it is a pinned run, whose check is the pin rather than a"
 		          " bit policy")
 	elif placement.offset_bits + placement.size_bits > extent * BITS_PER_BYTE:
@@ -294,14 +433,12 @@ def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
 		return [f"\t# Not enforced here: `{placement.path}`, because"
 		        f" {reason}.", ""]
 
-	# **Both of these are named too**, for the reason the preamble gives
-	# about the kinds this backend does not emit: a reader cannot tell a
-	# field that was checked from one nothing could check.
-	base = _baseline(resolved, struct, extent)
-	if base is None:
+	prelude = _prelude(resolved, struct, placement, extent)
+	if prelude is None:
 		return [f"\t# Not enforced here: `{placement.path}`, because no"
-		        " buffer satisfying every other constraint can be built,",
-		        "\t# so breaking this field would prove nothing.", ""]
+		        " buffer carrying it with every other constraint",
+		        "\t# satisfied can be built, so breaking it would prove"
+		        " nothing.", ""]
 
 	wrong = 0 if policy == "must_be_one" else (1 << placement.size_bits) - 1
 	broken = _break_to(placement, wrong)
@@ -311,7 +448,7 @@ def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
 		        " `native` byte order has no one answer here.", ""]
 
 	name = py_name(f"{struct.name}_{placement.name}")
-	lines = [
+	return [
 		f"\tdef test_{name}_{policy}_is_enforced(self) -> None:",
 		f'\t\t"""`{placement.path}` is reserved [{policy}].',
 		"",
@@ -324,15 +461,7 @@ def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
 		f"\t\tview = {basename}.{py_name(struct.name)}.at(msg, 0"
 		+ ("" if struct.layout.is_fixed_size else f", {extent}") + ")",
 		"",
-	]
-	if base:
-		lines += [
-			"\t\t# Every constraint satisfied, so the refusal below is about",
-			"\t\t# the field this check breaks and nothing else.",
-			*base,
-			"",
-		]
-	lines += [
+		*prelude,
 		"\t\tview.validate()",
 		"",
 		f"\t\t# {placement.path} declares {policy}.",
@@ -341,7 +470,6 @@ def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
 		"\t\t\tview.validate()",
 		"",
 	]
-	return lines
 
 
 def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,

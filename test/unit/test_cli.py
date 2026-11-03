@@ -580,23 +580,25 @@ def test_gen_checks_enforces_a_reserved_policy(tmp_path: Path) -> None:
 	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
 
 
-def test_gen_checks_says_which_reserved_fields_it_does_not_see(
-	tmp_path: Path,
-) -> None:
-	"""The kind reaches a struct's own members and says so.
+def test_gen_checks_declines_an_arm_it_cannot_name(tmp_path: Path) -> None:
+	"""An arm whose member is anonymous cannot be selected, so no check.
 
-	Of the corpus's 83 reserved fields `own_entries` yields 53; the 30 it
-	does not are 10 array elements, 9 inside variant arms and 11 excluded
-	for other reasons. **None of them reaches the emitter**, which is why
-	there is no per-field decline naming them -- the first version had two
-	such branches and a fixture putting a reserved field in an arm produced
-	neither, because the exclusion happens upstream. A reason nobody can
-	reach is worse than none: it reads as a case that was considered.
+	`enclosing_arm` answers `None` for two different reasons -- the member
+	is in no arm, and the member is in one that cannot be matched -- and
+	reading the second as the first emits a check about bytes nobody
+	selected. For `case 1: reserved u8 [must_be_zero];` the layout records
+	the arm's member as `s.body.arm` while the placement it created is
+	`s.body.<reserved0>`, so no lookup matches.
 
-	So the populations are named once, in the preamble, where a reader of
-	the generated module meets them. The per-field declines that remain are
-	the ones a member CAN hit: a pinned run, bits past the struct's extent,
-	no satisfiable baseline, and bits the map cannot place.
+	**Both backends did emit it**, and the check failed exactly as it
+	should: with a zeroed discriminant the OTHER arm is selected, the field
+	is not in the message, and `validate` accepted a nonzero byte there.
+	`inside_an_unresolved_arm` separates the two reasons so each backend
+	can decline and say so (26.839).
+
+	The corpus asks the same question of `--target c` through
+	`edges.arm_holder`; this asks it of `--target python`, which declines
+	`edges` for its `parameter`.
 	"""
 	schema = tmp_path / "unit.situ"
 	schema.write_text(
@@ -611,10 +613,38 @@ def test_gen_checks_says_which_reserved_fields_it_does_not_see(
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
 
-	# Named in the preamble, and NOT as a per-field decline, since the
-	# field never reaches the emitter to be declined.
-	assert "or members of a variant arm," in text
-	assert "Not enforced here:" not in text
+	assert "Not enforced here: `s.body.<reserved0>`" in text
+	assert "a variant arm this backend cannot name" in text
+	assert "_must_be_zero_is_enforced" not in text
+
+
+def test_gen_checks_selects_an_arm_it_can_name(tmp_path: Path) -> None:
+	"""And where the arm CAN be named, it is selected rather than declined.
+
+	Both arms of the question, because a backend that declined every arm
+	would pass the test above on its own. The member is a named struct
+	here, so `arm_members` resolves it and `_select_arm` writes the
+	discriminant that puts it in the message -- cleared and written rather
+	than OR-ed, since the baseline may already have left a value there and
+	OR-ing over a 0x01 selects arm three.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct held {\n\treserved  u8 [must_be_zero];\n}\n\n"
+		"struct s {\n\tu8  kind;\n"
+		"\tvariant body switch (kind) {\n"
+		"\t\tcase 1:  held  one;\n"
+		"\t\tdefault: u8    other;\n\t}\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "# Select the arm this member is in: kind = 1." in text
+	assert "raw[0] = 0x01" in text
+	assert "_must_be_zero_is_enforced" in text
 
 
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:

@@ -182,8 +182,21 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: which is the same thing this guard is for one level down.
 #:
 #: The fourth cell is the one this exists for. See the test below.
+#:
+#: And the first cell moved by one on 2026-11-03, when `edges.arm_holder`
+#: arrived for 26.839: a variant whose `case 1` member is an ANONYMOUS
+#: reserved field. Its `default: u8 other` is the arm this cell counts, an
+#: ordinary scalar arm like the thirty already there -- a moved count and
+#: no new cell, which is the benign half.
+#:
+#: **The other arm is counted nowhere, and that is the finding.** The
+#: layout records it as `arm_holder.body.arm` while the placement it made
+#: is `arm_holder.body.<reserved0>`, so no lookup matches and this census
+#: does not see it either -- a second consumer blind to the same mismatch
+#: that made `gen-checks` assert about bytes nobody selected. Expect this
+#: cell to gain one more when that is fixed.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                30,
+	("scalar", "not-struct", ""):                31,
 	("no-scalar", "struct", "fixed"):            49,
 	("no-scalar", "struct", "unmeasurable"):     28,
 	("no-scalar", "not-struct", ""):              1,

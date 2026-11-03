@@ -3495,6 +3495,42 @@ def enclosing_arm(struct: ResolvedStruct,
 	return None
 
 
+def inside_an_unresolved_arm(struct: ResolvedStruct,
+		placement: Placement) -> bool:
+	"""Whether this member is inside a variant whose arm cannot be named.
+
+	`enclosing_arm` answers `None` for two different reasons -- the member
+	is in no arm at all, and the member is in one that cannot be matched --
+	and a caller that reads the second as the first emits a check about
+	bytes nobody selected. This separates them.
+
+	**The case that needs it**: an arm whose member is anonymous. For
+	`case 1: reserved u8 [must_be_zero];` the layout records the arm's
+	member as `s.body.arm` while the placement it created is
+	`s.body.<reserved0>` -- one thing under two names, so
+	`arm_members` looks the first up among the placements, finds nothing,
+	and `enclosing_arm` reports no arm. `gen-checks` then poked the field's
+	byte in a message whose zeroed discriminant selects the OTHER arm and
+	asserted `validate` would refuse it; `validate` accepted, correctly,
+	in `--target c` and `--target python` alike (26.839).
+
+	The name mismatch is the defect underneath and is recorded rather than
+	fixed here, a placement's name being a layout decision. What this
+	gives a caller is the ability to decline instead of asserting -- which
+	is the documented stance for an arm that cannot be selected.
+	"""
+	local = placement.path[len(struct.name) + 1:]
+	if "." not in local:
+		return False
+
+	head = local.split(".")[0]
+	variant = next((held for held in own_members(struct)
+	                if held.kind == "variant" and held.name == head), None)
+	if variant is None:
+		return False
+	return enclosing_arm(struct, placement) is None
+
+
 def encoding_source(structs: Container[str], struct: ResolvedStruct,
 		source: str) -> Placement | None:
 	"""The member `[encoding = from(source)]` names, or None.

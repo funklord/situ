@@ -42,21 +42,10 @@ from situc.names import render_delimiter
 from situc.propagate import Resolved
 from situc.relation import Refused, conversation_key, key_layout
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import (
-	Obligation,
-	covered_run,
-	data_sized,
-	enclosing_arm,
-	has_computable_extent,
-	indexed_elements,
-	invalidating_members,
-	is_varint_run,
-	local_name,
-	obligations,
-	own_members,
-	reserved_constraint,
-	inside_a_nested_member,
-)
+from situc.traverse import (Obligation, covered_run, data_sized,
+	enclosing_arm, has_computable_extent, indexed_elements,
+	inside_a_nested_member, inside_an_unresolved_arm, invalidating_members,
+	is_varint_run, local_name, obligations, own_members, reserved_constraint)
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -2575,6 +2564,20 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 		# arm a zeroed discriminant picks and asserted that `validate` would
 		# refuse them -- an assertion about the wrong bytes, which passed only
 		# as long as no schema had a reserved field inside an arm.
+		# An arm this build cannot NAME is not an arm it can select, and
+		# `enclosing_arm` reports both as "no arm" -- so `_prelude`
+		# returned an empty list rather than None and the check went out
+		# unguarded. For `case 1: reserved u8 [must_be_zero];` the layout
+		# calls the arm's member `s.body.arm` and the placement
+		# `s.body.<reserved0>`, so no arm ever matches: this poked the
+		# field in a message whose zeroed discriminant selects the other
+		# arm and asserted a refusal that correctly never came (26.839).
+		if inside_an_unresolved_arm(struct, placement):
+			suite.skip(placement.path,
+			           "it is inside a variant arm this build cannot name, "
+			           "so no message can be built that carries it")
+			continue
+
 		prelude = _prelude(resolved, struct, placement, extent)
 		if prelude is None:
 			continue

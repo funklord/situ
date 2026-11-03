@@ -1233,6 +1233,30 @@ struct marked [endian = from(edge_order)] {
 	u16            samples[n];
 }
 
+// An arm whose member is ANONYMOUS, which is the arrangement in which
+// `enclosing_arm` cannot name the arm a member is in (26.839).
+//
+// The layout records this arm's member as `arm_holder.body.arm` while the
+// placement it creates is `arm_holder.body.<reserved0>` -- one thing under
+// two names -- so `arm_members` looks the first up among the placements,
+// finds nothing, and `enclosing_arm` reports no arm at all. Two callers
+// then read "no arm" as "not in an arm": `gen-checks` poked the field's
+// byte in a message whose zeroed discriminant selects the OTHER arm and
+// asserted `validate` would refuse it, in `--target c` and
+// `--target python` alike, and `validate` accepted it correctly.
+//
+// Here because the guard added for it changed nothing in the corpus: no
+// schema had an anonymous arm member, so the branch that declines such a
+// field could not fire and a revert of it would have gone unnoticed. Both
+// backends name the decline now, and this is what makes them say so.
+struct arm_holder {
+	u8  kind;
+	variant body switch (kind) {
+		case 1:  reserved u8 [must_be_zero];
+		default: u8  other;
+	}
+}
+
 // A tlv and an offset table inside a marker struct, which is the arrangement
 // in which four backends disagreed about one schema (26.833).
 //

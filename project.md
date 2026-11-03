@@ -8259,6 +8259,11 @@ Moved to
 Moved to
 `doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
 
+### 26.839 An arm whose member is anonymous cannot be named
+
+Moved to
+`doc/decision/26.839-an-arm-whose-member-is-anonymous-cannot-be-named.md`.
+
 ### 26.838 The baseline, and the first check that needs one
 
 Moved to
