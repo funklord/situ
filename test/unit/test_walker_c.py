@@ -1074,13 +1074,20 @@ def test_they_agree_about_a_nested_variable_struct(tmp_path: Path) -> None:
 	assert c_answers(tmp_path, blob, message, 1)[1] == "48879"
 	assert python_answers(blob, message, 1)[1] == "48879"
 
-	# The two still differ about the struct-typed member ITSELF -- C reads
-	# one byte and answers 3, `walk.py` reads four and answers 0x03616263 --
-	# and that is a separate path from the extent this fixes, unchanged by
-	# it and disagreeing before it. Asserted here so the gap is recorded
-	# where somebody comparing the two will meet it, rather than left for
-	# the next reader to rediscover as a surprise.
-	assert c_answers(tmp_path, blob, message, 1)[0] == "3"
+	# **And they agree about the struct-typed member itself, which they did
+	# not until 26.837.** C read one byte and answered 3 where `walk.py`
+	# read four and answered 0x03616263; this assertion pinned that gap
+	# deliberately, so that somebody comparing the two would meet it here
+	# rather than rediscover it.
+	#
+	# What closed it: `situ_walk_read` ended in `read_at(..., held.size_bits,
+	# ...)`, the row's own figure, which for a member whose extent the
+	# message decides is the MAXIMUM -- so C read the declared width and not
+	# the measured one. It asks `content_bits_deep` now, as the text-number
+	# path in the same function already did. The width assertions above were
+	# always 4; C's VALUE disagreed with C's own WIDTH, which is the cheapest
+	# possible tell and nothing was comparing them.
+	assert c_answers(tmp_path, blob, message, 1)[0] == "56713827"
 	assert python_answers(blob, message, 1)[0] == "56713827"
 
 

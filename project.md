@@ -8259,6 +8259,11 @@ Moved to
 Moved to
 `doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
 
+### 26.837 Two defects in the C walker a seeded sweep never reached
+
+Moved to
+`doc/decision/26.837-two-defects-in-the-c-walker-a-seeded-sweep-never-reached.md`.
+
 ### 26.836 The walker read a `prefixed(T)` length as a varint
 
 Moved to

@@ -3108,7 +3108,31 @@ static situ_walk_err read_deep(const situ_walk_image *image,
 		return SITU_WALK_UNSUPPORTED;
 	}
 
-	return read_at(message, len, &held, offset, held.size_bits, out);
+	/* **The width this message gives it, not the width the row claims.**
+	 * `size_bits` is the row's own figure and for a member whose extent the
+	 * message decides it is the MAXIMUM: `edges.blocked_arg.one` is a
+	 * `negotiated(block = block)` whose row says 40 bits, and with
+	 * `block = 0` and `kind` selecting the error arm it occupies 32. Reading
+	 * 40 took a byte belonging to the member after it -- and at the end of a
+	 * frame it would read past the frame, `read_at`'s bound being computed
+	 * from the width handed to it.
+	 *
+	 * The same mistake as the delimited case above, which the comment there
+	 * describes and which was answered for delimited members alone. This is
+	 * the class rather than that case (26.837).
+	 *
+	 * `content_bits_deep` is what the text-number path already asks, and for
+	 * an ordinary scalar it answers `size_bits`, so nothing else moves. */
+	{
+		uint32_t width = held.size_bits;
+
+		err = content_bits_deep(image, message, len, shape, index, depth,
+		                        &width);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		return read_at(message, len, &held, offset, width, out);
+	}
 }
 
 /* `situ_walk_eval` with a tag in scope, for a `tlv` selector. Declared here
@@ -5356,6 +5380,32 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 				record(why, index, SITU_WALK_NO_CHECK);
 				*verdict = SITU_WALK_BOUNDS;
 				return SITU_WALK_OK;
+			}
+			/* And the nested struct's own MINIMUM against the extent it
+			 * measures, which is the check every backend's accessor makes
+			 * and `report._validate` has made since 26.577 -- this walker
+			 * never did. `edges.blocked_arg.one` is a
+			 * `negotiated(block = block)` measuring 32 bits where its
+			 * minimum is 40, and the Python accessor says so in as many
+			 * words: "negotiated needs at least 5 bytes; 4 given". Without
+			 * this, the walk descended into a truncated struct and
+			 * answered VERSION from the variant inside it -- a verdict
+			 * about the message's content for a message that is simply
+			 * short, where five readers answered BOUNDS (26.837).
+			 *
+			 * Guarded on the stride because the row grew the field at
+			 * 26.577 and an older image does not carry it. */
+			if (image->struct_stride >= 20u) {
+				const uint8_t *row = image->structs
+				                     + held.type_struct
+				                       * image->struct_stride;
+				const uint32_t floor = u32_at(row + 16);
+
+				if (floor != SITU_WALK_NONE && wide < floor) {
+					record(why, index, SITU_WALK_NO_CHECK);
+					*verdict = SITU_WALK_BOUNDS;
+					return SITU_WALK_OK;
+				}
 			}
 			err = validate_deep(&bound, message + at / 8u, len - at / 8u,
 			                    held.type_struct, depth + 1u, &inner, why);
