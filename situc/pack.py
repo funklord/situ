@@ -2326,6 +2326,51 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 						whole = False
 						continue
 
+			# A RESERVED arm (26.848). The member path writes kind 3 or
+			# 4 a few hundred lines above and this pass wrote neither, so
+			# a reserved field an arm selects was free in all SIX readers
+			# -- the four backends and both walkers -- where one inside a
+			# struct arm was always checked, through that struct's own
+			# validate. Section 8.8 calls those bits malleability
+			# control.
+			#
+			# The same three-way split the member path makes: `preserve`
+			# and `unknown` state no policy and are checked by nobody, and
+			# `must_be_one` carries its WIDTH because it means every bit
+			# -- a reserved `u4` is compared against 0xF, and a walk that
+			# read the kind and assumed 1 would admit exactly the
+			# messages the schema refuses.
+			#
+			# A pad is excluded rather than deferred, and that is a
+			# measurement rather than an assumption -- the first version
+			# of this comment asserted "no backend checks one" while the
+			# emitter clause beside it had just taught all four to. What
+			# they emitted was worse than silence: `pad_to(4)` after one
+			# byte spans three and the arm's accessor reads ONE of them,
+			# so the comparison caught a nonzero first byte and missed
+			# the other two, and `01000001` was accepted by all four.
+			# `reserved_want` declines a pad for that reason now, so the
+			# six readers agree in saying nothing, and the run form that
+			# WOULD answer is kind 13 a few hundred lines above -- whose
+			# port to an arm is its own piece of work (26.848).
+			# The gate is the reader's, as the rows above are.
+			if kind is traverse.Check.RESERVED:
+				policies = {a.name for a in placement.attrs}
+				if policies & {"preserve", "unknown"} \
+						or placement.pad_to is not None:
+					continue
+				if "must_be_one" in policies:
+					if placement.size_bits is None \
+							or not 0 < placement.size_bits <= 63:
+						whole = False
+						continue
+					arm_checks.append((at, _struct.pack(
+						"<IqBxxx", at,
+						(1 << placement.size_bits) - 1, 4)))
+					continue
+				arm_checks.append((at, _struct.pack("<IqBxxx", at, 0, 3)))
+				continue
+
 			# A scalar arm's value comparisons, and its enum membership.
 			if kind is not traverse.Check.CONSTRAINED:
 				# Everything else an arm can be -- a run of wide values, a

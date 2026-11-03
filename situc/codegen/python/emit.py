@@ -28,7 +28,8 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
-from situc.codegen import arm_label, sized_shown
+from situc.codegen import (
+	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
@@ -8553,7 +8554,19 @@ class Emitter:
 
 		name  = py_name(local_name(struct, placement))
 		local = f"{name}_value"
-		inner = [*self._enum_check(placement, local),
+		# A RESERVED arm's policy, which neither route asked (26.848).
+		# `_reserved_check` answers for a reserved member of the struct and
+		# is reached from the validate loop; an arm's member is not in that
+		# loop, and this branch asked the enum and the bounds only. Against
+		# the value already read rather than the message: the accessor has
+		# established that this arm is the one present, and a second read
+		# would be a second thing to agree with it about where the field is.
+		want  = reserved_want(placement)
+		inner = [*([f"\t\tif {local} != {want}:",
+		            f'\t\t\traise ConstraintError("{placement.path} is'
+		            f' reserved [{reserved_stated(placement)}]")']
+		           if want is not None else []),
+		         *self._enum_check(placement, local),
 		         *self._attr_checks(struct, placement, local)]
 		if not inner:
 			return []

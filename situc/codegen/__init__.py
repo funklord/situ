@@ -661,6 +661,46 @@ def digit_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return spelled.encode("ascii")
 
 
+def reserved_want(placement: Placement) -> int | None:
+	"""What a reserved member's own bits must hold, or None where no policy.
+
+	`reserved_policy` below says WHICH policy; this says what a comparison
+	has to compare against, which each of the four backends derives from
+	the policy and the scalar's width at its own reserved branch.
+
+	Here because the variant-arm branch needed a fifth derivation. A
+	reserved FIELD arm -- `case 1: reserved u8 [must_be_zero];` -- was
+	enforced by none of the four: the validate loop never reaches an arm's
+	member, and `_arm_member_checks`, which does, asked the enum and the
+	attribute bounds and not the policy. Section 8.8 calls reserved bits
+	malleability control, so those bytes were free in every language situ
+	generates (26.848). A fifth copy of one arithmetic is how four
+	backends come to disagree about `must_be_one` on a four-bit field.
+	"""
+	scalar = placement.scalar
+	policy = reserved_policy(placement)
+	if scalar is None or policy is None:
+		return None
+	# **A PAD is not one of these**, and the first draft of this said it
+	# was. A `pad_to(4)` is a reserved RUN the message sizes, and the
+	# packer's member path already declines the scalar form for it in as
+	# many words -- "the scalar `must_be_zero` reads a fixed byte and
+	# would check one the empty pad does not own". Inside an arm the
+	# accessor makes that concrete: `pad_to(4)` after one byte spans three
+	# and `body_pad` reads ONE, bounds-checking three, so a comparison
+	# through it catches a nonzero first byte and misses the other two --
+	# a check that looks like one. Measured in all four backends on
+	# `01000001`: every one answered OK.
+	#
+	# So a pad arm is declined here rather than half-checked, the run form
+	# (the packer's kind 13, which scans the aligned span) being the shape
+	# that would answer and its port to an arm being its own piece of
+	# work. 26.848 records that, and the one-byte read beside it.
+	if placement.pad_to is not None:
+		return None
+	return 0 if policy == "must_be_zero" else (1 << scalar.bits) - 1
+
+
 def reserved_policy(placement: Placement) -> str | None:
 	"""`must_be_zero` (the default) or `must_be_one`, for a reserved field.
 

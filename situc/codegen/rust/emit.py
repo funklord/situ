@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
-from situc.codegen import arm_label, sized_shown
+from situc.codegen import (
+	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.c.names import c_name
 from situc.diagnostics import Diagnostic, error
 from situc.expr import evaluate
@@ -6875,6 +6876,22 @@ class Emitter:
 			return []
 
 		mine: list[str] = []
+
+		# A RESERVED arm's policy, which neither route asked (26.848): the
+		# validate loop does not reach an arm's member, and this branch
+		# asked the enum and the bounds only. Against the bound local
+		# rather than a raw read, the `match` above having settled that
+		# this arm is the one the discriminant selects.
+		want = reserved_want(placement)
+		if want is not None:
+			mine.extend([
+				f"\t\t// {placement.path} is reserved"
+				f" [{reserved_stated(placement)}] (section 8.8)",
+				f"\t\tif value != {want} {{",
+				"\t\t\treturn Err(Error::Constraint);",
+				"\t\t}",
+			])
+
 		enum = self.enums.get(placement.type_name or "")
 		if enum is not None \
 				and enum.effective_default is ast.EnumDefault.ERROR:

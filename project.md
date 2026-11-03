@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.850 A text number in an arm states what nobody enforces
+
+Moved to
+`doc/decision/26.850-a-text-number-arm-states-what-nobody-enforces.md`.
+
 ### 26.849 The pin a number cannot break, and the buffer that was too small
 
 Moved to

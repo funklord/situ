@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis, Value
+from situc.codegen import reserved_policy as reserved_stated
+from situc.codegen import reserved_want
 from situc.codegen.doc import extractable
 from situc.codegen.c.names import (
 	RUNTIME_GUARD, c_name, check_collisions, check_runtime_collisions,
@@ -12376,7 +12378,22 @@ class Emitter:
 
 		local  = c_name(self._local(struct, placement))
 		getter = ident(self.prefix, struct.name, local, "get")
-		inner  = [*self._enum_check(placement, "value"),
+		# A RESERVED arm's policy, which neither route asked (26.848). The
+		# reserved branch in `_checks_for` sits BELOW the dotted-path test
+		# that sends an arm here, so it never fired for one, and this
+		# builder asked the enum and the bounds only. Against the
+		# out-parameter the getter filled, which has settled the arm
+		# question already.
+		want   = reserved_want(placement)
+		expect = None if want is None else ("0" if want == 0
+		                                    else f"0x{want:X}u")
+		inner  = [*([f"\t/* {placement.path} is reserved"
+		             f" [{reserved_stated(placement)}] (section 8.8) */",
+		             f"\tif (value != {expect}) {{",
+		             "\t\treturn SITU_ERR_CONSTRAINT;",
+		             "\t}"]
+		            if want is not None else []),
+		          *self._enum_check(placement, "value"),
 		          *self._attr_checks(struct, placement, "value",
 		                             self.resolved.layout.env)]
 		if not inner:

@@ -3924,6 +3924,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			pinned += 1u;
 		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
 		                || kind == CHECK_MAXIMUM
+		                || kind == CHECK_MUST_BE_ZERO
+		                || kind == CHECK_MUST_BE_ONE
 		                || kind == CHECK_ENUM_KNOWN) {
 			values += 1u;
 		}
@@ -4117,6 +4119,16 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			break;
 		case CHECK_MAXIMUM:
 			broken = ((int64_t)value > want);
+			break;
+		case CHECK_MUST_BE_ZERO:
+			broken = (value != 0u);
+			break;
+		case CHECK_MUST_BE_ONE:
+			/* The WIDTH is in the row, not in the kind: `must_be_one`
+			 * means every bit, so a reserved `u4` is compared against
+			 * 0xF. The member path says the same thing a few hundred
+			 * lines below. */
+			broken = ((int64_t)value != want);
 			break;
 		case CHECK_ENUM_KNOWN:
 			/* The packer writes this for an arm only since 26.421: an

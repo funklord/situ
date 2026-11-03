@@ -30,7 +30,8 @@ from dataclasses import dataclass, field
 from situc import ast
 from situc.kernels import zero_means_none
 from situc.capability import Axis
-from situc.codegen import arm_label, sized_shown
+from situc.codegen import (
+	arm_label, reserved_policy as reserved_stated, reserved_want, sized_shown)
 from situc.codegen.c.names import (
 	KEYWORDS, RUNTIME_GUARD, bare_name, c_name)
 from situc.codegen.cpp.names import check_collisions, class_name, renamed
@@ -10208,7 +10209,19 @@ class Emitter:
 		# cannot meet this, its sibling reads being prefixed calls.
 		name  = bare_name(local_name(struct, placement))
 		held  = f"{name}_value"
-		inner = [*self._arm_enum_check(placement, held),
+		# A RESERVED arm's policy, which neither route asked (26.848): the
+		# validate loop does not reach an arm's member, and this branch
+		# asked the enum and the bounds only. Against the value the
+		# accessor has already handed back, which is where the arm
+		# question has been settled.
+		want  = reserved_want(placement)
+		inner = [*([f"\t\t/* {placement.path} is reserved"
+		            f" [{reserved_stated(placement)}] (section 8.8) */",
+		            f"\t\tif ({held} != {want}) {{",
+		            "\t\t\treturn ::situ::rt::err::constraint;",
+		            "\t\t}"]
+		           if want is not None else []),
+		         *self._arm_enum_check(placement, held),
 		         *self._attr_checks(struct, placement, held)]
 		if not inner:
 			return []
