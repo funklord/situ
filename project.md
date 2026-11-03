@@ -8259,6 +8259,11 @@ Moved to
 Moved to
 `doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
 
+### 26.842 The eighth kind, and the escape hatch that needs no check
+
+Moved to
+`doc/decision/26.842-the-eighth-kind-and-the-escape-hatch-that-needs-no-check.md`.
+
 ### 26.840 The seventh kind, and the pin a number cannot break
 
 Moved to

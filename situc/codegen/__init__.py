@@ -406,6 +406,23 @@ def tally(resolved: ResolvedSchema, cases: list["Case"],
 # check is vacuous, a zeroed buffer already breaking `must_be_one` so the
 # check would pass against a validator that did nothing.
 
+def passes_unknown(schema: ast.Schema, name: str | None) -> bool:
+	"""Whether this enum admits values no member names (section 8.7).
+
+	`default = pass` is the escape hatch the section offers deliberately:
+	IANA keeps assigning numbers, and a receiver refusing tomorrow's would
+	refuse tomorrow's traffic. A check that demanded a rejection regardless
+	of the policy failed a schema for using it.
+
+	Shared for the reason the six below are: the second backend to ask
+	would otherwise carry a second copy of one question.
+	"""
+	for decl in schema.enums():
+		if decl.name == name:
+			return decl.effective_default is ast.EnumDefault.PASS
+	return False
+
+
 def placed_bytes(offset_bits: int, bits: int, raw: int, endian: ast.Endian | None,
 		bit_order: ast.BitOrder | None, packed: bool) -> dict[int, int] | None:
 	"""Where `raw` lands in a zeroed buffer, from the map rather than the accessor.

@@ -26,7 +26,7 @@ from typing import Literal
 from situc import __version__, ast
 from situc.capability import Axis
 from situc.codegen import (PROBE_BYTES, digit_pattern, placed_bytes,
-                           reserved_policy,
+                           passes_unknown, reserved_policy,
                            refuse_parameters, required_pattern,
                            required_run, selected_arms)
 from situc.codegen.python.emit import py_name
@@ -93,6 +93,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		# refusal is about that field in a message that carries it.
 		lines.extend(_reserved_checks(basename, resolved, struct))
 		lines.extend(_must_eq_checks(basename, resolved, struct))
+		lines.extend(_enum_checks(basename, schema, resolved, struct))
 
 	lines.extend([
 		"",
@@ -143,7 +144,7 @@ _COUNT_WORD = ("no", "One", "Two", "Three", "Four", "Five",
 #: The kinds this backend emits: the first `DONE` of `C_KINDS`. One number,
 #: so adding a kind moves the sentence, the emitted list and the declined
 #: list together.
-DONE = 7
+DONE = 8
 
 
 def _preamble(basename: str, structs: int) -> list[str]:
@@ -199,7 +200,14 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"    form only -- 49 of the corpus's 67 pins are a foldable",
 		"    scalar and the other 18 are byte RUNS, which a number cannot",
 		"    break (`\"BM\"` has nothing to add one to), so those are",
-		"    declined by name. Same baseline, and the same reason for it."
+		"    declined by name. Same baseline, and the same reason for it.",
+		"  - an enum rejects a value no member names, where the schema",
+		"    says it should. `default = pass` is section 8.7's deliberate",
+		"    escape hatch -- IANA keeps assigning numbers and a receiver",
+		"    refusing tomorrow's would refuse tomorrow's traffic -- so an",
+		"    enum carrying it has nothing to reject and gets no check.",
+		"    The value written is the lowest the MEMBER's own width can",
+		"    hold that names no member, not the lowest byte."
 		"",
 		f"The {_COUNT_WORD[len(C_KINDS) - DONE].lower()} `--target c` also emits and this does not:",
 		"",
@@ -369,6 +377,106 @@ def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if select:
 		lines += [*select, ""]
 	return lines
+
+
+def _enum_checks(basename: str, schema: ast.Schema,
+		resolved: ResolvedSchema, struct: ResolvedStruct) -> list[str]:
+	"""An enum field admits its members and, with `default = error`,
+	nothing else.
+
+	Section 8.7 says so and every backend emitted it as a comment until
+	three of them were compared.
+	"""
+	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		return []
+
+	extent = struct.layout.size_bytes
+	lines: list[str] = []
+	for entry in struct.entries:
+		lines.extend(_one_enum(basename, schema, resolved, struct,
+		                       entry.placement, extent))
+	return lines
+
+
+def _one_enum(basename: str, schema: ast.Schema, resolved: ResolvedSchema,
+		struct: ResolvedStruct, placement: Placement,
+		extent: int) -> list[str]:
+	"""One enum field's rejection check, or a named decline, or nothing."""
+	values = resolved.layout.env.enums.get(placement.type_name or "")
+	if not values or "[]" in placement.path:
+		return []
+
+	# `default = pass` says an unknown value is accepted, which is exactly
+	# what section 8.7 offers it for -- IANA keeps assigning numbers, and a
+	# receiver refusing tomorrow's would refuse tomorrow's traffic. Not a
+	# decline to name: the schema is saying there is nothing to reject.
+	if passes_unknown(schema, placement.type_name):
+		return []
+
+	reason = None
+	unknown = None
+	if placement.offset_bits is None:
+		reason = ("it sits at an offset the message chooses, so no one"
+		          " buffer breaks it")
+	elif not placement.size_bits:
+		reason = "it owns no bit to break"
+	elif inside_an_unresolved_arm(struct, placement):
+		reason = ("it is inside a variant arm this backend cannot name, so"
+		          " no message can be built that carries it")
+	elif (placement.offset_bits + placement.size_bits - 1) \
+			// BITS_PER_BYTE >= extent:
+		reason = "it lies outside the frame this builds"
+	else:
+		# **The range is the MEMBER's width, not a byte.** It was 256
+		# whatever the field held in `--target c`, beside a gate that
+		# skipped anything wider than a byte -- so `ethernet.ethertype`,
+		# `mqtt.packet.kind` and twenty-one others declared their members
+		# and nobody checked that a value outside them was refused.
+		taken = set(values.values())
+		unknown = next((v for v in range(1 << placement.size_bits)
+		                if v not in taken), None)
+		if unknown is None:
+			reason = (f"`{placement.type_name}` names every value its"
+			          f" {placement.size_bits} bits can hold, so there is"
+			          " none to reject")
+	if reason is not None:
+		return [f"\t# Not enforced here: `{placement.path}`, because"
+		        f" {reason}.", ""]
+
+	prelude = _prelude(resolved, struct, placement, extent)
+	if prelude is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because no"
+		        " buffer carrying it with every other constraint",
+		        "\t# satisfied can be built, so breaking it would prove"
+		        " nothing.", ""]
+
+	assert unknown is not None
+	broken = _break_to(placement, unknown)
+	if broken is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because its"
+		        " bits are not ones a value can be placed into.", ""]
+
+	name = py_name(f"{struct.name}_{placement.name}")
+	return [
+		f"\tdef test_{name}_rejects_a_value_no_member_names(self) -> None:",
+		f'\t\t"""`{placement.path}` is a `{placement.type_name}`, which',
+		"\t\trejects unknown values (section 8.7). A field declared to",
+		"\t\tadmit a handful of values that takes all 256 is not the",
+		'\t\tfield the schema described."""',
+		f"\t\traw = bytearray({extent})",
+		"\t\tmsg = situ_runtime.Message(raw)",
+		f"\t\tview = {basename}.{py_name(struct.name)}.at(msg, 0"
+		+ ("" if struct.layout.is_fixed_size else f", {extent}") + ")",
+		"",
+		*prelude,
+		"\t\tview.validate()",
+		"",
+		f"\t\t# {unknown} names no member of `{placement.type_name}`.",
+		*broken,
+		"\t\twith self.assertRaises(situ_runtime.ConstraintError):",
+		"\t\t\tview.validate()",
+		"",
+	]
 
 
 def _must_eq_checks(basename: str, resolved: ResolvedSchema,

@@ -713,6 +713,69 @@ def test_gen_checks_declines_a_pin_a_number_cannot_break(
 	assert "test_s_sig_must_eq_is_enforced" not in text
 
 
+def test_gen_checks_rejects_a_value_no_enum_member_names(
+	tmp_path: Path,
+) -> None:
+	"""The eighth kind: an enum admits its members and nothing else.
+
+	Section 8.7 says so and every backend emitted it as a comment until
+	three of them were compared.
+
+	**The value written is the lowest the MEMBER's own width can hold that
+	names no member, not the lowest byte.** In `--target c` the range was
+	256 whatever the field held, beside a gate that skipped anything wider
+	than a byte -- so `ethernet.ethertype`, `mqtt.packet.kind` and
+	twenty-one others declared their members and nobody checked that a
+	value outside them was refused.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"enum kind : u8 {\n\tone = 0,\n\ttwo = 1,\n"
+		"\tdefault = error,\n}\n\n"
+		"struct s {\n\tkind  k;\n\tu8  rest;\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "def test_s_k_rejects_a_value_no_member_names" in text
+	# 0 and 1 are named, so 2 is the lowest that is not.
+	assert "# 2 names no member of `kind`." in text
+	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
+
+
+def test_gen_checks_leaves_an_enum_that_passes_unknowns_alone(
+	tmp_path: Path,
+) -> None:
+	"""`default = pass` means there is nothing to reject.
+
+	Section 8.7 offers it deliberately: IANA keeps assigning numbers, and a
+	receiver refusing tomorrow's would refuse tomorrow's traffic.
+	`--target c` emitted the rejection check regardless of the policy, so a
+	schema using the escape hatch failed a test asserting it had not.
+
+	No check and no decline either -- the schema is not saying "this cannot
+	be asked", it is saying there is no such value. A decline would read as
+	a gap.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"enum kind : u8 {\n\tone = 0,\n\ttwo = 1,\n"
+		"\tdefault = pass,\n}\n\n"
+		"struct s {\n\tkind  k;\n\tu8  rest;\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "rejects_a_value_no_member_names" not in text
+	assert "Not enforced here: `s.k`" not in text
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had

@@ -25,8 +25,8 @@ knowing anything about how the accessor is written.
 from __future__ import annotations
 
 from situc.codegen import (PROBE_BYTES, argued_sides, arguments,
-	digit_pattern, placed_bytes, refuse_parameters, required_pattern,
-	required_run, reserved_policy, selected_arms)
+	digit_pattern, passes_unknown, placed_bytes, refuse_parameters,
+	required_pattern, required_run, reserved_policy, selected_arms)
 from situc import __version__
 
 import re
@@ -1126,14 +1126,6 @@ def _versioned_checks(suite: Suite, resolved: ResolvedSchema,
 		 "\t * the start and the setter did not, which is the asymmetry worth",
 		 "\t * naming: reading the wrong bytes is a wrong answer, and writing",
 		 "\t * them is somebody else's data. */"])
-
-
-def _passes_unknown(schema: ast.Schema, name: str | None) -> bool:
-	"""Whether this enum admits values no member names (section 8.7)."""
-	for decl in schema.enums():
-		if decl.name == name:
-			return decl.effective_default is ast.EnumDefault.PASS
-	return False
 
 
 def _text_number_checks(suite: Suite, struct: ResolvedStruct, entry: Resolved,
@@ -2282,7 +2274,7 @@ def _enum_checks(suite: Suite, schema: ast.Schema,
 		# a receiver refusing tomorrow's would refuse tomorrow's traffic. This
 		# emitted the rejection check regardless of the policy, so a schema
 		# that used the escape hatch failed a test asserting it had not.
-		if _passes_unknown(schema, placement.type_name):
+		if passes_unknown(schema, placement.type_name):
 			continue
 
 		# A value no member names. Walking up from zero finds one unless the
