@@ -8229,6 +8229,11 @@ Moved to
 Moved to
 `doc/decision/26.827-no-tier-one-capacity-branch-was-ever-taken.md`.
 
+### 26.828 Three clauses true of the case that motivated them
+
+Moved to
+`doc/decision/26.828-three-clauses-true-of-the-case-that-motivated-them.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

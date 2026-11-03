@@ -470,6 +470,35 @@ def test_the_unbounded_branch_says_nothing_false_about_a_small_width() -> None:
 	assert "no caller can allocate" not in found.detail
 
 
+def test_a_driven_length_that_is_last_moves_nothing_after_it() -> None:
+	"""The clause said "moves every member after this one" unconditionally,
+	which is false where the driven member is last -- and the last member is
+	the commonest place for a variable-length one to be, because that is what
+	`move-dynamic-to-tail` spends its whole row asking for.
+
+	The count is of members that FOLLOW, not of `_behind`'s gainers: those
+	stop at the next variable-length member, and a different length moves
+	everything after it whether or not a pin would return it to an absolute
+	offset. The third arm below is where the two numbers differ.
+	"""
+	last = only("struct s { u16 n [max = 8]; u8 body[n]; }",
+	            "pin-a-driven-length")
+	assert "changes `s`'s own extent, nothing following it here" in last.detail
+
+	one = only("struct s { u16 n [max = 8]; u8 body[n]; u32 a; }",
+	           "pin-a-driven-length")
+	assert "moves the 1 member after it" in one.detail
+
+	# Two follow and only one of them gains from a pin, so a clause keyed on
+	# `_behind` would have said one.
+	two = next(item for item in
+	           by_rule("struct s { u16 n [max = 8]; u8 body[n]; u8 t[n];"
+	                   " u32 a; }", "pin-a-driven-length")
+	           if item.subject == "s.body")
+	assert "moves the 2 members after it" in two.detail
+	assert two.yields.startswith("a fixed extent, so 1 member after `body`")
+
+
 def test_a_parameter_is_not_a_length_anything_can_pin() -> None:
 	"""`sized_by` also names a `[stream]` parameter, whose value is the
 	caller's: `[must_eq]` cannot reach it, so advising it is advice nobody

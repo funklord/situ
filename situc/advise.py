@@ -879,9 +879,27 @@ def _find_driven_lengths(resolved: ResolvedSchema) -> list[Suggestion]:
 			longest          = _worst_bytes(placement)
 			declared         = any(attr.name == "max" for attr in driver.attrs)
 			behind, encloses = _behind(struct, placement)
+
+			# Whether anything follows it AT ALL, which is not `behind`:
+			# that counts the members a pin would return to absolute
+			# offsets, and stops at the next variable-length one. "Writing a
+			# different length moves every member after this one" was said
+			# unconditionally and is false where this member is last -- the
+			# third clause in this file written while looking at the case
+			# that motivated it and asserted of the class (26.828). What a
+			# different length moves then is the struct's own extent.
+			members = _members(struct)
+			index   = next((i for i, held in enumerate(members)
+			                if held.placement.path == placement.path), None)
+			follow  = 0 if index is None else len(members) - index - 1
+
 			shared  = (f"the extent is whatever `{placement.sized_by}` says, "
 			           f"so it is a range and not a number, and writing a "
-			           f"different length moves every member after this one")
+			           + (f"different length moves the "
+			              f"{_count(follow, 'member')} after it"
+			              if follow else
+			              f"different length changes `{struct.name}`'s own "
+			              f"extent, nothing following it here"))
 
 			if declared:
 				summary = (f"pin `{placement.sized_by}` with "
