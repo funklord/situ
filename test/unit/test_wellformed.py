@@ -2885,6 +2885,21 @@ REFUSING = {
 	"situc.codegen.c.fuzz",
 	"situc.codegen.c.tamper",
 	"situc.codegen.c.vectors",
+	# The four that arrived on 2026-11-03, when `gen-tests` reached all
+	# four languages (26.829) and `gen-checks` reached Python (26.831).
+	# Each is the same kind as the `c.*` rows above -- a SECOND artifact
+	# over a schema, with calls of its own that would each have to thread
+	# an argument through, and none on a `situc build` path.
+	#
+	# They were unnamed for the length of that work because this file is
+	# at the end of the suite's alphabet and the run that would have
+	# reached it was killed by its own timeout at 91% under a load of 73.
+	# A suite that does not finish is not a suite that passed, which is
+	# the lesson worth more than the four names.
+	"situc.codegen.cpp.vectors",
+	"situc.codegen.python.checks",
+	"situc.codegen.python.vectors",
+	"situc.codegen.rust.vectors",
 }
 
 #: What a generator DOES with a schema carrying a `parameter`, measured
@@ -3202,6 +3217,14 @@ SHAPES = {
 	# would go and the fixture leaves it empty, which is the point: the
 	# refusal is about the schema and fires before a case is read.
 	"situc.codegen.c.vectors":      ("schema", "resolved", "cases", "name"),
+	# The four added 2026-11-03 with `gen-tests` for all four languages and
+	# `gen-checks` for Python. Three take the vectors shape and the fourth
+	# the plain one; each has a `prefix` after these with a default, which
+	# the caller below does not pass.
+	"situc.codegen.cpp.vectors":    ("schema", "resolved", "cases", "name"),
+	"situc.codegen.python.vectors": ("schema", "resolved", "cases", "name"),
+	"situc.codegen.rust.vectors":   ("schema", "resolved", "cases", "name"),
+	"situc.codegen.python.checks":  ("schema", "resolved", "name"),
 }
 
 
