@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.846 The fuzz harness was parked on a rule that does not apply
+
+Moved to
+`doc/decision/26.846-the-fuzz-harness-was-parked-on-a-rule-that-does-not-apply.md`.
+
 ### 26.845 Gen-checks in Rust, and the getter that collapses its inputs
 
 Moved to
