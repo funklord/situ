@@ -320,6 +320,10 @@ def _check_one_text_number(member: ast.Field) -> None:
 
 	if member.scaled and fixed:
 		assert member.array is not None, "`fixed` says there is one"
+		# ...and that it has a size: `fixed` is what says the width is a
+		# literal rather than an expression or a remainder, so this cannot
+		# be None here and mypy has no way to know it from `fixed` alone.
+		assert member.array.size is not None, "`fixed` says it has a width"
 		raise error(
 			f"`{member.name}` is a scaled text number with a fixed width",
 			member.type_ref.span,
