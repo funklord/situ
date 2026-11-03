@@ -22,9 +22,11 @@ third-party packages, and a suite handed to a user should ask no more.
 from __future__ import annotations
 
 from situc import __version__, ast
+from situc.capability import Axis
 from situc.codegen import refuse_parameters
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
+from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_entries
 
@@ -50,6 +52,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	"""A `unittest` module holding each struct to its own minimum extent."""
 	refuse_parameters(schema)
 
+	enums   = {decl.name for decl in schema.enums()}
 	checked = [struct for struct in resolved.structs.values()
 	           if _has_a_minimum(struct)]
 	lines = _preamble(basename, len(checked))
@@ -72,6 +75,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend(_short_buffer(basename, struct))
 		for entry in own_entries(struct):
 			lines.extend(_occupies(basename, struct, entry.placement))
+			lines.extend(_round_trip(basename, enums, struct, entry))
 
 	lines.extend([
 		"",
@@ -131,10 +135,15 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"  - a field occupies exactly the bytes the map claims. Each of them",
 		"    must reach the value and nothing else may, which is checked by",
 		"    flipping every byte of the buffer in turn.",
+		"  - a field the map calls writable in place round-trips through its",
+		"    setter and moves no byte outside its own claim. The map's own",
+		"    verdict is the gate: where it does not say `InPlaceFixed`, no",
+		"    check is emitted, so this asserts the `MUTATE` axis where the",
+		"    two above assert `OFFSET` and `SIZE`.",
 		"",
-		"The seven `--target c` also emits and this does not:",
+		"The six `--target c` also emits and this does not:",
 		"",
-		*[f"  - {kind}" for kind in C_KINDS[2:]],
+		*[f"  - {kind}" for kind in C_KINDS[3:]],
 		"",
 		"Saying which rather than leaving them out silently: a suite that",
 		"checks one of nine things and does not say so reads as the whole",
@@ -151,6 +160,98 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"",
 		"",
 		"class Checks(unittest.TestCase):",
+	]
+
+
+def _round_trip(basename: str, enums: set[str],
+		struct: ResolvedStruct, entry: Resolved) -> list[str]:
+	"""A field the map calls writable in place round-trips and moves nothing.
+
+	**The map's own verdict is the gate**, which is the part of this check
+	worth getting right. Where `mutate` is not `InPlaceFixed` the field is
+	not claimed to be writable without moving anything, so no check is
+	emitted -- and a backend that emitted a setter anyway would be caught by
+	the absence of a check rather than by one, which is why the generated
+	module says how many it emitted.
+
+	This is the first of the kinds here to assert `MUTATE`; the two above
+	assert `OFFSET` and `SIZE`.
+
+	Writes `1` into a zeroed buffer, which is in range for any scalar of at
+	least one bit and is a change from what is there, so a setter that did
+	nothing would be caught -- which writing the value back unchanged would
+	not. Enum-typed fields are declined for the same reason the vector
+	suites decline them in Rust: `1` need not name a member, and the getter
+	is entitled to refuse a value the enum does not have.
+	"""
+	placement = entry.placement
+	if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
+		return []
+
+	# **The gate is two axes, not one**, and the second cost five schemas
+	# before it was here. `mutate = InPlaceFixed` says writing the field
+	# moves no bytes; `auth = Covered` says writing it leaves an
+	# authentication tag stale, and the backend withholds the plain setter
+	# for that reason (section 14.2). So a field can be writable in place
+	# and have no setter at all -- `tcp_header.urgent` and
+	# `usb.token.address` are both, and both raised
+	# `AttributeError: property 'urgent' of 'tcp_header' object has no
+	# setter`. Writing one is a different operation with a finalize after
+	# it, which is its own check rather than this one.
+	if entry.vector.get(Axis.AUTH).base != "Uncovered":
+		return []
+	if placement.offset_bits is None or placement.kind != "field":
+		return []
+	if placement.scalar is None or placement.radix is not None:
+		return []
+	if placement.size_max_bits != placement.size_bits:
+		return []
+	if placement.array_count is not None:
+		return []
+	if placement.type_name in enums:
+		return []
+	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		return []
+
+	first = placement.offset_bits // BITS_PER_BYTE
+	last  = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
+	size  = struct.layout.size_bytes
+	if last >= size:
+		return []
+
+	name    = py_name(f"{struct.name}_{placement.name}")
+	acquire = (f"{basename}.{py_name(struct.name)}.at(msg, 0"
+	           + ("" if struct.layout.is_fixed_size else f", {size}") + ")")
+	return [
+		f"	def test_{name}_round_trips_in_place(self) -> None:",
+		f'		"""The map calls `{struct.name}.{placement.name}` writable in'
+		f' place."""',
+		f"		raw = bytearray({size})",
+		"		msg = situ_runtime.Message(raw)",
+		f"		view = {acquire}",
+		"",
+		f"		view.{py_name(placement.name)} = 1",
+		"",
+		"		# Read back through a FRESH view. `InPlaceFixed` says",
+		"		# writing this field moves no bytes; it does not say a",
+		"		# view taken before the write survives it.",
+		"		# `test/schema/shared`'s `len` drives another member's",
+		"		# extent, so writing it bumps the message generation and",
+		"		# the old view is correctly refused with",
+		"		# `StaleViewError` -- section 12.3's typestate working,",
+		"		# not a field that failed to round-trip. Whether bytes",
+		"		# MOVED is asked of `raw` below, which no generation",
+		"		# affects.",
+		f"		view = {acquire}",
+		f'		self.assertEqual(view.{py_name(placement.name)}, 1,'
+		f' "{placement.name} did not take 1")',
+		"",
+		f"		for i in range({size}):",
+		f"			if {first} <= i <= {last}:",
+		"				continue",
+		"			self.assertEqual(raw[i], 0,",
+		f'				f"writing {placement.name} moved byte {{i}}")',
+		"",
 	]
 
 

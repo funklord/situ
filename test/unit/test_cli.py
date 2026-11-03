@@ -235,8 +235,8 @@ def test_gen_checks_writes_a_python_bounds_suite(
 	assert "with self.assertRaises(situ_runtime.BoundsError):" in text
 	# The seven it declines, named rather than absent -- and the count moved
 	# when the claimed-byte kind landed, which is the entry saying so.
-	assert "The seven `--target c` also emits and this does not:" in text
-	assert "a field round-trips in place" in text
+	assert "The six `--target c` also emits and this does not:" in text
+	assert "a field decodes a known encoding" in text
 
 
 def test_gen_checks_holds_a_field_to_its_claimed_bytes(
@@ -264,6 +264,64 @@ def test_gen_checks_holds_a_field_to_its_claimed_bytes(
 	assert 'self.assertTrue(noticed, "no claimed byte reaches length")' in text
 	assert "must not reach length" in text
 	assert "raw[i] ^= 0xFF" in text
+
+
+def test_gen_checks_holds_a_writable_field_to_its_own_bytes(
+	tmp_path: Path,
+) -> None:
+	"""The third kind, and the first to assert MUTATE where the two before
+	it assert OFFSET and SIZE.
+
+	Write through the setter, read back through a FRESH view, and require
+	every byte outside the field's claim unchanged. The fresh view is not
+	caution: `InPlaceFixed` says writing moves no bytes, not that a view
+	taken before the write survives it -- `test/schema/shared`'s `len`
+	drives another member's extent, so writing it bumps the generation and
+	the old view is correctly refused with `StaleViewError`. That is
+	section 12.3's typestate working, and whether bytes MOVED is asked of
+	the buffer, which no generation affects.
+
+	Watched discriminating: a setter writing three bytes where the map
+	claims two fails exactly that field's check.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert "def test_header_length_round_trips_in_place" in text
+	assert "view.length = 1" in text
+	assert "# Read back through a FRESH view." in text
+	assert "writing length moved byte" in text
+
+
+def test_gen_checks_skips_a_covered_field_with_no_setter(
+	tmp_path: Path,
+) -> None:
+	"""The gate is two axes, not one, and the second cost five schemas.
+
+	`mutate = InPlaceFixed` says writing the field moves no bytes;
+	`auth = Covered` says writing it leaves an authentication tag stale, and
+	the backend withholds the plain setter for that reason (section 14.2).
+	So a field can be writable in place and have no setter at all --
+	`tcp_header.urgent` and `usb.token.address` are both, and both raised
+	`AttributeError: property 'urgent' of 'tcp_header' object has no
+	setter`.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"codec sum16 {\n\tkernel = ones_complement(width = 16, complement);\n"
+		"}\nimpl sum16 derived;\n\nendian big;\n\nstruct s {\n"
+		"\tauthenticated body {\n\t\tu16 covered;\n\t}\n"
+		"\tchecksum u8 sum[2] covers(body) is sum16;\n"
+		"\tu16 plain;\n}\n", encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	# The uncovered field round-trips; the covered one is not asked to.
+	assert "test_s_plain_round_trips_in_place" in text
+	assert "test_s_covered_round_trips_in_place" not in text
 
 
 def test_gen_checks_skips_a_field_with_no_fixed_claim(
