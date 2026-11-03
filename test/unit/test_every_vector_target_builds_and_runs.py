@@ -1,0 +1,127 @@
+"""The three vector targets added at 26.829, built and run over the corpus.
+
+`gen-tests` reached C alone until this run, and section 1 names four
+languages. The C suite is built and run by `make test-c`; these three were
+verified once, by hand, which is how a target starts rotting -- a generator
+nothing exercises looks exactly like one that works.
+
+**The compile is the gate that matters here and the unit test in
+`test_cli.py` says so.** That one checks each target names every case,
+keyed on the shared case symbol, and cannot tell a call from a definition:
+with the C++ emitter cut to one case every symbol still appeared, because
+`main` dispatches to all of them. What catches a dropped body is the
+compiler -- `error: 'header_minimum' was not declared in this scope` -- so
+this is where that is caught.
+
+Python has no compiler, which is why its suite is the one that found a real
+fault the first time it ran: `at()` takes a length for a variable struct and
+13 of the corpus's 27 vector files raised `TypeError` for want of it. For
+Python, running IS the compile.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+RUSTC = shutil.which("rustc")
+CXX = shutil.which("g++") or shutil.which("c++")
+
+
+def vector_schemas() -> list[Path]:
+	"""Every schema with a `.vectors` beside it, asked of the filesystem.
+
+	`test/generated/Makefile` derives its own list the same way and says
+	why: a hand-kept list is a second answer to a question the filesystem
+	answers, and the two drift in the direction nobody notices -- a corpus
+	file that is never run looks exactly like one that passes.
+	"""
+	found = sorted(
+		path.with_suffix(".situ")
+		for path in [*ROOT.glob("example/*/*.vectors"),
+		             *ROOT.glob("test/schema/*.vectors")]
+		if path.with_suffix(".situ").exists())
+	assert len(found) > 20, f"only {len(found)} schemas with vectors; the corpus moved"
+	return found
+
+
+def emit(schema: Path, target: str, out: Path) -> None:
+	out.mkdir(parents=True, exist_ok=True)
+	for command in (
+		["gen-tests", str(schema), str(schema.with_suffix(".vectors")),
+		 "--target", target, "--out", str(out)],
+		["build", str(schema), "--target", target, "--out", str(out)],
+	):
+		done = subprocess.run(
+			[sys.executable, "-m", "situc", *command],
+			capture_output=True, text=True, cwd=ROOT)
+		assert done.returncode == 0, f"{command[0]} {target}: {done.stderr[-700:]}"
+
+
+@pytest.mark.parametrize("schema", vector_schemas(), ids=lambda p: p.stem)
+def test_the_python_vector_suite_runs(schema: Path, tmp_path: Path) -> None:
+	"""Python first, because it is the one with no compiler: running the
+	suite is the only thing that executes the generated accessors at all."""
+	emit(schema, "python", tmp_path)
+	shutil.copy(ROOT / "runtime" / "python" / "situ_runtime.py", tmp_path)
+
+	done = subprocess.run(
+		[sys.executable, "-m", "unittest", f"{schema.stem}_vectors"],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert done.returncode == 0, done.stderr[-2000:]
+	# A suite that ran nothing exits 0 as loudly as one that ran everything.
+	assert "Ran 0 tests" not in done.stderr, done.stderr
+
+
+@pytest.mark.skipif(RUSTC is None, reason="needs rustc")
+@pytest.mark.parametrize("schema", vector_schemas(), ids=lambda p: p.stem)
+def test_the_rust_vector_suite_builds_and_runs(
+	schema: Path, tmp_path: Path,
+) -> None:
+	emit(schema, "rust", tmp_path)
+	# `#![no_std]` stripped, as `fourway` strips it: a test crate links the
+	# standard library and the runtime is written to be embeddable without.
+	(tmp_path / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+
+	assert RUSTC is not None
+	built = subprocess.run(
+		[RUSTC, "--edition", "2021", "-O", "-A", "warnings", "--test",
+		 f"{schema.stem}_vectors.rs", "-o", "vectors"],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert built.returncode == 0, built.stderr[-2000:]
+
+	done = subprocess.run([str(tmp_path / "vectors")],
+	                      capture_output=True, text=True, cwd=tmp_path)
+	assert done.returncode == 0, done.stdout[-2000:]
+	assert "0 passed" not in done.stdout, done.stdout
+
+
+@pytest.mark.skipif(CXX is None, reason="needs g++")
+@pytest.mark.parametrize("schema", vector_schemas(), ids=lambda p: p.stem)
+def test_the_cpp_vector_suite_builds_and_runs(
+	schema: Path, tmp_path: Path,
+) -> None:
+	emit(schema, "cpp", tmp_path)
+
+	assert CXX is not None
+	built = subprocess.run(
+		[CXX, "-std=c++17", "-O1", "-I.",
+		 f"-I{ROOT / 'runtime' / 'c'}", f"-I{ROOT / 'runtime' / 'cpp'}",
+		 f"{schema.stem}_vectors.cpp", str(ROOT / "runtime" / "c" / "situ.c"),
+		 "-o", "vectors"],
+		capture_output=True, text=True, cwd=tmp_path)
+	assert built.returncode == 0, built.stderr[-2000:]
+
+	done = subprocess.run([str(tmp_path / "vectors")],
+	                      capture_output=True, text=True, cwd=tmp_path)
+	assert done.returncode == 0, done.stdout[-2000:]
+	# The suite prints its own verdict, and a run of nothing is not a pass.
+	assert "0 of 0 vector(s) failed" not in done.stdout, done.stdout
