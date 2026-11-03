@@ -839,6 +839,65 @@ def test_gen_checks_imports_no_frame_module_it_does_not_use(
 	assert "reader_reassembles" not in text
 
 
+def test_gen_checks_writes_a_cpp_suite(tmp_path: Path) -> None:
+	"""`gen-checks --target cpp`: the third language, and the cheapest.
+
+	Eight of the nine kinds, and the port was the statement vocabulary
+	rather than the logic -- which value a member must hold, where its
+	bytes land, which arm a message carries and what a probe pattern is
+	all live in `situc/codegen` now, shared with the other two backends.
+	26.838 and 26.842 are where those moved, and this is what they bought.
+
+	**A plain `main` counting failures rather than a framework**, which is
+	`cpp/vectors.py`'s decision and for its reason: the C suite uses cmocka
+	and C++ has no dependency to spend here.
+
+	Measured: inverting the C++ emitter's byte order fails 129 decode
+	checks across 27 of the corpus's schemas -- the same 129 the Python
+	backend gives, which is what two backends asking ONE question looks
+	like from outside. 33 further failures are the constraint kinds' own
+	control arm firing: "the baseline does not validate", said rather than
+	a refusal mis-asserted about the wrong thing.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "cpp",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.cpp").read_text(encoding="ascii")
+
+	assert "static int situ_failures = 0;" in text
+	assert "int main(void)" in text
+	assert "check(s) failed" in text
+	assert "static void check_header_refuses_a_short_buffer(void)" in text
+	assert "check_header_length_decodes_a_known_encoding" in text
+	# The frame header only where a framing check was emitted, as the
+	# Python suite imports its frame module only then.
+	assert '#include "header_frame.hpp"' in text
+
+
+def test_gen_checks_cpp_asks_the_same_question_as_python(
+	tmp_path: Path,
+) -> None:
+	"""The two backends write the same arithmetic, because they read it
+	from the same place.
+
+	Not because one was written from the other: `PROBE_BYTES`,
+	`placed_bytes`, `required_pattern`, `digit_pattern`, `required_run`,
+	`selected_arms`, `reserved_policy` and `passes_unknown` are all in
+	`situc/codegen`. Two backends agreeing is evidence only when they are
+	not each computing the answer, which is the distinction
+	`situc/codegen/differ` exists for one level down.
+
+	`header.length` is 16 bits big-endian at bit 24, so the probe is
+	`0x81 0x23` and the value 33059 in both.
+	"""
+	for target, suffix in (("python", "py"), ("cpp", "cpp")):
+		assert main(["gen-checks", HEADER, "--target", target,
+		             "--out", str(tmp_path)]) == 0
+		text = (tmp_path / f"header_checks.{suffix}").read_text(
+			encoding="ascii")
+		assert "33059" in text, target
+		assert "0x81" in text.replace('"8123"', "0x81 0x23"), target
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had

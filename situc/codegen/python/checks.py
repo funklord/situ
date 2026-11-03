@@ -25,11 +25,10 @@ from typing import Literal
 
 from situc import __version__, ast
 from situc.capability import Axis
-from situc.codegen import (PROBE_BYTES, arguments, digit_pattern,
-                           placed_bytes,
-                           passes_unknown, reserved_policy,
+from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
+                           digit_pattern, passes_unknown, placed_bytes,
                            refuse_parameters, required_pattern,
-                           required_run, selected_arms)
+                           required_run, reserved_policy, selected_arms)
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
@@ -39,21 +38,11 @@ from situc.traverse import (enclosing_arm, has_computable_extent,
                             inside_an_unresolved_arm, own_entries)
 from situc.types import ScalarKind
 
-#: The nine kinds `--target c` emits, so the generated file can name the
-#: eight it does not. Written out rather than derived, because the C emitter
-#: names them in the test identifiers it builds and there is no list to
-#: read -- which is itself worth knowing for whoever ports the rest.
-C_KINDS = (
-	"refuses a short buffer",
-	"a field occupies its claimed bytes",
-	"a field round-trips in place",
-	"a field decodes a known encoding",
-	"a nested member starts where the map says",
-	"`must_eq` is enforced",
-	"`reserved` must be zero",
-	"an enum rejects a value no member names",
-	"a framing reader reassembles across every boundary",
-)
+#: `CHECK_KINDS` under this module's own name, the generated prose
+#: citing it as `C_KINDS` in several places. One tuple, two spellings of
+#: the reference to it -- which is not the drift the shared list is
+#: against, that being two different tuples.
+C_KINDS = CHECK_KINDS
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,

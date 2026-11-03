@@ -406,6 +406,30 @@ def tally(resolved: ResolvedSchema, cases: list["Case"],
 # check is vacuous, a zeroed buffer already breaking `must_be_one` so the
 # check would pass against a validator that did nothing.
 
+#: The nine kinds of conformance check, named once.
+#:
+#: Each backend's generated file says which it emits and what each one
+#: declines per member, and until this was shared the two lists had already
+#: drifted: `--target cpp` called the sixth "`reserved` is enforced" and
+#: `--target python` called it "`reserved` must be zero". One kind under
+#: two names, which is the shape four of this day's fixes were about -- a
+#: layout naming an arm's member `s.body.arm` where the placement is
+#: `s.body.<reserved0>`, a tag's fixed-width flag read in one reader and
+#: not the other, a struct's minimum read by one walker and not its pair.
+#: A list is the cheapest instance of it and the easiest to prevent.
+CHECK_KINDS = (
+	"refuses a short buffer",
+	"a field occupies its claimed bytes",
+	"a field round-trips in place",
+	"a field decodes a known encoding",
+	"a nested member starts where the map says",
+	"`reserved` must be zero",
+	"`must_eq` is enforced",
+	"an enum rejects a value no member names",
+	"a framing reader reassembles across every boundary",
+)
+
+
 def passes_unknown(schema: ast.Schema, name: str | None) -> bool:
 	"""Whether this enum admits values no member names (section 8.7).
 

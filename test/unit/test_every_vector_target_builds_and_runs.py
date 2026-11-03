@@ -140,6 +140,58 @@ def check_schemas() -> list[Path]:
 	return found
 
 
+@pytest.mark.skipif(CXX is None, reason="needs g++")
+@pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
+def test_the_cpp_checks_suite_builds_and_runs(
+	schema: Path, tmp_path: Path,
+) -> None:
+	"""`gen-checks --target cpp`: eight of the nine kinds, compiled and run.
+
+	**The compile is the gate that matters here**, which is what the
+	vectors tests above say of themselves: the unit tests in `test_cli.py`
+	check that the emitter names what it should, and cannot tell a call
+	from a definition. What catches a body that does not build is g++.
+
+	`--layer frame` as well, because the framing kind includes
+	`<name>_frame.hpp` where it emitted one -- and a suite that fails to
+	COMPILE has asked none of its checks, which is the worst place to fail.
+
+	A schema `gen-checks` declines -- one taking a `parameter`, which the
+	`refuse_parameters` family all decline -- is skipped rather than
+	failed, the refusal being the generator working.
+	"""
+	out = tmp_path / "gen"
+	out.mkdir(parents=True, exist_ok=True)
+	emitted = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-checks", str(schema),
+		 "--target", "cpp", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	if emitted.returncode != 0:
+		if "parameter" in emitted.stderr:
+			pytest.skip("gen-checks declines a schema taking an argument")
+		raise AssertionError(emitted.stderr[-700:])
+
+	built = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(schema),
+		 "--target", "cpp", "--layer", "frame", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	assert built.returncode == 0, built.stderr[-700:]
+
+	assert CXX is not None
+	compiled = subprocess.run(
+		[CXX, "-std=c++17", "-O1", "-I.", f"-I{ROOT / 'runtime' / 'c'}",
+		 f"-I{ROOT / 'runtime' / 'cpp'}", f"{schema.stem}_checks.cpp",
+		 str(ROOT / "runtime" / "c" / "situ.c"), "-o", "checks"],
+		capture_output=True, text=True, cwd=out)
+	assert compiled.returncode == 0, compiled.stderr[-2000:]
+
+	done = subprocess.run([str(out / "checks")], capture_output=True,
+	                      text=True, cwd=out)
+	assert done.returncode == 0, done.stdout[-2000:]
+	# A suite of nothing exits 0 as loudly as one that checked everything.
+	assert "0 of 0 check(s) failed" not in done.stdout, done.stdout
+
+
 @pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
 def test_the_python_checks_suite_runs(schema: Path, tmp_path: Path) -> None:
 	"""`gen-checks --target python`, the first of the nine kinds `--target c`

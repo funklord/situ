@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.844 Gen-checks in C++, and what the sharing bought
+
+Moved to
+`doc/decision/26.844-gen-checks-in-c-plus-plus-and-what-the-sharing-bought.md`.
+
 ### 26.843 The ninth kind, and the guard that is its own backup
 
 Moved to

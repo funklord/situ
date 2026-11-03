@@ -291,10 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
 	checks_cmd.add_argument("--prefix", default="situ")
 	# C emits all nine kinds; Python emits the bounds check, which is the
 	# one section 12.3 calls the single check everything after it trusts
-	# (26.829, 26.831). The generated file names the eight it does not.
+	# (26.829, 26.831, 26.843). `--target python` emits all nine and
+	# `--target cpp` emits eight of them; each generated file says
+	# which kinds it emits and what each one declines per member.
 	checks_cmd.add_argument(
-		"--target", choices=("c", "python"), default="c",
-		help="language of the generated checks (c, python)")
+		"--target", choices=("c", "cpp", "python"), default="c",
+		help="language of the generated checks (c, cpp, python)")
 
 	doc_cmd = sub.add_parser(
 		"doc", help="RFC-style byte-layout diagrams and a field reference")
@@ -1373,13 +1375,16 @@ def cmd_gen_checks(args: argparse.Namespace) -> int:
 	if target_name == "python":
 		from situc.codegen.python import checks as python_checks
 		emit = python_checks.generate
+	elif target_name == "cpp":
+		from situc.codegen.cpp import checks as cpp_checks
+		emit = cpp_checks.generate
 
 	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
 	text = emit(parse(source), resolved, name, args.prefix)
 
 	args.out.mkdir(parents=True, exist_ok=True)
-	suffix = "py" if target_name == "python" else "c"
+	suffix = {"python": "py", "cpp": "cpp"}.get(target_name, "c")
 	target = args.out / f"{name}_checks.{suffix}"
 	target.write_text(text, encoding="ascii")
 	print(f"situc: wrote {target}", file=sys.stderr)
