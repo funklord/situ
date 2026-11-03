@@ -14,6 +14,7 @@ fact arrives with the first.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -119,8 +120,21 @@ def test_the_reordering_suggestion_ranks_first() -> None:
 	assert found[0].subject == "bad.opts"
 
 
-def test_a_well_ordered_schema_gets_nothing() -> None:
-	assert suggestions("struct fine { u32 seq; u16 n [max = 8]; u8 body[n]; }") == []
+def test_a_well_ordered_schema_gets_no_reordering_suggestion() -> None:
+	"""It asked the whole catalog until the catalog had something to say.
+
+	The schema is well ordered -- its one variable-length member is already
+	last -- and that is all this test was ever about, sitting in the
+	reordering section. `pin-a-driven-length` arrived at 26.824 and has a
+	second thing to say about it, correctly: pinning `n` makes `fine` a
+	fixed-size struct, which it is not. So the assertion narrows to the rule
+	the test is named for, and states what else now fires rather than
+	dropping the whole-catalog claim.
+	"""
+	body = "struct fine { u32 seq; u16 n [max = 8]; u8 body[n]; }"
+
+	assert by_rule(body, "move-dynamic-to-tail") == []
+	assert [item.rule for item in suggestions(body)] == ["pin-a-driven-length"]
 
 
 def test_a_tag_is_not_something_to_move_forward() -> None:
@@ -370,7 +384,8 @@ def test_every_catalog_rule_is_exercised() -> None:
 	tested = {
 		"move-dynamic-to-tail", "varint-to-fixed", "bound-unbounded",
 		"equalize-variant-arms", "fill-alignment-holes", "tlv-to-positional",
-		"uncover-mutable-field",
+		"uncover-mutable-field", "pin-a-driven-length", "count-a-while-run",
+		"widen-bit-field",
 		# Needs two covered regions with a member between them, which no test
 		# schema above builds; covered by test_scattered_coverage below.
 		"group-covered-regions",
@@ -395,6 +410,182 @@ def test_suggestions_carry_a_source_line() -> None:
 	"""So an editor can put the advice where the construct is."""
 	found = only(BADLY_ORDERED, "move-dynamic-to-tail")
 	assert advise.to_dict(found)["line"] == 4
+
+
+
+# -- the three rows added at 26.824 -----------------------------------------
+#
+# A length a field decides, a `while` run, and a byte of packed bit fields.
+# All three were measured as candidates in 26.822 and none of their
+# populations was what that record counted, which is why each test below
+# pins the population as well as the wording.
+
+BITS = "bit_order msb_first;\n"
+
+
+def test_a_driven_length_is_offered_the_pin_its_driver_declares() -> None:
+	"""`[max = N]` on the driver is a number somebody chose, so the pin names
+	it and prices the padding exactly."""
+	found = only("struct s { u16 n [max = 8]; u8 body[n]; u32 seq; }",
+	             "pin-a-driven-length")
+
+	assert found.summary == "pin `n` with `[must_eq = 8]`"
+	# A frame already carrying eight bytes pays nothing; the empty one pays
+	# all eight.
+	assert (found.cost.typical, found.cost.worst) == (0, 8)
+
+
+def test_a_driven_length_with_no_declared_bound_is_told_to_bound_it_first()\
+		-> None:
+	"""The branch that keeps the rule honest.
+
+	Without a `[max]` on the driver the member's worst case is the driver's
+	whole type range, so "pin at the maximum" would name a number the
+	compiler accepts and nobody can use -- 26.163's defect, which is why the
+	rule says bound it first and prices the pin as unchosen.
+	"""
+	found = only("struct s { u32 n; u8 body[n]; u32 seq; }",
+	             "pin-a-driven-length")
+
+	assert found.summary == "bound `n` with `[max = N]`, then pin it"
+	assert found.cost.unknown
+	assert "4294967295 bytes -- a number no caller can allocate" in found.detail
+
+
+def test_a_parameter_is_not_a_length_anything_can_pin() -> None:
+	"""`sized_by` also names a `[stream]` parameter, whose value is the
+	caller's: `[must_eq]` cannot reach it, so advising it is advice nobody
+	can take. Four of the corpus's driven members are this shape."""
+	found = by_rule("""struct s {
+		parameter u8 block [stream];
+		u8 body[block];
+		u32 seq;
+	}
+	""", "pin-a-driven-length")
+	assert found == []
+
+
+def test_a_while_run_over_a_fixed_element_is_offered_a_count() -> None:
+	"""Every element the same width, so a count is all that is missing
+	between walking the run and multiplying."""
+	found = only("""struct e { u8 kind; u8 payload; }
+struct s { e run[] while (kind == 0x33) max 6; u16 after; }
+""", "count-a-while-run")
+
+	assert found.summary.endswith("in a `u8`")
+	assert (found.cost.typical, found.cost.worst) == (1, 1)
+	assert "every element is 2 bytes" in found.detail
+
+
+def test_a_while_run_over_a_variable_element_gets_no_count() -> None:
+	"""The population correction, and the whole reason this rule has a guard.
+
+	26.822 counted three instances off three `caused by:` clauses and treated
+	all three as the population. Re-measured over the corpus there are eight
+	`while` runs and two have a fixed-size element: for the other six a count
+	says how many elements there are and still nothing about where any of
+	them is, because each element's own length decides where the next begins.
+	A suggestion promising `Random` access there would be promising what the
+	rewrite cannot deliver, which is the one failure the taken-advice section
+	below exists to catch.
+
+	The guard is the element STRIDE, which the rule multiplies by in its own
+	yield text. It was written as two conditions -- the stride and the
+	element struct's `is_fixed_size` -- and removing the second left this
+	test green, because `element_bits` is set for no variable-length element
+	anywhere in the corpus. One predicate, so a sabotage of it is visible
+	here.
+	"""
+	found = by_rule("""struct e { u8 kind; u8 len; u8 body[len]; }
+struct s { e run[] while (kind == 0x33) max 6; u16 after; }
+""", "count-a-while-run")
+	assert found == []
+
+
+def test_an_uncapped_while_run_cannot_price_its_count() -> None:
+	"""No bound on the element count is no bound on the field that would
+	carry it, which is `Cost.unknown`'s own case."""
+	found = only("""struct e { u8 kind; u8 payload; }
+struct s { e run[] while (kind == 0x33); u16 trail; u16 mark; }
+""", "count-a-while-run")
+
+	assert found.cost.unknown
+	assert found.summary == "state the element count ahead of the run"
+
+
+def test_packed_bit_fields_get_one_suggestion_for_the_run() -> None:
+	"""One per run, not one per field, which is the judgement 18.2 already
+	made for `uncover-mutable-field` and the same one: the fields share a
+	byte, so their costs do not add, and the schema does not say which of
+	them is written on a hot path.
+	"""
+	found = by_rule(BITS + """struct s {
+	u1 urgent; u1 ack; u2 prio; reserved u4;
+	u32 seq;
+}
+""", "widen-bit-field")
+
+	assert len(found) == 1
+	assert found[0].subject == "s.urgent"
+	assert "`urgent`, `ack`, `prio`" in found[0].detail
+	# One byte for the field lifted, and three for lifting all of them -- the
+	# byte they share is why that is not four.
+	assert (found[0].cost.typical, found[0].cost.worst) == (1, 1)
+	assert "Lifting all 3 costs 3 bytes" in found[0].detail
+
+
+def test_reserved_bits_are_not_a_candidate_for_a_byte() -> None:
+	"""Nothing writes reserved bits, so an atomic write to them is not worth
+	a byte -- and they are not the subject of advice about the fields beside
+	them either, which is what naming the run's first member made them."""
+	found = only(BITS + """struct s {
+	reserved u3; u1 ack; u4 prio;
+	u32 seq;
+}
+""", "widen-bit-field")
+
+	assert found.subject == "s.ack"
+	assert "2 fields share 1 byte" in found.detail
+	assert "reserved" not in found.detail
+
+
+def test_a_straddling_bit_field_is_named_as_paying_twice() -> None:
+	"""A field crossing a byte boundary is a multi-byte read-modify-write, and
+	the propagation table gives it a row of its own for that second reason.
+	One rule here rather than two (26.822): it is the same remedy, and what
+	changes is how much the field was paying before it is taken."""
+	found = only(BITS + """struct s [allow_straddle] {
+	u4 head; u12 middle; u4 tail; reserved u4;
+	u32 seq;
+}
+""", "widen-bit-field")
+
+	assert "`middle` crosses a byte boundary, so its write touches two" \
+		in found.detail
+	# And the wide field is priced at the bytes it needs rather than at one:
+	# twelve bits lifted out of a three-byte run leave twelve behind, so the
+	# run keeps two bytes and the field takes two.
+	assert (found.cost.typical, found.cost.worst) == (1, 1)
+
+
+def test_every_rule_ranks_where_the_catalog_says_it_does() -> None:
+	"""`rank` is written twice -- once in `CATALOG` and once in every
+	`Suggestion` the rule builds -- and nothing but this compares them.
+
+	Two places answering one question from different text is this tree's most
+	productive lens, and the catalog grew by three rows and renumbered five
+	the day it was written. A rule whose suggestions carry a stale rank sorts
+	into the wrong class and no existing gate can see it: the order would
+	still be *an* order, and `suggest`'s own sort assertion would still hold.
+	"""
+	ranks = {rule.name: rule.rank for rule in advise.CATALOG}
+	body  = pathlib.Path(advise.__file__).read_text()
+
+	written = {name: int(rank) for name, rank in
+	           re.findall(r'rule    = "([a-z-]+)",.*?rank    = (\d+),',
+	                      body, re.DOTALL)}
+
+	assert written == ranks, "a rule's rank disagrees with its catalog row"
 
 
 # -- the revision diff (18.3) -----------------------------------------------
@@ -818,7 +1009,14 @@ def test_every_catalog_rule_has_its_yield_measured() -> None:
 	because a list of rules with measured yields is a second place to forget.
 	"""
 	source = pathlib.Path(__file__).read_text()
-	taken  = source.split("# -- the suggestion, taken")[1]
+	# `maxsplit=1`, because the marker occurs TWICE in this file -- once as
+	# the section heading and once as the literal on this line -- so the
+	# default split put everything between them in [1] and everything below
+	# this gate in [2]. A taken-advice test written after this function was
+	# therefore invisible to it, and the gate reported the one thing it
+	# exists to deny: that the advice had not been taken. Found adding the
+	# three rows at 26.824, whose tests landed below here.
+	taken  = source.split("# -- the suggestion, taken", 1)[1]
 
 	missing = sorted(rule.name for rule in advise.CATALOG
 	                 if f'"{rule.name}"' not in taken)
@@ -864,6 +1062,21 @@ struct large { u8 y[10]; }
 		        " { case k.a: small p; case k.b: large q; } u32 after; }\n",
 		 arms + "struct s { k kind; variant b switch (kind) [equalize]"
 		        " { case k.a: small p; case k.b: large q; } u32 after; }\n"),
+		# The two rows added at 26.824 whose rewrite is fixed, which is this
+		# method's precondition. `count-a-while-run` is not one of them: a
+		# counted run is still variable, and its smallest frame is a byte
+		# SMALLER than the `while` run's, because a `while` is a
+		# post-condition and carries at least one element where a count may
+		# say zero. Its byte is checked against the count field itself, in
+		# the taken-advice section.
+		("pin-a-driven-length",
+		 "struct s { u16 n [max = 8]; u8 body[n]; u32 seq; }",
+		 "struct s { u16 n [max = 8, must_eq = 8]; u8 body[n]; u32 seq; }"),
+		("widen-bit-field",
+		 BITS + "struct s { u1 urgent; u1 ack; u2 prio; reserved u4;"
+		        " u32 seq; }\n",
+		 BITS + "struct s { u8 urgent; u1 ack; u2 prio; reserved u5;"
+		        " u32 seq; }\n"),
 	]
 
 	def smallest_frame(body: str) -> int:
@@ -918,6 +1131,124 @@ struct big {
 	assert [(item.rank, -item.weight, item.subject) for item in found] == \
 		sorted((item.rank, -item.weight, item.subject) for item in found)
 
+
+
+# -- the three rows added at 26.824, taken ----------------------------------
+
+
+def axes(body: str, axis: Axis) -> dict[str, str]:
+	"""Every member's value on one axis, which is what a rewrite moves."""
+	resolved = build(body)
+	return {entry.placement.path: entry.vector.get(axis).base
+	        for struct in resolved.structs.values()
+	        for entry in struct.entries}
+
+
+def test_pinning_a_driven_length_yields_what_it_says() -> None:
+	"""`[must_eq = N]` on the driver, and the three things it returns.
+
+	The rule hands `_pinned_yield` the same two measurements the varint and
+	variant rules hand it, so this checks the rewrite delivers both: the
+	members behind return to absolute offsets, and the struct becomes a
+	fixed size. The member's own `mutate` goes with them, which the summary
+	does not promise and the propagation row does.
+	"""
+	before = "struct s { u16 n [max = 8]; u8 body[n]; u32 seq; }"
+	after  = "struct s { u16 n [max = 8, must_eq = 8]; u8 body[n]; u32 seq; }"
+	found  = only(before, "pin-a-driven-length")
+
+	gained = [path for path, base in axes(before, Axis.OFFSET).items()
+	          if base != "AbsoluteStatic"
+	          and axes(after, Axis.OFFSET).get(path) == "AbsoluteStatic"]
+	assert gained == ["s.seq"]
+	assert found.yields.startswith("a fixed extent, so 1 member after `body`")
+	assert "`s` itself becomes a fixed size" in found.yields
+
+	assert not build(before).structs["s"].layout.is_fixed_size
+	assert build(after).structs["s"].layout.is_fixed_size
+
+	assert axes(before, Axis.MUTATE)["s.body"] == "Shifting"
+	assert axes(after, Axis.MUTATE)["s.body"] == "InPlaceFixed"
+
+
+def test_bounding_a_driven_length_first_is_advice_the_compiler_takes() -> None:
+	"""The other branch, which names two edits rather than one.
+
+	`[max = N]` on the driver has to come before the pin, and the thing worth
+	checking is that the compiler accepts the pair and that the worst case
+	the member reports stops being the driver's whole type range -- 2^32-1
+	bytes, which is the number the detail prints and nobody can allocate.
+	"""
+	loose = "struct s { u32 n; u8 body[n]; u32 seq; }"
+	found = only(loose, "pin-a-driven-length")
+	assert found.summary == "bound `n` with `[max = N]`, then pin it"
+
+	def worst(body: str) -> int:
+		placement = next(entry.placement
+		                 for entry in own_entries(build(body).structs["s"])
+		                 if entry.placement.name == "body")
+		assert placement.size_max_bits is not None
+		return placement.size_max_bits // 8
+
+	assert worst(loose) == 0xFFFFFFFF
+	bounded = "struct s { u32 n [max = 1500]; u8 body[n]; u32 seq; }"
+	assert worst(bounded) == 1500
+
+	# And the pin the bound makes sayable is one the solver accepts.
+	pinned = "struct s { u32 n [max = 1500, must_eq = 1500]; u8 body[n]; u32 seq; }"
+	assert build(pinned).structs["s"].layout.is_fixed_size
+
+
+def test_counting_a_while_run_yields_the_random_access_it_promises() -> None:
+	"""The rewrite the summary describes, and the axis it claims.
+
+	Not in `test_every_priced_rule_costs_what_it_says_on_the_wire`, and the
+	reason is that gate's own precondition: it measures a cost as the
+	difference between two smallest frames, which holds "where the rewritten
+	schema is fixed". A counted run is not -- and its smallest frame is a
+	byte SMALLER than the `while` run's, because a `while` is a
+	post-condition and so carries at least one element where a count may say
+	zero. The count field still costs one byte in every frame carrying the
+	same elements, which is what the rule prices.
+	"""
+	element = "struct e { u8 kind; u8 payload; }\n"
+	before  = element + "struct s { e run[] while (kind == 0x33) max 6; u16 after; }\n"
+	after   = element + "struct s { u8 count [max = 6]; e run[count]; u16 after; }\n"
+	found   = only(before, "count-a-while-run")
+
+	assert axes(before, Axis.ACCESS)["s.run"] == "Sequential"
+	assert axes(after, Axis.ACCESS)["s.run"] == "Random"
+	assert found.yields.startswith("`Random` access")
+
+	# The byte the rule charges for is the count field and nothing else.
+	counted = next(entry.placement
+	               for entry in own_entries(build(after).structs["s"])
+	               if entry.placement.name == "count")
+	assert counted.size_bits // 8 == found.cost.worst == 1
+
+
+def test_widening_a_bit_field_yields_the_three_axes_it_promises() -> None:
+	"""One field out of the packed run, and `atomic`, `align` and `repr` with
+	it -- which is three axes for one byte and the reason this row is worth
+	having at all. The propagation row names only the atomic one as its
+	remedy's object, so the other two are the rewrite paying more than the
+	table claims rather than less.
+	"""
+	before = BITS + "struct s { u1 urgent; u1 ack; u2 prio; reserved u4; u32 seq; }\n"
+	after  = BITS + "struct s { u8 urgent; u1 ack; u2 prio; reserved u5; u32 seq; }\n"
+	found  = only(before, "widen-bit-field")
+
+	for axis, weak, strong in ((Axis.ATOMIC, "NonAtomic", "AtomicWord"),
+	                           (Axis.ALIGN,  "Unaligned", "Aligned"),
+	                           (Axis.REPR,   "ValueConverted", "MemoryIdentical")):
+		assert axes(before, axis)["s.urgent"] == weak, axis
+		assert axes(after,  axis)["s.urgent"] == strong, axis
+
+	assert found.yields.startswith("an atomic write, a byte address")
+	# And the byte it costs is a byte the rewrite really spends.
+	paid = (build(after).structs["s"].layout.size_bits
+	        - build(before).structs["s"].layout.size_bits) // 8
+	assert paid == found.cost.worst == 1
 
 # -- what the diff was calling neither direction (26.187) -------------------
 

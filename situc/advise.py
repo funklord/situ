@@ -476,7 +476,7 @@ def _find_variant_equalization(resolved: ResolvedSchema) -> list[Suggestion]:
 				               basis="padding to the largest arm"),
 				yields  = _pinned_yield(struct, behind, encloses,
 				                        "the variant"),
-				rank    = 3,
+				rank    = 4,
 				# What it buys, not what it costs. `weight` orders the
 				# catalogue and this rule handed it the padding, so the most
 				# expensive equalization in a schema sorted above the
@@ -622,7 +622,7 @@ def _find_alignment_holes(resolved: ResolvedSchema) -> list[Suggestion]:
 				               "a peer already speaking this format reads the "
 				               "old order"),
 				yields  = bought,
-				rank    = 4,
+				rank    = 6,
 				weight  = scalar.bits // BITS_PER_BYTE,
 			))
 
@@ -681,7 +681,7 @@ def _find_scattered_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 				cost    = Cost(basis="moving members, not adding them"),
 				yields  = "one range to authenticate instead of several, and a "
 				          "covered-span accessor the backend can emit",
-				rank    = 5,
+				rank    = 7,
 				weight  = len(placement.tag_covers),
 			))
 
@@ -765,7 +765,7 @@ def _find_mutable_under_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 				yields  = ("writes that invalidate no tag, which is why real "
 				           "protocols keep routing and hop fields outside "
 				           "coverage"),
-				rank    = 6,
+				rank    = 8,
 				weight  = extent * len(candidates),
 			))
 
@@ -816,22 +816,332 @@ def _find_tlv_to_positional(resolved: ResolvedSchema) -> list[Suggestion]:
 				               "anyway"),
 				yields  = "O(1) access and static offsets for the tags that are "
 				          "always present; the rest can stay in the region",
-				rank    = 7,
+				rank    = 9,
 				weight  = 1,
 			))
 
 	return found
 
 
+def _find_driven_lengths(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""A member whose length a field earlier in the same frame decides.
+
+	The propagation table's `bounded-size` row already states the remedy --
+	pin the length with `[must_eq = N]` -- and this is that remedy costed.
+
+	It is the complement of `move-dynamic-to-tail` rather than a second
+	spelling of it, which is why both firing on one member is right. Moving
+	the member is free and changes the order on the wire; pinning it costs
+	padding and keeps the order. A format already deployed can take only the
+	second, and it is the one the reader with no choice about the layout
+	needs.
+
+	**Two branches, because half the population has no number to pin to.**
+	Where the driving field carries a declared `[max = N]`, N is a number
+	somebody chose and pinning at it is priced exactly: a frame already
+	carrying the maximum pays nothing and the shortest frame pays the whole
+	difference, which is how `varint-to-fixed` prices over a stated range.
+	Where it does not, the member's worst case is the driver's entire type
+	range -- 29 of the corpus's 50 driven members, and `sqlite`'s
+	`table_leaf_cell.payload` prices at 18 exabytes -- so the first change
+	is a bound on the driver and the pin comes after. Naming `[must_eq =
+	2147483647]` for a PNG chunk was 26.163's defect in its other form:
+	a rule that hands over a number the compiler accepts and nobody can use.
+
+	Only where the driver is a FIELD of the same frame. `sized_by` also names
+	a `parameter`, whose value is the caller's and which `[must_eq]` cannot
+	reach, and the word `remaining`, which is the frame's own length and not
+	a member at all -- 6 of the corpus's 56 driven members are one of those
+	two, and advising `must_eq` on either would be advice nobody can take.
+	"""
+	found = []
+
+	for struct in resolved.structs.values():
+		by_path = {entry.placement.path: entry.placement
+		           for entry in struct.entries}
+		for entry in _members(struct):
+			placement = entry.placement
+			if placement.sized_by is None:
+				continue
+			if placement.size_max_bits is None:
+				continue		# bound-unbounded's, not this rule's
+			if placement.size_max_bits == placement.size_bits:
+				continue
+
+			# `sized_by` is spelled relative to the struct, and a driver in a
+			# nested member is spelled with the dots -- `hdr.length`.
+			driver = by_path.get(f"{struct.name}.{placement.sized_by}")
+			if driver is None or driver.parameter or driver.kind != "field":
+				continue
+
+			slack            = ((placement.size_max_bits - placement.size_bits)
+			                    // BITS_PER_BYTE)
+			longest          = _worst_bytes(placement)
+			declared         = any(attr.name == "max" for attr in driver.attrs)
+			behind, encloses = _behind(struct, placement)
+			shared  = (f"the extent is whatever `{placement.sized_by}` says, "
+			           f"so it is a range and not a number, and writing a "
+			           f"different length moves every member after this one")
+
+			if declared:
+				summary = (f"pin `{placement.sized_by}` with "
+				           f"`[must_eq = {longest}]`")
+				detail  = shared
+				cost    = Cost(typical=0, worst=slack,
+				               basis="padding every frame out to the pinned "
+				                     "length; a frame already carrying the "
+				                     "maximum pays nothing")
+			else:
+				summary = (f"bound `{placement.sized_by}` with `[max = N]`, "
+				           f"then pin it")
+				detail  = (f"{shared}. Nothing bounds `{placement.sized_by}` "
+				           f"but its own width, so the worst case this member "
+				           f"reports is {_count(slack, 'byte')} -- a number no "
+				           f"caller can allocate and not one anybody chose")
+				cost    = Cost(unknown=True,
+				               basis="the bound chosen for "
+				                     f"`{placement.sized_by}`, and then the "
+				                     "padding out to it")
+
+			found.append(Suggestion(
+				rule    = "pin-a-driven-length",
+				subject = placement.path,
+				span    = placement.span,
+				summary = summary,
+				detail  = detail,
+				cost    = cost,
+				yields  = _pinned_yield(struct, behind, encloses,
+				                        f"`{placement.name}`"),
+				rank    = 3,
+				# A declared bound outranks an unchosen one at equal reach:
+				# the first is advice somebody can take today.
+				weight  = behind * 4 + (2 if encloses else 0) + (1 if declared else 0),
+			))
+
+	return found
+
+
+def _find_uncounted_runs(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""A `while` run of fixed-size elements, which a count would address.
+
+	How many elements there are is in neither the schema nor the data: it is
+	whichever one first fails the condition, so element N is reached by
+	reading the N-1 before it. A count field ahead of the run says the number
+	outright, and where every element is the same width that is enough to
+	multiply -- `access` returns to `Random`.
+
+	**Only where the element is fixed-size, and that is the whole rule.**
+	26.822 priced this row off three `caused by:` clauses and counted all
+	three as the population; re-measured here over the corpus there are eight
+	`while` runs and only two have a fixed-size element. For the other six a
+	count says how many elements there are and still nothing about where any
+	of them is, because each element's own length decides where the next
+	begins -- so the access axis does not move and the suggestion would be
+	advice that buys nothing it claims. `while (...) max N`, which the
+	propagation row names first, is what those have, and an uncapped one is
+	already `bound-unbounded`'s.
+
+	The count's width comes from the declared cap. Without one there is no
+	bound on the number of elements and so none on the field that would
+	carry it, which is `Cost.unknown`'s own case: a cost that depends on a
+	number the schema does not state.
+	"""
+	found = []
+
+	for struct in resolved.structs.values():
+		for entry in _members(struct):
+			placement = entry.placement
+			if placement.repeat_while is None:
+				continue
+
+			# The stride, and it is the only guard. A second one asking the
+			# element struct's `is_fixed_size` was redundant -- measured over
+			# the corpus, `element_bits` is set for no variable-length
+			# element -- and a sabotage that removed it left every test
+			# green, which is the tell that two predicates were answering
+			# one question. It also excluded a run over a SCALAR element,
+			# which has no struct to ask and a stride all the same.
+			stride = placement.element_bits
+			if stride is None:
+				continue
+
+			cap    = placement.repeat_cap
+			width  = None if cap is None else (1 if cap <= 0xFF else 2)
+			spelt  = "u8" if width == 1 else "u16"
+			behind, encloses = _behind(struct, placement)
+			found.append(Suggestion(
+				rule    = "count-a-while-run",
+				subject = placement.path,
+				span    = placement.span,
+				summary = ("state the element count ahead of the run"
+				           if width is None else
+				           f"state the element count ahead of the run, in a "
+				           f"`{spelt}`"),
+				detail  = (f"the run ends after the element failing "
+				           f"`{placement.repeat_while}`, so element N is "
+				           f"reached by reading the N-1 before it; every "
+				           f"element is {stride // BITS_PER_BYTE} bytes, so a "
+				           f"count is all that is missing"),
+				cost    = (Cost(unknown=True,
+				                basis="a count field, whose width needs a "
+				                      "bound on the element count that the "
+				                      "run does not declare")
+				           if width is None else
+				           Cost(typical=width, worst=width,
+				                basis="a count field ahead of the run")),
+				yields  = (f"`Random` access -- element N at "
+				           f"{stride // BITS_PER_BYTE} bytes times N from the "
+				           f"run's base, read without walking"),
+				rank    = 5,
+				weight  = cap or 1,
+			))
+
+	return found
+
+
+def _find_packed_bit_runs(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""Bit-packed fields sharing a byte, any one of which a byte would free.
+
+	Writing a bit-packed field is a read-modify-write of the byte it lives
+	in, and reading it is a shift and a mask; a field with a whole byte to
+	itself is written atomically, has a byte address, and is the memory
+	rather than a value decoded out of it.
+
+	One suggestion per packed run rather than one per field, which is the
+	judgement 18.2 already made for `uncover-mutable-field` and the same
+	one: the fields in a run share a resource, so the costs do not add --
+	lifting one out of a byte of eight flags costs a byte, and lifting all
+	eight costs seven, not eight -- and the schema does not say which of
+	them is written on a hot path. So the compiler prices the lift and lists
+	the candidates, and whoever knows which field is hot chooses.
+
+	`typical` and `worst` bracket that choice rather than two frames: the
+	change costs the same in every frame, and what varies is which field is
+	lifted. The cheapest is sometimes free -- lifting a field that is itself
+	a whole byte wide but not on a byte boundary leaves the rest of the run
+	one byte shorter, so the run gives back exactly what the field takes.
+
+	A `reserved` run of bits is not a candidate. Nothing writes it, so an
+	atomic write to it is not worth a byte.
+	"""
+	found = []
+
+	for struct in resolved.structs.values():
+		for run in _packed_runs(_members(struct)):
+			candidates = [held for held in run if held.kind == "field"]
+			if not candidates:
+				continue
+
+			total  = sum(held.size_bits for held in run)
+			footprint = _whole_bytes(total)
+			# `_whole_bytes` of the field too, not one byte: a `u12` lifted
+			# out needs two bytes of its own, and pricing every lift at one
+			# understated the wide fields -- which are exactly the ones worth
+			# lifting. Found by taking the advice on `u4 a; u12 b; u4 c`,
+			# where the rewrite costs nothing and the rule said it saved a
+			# byte.
+			lifts  = sorted(_whole_bytes(total - held.size_bits)
+			                + _whole_bytes(held.size_bits) - footprint
+			                for held in candidates)
+			spare  = total - sum(held.size_bits for held in candidates)
+			all_of = (sum(_whole_bytes(held.size_bits) for held in candidates)
+			          + _whole_bytes(spare) - footprint)
+
+			listed = ", ".join(f"`{held.name}`" for held in candidates[:5])
+			if len(candidates) > 5:
+				listed += f", and {len(candidates) - 5} more"
+			crossing = [held.name for held in candidates
+			            if held.bit_position is not None
+			            and held.bit_position.straddles]
+
+			found.append(Suggestion(
+				rule    = "widen-bit-field",
+				# The first CANDIDATE, not the first member of the run. A run
+				# that opens with `reserved u3` named the reserved bits as the
+				# subject of advice about the three fields beside them, and
+				# nothing writes reserved bits.
+				subject = candidates[0].path,
+				span    = candidates[0].span,
+				# The propagation row's own words -- "widen the field to a
+				# whole number of bytes" -- because a `u12` does not widen to
+				# a byte and the catalog must not say a thing the blame chain
+				# beside it contradicts.
+				summary = ("widen the field you write often to a whole "
+				           "number of bytes"),
+				detail  = (f"{_count(len(candidates), 'field')} "
+				           f"{_verb(len(candidates), 'shares', 'share')} "
+				           f"{_count(footprint, 'byte')} -- {listed} -- and "
+				           f"every write is a read-modify-write of the byte "
+				           f"{_verb(len(candidates), 'it sits', 'they sit')} "
+				           f"in"
+				           + (f"; `{crossing[0]}` crosses a byte boundary, so "
+				              f"its write touches two"
+				              if crossing else "")
+				           + f". Lifting all {len(candidates)} costs "
+				           + _bytes(all_of)),
+				# The two numbers bracket which field is lifted rather than
+				# two frames: the change costs the same in every frame, and a
+				# field whose width is already a whole number of bytes gives
+				# the run back exactly what it takes.
+				cost    = Cost(typical=lifts[0], worst=lifts[-1],
+				               basis="whole bytes for the field lifted out of "
+				                     "the packed run, cheapest for a field "
+				                     "already a whole number of bytes wide"),
+				yields  = ("an atomic write, a byte address, and a value read "
+				           "without a shift and a mask, for the field lifted"),
+				rank    = 10,
+				weight  = footprint * len(candidates),
+			))
+
+	return found
+
+
+def _packed_runs(members: list[Resolved]) -> list[list[Placement]]:
+	"""The struct's bit-packed members, grouped into the runs that share bytes.
+
+	A run is a maximal stretch of consecutive bit-packed members, which is
+	the grouping and not an approximation of it: a packed run starts on a
+	byte boundary, so anything that is not bit-packed between two of them
+	ends the first and begins the second.
+	"""
+	runs: list[list[Placement]] = []
+	current: list[Placement]    = []
+
+	for entry in members:
+		placement = entry.placement
+		if placement.scalar is not None and placement.scalar.is_bit_packed:
+			current.append(placement)
+			continue
+		if current:
+			runs.append(current)
+			current = []
+
+	if current:
+		runs.append(current)
+	return runs
+
+
+def _whole_bytes(bits: int) -> int:
+	"""Bits rounded up to the bytes they occupy."""
+	return (bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+
+# Ordered by yield, which is what 18.2's table is ordered by and what `rank`
+# carries. The three rows added at 26.824 are interleaved rather than
+# appended: `pin-a-driven-length` pins an extent exactly as the two rows above
+# it do and fires on fifty corpus members where the varint rule fires on ten,
+# so putting it last would have said the opposite of what it is worth.
 CATALOG: tuple[Rule, ...] = (
-	Rule("move-dynamic-to-tail",	0, _find_tail_reordering),
-	Rule("varint-to-fixed",		1, _find_varint_replacement),
-	Rule("bound-unbounded",		2, _find_unbounded_regions),
-	Rule("equalize-variant-arms",	3, _find_variant_equalization),
-	Rule("fill-alignment-holes",	4, _find_alignment_holes),
-	Rule("group-covered-regions",	5, _find_scattered_coverage),
-	Rule("uncover-mutable-field",	6, _find_mutable_under_coverage),
-	Rule("tlv-to-positional",	7, _find_tlv_to_positional),
+	Rule("move-dynamic-to-tail",	0,  _find_tail_reordering),
+	Rule("varint-to-fixed",		1,  _find_varint_replacement),
+	Rule("bound-unbounded",		2,  _find_unbounded_regions),
+	Rule("pin-a-driven-length",	3,  _find_driven_lengths),
+	Rule("equalize-variant-arms",	4,  _find_variant_equalization),
+	Rule("count-a-while-run",	5,  _find_uncounted_runs),
+	Rule("fill-alignment-holes",	6,  _find_alignment_holes),
+	Rule("group-covered-regions",	7,  _find_scattered_coverage),
+	Rule("uncover-mutable-field",	8,  _find_mutable_under_coverage),
+	Rule("tlv-to-positional",	9,  _find_tlv_to_positional),
+	Rule("widen-bit-field",		10, _find_packed_bit_runs),
 )
 
 

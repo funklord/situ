@@ -4329,13 +4329,16 @@ case.
 | move variable-length fields toward the tail | dynamic member with static members after it | highest-yield single change; everything before stays absolute |
 | replace varint with fixed width | bounded varint field | if `max = 1500`, varint costs 2 bytes for most of the range anyway; fixed `u16` is free and restores fixed offsets |
 | pin an unbounded region's max | `size = Unbounded` | makes the region statically allocatable |
+| pin a length the schema's own field decides | bounded member whose length comes from an earlier field | everything behind it returns to absolute addressing and the member itself stops shifting; costs padding every short frame out to the pinned length |
 | equalize variant arm sizes | variant with unequal arms | costs padding to the largest arm; restores static offsets after the variant |
+| count a `while` run | run of fixed-size elements ended by a condition | `access` returns from `Sequential` to `Random` for the one or two bytes of a count |
 | reorder to fill alignment holes | unaligned members with padding present | zero cost |
 | group covered fields contiguously | scattered `authenticated` regions | one tag over one range instead of several; fewer recomputations |
 | move a mutable field out of tag coverage | frequent mutation of a covered field | eliminates tag recomputation per mutation |
 | convert `tlv` to `positional` for known-common tags | hot tags in a TLV region | O(1) access instead of O(n) scan |
+| widen a bit-packed field to whole bytes | bit-packed fields sharing a byte | one field out of the run regains `atomic`, a byte address and a direct representation, for the bytes it takes |
 
-Two of those triggers are not decidable from a schema and are implemented as
+Three of those triggers are not decidable from a schema and are implemented as
 what the compiler can actually supply:
 
 - **"frequent mutation of a covered field"** -- a schema does not say which
@@ -4348,6 +4351,31 @@ what the compiler can actually supply:
   the lattice already recorded, because `Aligned(1)` is a weakened align axis
   even though its base is not `Unaligned`, and the rule that noticed is the one
   that knows.
+- **"bit-packed fields sharing a byte"** -- the same question as the one above
+  it, asked of a byte rather than a tag: the fields in a packed run share the
+  byte, so their costs do not add -- lifting one field out of eight flags
+  costs a byte and lifting all eight costs seven -- and the schema does not
+  say which of them is written on a hot path. So the advisor reports one
+  suggestion per run, lists the candidates, prices the lift, and leaves the
+  choice to the person who knows. A `reserved` run of bits is not a
+  candidate: nothing writes it.
+
+And two of the three rows added at 26.824 carry a condition that is decidable
+and that the row's one line cannot hold:
+
+- **A driven length whose driver declares no bound** cannot be told to pin at
+  its maximum, because that maximum is the driver's whole type range -- 2^32-1
+  bytes for a `u32` length, and 2^64-1 for `sqlite`'s `payload_size`. Naming
+  it would be 26.163's defect in another form: a number the compiler accepts
+  and nobody can use. So the suggestion asks for `[max = N]` on the driver
+  first and prices the pin as unchosen, which is 29 of the corpus's 50 driven
+  members.
+- **A `while` run over a variable-size element gains nothing from a count.**
+  The count says how many elements there are and still nothing about where any
+  of them is, because each element's own length decides where the next begins,
+  so `access` does not move. Six of the corpus's eight `while` runs are that
+  shape and the rule is silent on them; `while (...) max N`, which the
+  propagation row names first, is what they have instead.
 
 `situc advise schema.situ` runs the catalog and prints ranked suggestions, and
 exits 0 whatever it finds: a suggestion is advice about a design rather than a
@@ -8178,6 +8206,11 @@ Moved to
 
 Moved to
 `doc/decision/26.823-the-derived-codecs-are-fuzzed-by-nothing.md`.
+
+### 26.824 Three rows for the advisor, and what each one may not claim
+
+Moved to
+`doc/decision/26.824-three-rows-for-the-advisor.md`.
 
 ### 26.715 The same width in the other pointer backend
 
