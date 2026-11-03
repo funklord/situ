@@ -73,16 +73,25 @@ def inside_a_nested_member(struct: ResolvedStruct,
 	fault this whole family of records is about.
 
 	**True only where the parent cannot address the interior, which is
-	narrower than "is nested" and was got wrong once.** 18 covered fields
-	in the corpus are inside a nested member and addressed correctly,
-	because that member is FIXED SIZE and statically placed, so the
-	interior sits at a constant the parent can write. So the test is every
-	intermediate being fixed size and at a static offset -- not the
-	field's own `offset_bits`, which is FRAME-relative and so says nothing
-	about the parent: `blocked_arg.one.carried.marker.tag` has
-	`offset_bits=8` while its byte moves with `payload[block]` four levels
-	up, and the first version of this helper let it through to a setter
-	that wrote byte 2 where the field sits at 5 (26.821).
+	narrower than "is nested" and took two tries.** The parent has an
+	offset function for a nested MEMBER of its own, dynamic or not. What
+	it cannot do is find a field INSIDE one whose size varies, because
+	then the interior's offset within the child is not a constant either.
+	So the test is one thing: is every intermediate's TYPE fixed size.
+
+	**Not the field's own `offset_bits`, which is FRAME-relative and so
+	says nothing about the parent.** `blocked_arg.one.carried.marker.tag`
+	has `offset_bits=8` while its byte moves with `payload[block]` four
+	levels up, and the first version of this helper let it through to a
+	setter that wrote byte 2 where the field sits at 5.
+
+	**Nor the intermediate's `offset_bits`, which was the second try and
+	was too wide.** It excluded `covered_tail.head.seq` -- `head` is a
+	`beacon`, three bytes, sitting after `pad[n]` -- and that one the
+	parent addresses perfectly well: a dynamic offset for `head` plus a
+	constant inside it. Adding that disjunct removed two working setters,
+	measured by counting the exclusions over the corpus and finding ten
+	where the claim said eight (26.821).
 	"""
 	parts = placement.path.split(".")
 	for cut in range(2, len(parts)):
@@ -93,8 +102,7 @@ def inside_a_nested_member(struct: ResolvedStruct,
 				continue
 			if above.kind != "field" or above.type_name not in structs:
 				continue
-			inner = structs[above.type_name]
-			if above.offset_bits is None or not inner.layout.is_fixed_size:
+			if not structs[above.type_name].layout.is_fixed_size:
 				return True
 	return False
 
