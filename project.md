@@ -8259,6 +8259,11 @@ Moved to
 Moved to
 `doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
 
+### 26.841 The same omission at the struct a walk starts from
+
+Moved to
+`doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
 ### 26.842 The eighth kind, and the escape hatch that needs no check
 
 Moved to

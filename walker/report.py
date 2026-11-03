@@ -883,13 +883,32 @@ def _validate(image: Image, view: View, struct_index: int,
 	# found its `magic` wrong and said CONSTRAINT. A short frame's members
 	# are not wrong, they are absent.
 	#
-	# `size_bits` is `NONE` for a variable struct, which is the C walker's
-	# own condition: the image does not carry a minimum for one, so neither
-	# reader checks it and the four backends -- which have `SIZE_MIN` from
-	# the compiler -- can still refuse where these two cannot.
+	# **And the MINIMUM where there is no fixed size.** This read
+	# `size_bits` alone, which is `NONE` for a variable struct, and
+	# justified the gap by pointing at the other reader: "which is the C
+	# walker's own condition: the image does not carry a minimum for one,
+	# so neither reader checks it and the four backends -- which have
+	# `SIZE_MIN` from the compiler -- can still refuse where these two
+	# cannot."
+	#
+	# The image has carried `size_min_bits` since 26.577. The sentence was
+	# true when written and became false then, and **each walker's comment
+	# cited the other's condition as the reason for its own** -- two
+	# readers agreeing because each had copied the other's gap, which is
+	# the one way a differential can be silent about a fault both sides
+	# share.
+	#
+	# `example/keystore` is the input: it needs 87 bytes, and over 46 the
+	# accessor says "keystore needs at least 87 bytes; 46 given" while
+	# this walk descended and reported CONSTRAINT. A short frame's members
+	# are not wrong, they are absent -- which is what the paragraph above
+	# already says about `cpio_entry` (26.841).
 	shape = image.structs[struct_index]
-	if shape.size_bits != NONE:
-		need = (shape.size_bits + BITS_PER_BYTE - 1) // BITS_PER_BYTE
+	floor = shape.size_bits
+	if floor == NONE:
+		floor = shape.size_min_bits
+	if floor != NONE:
+		need = (floor + BITS_PER_BYTE - 1) // BITS_PER_BYTE
 		if view.limit - view.at < need:
 			return fail(ERR_BOUNDS)
 

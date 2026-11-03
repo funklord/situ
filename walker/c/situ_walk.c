@@ -5052,8 +5052,25 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 	 * acquires a view. Without it the two agreed about every well-formed
 	 * message and disagreed about short ones, C answering for the members
 	 * that happened to fit. */
-	const uint32_t fixed = u32_at(entry + 8);
-	if (fixed != SITU_WALK_NONE && len < (fixed + 7u) / 8u) {
+	/* **And the MINIMUM where there is no fixed size**, which is the half
+	 * this was missing. `size_bits` is `NONE` for a variable struct, so the
+	 * check above skipped every one of them: `edges.keywords` is ten bytes
+	 * of fixed members and then `u8 body[class + 1]`, so it needs eleven
+	 * and an eight-byte frame was walked as well formed while the Python
+	 * walk refused it on acquisition. C answered for the members that
+	 * happened to fit -- which is word for word what the comment above
+	 * says this check exists to stop, for the fixed case it did cover.
+	 *
+	 * The number has been in the image since 26.577 and was read by the
+	 * Python walker alone; 26.837 gave the C walker it for a NESTED
+	 * struct's minimum, and this is the same omission one level up, at the
+	 * struct a walk starts from. Guarded on the stride for that entry's
+	 * reason: the row grew the field then and an older image lacks it. */
+	uint32_t floor = u32_at(entry + 8);
+	if (floor == SITU_WALK_NONE && image->struct_stride >= 20u) {
+		floor = u32_at(entry + 16);
+	}
+	if (floor != SITU_WALK_NONE && len < (floor + 7u) / 8u) {
 		record(why, SITU_WALK_NONE, SITU_WALK_NO_CHECK);
 		*verdict = SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
