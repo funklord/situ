@@ -971,6 +971,29 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 			found.append(Ask(Probe.ARM_BYTES, local))
 			continue
 
+		# A FIXED-WIDTH text number arm, which is the delimited one above
+		# with a width instead of a scan -- and the only thing the two have
+		# in common here. All four backends decline it in words, "`code` is
+		# not a shape this backend reaches into yet", emitting just the
+		# infallible `_value` helper that the offset arithmetic AFTER the
+		# arm needs. There is no member accessor to ask.
+		#
+		# It fell past every clause to the scalar probe, so the driver named
+		# a getter nothing defines and did not compile: measured on
+		# `case 1: decimal u32 code[3] [min = 200, max = 599]`, where cc
+		# refused `situ_arms_body_code_get` and helpfully offered
+		# `situ_arms_body_other_get` instead. Not compiling is the good
+		# outcome; what it means is that the construct cannot be compared
+		# four ways AT ALL, so a differential could not have caught
+		# anything about it -- which is how 26.850's gap in six readers got
+		# to stay invisible.
+		#
+		# Nothing in the corpus changes: its one text-number arm,
+		# `edges.wide_delim_arm.held.code`, is delimited and is taken by
+		# the branch above.
+		if member.radix is not None:
+			continue
+
 		if scalar.bits == BITS_PER_BYTE \
 				and (member.sized_by is not None
 				     or member.array_count is not None
