@@ -207,7 +207,12 @@ def argued_refusal(relation: ast.Relation, resolved: ResolvedSchema,
 #: is the same number without it. Allowing it moved the comparable share of
 #: the corpus from 140 expectations to 142 -- small, and also two
 #: expectations that would otherwise have gone silently uncompared.
-INT_LITERAL = re.compile(r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*\Z")
+#:
+#: The leading sign is `example/ntp`'s `precision = -23`, an `i8`, and it
+#: was the LAST expectation in the corpus that nothing compared -- one of
+#: 197, found by asking which one remained rather than by assuming the tail
+#: was empty. All four languages read `-23`.
+INT_LITERAL = re.compile(r"(-?0[xX][0-9a-fA-F]+|-?\d+)[uUlL]*\Z")
 
 
 def enum_constants(schema: ast.Schema, prefix: str = "situ") -> dict[str, int]:
@@ -240,7 +245,7 @@ def enum_constants(schema: ast.Schema, prefix: str = "situ") -> dict[str, int]:
 def comparable(resolved: ResolvedSchema, case: "Case",
 		path: str, value: str,
 		constants: dict[str, int] | None = None,
-		nested: bool = False) -> str | None:
+		nested: bool = False, text: bool = False) -> str | None:
 	"""The literal to compare this expectation against, or None.
 
 	Measured over the corpus: of 197 expectations, **142 are a plain scalar
@@ -267,8 +272,14 @@ def comparable(resolved: ResolvedSchema, case: "Case",
 	if _byte_run(resolved, case.struct, path) is not None:
 		return None
 
+	# A text number's getter is fallible, and what that costs differs by
+	# backend: C takes an out-parameter and returns a code, so calling it as
+	# a plain getter does not compile; Python makes it the one property that
+	# can RAISE, which for a golden vector's valid digits is simply the
+	# number. So `text` is a backend saying it can read one, the same shape
+	# as `nested` above.
 	found = resolved.find(f"{case.struct}.{path}")
-	if found is not None and found.placement.radix is not None:
+	if not text and found is not None and found.placement.radix is not None:
 		return None
 
 	match = INT_LITERAL.match(value)
@@ -322,7 +333,7 @@ def byte_run(resolved: ResolvedSchema, case: "Case",
 def declined_reason(resolved: ResolvedSchema, case: "Case",
 		path: str, value: str,
 		constants: dict[str, int] | None = None,
-		nested: bool = False) -> str:
+		nested: bool = False, text: bool = False) -> str:
 	"""Why one expectation is not compared, in the words a reader needs.
 
 	Four reasons rather than one count, because "37 not compared" tells a
@@ -340,7 +351,7 @@ def declined_reason(resolved: ResolvedSchema, case: "Case",
 		return "a byte run, which compares as bytes rather than as a number"
 
 	found = resolved.find(f"{case.struct}.{path}")
-	if found is not None and found.placement.radix is not None:
+	if not text and found is not None and found.placement.radix is not None:
 		return "a text number, whose getter is fallible"
 	if constants is not None:
 		return ("a value that is neither an integer literal nor an enum "
@@ -349,8 +360,8 @@ def declined_reason(resolved: ResolvedSchema, case: "Case",
 
 
 def tally(resolved: ResolvedSchema, cases: list["Case"],
-		constants: dict[str, int] | None = None,
-		nested: bool = False) -> tuple[int, dict[str, int]]:
+		constants: dict[str, int] | None = None, nested: bool = False,
+		text: bool = False) -> tuple[int, dict[str, int]]:
 	"""How many expectations a backend compares, and why it declines the rest."""
 	compared = 0
 	declined: dict[str, int] = {}
@@ -358,12 +369,12 @@ def tally(resolved: ResolvedSchema, cases: list["Case"],
 	for case in cases:
 		for path, value in case.expectations:
 			if (comparable(resolved, case, path, value, constants,
-			               nested) is not None
+			               nested, text) is not None
 			    or byte_run(resolved, case, path, value, nested) is not None):
 				compared += 1
 			else:
 				why = declined_reason(resolved, case, path, value, constants,
-				                      nested)
+				                      nested, text)
 				declined[why] = declined.get(why, 0) + 1
 
 	return compared, declined

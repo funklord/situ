@@ -62,7 +62,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# `nested=True`: Python reaches a nested field by chaining properties,
 	# `view.head.magic`, where Rust's accessor returns a `Result` and C++'s
 	# takes an out-parameter and each needs a block neither has yet.
-	compared, declined = tally(resolved, cases, constants, nested=True)
+	compared, declined = tally(resolved, cases, constants, nested=True,
+	                          text=True)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
@@ -180,7 +181,7 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 	lines: list[str] = []
 	for path, value in case.expectations:
 		literal = comparable(resolved, case, path, value, constants,
-		                     nested=True)
+		                     nested=True, text=True)
 		raw     = byte_run(resolved, case, path, value, nested=True)
 		if literal is None and raw is None:
 			continue

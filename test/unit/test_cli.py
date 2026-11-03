@@ -582,6 +582,41 @@ def test_a_nested_byte_run_is_not_named_as_a_flat_one(tmp_path: Path) -> None:
 	assert "a field inside a nested struct" in text
 
 
+def test_python_compares_a_text_number_and_a_negative(
+	tmp_path: Path,
+) -> None:
+	"""The last two classes, and the last expectation in the corpus.
+
+	A text number's getter is fallible, and what that costs differs by
+	backend: C takes an out-parameter and returns a code, so calling it as a
+	plain getter does not compile; Python makes it the one property that can
+	RAISE, which for a golden vector's valid digits is simply the number. So
+	`text` is a backend saying it can read one, the same shape as `nested`.
+
+	And the sign. `example/ntp`'s `precision = -23` is an `i8` and was the
+	LAST of the corpus's 197 expectations that nothing compared -- found by
+	asking which one remained rather than by assuming the tail was empty,
+	which is how the other four classes were found too.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		'endian big;\n\nstruct s {\n\tdecimal u32 count until ",";\n'
+		"\ti8 precision;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text(
+		"s one 31 35 30 30 2C E9\n\tcount = 1500\n\tprecision = -23\n",
+		encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+
+	assert 'self.assertEqual(view.count, 1500, "count")' in text
+	assert 'self.assertEqual(view.precision, -23, "precision")' in text
+	assert "2 field expectation(s) are compared" in text
+	assert "NOT compared" not in text
+
+
 def test_python_reaches_a_scalar_a_nested_one_and_a_byte_run(
 	tmp_path: Path,
 ) -> None:
