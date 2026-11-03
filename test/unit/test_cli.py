@@ -647,6 +647,72 @@ def test_gen_checks_selects_an_arm_it_can_name(tmp_path: Path) -> None:
 	assert "_must_be_zero_is_enforced" in text
 
 
+def test_gen_checks_enforces_a_pinned_value(tmp_path: Path) -> None:
+	"""The seventh kind: a pinned value must be refused when it is wrong.
+
+	The wrong value is the demanded one plus one, masked to the member's
+	own width, which differs from the pin at every width above zero. That
+	matters because `--target c` once wrote a single byte and silently
+	skipped every member wider than one, so `bmp.signature`,
+	`sqlite.magic` and `image_header.format_version` were all pinned and
+	none was tested -- which is why this goes through `_break_to` rather
+	than writing a byte.
+
+	**Measured**: making the emitter skip `must_eq` entirely fails 38 of
+	the 40 checks across 19 of the corpus's schemas, and every one of the
+	38 is this kind. The two that stay green are worth knowing rather than
+	rounding away -- a pin another constraint also refuses does not need
+	this check to notice.
+
+	The control inside each check is the baseline: `view.validate()` has to
+	succeed before the pin is broken, or a refusal afterwards could be
+	about a buffer the schema already refused.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct s {\n\tu16  magic [must_eq = 42];\n\tu8  rest;\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "def test_s_magic_must_eq_is_enforced" in text
+	# 42 pinned, 43 written: both bytes of a u16, not just the low one.
+	assert "# s.magic is pinned to 42; 43 is not it." in text
+	assert "raw[0] = (raw[0] & 0x00) | 0x00" in text
+	assert "raw[1] = (raw[1] & 0x00) | 0x2b" in text
+	assert "\t\tview.validate()\n" in text
+	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
+
+
+def test_gen_checks_declines_a_pin_a_number_cannot_break(
+	tmp_path: Path,
+) -> None:
+	"""A pin on a byte RUN is not broken by adding one to anything.
+
+	`[must_eq = "BM"]` has no integer to increment, and a schema admitting
+	several alternatives needs a byte outside every one of them -- which is
+	`--target c`'s pinned-run body and is not ported yet. 18 of the
+	corpus's 67 pins are of this kind, so declining them silently would
+	leave a reader of 40 checks believing all 67 were asked.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		'struct s {\n\tu8  sig[2] [must_eq = "BM"];\n\tu8  rest;\n}\n',
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "Not enforced here: `s.sig`" in text
+	assert "which a number cannot break" in text
+	assert "test_s_sig_must_eq_is_enforced" not in text
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had

@@ -92,6 +92,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		# selected by `_prelude` before the field is broken, so the
 		# refusal is about that field in a message that carries it.
 		lines.extend(_reserved_checks(basename, resolved, struct))
+		lines.extend(_must_eq_checks(basename, resolved, struct))
 
 	lines.extend([
 		"",
@@ -142,7 +143,7 @@ _COUNT_WORD = ("no", "One", "Two", "Three", "Four", "Five",
 #: The kinds this backend emits: the first `DONE` of `C_KINDS`. One number,
 #: so adding a kind moves the sentence, the emitted list and the declined
 #: list together.
-DONE = 6
+DONE = 7
 
 
 def _preamble(basename: str, structs: int) -> list[str]:
@@ -192,7 +193,13 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"    an already-invalid buffer would prove nothing. A field inside",
 		"    a variant arm is reached too: the arm is selected first, so",
 		"    the refusal is about that field in a message that carries it.",
-		"    Each field this declines says which and why below."
+		"    Each field this declines says which and why below.",
+		"  - `must_eq` is enforced: a pinned value, broken by adding one",
+		"    inside its own width, must be refused on parse. The scalar",
+		"    form only -- 49 of the corpus's 67 pins are a foldable",
+		"    scalar and the other 18 are byte RUNS, which a number cannot",
+		"    break (`\"BM\"` has nothing to add one to), so those are",
+		"    declined by name. Same baseline, and the same reason for it."
 		"",
 		f"The {_COUNT_WORD[len(C_KINDS) - DONE].lower()} `--target c` also emits and this does not:",
 		"",
@@ -362,6 +369,121 @@ def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
 	if select:
 		lines += [*select, ""]
 	return lines
+
+
+def _must_eq_checks(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct) -> list[str]:
+	"""Every pinned value in this struct, held to its pin.
+
+	Malleability control again, and section 8.8's argument applies
+	unchanged: a value the schema does not admit has to be refused on
+	parse, or a sender varies bytes the format calls fixed.
+
+	The scalar form only. 49 of the corpus's 67 pins are a foldable scalar
+	`[must_eq = ...]`; the other 18 are byte RUNS, which a number cannot
+	break -- `"BM"` has nothing to add one to, and a schema admitting
+	several alternatives needs a byte outside every one of them. Those are
+	declined by name until `--target c`'s pinned-run body is ported too.
+	"""
+	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		return []
+
+	extent = struct.layout.size_bytes
+	lines: list[str] = []
+	for entry in struct.entries:
+		lines.extend(_one_must_eq(basename, resolved, struct,
+		                          entry.placement, extent))
+	return lines
+
+
+def _one_must_eq(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct, placement: Placement,
+		extent: int) -> list[str]:
+	"""One pin's check, or a named decline, or nothing."""
+	from situc.expr import evaluate
+
+	must = next((attr for attr in placement.attrs
+	             if attr.name == "must_eq"), None)
+	# A pin reaches here two ways: written on the member, and carried by a
+	# byte run whose value the schema states -- an enum over runs, or
+	# `[must_eq = "BM"]`, which the solver folds into the same field. A
+	# reserved run is the third and belongs to `_reserved_checks`.
+	run = bool(required_run(placement, every=True))
+	if must is None and not (run and placement.kind != "reserved"):
+		return []
+	if must is not None and must.value is None:
+		return []
+
+	reason = None
+	if run and placement.kind != "reserved":
+		reason = ("its pin is a byte run, which a number cannot break -- it"
+		          " wants a byte no pin admits")
+	elif placement.offset_bits is None:
+		reason = ("its pinned value sits at an offset the message chooses,"
+		          " so no one buffer breaks it")
+	elif inside_an_unresolved_arm(struct, placement):
+		reason = ("it is inside a variant arm this backend cannot name, so"
+		          " no message can be built that carries it")
+	elif not placement.size_bits:
+		reason = "it owns no bit to break"
+	elif (placement.offset_bits + placement.size_bits - 1) \
+			// BITS_PER_BYTE >= extent:
+		reason = "its pinned value lies outside the frame this builds"
+	if reason is None:
+		assert must is not None and must.value is not None
+		try:
+			demanded = int(evaluate(must.value, resolved.layout.env))
+		except Exception:	# noqa: BLE001 - unfoldable is unbreakable
+			reason = "its `must_eq` is not a compile-time value"
+	if reason is not None:
+		return [f"\t# Not enforced here: `{placement.path}`, because"
+		        f" {reason}.", ""]
+
+	prelude = _prelude(resolved, struct, placement, extent)
+	if prelude is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because no"
+		        " buffer carrying it with every other constraint",
+		        "\t# satisfied can be built, so breaking it would prove"
+		        " nothing.", ""]
+
+	# **Any width, which is why this goes through `_break_to`.** The C
+	# version wrote one byte and silently skipped every member that was not
+	# exactly one byte wide, so `bmp.signature`, `sqlite.magic` and
+	# `image_header.format_version` were all pinned and none was tested.
+	# Adding one wraps inside the member's own width, so the result differs
+	# from the demanded value at every width above zero.
+	wrong = (demanded + 1) & ((1 << placement.size_bits) - 1)
+	broken = _break_to(placement, wrong)
+	if broken is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because its"
+		        " bits are not ones a value can be placed into.", ""]
+
+	name = py_name(f"{struct.name}_{placement.name}")
+	return [
+		f"\tdef test_{name}_must_eq_is_enforced(self) -> None:",
+		f'\t\t"""`{placement.path}` is pinned to {demanded}.',
+		"",
+		"\t\tMalleability control rather than pedantry (section 8.8): a",
+		"\t\tvalue the schema does not admit has to be refused on",
+		'\t\tparse."""',
+		f"\t\traw = bytearray({extent})",
+		"\t\tmsg = situ_runtime.Message(raw)",
+		f"\t\tview = {basename}.{py_name(struct.name)}.at(msg, 0"
+		+ ("" if struct.layout.is_fixed_size else f", {extent}") + ")",
+		"",
+		*prelude,
+		"\t\t# The control: without it a refusal below proves nothing,",
+		"\t\t# since a buffer the schema already refuses would refuse",
+		"\t\t# whatever this wrote into it.",
+		"\t\tview.validate()",
+		"",
+		f"\t\t# {placement.path} is pinned to {demanded};"
+		f" {wrong} is not it.",
+		*broken,
+		"\t\twith self.assertRaises(situ_runtime.ConstraintError):",
+		"\t\t\tview.validate()",
+		"",
+	]
 
 
 def _reserved_checks(basename: str, resolved: ResolvedSchema,

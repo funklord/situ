@@ -8259,6 +8259,11 @@ Moved to
 Moved to
 `doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
 
+### 26.840 The seventh kind, and the pin a number cannot break
+
+Moved to
+`doc/decision/26.840-the-seventh-kind-and-the-pin-a-number-cannot-break.md`.
+
 ### 26.839 An arm whose member is anonymous cannot be named
 
 Moved to
