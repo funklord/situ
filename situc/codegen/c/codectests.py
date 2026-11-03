@@ -1047,6 +1047,16 @@ def _derived_hostile(codec: ast.CodecDecl, decode: str, counted: str,
 	capacity a correct caller would supply, and a single byte past it trips
 	the guard.
 
+	**That is a premise about the kernels, not a theorem**, and it is stated
+	here because a reader needs to know what makes the capacity right.
+	Measured over all 44 signatures in `std/kernels.situ` when this was
+	written. A kernel whose DECODE direction expands would be handed too
+	little room and would fail this test honestly -- `SITU_ERR_BOUNDS` is not
+	available at this ABI, so it would trip the guard or report more than it
+	was given -- and the fix then is to compute the capacity from the
+	kernel's own ratio rather than to widen the buffer, because a buffer with
+	slack behind it is what this test exists to stop being.
+
 	The guard rather than a sanitizer because this suite is built with the
 	ordinary test compiler, and a stack array with slack behind it is exactly
 	what ASan would not be running to see.
@@ -1078,8 +1088,11 @@ def _derived_hostile(codec: ast.CodecDecl, decode: str, counted: str,
 	return ([
 		"/* Derived: a decoder is handed bytes no encoder produced, with the",
 		" * output capacity set to the input count and a guard immediately",
-		" * behind it. The one property a decoder can be held to over an",
-		" * input it did not make is that it writes inside that. */",
+		" * behind it. Over an input it did not make there is nothing to",
+		" * compare the OUTPUT against, so what it can be held to here is",
+		" * that it writes inside that capacity -- and, under",
+		" * `make test-codec-san`, that it reads inside its input, which no",
+		" * guard can be placed to see. */",
 		f"static void {name}(void **state)",
 		"{",
 		f"	static const uint32_t sizes[] = {{ {spelt} }};",
