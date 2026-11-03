@@ -5044,6 +5044,8 @@ Three parts, the first now mechanical:
 | offset constancy | cmocka + disassembly check | verify view field access compiles to constant offsets |
 | round-trip | pytest + hex vectors | parse then re-emit must be byte-identical for canonical schemas |
 | fuzz | libFuzzer + ASan | `make fuzz` builds every generated harness with `-fsanitize=fuzzer,address` and runs each for `FUZZ_SECONDS`. Not part of `make test`: minutes rather than seconds, and a compiler `test` does not need. The suite still compiles every harness and smoke-runs it on eight inputs from `/dev/urandom`, which catches a harness that stopped running and reaches nothing else -- a length field is a 1-in-2^16 guess |
+| codec properties | generated cmocka | every declared property of every codec gets the cheap falsifying test from 13.1's table, generated from the signature. Both tiers: a tier-1 `impl extern` through 13.2a's ABI, and a derived one through the pair its kernel emits. A decoder is also handed bytes no encoder produced, with the output capacity set to the input count and a guard immediately behind it -- the round-trip tests feed a decoder only its own encoder's output, which is the one input class it is guaranteed to handle, and every buffer they declare has 1792 bytes of slack behind it (26.826, 26.827) |
+| codec properties, sanitized | `make test-codec-san` | the same two suites under `-fsanitize=address,undefined`. The guard above catches a write past the capacity with no sanitizer at all, which is why it is a guard; a read past the INPUT it cannot see, the input sitting inside a `SITU_CODEC_MAX_INPUT` array. ASan redzones that array, so the hostile sweeps reach `MAX_INPUT` exactly: at any shorter length there is slack ASan cannot tell from legitimate use. Not part of `make test`, for `make fuzz`'s reason -- it needs a compiler `test` does not |
 | diagnostics | pytest | snapshot-test the exact diagnostic text; regressions in message quality are real regressions |
 | backend agreement | pytest + each toolchain | every backend's output compiled and compared against the C on the same buffer, field by field. Four backends that disagreed would mean a schema means four things, and this is the only test that would notice |
 | backend agreement, hostile input | pytest + all four toolchains | the same question about bytes nobody meant to send, over every schema: the drivers are generated from the layout (`situc/codegen/differ.py`), so what is asked of one backend is asked of all four, and the answers are diffed. The well-formed comparison above cannot see a backend that differs only on a malformed message, which is where all four differed (26.27) |
@@ -8221,6 +8223,11 @@ Moved to
 
 Moved to
 `doc/decision/26.826-a-decoder-was-only-ever-fed-its-own-encoder.md`.
+
+### 26.827 No tier-1 codec's capacity branch was ever taken
+
+Moved to
+`doc/decision/26.827-no-tier-one-capacity-branch-was-ever-taken.md`.
 
 ### 26.715 The same width in the other pointer backend
 

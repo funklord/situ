@@ -52,6 +52,18 @@ SWEEP = (0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 63, 64, 127, 128, 255, 256)
 MAX_INPUT  = 256
 MAX_OUTPUT = 2048
 
+#: Input lengths the hostile-input tests sweep, in bytes.
+#:
+#: `MAX_INPUT` itself is the last of them and is load-bearing rather than
+#: round. The guard behind the OUTPUT catches a write past the capacity with
+#: no sanitizer at all; an over-READ it cannot see, because the input sits
+#: inside a `SITU_CODEC_MAX_INPUT` array and reading past `n` stays in bounds
+#: of the object. ASan redzones a stack array, so a sanitized build sees a
+#: read past the array -- but only where `n` leaves no slack, which is this
+#: entry and no other. 26.826 named that gap and this is half of closing it;
+#: `make test-codec-san` is the other half.
+HOSTILE_SIZES = (1, 2, 3, 7, 8, 15, 16, 31, 64, 255, MAX_INPUT)
+
 # Bytes of guard immediately behind the output capacity a hostile input is
 # decoded into, where that capacity is the input count rather than
 # MAX_OUTPUT. Sized to catch the shape 26.482 had -- an output length the
@@ -90,13 +102,15 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	]
 
 	cases: list[str] = []
+	claimed: list[str] = []
 	suites: list[str] = []
 	for codec in codecs:
 		symbol = extern_symbol(schema, codec.name)
 		if symbol is not None:
-			body, names = _codec_suite(codec, symbol)
+			body, names, from_claims = _codec_suite(codec, symbol)
 			suites.extend(body)
 			cases.extend(names)
+			claimed.extend(from_claims)
 			continue
 
 		# A derived codec is attacked through the pair its kernel emits
@@ -109,6 +123,10 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 			body, names = _derived_suite(codec, *pair)
 			suites.extend(body)
 			cases.extend(names)
+			# A derived hostile-input test IS gated on a declared property:
+			# the emitter binds a decoder only where the kernel is
+			# `invertible`, so there is nothing to separate out here.
+			claimed.extend(names)
 			continue
 
 		suites.extend(_declined(schema, codec))
@@ -121,7 +139,7 @@ def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 		lines.extend(_shared())
 	lines.extend(suites)
 
-	lines.extend(_main(cases))
+	lines.extend(_main(cases, claimed))
 	return "\n".join(lines) + "\n"
 
 
@@ -193,7 +211,16 @@ def _declined(schema: ast.Schema, codec: ast.CodecDecl) -> list[str]:
 
 
 def _codec_suite(codec: ast.CodecDecl,
-		symbol: str) -> tuple[list[str], list[str]]:
+		symbol: str) -> tuple[list[str], list[str], list[str]]:
+	"""The tier-1 suite, and which of its tests come from a declared property.
+
+	The third value exists because `_hostile_test` does not: it attacks the
+	section 13.2a ABI, which every `impl extern` takes on whatever its
+	signature claims, so it fires for a codec that claims nothing at all.
+	`_main` still has to say that such a signature claims nothing -- silence
+	reading as coverage is this file's own rule -- and it cannot tell from a
+	non-empty case list any more.
+	"""
 	encode = f"{symbol}_encode"
 	decode = f"{symbol}_decode"
 
@@ -208,10 +235,11 @@ def _codec_suite(codec: ast.CodecDecl,
 	]
 
 	names: list[str] = []
+	claimed: list[str] = []
 
 	for builder in (_length_test, _deterministic_test, _invertible_test,
 	                _seekable_test, _permuted_test,
-	                _systematic_test, _granularity_test,
+	                _systematic_test, _granularity_test, _hostile_test,
 	                _authenticated_note, _error_propagating_note):
 		body, name = builder(codec, encode, decode)
 
@@ -225,8 +253,99 @@ def _codec_suite(codec: ast.CodecDecl,
 		lines.append("")
 		if name is not None:
 			names.append(name)
+			if builder is not _hostile_test:
+				claimed.append(name)
 
-	return lines, names
+	return lines, names, claimed
+
+
+def _hostile_test(codec: ast.CodecDecl, encode: str,
+		decode: str) -> tuple[list[str], str | None]:
+	"""A tier-1 implementation handed a tight capacity, and bytes it did not make.
+
+	Section 13.1's whole argument is that a tier-1 codec is trusted and
+	unverified, so it can lie, and what the compiler can do is generate the
+	tests that would catch a lying one. **"I respect `out_cap`" is such a
+	claim**, and nothing here was checking it: every other test in this
+	file passes `sizeof(coded)` -- `SITU_CODEC_MAX_OUTPUT`, 2048 -- against
+	an input of at most 256, so the capacity branch of a tier-1
+	implementation was never once taken. An implementation that ignores
+	`out_cap` entirely passed the whole suite.
+
+	The same hole on the derived side was 26.826. There the capacity is
+	implicit in the kernel and the fix was to size the buffer tight; here it
+	is a PARAMETER, which makes the test sharper rather than harder: pass
+	`n`, and an implementation that needs more must say so with
+	`SITU_ERR_BOUNDS` rather than write.
+
+	And the input is bytes no encoder produced, for the reason 26.826 gives
+	-- a decoder's whole risk surface is the input an encoder did not make,
+	and 26.482 was exactly there.
+
+	What is asserted holds for any tier-1 codec whatever its signature says,
+	which is what lets one generated body serve all of them: the guard behind
+	the capacity is untouched, and a call reporting `SITU_OK` wrote no more
+	than the capacity it was given. Nothing is asserted about the decoded
+	CONTENT, because over an input no encoder made there is nothing to
+	compare it against.
+	"""
+	name = f"test_{codec.name}_hostile_input"
+	return ([
+		"/* A tier-1 implementation, handed bytes no encoder produced and a",
+		" * capacity of exactly the input length. Section 13.1: the signature",
+		" * is trusted and unverified, and `out_cap` is one of the things it",
+		" * can be wrong about. Every other test here passes a 2048-byte",
+		" * buffer, so the capacity branch was never taken. */",
+		f"static void {name}(void **state)",
+		"{",
+		"	static const uint32_t sizes[] = {",
+		"		" + ", ".join(f"{n}u" for n in HOSTILE_SIZES) + ",",
+		"	};",
+		"	static const int fills[] = { -1, -2, 0x00, 0x7E, 0x7D, 0xDB, 0xFF };",
+		"	uint8_t input[SITU_CODEC_MAX_INPUT];",
+		"	uint8_t out[SITU_CODEC_MAX_INPUT + SITU_CODEC_GUARD];",
+		"	size_t i;",
+		"	size_t k;",
+		"",
+		"	(void)state;",
+		"	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {",
+		"		for (k = 0; k < sizeof(fills) / sizeof(fills[0]); k++) {",
+		"			const uint32_t n = sizes[i];",
+		"			uint32_t out_len = 0;",
+		"			uint32_t g;",
+		"",
+		"			if (fills[k] < 0) {",
+		"				situ_codec_fill(input, n,",
+		"					(uint32_t)i * 13u + (uint32_t)k + 1u);",
+		"			} else {",
+		"				memset(input, (int)fills[k], (size_t)n);",
+		"			}",
+		"",
+		"			/* Decode first: the input is nothing an encoder made. */",
+		"			memset(out, (int)SITU_CODEC_GUARD_BYTE, sizeof(out));",
+		f"			if ({decode}(input, n, out, n, &out_len) == SITU_OK) {{",
+		"				assert_true(out_len <= n);",
+		"			}",
+		"			for (g = 0; g < SITU_CODEC_GUARD; g++) {",
+		"				assert_int_equal(out[n + g],",
+		"					SITU_CODEC_GUARD_BYTE);",
+		"			}",
+		"",
+		"			/* And encode into a capacity that may not be enough,",
+		"			 * which is the branch a 2048-byte buffer never takes. */",
+		"			out_len = 0;",
+		"			memset(out, (int)SITU_CODEC_GUARD_BYTE, sizeof(out));",
+		f"			if ({encode}(input, n, out, n, &out_len) == SITU_OK) {{",
+		"				assert_true(out_len <= n);",
+		"			}",
+		"			for (g = 0; g < SITU_CODEC_GUARD; g++) {",
+		"				assert_int_equal(out[n + g],",
+		"					SITU_CODEC_GUARD_BYTE);",
+		"			}",
+		"		}",
+		"	}",
+		"}",
+	], name)
 
 
 def _expected_length(codec: ast.CodecDecl) -> str | None:
@@ -715,7 +834,7 @@ def _granularity_test(codec: ast.CodecDecl, encode: str,
 	], name)
 
 
-def _main(cases: list[str]) -> list[str]:
+def _main(cases: list[str], claimed: list[str]) -> list[str]:
 	if not cases:
 		return [
 			"int main(void)",
@@ -726,7 +845,19 @@ def _main(cases: list[str]) -> list[str]:
 			"}",
 		]
 
-	lines = ["int main(void)", "{", "\tconst struct CMUnitTest tests[] = {"]
+	lines = ["int main(void)", "{"]
+	if not claimed:
+		# Tests, but none from a declared property. Saying so matters more
+		# here than where there are none at all: a non-empty suite reads as
+		# coverage of the signature, and all it covers is the ABI every
+		# `impl extern` takes on regardless of what the signature says.
+		lines.extend([
+			"\t/* No codec in this schema declares a property with a",
+			"\t * falsifying test, so the signatures claim nothing. What",
+			"\t * follows attacks the section 13.2a ABI, which an `impl",
+			"\t * extern` takes on whatever it claims -- not the claims. */",
+		])
+	lines.append("\tconst struct CMUnitTest tests[] = {")
 	for case in cases:
 		lines.append(f"\t\tcmocka_unit_test({case}),")
 	lines.extend([
@@ -942,7 +1073,7 @@ def _derived_hostile(codec: ast.CodecDecl, decode: str, counted: str,
 	# A bit-counted decoder is handed `n * 8` and reports bits, so the
 	# capacity in BYTES is the same `n` either way and only the count moves.
 	count = "n * 8u" if bits else "n"
-	spelt = ", ".join(f"{n}u" for n in (1, 2, 3, 7, 8, 15, 16, 31, 64, 255))
+	spelt = ", ".join(f"{n}u" for n in HOSTILE_SIZES)
 
 	return ([
 		"/* Derived: a decoder is handed bytes no encoder produced, with the",

@@ -50,7 +50,7 @@ export CROSS_COMPILE CFLAGS LDFLAGS
 export RUNTIME_INC RUNTIME_LIB
 
 .PHONY: all runtime compiler test test-c test-py check typecheck lint bench \
-	fuzz fuzz-generated fuzz-cpp fuzz-walker \
+	fuzz fuzz-generated fuzz-cpp fuzz-walker test-codec-san \
 	veryclean distclean style style-source style-docs hooks walk-c \
 	cross cross-test install uninstall clean help deb deb-check
 
@@ -72,6 +72,7 @@ help:
 	@echo '  edit       read a message: bin/situ-edit, -tui (0034)'
 	@echo '  bench      what the offset cache costs, in all four backends'
 	@echo '  fuzz       run every generated harness under libFuzzer + ASan'
+	@echo '  test-codec-san  the codec property suites under ASan + UBSan'
 	@echo '  cross      compile-only build for aarch64'
 	@echo '  cross-test run generated accessors on aarch64 under emulation'
 	@echo '  install    install situc and the runtime under PREFIX'
@@ -188,6 +189,13 @@ fuzz-cpp:
 
 fuzz-walker:
 	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' fuzz-walker
+
+# The codec property suites rebuilt under a sanitizer. `test-c` runs them with
+# the ordinary compiler, where the hostile-input property's guard catches a
+# write past the output capacity; an over-read needs the redzone this gets
+# (26.826, 26.827). Separate because it needs clang, as `fuzz` does.
+test-codec-san:
+	@$(MAKE) --no-print-directory -C test/generated BUILD_DIR='$(BUILD_DIR)/tests' test-codec-san
 
 # aarch64 has a cross compiler here but no cmocka build and no emulator, so
 # the cross target compiles the runtime warning-clean and stops there.

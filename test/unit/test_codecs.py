@@ -516,11 +516,73 @@ def test_block_granularity_checks_independence() -> None:
 	assert "Disturb one byte of the second block" in text
 
 
-def test_a_signature_claiming_nothing_produces_no_tests() -> None:
-	"""And the generated main says why, rather than reporting a pass."""
+def test_a_signature_claiming_nothing_gets_no_test_from_a_claim() -> None:
+	"""And the generated main says so, rather than reporting a pass.
+
+	It used to assert that such a signature produces NO tests, and that
+	stopped being true when the ABI attack landed: `_hostile_test` fires for
+	every bound codec whatever it claims, because section 13.2a's contract is
+	one an `impl extern` takes on regardless. So the file is no longer silent
+	and the sentence it has to carry is a different one -- a non-empty suite
+	reads as coverage of the signature, and all this one covers is the ABI.
+	"""
 	text = codec_tests("codec c { expansion = unbounded; }")
+
+	# Nothing from a claim, and the only case is the ABI attack.
+	assert "cmocka_unit_test(test_c_hostile_input)" in text
+	assert text.count("cmocka_unit_test(") == 1
+	# And the main says which it is.
+	assert "the signatures claim nothing" in text
+	assert "attacks the section 13.2a ABI" in text
+
+
+def test_a_schema_with_no_bound_codec_at_all_still_says_so() -> None:
+	"""The branch above it: no `impl`, so no ABI to attack either, and the
+	original sentence is the one that applies."""
+	text = codec_tests("codec c { expansion = unbounded; }", bind=False)
+
+	assert "cmocka_unit_test(" not in text
 	assert "That is not a pass: it means the signatures claim nothing" in text
 
+
+
+def test_a_tier_one_codec_is_handed_a_capacity_it_may_not_fit() -> None:
+	"""Section 13.1 says a tier-1 signature is trusted and unverified, so it
+	can lie, and that what the compiler can do is generate the tests that
+	would catch a lying one. "I respect `out_cap`" is such a claim and
+	nothing was checking it.
+
+	Every other test in the generated file passes `sizeof(coded)` --
+	`SITU_CODEC_MAX_OUTPUT`, 2048 -- against an input of at most 256, so the
+	capacity branch of a tier-1 implementation was never once taken. An
+	implementation that ignored `out_cap` entirely passed the whole suite.
+	Here the capacity is the input count, with a guard immediately behind it.
+
+	The derived side had the same hole and it is 26.826; the difference is
+	that there the capacity is implicit in the kernel and here it is a
+	parameter, which makes the test sharper rather than harder.
+	"""
+	text = codec_tests("codec c { length_preserving; invertible;"
+	                   " deterministic; }")
+
+	assert "test_c_hostile_input" in text
+	assert "uint8_t out[SITU_CODEC_MAX_INPUT + SITU_CODEC_GUARD];" in text
+	# Both halves: the decoder over bytes no encoder made, and the encoder
+	# into a capacity that may not be enough.
+	assert "my_c_decode(input, n, out, n, &out_len)" in text
+	assert "my_c_encode(input, n, out, n, &out_len)" in text
+	assert "assert_int_equal(out[n + g]," in text
+
+
+def test_a_tier_one_codec_with_no_implementation_is_not_attacked() -> None:
+	"""A signature may exist with no `impl` at all (13.1), and the file says
+	so instead of emitting a harness that could not be linked -- which is
+	26.35's defect, a suite calling functions nothing defines."""
+	text = codec_tests("codec c { length_preserving; invertible; }",
+	                   bind=False)
+
+	assert "test_c_hostile_input" not in text
+	assert "no suite" in text
 
 def test_a_derived_codec_is_attacked_through_its_kernel_pair() -> None:
 	"""A tier-2 codec has no `impl extern` to bind the tier-1 ABI to, and its

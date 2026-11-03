@@ -167,7 +167,7 @@ OBJS_test_spans		:= $(GEN_DIR)/edges.o codec_impl.c
 .SECONDEXPANSION:
 
 .PHONY: all test clean generate fuzz fuzz-generated fuzz-cpp \
-	fuzz-walker run-fuzz
+	fuzz-walker run-fuzz test-codec-san
 
 all: $(BINS) $(VECTOR_BINS) $(FUZZ_BINS) $(CHECK_BINS) $(CODEC_SUITE) \
 	$(CODEC_BINS)
@@ -426,6 +426,57 @@ test: all
 				|| exit 1; \
 		done; \
 	done
+
+# -- the codec suites under a sanitizer -------------------------------------
+#
+# The hostile-input property (26.826, 26.827) catches a WRITE past the output
+# capacity with a guard byte, which works under the ordinary test compiler and
+# is why it was built that way. An over-READ it cannot see at all: the input
+# sits inside a `SITU_CODEC_MAX_INPUT` array, so reading past `n` stays in
+# bounds of the object and no guard is between.
+#
+# ASan redzones a stack array, so it sees a read past the array itself -- and
+# the sweeps reach `MAX_INPUT` exactly for that reason, since any shorter
+# length leaves slack ASan cannot distinguish from legitimate use. UBSan is
+# here for the same reason `fuzz` has it: this is bit and byte manipulation,
+# and shift exponents and index arithmetic are what it reads.
+#
+# `-fno-sanitize-recover=undefined` is load-bearing exactly as it is above: a
+# UBSan report with recovery leaves the harness exiting 0, which is a gate
+# that prints a finding and passes.
+#
+# Separate from `test` because it needs a compiler `test` does not, and
+# reusing `FUZZ_CC` rather than naming a second one: whichever clang is
+# installed, found the same way and for the same reason.
+SAN_CC		?= $(FUZZ_CC)
+SAN_CFLAGS	:= -std=c11 -g -O1 -fsanitize=address,undefined \
+		   -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+SAN_DIR		:= $(BUILD_DIR)/san
+SAN_BINS	:= $(SAN_DIR)/edges_codec_tests $(SAN_DIR)/kernels_codec_tests
+
+$(SAN_DIR)/edges_codec_tests: $(GEN_DIR)/edges_codec_tests.c codec_impl.c \
+		$(GEN_DIR)/edges_derived.c $(RUNTIME_INC)/situ.c
+	@mkdir -p '$(@D)'
+	$(SAN_CC) $(SAN_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< codec_impl.c $(GEN_DIR)/edges_derived.c \
+		'$(RUNTIME_INC)/situ.c' $(CMOCKA_LIBS) -o $@
+
+$(SAN_DIR)/kernels_codec_tests: $(GEN_DIR)/kernels_codec_tests.c \
+		$(GEN_DIR)/kernels_derived.c $(RUNTIME_INC)/situ.c
+	@mkdir -p '$(@D)'
+	$(SAN_CC) $(SAN_CFLAGS) -I'$(RUNTIME_INC)' -I'$(GEN_DIR)' \
+		$< $(GEN_DIR)/kernels_derived.c \
+		'$(RUNTIME_INC)/situ.c' $(CMOCKA_LIBS) -o $@
+
+# The sources are rebuilt from the schemas rather than reusing `test`'s
+# objects: those are compiled with `$(CFLAGS)` and an object built without
+# the sanitizer is one ASan cannot see inside.
+test-codec-san: $(SAN_BINS)
+	@for t in $(SAN_BINS); do \
+		echo "--- $$t"; \
+		case "$$t" in /*) "$$t";; *) "./$$t";; esac || exit 1; \
+	done
+	@echo "codec suites clean under address and undefined sanitizers"
 
 # -- fuzzing, for real ------------------------------------------------------
 #
