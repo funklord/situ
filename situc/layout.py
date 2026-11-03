@@ -2117,8 +2117,37 @@ class Solver:
 
 			arm_cases.append(Arm(source, value,
 			                     f"{prefix}.{variant.name}.{_arm_name(arm)}"))
+			seen   = len(layout.placements)
 			extent = self.arm_extent(decl, arm, scope, layout, prefix, variant,
 			                         state, last_in_frame)
+
+			# **An anonymous arm member is named by the placement, not by a
+			# placeholder.** `_arm_name` falls back to the string `"arm"`
+			# where the member has no name of its own -- `case 1: reserved
+			# u8 [must_be_zero];` -- and its own docstring calls that "a
+			# placeholder reaching a user-facing artifact". The placement
+			# the layout creates is `<reserved0>`, so the arm named a
+			# member nobody has.
+			#
+			# Three consumers were wrong about it before this was fixed, and
+			# each was wrong differently (26.839, 26.848): `gen-checks`
+			# emitted a check for bytes nobody had selected, the variant-arm
+			# census counted the arm nowhere, and a REFUSAL MESSAGE named
+			# `arm_holder.body.arm` to the author. The last is why this is
+			# fixed in the layout rather than guarded around: a diagnostic
+			# citing a member that does not exist is the one instance a user
+			# meets.
+			#
+			# Read from the placement rather than predicting the counter:
+			# `<reserved{n}>` is numbered as the layout walks, so guessing
+			# `n` here would be a second answer to a question the layout
+			# already answers.
+			if _arm_name(arm) == "arm":
+				made = next((held.path for held in layout.placements[seen:]
+				             if held.path.startswith(
+					             f"{prefix}.{variant.name}.")), None)
+				if made is not None:
+					arm_cases[-1] = replace(arm_cases[-1], member = made)
 			# AN ARM IS A WHOLE NUMBER OF BYTES (26.435), which is what makes
 			# the byte-aligned start above worth checking: everything after
 			# the variant then lands on a byte boundary whichever arm the

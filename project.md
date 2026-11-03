@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.848 The placeholder that reached three consumers
+
+Moved to
+`doc/decision/26.848-the-placeholder-that-reached-three-consumers.md`.
+
 ### 26.847 A fuzz harness that needs no fuzzer
 
 Moved to

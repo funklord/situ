@@ -757,18 +757,21 @@ def _one_reserved(basename: str, resolved: ResolvedSchema,
 		return []
 
 	reason = None
-	if inside_an_unresolved_arm(struct, placement):
+	# **The array branch first**, because after 26.848 every placement the
+	# arm predicate still answers for is an array element -- the arm names
+	# `recs` and the placement is `recs[]` -- and "an array element" is the
+	# more informative of two true reasons. The arm predicate stays as the
+	# backstop it now is: zero corpus placements reach it that are not
+	# arrays, and a construct that does would otherwise get no reason at
+	# all.
+	if "[]" in placement.path:
+		reason = "it is an array element, which validates its own"
+	elif inside_an_unresolved_arm(struct, placement):
 		# `enclosing_arm` says "no arm" for a member in an arm it cannot
 		# name as well as for one in no arm, and reading the first as the
 		# second emits a check about bytes nobody selected (26.839).
 		reason = ("it is inside a variant arm this backend cannot name, so"
 		          " no message can be built that carries it")
-	elif "[]" in placement.path:
-		# Deliberate: walking every element on every parse is a cost the
-		# caller should choose, so the element type's own `validate` is
-		# where that check lives. Demanding it here would fail a design
-		# decision rather than a bug.
-		reason = "it is an array element, which validates its own"
 	elif placement.pinned_runs:
 		reason = ("it is a pinned run, whose check is the pin rather than a"
 		          " bit policy")

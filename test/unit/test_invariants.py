@@ -189,14 +189,21 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: ordinary scalar arm like the thirty already there -- a moved count and
 #: no new cell, which is the benign half.
 #:
-#: **The other arm is counted nowhere, and that is the finding.** The
-#: layout records it as `arm_holder.body.arm` while the placement it made
-#: is `arm_holder.body.<reserved0>`, so no lookup matches and this census
-#: does not see it either -- a second consumer blind to the same mismatch
-#: that made `gen-checks` assert about bytes nobody selected. Expect this
-#: cell to gain one more when that is fixed.
+#: **And it gained one more the same day, when that was fixed** -- which
+#: is this annotation's own prediction coming true and the reason it was
+#: written as a prediction. The layout had recorded the arm as
+#: `arm_holder.body.arm` while the placement it made was
+#: `arm_holder.body.<reserved0>`, so no lookup matched and this census did
+#: not see the arm at all; the layout names it from the placement now
+#: (26.848), `enclosing_arm` finds it, and it lands in this cell as the
+#: ordinary scalar arm it always was.
+#:
+#: Three consumers were wrong about that mismatch and each differently:
+#: `gen-checks` emitted a check for bytes nobody had selected, this census
+#: counted the arm nowhere, and a refusal message named a member the
+#: struct does not have. 31 -> 32 is the third of them closing.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                31,
+	("scalar", "not-struct", ""):                32,
 	("no-scalar", "struct", "fixed"):            49,
 	("no-scalar", "struct", "unmeasurable"):     28,
 	("no-scalar", "not-struct", ""):              1,

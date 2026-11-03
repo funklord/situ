@@ -582,25 +582,35 @@ def test_gen_checks_enforces_a_reserved_policy(tmp_path: Path) -> None:
 	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
 
 
-def test_gen_checks_declines_an_arm_it_cannot_name(tmp_path: Path) -> None:
-	"""An arm whose member is anonymous cannot be selected, so no check.
+def test_gen_checks_checks_an_anonymous_arm_member(
+	tmp_path: Path,
+) -> None:
+	"""An arm whose member is anonymous is CHECKED, not declined.
 
-	`enclosing_arm` answers `None` for two different reasons -- the member
-	is in no arm, and the member is in one that cannot be matched -- and
-	reading the second as the first emits a check about bytes nobody
-	selected. For `case 1: reserved u8 [must_be_zero];` the layout records
-	the arm's member as `s.body.arm` while the placement it created is
-	`s.body.<reserved0>`, so no lookup matches.
+	This test asserted the opposite for part of a day, and the history is
+	the point. For
 
-	**Both backends did emit it**, and the check failed exactly as it
-	should: with a zeroed discriminant the OTHER arm is selected, the field
-	is not in the message, and `validate` accepted a nonzero byte there.
-	`inside_an_unresolved_arm` separates the two reasons so each backend
-	can decline and say so (26.839).
+	    case 1:  reserved u8 [must_be_zero];
 
-	The corpus asks the same question of `--target c` through
-	`edges.arm_holder`; this asks it of `--target python`, which declines
-	`edges` for its `parameter`.
+	the layout recorded the arm's member as `s.body.arm` while the
+	placement it created was `s.body.<reserved0>`, so `arm_members` looked
+	the first up among the placements, found nothing, and `enclosing_arm`
+	reported no arm at all. Both backends then emitted a check that broke
+	the field in a message whose zeroed discriminant selects the OTHER arm
+	-- and `validate` accepted it, correctly.
+
+	The first answer was to decline, through
+	`traverse.inside_an_unresolved_arm`, which separates "in no arm" from
+	"in one that cannot be matched". That was right as far as it went and
+	26.839 recorded the name mismatch as a layout decision left unfixed.
+
+	**What changed the calculus was the third consumer.** A refusal message
+	named `arm_holder.body.arm` to the author -- a diagnostic citing a
+	member the struct does not have, which is the one instance a user
+	meets. `_arm_name`'s own docstring had called the fallback "a
+	placeholder reaching a user-facing artifact". So the layout names an
+	anonymous arm member from the placement it created (26.848), and the
+	arm is selectable like any other.
 	"""
 	schema = tmp_path / "unit.situ"
 	schema.write_text(
@@ -615,9 +625,9 @@ def test_gen_checks_declines_an_arm_it_cannot_name(tmp_path: Path) -> None:
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
 
-	assert "Not enforced here: `s.body.<reserved0>`" in text
-	assert "a variant arm this backend cannot name" in text
-	assert "_must_be_zero_is_enforced" not in text
+	assert "_must_be_zero_is_enforced" in text
+	assert "# Select the arm this member is in: kind = 1." in text
+	assert "cannot name" not in text
 
 
 def test_gen_checks_selects_an_arm_it_can_name(tmp_path: Path) -> None:
