@@ -21,6 +21,7 @@ Python, running IS the compile.
 
 from __future__ import annotations
 
+import random
 import re
 import shutil
 import subprocess
@@ -148,6 +149,71 @@ def check_schemas() -> list[Path]:
 	                *ROOT.glob("test/schema/*.situ")])
 	assert len(found) > 30, f"only {len(found)} schemas; the corpus moved"
 	return found
+
+
+@pytest.mark.skipif(RUSTC is None, reason="needs rustc")
+@pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
+def test_the_rust_fuzz_harness_builds_and_runs(
+	schema: Path, tmp_path: Path,
+) -> None:
+	"""`gen-fuzz --target rust`, compiled and driven with random bytes.
+
+	No `skipif` on `cargo-fuzz`: `one_input` takes no dependency and a
+	stdin `main` drives it, so this runs here rather than skipping
+	(26.847).
+
+	**Every dispatch index is driven, not a random spread of first
+	bytes.** The first byte selects a struct, so a driver that happened to
+	pick one would leave the others compiled and unexercised -- and the
+	control for this harness showed exactly that asymmetry: with
+	`test/schema/header`, byte 0 selects a struct whose fields are all
+	bit-packed and reads nothing, byte 1 selects one that reads four.
+	"""
+	out = tmp_path / "gen"
+	out.mkdir(parents=True, exist_ok=True)
+	emitted = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-fuzz", str(schema),
+		 "--target", "rust", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	if emitted.returncode != 0:
+		if "parameter" in emitted.stderr:
+			pytest.skip("gen-fuzz declines a schema taking an argument")
+		raise AssertionError(emitted.stderr[-700:])
+
+	built = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(schema),
+		 "--target", "rust", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	assert built.returncode == 0, built.stderr[-700:]
+	(out / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+
+	assert RUSTC is not None
+	compiled = subprocess.run(
+		[RUSTC, "--edition", "2021", "-A", "warnings", "-O",
+		 f"{schema.stem}_fuzz.rs", "-o", "fuzz"],
+		capture_output=True, text=True, cwd=out)
+	assert compiled.returncode == 0, compiled.stderr[-2000:]
+
+	harness = (out / f"{schema.stem}_fuzz.rs").read_text(encoding="ascii")
+	arms = len(re.findall(r"=> fuzz_", harness))
+	widest = max((int(one) for one in
+	              re.findall(r"if data\.len\(\) < (\d+)", harness)),
+	             default=16)
+
+	rng = random.Random(20261103)
+	for index in range(max(arms, 1)):
+		for _ in range(12):
+			body = bytes(rng.randrange(256)
+			             for _ in range(rng.randrange(0, widest * 2 + 8)))
+			done = subprocess.run([str(out / "fuzz")],
+			                      input=bytes([index]) + body,
+			                      capture_output=True)
+			assert done.returncode == 0, (
+				f"arm {index}: exit {done.returncode} on "
+				f"{(bytes([index]) + body).hex()}")
 
 
 @pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)

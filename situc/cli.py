@@ -337,7 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
 	# reads them over a byte buffer -- so it is that source with the entry
 	# point libFuzzer wants, rather than a second list of accessors to keep
 	# in step with the first.
-	fuzz_cmd.add_argument("--target", choices=("c", "cpp", "python"),
+	fuzz_cmd.add_argument("--target",
+	                      choices=("c", "cpp", "python", "rust"),
 	                      default="c",
 	                      help="which backend's accessors to drive")
 
@@ -1465,6 +1466,20 @@ def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 
 	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
+
+	if args.target == "rust":
+		# The same shape and the same reason as `python` below (26.847).
+		from situc.codegen.rust import fuzz as rust_fuzz
+
+		text = rust_fuzz.generate(parse(source), resolved, name,
+		                          args.prefix)
+		args.out.mkdir(parents=True, exist_ok=True)
+		target = args.out / f"{name}_fuzz.rs"
+		target.write_text(text, encoding="ascii")
+		print(f"situc: wrote {target}", file=sys.stderr)
+		_report(args, requirements.warnings(outcomes)
+		        + requirements.deferrals(outcomes))
+		return 0
 
 	if args.target == "python":
 		# **No `skipif` on a fuzzer's absence**, because this target takes
