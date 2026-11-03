@@ -92,7 +92,18 @@ RUST_CENSUS = {
 	"coap.situ": 1,
 	"cpio.situ": 1,
 	"dnsname.situ": 1,
-	"edges.situ": 30,
+	# 30 -> 33 on 2026-11-03, when 26.833 added `marked_tag`,
+	# `marked_index` and `marked_prefix`: a tlv and an offset table inside
+	# an `endian_marker` struct, which is the arrangement where four
+	# backends disagreed about one schema. The gate's own message says a row
+	# cannot tell a gained construct from a regressed emitter, so this was
+	# read rather than bumped. The three new sites are 1 in `MarkedTag` and
+	# 2 in `MarkedPrefix`; `MarkedIndex` adds none. Discriminating control:
+	# the same tlv with `value_size = prefixed(u16)` and NO marker emits 2
+	# as well, so the sites are the construct's and not the
+	# marker-conditional read's -- and the existing `TaggedOptions`, a tlv
+	# with no prefixed length, has had 1 all along.
+	"edges.situ": 33,
 	"ethernet.situ": 2,
 	"header.situ": 1,
 	"http.situ": 2,

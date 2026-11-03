@@ -8244,6 +8244,21 @@ Moved to
 Moved to
 `doc/decision/26.831-the-first-of-gen-checks-nine-kinds-in-python.md`.
 
+### 26.832 A check that asks what the bytes mean
+
+Moved to
+`doc/decision/26.832-a-check-that-asks-what-the-bytes-mean.md`.
+
+### 26.833 A tlv tag ignores its struct's byte order marker
+
+Moved to
+`doc/decision/26.833-a-tlv-tag-ignores-its-struct-s-byte-order-marker.md`.
+
+### 26.835 The map does not say a region's order is in the data
+
+Moved to
+`doc/decision/26.835-the-map-does-not-say-a-region-s-order-is-in-the-data.md`.
+
 ### 26.830 Situ may carry settled reference data
 
 Raised by the copyright holder 2026-11-03 and recorded as

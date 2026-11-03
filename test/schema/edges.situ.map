@@ -419,6 +419,22 @@ struct marked size=5..17 mutate=Shifting address=Unstable repr=ConditionallyConv
   marked.after                           offset=Dynamic size=Fixed(2) align=Unaligned repr=ConditionallyConverted(edge_order) atomic=NonAtomic address=Unstable canonical=CanonicalGiven(edge_order)
   marked.samples                         offset=Dynamic size=Bounded(0, 8) align=Unaligned repr=ConditionallyConverted(edge_order) atomic=NonAtomic mutate=Shifting address=Unstable canonical=CanonicalGiven(edge_order)
 
+struct marked_entry size=2 repr=ValueConverted
+  marked_entry.value                     offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct marked_index size=3.. mutate=Shifting address=FrameStable atomic=NonAtomic
+  marked_index.edge_order                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  marked_index.n                         offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  marked_index.cells                     offset=AbsoluteStatic(0x03) size=Unbounded align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+
+struct marked_prefix size=2.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
+  marked_prefix.edge_order               offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  marked_prefix.framed                   offset=AbsoluteStatic(0x02) size=Unbounded align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+
+struct marked_tag size=2.. access=Sequential mutate=InPlaceSlack address=Unstable atomic=NonAtomic canonical=NonCanonical
+  marked_tag.edge_order                  offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  marked_tag.opts                        offset=AbsoluteStatic(0x02) size=Unbounded align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic access=Sequential mutate=InPlaceSlack address=Unstable canonical=NonCanonical
+
 struct measured size=2.. access=Sequential mutate=Shifting address=Unstable repr=TextConverted atomic=NonAtomic canonical=NonCanonical
   measured.reading                       offset=AbsoluteStatic(0x00) size=Bounded(1, 32) align=Aligned(8) repr=TextConverted atomic=AtomicWord mutate=Shifting canonical=NonCanonical
   measured.positive                      offset=Scanned size=Bounded(1, 12) align=Unaligned repr=TextConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable canonical=NonCanonical

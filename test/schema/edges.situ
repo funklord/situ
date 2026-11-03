@@ -1233,6 +1233,64 @@ struct marked [endian = from(edge_order)] {
 	u16            samples[n];
 }
 
+// A tlv and an offset table inside a marker struct, which is the arrangement
+// in which four backends disagreed about one schema (26.833).
+//
+// `marked` above has had the marker since the dynamic-offset fault, and it
+// holds fields and an array only. The byte order of a tlv's TAG and of an
+// offset TABLE's entries comes from the region, and those are two further
+// consumers of the same order -- so a marker struct with neither could not
+// ask whether they were wired to it. They were not: 26.665 had already found
+// both placements carrying no endian at all and set `endian = scope.endian`
+// on each, which is None again exactly when the order comes from a marker,
+// so the marker case re-entered by the one route that fix did not cover.
+//
+// What it cost, before this struct existed: Python read a `u16` tag little
+// and C, C++ and Rust read it big, none of them consulting the marker. Three
+// backends agreeing was not evidence -- they agreed on the wrong answer, and
+// a file written by one reader had every tag byte-swapped for another.
+//
+// Both constructs are here rather than one because they are separate
+// placements built in separate places, and a fix proved on one says nothing
+// about the other.
+struct marked_tag [endian = from(edge_order)] {
+	endian_marker  edge_order;
+	tlv opts (
+		tag_type = u16,
+		tag_decode = { kind = tag >> 8, length = tag & 0x0F },
+		tag_identity = kind,
+		value_size = switch (kind) { default: length },
+	);
+}
+
+// And the third read whose order the region decides: a `prefixed(T)` value
+// length. Three constructs for three placements, because each is built in its
+// own place and a fix proved on one says nothing about the other -- which is
+// the lesson of this group: the `indexed` placement carried its own copy of
+// the tlv placement's comment, from the same earlier fix, missing the same
+// field.
+struct marked_prefix [endian = from(edge_order)] {
+	endian_marker  edge_order;
+	tlv framed (
+		tag_type = u16,
+		tag_decode = { kind = tag },
+		tag_identity = kind,
+		value_size = switch (kind) { default: prefixed(u16) },
+	);
+}
+
+struct marked_entry {
+	u16  value;
+}
+
+struct marked_index [endian = from(edge_order)] {
+	endian_marker  edge_order;
+	u8             n [max = 4];
+	indexed(offset_type = u16, count = n) {
+		marked_entry  cells[];
+	}
+}
+
 // A nested struct behind a variable-length member.
 //
 // A header, a variable-length field, and another header: about as ordinary as

@@ -1551,7 +1551,7 @@ class Emitter:
 		name    = py_name(local_name(struct, placement))
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
-		order   = _byte_order(placement.endian)
+		order   = self._order_argument(placement)
 
 		count = self._count_expression(struct, placement)
 		if count is None:
@@ -1780,7 +1780,7 @@ class Emitter:
 			]
 
 		width = (bits + 7) // BITS_PER_BYTE
-		order = _byte_order(placement.endian)
+		order = self._order_argument(placement)
 		return [
 			f"\t\tif len(data) - at < {width}:",
 			f'\t\t\traise BoundsError(f"the tag at {{at}} runs past the'
@@ -1840,7 +1840,7 @@ class Emitter:
 		]
 
 		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
-		                                    placement.endian))
+		                                    placement))
 		lines.extend([
 			"",
 			"\t\tif size > len(data) - at:",
@@ -1859,12 +1859,11 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			max_tag: int, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
 			return self._tlv_prefixed_size(grammar.length_type or "u8",
-			                               "\t\t", endian)
+			                               "\t\t", placement)
 
 		selector = next((part for part in grammar.tag_decode
 		                 if part.name == grammar.selector), None)
@@ -1878,7 +1877,7 @@ class Emitter:
 			lines.append(f"\t\t{'if' if first else 'elif'} chosen"
 			             f" == {rule.label}:")
 			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
-			                                endian))
+			                                placement))
 			first = False
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
@@ -1893,12 +1892,12 @@ class Emitter:
 			])
 		else:
 			lines.extend(self._tlv_one_rule(struct, grammar, default,
-			                                max_tag, endian))
+			                                max_tag, placement))
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
 			rule: ValueRule, max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\tsize = {rule.size}"]
 
@@ -1931,11 +1930,17 @@ class Emitter:
 				"\t\t\tsize = carried[1]",
 			]
 		return self._tlv_prefixed_size(rule.length_type or "u8", "\t\t\t",
-		                               endian)
+		                               placement)
 
 	def _tlv_prefixed_size(self, length_type: str, indent: str,
-			endian: ast.Endian | None) -> list[str]:
-		"""`prefixed(T)`: a length in T, then that many bytes."""
+			placement: Placement) -> list[str]:
+		"""`prefixed(T)`: a length in T, then that many bytes.
+
+		The placement rather than its endian, because the order may not be
+		static: 26.833. All four backends thread it this way so that the
+		tag, the length and a table entry cannot disagree.
+		"""
+		order = self._order_argument(placement)
 		declared = next((decl for decl in self.schema.varints()
 		                 if decl.name == length_type), None)
 
@@ -1957,7 +1962,6 @@ class Emitter:
 
 		scalar = lookup(length_type)
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
-		order  = _byte_order(endian)
 		return [
 			f"{indent}if len(data) - at < {width}:",
 			f'{indent}\traise BoundsError(',
@@ -4179,6 +4183,25 @@ class Emitter:
 
 	def _marker_predicate(self, placement: Placement) -> str:
 		return f"self.{py_name(placement.marker or '')}_is_little"
+
+	def _order_argument(self, placement: Placement) -> str:
+		"""The `int.from_bytes` order argument for a read inside `placement`.
+
+		**A struct whose order comes from an `endian_marker` has no static
+		answer, and `_byte_order` has no branch for that** -- it keys on
+		`BIG` and sends everything else to `little`, so a marker struct's
+		table entries, TLV tags and length prefixes were read little-endian
+		whatever the marker said. The field path has been conditional all
+		along, two methods below this one; these three consumers of the same
+		byte order were simply not wired to it (26.833).
+
+		The predicate is the same one the field getters use, so a reader
+		cannot disagree with itself about what the marker said.
+		"""
+		if placement.marker is not None:
+			return (f'("little" if {self._marker_predicate(placement)}'
+			        ' else "big")')
+		return _byte_order(placement.endian)
 
 	def _scalar(self, struct: ResolvedStruct, entry: Resolved) -> list[str]:
 		placement = entry.placement

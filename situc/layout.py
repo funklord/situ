@@ -1928,6 +1928,16 @@ class Solver:
 			# two ways by four backends, invisibly while every such read
 			# in the tree is one byte wide (26.665).
 			endian        = scope.endian,
+			# And the marker beside it, because `scope.endian` is None
+			# again exactly when the order comes from an `endian_marker`
+			# -- so the fix above held for a struct with a declared order
+			# and the marker case re-entered by the one route it does not
+			# cover. A clause true of the case that motivated it, asserted
+			# of the class: `[endian = from(byte_order)]` left this None,
+			# the backends resolved None statically and disagreed, and a
+			# u16 tag was read little by Python and big by the other three
+			# whatever the marker said (26.833).
+			marker        = scope.marker,
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			attrs         = member.attrs,
@@ -2030,6 +2040,13 @@ class Solver:
 			# and defaulted -- which reads a big-endian table little end
 			# first and yields a plausible offset.
 			endian        = scope.endian,
+			# And the marker, for the TLV placement's reason: `scope.endian`
+			# is None again exactly when the order comes from a marker, so
+			# the fix above left the marker case defaulting by the one route
+			# it does not cover. Measured: a u16 offset entry inside
+			# `[endian = from(...)]` was read little by Python and big by C
+			# whatever the marker said (26.833).
+			marker        = scope.marker,
 			bit_order     = scope.bit_order,
 			span          = member.span,
 			sized_by      = _path_of(count_expr),

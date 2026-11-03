@@ -889,6 +889,15 @@ class Emitter:
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
 		reader  = _reader(placement.endian)
+		# 26.833: a region inside `[endian = from(marker)]` has no static
+		# order, and reading an entry statically gave this backend a
+		# different wire format from Python's.
+		entry_read = (
+			f"(if {self._marker_predicate(placement)} {{"
+			f" situ_rt::read_le(self.bytes, at, {width}) }}"
+			f" else {{ situ_rt::read_be(self.bytes, at, {width}) }})"
+			if placement.marker is not None
+			else f"situ_rt::{reader}(self.bytes, at, {width})")
 
 		# A literal count needs no read; a field-driven one is the driver's own
 		# accessor, which already lands in `usize`.
@@ -933,7 +942,7 @@ class Emitter:
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
 			"",
-			f"\t\tOk(situ_rt::{reader}(self.bytes, at, {width}) as usize)",
+			f"\t\tOk({entry_read} as usize)",
 			"\t}",
 		]
 		lines.extend(self._index_element(struct, placement, table, name,
@@ -1112,11 +1121,25 @@ class Emitter:
 
 		width  = (bits + 7) // 8
 		reader = _reader(placement.endian)
+		if placement.marker is not None:
+			# 26.833, as in the field reads: no static answer here.
+			#
+			# **No parentheses.** This is the whole assigned value of a
+			# `let`, where `unused_parens` is an error under the gate's
+			# `-D warnings` -- which a hand-compile with `-A warnings` does
+			# not show. The sibling sites keep theirs because an `as` cast
+			# needs them around an `if` expression.
+			predicate = self._marker_predicate(placement)
+			read = (f"if {predicate} {{"
+			        f" situ_rt::read_le(self.bytes, at, {width}) }}"
+			        f" else {{ situ_rt::read_be(self.bytes, at, {width}) }}")
+		else:
+			read = f"situ_rt::{reader}(self.bytes, at, {width})"
 		return [
 			f"\t\tif self.bytes.len() - at < {width} {{",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			f"\t\tlet tag = situ_rt::{reader}(self.bytes, at, {width});",
+			f"\t\tlet tag = {read};",
 			f"\t\tlet used = {width};",
 		]
 
@@ -1172,7 +1195,7 @@ class Emitter:
 		]
 
 		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
-		                                    placement.endian))
+		                                    placement))
 		lines.extend([
 			"",
 			"\t\tif size > situ_rt::remaining(self.bytes.len(), at) {",
@@ -1192,12 +1215,11 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			max_tag: int, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
 			return self._tlv_prefixed_size(grammar.length_type or "u8",
-			                               "\t\t", endian)
+			                               "\t\t", placement)
 
 		selector = next((part for part in grammar.tag_decode
 		                 if part.name == grammar.selector), None)
@@ -1208,7 +1230,7 @@ class Emitter:
 				continue
 			lines.append(f"\t\t\t{rule.label} => {{")
 			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
-			                                endian))
+			                                placement))
 			lines.append("\t\t\t}")
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
@@ -1222,13 +1244,13 @@ class Emitter:
 			])
 		else:
 			lines.extend(self._tlv_one_rule(struct, grammar, default,
-			                                max_tag, endian))
+			                                max_tag, placement))
 		lines.extend(["\t\t\t}", "\t\t}"])
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
 			rule: ValueRule, max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\t\tsize = {rule.size};"]
 
@@ -1253,10 +1275,10 @@ class Emitter:
 				"\t\t\t\tsize = used;",
 			]
 		return self._tlv_prefixed_size(rule.length_type or "u8", "\t\t\t\t",
-		                               endian)
+		                               placement)
 
 	def _tlv_prefixed_size(self, length_type: str, indent: str,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		"""`prefixed(T)`: a length in T, then that many bytes."""
 		declared = next((decl for decl in self.schema.varints()
 		                 if decl.name == length_type), None)
@@ -1276,12 +1298,20 @@ class Emitter:
 
 		scalar = lookup(length_type)
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
-		reader = _reader(endian)
+		reader = _reader(placement.endian)
+		# 26.833: the length prefix is in the region's order, which may be
+		# in the data.
+		size_read = (
+			f"(if {self._marker_predicate(placement)} {{"
+			f" situ_rt::read_le(self.bytes, at, {width}) }}"
+			f" else {{ situ_rt::read_be(self.bytes, at, {width}) }})"
+			if placement.marker is not None
+			else f"situ_rt::{reader}(self.bytes, at, {width})")
 		return [
 			f"{indent}if self.bytes.len() - at < {width} {{",
 			f"{indent}\treturn Err(Error::Bounds);",
 			f"{indent}}}",
-			f"{indent}size = situ_rt::{reader}(self.bytes, at, {width})"
+			f"{indent}size = {size_read}"
 			f" as usize;",
 			f"{indent}at += {width};",
 		]

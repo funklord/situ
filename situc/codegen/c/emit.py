@@ -2490,7 +2490,8 @@ class Emitter:
 			f"\tif (situ_remaining_u32(view.limit, at) < {width}u) {{",
 			"\t\treturn SITU_ERR_BOUNDS;",
 			"\t}",
-			f"\ttag  = (uint64_t){self._fixed_length_read(width, placement.endian)};",
+			f"\ttag  = (uint64_t)"
+			f"{self._fixed_length_read(width, placement.endian, placement)};",
 			f"\tused = {width}u;",
 		]
 
@@ -2603,7 +2604,7 @@ class Emitter:
 		]
 
 		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
-		                                    placement.endian))
+		                                    placement))
 		lines.extend([
 			"",
 			"\tif (size > situ_remaining_u32(view.limit, at)) {",
@@ -2620,7 +2621,7 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int, endian: ast.Endian | None) -> list[str]:
+			max_tag: int, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched exactly as the schema dispatches it.
 
 		The simple form has no dispatch: one `length_type` sizes every value,
@@ -2628,7 +2629,7 @@ class Emitter:
 		"""
 		if grammar.selector is None:
 			return self._tlv_prefixed_size(grammar.length_type or "u8", "\t",
-			                               endian)
+			                               placement)
 
 		lines = [f"\tswitch (out->{c_name(grammar.selector)}) {{"]
 		for rule in grammar.rules:
@@ -2636,7 +2637,7 @@ class Emitter:
 				continue
 			lines.append(f"\tcase {rule.label}u:")
 			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
-			                                endian))
+			                                placement))
 
 		default = next((rule for rule in grammar.rules if rule.label is None), None)
 		lines.append("\tdefault:")
@@ -2648,13 +2649,13 @@ class Emitter:
 			])
 		else:
 			lines.extend(self._tlv_one_rule(struct, grammar, default, max_tag,
-			                                endian))
+			                                placement))
 		lines.append("\t}")
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
 			rule: ValueRule, max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		"""One arm of the dispatch, sizing a value the way section 9.5 says."""
 		if rule.kind == "fixed":
 			return [f"\t\tsize = {rule.size}u;", "\t\tbreak;"]
@@ -2692,11 +2693,11 @@ class Emitter:
 			]
 
 		return [*self._tlv_prefixed_size(rule.length_type or "u8", "\t\t",
-		                                 endian),
+		                                 placement),
 		        "\t\tbreak;"]
 
 	def _tlv_prefixed_size(self, length_type: str, indent: str,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		"""`prefixed(T)`: a length in T, then that many bytes.
 
 		The length is read where the value would start, and the value starts
@@ -2731,17 +2732,30 @@ class Emitter:
 			f"{indent}\tif (situ_remaining_u32(view.limit, at) < {width}u) {{",
 			f"{indent}\t\treturn SITU_ERR_BOUNDS;",
 			f"{indent}\t}}",
-			f"{indent}\tsize = {self._fixed_length_read(width, endian)};",
+			f"{indent}\tsize = "
+			f"{self._fixed_length_read(width, placement.endian, placement)};",
 			f"{indent}\tat = at + {width}u;",
 			f"{indent}}}",
 		]
 
 	def _fixed_length_read(self, width: int,
-			endian: ast.Endian | None) -> str:
-		"""A length prefix of a fixed width, in the region's byte order."""
+			endian: ast.Endian | None,
+			placement: Placement | None = None) -> str:
+		"""A length prefix or a tag of a fixed width, in the region's order.
+
+		A region whose order comes from an `endian_marker` has no static
+		answer, and reading it statically is 26.833: the tag was read one
+		way here and another way by the other backends, whatever the
+		marker said. The predicate is the one the field reads use.
+		"""
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		if suffix is None:
 			return "(uint32_t)situ_base(view)[at]"
+		if placement is not None and placement.marker is not None:
+			predicate = self._marker_predicate(placement)
+			return (f"(uint32_t)({predicate}"
+			        f" ? situ_get_le{suffix}(situ_base(view) + at)"
+			        f" : situ_get_be{suffix}(situ_base(view) + at))")
 		order = _order_suffix(endian)
 		return f"(uint32_t)situ_get_{order}{suffix}(situ_base(view) + at)"
 
@@ -2996,9 +3010,21 @@ class Emitter:
 		]
 
 	def _index_entry_read(self, placement: Placement, width: int) -> str:
-		"""One table entry, in the region's byte order."""
+		"""One table entry, in the region's byte order.
+
+		Which may not be static: a region inside `[endian = from(marker)]`
+		has its order in the data, and reading an entry statically is 26.833
+		-- this read big where Python's read little, so one schema had two
+		wire formats. The predicate is the one the field reads use.
+		"""
 		if width == 1:
 			return "(uint32_t)situ_base(view)[at]"
+		if placement.marker is not None:
+			predicate = self._marker_predicate(placement)
+			bits      = width * 8
+			return (f"(uint32_t)({predicate}"
+			        f" ? situ_get_le{bits}(situ_base(view) + at)"
+			        f" : situ_get_be{bits}(situ_base(view) + at))")
 		order = _order_suffix(placement.endian)
 		return f"(uint32_t)situ_get_{order}{width * 8}(situ_base(view) + at)"
 

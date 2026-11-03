@@ -364,6 +364,37 @@ struct marked size=5..17
   ~         2         u16        after  endian-from=edge_order
   ~         0..8      u16        samples  endian-from=edge_order sized-by=n
 
+struct marked_entry size=2
+  @0x0000   2         u16        value  big
+
+struct marked_index size=3..
+  @0x0000   2         edge_order edge_order
+  @0x0002   1         u8         n  endian-from=edge_order max=4
+  @0x0003   0..       marked_entry cells  endian-from=edge_order sized-by=n
+  cells index entry: 2
+  cells index base: region
+
+struct marked_prefix size=2..
+  @0x0000   2         edge_order edge_order
+  @0x0002   0..       tlv        framed  endian-from=edge_order
+  framed tlv decode kind: tag
+  framed tlv identity: kind
+  framed tlv select: kind
+  framed tlv size default: prefixed u16
+  framed tlv duplicates: error
+  framed tlv unknown: error
+
+struct marked_tag size=2..
+  @0x0000   2         edge_order edge_order
+  @0x0002   0..       tlv        opts  endian-from=edge_order
+  opts tlv decode kind: tag >> 8
+  opts tlv decode length: tag & 0x0F
+  opts tlv identity: kind
+  opts tlv select: kind
+  opts tlv size default: computed length
+  opts tlv duplicates: error
+  opts tlv unknown: error
+
 struct measured size=2..
   @0x0000   until:3a  i64        reading  radix=10 scaled cap=32
   ~         until:20  u16        positive  radix=10 scaled cap=12

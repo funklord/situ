@@ -52,7 +52,7 @@ from pathlib import Path
 import pytest
 
 from every_schema import SCHEMAS, ids
-from fourway import COMPLETE, answers, build, draw
+from fourway import COMPLETE, answers, build, draw, planted
 from situc.layout import solve
 from situc.parser import parse_text
 from situc.resolve import resolve
@@ -71,11 +71,26 @@ def test_the_four_agree_about_bytes_nobody_meant_to_send(
 	if not command:
 		pytest.skip("no struct a driver can acquire")
 
+	parsed   = parse_text(schema.read_text(encoding="ascii"), str(schema))
+	resolved = resolve(parsed, solve(parsed))
+
 	rng     = random.Random(SEED)
 	reached = 0
 
 	for _ in range(COUNT):
-		packet = draw(rng)
+		# **Planted, not merely drawn.** `fourway.magics` writes each
+		# constant the schema states and draws a marker BETWEEN its two
+		# literals, so both branches of a byte order the data decides are
+		# reached about half the time. This test drew raw bytes, and the
+		# little branch of a marker needs the first two bytes to be exactly
+		# 0x4949 -- about one buffer in 65536, against 48 per schema. So the
+		# one test whose job is cross-backend agreement was, on a marker
+		# struct, a test of the big branch alone, and 26.833 went unseen in
+		# four backends until a construct arrived that asked.
+		#
+		# Additive by `planted`'s own contract: an unplanted draw keeps every
+		# verdict it had, so this can only reach cases nothing reached.
+		packet = planted(rng, parsed, resolved, draw(rng))
 		given  = {name: answers(argv, packet, tmp_path)
 		          for name, argv in command.items()}
 

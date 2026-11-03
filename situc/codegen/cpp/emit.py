@@ -5438,9 +5438,18 @@ class Emitter:
 		return lines
 
 	def _index_entry_read(self, placement: Placement, width: int) -> str:
-		"""One table entry, in the region's byte order."""
+		"""One table entry, in the region's byte order.
+
+		Which may not be static -- 26.833, as in the field reads.
+		"""
 		if width == 1:
 			return "static_cast<std::uint32_t>(situ_base(raw_)[at])"
+		if placement.marker is not None:
+			predicate = self._marker_predicate(placement)
+			bits      = width * 8
+			return (f"static_cast<std::uint32_t>({predicate}"
+			        f" ? situ_get_le{bits}(situ_base(raw_) + at)"
+			        f" : situ_get_be{bits}(situ_base(raw_) + at))")
 		order = _order_suffix(placement.endian)
 		return (f"static_cast<std::uint32_t>"
 		        f"(situ_get_{order}{width * 8}(situ_base(raw_) + at))")
@@ -5629,10 +5638,17 @@ class Emitter:
 		width  = (bits + 7) // 8
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
 		order  = _order_suffix(placement.endian)
-		read   = ("static_cast<std::uint64_t>(situ_base(raw_)[at])"
-		          if suffix is None else
-		          f"static_cast<std::uint64_t>"
-		          f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
+		if suffix is None:
+			read = "static_cast<std::uint64_t>(situ_base(raw_)[at])"
+		elif placement.marker is not None:
+			# 26.833, as in the field reads: no static answer here.
+			predicate = self._marker_predicate(placement)
+			read = (f"static_cast<std::uint64_t>({predicate}"
+			        f" ? situ_get_le{suffix}(situ_base(raw_) + at)"
+			        f" : situ_get_be{suffix}(situ_base(raw_) + at))")
+		else:
+			read = (f"static_cast<std::uint64_t>"
+			        f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
 		return [
 			f"\t\tif (situ_remaining_u32(raw_.limit, at) < {width}u) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
@@ -5727,7 +5743,7 @@ class Emitter:
 		]
 
 		lines.extend(self._tlv_value_extent(struct, grammar, max_tag,
-		                                    placement.endian))
+		                                    placement))
 		lines.extend([
 			"",
 			"\t\tif (size > situ_remaining_u32(raw_.limit, at)) {",
@@ -5743,12 +5759,11 @@ class Emitter:
 		return lines
 
 	def _tlv_value_extent(self, struct: ResolvedStruct, grammar: TlvGrammar,
-			max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			max_tag: int, placement: Placement) -> list[str]:
 		"""Where the value ends, dispatched as the schema dispatches it."""
 		if grammar.selector is None:
 			return self._tlv_prefixed_size(grammar.length_type or "u8",
-			                               "\t\t", endian)
+			                               "\t\t", placement)
 
 		lines = [f"\t\tswitch (out.{c_name(grammar.selector)}) {{"]
 		for rule in grammar.rules:
@@ -5756,7 +5771,7 @@ class Emitter:
 				continue
 			lines.append(f"\t\tcase {rule.label}u:")
 			lines.extend(self._tlv_one_rule(struct, grammar, rule, max_tag,
-			                                endian))
+			                                placement))
 
 		default = next((rule for rule in grammar.rules if rule.label is None),
 		               None)
@@ -5769,13 +5784,13 @@ class Emitter:
 			])
 		else:
 			lines.extend(self._tlv_one_rule(struct, grammar, default,
-			                                max_tag, endian))
+			                                max_tag, placement))
 		lines.append("\t\t}")
 		return lines
 
 	def _tlv_one_rule(self, struct: ResolvedStruct, grammar: TlvGrammar,
 			rule: ValueRule, max_tag: int,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		if rule.kind == "fixed":
 			return [f"\t\t\tsize = {rule.size}u;", "\t\t\tbreak;"]
 
@@ -5807,11 +5822,11 @@ class Emitter:
 				"\t\t\tbreak;",
 			]
 		return [*self._tlv_prefixed_size(rule.length_type or "u8", "\t\t\t",
-		                                 endian),
+		                                 placement),
 		        "\t\t\tbreak;"]
 
 	def _tlv_prefixed_size(self, length_type: str, indent: str,
-			endian: ast.Endian | None) -> list[str]:
+			placement: Placement) -> list[str]:
 		"""`prefixed(T)`: a length in T, then that many bytes."""
 		declared = next((decl for decl in self.schema.varints()
 		                 if decl.name == length_type), None)
@@ -5838,10 +5853,19 @@ class Emitter:
 		scalar = lookup(length_type)
 		width  = (scalar.bits + 7) // 8 if scalar is not None else 1
 		suffix = {2: "16", 4: "32", 8: "64"}.get(width)
-		order  = _order_suffix(endian)
-		read   = ("static_cast<std::uint32_t>(situ_base(raw_)[at])" if suffix is None
-		          else f"static_cast<std::uint32_t>"
-		               f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
+		order  = _order_suffix(placement.endian)
+		if suffix is None:
+			read = "static_cast<std::uint32_t>(situ_base(raw_)[at])"
+		elif placement.marker is not None:
+			# 26.833: the length prefix is in the region's order too, and
+			# that order may be in the data.
+			predicate = self._marker_predicate(placement)
+			read = (f"static_cast<std::uint32_t>({predicate}"
+			        f" ? situ_get_le{suffix}(situ_base(raw_) + at)"
+			        f" : situ_get_be{suffix}(situ_base(raw_) + at))")
+		else:
+			read = (f"static_cast<std::uint32_t>"
+			        f"(situ_get_{order}{suffix}(situ_base(raw_) + at))")
 		return [
 			f"{indent}{{",
 			f"{indent}\tif (situ_remaining_u32(raw_.limit, at) < {width}u) {{",
