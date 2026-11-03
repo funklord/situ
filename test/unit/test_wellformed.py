@@ -2900,6 +2900,22 @@ REFUSING = {
 	"situc.codegen.python.checks",
 	"situc.codegen.python.vectors",
 	"situc.codegen.rust.vectors",
+	# And four more the same day, as `gen-checks` reached C++ and Rust
+	# (26.844, 26.845) and `gen-fuzz` reached Python and Rust (26.846).
+	# The lesson above repeated itself exactly: this file is at the end of
+	# the suite's alphabet, every run that would have reached it was
+	# killed or superseded, and the four names went unwritten through the
+	# same afternoon that recorded why the first four had.
+	#
+	# A list and a tree, kept in step by somebody noticing, drift once per
+	# generator added. The test beside this compares them, which is what
+	# makes the drift a failure rather than a silence -- so what this
+	# needs is for the comparison to be REACHED, and that is a question
+	# about how the suite is run rather than about this set.
+	"situc.codegen.cpp.checks",
+	"situc.codegen.python.fuzz",
+	"situc.codegen.rust.checks",
+	"situc.codegen.rust.fuzz",
 }
 
 #: What a generator DOES with a schema carrying a `parameter`, measured
@@ -3225,6 +3241,16 @@ SHAPES = {
 	"situc.codegen.python.vectors": ("schema", "resolved", "cases", "name"),
 	"situc.codegen.rust.vectors":   ("schema", "resolved", "cases", "name"),
 	"situc.codegen.python.checks":  ("schema", "resolved", "name"),
+	# And the four from later the same day: `gen-checks` for C++ and Rust,
+	# `gen-fuzz` for Python and Rust. All four take the plain shape --
+	# `(schema, resolved, basename, prefix = "situ")` read off their own
+	# signatures rather than assumed, since three of the rows above take a
+	# fourth argument and guessing which is how the test beside this one
+	# comes to call nothing.
+	"situc.codegen.cpp.checks":     ("schema", "resolved", "name"),
+	"situc.codegen.python.fuzz":    ("schema", "resolved", "name"),
+	"situc.codegen.rust.checks":    ("schema", "resolved", "name"),
+	"situc.codegen.rust.fuzz":      ("schema", "resolved", "name"),
 }
 
 
