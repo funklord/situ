@@ -383,6 +383,60 @@ def test_a_rust_vector_suite_says_what_it_does_not_compare(
 	assert "`situc gen-tests --target c` compares them" in text
 
 
+def test_a_python_vector_suite_compares_a_scalar_expectation(
+	tmp_path: Path,
+) -> None:
+	"""72 per cent of the corpus's expectations are a plain scalar against
+	an integer, and those are compared.
+
+	The C integer suffix is stripped rather than refused: `0xDEADBEEFu` is
+	in `test/schema/header.vectors` and is the same number without it.
+	Watched discriminating -- `length = 1501` against bytes that say 1500
+	fails with `AssertionError: 1500 != 1501 : length` -- which is what
+	`test/generated/Makefile` did for the C target and says so.
+	"""
+	vectors = str(Path(HEADER).with_suffix(".vectors"))
+	assert main(["gen-tests", HEADER, vectors, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_vectors.py").read_text(encoding="ascii")
+
+	assert 'self.assertEqual(view.version, 1, "version")' in text
+	assert 'self.assertEqual(view.length, 1500, "length")' in text
+	assert 'self.assertEqual(view.seq, 0xDEADBEEF, "seq")' in text
+	# The count, and the reason the rest are not compared.
+	assert "field expectation(s) are compared" in text
+	assert "a value that is not an integer literal" in text
+
+
+def test_a_python_vector_suite_declines_four_kinds_and_says_which(
+	tmp_path: Path,
+) -> None:
+	"""Four classes are declined for four different reasons, and each
+	reason is its own piece of work. What makes declining safe is that the
+	module says how many and why: a suite that compares 72 per cent of its
+	input and does not say so reads as coverage of all of it.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nstruct inner {\n\tu8 x;\n}\n\n"
+		"struct s {\n\tu8 plain;\n\tinner nest;\n\tu8 run[2];\n}\n",
+		encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text(
+		"s one 01 02 03 04\n\tplain = 1\n\tnest.x = 2\n"
+		"\trun = 03:04\n", encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target",
+	             "python", "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+
+	assert 'self.assertEqual(view.plain, 1, "plain")' in text
+	assert "a field inside a nested struct" in text
+	assert "a byte run, which compares as bytes" in text
+	# And the two it declined are not silently absent from the count.
+	assert "2 are NOT compared" in text
+
+
 def test_a_rust_vector_suite_refuses_a_schema_that_takes_an_argument(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
