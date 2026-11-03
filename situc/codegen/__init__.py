@@ -6,11 +6,20 @@ started before the C backend has proven the lattice.
 
 from __future__ import annotations
 
+import re
+from typing import TYPE_CHECKING
+
 from situc import ast, traverse
 from situc.diagnostics import not_yet_implemented
 from situc.layout import Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import own_members
+
+if TYPE_CHECKING:		# a cycle at run time, a name at check time
+	# `c.vectors` imports this module, so `Case` is a forward reference
+	# here and the two predicates beside it are imported inside the
+	# functions that need them.
+	from situc.codegen.c.vectors import Case
 
 
 def refuse_parameters(schema: ast.Schema) -> None:
@@ -180,3 +189,90 @@ def argued_refusal(relation: ast.Relation, resolved: ResolvedSchema,
 	return (f"{names} {verb} a `parameter`, and {because} (decision 0050). "
 	        f"The view rung takes it: build the view with the argument and "
 	        f"compare, match or drive by hand")
+
+
+# ---------------------------------------------------------------------------
+# What a golden vector says about one field, and whether a backend can say it
+#
+# Language-independent, and here for the reason `refuse_parameters` is above:
+# the vector FILE is one file read by four emitters, so "can this expectation
+# be compared" must have one answer. Putting it in `python/vectors.py` -- the
+# first emitter to need it -- would have made the Rust one import the Python
+# one, which is how a change to one backend breaks another.
+
+
+#: An expectation's value, where it is an integer the three new targets can
+#: splice. The trailing `[uUlL]*` is a C integer suffix and is stripped
+#: rather than refused: `0xDEADBEEFu` is in `test/schema/header.vectors` and
+#: is the same number without it. Allowing it moved the comparable share of
+#: the corpus from 140 expectations to 142 -- small, and also two
+#: expectations that would otherwise have gone silently uncompared.
+INT_LITERAL = re.compile(r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*\Z")
+
+
+def comparable(resolved: ResolvedSchema, case: "Case",
+		path: str, value: str) -> str | None:
+	"""The literal to compare this expectation against, or None.
+
+	Measured over the corpus: of 197 expectations, **142 are a plain scalar
+	against an integer**. The rest divide into four classes for four
+	different reasons -- 22 name a field inside a nested struct, 18 give a C
+	enum constant such as `SITU_LEAP_INDICATOR_NONE`, 11 are a byte run, and
+	4 are a text number whose getter is fallible.
+
+	Each of those four is its own piece of work, and what makes declining
+	them safe is that the generated file says how many and why: a suite that
+	compares 72 per cent of its input and does not say so reads as coverage
+	of all of it.
+	"""
+	from situc.codegen.c.vectors import _byte_run, _nested_of
+
+	if _nested_of(resolved, case.struct, path) is not None:
+		return None
+	if _byte_run(resolved, case.struct, path) is not None:
+		return None
+
+	found = resolved.find(f"{case.struct}.{path}")
+	if found is not None and found.placement.radix is not None:
+		return None
+
+	match = INT_LITERAL.match(value)
+	return match.group(1) if match else None
+
+
+def declined_reason(resolved: ResolvedSchema, case: "Case",
+		path: str, value: str) -> str:
+	"""Why one expectation is not compared, in the words a reader needs.
+
+	Four reasons rather than one count, because "37 not compared" tells a
+	reader nothing about what to do and "22 are nested" tells them where the
+	next piece of work is.
+	"""
+	from situc.codegen.c.vectors import _byte_run, _nested_of
+
+	if _nested_of(resolved, case.struct, path) is not None:
+		return "a field inside a nested struct, read through its own view"
+	if _byte_run(resolved, case.struct, path) is not None:
+		return "a byte run, which compares as bytes rather than as a number"
+
+	found = resolved.find(f"{case.struct}.{path}")
+	if found is not None and found.placement.radix is not None:
+		return "a text number, whose getter is fallible"
+	return "a value that is not an integer literal, such as a C enum constant"
+
+
+def tally(resolved: ResolvedSchema,
+		cases: list["Case"]) -> tuple[int, dict[str, int]]:
+	"""How many expectations a backend compares, and why it declines the rest."""
+	compared = 0
+	declined: dict[str, int] = {}
+
+	for case in cases:
+		for path, value in case.expectations:
+			if comparable(resolved, case, path, value) is not None:
+				compared += 1
+			else:
+				why = declined_reason(resolved, case, path, value)
+				declined[why] = declined.get(why, 0) + 1
+
+	return compared, declined

@@ -361,26 +361,42 @@ def test_every_vector_target_asks_the_same_question(
 def test_a_rust_vector_suite_says_what_it_does_not_compare(
 	tmp_path: Path,
 ) -> None:
-	"""Per-field expectations are read and schema-checked by the shared
-	validator and not yet COMPARED by the Rust body. A suite that checks
+	"""The counts, both halves of them.
+
+	The Rust body compares a plain scalar against an integer and declines
+	four classes from the shared classifier plus one of its own -- an
+	enum-typed field, whose getter returns `Option<T>`. A suite that checks
 	fewer things than its input states, and does not say which, reads as
-	coverage of the input -- which is this family's own rule, met here with
-	a number.
+	coverage of the input, so the module prints what it compared as well as
+	what it did not and why.
 	"""
 	schema = tmp_path / "unit.situ"
-	schema.write_text("endian big;\n\nstruct s {\n\tu16 a;\n\tu16 b;\n}\n",
-	                  encoding="ascii")
+	schema.write_text(
+		"endian big;\n\nenum kind : u8 { one = 1, two = 2, }\n\n"
+		"struct s {\n\tu16 a;\n\tkind k;\n\tu8 run[2];\n}\n",
+		encoding="ascii")
 	vectors = tmp_path / "unit.vectors"
-	vectors.write_text("s one 00 01 00 02\n\ta = 1\n\tb = 2\n",
-	                   encoding="ascii")
+	vectors.write_text(
+		"s one 00 01 01 03 04\n\ta = 1\n\tk = 1\n\trun = 03:04\n",
+		encoding="ascii")
 
 	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
 
-	assert "2 field expectation(s) in that file are not" in text
-	# And the C suite, which does compare them, is named rather than implied.
+	# One compared, two declined, and both halves of the count said: a bare
+	# "not compared" number overstates what is missing, and a bare
+	# "compared" number overstates what is covered.
+	assert "1 field expectation(s) are compared" in text
+	assert 'assert_eq!(view.a(), 1, "a");' in text
+	assert "2 are NOT compared" in text
 	assert "`situc gen-tests --target c` compares them" in text
+
+	# And the reasons, one of which is Rust's own veto rather than the
+	# shared classifier's.
+	assert "a byte run, which compares as bytes" in text
+	assert "whose Rust getter returns `Option<T>`" in text
+	assert 'view.k()' not in text
 
 
 def test_a_python_vector_suite_compares_a_scalar_expectation(

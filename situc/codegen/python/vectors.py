@@ -29,23 +29,11 @@ validation accepts them.
 
 from __future__ import annotations
 
-import re
-
 from situc import __version__, ast
-from situc.codegen import refuse_parameters
-from situc.codegen.c.vectors import Case, _byte_run, _check, _nested_of, _symbol
+from situc.codegen import comparable, refuse_parameters, tally
+from situc.codegen.c.vectors import Case, _check, _symbol
 from situc.codegen.python.emit import py_name
 from situc.resolve import ResolvedSchema
-
-#: An expectation's value, where it is an integer Python can read.
-#:
-#: The trailing `[uUlL]*` is a C integer suffix and is stripped rather than
-#: refused: `0xDEADBEEFu` appears in `test/schema/header.vectors` and is the
-#: same number without it. Allowing it moved the comparable share of the
-#: corpus from 140 expectations to 142, which is small and is also two
-#: expectations that would otherwise have been silently uncompared.
-INT_LITERAL = re.compile(r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*\Z")
-
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		basename: str, prefix: str = "situ") -> str:
@@ -69,7 +57,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	for case in cases:
 		_check(resolved, case)
 
-	compared, declined = _tally(resolved, cases)
+	compared, declined = tally(resolved, cases)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
@@ -81,62 +69,6 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		"\tunittest.main()",
 	])
 	return "\n".join(lines) + "\n"
-
-
-def _comparable(resolved: ResolvedSchema, case: Case,
-		path: str, value: str) -> str | None:
-	"""The Python literal to compare this expectation against, or None.
-
-	Measured over the corpus: 142 of 197 expectations are a plain scalar
-	against an integer, 22 name a field inside a nested struct, 11 are a
-	byte run, 4 are a text number whose getter is fallible, and 18 give a C
-	enum constant -- `SITU_LEAP_INDICATOR_NONE` -- which is not the Python
-	enum's spelling and cannot be spliced.
-
-	The four it declines are declined for four different reasons and each
-	is its own piece of work. What makes declining safe is that the module
-	says how many and why: a suite that compares 72 per cent of its input
-	and does not say so reads as coverage of all of it.
-	"""
-	if _nested_of(resolved, case.struct, path) is not None:
-		return None
-	if _byte_run(resolved, case.struct, path) is not None:
-		return None
-
-	found = resolved.find(f"{case.struct}.{path}")
-	if found is not None and found.placement.radix is not None:
-		return None
-
-	match = INT_LITERAL.match(value)
-	return match.group(1) if match else None
-
-
-def _reason(resolved: ResolvedSchema, case: Case,
-		path: str, value: str) -> str:
-	"""Why one expectation is not compared, in the words a reader needs."""
-	if _nested_of(resolved, case.struct, path) is not None:
-		return "a field inside a nested struct, which reads through its own view"
-	if _byte_run(resolved, case.struct, path) is not None:
-		return "a byte run, which compares as bytes rather than as a number"
-
-	found = resolved.find(f"{case.struct}.{path}")
-	if found is not None and found.placement.radix is not None:
-		return "a text number, whose getter is fallible"
-	return "a value that is not an integer literal, such as a C enum constant"
-
-
-def _tally(resolved: ResolvedSchema,
-		cases: list[Case]) -> tuple[int, dict[str, int]]:
-	compared = 0
-	declined: dict[str, int] = {}
-	for case in cases:
-		for path, value in case.expectations:
-			if _comparable(resolved, case, path, value) is not None:
-				compared += 1
-			else:
-				why = _reason(resolved, case, path, value)
-				declined[why] = declined.get(why, 0) + 1
-	return compared, declined
 
 
 def _preamble(basename: str, compared: int,
@@ -240,7 +172,7 @@ def _expectations(resolved: ResolvedSchema, case: Case) -> list[str]:
 	"""What the vector says about each field, where this target can say it."""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		literal = _comparable(resolved, case, path, value)
+		literal = comparable(resolved, case, path, value)
 		if literal is None:
 			continue
 		if not lines:
