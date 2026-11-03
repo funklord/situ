@@ -718,6 +718,36 @@ def _tag_accessors(struct: ResolvedStruct) -> dict[str, str]:
 	return found
 
 
+def _inside_a_nested_member(struct: ResolvedStruct,
+		structs: dict[str, ResolvedStruct],
+		placement: Placement) -> bool:
+	"""Whether this field lies inside a nested struct MEMBER rather than
+	inside a transparent region (26.818).
+
+	A region -- `sealed`, `coded`, `authenticated`, `positional` -- holds
+	the struct's own members, so the struct emits their offset functions; a
+	nested member holds its TYPE's members, emitted against a sub-view. The
+	parent's accessor for a nested member's interior exists only where that
+	interior is at a static offset.
+
+	Asked of the struct's own entries rather than of a path lookup: a path
+	component is a MEMBER name and the thing to test is that member's
+	TYPE, so `au.e.block` has to find `au.e` and ask whether `entry` is a
+	struct. Testing the component against `structs` finds nothing, because
+	`e` is not a type name -- written that way first.
+	"""
+	parts = placement.path.split(".")
+	for cut in range(2, len(parts)):
+		prefix = ".".join(parts[:cut])
+		for entry in struct.entries:
+			above = entry.placement
+			if above.path != prefix:
+				continue
+			if above.kind == "field" and above.type_name in structs:
+				return True
+	return False
+
+
 def writes(struct: ResolvedStruct,
 		structs_by_name: dict[str, ResolvedStruct] | None = None) -> list[Ask]:
 	"""Which members this struct can be *written*, in declaration order.
@@ -789,6 +819,17 @@ def writes(struct: ResolvedStruct,
 
 		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
 			continue
+		# A `parameter` is not a field: it occupies no bytes and the caller
+		# supplies it, so there is no setter to call and never was one that
+		# wrote the right byte. It arrives here with `offset_bits` 0 like
+		# anything at the start of its struct, so this asked for
+		# `situ_au_e_block_set` -- `entry`'s parameter, reached through a
+		# transparent block -- and the C emitter obliged by storing at the
+		# nested member's base. 26.818 stopped emitting it; this is the
+		# same omission in the second of the two places that had it, and
+		# the driver that called it is how the pair was found.
+		if placement.parameter:
+			continue
 		# And where nothing can place the member, whatever `mutate` says.
 		# The lattice weakens it to `Immutable` for a codec blocker and has
 		# no signal for a variant arm nothing walks, so the read pass's own
@@ -850,6 +891,23 @@ def writes(struct: ResolvedStruct,
 		# write element zero under the run's name, which is why no backend
 		# emits one any more (invariant 74). This asked for it in C.
 		if "[]" in placement.path:
+			continue
+		# Nor a `parameter`, which occupies no bytes and has no setter
+		# anywhere. It arrives with `offset_bits` 0 like anything at the
+		# start of its struct, so this asked C for `situ_au_e_block_set` --
+		# and C obliged, storing at the nested member's base. 26.818
+		# stopped emitting it; this is the same omission in the second of
+		# the two places that had it, and the driver asking for a function
+		# that no longer exists is how the pair was found.
+		if placement.parameter:
+			continue
+		# Nor a nested member's interior at a dynamic offset, for the
+		# reason the `[]` test above gives in its special case: the parent
+		# emits offset functions for ITS members, not for the interior of
+		# one of them. A static interior it addresses with constants, which
+		# is why the test is the offset and not the nesting (26.818).
+		if placement.offset_bits is None and _inside_a_nested_member(
+				struct, structs_by_name or {}, placement):
 			continue
 		if scalar is None or placement.kind != "field":
 			continue

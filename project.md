@@ -8159,6 +8159,11 @@ Moved to
 
 Moved to `doc/decision/26.819-the-region-refusal-is-load-bearing.md`.
 
+### 26.820 The differ asked for a setter for a `parameter`
+
+Moved to
+`doc/decision/26.820-the-differ-asked-for-a-setter-for-a-parameter.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
