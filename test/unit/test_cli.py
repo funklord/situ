@@ -539,6 +539,84 @@ def test_gen_checks_locates_nothing_it_has_no_sub_view_for(
 	assert "Not located: `outer.n`" not in text
 
 
+def test_gen_checks_enforces_a_reserved_policy(tmp_path: Path) -> None:
+	"""The sixth kind, and the first that needs a BASELINE.
+
+	A constraint check that only breaks a field proves nothing: for
+	`must_be_one` a zeroed buffer already breaks the policy, so the check
+	would pass against a validator that did nothing. `view.validate()` has
+	to succeed over a buffer satisfying every OTHER constraint first, and
+	that buffer is what `_baseline` builds -- ported from `--target c` on
+	top of the six helpers moved into `situc/codegen` for the purpose.
+
+	**Measured, so the kind's value is a number**: making the emitter's
+	bit-level reserved check unreachable fails 41 of the 43 checks over 12
+	of the corpus's schemas, and every one of the 41 is this kind. The five
+	before it catch none of it. (The two that stay green are byte-run
+	reserved fields, which the emitter enforces at a second site.)
+
+	The generated arithmetic is the same as `--target c`'s, byte for byte,
+	because both now read it from the shared helpers rather than each
+	computing it: for `example/rtc`'s `wall_clock.<reserved0>` both write
+	`3, 4, 5 |= 0x01` as the baseline and both break bit 7 of byte 1.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct s {\n\tu8        v [min = 1];\n"
+		"\treserved  u8 [must_be_zero];\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "_must_be_zero_is_enforced" in text
+	# The baseline first: `[min = 1]` on `v` must be satisfied, or the
+	# refusal below could be about `v` rather than the reserved field.
+	assert "# Every constraint satisfied, so the refusal below is about" in text
+	assert "raw[0] |= 0x01" in text
+	assert "\t\tview.validate()\n" in text
+	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
+
+
+def test_gen_checks_says_which_reserved_fields_it_does_not_see(
+	tmp_path: Path,
+) -> None:
+	"""The kind reaches a struct's own members and says so.
+
+	Of the corpus's 83 reserved fields `own_entries` yields 53; the 30 it
+	does not are 10 array elements, 9 inside variant arms and 11 excluded
+	for other reasons. **None of them reaches the emitter**, which is why
+	there is no per-field decline naming them -- the first version had two
+	such branches and a fixture putting a reserved field in an arm produced
+	neither, because the exclusion happens upstream. A reason nobody can
+	reach is worse than none: it reads as a case that was considered.
+
+	So the populations are named once, in the preamble, where a reader of
+	the generated module meets them. The per-field declines that remain are
+	the ones a member CAN hit: a pinned run, bits past the struct's extent,
+	no satisfiable baseline, and bits the map cannot place.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct s {\n\tu8  kind;\n"
+		"\tvariant body switch (kind) {\n"
+		"\t\tcase 1:  reserved u8 [must_be_zero];\n"
+		"\t\tdefault: u8  other;\n\t}\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	# Named in the preamble, and NOT as a per-field decline, since the
+	# field never reaches the emitter to be declined.
+	assert "or members of a variant arm," in text
+	assert "Not enforced here:" not in text
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had

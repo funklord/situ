@@ -25,12 +25,16 @@ from typing import Literal
 
 from situc import __version__, ast
 from situc.capability import Axis
-from situc.codegen import PROBE_BYTES, refuse_parameters
+from situc.codegen import (PROBE_BYTES, digit_pattern, placed_bytes,
+                           reserved_policy,
+                           refuse_parameters, required_pattern,
+                           required_run, selected_arms)
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import has_computable_extent, own_entries
+from situc.traverse import (enclosing_arm, has_computable_extent,
+                            own_entries)
 from situc.types import ScalarKind
 
 #: The nine kinds `--target c` emits, so the generated file can name the
@@ -82,6 +86,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			lines.extend(_decodes(basename, enums, struct, entry.placement))
 			lines.extend(_nested_start(basename, resolved, struct,
 			                           entry.placement))
+			lines.extend(_reserved(basename, resolved, struct,
+			                       entry.placement))
 
 	lines.extend([
 		"",
@@ -132,7 +138,7 @@ _COUNT_WORD = ("no", "One", "Two", "Three", "Four", "Five",
 #: The kinds this backend emits: the first `DONE` of `C_KINDS`. One number,
 #: so adding a kind moves the sentence, the emitted list and the declined
 #: list together.
-DONE = 5
+DONE = 6
 
 
 def _preamble(basename: str, structs: int) -> list[str]:
@@ -173,6 +179,18 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"    nothing about where the parent puts it: mutation testing of",
 		"    `--target c` moved every nested member one byte late and that",
 		"    whole suite still passed.",
+		"  - a `reserved` field holds what its policy says, and",
+		"    `validate` refuses it when it does not. Section 8.8: reserved",
+		"    bits are malleability control, so a receiver that ignores them",
+		"    lets a sender vary bytes the format calls fixed. The first kind",
+		"    here to need a BASELINE -- every other constraint satisfied",
+		"    before this one is broken -- without which breaking a field in",
+		"    an already-invalid buffer would prove nothing. It reaches a",
+		"    struct's own members: of the corpus's 83 reserved fields it",
+		"    sees 53, the rest being array elements (whose own `validate`",
+		"    is where that check belongs) or members of a variant arm,",
+		"    which `--target c` selects before breaking and this does not",
+		"    yet.",
 		"",
 		f"The {_COUNT_WORD[len(C_KINDS) - DONE].lower()} `--target c` also emits and this does not:",
 		"",
@@ -194,6 +212,227 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"",
 		"class Checks(unittest.TestCase):",
 	]
+
+
+def _break_to(placement: Placement, wrong: int) -> list[str] | None:
+	"""Statements setting this member's bits to `wrong`, leaving the rest.
+
+	Read-modify-write rather than a store, because a member narrower than a
+	byte shares one with its neighbours: storing would break theirs too,
+	and the refusal that followed would be true of the wrong field.
+
+	`placed_bytes` puts the value where the member's own byte order and bit
+	order say it goes, so this is the one place that has to know either.
+	`None` where the member's bits cannot be placed at all.
+	"""
+	if placement.offset_bits is None or not placement.size_bits:
+		return None
+
+	packed = bool(placement.scalar and placement.scalar.is_bit_packed)
+	placed = placed_bytes(placement.offset_bits, placement.size_bits, wrong,
+	                      placement.endian, placement.bit_order, packed)
+	mask = placed_bytes(placement.offset_bits, placement.size_bits,
+	                    (1 << placement.size_bits) - 1,
+	                    placement.endian, placement.bit_order, packed)
+	if placed is None or mask is None:
+		return None
+
+	return [f"\t\traw[{at}] = (raw[{at}] & {0xFF ^ mask[at]:#04x})"
+	        f" | {placed[at]:#04x}"
+	        for at in sorted(mask)]
+
+
+def _reserved(basename: str, resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> list[str]:
+	"""A reserved field must hold what its policy says, and `validate` must
+	refuse it when it does not.
+
+	**Section 8.8's reason, which is not pedantry**: reserved bits are
+	malleability control. A receiver that ignores them lets a sender vary
+	bytes the format calls fixed, which is a signature-bypass primitive in
+	anything authenticated.
+
+	This is the first kind here to need a BASELINE, and the baseline is what
+	makes it mean anything: breaking a field in a buffer that was already
+	invalid proves nothing, and for `must_be_one` a zeroed buffer breaks the
+	policy before the check touches it -- so the check would pass against a
+	validator that did nothing. `view.validate()` has to succeed first.
+
+	Four declines, named in the module rather than left silent. 56 of the
+	corpus's 76 reserved fields are reachable here; the other 20 need arm
+	selection or version reach, which `--target c` has and this does not
+	yet.
+	"""
+	policy = reserved_policy(placement)
+	if policy is None or placement.offset_bits is None:
+		return []
+	if not placement.size_bits:
+		# A zero-width reserved field owns no bit to break, so there is no
+		# check and nothing a reader could mistake for one. Silent on
+		# purpose, unlike the declines below.
+		return []
+	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		return []
+
+	# **No branch here for an array element or a variant arm**, and that is
+	# measured rather than assumed: of the corpus's 83 reserved fields,
+	# `own_entries` yields 53, and the 30 it does not are 10 array
+	# elements, 9 inside variant arms and 11 excluded for other reasons.
+	# None of them reaches this function, so a reason naming them would be
+	# a branch nobody can take -- the first version had two and a fixture
+	# putting a reserved field in an arm produced neither. The preamble
+	# names those populations instead, where a reader of the module will
+	# meet them.
+	extent = struct.layout.size_bytes
+	reason = None
+	if placement.pinned_runs:
+		reason = ("it is a pinned run, whose check is the pin rather than a"
+		          " bit policy")
+	elif placement.offset_bits + placement.size_bits > extent * BITS_PER_BYTE:
+		reason = "its bits lie past the struct's own extent"
+	if reason is not None:
+		return [f"\t# Not enforced here: `{placement.path}`, because"
+		        f" {reason}.", ""]
+
+	# **Both of these are named too**, for the reason the preamble gives
+	# about the kinds this backend does not emit: a reader cannot tell a
+	# field that was checked from one nothing could check.
+	base = _baseline(resolved, struct, extent)
+	if base is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because no"
+		        " buffer satisfying every other constraint can be built,",
+		        "\t# so breaking this field would prove nothing.", ""]
+
+	wrong = 0 if policy == "must_be_one" else (1 << placement.size_bits) - 1
+	broken = _break_to(placement, wrong)
+	if broken is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because its"
+		        " bits cannot be placed from the map alone", "\t# -- a"
+		        " `native` byte order has no one answer here.", ""]
+
+	name = py_name(f"{struct.name}_{placement.name}")
+	lines = [
+		f"\tdef test_{name}_{policy}_is_enforced(self) -> None:",
+		f'\t\t"""`{placement.path}` is reserved [{policy}].',
+		"",
+		"\t\tSection 8.8: reserved bits are malleability control, not",
+		"\t\tpedantry. A receiver that ignores them lets a sender vary",
+		"\t\tbytes the format calls fixed, which is a bypass primitive",
+		'\t\tin anything authenticated."""',
+		f"\t\traw = bytearray({extent})",
+		"\t\tmsg = situ_runtime.Message(raw)",
+		f"\t\tview = {basename}.{py_name(struct.name)}.at(msg, 0"
+		+ ("" if struct.layout.is_fixed_size else f", {extent}") + ")",
+		"",
+	]
+	if base:
+		lines += [
+			"\t\t# Every constraint satisfied, so the refusal below is about",
+			"\t\t# the field this check breaks and nothing else.",
+			*base,
+			"",
+		]
+	lines += [
+		"\t\tview.validate()",
+		"",
+		f"\t\t# {placement.path} declares {policy}.",
+		*broken,
+		"\t\twith self.assertRaises(situ_runtime.ConstraintError):",
+		"\t\t\tview.validate()",
+		"",
+	]
+	return lines
+
+
+def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
+		extent: int, inside: str | None = None) -> list[str] | None:
+	"""Statements making a zeroed buffer satisfy every constraint.
+
+	**Without this a constraint check is vacuous.** It could only show that
+	a wrong value is refused, and for `must_be_one` a zeroed buffer already
+	breaks it -- so the check would pass against a validator that did
+	nothing. Establishing that the RIGHT value is accepted first is what
+	gives the refusal its meaning, and it is why the three constraint kinds
+	wait on this rather than being written one at a time.
+
+	Ported from `--target c`, whose own version paid for every branch here.
+	The arithmetic -- which value a member must hold, where its bytes land,
+	which arm a message carries -- is `situc/codegen`'s now rather than a
+	backend's, so what is left is turning `{offset: byte}` into Python.
+
+	`inside` is the arm the check about to be built lives in, and the arms
+	are why it takes an argument: a member of an arm is in the message only
+	when the discriminant selects that arm, so satisfying every arm at once
+	writes several mutually exclusive layouts over each other -- Modbus has
+	ten exception arms sharing one byte and the baseline set it ten times.
+
+	`None` where some constraint cannot be satisfied from here, because a
+	baseline that is not actually valid would make every check built on it
+	assert the wrong thing.
+	"""
+	writes: list[str] = []
+	carried = selected_arms(resolved, struct, inside)
+
+	for entry in struct.entries:
+		placement = entry.placement
+		if placement.offset_bits is None or not placement.size_bits:
+			continue
+
+		# A TEXT NUMBER's bytes are digits and a zeroed buffer holds none:
+		# `hex u32 ino[8]` reads eight NULs, which is not a number in any
+		# radix, so `validate` refuses a fixture nothing had broken yet.
+		digits = digit_pattern(resolved, struct, placement)
+		if digits is not None:
+			if placement.offset_bits % BITS_PER_BYTE:
+				return None
+			at = placement.offset_bits // BITS_PER_BYTE
+			if at + len(digits) > extent:
+				return None
+			writes.extend(f"\t\traw[{at + i}] = {byte:#04x}"
+			              for i, byte in enumerate(digits))
+			continue
+
+		# A pinned byte RUN, before the array skip below, because all three
+		# spellings of one are arrays and the skip takes every one of them.
+		# `edges.sig` is `u8 sig[4] [must_eq = "WOZ2"]`, and skipping it
+		# left the baseline claiming a validity it did not have.
+		run = required_run(placement)
+		if run is not None:
+			if placement.offset_bits % BITS_PER_BYTE:
+				return None
+			at = placement.offset_bits // BITS_PER_BYTE
+			if at + len(run) > extent:
+				return None
+			writes.extend(f"\t\traw[{at + i}] = {byte:#04x}"
+			              for i, byte in enumerate(run))
+			continue
+
+		if placement.array_count is not None or placement.sized_by is not None:
+			continue
+		if "[]" in placement.path:
+			continue		# an array element, not the array
+
+		# Not this message's arm, so not this message's constraint.
+		held = enclosing_arm(struct, placement)
+		if held is not None and held[1].member not in carried:
+			continue
+
+		value = required_pattern(resolved, struct, placement)
+		if value in (None, 0):
+			continue		# nothing to write: the buffer starts zeroed
+		assert value is not None
+
+		placed = placed_bytes(
+			placement.offset_bits, placement.size_bits, value,
+			placement.endian, placement.bit_order,
+			bool(placement.scalar and placement.scalar.is_bit_packed))
+		if placed is None or max(placed) >= extent:
+			return None
+
+		writes.extend(f"\t\traw[{at}] |= {placed[at]:#04x}"
+		              for at in sorted(placed) if placed[at])
+
+	return writes
 
 
 def _nested_start(basename: str, resolved: ResolvedSchema,
