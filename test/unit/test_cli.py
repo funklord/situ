@@ -287,6 +287,77 @@ def test_a_python_vector_suite_passes_a_length_where_at_needs_one(
 	assert "unit.varying.at(msg, 0, len(raw))" in text
 
 
+def test_gen_tests_writes_a_cpp_vector_suite(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The last of the four, which makes `gen-tests` the first of section
+	1's four artifacts to reach all four of the languages section 1 names
+	(26.829).
+
+	A standalone `main` rather than a framework: the C suite uses cmocka and
+	the C++ fuzz harness uses libFuzzer, and neither is a thing to ask a
+	consumer for. Section 24's no-third-party rule is about what situ asks
+	of the people who use it as much as of itself.
+	"""
+	vectors = str(Path(HEADER).with_suffix(".vectors"))
+	assert main(["gen-tests", HEADER, vectors, "--target", "cpp",
+	             "--out", str(tmp_path)]) == 0
+
+	text = (tmp_path / "header_vectors.cpp").read_text(encoding="ascii")
+	assert "::situ::rt::message msg(bytes, length);" in text
+	assert "::situ::header::at(msg, 0, view)" in text
+	assert "view.validate() != ::situ::rt::err::ok" in text
+	# It reports rather than aborts, and the exit code is the verdict.
+	assert "return situ_failures == 0 ? 0 : 1;" in text
+	assert "4 vectors" in capsys.readouterr().err
+
+
+def test_every_vector_target_asks_the_same_question(
+	tmp_path: Path,
+) -> None:
+	"""Four languages, one vector file, and every case named in each.
+
+	What this catches is a target that never mentions a case -- a `continue`
+	for a construct it cannot express -- which would leave four suites that
+	look alike and ask different questions about one schema.
+
+	**What it does NOT catch is a target that drops a case's BODY**, and that
+	is worth stating rather than leaving to be discovered. Tried: with the
+	C++ emitter cut to one case, every symbol still appeared, because `main`
+	dispatches to all of them and this test cannot tell a call from a
+	definition. What catches that is the compiler --
+
+	    error: 'header_minimum' was not declared in this scope
+
+	-- so the generate-compile-run sweep is the gate for it, and this one is
+	the gate for the case nobody emitted at all. Keyed on the case SYMBOL,
+	which every emitter names its body after, rather than on a per-language
+	marker: the first version keyed on four of those and two were wrong about
+	their own language, which is a count inheriting its detector.
+	"""
+	from situc.codegen.c.vectors import _symbol, parse_vectors
+	from situc.diagnostics import Source
+
+	path = Path(HEADER).with_suffix(".vectors")
+	cases = parse_vectors(Source(str(path), path.read_text(encoding="ascii")))
+	assert len(cases) == 4, len(cases)
+
+	# Keyed on the case SYMBOL, which every emitter names its body after,
+	# rather than on a per-language marker. Counting `static void` or
+	# `#[test]` is a detector per target, and a count inherits its detector:
+	# the first version of this test keyed on four of them and two were
+	# wrong about their own language.
+	suffix = {"c": "c", "cpp": "cpp", "rust": "rs", "python": "py"}
+	for target, ending in suffix.items():
+		out = tmp_path / target
+		assert main(["gen-tests", HEADER, str(path), "--target", target,
+		             "--out", str(out)]) == 0
+		text = (out / f"header_vectors.{ending}").read_text(encoding="ascii")
+
+		missing = [_symbol(case) for case in cases if _symbol(case) not in text]
+		assert not missing, f"{target} skips {missing}"
+
+
 def test_a_rust_vector_suite_says_what_it_does_not_compare(
 	tmp_path: Path,
 ) -> None:
