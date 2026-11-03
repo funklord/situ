@@ -8239,6 +8239,11 @@ Moved to
 Moved to
 `doc/decision/26.829-the-fourth-artifact-reached-one-language.md`.
 
+### 26.831 The first of `gen-checks`' nine kinds, in Python
+
+Moved to
+`doc/decision/26.831-the-first-of-gen-checks-nine-kinds-in-python.md`.
+
 ### 26.830 Situ may carry settled reference data
 
 Raised by the copyright holder 2026-11-03 and recorded as

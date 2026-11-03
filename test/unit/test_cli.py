@@ -208,6 +208,67 @@ def test_gen_tests_writes_a_vector_suite(
 	assert "4 vectors" in capsys.readouterr().err
 
 
+def test_gen_checks_writes_a_python_bounds_suite(
+	tmp_path: Path,
+) -> None:
+	"""`gen-checks` reached C alone, and `c/checks.py` is 3239 lines over 70
+	functions emitting nine kinds (26.829, 26.831). This is the first of the
+	nine in Python: a buffer one byte short of a struct's minimum must not
+	yield a view.
+
+	That kind first because section 12.3 calls it the single check
+	everything after it trusts -- a backend that got it wrong would have
+	every other guarantee resting on nothing -- and because it is one
+	assertion per struct needing nothing but the acquiring call.
+
+	The module names the eight it does not emit. A suite that checks one of
+	nine things and does not say so reads as the whole map having been
+	checked.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert "class Checks(unittest.TestCase):" in text
+	assert "def test_header_refuses_a_short_buffer(self) -> None:" in text
+	assert "`header` needs 9 bytes; 8 must refuse." in text
+	assert "with self.assertRaises(situ_runtime.BoundsError):" in text
+	# The eight it declines, named rather than absent.
+	assert "The eight `--target c` also emits and this does not:" in text
+	assert "a field occupies its claimed bytes" in text
+
+
+def test_gen_checks_skips_a_register_and_a_zero_minimum(
+	tmp_path: Path,
+) -> None:
+	"""Two exclusions, both of which cost a failing run before they existed.
+
+	A register is a bus transaction rather than bytes off a wire, so its
+	accessors take a device handle and there is no `at` to refuse anything:
+	`example/register` raised `AttributeError: type object 'dma_status' has
+	no attribute 'at'`. And a zero-byte minimum has no short buffer at all.
+
+	Where that leaves nothing, the module says so instead of defining an
+	empty class -- which is an `IndentationError`, and is how
+	`example/protobuf` failed. A module that imports and defines nothing
+	reads as a suite that passed.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target mmio;\nendian little;\nbit_order lsb_first;\n\n"
+		"register ctrl @ 0x00 {\n\twidth        = 32;\n"
+		"\taccess_width = 32;\n\n\tbit enable [rw];\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "refuses_a_short_buffer" not in text
+	assert "test_nothing_here_has_a_minimum" in text
+	assert "every struct is a register, or its minimum is zero" in text
+
+
 def test_gen_tests_writes_a_rust_vector_suite(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:

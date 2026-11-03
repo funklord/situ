@@ -125,3 +125,57 @@ def test_the_cpp_vector_suite_builds_and_runs(
 	assert done.returncode == 0, done.stdout[-2000:]
 	# The suite prints its own verdict, and a run of nothing is not a pass.
 	assert "0 of 0 vector(s) failed" not in done.stdout, done.stdout
+
+
+def check_schemas() -> list[Path]:
+	"""Every corpus schema, since `gen-checks` needs no vectors beside it.
+
+	Asked of the filesystem for `vector_schemas`' reason. `std/` is left out:
+	those declare codecs and no struct, so there is no accessor to hold to
+	anything.
+	"""
+	found = sorted([*ROOT.glob("example/*/*.situ"),
+	                *ROOT.glob("test/schema/*.situ")])
+	assert len(found) > 30, f"only {len(found)} schemas; the corpus moved"
+	return found
+
+
+@pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
+def test_the_python_checks_suite_runs(schema: Path, tmp_path: Path) -> None:
+	"""`gen-checks --target python`, the first of the nine kinds `--target c`
+	emits (26.831): a buffer one byte short of a struct's minimum must not
+	yield a view.
+
+	Python has no compiler, so running the suite is the only thing that
+	executes the generated accessors -- and this is the check section 12.3
+	calls the single one everything after it trusts, so a backend that got
+	it wrong would have every other guarantee resting on nothing.
+
+	A schema `gen-checks` declines -- one taking a `parameter`, which the
+	`refuse_parameters` family all decline -- is skipped rather than failed,
+	because the refusal is the generator working.
+	"""
+	out = tmp_path / "gen"
+	out.mkdir(parents=True, exist_ok=True)
+	emitted = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-checks", str(schema),
+		 "--target", "python", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	if emitted.returncode != 0:
+		if "parameter" in emitted.stderr:
+			pytest.skip("gen-checks declines a schema taking an argument")
+		raise AssertionError(emitted.stderr[-700:])
+
+	built = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(schema),
+		 "--target", "python", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	assert built.returncode == 0, built.stderr[-700:]
+	shutil.copy(ROOT / "runtime" / "python" / "situ_runtime.py", out)
+
+	done = subprocess.run(
+		[sys.executable, "-m", "unittest", f"{schema.stem}_checks"],
+		capture_output=True, text=True, cwd=out)
+	assert done.returncode == 0, done.stderr[-2000:]
+	# A suite that ran nothing exits 0 as loudly as one that ran everything.
+	assert "Ran 0 tests" not in done.stderr, done.stderr
