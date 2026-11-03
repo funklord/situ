@@ -103,8 +103,14 @@ def test_both_walkers_take_the_argument_from_the_image(tmp_path: Path) -> None:
 @pytest.mark.parametrize(("member", "words"), [
 	# A value the parameter cannot hold: truncated by C, kept by Python.
 	("u16 n; note(mode = n) k;", "may not hold this argument"),
-	# Handing on the parent's own parameter is step 5's, with recursion.
-	("parameter u8 m; note(mode = m) k;", "cannot be a member yet"),
+	# `parameter u8 m; note(mode = m) k;` was here and is gone, not moved:
+	# rule 5's last sentence is "a child parameter without `[stream]`
+	# (meaning only) may take any of them", and `note.mode` carries no
+	# `[stream]`, so this was asserting a refusal the document never asked
+	# for. It stopped being refused in `c43b57f` and this file was not
+	# re-run -- the SECOND file to carry the same stale assertion, after
+	# `test_a_parent_supplies_arguments.py` (26.815, 9b5295f). Acceptance
+	# is asserted there, where the acceptance set lives.
 ])
 def test_what_step_2_does_not_build_is_refused(member: str,
 		words: str) -> None:

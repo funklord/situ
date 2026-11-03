@@ -37,7 +37,7 @@ from walker.image import NONE, Image, load                 # noqa: E402
 from situc.codegen.differ import writes as differ_writes  # noqa: E402
 from walker import walk as walk_module             # noqa: E402
 from walker.walk import (BITS_PER_BYTE, Refused, View,  # noqa: E402
-                         acquire, offset_bits, read_scalar,
+                         acquire, offset_bits, parameters_of, read_scalar,
                          write_scalar)
 
 
@@ -1719,7 +1719,20 @@ def test_every_count_the_differ_asks_is_one_the_walk_answers() -> None:
 			# the other way first, and deleting either call site left this
 			# green -- "a correct function is not a working feature".
 			which   = names.index(struct.name)
-			view    = acquire(image, probe, which)
+			# One argument per `parameter` the struct declares, because
+			# `acquire` refuses a guess in either direction (0050). The
+			# value is 1 for each: the smallest that makes a member sized
+			# by one non-empty, so the question under test is whether the
+			# walk EMITS a `count=` line and not whether the probe was
+			# long enough.
+			#
+			# Needed as of `relays_on_runs` (26.815). The corpus has had
+			# an argued struct since `relays_on`, and this test skips any
+			# struct the differ asks no `count=` of -- a single nested
+			# member is not a run, so nothing reached `acquire` with a
+			# parameter until a COUNTED run of argued elements existed.
+			view    = acquire(image, probe, which,
+			                  [1] * len(parameters_of(image, which)))
 			answers = {line.split(" ", 1)[0]
 			           for line in report._members(image, view, which)
 			           if " count=" in line}
