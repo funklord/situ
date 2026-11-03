@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from situc import __version__, ast
 from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
+                           buffer_size,
                            digit_pattern,
                            passes_unknown, placed_bytes, refuse_parameters,
                            required_pattern, required_run, reserved_policy,
@@ -342,7 +343,8 @@ def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 def _constraint(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement, extent: int, suffix: str, note: list[str],
-		wrong: int, broke: str) -> list[str] | None:
+		wrong: int, broke: str,
+		broken: list[str] | None = None) -> list[str] | None:
 	"""The shape every constraint check here has.
 
 	Acquire, satisfy everything, `validate` must accept, break one field,
@@ -354,7 +356,13 @@ def _constraint(resolved: ResolvedSchema, struct: ResolvedStruct,
 	prelude = _prelude(resolved, struct, placement, extent)
 	if prelude is None:
 		return None
-	broken = _break_to(placement, wrong)
+	# `broken` given rather than derived, for a pinned byte RUN: there is
+	# no number to place into its bits, so the caller writes a byte that
+	# begins none of the admitted pins. Everything else about the shape --
+	# the acquisition, the baseline, the accept before the refuse -- is
+	# what this function exists to keep in one place, and a second copy of
+	# it for runs would be a second chance to leave the accept out.
+	broken = broken if broken is not None else _break_to(placement, wrong)
 	if broken is None:
 		return None
 
@@ -413,6 +421,54 @@ def _reserved(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return body or []
 
 
+def _pinned_run(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement, extent: int) -> list[str]:
+	"""A pinned byte run, broken by a byte that begins none of its pins.
+
+	**A number cannot break one.** `"BM"` has no integer to increment, and
+	a schema admitting several alternatives needs a byte outside every one
+	of them -- so the first byte of each admitted pin is collected and a
+	byte beginning none of them is written at the run's start. Wrong for
+	every pin the schema admits, and still wrong for one nobody has
+	written yet.
+
+	`--target c` records why that beats writing all-ones: all-ones is
+	right for `\r\n` by luck and vacuous for a preamble pinned to
+	0xffff.
+
+	Nothing where the run does not start on a byte, or where the schema
+	has taken all 256 first bytes -- a check that cannot break its subject
+	is worse than none.
+	"""
+	runs = required_run(placement, every=True)
+	if not runs or placement.offset_bits is None:
+		return []
+	if placement.offset_bits % BITS_PER_BYTE:
+		return []
+	if inside_an_unresolved_arm(struct, placement):
+		return []
+
+	at = placement.offset_bits // BITS_PER_BYTE
+	if at >= extent:
+		return []
+
+	taken = {run[0] for run in runs if run}
+	wrong = next((one for one in range(256) if one not in taken), None)
+	if wrong is None:
+		return []
+
+	shown = ", ".join(run.hex() or "(empty)" for run in runs)
+	return _constraint(
+		resolved, struct, placement, extent, "must_eq_is_enforced",
+		[f"/* {placement.path} is pinned, to one of: {shown}.",
+		 " *",
+		 " * A value the schema does not admit has to be refused on",
+		 " * parse (section 8.8), and a run is broken by a byte that",
+		 " * begins none of the pins rather than by arithmetic. */"],
+		0, f"{placement.path}: the byte below begins none of its pins.",
+		broken=[f"\traw[{at}u] = {wrong:#04x}u;"]) or []
+
+
 def _must_eq(resolved: ResolvedSchema, struct: ResolvedStruct,
 		placement: Placement, extent: int) -> list[str]:
 	"""A pinned value, broken by adding one inside its own width."""
@@ -420,11 +476,18 @@ def _must_eq(resolved: ResolvedSchema, struct: ResolvedStruct,
 
 	must = next((attr for attr in placement.attrs
 	             if attr.name == "must_eq"), None)
+	# A pin reaches here two ways: written on the member, and carried by a
+	# byte run whose value the schema states -- an enum over runs, or
+	# `[must_eq = "BM"]`, which the solver folds into the same field. A
+	# reserved run is the third and belongs to `_reserved`.
 	run = bool(required_run(placement, every=True))
-	if must is None or must.value is None:
+	if must is None and not (run and placement.kind != "reserved"):
+		return []
+	if must is not None and must.value is None:
 		return []
 	if run and placement.kind != "reserved":
-		return []		# a byte run: a number cannot break one
+		return _pinned_run(resolved, struct, placement, extent)
+	assert must is not None and must.value is not None
 	if placement.offset_bits is None or not placement.size_bits:
 		return []
 	if inside_an_unresolved_arm(struct, placement):
@@ -784,7 +847,26 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			continue		# a bus transaction, with no view to acquire
 		if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
 			continue
-		extent = struct.layout.size_bytes
+		# **The MAXIMUM extent, not the minimum**, which the three
+		# constraint kinds below need rather than prefer: a baseline
+		# writes the value every driving member must hold, and a driving
+		# text number's smallest admitted value can still declare a
+		# length the minimum does not reach. `example/cpio` is thirteen
+		# text numbers around one pinned magic, and over its minimum the
+		# baseline's own `validate` refuses before anything has been
+		# broken -- the control arm failing, which is the control arm
+		# working. `--target c` has used this rule since its checks were
+		# written; the other three took `size_bytes` and were going to
+		# meet the same wall one struct at a time (26.849).
+		#
+		# **And the minimum where there is no maximum**, rather than
+		# declining the struct. Written as a bare `buffer_size(...) or
+		# return` in `--target python` first, and that LOST checks: a
+		# struct with no computable maximum went from some checks over
+		# its minimum to none at all. A wider buffer is an improvement
+		# where one can be had and the narrow one was never wrong, only
+		# sometimes too small.
+		extent = buffer_size(struct.layout) or struct.layout.size_bytes
 
 		take(_short_buffer(struct))
 		for entry in own_entries(struct):
