@@ -234,6 +234,59 @@ def test_gen_tests_writes_a_rust_vector_suite(
 	assert "4 vectors" in capsys.readouterr().err
 
 
+def test_gen_tests_writes_a_python_vector_suite(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The language where this matters most, because Python has no compiler:
+	a generated accessor fails at the call, not at the build, so a vector
+	suite is the first time it runs at all (26.829).
+
+	`unittest` rather than pytest, since section 24 requires `situc` to run
+	from a bare interpreter and a suite handed to a user should ask no more.
+	"""
+	vectors = str(Path(HEADER).with_suffix(".vectors"))
+	assert main(["gen-tests", HEADER, vectors, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+
+	text = (tmp_path / "header_vectors.py").read_text(encoding="ascii")
+	assert "import unittest" in text
+	assert "class Vectors(unittest.TestCase):" in text
+	assert "situ_runtime.Message(raw)" in text
+	# The class is the Python backend's own `py_name`, not a second copy.
+	assert "header.header.at(msg, 0)" in text
+	assert "4 vectors" in capsys.readouterr().err
+
+
+def test_a_python_vector_suite_passes_a_length_where_at_needs_one(
+	tmp_path: Path,
+) -> None:
+	"""A variable struct's `at` takes the message length and a fixed one's
+	does not, which is the Python backend's own branch on
+	`layout.is_fixed_size`.
+
+	Getting it wrong is 26.36 in another language. The first version called
+	`at(msg, 0)` for every struct, and 13 of the corpus's 27 vector files
+	raised `TypeError: at() missing 1 required positional argument:
+	'length'` -- caught by running the generated suites rather than by any
+	check, which is the whole argument for this target existing.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nstruct fixed {\n\tu16 a;\n}\n\n"
+		"struct varying {\n\tu8 n [max = 4];\n\tu8 body[n];\n}\n",
+		encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text("fixed one 00 01\nvarying two 02 AA BB\n",
+	                   encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+
+	assert "unit.fixed.at(msg, 0)" in text
+	assert "unit.varying.at(msg, 0, len(raw))" in text
+
+
 def test_a_rust_vector_suite_says_what_it_does_not_compare(
 	tmp_path: Path,
 ) -> None:

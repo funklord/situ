@@ -232,12 +232,12 @@ def build_parser() -> argparse.ArgumentParser:
 	tests_cmd.add_argument("--out", type=Path, default=Path("."))
 	tests_cmd.add_argument("--prefix", default="situ")
 	# Section 1 names four languages for the accessors and four artifacts
-	# beside them, and this one reached C alone until 26.829. `cpp` and
-	# `python` are not here yet and the help says so rather than offering a
-	# choice that errors.
+	# beside them, and this one reached C alone until 26.829. `cpp` is not
+	# here yet and the help says so rather than offering a choice that
+	# errors.
 	tests_cmd.add_argument(
-		"--target", choices=("c", "rust"), default="c",
-		help="language of the generated suite (c, rust)")
+		"--target", choices=("c", "python", "rust"), default="c",
+		help="language of the generated suite (c, python, rust)")
 
 	codec_cmd = sub.add_parser(
 		"gen-codec-tests", help="generate property tests from codec signatures")
@@ -1187,6 +1187,9 @@ def cmd_gen_tests(args: argparse.Namespace) -> int:
 	if target_name == "rust":
 		from situc.codegen.rust import vectors as rust_vectors
 		emit = rust_vectors.generate
+	elif target_name == "python":
+		from situc.codegen.python import vectors as python_vectors
+		emit = python_vectors.generate
 
 	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	cases = vectors.parse_vectors(read_source(args.vectors))
@@ -1199,7 +1202,7 @@ def cmd_gen_tests(args: argparse.Namespace) -> int:
 		return 1
 
 	args.out.mkdir(parents=True, exist_ok=True)
-	suffix = "rs" if target_name == "rust" else "c"
+	suffix = {"rust": "rs", "python": "py"}.get(target_name, "c")
 	target = args.out / f"{name}_vectors.{suffix}"
 	target.write_text(text, encoding="ascii")
 	print(f"situc: wrote {target} ({len(cases)} vectors)", file=sys.stderr)
