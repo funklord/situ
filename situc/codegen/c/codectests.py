@@ -52,6 +52,13 @@ SWEEP = (0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 63, 64, 127, 128, 255, 256)
 MAX_INPUT  = 256
 MAX_OUTPUT = 2048
 
+# Bytes of guard immediately behind the output capacity a hostile input is
+# decoded into, where that capacity is the input count rather than
+# MAX_OUTPUT. Sized to catch the shape 26.482 had -- an output length the
+# decoder derived from the input's own bytes, overshooting by a few -- which
+# a buffer with 1792 bytes of slack behind it cannot see at all.
+GUARD = 64
+
 
 def generate(schema: ast.Schema, basename: str, prefix: str = "situ") -> str:
 	codecs = schema.codecs()
@@ -122,6 +129,12 @@ def _shared() -> list[str]:
 	return [
 		f"#define SITU_CODEC_MAX_INPUT  {MAX_INPUT}u",
 		f"#define SITU_CODEC_MAX_OUTPUT {MAX_OUTPUT}u",
+		# Bytes past the output capacity, written with a known value and
+		# checked afterwards. The suite is built with the ordinary test
+		# compiler and no sanitizer, so a guard is the only thing here that
+		# can see a write past the end -- see `_derived_hostile`.
+		f"#define SITU_CODEC_GUARD      {GUARD}u",
+		f"#define SITU_CODEC_GUARD_BYTE 0xA5u",
 		"",
 		"/* A cheap deterministic generator, so a failure is reproducible from",
 		" * the seed alone rather than from whatever the last test left behind. */",
@@ -871,9 +884,109 @@ def _derived_suite(codec: ast.CodecDecl, encode: str,
 		body.extend(permuted[0])
 		names.append(permuted[1])
 
+	hostile = _derived_hostile(codec, decode, counted, bits)
+	if hostile is not None:
+		body.extend(hostile[0])
+		names.append(hostile[1])
+
 	return (head + body if names else
 	        [*head, "/* Nothing declared that this shape can attack. */", ""],
 	        names)
+
+
+def _derived_hostile(codec: ast.CodecDecl, decode: str, counted: str,
+		bits: bool) -> tuple[list[str], str] | None:
+	"""`decode` over bytes no encoder produced, into a buffer with no slack.
+
+	**Every other test in this file feeds a decoder the output of its own
+	encoder** -- measured over `std/kernels.situ`, 146 generated tests across
+	five properties and not one of them calls a decode entry point on
+	anything else. A decoder's whole risk surface is the input an encoder did
+	not produce, and that is where both of this project's worst memory faults
+	were: 26.482 was a heap-buffer-overflow WRITE in `situ_slip_decode`, from
+	a length the decoder derived out of the input's own bytes.
+
+	**The capacity is the input count and the guard begins at it**, which is
+	the half that makes this a test rather than a gesture. The other tests
+	here declare `uint8_t out[SITU_CODEC_MAX_OUTPUT]` -- 2048 bytes for an
+	input of at most 256 -- so 1792 bytes of slack sit behind every write and
+	an overshoot of anything less than that is invisible. No decoder in this
+	library expands: a byte-counted one writes at most the bytes it was
+	given, and a bit-counted one at most the bits. So `n` bytes is the
+	capacity a correct caller would supply, and a single byte past it trips
+	the guard.
+
+	The guard rather than a sanitizer because this suite is built with the
+	ordinary test compiler, and a stack array with slack behind it is exactly
+	what ASan would not be running to see.
+
+	What this can assert, and what it cannot. A decoder handed arbitrary
+	bytes may return any length and any content -- there is nothing to
+	compare it against, which is why the round-trip tests cannot be made to
+	do this job. What it may not do is write outside the buffer it was given.
+	An over-READ is not caught here: the input sits inside a larger array, so
+	reading past `n` stays in bounds of the object and no guard can see it.
+	That one needs the sanitized build.
+
+	The patterns are not arbitrary. A framing or stuffing codec is driven by
+	one distinguished byte -- `0x7E`, `0x00`, `0xDB`, `0x7D` -- so an input of
+	nothing but that byte is what drives the escape path through every branch
+	it has. The pseudo-random fills reach the rest.
+	"""
+	if not codec.invertible:
+		# Without an inverse there is no decode entry point to call: the
+		# derived emitter binds one only where the kernel has one.
+		return None
+
+	name  = f"test_{codec.name}_derived_hostile_input"
+	# A bit-counted decoder is handed `n * 8` and reports bits, so the
+	# capacity in BYTES is the same `n` either way and only the count moves.
+	count = "n * 8u" if bits else "n"
+	spelt = ", ".join(f"{n}u" for n in (1, 2, 3, 7, 8, 15, 16, 31, 64, 255))
+
+	return ([
+		"/* Derived: a decoder is handed bytes no encoder produced, with the",
+		" * output capacity set to the input count and a guard immediately",
+		" * behind it. The one property a decoder can be held to over an",
+		" * input it did not make is that it writes inside that. */",
+		f"static void {name}(void **state)",
+		"{",
+		f"	static const uint32_t sizes[] = {{ {spelt} }};",
+		"	static const int fills[] = { -1, -2, 0x00, 0x7E, 0x7D, 0xDB, 0xFF };",
+		"	uint8_t input[SITU_CODEC_MAX_INPUT];",
+		"	uint8_t out[SITU_CODEC_MAX_INPUT + SITU_CODEC_GUARD];",
+		"	size_t i;",
+		"	size_t k;",
+		"",
+		"	(void)state;",
+		"	for (i = 0; i < sizeof(sizes) / sizeof(sizes[0]); i++) {",
+		"		for (k = 0; k < sizeof(fills) / sizeof(fills[0]); k++) {",
+		"			const uint32_t n = sizes[i];",
+		"			uint32_t written;",
+		"			uint32_t g;",
+		"",
+		"			if (fills[k] < 0) {",
+		"				situ_codec_fill(input, n,",
+		"					(uint32_t)i * 13u + (uint32_t)k + 1u);",
+		"			} else {",
+		"				memset(input, (int)fills[k], (size_t)n);",
+		"			}",
+		"			memset(out, (int)SITU_CODEC_GUARD_BYTE, sizeof(out));",
+		"",
+		f"			written = {decode}(input, {count}, out);",
+		"",
+		"			/* The guard first: a write past the capacity is the",
+		"			 * finding, and it is true whatever `written` says. */",
+		"			for (g = 0; g < SITU_CODEC_GUARD; g++) {",
+		"				assert_int_equal(out[n + g],",
+		"					SITU_CODEC_GUARD_BYTE);",
+		"			}",
+		f"			assert_true(written <= {count});",
+		"		}",
+		"	}",
+		"}",
+		"",
+	], name)
 
 
 def _derived_length(codec: ast.CodecDecl, encode: str, unit: str,

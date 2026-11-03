@@ -8217,6 +8217,11 @@ Moved to
 Moved to
 `doc/decision/26.825-the-remedies-the-advisor-does-not-cost.md`.
 
+### 26.826 A decoder was only ever fed its own encoder's output
+
+Moved to
+`doc/decision/26.826-a-decoder-was-only-ever-fed-its-own-encoder.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

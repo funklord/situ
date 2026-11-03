@@ -541,6 +541,53 @@ def test_a_derived_codec_is_attacked_through_its_kernel_pair() -> None:
 	assert "test_mm_derived_length" in text
 
 
+def test_a_derived_decoder_is_attacked_with_bytes_no_encoder_made() -> None:
+	"""The property every other test in that file was missing.
+
+	Measured over `std/kernels.situ` before this was written: 146 generated
+	tests across five properties, and not one of them called a decode entry
+	point on anything but the output of its own encoder. A decoder's whole
+	risk surface is the input an encoder did not produce, and that is where
+	26.482 was -- a heap-buffer-overflow WRITE in `situ_slip_decode`, from a
+	length the decoder derived out of the input's own bytes.
+	"""
+	text = codec_tests(
+		"codec mm { kernel = table(input_bits = 1, output_bits = 2,"
+		" code = manchester_802_3); }\nimpl mm derived;",
+		bind=False)
+
+	assert "test_mm_derived_hostile_input" in text
+	# The capacity is the input count and the guard begins AT it. The other
+	# tests in the file declare `out[SITU_CODEC_MAX_OUTPUT]` against an input
+	# of at most MAX_INPUT, so 1792 bytes of slack sit behind every write --
+	# which is the whole reason a guard at the end of that array would see
+	# nothing. Measured: a one-byte overshoot added to the generated
+	# `situ_slip_framing_decode` fails this property and none of the other
+	# four.
+	assert "uint8_t out[SITU_CODEC_MAX_INPUT + SITU_CODEC_GUARD];" in text
+	assert "assert_int_equal(out[n + g]," in text
+	# The bit-counted call shape, as the kernel counts it.
+	assert "situ_mm_decode(input, n * 8u, out)" in text
+
+
+def test_a_decoder_with_no_inverse_is_not_attacked_that_way() -> None:
+	"""There is no decode entry point to call: the derived emitter binds one
+	only where the kernel has an inverse, so a hostile-input test would name
+	a function that does not exist -- which the C compiler would catch, and
+	which is the kind of thing 26.35 found by linking a harness nobody had
+	ever linked."""
+	text = codec_tests(
+		"codec mm { kernel = polynomial(width = 32, poly = 0x04C11DB7,"
+		" init = 0xFFFFFFFF, xorout = 0xFFFFFFFF, reflect); }"
+		"\nimpl mm derived;",
+		bind=False)
+
+	assert "test_mm_derived_hostile_input" not in text
+	# And the reason, so a future emitter that grows a decoder for this
+	# family fails here rather than silently stopping the attack.
+	assert "_decode" not in text
+
+
 def test_a_padded_codec_is_cut_on_a_group_boundary() -> None:
 	"""`seekable = linear` is a claim at the codec's own granularity. base64
 	emits whole groups of four from three input bytes, so cutting at half of
