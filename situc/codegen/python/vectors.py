@@ -59,7 +59,10 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		_check(resolved, case)
 
 	constants = enum_constants(schema, prefix)
-	compared, declined = tally(resolved, cases, constants)
+	# `nested=True`: Python reaches a nested field by chaining properties,
+	# `view.head.magic`, where Rust's accessor returns a `Result` and C++'s
+	# takes an out-parameter and each needs a block neither has yet.
+	compared, declined = tally(resolved, cases, constants, nested=True)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
@@ -96,8 +99,9 @@ def _preamble(basename: str, compared: int,
 	if compared:
 		lines.extend([
 			"",
-			f"{compared} field expectation(s) are compared: a plain scalar",
-			"against an integer, read through the generated property.",
+			f"{compared} field expectation(s) are compared -- a scalar",
+			"against an integer, a byte run against its bytes, and either of",
+			"those inside a nested struct, reached by chaining properties.",
 		])
 
 	if declined:
@@ -175,8 +179,9 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 	"""What the vector says about each field, where this target can say it."""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		literal = comparable(resolved, case, path, value, constants)
-		raw     = byte_run(resolved, case, path, value)
+		literal = comparable(resolved, case, path, value, constants,
+		                     nested=True)
+		raw     = byte_run(resolved, case, path, value, nested=True)
 		if literal is None and raw is None:
 			continue
 		if not lines:
@@ -187,10 +192,23 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 			# is what makes a FAILURE print the bytes rather than
 			# `<memory at 0x...>`. Section 17 again.
 			lines.append(
-				f"\t\tself.assertEqual(bytes(view.{py_name(path)}),"
+				f"\t\tself.assertEqual(bytes({_chain(path)}),"
 				f" bytes.fromhex(\"{raw.hex()}\"), \"{path}\")")
 			continue
 		lines.append(
-			f"\t\tself.assertEqual(view.{py_name(path)}, {literal},"
+			f"\t\tself.assertEqual({_chain(path)}, {literal},"
 			f" \"{path}\")")
 	return lines
+
+
+def _chain(path: str) -> str:
+	"""`head.magic` as `view.head.magic`.
+
+	A nested struct's accessor is a property returning its own view, so the
+	dotted path a vector writes IS the attribute chain -- which is why
+	Python can compare these 22 expectations and the other two targets
+	cannot yet. Each part through `py_name`, because the mangling is the
+	Python backend's and a part that needed it would otherwise name
+	something that does not exist.
+	"""
+	return "view." + ".".join(py_name(part) for part in path.split("."))

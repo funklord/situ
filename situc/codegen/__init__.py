@@ -239,7 +239,8 @@ def enum_constants(schema: ast.Schema, prefix: str = "situ") -> dict[str, int]:
 
 def comparable(resolved: ResolvedSchema, case: "Case",
 		path: str, value: str,
-		constants: dict[str, int] | None = None) -> str | None:
+		constants: dict[str, int] | None = None,
+		nested: bool = False) -> str | None:
 	"""The literal to compare this expectation against, or None.
 
 	Measured over the corpus: of 197 expectations, **142 are a plain scalar
@@ -255,7 +256,13 @@ def comparable(resolved: ResolvedSchema, case: "Case",
 	"""
 	from situc.codegen.c.vectors import _byte_run, _nested_of
 
-	if _nested_of(resolved, case.struct, path) is not None:
+	# `nested` is the backend saying it can REACH a nested field, which is
+	# not the same as the field being comparable. Python chains properties
+	# -- `view.head.magic` -- so it passes True; Rust's accessor returns a
+	# `Result` and C++'s takes an out-parameter, so each needs a block and
+	# neither has one yet. The predicates below work on a dotted path
+	# unchanged, `_byte_run` and `radix` both asking the leaf.
+	if not nested and _nested_of(resolved, case.struct, path) is not None:
 		return None
 	if _byte_run(resolved, case.struct, path) is not None:
 		return None
@@ -277,7 +284,7 @@ def comparable(resolved: ResolvedSchema, case: "Case",
 
 
 def byte_run(resolved: ResolvedSchema, case: "Case",
-		path: str, value: str) -> bytes | None:
+		path: str, value: str, nested: bool = False) -> bytes | None:
 	"""The bytes this expectation names, where it names a byte run.
 
 	11 of the corpus's 197 expectations are this shape, and they are the
@@ -298,7 +305,7 @@ def byte_run(resolved: ResolvedSchema, case: "Case",
 	# `view.header_magic()` for `cpio_entry.header.magic` and nothing
 	# defines it. Caught by a count that did not match -- 13 comparisons
 	# where the byte-run class measured 11 -- rather than by the compiler.
-	if _nested_of(resolved, case.struct, path) is not None:
+	if not nested and _nested_of(resolved, case.struct, path) is not None:
 		return None
 
 	count = _byte_run(resolved, case.struct, path)
@@ -314,7 +321,8 @@ def byte_run(resolved: ResolvedSchema, case: "Case",
 
 def declined_reason(resolved: ResolvedSchema, case: "Case",
 		path: str, value: str,
-		constants: dict[str, int] | None = None) -> str:
+		constants: dict[str, int] | None = None,
+		nested: bool = False) -> str:
 	"""Why one expectation is not compared, in the words a reader needs.
 
 	Four reasons rather than one count, because "37 not compared" tells a
@@ -323,7 +331,7 @@ def declined_reason(resolved: ResolvedSchema, case: "Case",
 	"""
 	from situc.codegen.c.vectors import _byte_run, _nested_of
 
-	if _nested_of(resolved, case.struct, path) is not None:
+	if not nested and _nested_of(resolved, case.struct, path) is not None:
 		return "a field inside a nested struct, read through its own view"
 	if _byte_run(resolved, case.struct, path) is not None:
 		if byte_run(resolved, case, path, value) is None:
@@ -341,18 +349,21 @@ def declined_reason(resolved: ResolvedSchema, case: "Case",
 
 
 def tally(resolved: ResolvedSchema, cases: list["Case"],
-		constants: dict[str, int] | None = None
-		) -> tuple[int, dict[str, int]]:
+		constants: dict[str, int] | None = None,
+		nested: bool = False) -> tuple[int, dict[str, int]]:
 	"""How many expectations a backend compares, and why it declines the rest."""
 	compared = 0
 	declined: dict[str, int] = {}
 
 	for case in cases:
 		for path, value in case.expectations:
-			if comparable(resolved, case, path, value, constants) is not None:
+			if (comparable(resolved, case, path, value, constants,
+			               nested) is not None
+			    or byte_run(resolved, case, path, value, nested) is not None):
 				compared += 1
 			else:
-				why = declined_reason(resolved, case, path, value, constants)
+				why = declined_reason(resolved, case, path, value, constants,
+				                      nested)
 				declined[why] = declined.get(why, 0) + 1
 
 	return compared, declined

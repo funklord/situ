@@ -384,17 +384,18 @@ def test_a_rust_vector_suite_says_what_it_does_not_compare(
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
 
-	# One compared, two declined, and both halves of the count said: a bare
-	# "not compared" number overstates what is missing, and a bare
-	# "compared" number overstates what is covered.
-	assert "1 field expectation(s) are compared" in text
+	# Two compared -- the scalar and the byte run -- and one declined, with
+	# both halves of the count said: a bare "not compared" number overstates
+	# what is missing, and a bare "compared" number overstates what is
+	# covered.
+	assert "2 field expectation(s) are compared" in text
 	assert 'assert_eq!(view.a(), 1, "a");' in text
-	assert "2 are NOT compared" in text
+	assert 'assert_eq!(view.run(), &[0x03, 0x04][..], "run");' in text
+	assert "1 are NOT compared" in text
 	assert "`situc gen-tests --target c` compares them" in text
 
-	# And the reasons, one of which is Rust's own veto rather than the
-	# shared classifier's.
-	assert "a byte run, which compares as bytes" in text
+	# And the reason is Rust's own veto rather than the shared classifier's:
+	# the obstacle is the getter's type, not the value's spelling.
 	assert "whose Rust getter returns `Option<T>`" in text
 	assert 'view.k()' not in text
 
@@ -509,8 +510,48 @@ def test_a_vector_suite_compares_a_byte_run(tmp_path: Path) -> None:
 		assert "7" in text
 
 
-def test_a_nested_byte_run_is_still_declined(tmp_path: Path) -> None:
-	"""Nested is asked before byte run, exactly as the C emitter orders it.
+def test_python_reaches_a_nested_field_by_chaining(tmp_path: Path) -> None:
+	"""22 of the corpus's 197 expectations name a field inside a nested
+	struct, and they were the largest class left.
+
+	A nested struct's Python accessor is a property returning its own view,
+	so the dotted path a vector writes IS the attribute chain. That is why
+	Python compares these and the other two do not yet: Rust's accessor
+	returns a `Result` and C++'s takes an out-parameter, and each needs a
+	block rather than a chain.
+
+	Both leaf kinds, because a nested byte run and a nested scalar take
+	different right-hand sides and the chain is the same.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nstruct inner {\n\tu8 magic[2];\n\tu16 x;\n}\n\n"
+		"struct s {\n\tinner head;\n\tu16 t;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text(
+		"s one 07 07 00 05 00 09\n\thead.magic = 07:07\n\thead.x = 5\n"
+		"\tt = 9\n", encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+
+	assert ('self.assertEqual(bytes(view.head.magic), '
+	        'bytes.fromhex("0707"), "head.magic")') in text
+	assert 'self.assertEqual(view.head.x, 5, "head.x")' in text
+	assert "3 field expectation(s) are compared" in text
+
+	# And Rust still declines them, with the reason being the accessor's
+	# shape rather than the path's.
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	rust = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
+	assert "head_magic" not in rust
+	assert "a field inside a nested struct" in rust
+
+
+def test_a_nested_byte_run_is_not_named_as_a_flat_one(tmp_path: Path) -> None:
+	"""Nested is asked before byte run wherever a backend cannot chain.
 
 	A byte run inside a nested struct reads through that struct's own view,
 	so the dotted path is not a method name. Asking the byte-run question
@@ -530,24 +571,28 @@ def test_a_nested_byte_run_is_still_declined(tmp_path: Path) -> None:
 		"s one 07 07 01 02\n\thead.magic = 07:07\n\ttail = 01:02\n",
 		encoding="ascii")
 
-	assert main(["gen-tests", str(schema), str(vectors), "--target", "python",
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "cpp",
 	             "--out", str(tmp_path)]) == 0
-	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+	text = (tmp_path / "unit_vectors.cpp").read_text(encoding="ascii")
 
 	# The flat one is compared; the nested one is declined, and no accessor
 	# is invented for the dotted path.
-	assert "bytes(view.tail)" in text
+	assert "view.tail()" in text
 	assert "head_magic" not in text
 	assert "a field inside a nested struct" in text
 
 
-def test_a_python_vector_suite_declines_four_kinds_and_says_which(
+def test_python_reaches_a_scalar_a_nested_one_and_a_byte_run(
 	tmp_path: Path,
 ) -> None:
-	"""Four classes are declined for four different reasons, and each
-	reason is its own piece of work. What makes declining safe is that the
-	module says how many and why: a suite that compares 72 per cent of its
-	input and does not say so reads as coverage of all of it.
+	"""The three forms Python compares, in one case.
+
+	It declined all but the first when this test was written, and the
+	assertions moved with the behaviour rather than being worked around.
+	What has not changed is the rule they were written for: where a class IS
+	declined the module says how many and why, because a suite that
+	compares part of its input and does not say so reads as coverage of all
+	of it.
 	"""
 	schema = tmp_path / "unit.situ"
 	schema.write_text(
@@ -563,11 +608,15 @@ def test_a_python_vector_suite_declines_four_kinds_and_says_which(
 	             "python", "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
 
+	# Python reaches all three now -- the scalar, the nested scalar by
+	# chaining, and the byte run -- so this fixture no longer declines
+	# anything, and the test says what it does rather than what it did.
 	assert 'self.assertEqual(view.plain, 1, "plain")' in text
-	assert "a field inside a nested struct" in text
-	assert "a byte run, which compares as bytes" in text
-	# And the two it declined are not silently absent from the count.
-	assert "2 are NOT compared" in text
+	assert 'self.assertEqual(view.nest.x, 2, "nest.x")' in text
+	assert ('self.assertEqual(bytes(view.run), bytes.fromhex("0304"), "run")'
+	        in text)
+	assert "3 field expectation(s) are compared" in text
+	assert "NOT compared" not in text
 
 
 def test_a_rust_vector_suite_refuses_a_schema_that_takes_an_argument(

@@ -129,8 +129,9 @@ def _preamble(basename: str, compared: int,
 	if compared:
 		lines.extend([
 			"//!",
-			f"//! {compared} field expectation(s) are compared: a plain",
-			"//! scalar against an integer, through its getter.",
+			f"//! {compared} field expectation(s) are compared -- a scalar",
+			"//! against an integer and a byte run against its bytes,",
+			"//! through their getters.",
 		])
 
 	if declined:
