@@ -24,7 +24,7 @@ in the other two, and the generated file says so with the count.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import (comparable, enum_constants,
+from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_parameters, tally)
 from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
@@ -111,6 +111,7 @@ def _preamble(basename: str, compared: int,
 		"",
 		"#include <cstdint>",
 		"#include <cstdio>",
+		"#include <cstring>",
 		"#include <vector>",
 		"",
 		f'#include "{basename}.hpp"',
@@ -178,6 +179,29 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 	"""
 	lines: list[str] = []
 	for path, value in case.expectations:
+		raw = byte_run(resolved, case, path, value)
+		if raw is not None:
+			if not lines:
+				lines.append("")
+			body = ", ".join(f"0x{byte:02X}" for byte in raw)
+			# `::situ::rt::bytes` is a `span`, so `data()` and `size()` and
+			# `memcmp`. Both halves compared, because a span of the right
+			# bytes and the wrong length is not the run the vector names.
+			lines.extend([
+				"\t{",
+				f"\t\tconst auto got = view.{c_name(path)}();",
+				f"\t\tstatic const std::uint8_t want[] = {{{body}}};",
+				"",
+				"\t\tif (got.size() != sizeof want",
+				"\t\t    || std::memcmp(got.data(), want, sizeof want) != 0) {",
+				f"\t\t\tstd::printf(\"FAIL {case.struct} {case.name}: {path}"
+				f" is not the {len(raw)} bytes the vector names\\n\");",
+				"\t\t\tsitu_failures++;",
+				"\t\t}",
+				"\t}",
+			])
+			continue
+
 		literal = comparable(resolved, case, path, value, constants)
 		if literal is None:
 			continue

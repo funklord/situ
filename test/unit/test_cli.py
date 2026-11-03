@@ -472,6 +472,75 @@ def test_a_vector_suite_resolves_a_c_enum_constant_to_its_number(
 	assert "whose Rust getter returns `Option<T>`" in rust
 
 
+def test_a_vector_suite_compares_a_byte_run(tmp_path: Path) -> None:
+	"""11 of the corpus's 197 expectations are a byte run, and they are the
+	class that made `example/arp` -- twenty of its twenty-eight bytes
+	addresses -- unable to state almost anything about itself before the C
+	emitter grew the form (26.35).
+
+	One shape, three spellings: `memoryview` in Python, `&[u8]` in Rust,
+	`::situ::rt::bytes` in C++. `bytes(...)` around the Python getter is not
+	for the comparison -- a memoryview already compares equal to bytes -- but
+	so that a FAILURE prints the bytes instead of `<memory at 0x...>`.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text("endian big;\n\nstruct s {\n\tu8 mac[6];\n\tu16 t;\n}\n",
+	                  encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text(
+		"s one 00 1A 2B 3C 4D 5E 00 07\n\tmac = 00:1A:2B:3C:4D:5E\n"
+		"\tt = 7\n", encoding="ascii")
+
+	for target, ending, expected in (
+		("python", "py",
+		 'self.assertEqual(bytes(view.mac), bytes.fromhex("001a2b3c4d5e"), "mac")'),
+		("rust", "rs",
+		 'assert_eq!(view.mac(), &[0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E][..], "mac");'),
+		("cpp", "cpp",
+		 "static const std::uint8_t want[] = "
+		 "{0x00, 0x1A, 0x2B, 0x3C, 0x4D, 0x5E};"),
+	):
+		out = tmp_path / target
+		assert main(["gen-tests", str(schema), str(vectors), "--target",
+		             target, "--out", str(out)]) == 0
+		text = (out / f"unit_vectors.{ending}").read_text(encoding="ascii")
+		assert expected in text, target
+		# And the scalar beside it, so the two forms coexist in one case.
+		assert "7" in text
+
+
+def test_a_nested_byte_run_is_still_declined(tmp_path: Path) -> None:
+	"""Nested is asked before byte run, exactly as the C emitter orders it.
+
+	A byte run inside a nested struct reads through that struct's own view,
+	so the dotted path is not a method name. Asking the byte-run question
+	first emitted `view.header_magic()` for `example/cpio`'s
+	`cpio_entry.header.magic` and nothing defines it.
+
+	Caught by a count that did not match -- 13 comparisons where the
+	byte-run class measured 11 -- rather than by the compiler, which is the
+	cheaper of the two places to catch it.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nstruct inner {\n\tu8 magic[2];\n}\n\n"
+		"struct s {\n\tinner head;\n\tu8 tail[2];\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text(
+		"s one 07 07 01 02\n\thead.magic = 07:07\n\ttail = 01:02\n",
+		encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+
+	# The flat one is compared; the nested one is declined, and no accessor
+	# is invented for the dotted path.
+	assert "bytes(view.tail)" in text
+	assert "head_magic" not in text
+	assert "a field inside a nested struct" in text
+
+
 def test_a_python_vector_suite_declines_four_kinds_and_says_which(
 	tmp_path: Path,
 ) -> None:

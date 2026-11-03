@@ -276,6 +276,42 @@ def comparable(resolved: ResolvedSchema, case: "Case",
 	return None
 
 
+def byte_run(resolved: ResolvedSchema, case: "Case",
+		path: str, value: str) -> bytes | None:
+	"""The bytes this expectation names, where it names a byte run.
+
+	11 of the corpus's 197 expectations are this shape, and they are the
+	class that made `example/arp` -- twenty of its twenty-eight bytes
+	addresses -- unable to state almost anything about itself before the C
+	emitter grew the form (26.35).
+
+	`_byte_run` for the count and `_hex` for the value, both the C emitter's:
+	the count comes from the layout and the spelling is the vector file's,
+	and both questions already have one answer. `_hex` is why
+	`00:1A:2B:3C:4D:5E` and `C0 A8 01 0A` are the same kind of thing here.
+	"""
+	from situc.codegen.c.vectors import _byte_run, _hex, _nested_of
+
+	# Nested first, exactly as the C emitter orders it. A byte run inside a
+	# nested struct reads through that struct's own view, so the dotted path
+	# is not a method name: asking the byte-run question first emitted
+	# `view.header_magic()` for `cpio_entry.header.magic` and nothing
+	# defines it. Caught by a count that did not match -- 13 comparisons
+	# where the byte-run class measured 11 -- rather than by the compiler.
+	if _nested_of(resolved, case.struct, path) is not None:
+		return None
+
+	count = _byte_run(resolved, case.struct, path)
+	if count is None:
+		return None
+
+	try:
+		raw = _hex(value)
+	except ValueError:
+		return None
+	return raw if len(raw) == count else None
+
+
 def declined_reason(resolved: ResolvedSchema, case: "Case",
 		path: str, value: str,
 		constants: dict[str, int] | None = None) -> str:
@@ -290,6 +326,9 @@ def declined_reason(resolved: ResolvedSchema, case: "Case",
 	if _nested_of(resolved, case.struct, path) is not None:
 		return "a field inside a nested struct, read through its own view"
 	if _byte_run(resolved, case.struct, path) is not None:
+		if byte_run(resolved, case, path, value) is None:
+			return ("a byte run whose value is not that many bytes of hex, "
+			        "so there is nothing to compare it against")
 		return "a byte run, which compares as bytes rather than as a number"
 
 	found = resolved.find(f"{case.struct}.{path}")

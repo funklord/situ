@@ -30,7 +30,7 @@ validation accepts them.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import (comparable, enum_constants,
+from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_parameters, tally)
 from situc.codegen.c.vectors import Case, _check, _symbol
 from situc.codegen.python.emit import py_name
@@ -176,10 +176,20 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 	lines: list[str] = []
 	for path, value in case.expectations:
 		literal = comparable(resolved, case, path, value, constants)
-		if literal is None:
+		raw     = byte_run(resolved, case, path, value)
+		if literal is None and raw is None:
 			continue
 		if not lines:
 			lines.append("")
+		if raw is not None:
+			# `bytes(...)` around the getter, which returns a `memoryview`:
+			# a memoryview and a bytes compare equal already, and the cast
+			# is what makes a FAILURE print the bytes rather than
+			# `<memory at 0x...>`. Section 17 again.
+			lines.append(
+				f"\t\tself.assertEqual(bytes(view.{py_name(path)}),"
+				f" bytes.fromhex(\"{raw.hex()}\"), \"{path}\")")
+			continue
 		lines.append(
 			f"\t\tself.assertEqual(view.{py_name(path)}, {literal},"
 			f" \"{path}\")")

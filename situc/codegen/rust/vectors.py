@@ -31,7 +31,7 @@ family's own rule.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import (comparable, enum_constants,
+from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_parameters, tally)
 from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
@@ -217,6 +217,19 @@ def _expectations(resolved: ResolvedSchema, enums: set[str],
 	"""
 	lines: list[str] = []
 	for path, value in case.expectations:
+		raw = byte_run(resolved, case, path, value)
+		if raw is not None:
+			if not lines:
+				lines.append("")
+			body = ", ".join(f"0x{byte:02X}" for byte in raw)
+			# `[..]` so the comparison is slice against slice: the getter
+			# returns `&[u8]` and an array literal is `[u8; N]`, which do
+			# not compare directly.
+			lines.append(
+				f"\t\tassert_eq!(view.{c_name(path)}(), &[{body}][..],"
+				f" \"{path}\");")
+			continue
+
 		literal = comparable(resolved, case, path, value, constants)
 		if literal is None or _enum_typed(resolved, enums, case, path):
 			continue
