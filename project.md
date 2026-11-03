@@ -8212,6 +8212,11 @@ Moved to
 Moved to
 `doc/decision/26.824-three-rows-for-the-advisor.md`.
 
+### 26.825 The remedies the advisor does not cost
+
+Moved to
+`doc/decision/26.825-the-remedies-the-advisor-does-not-cost.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
