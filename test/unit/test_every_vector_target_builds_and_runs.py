@@ -166,9 +166,14 @@ def test_the_python_checks_suite_runs(schema: Path, tmp_path: Path) -> None:
 			pytest.skip("gen-checks declines a schema taking an argument")
 		raise AssertionError(emitted.stderr[-700:])
 
+	# **`--layer frame` as well**, because the ninth kind's checks drive the
+	# stream reader and the suite imports `<name>_frame` where it emitted
+	# one. The frame layer is a separate artifact, so a suite built without
+	# it would fail on IMPORT rather than on a check -- the worst place for
+	# a suite to fail, since nothing it was meant to assert gets asked.
 	built = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(schema),
-		 "--target", "python", "--out", str(out)],
+		 "--target", "python", "--layer", "frame", "--out", str(out)],
 		capture_output=True, text=True, cwd=ROOT)
 	assert built.returncode == 0, built.stderr[-700:]
 	shutil.copy(ROOT / "runtime" / "python" / "situ_runtime.py", out)

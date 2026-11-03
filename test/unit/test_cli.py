@@ -233,18 +233,20 @@ def test_gen_checks_writes_a_python_bounds_suite(
 	assert "def test_header_refuses_a_short_buffer(self) -> None:" in text
 	assert "`header` needs 9 bytes; 8 must refuse." in text
 	assert "with self.assertRaises(situ_runtime.BoundsError):" in text
-	# The kinds it declines, named rather than absent. **Derived, because
-	# this assertion has now gone stale twice** -- it said "The seven" and
-	# then "The six", each time because a kind landed and the sentence was
-	# a second copy of a number nothing compared. Both the generated prose
-	# and this check read `DONE` now, and the kind that just moved sides is
-	# asserted to have moved rather than merely to appear somewhere.
-	from situc.codegen.python.checks import C_KINDS, DONE, _COUNT_WORD
+	# **All nine kinds are emitted now, so there is no declined list.**
+	# This assertion went stale three times on its way here -- "The seven",
+	# "The six", "The five" -- each time because a kind landed and the
+	# sentence was a second copy of a number nothing compared. It reads
+	# `DONE` now, and the zero case says something different rather than
+	# filling a number in: "The no `--target c` also emits" is what a count
+	# word gives for an empty list.
+	from situc.codegen.python.checks import C_KINDS, DONE
 
-	word = _COUNT_WORD[len(C_KINDS) - DONE].lower()
-	assert f"The {word} `--target c` also emits and this does not:" in text
-	_, declined = text.split("`--target c` also emits and this does not")
-	assert "a field decodes a known encoding" not in declined
+	assert DONE == len(C_KINDS), "a kind was added or removed"
+	assert "All nine, so nothing is left out at the level of KINDS." in text
+	assert "also emits and this does not" not in text
+	# The finer claim is the one with content left: a kind emitted for some
+	# members and not others says so per member.
 	assert "a byte-aligned field decodes a known encoding" in text
 
 
@@ -776,6 +778,67 @@ def test_gen_checks_leaves_an_enum_that_passes_unknowns_alone(
 	assert "Not enforced here: `s.k`" not in text
 
 
+def test_gen_checks_frames_a_stream_at_every_boundary(
+	tmp_path: Path,
+) -> None:
+	"""The ninth kind, which completes the nine.
+
+	Two checks per framed struct, and **the pair is what discriminates**: a
+	reader announcing a message on every push would satisfy "two whole
+	messages arrive" and fail the stream a byte short, and one announcing
+	nothing would pass the short case and fail the whole one.
+
+	The loop is bounded by the ANSWER rather than by the reader -- a reader
+	announcing a message every time would otherwise spin for ever, and a
+	test that hangs is worse than one that fails, so the third message
+	being impossible makes seeing it the failure.
+
+	**The controls, which took three attempts and the first two are the
+	instructive ones.** Making `advance()` a no-op fails all 50 reassemble
+	checks over 31 schemas and leaves the partial arm green -- the pair
+	separating exactly as designed. Neutering the reader's own
+	`if need > len(self._buf)` fails NOTHING, and so does neutering
+	`required`'s floor: the two refuse the same condition, so each is the
+	other's backup and no single mutation can show that arm live. Breaking
+	both fails all 50 partial checks. A redundant guard makes a mutation
+	score read low for a check that is perfectly alive.
+
+	The frame module is imported only where a framing check was emitted:
+	the frame layer is a separate artifact (`build --layer frame`), so
+	importing it always would make every suite depend on a file the caller
+	may not have asked for. `--target c` appends its header the same way.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert "import header_frame" in text
+	assert "def test_header_reader_reassembles_across_every_boundary(" in text
+	assert "def test_header_reader_yields_nothing_from_a_partial_message(" in text
+	assert "reader = header_frame.header_reader()" in text
+	# Bounded by the answer: `seen <= 2` and not by what the reader says.
+	assert "while seen <= 2:" in text
+	assert "with self.assertRaises(situ_runtime.TruncatedError):" in text
+
+
+def test_gen_checks_imports_no_frame_module_it_does_not_use(
+	tmp_path: Path,
+) -> None:
+	"""A schema with nothing framable imports no frame module.
+
+	`register` structs are bus transactions rather than bytes off a wire,
+	so `framed_structs` yields none and the suite would otherwise import a
+	module the caller never generated -- failing on import rather than on
+	a check, which is the worst place for a suite to fail.
+	"""
+	assert main(["gen-checks", "example/register/register.situ",
+	             "--target", "python", "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "register_checks.py").read_text(encoding="ascii")
+
+	assert "_frame" not in text
+	assert "reader_reassembles" not in text
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had
@@ -792,11 +855,15 @@ def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
 
 	assert f"**{_COUNT_WORD[DONE]} of the nine kinds" in text
-	emitted, declined = text.split("`--target c` also emits and this does not")
-	assert emitted.count("\n  - ") == DONE, emitted
-	assert declined.count("\n  - ") == len(C_KINDS) - DONE, declined
-	for kind in C_KINDS[DONE:]:
-		assert kind in declined
+	# With nothing declined there is no divider to split on, so the count
+	# is taken from the bullet list that remains -- and it must still be
+	# one bullet per kind.
+	preamble = text.split('"""')[1]
+	assert preamble.count("\n  - ") == DONE, preamble
+	if DONE < len(C_KINDS):
+		_, declined = text.split("`--target c` also emits and this does not")
+		for kind in C_KINDS[DONE:]:
+			assert kind in declined
 
 
 def test_gen_tests_writes_a_rust_vector_suite(

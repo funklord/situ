@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.843 The ninth kind, and the guard that is its own backup
+
+Moved to
+`doc/decision/26.843-the-ninth-kind-and-the-guard-that-is-its-own-backup.md`.
+
 ### 26.842 The eighth kind, and the escape hatch that needs no check
 
 Moved to
