@@ -8169,6 +8169,11 @@ Moved to
 Moved to
 `doc/decision/26.821-three-more-backends-wrote-the-parameter.md`.
 
+### 26.822 The advisor is complete, and the aim is wider than its catalog
+
+Moved to
+`doc/decision/26.822-the-advisor-is-complete-and-the-aim-is-wider.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
