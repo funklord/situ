@@ -33,9 +33,8 @@ from __future__ import annotations
 from situc import __version__, ast
 from situc.codegen import (byte_run, comparable, enum_constants,
                            refuse_parameters, tally)
-from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
-from situc.codegen.rust.emit import _pascal
+from situc.codegen.rust.emit import _ident, _pascal
 from situc.resolve import ResolvedSchema
 
 
@@ -77,21 +76,34 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# of these needs to be told which (26.828's shape, met in a reason
 	# string rather than a claim).
 	enums     = {decl.name for decl in schema.enums()}
+	variants  = _variants(schema)
 	constants = enum_constants(schema, prefix)
 	compared, declined = tally(resolved, cases, constants)
 	for case in cases:
 		for path, value in case.expectations:
-			if (comparable(resolved, case, path, value, constants) is not None
-			    and _enum_typed(resolved, enums, case, path)):
+			literal = comparable(resolved, case, path, value, constants)
+			if literal is None or not _enum_typed(resolved, enums, case, path):
+				continue
+			# An enum-typed field is comparable after all, against the
+			# VARIANT rather than the number: the getter returns
+			# `Option<T>`, so `Some(PacketId::Out)` is the right-hand side
+			# and the number is how we find which variant that is. Where
+			# the value names no variant the getter would return `None`,
+			# which is a vector claiming a value the enum does not have --
+			# declined rather than asserted, since `None` is what a wrong
+			# vector and an unknown value look like alike.
+			if _variant_of(basename, resolved, variants, case, path,
+			               literal) is None:
 				compared -= 1
-				why = ("an enum-typed field, whose Rust getter returns"
-				       " `Option<T>` rather than an integer")
+				why = ("an enum-typed field whose value names no variant,"
+				       " where the Rust getter returns `None`")
 				declined[why] = declined.get(why, 0) + 1
 
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
-		lines.extend(_case_body(basename, resolved, enums, constants, case))
+		lines.extend(_case_body(basename, resolved, enums, variants,
+		                        constants, case))
 
 	lines.append("}")
 	return "\n".join(lines) + "\n"
@@ -186,7 +198,59 @@ def _enum_typed(resolved: ResolvedSchema, enums: set[str],
 	return found is not None and found.placement.type_name in enums
 
 
+def _variants(schema: ast.Schema) -> dict[str, dict[int, str]]:
+	"""Each enum's members by value, for the variant a number names.
+
+	Keyed on the value rather than the name because that is the question an
+	expectation asks: a vector gives `0x2D` or `SITU_PACKET_ID_SETUP`, both
+	of which resolve to a number, and the Rust right-hand side needs
+	`PacketId::Setup`.
+	"""
+	found: dict[str, dict[int, str]] = {}
+	for decl in schema.enums():
+		by_value: dict[int, str] = {}
+		for member in decl.members:
+			value = getattr(member.value, "value", None)
+			if isinstance(value, int) and value not in by_value:
+				by_value[value] = member.name
+		found[decl.name] = by_value
+	return found
+
+
+def _variant_of(basename: str, resolved: ResolvedSchema,
+		variants: dict[str, dict[int, str]],
+		case: Case, path: str, literal: str) -> str | None:
+	"""`Some(crate::usb::PacketId::Setup)` for a field and a number, or None.
+
+	Qualified by the module, as the view beside it is. Unqualified gave
+	`error[E0433]: failed to resolve: use of undeclared type PacketId` for
+	eight of the corpus's schemas: the cases live in `mod vectors` and the
+	generated module is a sibling, so nothing of its is in scope by its bare
+	name. Caught by the corpus gate compiling the output, which is the only
+	thing that could have.
+	"""
+	found = resolved.find(f"{case.struct}.{path}")
+	if found is None:
+		return None
+
+	members = variants.get(found.placement.type_name)
+	if members is None:
+		return None
+
+	try:
+		number = int(literal, 0)
+	except ValueError:
+		return None
+
+	name = members.get(number)
+	if name is None:
+		return None
+	return (f"Some(crate::{basename}::"
+	        f"{_pascal(found.placement.type_name)}::{_pascal(name)})")
+
+
 def _case_body(basename: str, resolved: ResolvedSchema, enums: set[str],
+		variants: dict[str, dict[int, str]],
 		constants: dict[str, int], case: Case) -> list[str]:
 	name = _symbol(case)
 	body = ", ".join(f"0x{byte:02X}" for byte in case.data)
@@ -202,13 +266,14 @@ def _case_body(basename: str, resolved: ResolvedSchema, enums: set[str],
 		"",
 		f"\t\tview.validate()",
 		f"\t\t\t.expect(\"`{case.name}` must validate\");",
-		*_expectations(resolved, enums, constants, case),
+		*_expectations(basename, resolved, enums, variants, constants, case),
 		"\t}",
 		"",
 	]
 
 
-def _expectations(resolved: ResolvedSchema, enums: set[str],
+def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
+		variants: dict[str, dict[int, str]],
 		constants: dict[str, int], case: Case) -> list[str]:
 	"""What the vector says about each field, where this target can say it.
 
@@ -227,16 +292,29 @@ def _expectations(resolved: ResolvedSchema, enums: set[str],
 			# returns `&[u8]` and an array literal is `[u8; N]`, which do
 			# not compare directly.
 			lines.append(
-				f"\t\tassert_eq!(view.{c_name(path)}(), &[{body}][..],"
+				f"\t\tassert_eq!(view.{_ident(path)}(), &[{body}][..],"
 				f" \"{path}\");")
 			continue
 
 		literal = comparable(resolved, case, path, value, constants)
-		if literal is None or _enum_typed(resolved, enums, case, path):
+		if literal is None:
 			continue
+
+		right = literal
+		if _enum_typed(resolved, enums, case, path):
+			variant = _variant_of(basename, resolved, variants, case, path,
+			                      literal)
+			if variant is None:
+				continue
+			right = variant
+
 		if not lines:
 			lines.append("")
+		# `_ident` and not `c_name`: a field called `type` is a Rust keyword
+		# and its accessor is `r#type`, which the Rust backend escapes and
+		# the C name function knows nothing about. `test/schema/header` has
+		# one, and it was the last of eight schemas this broke.
 		lines.append(
-			f"\t\tassert_eq!(view.{c_name(path)}(), {literal},"
+			f"\t\tassert_eq!(view.{_ident(path)}(), {right},"
 			f" \"{path}\");")
 	return lines

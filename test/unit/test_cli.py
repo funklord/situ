@@ -384,20 +384,15 @@ def test_a_rust_vector_suite_says_what_it_does_not_compare(
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
 
-	# Two compared -- the scalar and the byte run -- and one declined, with
-	# both halves of the count said: a bare "not compared" number overstates
-	# what is missing, and a bare "compared" number overstates what is
-	# covered.
-	assert "2 field expectation(s) are compared" in text
+	# All three compared now: the scalar, the byte run, and the enum field
+	# against its variant rather than its number. The assertions moved with
+	# the behaviour, which is the third time in this run these fixtures have
+	# had to -- each time because a class stopped being declined.
+	assert "3 field expectation(s) are compared" in text
 	assert 'assert_eq!(view.a(), 1, "a");' in text
 	assert 'assert_eq!(view.run(), &[0x03, 0x04][..], "run");' in text
-	assert "1 are NOT compared" in text
-	assert "`situc gen-tests --target c` compares them" in text
-
-	# And the reason is Rust's own veto rather than the shared classifier's:
-	# the obstacle is the getter's type, not the value's spelling.
-	assert "whose Rust getter returns `Option<T>`" in text
-	assert 'view.k()' not in text
+	assert 'assert_eq!(view.k(), Some(crate::unit::Kind::One), "k");' in text
+	assert "NOT compared" not in text
 
 
 def test_a_python_vector_suite_compares_a_scalar_expectation(
@@ -437,9 +432,10 @@ def test_a_vector_suite_resolves_a_c_enum_constant_to_its_number(
 
 	18 of the corpus's 197 expectations were this shape and were the largest
 	class no target could compare. Resolving them took Python and C++ from
-	142 to 159. Rust gains none, and correctly: every one of the 18 is on an
-	enum-typed field, whose Rust getter returns `Option<T>` whatever the
-	right-hand side says.
+	142 to 159. Rust gained none AT THE TIME, every one of the 18 being on an
+	enum-typed field whose getter returns `Option<T>`; it compares them now
+	against the variant the number names, which is the commit after this
+	one's.
 
 	The mapping is built by asking `names.macro` for each member's constant
 	rather than by taking the constant apart. Guessing at `SITU_` plus an
@@ -463,14 +459,15 @@ def test_a_vector_suite_resolves_a_c_enum_constant_to_its_number(
 	assert "SITU_KIND_TWO" not in text
 	assert "2 field expectation(s) are compared" in text
 
-	# And Rust declines it, because the getter's type is the obstacle rather
-	# than the value's spelling.
+	# And Rust compares it too, against the variant the number names: the
+	# getter returns `Option<T>`, so the number tells us WHICH variant
+	# rather than being the right-hand side itself.
 	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
 	             "--out", str(tmp_path)]) == 0
 	rust = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
 	assert 'assert_eq!(view.plain(), 7, "plain")' in rust
-	assert "view.k()" not in rust
-	assert "whose Rust getter returns `Option<T>`" in rust
+	assert 'Some(crate::unit::Kind::Two)' in rust
+	assert "SITU_KIND_TWO" not in rust
 
 
 def test_a_vector_suite_compares_a_byte_run(tmp_path: Path) -> None:
@@ -580,6 +577,62 @@ def test_a_nested_byte_run_is_not_named_as_a_flat_one(tmp_path: Path) -> None:
 	assert "view.tail()" in text
 	assert "head_magic" not in text
 	assert "a field inside a nested struct" in text
+
+
+def test_rust_compares_an_enum_field_against_its_variant(
+	tmp_path: Path,
+) -> None:
+	"""An enum-typed field's Rust getter returns `Option<T>`, so the number
+	is not the right-hand side -- the variant is, and the number is how we
+	find which. 18 of the corpus's 197 expectations.
+
+	Two things the corpus gate caught that nothing else could, both from
+	compiling the output:
+
+	- the type needs qualifying by its module. Unqualified gave
+	  `error[E0433]: use of undeclared type PacketId` for eight schemas,
+	  the cases living in `mod vectors` with the generated module a sibling.
+	- the accessor needs the Rust backend's own `_ident`, not `c_name`. A
+	  field called `type` is a keyword and its accessor is `r#type`, which
+	  `test/schema/header` has and which was the last schema this broke.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nenum kind : u8 { setup = 45, out = 225, }\n\n"
+		"struct s {\n\tkind type;\n\tu8 n;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text("s one 2D 07\n\ttype = 0x2D\n\tn = 7\n",
+	                   encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
+
+	# Qualified, and through the raw identifier a keyword needs.
+	assert ('assert_eq!(view.r#type(), Some(crate::unit::Kind::Setup), '
+	        '"type");') in text
+	assert "2 field expectation(s) are compared" in text
+
+
+def test_rust_declines_an_enum_value_that_names_no_variant(
+	tmp_path: Path,
+) -> None:
+	"""Where the value names no variant the getter returns `None`, and that
+	is what a wrong vector and an unknown value look like alike. Declined
+	rather than asserted, with the reason saying which."""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nenum kind : u8 { setup = 45, default = pass, }\n\n"
+		"struct s {\n\tkind k;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text("s one 63\n\tk = 0x63\n", encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
+
+	assert "view.k()" not in text
+	assert "names no variant" in text
 
 
 def test_python_compares_a_text_number_and_a_negative(
