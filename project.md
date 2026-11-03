@@ -8174,6 +8174,11 @@ Moved to
 Moved to
 `doc/decision/26.822-the-advisor-is-complete-and-the-aim-is-wider.md`.
 
+### 26.823 The derived codecs are fuzzed by nothing
+
+Moved to
+`doc/decision/26.823-the-derived-codecs-are-fuzzed-by-nothing.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to
