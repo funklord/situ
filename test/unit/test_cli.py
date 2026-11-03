@@ -460,6 +460,85 @@ def test_gen_checks_declines_an_encoding_it_cannot_decode_itself(
 	assert "test_s_digits_decodes_a_known_encoding" not in text
 
 
+def test_gen_checks_locates_a_nested_member_in_its_parent(
+	tmp_path: Path,
+) -> None:
+	"""The fifth kind, and it closes a hole found by mutation testing.
+
+	A nested struct's interior is checked thoroughly -- but under its own
+	struct's section, against a buffer where it begins at zero. That says
+	nothing about where the parent puts it, and moving every nested member
+	one byte late passed the whole `--target c` suite, because each nested
+	field still agreed with every other nested field.
+
+	**Measured here too**: making the Python emitter's fixed-size nested
+	accessor start one byte late fails 20 checks across 12 of the corpus's
+	42 schemas, and every one of the 20 is this kind. The four before it
+	catch none of it.
+
+	`_at` is the view's absolute offset, so the subtraction is the
+	parent-relative start -- the quantity `--target c` reads as
+	`inner.base - view.base`. One assertion rather than a re-derivation,
+	because recomputing the offset from the parent would be asking the
+	emitter what it thinks twice.
+
+	This kind needed no exclusion the corpus had to find, which breaks the
+	run of the four before it for a reason worth knowing: the exclusions
+	were copied from `--target c`, which had already paid for every one of
+	them.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert "_starts_where_the_map_says" in text
+	assert "inner._at - view._at" in text
+	assert "# The map's offset, measured from the parent rather than" in text
+
+
+def test_gen_checks_locates_nothing_it_has_no_sub_view_for(
+	tmp_path: Path,
+) -> None:
+	"""A scalar member is not a nested struct, and a run is not one either
+	however few elements it has.
+
+	The run case is the one worth a test: it reaches its elements through an
+	`_at` of its own rather than a property, so there is nothing to locate
+	and the two kinds above already hold its bytes. `--target c` excluded it
+	for the wrong reason first -- a false `array_count = 1` -- and this
+	carries the right one.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct inner {\n\tu16  v;\n}\n\n"
+		"struct outer {\n\tu8     n [max = 4];\n"
+		"\tinner  one;\n\tinner  many[n];\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "test_outer_one_starts_where_the_map_says" in text
+	assert "test_outer_many_starts_where_the_map_says" not in text
+	assert "test_outer_n_starts_where_the_map_says" not in text
+
+	# **And a decline past the scalar test is NAMED.** 35 of the corpus's 72
+	# nested members can be located and 37 cannot, so a suite that said
+	# nothing would have a reader take the 35 for all of them -- which is
+	# the argument the preamble already makes about the four kinds this
+	# backend does not emit, applied inside a kind.
+	# `many[n]` is driven by `n`, so the reason given is its extent rather
+	# than its arrayness -- the more specific of the two branches, and the
+	# one a reader needs.
+	assert ("# Not located: `outer.many`, because its extent is driven by"
+	        " another member") in text
+	# A scalar member is not a nested struct and gets no line, since there
+	# is nothing a reader could mistake for a located nested struct.
+	assert "Not located: `outer.n`" not in text
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had

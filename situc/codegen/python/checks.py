@@ -30,7 +30,7 @@ from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import own_entries
+from situc.traverse import has_computable_extent, own_entries
 from situc.types import ScalarKind
 
 #: The nine kinds `--target c` emits, so the generated file can name the
@@ -80,6 +80,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			lines.extend(_occupies(basename, struct, entry.placement))
 			lines.extend(_round_trip(basename, enums, struct, entry))
 			lines.extend(_decodes(basename, enums, struct, entry.placement))
+			lines.extend(_nested_start(basename, resolved, struct,
+			                           entry.placement))
 
 	lines.extend([
 		"",
@@ -130,7 +132,7 @@ _COUNT_WORD = ("no", "One", "Two", "Three", "Four", "Five",
 #: The kinds this backend emits: the first `DONE` of `C_KINDS`. One number,
 #: so adding a kind moves the sentence, the emitted list and the declined
 #: list together.
-DONE = 4
+DONE = 5
 
 
 def _preamble(basename: str, structs: int) -> list[str]:
@@ -165,6 +167,12 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"    is computed with `int.from_bytes`, which is the standard",
 		"    library and not the backend's own read path -- so the check is",
 		"    independent of the thing it checks.",
+		"  - a nested struct starts where the map says it does, measured",
+		"    from the parent. Its interior is checked under its own",
+		"    struct, against a buffer where it begins at zero, which says",
+		"    nothing about where the parent puts it: mutation testing of",
+		"    `--target c` moved every nested member one byte late and that",
+		"    whole suite still passed.",
 		"",
 		f"The {_COUNT_WORD[len(C_KINDS) - DONE].lower()} `--target c` also emits and this does not:",
 		"",
@@ -185,6 +193,86 @@ def _preamble(basename: str, structs: int) -> list[str]:
 		"",
 		"",
 		"class Checks(unittest.TestCase):",
+	]
+
+
+def _nested_start(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct, placement: Placement) -> list[str]:
+	"""Where a nested struct sits inside its parent.
+
+	**The hole this closes is specific and was found by mutation testing in
+	`--target c`**: a nested struct's interior is checked thoroughly, but
+	under its own struct's section, against a buffer where it begins at
+	zero. Moving every nested member one byte late passed that whole suite,
+	because each nested field still agreed with every other nested field.
+	Only this says where the PARENT puts it.
+
+	`_at` is the view's absolute offset in the message, so the subtraction
+	is the parent-relative start -- the same quantity C reads as
+	`inner.base - view.base`, and the reason this is one assertion rather
+	than a re-derivation: recomputing the offset from the parent would be
+	asking the emitter what it thinks twice.
+	"""
+	if placement.kind != "field" or placement.type_name is None:
+		return []
+	nested = resolved.structs.get(placement.type_name)
+	if nested is None:
+		return []		# a scalar member; the two kinds above hold those
+
+	# **Past here the member IS a nested struct, so a decline is named.**
+	# 35 of the corpus's 72 nested members can be located and 37 cannot,
+	# and a reader of a suite that said nothing would take the 35 for all
+	# of them -- which is the argument the preamble already makes about the
+	# four kinds this backend does not emit, applied inside a kind. The
+	# skip is a comment rather than a failing test because each reason is
+	# the map being right.
+	offset_bits = placement.offset_bits
+	reason: str | None = None
+	if offset_bits is None:
+		reason = "its offset is one the message decides"
+	elif placement.array_count is not None:
+		reason = "it is an array, whose elements the two kinds above hold"
+	elif placement.repeat_while is not None or placement.delimiters:
+		reason = "it is a run, reached through an `at` rather than a property"
+	elif placement.sized_by is not None:
+		reason = "its extent is driven by another member"
+	elif placement.sealed_by is not None:
+		reason = "it is reached through a gate, which has its own checks"
+	elif offset_bits % BITS_PER_BYTE:
+		reason = "it does not start on a byte"
+	elif not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
+		reason = f"`{struct.name}` has no byte extent to acquire"
+	elif not nested.layout.is_fixed_size \
+			and not has_computable_extent(resolved.structs, nested):
+		reason = ("its type cannot be measured from its own bytes, so there"
+		          " is no sub-view accessor")
+	if reason is not None:
+		return [f"	# Not located: `{placement.path}`, because {reason}.",
+		        ""]
+	assert offset_bits is not None, "the None case is named above"
+
+	size   = struct.layout.size_bytes
+	offset = offset_bits // BITS_PER_BYTE
+	member = py_name(placement.name)
+	name   = py_name(f"{struct.name}_{placement.name}")
+	return [
+		f'	def test_{name}_starts_where_the_map_says(self) -> None:',
+		f'		"""`{placement.path}` starts {offset} byte(s) into'
+		f' `{struct.name}`."""',
+		f"		raw = bytearray({size})",
+		f"		msg = situ_runtime.Message(raw)",
+		f"		view = {basename}.{py_name(struct.name)}.at(msg, 0"
+		+ ("" if struct.layout.is_fixed_size else f", {size}") + ")",
+		"",
+		f"		inner = view.{member}",
+		"",
+		f"		# The map's offset, measured from the parent rather than",
+		f"		# recomputed from it. Its own fields are checked under its",
+		f"		# own struct, where it begins at zero; only this says where",
+		f"		# the parent actually puts it.",
+		f"		self.assertEqual(inner._at - view._at, {offset},",
+		f'			"{placement.path} does not start where the map says")',
+		"",
 	]
 
 

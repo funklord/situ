@@ -8254,6 +8254,11 @@ Moved to
 Moved to
 `doc/decision/26.833-a-tlv-tag-ignores-its-struct-s-byte-order-marker.md`.
 
+### 26.834 The check that locates a nested member
+
+Moved to
+`doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
+
 ### 26.835 The map does not say a region's order is in the data
 
 Moved to
