@@ -233,10 +233,19 @@ def test_gen_checks_writes_a_python_bounds_suite(
 	assert "def test_header_refuses_a_short_buffer(self) -> None:" in text
 	assert "`header` needs 9 bytes; 8 must refuse." in text
 	assert "with self.assertRaises(situ_runtime.BoundsError):" in text
-	# The seven it declines, named rather than absent -- and the count moved
-	# when the claimed-byte kind landed, which is the entry saying so.
-	assert "The six `--target c` also emits and this does not:" in text
-	assert "a field decodes a known encoding" in text
+	# The kinds it declines, named rather than absent. **Derived, because
+	# this assertion has now gone stale twice** -- it said "The seven" and
+	# then "The six", each time because a kind landed and the sentence was
+	# a second copy of a number nothing compared. Both the generated prose
+	# and this check read `DONE` now, and the kind that just moved sides is
+	# asserted to have moved rather than merely to appear somewhere.
+	from situc.codegen.python.checks import C_KINDS, DONE, _COUNT_WORD
+
+	word = _COUNT_WORD[len(C_KINDS) - DONE].lower()
+	assert f"The {word} `--target c` also emits and this does not:" in text
+	_, declined = text.split("`--target c` also emits and this does not")
+	assert "a field decodes a known encoding" not in declined
+	assert "a byte-aligned field decodes a known encoding" in text
 
 
 def test_gen_checks_holds_a_field_to_its_claimed_bytes(
@@ -378,6 +387,100 @@ def test_gen_checks_skips_a_register_and_a_zero_minimum(
 	assert "refuses_a_short_buffer" not in text
 	assert "test_nothing_here_has_a_minimum" in text
 	assert "every struct is a register, or its minimum is zero" in text
+
+
+def test_gen_checks_holds_a_field_to_a_known_encoding(
+	tmp_path: Path,
+) -> None:
+	"""The fourth kind, and the first to ask what the bytes MEAN.
+
+	The three before it ask where a value lives and whether writing it
+	disturbs anything; none of them reads the byte order, the width or the
+	signedness, which is the part of the map a reader most takes on trust.
+
+	**Measured, because the claim is about what the other kinds miss**:
+	inverting the emitter's byte order (`_order`, which returns the `big=`
+	argument) fails 129 checks over 26 of the corpus's 42 schemas, and every
+	one of the 129 is this kind. The other three stay green, being
+	structurally blind to it.
+
+	The expectation is computed with `int.from_bytes` at generation time --
+	the standard library, not the rule the accessor reads with -- so an
+	emitter with the order backwards cannot produce a getter and an
+	expectation that agree.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert "def test_header_length_decodes_a_known_encoding" in text
+	# `header.length` is 16 bits, big-endian, at bit 24. The pattern is
+	# `PROBE_BYTES`, shared with `--target c` so the two backends ask one
+	# question: 0x8123 = 33059.
+	assert 'bytes.fromhex("8123")' in text
+	assert "self.assertEqual(view.length, 33059," in text
+	assert "# computed by `int.from_bytes` -- the standard library," in text
+
+
+def test_gen_checks_declines_an_encoding_it_cannot_decode_itself(
+	tmp_path: Path,
+) -> None:
+	"""Two exclusions, both of which the corpus found by failing.
+
+	**BCD.** `int.from_bytes` is the independent implementation only of a
+	plain integer. `example/rtc` holds its year as packed decimal, so the
+	byte 0x81 means 81 -- the getter said 81, this check demanded 129, and
+	the getter was right. The test is a whitelist of `UINT` and `SINT` with
+	no fractional bits rather than a list of kinds to skip, so a scalar kind
+	added later declines until somebody writes its decoder.
+
+	**A byte order resolved at run time.** `example/tiff`'s first two bytes
+	say which order the rest of the file uses, so the resolved placement
+	carries `endian=None` and the order is a value the accessor computes.
+	The first version of this asked `"big" if endian is BIG else "little"`
+	-- true of the two cases that motivated it, and it absorbed that third
+	state into the `little` arm, so the check failed against an accessor
+	reading correctly. Asked positively now: anything but `BIG` or `LITTLE`
+	declines.
+
+	That the sabotage above leaves `tiff` green is the same fact from the
+	other side -- its order never passes through `_order`.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct s {\n\tu16   plain;\n\tbcd2  digits;\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
+
+	assert "test_s_plain_decodes_a_known_encoding" in text
+	assert "test_s_digits_decodes_a_known_encoding" not in text
+
+
+def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
+	"""The sentence naming how many kinds this backend emits, and the list
+	it counts, were two values with nothing comparing them -- and they had
+	already disagreed: "Two of the nine kinds" over a list of three.
+
+	Derived from `DONE` now, and this holds the derivation to the lists: the
+	count word, the number of bullets above the divider, and the number of
+	kinds named as declined.
+	"""
+	from situc.codegen.python.checks import C_KINDS, DONE, _COUNT_WORD
+
+	assert main(["gen-checks", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.py").read_text(encoding="ascii")
+
+	assert f"**{_COUNT_WORD[DONE]} of the nine kinds" in text
+	emitted, declined = text.split("`--target c` also emits and this does not")
+	assert emitted.count("\n  - ") == DONE, emitted
+	assert declined.count("\n  - ") == len(C_KINDS) - DONE, declined
+	for kind in C_KINDS[DONE:]:
+		assert kind in declined
 
 
 def test_gen_tests_writes_a_rust_vector_suite(

@@ -24,7 +24,7 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
-from situc.codegen import argued_sides, arguments, refuse_parameters
+from situc.codegen import PROBE_BYTES, argued_sides, arguments, refuse_parameters
 from situc import __version__
 
 import re
@@ -1855,12 +1855,6 @@ def resolve_element_struct(placement: Placement) -> str | None:
 	"""The struct name an array's elements have, or None if they are not one."""
 	name = placement.type_name
 	return name if name and placement.scalar is None else None
-
-
-#: Distinct bytes, top bit set in the first. Distinct so any permutation of the
-#: field's bytes is a different value; top bit set so a getter that forgot to
-#: sign-extend returns something else.
-PROBE_BYTES = (0x81, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF)
 
 
 def _bcd_probe(digits: int) -> tuple[int, int]:

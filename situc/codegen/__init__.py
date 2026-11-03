@@ -212,6 +212,18 @@ def argued_refusal(relation: ast.Relation, resolved: ResolvedSchema,
 #: was the LAST expectation in the corpus that nothing compared -- one of
 #: 197, found by asking which one remained rather than by assuming the tail
 #: was empty. All four languages read `-23`.
+#: The bytes a conformance check writes to ask what a field's bytes MEAN.
+#:
+#: Distinct, so any permutation of the field's bytes is a different value;
+#: top bit set in the first, so a getter that forgot to sign-extend returns
+#: something else.
+#:
+#: Shared because two backends now write it, and a probe pattern that
+#: differed between them would make the same question two questions. The C
+#: backend defined it first and this is that definition, moved.
+PROBE_BYTES = (0x81, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF)
+
+
 INT_LITERAL = re.compile(r"(-?0[xX][0-9a-fA-F]+|-?\d+)[uUlL]*\Z")
 
 
