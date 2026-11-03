@@ -5395,12 +5395,22 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			 *
 			 * Guarded on the stride because the row grew the field at
 			 * 26.577 and an older image does not carry it. */
-			if (image->struct_stride >= 20u) {
+			if (image->struct_stride >= 20u
+			                && table_row(image->indexes,
+			                             image->index_count,
+			                             image->index_stride, index) == NULL) {
 				const uint8_t *row = image->structs
 				                     + held.type_struct
 				                       * image->struct_stride;
 				const uint32_t floor = u32_at(row + 16);
 
+				/* **Not an indexed region.** `type_struct` there is the
+				 * ELEMENT's type and `wide` is the whole region's extent,
+				 * so comparing them asks whether the region is at least
+				 * one element long -- which is false for an empty table
+				 * and says nothing about validity. A 16-byte frame
+				 * declaring 0 cells was refused as BOUNDS where every
+				 * other reader passes it. */
 				if (floor != SITU_WALK_NONE && wide < floor) {
 					record(why, index, SITU_WALK_NO_CHECK);
 					*verdict = SITU_WALK_BOUNDS;
