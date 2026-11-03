@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.849 The pin a number cannot break, and the buffer that was too small
+
+Moved to
+`doc/decision/26.849-the-pin-a-number-cannot-break-and-the-buffer-that-was-too-small.md`.
+
 ### 26.848 The placeholder that reached three consumers
 
 Moved to

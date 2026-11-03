@@ -699,16 +699,28 @@ def test_gen_checks_enforces_a_pinned_value(tmp_path: Path) -> None:
 	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
 
 
-def test_gen_checks_declines_a_pin_a_number_cannot_break(
+def test_gen_checks_breaks_a_pinned_run_by_construction(
 	tmp_path: Path,
 ) -> None:
-	"""A pin on a byte RUN is not broken by adding one to anything.
+	"""A pin on a byte RUN is broken by a byte that begins none of its
+	alternatives, not by adding one to anything.
 
 	`[must_eq = "BM"]` has no integer to increment, and a schema admitting
-	several alternatives needs a byte outside every one of them -- which is
-	`--target c`'s pinned-run body and is not ported yet. 18 of the
-	corpus's 67 pins are of this kind, so declining them silently would
-	leave a reader of 40 checks believing all 67 were asked.
+	several needs a byte outside every one of them -- so the first byte of
+	every admitted pin is collected and a byte beginning none of them is
+	written at the run's start. Wrong for every pin the schema admits, and
+	still wrong for one nobody has written yet.
+
+	`--target c` records why that beats writing all-ones: all-ones is right
+	for `\r\n` by luck and vacuous for a preamble pinned to 0xffff.
+
+    This target declined 18 of the corpus's 67 pins until it landed, so a
+	reader of 40 checks had 67 pins in mind. 11 of the 18 are checked now
+	and the rest are declined by name -- an arm this cannot select, a
+	schema admitting every first byte, or no satisfiable baseline.
+
+	**Measured**: neutralising the emitter's pinned-run check fails exactly
+	those 11 across 7 schemas, and nothing else.
 	"""
 	schema = tmp_path / "unit.situ"
 	schema.write_text(
@@ -720,9 +732,11 @@ def test_gen_checks_declines_a_pin_a_number_cannot_break(
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_checks.py").read_text(encoding="ascii")
 
-	assert "Not enforced here: `s.sig`" in text
-	assert "which a number cannot break" in text
-	assert "test_s_sig_must_eq_is_enforced" not in text
+	assert "def test_s_sig_must_eq_is_enforced" in text
+	# "BM" begins with 0x42, so 0x00 begins none of the pins.
+	assert "# s.sig is pinned to 424d; the byte below" in text
+	assert "raw[0] = 0x00" in text
+	assert "with self.assertRaises(situ_runtime.ConstraintError):" in text
 
 
 def test_gen_checks_rejects_a_value_no_enum_member_names(

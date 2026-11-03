@@ -26,9 +26,11 @@ from typing import Literal
 from situc import __version__, ast
 from situc.capability import Axis
 from situc.codegen import (CHECK_KINDS, PROBE_BYTES, arguments,
+                           buffer_size,
                            digit_pattern, passes_unknown, placed_bytes,
                            refuse_parameters, required_pattern,
-                           required_run, reserved_policy, selected_arms)
+                           required_run, reserved_policy,
+                           selected_arms)
 from situc.codegen.c.frame import framed_structs
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
@@ -410,6 +412,72 @@ def _prelude(resolved: ResolvedSchema, struct: ResolvedStruct,
 	return lines
 
 
+def _pinned_run(basename: str, resolved: ResolvedSchema,
+		struct: ResolvedStruct, placement: Placement,
+		extent: int) -> list[str]:
+	"""A pinned byte run, broken by a byte that begins none of its pins.
+
+	18 of the corpus's 67 pins are runs and all four backends declined
+	them until this landed, so a reader of 40 checks had 67 pins in mind.
+	`None` where the run does not start on a byte, or where the schema has
+	taken all 256 first bytes -- a check that cannot break its subject is
+	worse than none.
+	"""
+	runs = required_run(placement, every=True)
+	if not runs or placement.offset_bits is None:
+		return []
+	if placement.offset_bits % BITS_PER_BYTE:
+		return []
+	if inside_an_unresolved_arm(struct, placement):
+		return []
+
+	at = placement.offset_bits // BITS_PER_BYTE
+	if at >= extent:
+		return []
+
+	taken = {run[0] for run in runs if run}
+	wrong = next((one for one in range(256) if one not in taken), None)
+	if wrong is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because the"
+		        " schema admits every first byte, so no", "\t# byte breaks"
+		        " the pin.", ""]
+
+	prelude = _prelude(resolved, struct, placement, extent)
+	if prelude is None:
+		return [f"\t# Not enforced here: `{placement.path}`, because no"
+		        " buffer carrying it with every other constraint",
+		        "\t# satisfied can be built, so breaking it would prove"
+		        " nothing.", ""]
+
+	shown = ", ".join(run.hex() or "(empty)" for run in runs)
+	name  = py_name(f"{struct.name}_{placement.name}")
+	return [
+		f"\tdef test_{name}_must_eq_is_enforced(self) -> None:",
+		f'\t\t"""`{placement.path}` is pinned to {shown}.',
+		"",
+		"\t\tMalleability control rather than pedantry (section 8.8): a",
+		"\t\tvalue the schema does not admit has to be refused on",
+		'\t\tparse."""',
+		f"\t\traw = bytearray({extent})",
+		"\t\tmsg = situ_runtime.Message(raw)",
+		f"\t\tview = {basename}.{py_name(struct.name)}.at(msg, 0"
+		+ ("" if struct.layout.is_fixed_size else f", {extent}") + ")",
+		"",
+		*prelude,
+		"\t\t# The control: without it a refusal below proves nothing,",
+		"\t\t# since a buffer the schema already refuses would refuse",
+		"\t\t# whatever this wrote into it.",
+		"\t\tview.validate()",
+		"",
+		f"\t\t# {placement.path} is pinned to {shown}; the byte below",
+		"\t\t# begins none of them.",
+		f"\t\traw[{at}] = {wrong:#04x}",
+		"\t\twith self.assertRaises(situ_runtime.ConstraintError):",
+		"\t\t\tview.validate()",
+		"",
+	]
+
+
 def _enum_checks(basename: str, schema: ast.Schema,
 		resolved: ResolvedSchema, struct: ResolvedStruct) -> list[str]:
 	"""An enum field admits its members and, with `default = error`,
@@ -421,7 +489,24 @@ def _enum_checks(basename: str, schema: ast.Schema,
 	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
 		return []
 
-	extent = struct.layout.size_bytes
+	# **The MAXIMUM extent, not the minimum**, which the constraint kinds
+	# need rather than prefer: a baseline writes the value every driving
+	# member must hold, and a driving text number's smallest admitted
+	# value can still declare a length the minimum does not reach.
+	# `example/cpio` is thirteen text numbers around one pinned magic, and
+	# over its minimum the baseline's own `validate` refused with
+	# "`<reserved0>`: declared length does not fit" -- the control arm
+	# failing before anything had been broken. `--target c` has used this
+	# rule since its checks were written; the other three took
+	# `size_bytes` and met the same wall one struct at a time.
+	# **And the minimum where there is no maximum**, rather than declining
+	# the struct. Written as a bare `buffer_size(...) or return` first, and
+	# that LOST checks: a struct with no computable maximum went from some
+	# checks over its minimum extent to none at all, taking `must_eq` from
+	# 51 to 46 and the enum kind from 39 to 36. A wider buffer is an
+	# improvement where one can be had and the narrow one was never wrong,
+	# only sometimes too small -- so the fallback keeps what worked.
+	extent = buffer_size(struct.layout) or struct.layout.size_bytes
 	lines: list[str] = []
 	for entry in struct.entries:
 		lines.extend(_one_enum(basename, schema, resolved, struct,
@@ -527,7 +612,24 @@ def _must_eq_checks(basename: str, resolved: ResolvedSchema,
 	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
 		return []
 
-	extent = struct.layout.size_bytes
+	# **The MAXIMUM extent, not the minimum**, which the constraint kinds
+	# need rather than prefer: a baseline writes the value every driving
+	# member must hold, and a driving text number's smallest admitted
+	# value can still declare a length the minimum does not reach.
+	# `example/cpio` is thirteen text numbers around one pinned magic, and
+	# over its minimum the baseline's own `validate` refused with
+	# "`<reserved0>`: declared length does not fit" -- the control arm
+	# failing before anything had been broken. `--target c` has used this
+	# rule since its checks were written; the other three took
+	# `size_bytes` and met the same wall one struct at a time.
+	# **And the minimum where there is no maximum**, rather than declining
+	# the struct. Written as a bare `buffer_size(...) or return` first, and
+	# that LOST checks: a struct with no computable maximum went from some
+	# checks over its minimum extent to none at all, taking `must_eq` from
+	# 51 to 46 and the enum kind from 39 to 36. A wider buffer is an
+	# improvement where one can be had and the narrow one was never wrong,
+	# only sometimes too small -- so the fallback keeps what worked.
+	extent = buffer_size(struct.layout) or struct.layout.size_bytes
 	lines: list[str] = []
 	for entry in struct.entries:
 		lines.extend(_one_must_eq(basename, resolved, struct,
@@ -553,11 +655,21 @@ def _one_must_eq(basename: str, resolved: ResolvedSchema,
 	if must is not None and must.value is None:
 		return []
 
-	reason = None
+	# **A pinned byte RUN is broken by construction**, not by adding one to
+	# anything: `"BM"` has no integer to increment, and a schema admitting
+	# several alternatives needs a byte outside every one of them. So the
+	# first byte of every admitted pin is collected and a byte beginning
+	# none of them is written at the run's start -- wrong for every pin the
+	# schema admits, and still wrong for one nobody has written yet.
+	#
+	# `--target c` records why that beats writing all-ones: all-ones is
+	# right for `\r\n` by luck and vacuous for a preamble pinned to
+	# 0xffff.
 	if run and placement.kind != "reserved":
-		reason = ("its pin is a byte run, which a number cannot break -- it"
-		          " wants a byte no pin admits")
-	elif placement.offset_bits is None:
+		return _pinned_run(basename, resolved, struct, placement, extent)
+
+	reason = None
+	if placement.offset_bits is None:
 		reason = ("its pinned value sits at an offset the message chooses,"
 		          " so no one buffer breaks it")
 	elif inside_an_unresolved_arm(struct, placement):
@@ -735,7 +847,24 @@ def _reserved_checks(basename: str, resolved: ResolvedSchema,
 	if not struct.layout.is_byte_sized or struct.layout.size_bytes == 0:
 		return []
 
-	extent = struct.layout.size_bytes
+	# **The MAXIMUM extent, not the minimum**, which the constraint kinds
+	# need rather than prefer: a baseline writes the value every driving
+	# member must hold, and a driving text number's smallest admitted
+	# value can still declare a length the minimum does not reach.
+	# `example/cpio` is thirteen text numbers around one pinned magic, and
+	# over its minimum the baseline's own `validate` refused with
+	# "`<reserved0>`: declared length does not fit" -- the control arm
+	# failing before anything had been broken. `--target c` has used this
+	# rule since its checks were written; the other three took
+	# `size_bytes` and met the same wall one struct at a time.
+	# **And the minimum where there is no maximum**, rather than declining
+	# the struct. Written as a bare `buffer_size(...) or return` first, and
+	# that LOST checks: a struct with no computable maximum went from some
+	# checks over its minimum extent to none at all, taking `must_eq` from
+	# 51 to 46 and the enum kind from 39 to 36. A wider buffer is an
+	# improvement where one can be had and the narrow one was never wrong,
+	# only sometimes too small -- so the fallback keeps what worked.
+	extent = buffer_size(struct.layout) or struct.layout.size_bytes
 	lines: list[str] = []
 	for entry in struct.entries:
 		lines.extend(_one_reserved(basename, resolved, struct,

@@ -24,9 +24,10 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
-from situc.codegen import (PROBE_BYTES, argued_sides, arguments,
-	digit_pattern, passes_unknown, placed_bytes, refuse_parameters,
-	required_pattern, required_run, reserved_policy, selected_arms)
+from situc.codegen import (INSTANCE_CEILING, PROBE_BYTES, argued_sides,
+	arguments, buffer_size, digit_pattern, passes_unknown, placed_bytes,
+	refuse_parameters, required_pattern, required_run, reserved_policy,
+	selected_arms)
 from situc import __version__
 
 import re
@@ -232,7 +233,7 @@ def _relation_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 			extent = None
 			if (struct is not None and struct.layout.is_byte_sized
 					and struct.layout.is_fixed_size):
-				extent = _buffer_size(struct.layout)
+				extent = buffer_size(struct.layout)
 			params.append((param.name, struct, extent))
 
 		# Before the extent question below, so the note names the construct
@@ -366,7 +367,7 @@ def _converse_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 			extent = None
 			if (struct is not None and struct.layout.is_byte_sized
 					and struct.layout.is_fixed_size):
-				extent = _buffer_size(struct.layout)
+				extent = buffer_size(struct.layout)
 			params.append((param.name, struct, extent))
 
 		# Above the extent question for the reason the relation one is, and
@@ -478,7 +479,7 @@ def _frame_checks(suite: Suite, resolved: ResolvedSchema, basename: str,
 			           "whole messages cannot be built out of zeroes")
 			continue
 
-		extent = _buffer_size(layout)
+		extent = buffer_size(layout)
 		if extent is None or extent < 2:
 			suite.skip(f"framing {name}", "is under two bytes, so there is no "
 			           "partial message C can declare a buffer for")
@@ -563,7 +564,7 @@ def _struct_checks(suite: Suite, schema: ast.Schema, resolved: ResolvedSchema,
 		suite.skip(struct.name, "not a whole number of bytes, so it has no accessors")
 		return
 
-	extent = _buffer_size(layout)
+	extent = buffer_size(layout)
 	if extent is None:
 		_instance_checks(suite, resolved, struct, prefix)
 		return
@@ -933,20 +934,6 @@ def _instance_assertions(struct: ResolvedStruct, placement: Placement,
 #: `uint32_t`. The checks assert *offsets* over a zeroed instance, where every
 #: data-decided length reads zero -- so the worst case was never what they
 #: needed, only what they asked for.
-INSTANCE_CEILING = 64 * 1024
-
-
-def _buffer_size(layout: object) -> int | None:
-	"""A buffer big enough for the worst case, or as much of it as fits."""
-	maximum = getattr(layout, "size_max_bytes", None)
-	if maximum is not None:
-		return min(max(int(maximum), 1), INSTANCE_CEILING)
-	minimum = getattr(layout, "size_bytes", 0)
-	if getattr(layout, "is_fixed_size", False):
-		return max(int(minimum), 1)
-	return None
-
-
 def _acquire(struct: ResolvedStruct, prefix: str, extent: int,
 		length: str | None = None) -> list[str]:
 	"""The preamble every check shares: a buffer, a message, a view."""

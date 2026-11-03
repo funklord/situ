@@ -430,6 +430,40 @@ CHECK_KINDS = (
 )
 
 
+#: The largest buffer a generated check declares. A struct whose maximum
+#: is unbounded gets this much and no more, so a check is a check rather
+#: than an allocation.
+INSTANCE_CEILING = 64 * 1024
+
+
+def buffer_size(layout: object) -> int | None:
+	"""A buffer big enough for the worst case, or as much of it as fits.
+
+	**The MAXIMUM and not the minimum**, which the constraint checks need
+	rather than prefer. A baseline writes the value every driving member
+	must hold, and a driving text number's smallest admitted value can
+	still declare a length the minimum extent does not reach:
+	`example/cpio` is thirteen text numbers around one pinned magic, and
+	over its minimum the baseline's own `validate` refused with
+	"`<reserved0>`: declared length does not fit" -- so the check's control
+	arm failed before anything had been broken.
+
+	`--target c` has used this rule since its checks were written, with a
+	`buf[65536u]` in cpio's suite to show it. The other three backends took
+	`layout.size_bytes` and met the same wall one struct at a time.
+
+	`None` where neither a maximum nor a fixed size is known, so the caller
+	declines rather than guessing an extent.
+	"""
+	maximum = getattr(layout, "size_max_bytes", None)
+	if maximum is not None:
+		return min(max(int(maximum), 1), INSTANCE_CEILING)
+	minimum = getattr(layout, "size_bytes", 0)
+	if getattr(layout, "is_fixed_size", False):
+		return max(int(minimum), 1)
+	return None
+
+
 def passes_unknown(schema: ast.Schema, name: str | None) -> bool:
 	"""Whether this enum admits values no member names (section 8.7).
 
