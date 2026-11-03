@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.847 A fuzz harness that needs no fuzzer
+
+Moved to
+`doc/decision/26.847-a-fuzz-harness-that-needs-no-fuzzer.md`.
+
 ### 26.846 The fuzz harness was parked on a rule that does not apply
 
 Moved to

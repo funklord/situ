@@ -337,7 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
 	# reads them over a byte buffer -- so it is that source with the entry
 	# point libFuzzer wants, rather than a second list of accessors to keep
 	# in step with the first.
-	fuzz_cmd.add_argument("--target", choices=("c", "cpp"), default="c",
+	fuzz_cmd.add_argument("--target", choices=("c", "cpp", "python"),
+	                      default="c",
 	                      help="which backend's accessors to drive")
 
 	advise_cmd = sub.add_parser("advise", help="ranked, costed schema suggestions")
@@ -1464,6 +1465,24 @@ def cmd_gen_fuzz(args: argparse.Namespace) -> int:
 
 	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
+
+	if args.target == "python":
+		# **No `skipif` on a fuzzer's absence**, because this target takes
+		# no dependency: `one_input` is the entry point and a stdin `main`
+		# drives it, which is `--target c`'s `SITU_FUZZ_STANDALONE` split
+		# and lets this repository's own gates RUN the harness rather than
+		# skip where a fuzzer is not installed (26.846).
+		from situc.codegen.python import fuzz as python_fuzz
+
+		text = python_fuzz.generate(parse(source), resolved, name,
+		                            args.prefix)
+		args.out.mkdir(parents=True, exist_ok=True)
+		target = args.out / f"{name}_fuzz.py"
+		target.write_text(text, encoding="ascii")
+		print(f"situc: wrote {target}", file=sys.stderr)
+		_report(args, requirements.warnings(outcomes)
+		        + requirements.deferrals(outcomes))
+		return 0
 
 	if args.target == "cpp":
 		from situc.codegen import differ

@@ -150,6 +150,85 @@ def check_schemas() -> list[Path]:
 	return found
 
 
+@pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
+def test_the_python_fuzz_harness_drives_the_accessors(
+	schema: Path, tmp_path: Path,
+) -> None:
+	"""`gen-fuzz --target python`, driven with random bytes and RUN.
+
+	**No `skipif` on a fuzzer's absence**, which is the point of the
+	target's shape: `one_input` takes no dependency and a stdin `main`
+	drives it, so this repository's own gates run the harness rather than
+	skip where `atheris` is not installed. That split is `--target c`'s,
+	whose `SITU_FUZZ_STANDALONE` main exists "so the harness can be built
+	and run without a fuzzing engine. This is what keeps it from rotting
+	between runs" (26.846).
+
+	**And the reads are counted, because a harness that crashes on nothing
+	and a harness that does nothing look identical from outside.** `sink`
+	is where every field read goes, so patching it counts them: a run that
+	performed none would be a harness that took a view and asked it
+	nothing, which is the vacuous pass this file guards against
+	everywhere else.
+	"""
+	out = tmp_path / "gen"
+	out.mkdir(parents=True, exist_ok=True)
+	emitted = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-fuzz", str(schema),
+		 "--target", "python", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	if emitted.returncode != 0:
+		if "parameter" in emitted.stderr:
+			pytest.skip("gen-fuzz declines a schema taking an argument")
+		raise AssertionError(emitted.stderr[-700:])
+
+	built = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(schema),
+		 "--target", "python", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	assert built.returncode == 0, built.stderr[-700:]
+	shutil.copy(ROOT / "runtime" / "python" / "situ_runtime.py", out)
+
+	# **The inputs are sized from the harness, not from a round number.**
+	# Written with `rng.randrange(0, 80)` first, and `cpio` read nothing:
+	# its struct needs 110 bytes, so every input fell short of the guard
+	# and the harness returned before touching an accessor. A fuzz driver
+	# whose inputs cannot reach the minimum is a driver that tests the
+	# length check and nothing else.
+	harness = (out / f"{schema.stem}_fuzz.py").read_text(encoding="ascii")
+	widest = max((int(one) for one in
+	              re.findall(r"if len\(data\) < (\d+):", harness)),
+	             default=16)
+
+	driver = (
+		"import importlib, random\n"
+		f"mod = importlib.import_module('{schema.stem}_fuzz')\n"
+		"reads = 0\n"
+		"real = mod.sink\n"
+		"def counting(value):\n"
+		"    global reads\n"
+		"    reads += 1\n"
+		"    return real(value)\n"
+		"mod.sink = counting\n"
+		"rng = random.Random(20261103)\n"
+		"for _ in range(300):\n"
+		f"    n = rng.randrange(0, {widest * 2 + 8})\n"
+		"    mod.one_input(bytes(rng.randrange(256) for _ in range(n)))\n"
+		"print(reads)\n")
+	done = subprocess.run([sys.executable, "-c", driver],
+	                      capture_output=True, text=True, cwd=out)
+	assert done.returncode == 0, done.stderr[-2000:]
+
+	# **Only where the harness has a read to perform.** A schema whose
+	# structs carry no plain scalar field has `pass` where the reads would
+	# be -- `example/protobuf` is a bare `tlv` region and `example/slip` is
+	# framing -- so zero is the true answer there and asserting otherwise
+	# would be demanding a getter the schema does not describe.
+	reads = int(done.stdout.strip().splitlines()[-1])
+	if "\t\tsink(view." in harness:
+		assert reads > 0, "the harness took views and read nothing"
+
+
 @pytest.mark.skipif(RUSTC is None, reason="needs rustc")
 @pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
 def test_the_rust_checks_suite_builds_and_runs(

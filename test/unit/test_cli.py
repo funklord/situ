@@ -961,6 +961,45 @@ def test_gen_checks_rust_escapes_a_whole_setter_name(
 	assert "view.r#type()" in text
 
 
+def test_gen_fuzz_writes_a_python_harness(tmp_path: Path) -> None:
+	"""`gen-fuzz --target python`: the third of section 1's four languages
+	for the second half of "test scaffolding".
+
+	**It takes no dependency, and that is the design rather than a
+	shortfall.** The target was parked once on the reading that `atheris`
+	is third party and section 24 forbids one -- which it does not,
+	decision 0001 constraining what `situc` IMPORTS and saying nothing
+	about what a generated file expects of the consumer, `--target c`
+	already emitting a libFuzzer entry point `situc` does not depend on
+	(26.846).
+
+	The better answer did not need the dependency. `one_input` is the
+	entry point and a stdin `main` drives it, which is `--target c`'s
+	`SITU_FUZZ_STANDALONE` split -- so the harness runs under this
+	repository's own gates instead of skipping, and an engine wraps
+	`one_input` in two lines.
+
+	The first byte selects a struct, so one corpus drives every parser in
+	the schema rather than needing a harness each, which is again the C
+	target's arrangement.
+	"""
+	assert main(["gen-fuzz", HEADER, "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_fuzz.py").read_text(encoding="ascii")
+
+	assert "def one_input(data: bytes) -> int:" in text
+	assert "def fuzz_header(data: bytes) -> None:" in text
+	assert "def sink(value: object) -> None:" in text
+	# Validation on arbitrary bytes, then every field READ.
+	assert "\t\tview.validate()" in text
+	assert "sink(view.length)" in text
+	# The stdin driver, which is what makes it runnable with no engine.
+	assert "sys.exit(one_input(sys.stdin.buffer.read()))" in text
+	# And no import of a fuzzer.
+	assert "atheris" not in text.split('"""')[2] if len(
+		text.split('"""')) > 2 else True
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had
