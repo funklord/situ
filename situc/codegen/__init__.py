@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING
 
 from situc import ast, traverse
 from situc.diagnostics import not_yet_implemented
-from situc.layout import Placement
+from situc.layout import BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import own_members
+from situc.traverse import own_members, reserved_constraint
 
 if TYPE_CHECKING:		# a cycle at run time, a name at check time
 	# `c.vectors` imports this module, so `Case` is a forward reference
@@ -390,3 +390,209 @@ def tally(resolved: ResolvedSchema, cases: list["Case"],
 				declined[why] = declined.get(why, 0) + 1
 
 	return compared, declined
+
+
+# -- what a constraint check must write, computed from the map -----------
+#
+# These six answer a question about VALUES and BYTE POSITIONS rather than
+# about source text, so none of them is a backend's business. They were
+# `--target c`'s, and they move here for `PROBE_BYTES`' reason: the second
+# backend to need them would otherwise carry a second copy, and two copies
+# of "what must this field hold for the struct to validate" is two answers
+# to one question.
+#
+# What they are FOR is the baseline a constraint check needs -- a buffer
+# satisfying every constraint before anything is broken -- without which a
+# check is vacuous, a zeroed buffer already breaking `must_be_one` so the
+# check would pass against a validator that did nothing.
+
+def placed_bytes(offset_bits: int, bits: int, raw: int, endian: ast.Endian | None,
+		bit_order: ast.BitOrder | None, packed: bool) -> dict[int, int] | None:
+	"""Where `raw` lands in a zeroed buffer, from the map rather than the accessor.
+
+	This is the whole point of the check: the expected bytes are derived here,
+	from the offset and the declared order, by code that shares nothing with the
+	emitter. An accessor and a check that agree because they were generated from
+	the same expression would agree just as readily about a wrong answer.
+
+	`None` when the encoding is not a fixed pattern -- `native` order depends on
+	the machine that eventually runs the code, which is not knowable here.
+	"""
+	if endian is ast.Endian.NATIVE:
+		return None
+
+	if not packed:
+		if offset_bits % BITS_PER_BYTE != 0 or bits % BITS_PER_BYTE != 0:
+			return None
+		first  = offset_bits // BITS_PER_BYTE
+		count  = bits // BITS_PER_BYTE
+		chunks = [(raw >> (BITS_PER_BYTE * i)) & 0xFF for i in range(count)]
+		if endian is not ast.Endian.LITTLE:
+			chunks.reverse()	# big endian: most significant byte lowest
+		return {first + i: chunk for i, chunk in enumerate(chunks)}
+
+	# Bit-packed: assemble the whole bytes the field touches, then place the
+	# value within them the way the declared bit order numbers bits.
+	first = offset_bits // BITS_PER_BYTE
+	last  = (offset_bits + bits - 1) // BITS_PER_BYTE
+	span  = (last - first + 1) * BITS_PER_BYTE
+	skip  = offset_bits - first * BITS_PER_BYTE
+
+	if bit_order is ast.BitOrder.LSB_FIRST:
+		acc   = raw << skip
+		order = range(first, last + 1)			# earlier byte, lower bits
+	else:
+		acc   = raw << (span - skip - bits)
+		order = range(last, first - 1, -1)		# earlier byte, higher bits
+
+	placed = {}
+	for at in order:
+		placed[at] = acc & 0xFF
+		acc >>= BITS_PER_BYTE
+	return placed
+
+
+def required_run(placement: Placement, every: bool = False):	# type: ignore[no-untyped-def]
+	"""The bytes a pinned byte RUN must hold, or None where it pins none.
+
+	Three spellings reach one fact, and each of them is an array:
+	`[must_eq = "WOZ2"]` on a `u8[4]`, a `preamble` (0052), and an enum
+	whose members are byte runs. `required_pattern` next door answers for
+	a scalar and cannot answer for these -- a run has no single integer to
+	fold to, which is why the two are separate functions rather than one
+	with a branch.
+
+	The FIRST of several, where the schema admits several: `signature` is
+	`BM` or `MZ` and either validates, so a baseline needs one that does
+	rather than a rule about which.
+	"""
+	found: tuple[bytes, ...] = ()
+	if placement.pinned_runs:
+		found = placement.pinned_runs
+	else:
+		for attr in placement.attrs:
+			if attr.name != "must_eq":
+				continue
+			held = getattr(attr.value, "value", None)
+			if isinstance(held, str):
+				found = (held.encode("latin-1"),)
+			break
+
+	if every:
+		return found
+	return found[0] if found else None
+
+
+def required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> int | None:
+	"""The value this member must hold for the struct to validate, if any."""
+	policy = reserved_policy(placement)
+	if policy == "must_be_one":
+		return (1 << placement.size_bits) - 1
+	if policy == "must_be_zero":
+		return 0
+
+	# `must_eq` pins the value; `min` is the smallest that satisfies it, and
+	# satisfies any `max` alongside it too. A field with only `max` is happy at
+	# zero, which is where the buffer starts.
+	from situc.expr import evaluate
+
+	for name in ("must_eq", "min"):
+		for attr in placement.attrs:
+			if attr.name != name or attr.value is None:
+				continue
+			try:
+				return int(evaluate(attr.value, resolved.layout.env))
+			except Exception:	# noqa: BLE001 - not foldable, so not satisfiable
+				return None
+
+	# An enum with `default = error` admits its members and nothing else, so a
+	# baseline that leaves one at zero is not valid unless zero is a member.
+	values = resolved.layout.env.enums.get(placement.type_name or "")
+	if values:
+		return None if 0 in values.values() else min(values.values())
+	return None
+
+
+def selected_arms(resolved: ResolvedSchema, struct: ResolvedStruct,
+		chosen: str | None) -> set[str]:
+	"""Which arms the message a baseline builds actually carries.
+
+	One per variant, and never more: `chosen` where the check being built
+	selects an arm of that variant itself, and otherwise whichever arm the
+	discriminant's own baseline value happens to name. The second half is
+	the part that is easy to forget -- a check about a member *outside*
+	every variant still leaves the discriminant somewhere, and the arm it
+	lands on has constraints of its own that the baseline has to satisfy or
+	`validate` refuses the buffer the check calls valid.
+	"""
+	held: set[str] = set()
+
+	for variant in own_members(struct):
+		if variant.kind != "variant" or variant.discriminant is None:
+			continue
+
+		arms = {arm.value: arm.member for arm in variant.arm_cases
+		        if arm.value is not None and arm.member is not None}
+		if chosen is not None and chosen in arms.values():
+			held.add(chosen)
+			continue
+
+		disc = next((entry.placement for entry in struct.entries
+		             if entry.placement.name == variant.discriminant), None)
+		if disc is None:
+			continue
+
+		landed = arms.get(required_pattern(resolved, struct, disc) or 0)
+		if landed is not None:
+			held.add(landed)
+
+	return held
+
+
+def digit_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
+		placement: Placement) -> bytes | None:
+	"""The ASCII a text number must hold for the struct to validate.
+
+	`None` for anything that is not a fixed-width text number. For one that
+	is, the smallest value the field admits, spelled in its own radix and
+	zero-padded to its own width -- which is what `[minimal]` would demand
+	anyway and what every real header writes.
+
+	Separate from `required_pattern` because that answers with a NUMBER,
+	and a text number's constraint is on its bytes: 70701 as an integer put
+	into six bytes is not `"070701"`, and the baseline has to write what a
+	reader will parse.
+	"""
+	if placement.radix is None or placement.offset_bits is None:
+		return None
+	if placement.offset_bits % BITS_PER_BYTE or placement.size_bits % BITS_PER_BYTE:
+		return None
+	if placement.delimiters:
+		return None		# its width is the scan's, not the schema's
+
+	width = placement.array_count or placement.size_bits // BITS_PER_BYTE
+	if width <= 0:
+		return None
+
+	least = required_pattern(resolved, struct, placement) or 0
+	# The digits in the field's own base: `X` for hex, which the runtime
+	# writes upper, and `o` for octal (26.756).
+	spelled = format(least, f"0{width}"
+	                 + {10: "d", 16: "X", 8: "o"}[placement.radix or 10])
+	if len(spelled) != width:
+		return None		# the smallest admitted value does not fit its field
+
+	return spelled.encode("ascii")
+
+
+def reserved_policy(placement: Placement) -> str | None:
+	"""`must_be_zero` (the default) or `must_be_one`, for a reserved field.
+
+	The policy itself is `traverse.reserved_constraint`, which three other
+	backends also read; what stays here is the question this builder asks
+	of a NON-reserved member, which is not a constraint either (26.658).
+	"""
+	if placement.kind != "reserved":
+		return None
+	return reserved_constraint(placement.attrs)

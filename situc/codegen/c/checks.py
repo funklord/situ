@@ -24,7 +24,9 @@ knowing anything about how the accessor is written.
 
 from __future__ import annotations
 
-from situc.codegen import PROBE_BYTES, argued_sides, arguments, refuse_parameters
+from situc.codegen import (PROBE_BYTES, argued_sides, arguments,
+	digit_pattern, placed_bytes, refuse_parameters, required_pattern,
+	required_run, reserved_policy, selected_arms)
 from situc import __version__
 
 import re
@@ -1643,7 +1645,7 @@ def _element_encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolve
 	stride = scalar.bits // BITS_PER_BYTE
 	at     = placement.offset_bits // BITS_PER_BYTE + index * stride
 	raw    = _probe_pattern(scalar.bits)
-	placed = _placed_bytes(at * BITS_PER_BYTE, scalar.bits, raw,
+	placed = placed_bytes(at * BITS_PER_BYTE, scalar.bits, raw,
 	                       placement.endian, placement.bit_order, False)
 	if placed is None or at + stride > extent:
 		return
@@ -1713,7 +1715,7 @@ def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	stride = scalar.bits // BITS_PER_BYTE
 	at     = placement.offset_bits // BITS_PER_BYTE + index * stride
 	raw    = _probe_pattern(scalar.bits)
-	placed = _placed_bytes(at * BITS_PER_BYTE, scalar.bits, raw,
+	placed = placed_bytes(at * BITS_PER_BYTE, scalar.bits, raw,
 	                       placement.endian, placement.bit_order, False)
 	if placed is None or at + stride > extent:
 		return
@@ -1721,7 +1723,7 @@ def _run_element_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 	# Two elements is all this needs, and asking for more of them than the
 	# frame holds would have the accessor answer zero -- correctly, and about
 	# a different question.
-	counted = _placed_bytes(driver.offset_bits or 0, driver.scalar.bits
+	counted = placed_bytes(driver.offset_bits or 0, driver.scalar.bits
 	                        if driver.scalar else 8, index + 1,
 	                        driver.endian, driver.bit_order, False)
 	if counted is None:
@@ -1796,7 +1798,7 @@ def _run_length_clamp_check(suite: Suite, struct: ResolvedStruct,
 	# The largest value the driver can hold, so the claim always exceeds the
 	# frame whatever its width.
 	claim = (1 << driver.scalar.bits) - 1
-	counted = _placed_bytes(driver.offset_bits or 0, driver.scalar.bits, claim,
+	counted = placed_bytes(driver.offset_bits or 0, driver.scalar.bits, claim,
 	                        driver.endian, driver.bit_order, False)
 	if counted is None:
 		return
@@ -1886,52 +1888,6 @@ def _probe_pattern(bits: int) -> int:
 	return (1 << bits) - 2		# 0b1...10: top bit set, and not a palindrome
 
 
-def _placed_bytes(offset_bits: int, bits: int, raw: int, endian: ast.Endian | None,
-		bit_order: ast.BitOrder | None, packed: bool) -> dict[int, int] | None:
-	"""Where `raw` lands in a zeroed buffer, from the map rather than the accessor.
-
-	This is the whole point of the check: the expected bytes are derived here,
-	from the offset and the declared order, by code that shares nothing with the
-	emitter. An accessor and a check that agree because they were generated from
-	the same expression would agree just as readily about a wrong answer.
-
-	`None` when the encoding is not a fixed pattern -- `native` order depends on
-	the machine that eventually runs the code, which is not knowable here.
-	"""
-	if endian is ast.Endian.NATIVE:
-		return None
-
-	if not packed:
-		if offset_bits % BITS_PER_BYTE != 0 or bits % BITS_PER_BYTE != 0:
-			return None
-		first  = offset_bits // BITS_PER_BYTE
-		count  = bits // BITS_PER_BYTE
-		chunks = [(raw >> (BITS_PER_BYTE * i)) & 0xFF for i in range(count)]
-		if endian is not ast.Endian.LITTLE:
-			chunks.reverse()	# big endian: most significant byte lowest
-		return {first + i: chunk for i, chunk in enumerate(chunks)}
-
-	# Bit-packed: assemble the whole bytes the field touches, then place the
-	# value within them the way the declared bit order numbers bits.
-	first = offset_bits // BITS_PER_BYTE
-	last  = (offset_bits + bits - 1) // BITS_PER_BYTE
-	span  = (last - first + 1) * BITS_PER_BYTE
-	skip  = offset_bits - first * BITS_PER_BYTE
-
-	if bit_order is ast.BitOrder.LSB_FIRST:
-		acc   = raw << skip
-		order = range(first, last + 1)			# earlier byte, lower bits
-	else:
-		acc   = raw << (span - skip - bits)
-		order = range(last, first - 1, -1)		# earlier byte, higher bits
-
-	placed = {}
-	for at in order:
-		placed[at] = acc & 0xFF
-		acc >>= BITS_PER_BYTE
-	return placed
-
-
 def _signed_value(raw: int, bits: int) -> int:
 	"""`raw` read as two's complement, which is what the getter must return."""
 	return raw - (1 << bits) if raw >= 1 << (bits - 1) else raw
@@ -1982,7 +1938,7 @@ def _encoding_check(suite: Suite, struct: ResolvedStruct, entry: Resolved,
 		raw, decoded = _bcd_probe(scalar.digits)
 	else:
 		raw, decoded = _probe_pattern(bits), None
-	placed = _placed_bytes(placement.offset_bits, bits, raw,
+	placed = placed_bytes(placement.offset_bits, bits, raw,
 	                       placement.endian, placement.bit_order,
 	                       scalar.is_bit_packed)
 	if placed is None:
@@ -2053,121 +2009,6 @@ def _ctype(scalar: object) -> str:
 	return f"{'int' if signed else 'uint'}{width}_t"
 
 
-def _reserved_policy(placement: Placement) -> str | None:
-	"""`must_be_zero` (the default) or `must_be_one`, for a reserved field.
-
-	The policy itself is `traverse.reserved_constraint`, which three other
-	backends also read; what stays here is the question this builder asks
-	of a NON-reserved member, which is not a constraint either (26.658).
-	"""
-	if placement.kind != "reserved":
-		return None
-	return reserved_constraint(placement.attrs)
-
-
-def _required_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
-		placement: Placement) -> int | None:
-	"""The value this member must hold for the struct to validate, if any."""
-	policy = _reserved_policy(placement)
-	if policy == "must_be_one":
-		return (1 << placement.size_bits) - 1
-	if policy == "must_be_zero":
-		return 0
-
-	# `must_eq` pins the value; `min` is the smallest that satisfies it, and
-	# satisfies any `max` alongside it too. A field with only `max` is happy at
-	# zero, which is where the buffer starts.
-	from situc.expr import evaluate
-
-	for name in ("must_eq", "min"):
-		for attr in placement.attrs:
-			if attr.name != name or attr.value is None:
-				continue
-			try:
-				return int(evaluate(attr.value, resolved.layout.env))
-			except Exception:	# noqa: BLE001 - not foldable, so not satisfiable
-				return None
-
-	# An enum with `default = error` admits its members and nothing else, so a
-	# baseline that leaves one at zero is not valid unless zero is a member.
-	values = resolved.layout.env.enums.get(placement.type_name or "")
-	if values:
-		return None if 0 in values.values() else min(values.values())
-	return None
-
-
-def _selected_arms(resolved: ResolvedSchema, struct: ResolvedStruct,
-		chosen: str | None) -> set[str]:
-	"""Which arms the message a baseline builds actually carries.
-
-	One per variant, and never more: `chosen` where the check being built
-	selects an arm of that variant itself, and otherwise whichever arm the
-	discriminant's own baseline value happens to name. The second half is
-	the part that is easy to forget -- a check about a member *outside*
-	every variant still leaves the discriminant somewhere, and the arm it
-	lands on has constraints of its own that the baseline has to satisfy or
-	`validate` refuses the buffer the check calls valid.
-	"""
-	held: set[str] = set()
-
-	for variant in own_members(struct):
-		if variant.kind != "variant" or variant.discriminant is None:
-			continue
-
-		arms = {arm.value: arm.member for arm in variant.arm_cases
-		        if arm.value is not None and arm.member is not None}
-		if chosen is not None and chosen in arms.values():
-			held.add(chosen)
-			continue
-
-		disc = next((entry.placement for entry in struct.entries
-		             if entry.placement.name == variant.discriminant), None)
-		if disc is None:
-			continue
-
-		landed = arms.get(_required_pattern(resolved, struct, disc) or 0)
-		if landed is not None:
-			held.add(landed)
-
-	return held
-
-
-def _digit_pattern(resolved: ResolvedSchema, struct: ResolvedStruct,
-		placement: Placement) -> bytes | None:
-	"""The ASCII a text number must hold for the struct to validate.
-
-	`None` for anything that is not a fixed-width text number. For one that
-	is, the smallest value the field admits, spelled in its own radix and
-	zero-padded to its own width -- which is what `[minimal]` would demand
-	anyway and what every real header writes.
-
-	Separate from `_required_pattern` because that answers with a NUMBER,
-	and a text number's constraint is on its bytes: 70701 as an integer put
-	into six bytes is not `"070701"`, and the baseline has to write what a
-	reader will parse.
-	"""
-	if placement.radix is None or placement.offset_bits is None:
-		return None
-	if placement.offset_bits % BITS_PER_BYTE or placement.size_bits % BITS_PER_BYTE:
-		return None
-	if placement.delimiters:
-		return None		# its width is the scan's, not the schema's
-
-	width = placement.array_count or placement.size_bits // BITS_PER_BYTE
-	if width <= 0:
-		return None
-
-	least = _required_pattern(resolved, struct, placement) or 0
-	# The digits in the field's own base: `X` for hex, which the runtime
-	# writes upper, and `o` for octal (26.756).
-	spelled = format(least, f"0{width}"
-	                 + {10: "d", 16: "X", 8: "o"}[placement.radix or 10])
-	if len(spelled) != width:
-		return None		# the smallest admitted value does not fit its field
-
-	return spelled.encode("ascii")
-
-
 def _break_to(placement: Placement, wrong: int) -> list[str] | None:
 	"""Statements setting this member's bits to `wrong`, leaving the rest.
 
@@ -2175,7 +2016,7 @@ def _break_to(placement: Placement, wrong: int) -> list[str] | None:
 	byte shares one with its neighbours: storing would break theirs too, and
 	the refusal that followed would be true of the wrong field.
 
-	`_placed_bytes` puts the value where this member's own byte order and bit
+	`placed_bytes` puts the value where this member's own byte order and bit
 	order say it goes, so this is the one place that has to know either --
 	which is why the three checks that break a field all come through here
 	rather than each spelling the arithmetic.
@@ -2186,9 +2027,9 @@ def _break_to(placement: Placement, wrong: int) -> list[str] | None:
 		return None
 
 	packed = bool(placement.scalar and placement.scalar.is_bit_packed)
-	placed = _placed_bytes(placement.offset_bits, placement.size_bits, wrong,
+	placed = placed_bytes(placement.offset_bits, placement.size_bits, wrong,
 	                       placement.endian, placement.bit_order, packed)
-	mask = _placed_bytes(placement.offset_bits, placement.size_bits,
+	mask = placed_bytes(placement.offset_bits, placement.size_bits,
 	                     (1 << placement.size_bits) - 1,
 	                     placement.endian, placement.bit_order, packed)
 	if placed is None or mask is None:
@@ -2205,37 +2046,6 @@ def _break_reaches(placement: Placement, extent: int) -> bool:
 		return False
 	last = (placement.offset_bits + placement.size_bits - 1) // BITS_PER_BYTE
 	return last < extent
-
-
-def _required_run(placement: Placement, every: bool = False):	# type: ignore[no-untyped-def]
-	"""The bytes a pinned byte RUN must hold, or None where it pins none.
-
-	Three spellings reach one fact, and each of them is an array:
-	`[must_eq = "WOZ2"]` on a `u8[4]`, a `preamble` (0052), and an enum
-	whose members are byte runs. `_required_pattern` next door answers for
-	a scalar and cannot answer for these -- a run has no single integer to
-	fold to, which is why the two are separate functions rather than one
-	with a branch.
-
-	The FIRST of several, where the schema admits several: `signature` is
-	`BM` or `MZ` and either validates, so a baseline needs one that does
-	rather than a rule about which.
-	"""
-	found: tuple[bytes, ...] = ()
-	if placement.pinned_runs:
-		found = placement.pinned_runs
-	else:
-		for attr in placement.attrs:
-			if attr.name != "must_eq":
-				continue
-			held = getattr(attr.value, "value", None)
-			if isinstance(held, str):
-				found = (held.encode("latin-1"),)
-			break
-
-	if every:
-		return found
-	return found[0] if found else None
 
 
 def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
@@ -2261,7 +2071,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 	assert the wrong thing.
 	"""
 	writes: list[str] = []
-	carried = _selected_arms(resolved, struct, inside)
+	carried = selected_arms(resolved, struct, inside)
 
 	for entry in struct.entries:
 		placement = entry.placement
@@ -2272,7 +2082,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# radix, so `validate` refuses a fixture nothing had broken yet.
 		# `cpio_header` is thirteen of these around one pinned magic, and
 		# the control this baseline exists to support could not hold for it.
-		digits = _digit_pattern(resolved, struct, placement)
+		digits = digit_pattern(resolved, struct, placement)
 		if digits is not None:
 			if placement.offset_bits % BITS_PER_BYTE:
 				return None
@@ -2290,7 +2100,7 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		# builds failed `validate` before any check had broken anything --
 		# and every check built on it asserted `SITU_OK` about a buffer that
 		# was already refused.
-		run = _required_run(placement)
+		run = required_run(placement)
 		if run is not None:
 			if placement.offset_bits % BITS_PER_BYTE:
 				return None
@@ -2311,12 +2121,12 @@ def _baseline(resolved: ResolvedSchema, struct: ResolvedStruct,
 		if held is not None and held[1].member not in carried:
 			continue
 
-		value = _required_pattern(resolved, struct, placement)
+		value = required_pattern(resolved, struct, placement)
 		if value in (None, 0):
 			continue		# nothing to write: the buffer starts zeroed
 		assert value is not None
 
-		placed = _placed_bytes(placement.offset_bits, placement.size_bits, value,
+		placed = placed_bytes(placement.offset_bits, placement.size_bits, value,
 		                       placement.endian, placement.bit_order,
 		                       bool(placement.scalar and placement.scalar.is_bit_packed))
 		if placed is None:
@@ -2359,7 +2169,7 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 		# schema states -- an enum over runs, or `[must_eq = "BM"]`, which
 		# the solver folds into the same field. A reserved run is the third
 		# and belongs to `_reserved_checks`, which names it a preamble.
-		pinned = bool(_required_run(placement, every=True))
+		pinned = bool(required_run(placement, every=True))
 		if must_eq is None and not (pinned and placement.kind != "reserved"):
 			continue
 		if must_eq is not None and must_eq.value is None:
@@ -2564,13 +2374,13 @@ def _select_arm(struct: ResolvedStruct, placement: Placement,
 	if held is None or held.offset_bits is None or held.scalar is None:
 		return None
 
-	placed = _placed_bytes(held.offset_bits, held.size_bits, arm.value,
+	placed = placed_bytes(held.offset_bits, held.size_bits, arm.value,
 	                       held.endian, held.bit_order,
 	                       held.scalar.is_bit_packed)
 	if placed is None or max(placed) >= extent:
 		return None
 
-	mask = _placed_bytes(held.offset_bits, held.size_bits,
+	mask = placed_bytes(held.offset_bits, held.size_bits,
 	                     (1 << held.size_bits) - 1, held.endian, held.bit_order,
 	                     held.scalar.is_bit_packed)
 	if mask is None:
@@ -2650,7 +2460,7 @@ def _reach_version(struct: ResolvedStruct, extent: int) -> list[str] | None:
 	if held is None or held.offset_bits is None or held.scalar is None:
 		return None
 
-	placed = _placed_bytes(held.offset_bits, held.size_bits, max(versioned),
+	placed = placed_bytes(held.offset_bits, held.size_bits, max(versioned),
 	                       held.endian, held.bit_order, held.scalar.is_bit_packed)
 	if placed is None or max(placed) >= extent:
 		return None
@@ -2675,7 +2485,7 @@ def _pinned_run_body(struct: ResolvedStruct, placement: Placement,
 	taken all 256 first bytes -- neither is reachable from anything here,
 	and a check that cannot break its subject is worse than none.
 	"""
-	runs = _required_run(placement, every=True)
+	runs = required_run(placement, every=True)
 	if not runs or placement.offset_bits is None:
 		return None
 	if placement.offset_bits % BITS_PER_BYTE:
@@ -2727,7 +2537,7 @@ def _pinned_run_check(struct: ResolvedStruct, placement: Placement,
 
 def _pins_shown(placement: Placement) -> str:
 	"""The pinned bytes as a reader of the generated file would write them."""
-	runs = _required_run(placement, every=True)
+	runs = required_run(placement, every=True)
 	return " or ".join(render_delimiter(run).strip("`") for run in runs)
 
 
@@ -2744,7 +2554,7 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 
 	for entry in struct.entries:
 		placement = entry.placement
-		policy    = _reserved_policy(placement)
+		policy    = reserved_policy(placement)
 
 		if policy is None or placement.offset_bits is None or not placement.size_bits:
 			continue
@@ -2770,7 +2580,7 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 			continue
 
 		# A `preamble` is a reserved run pinned to BYTES (0052), and it has
-		# no bit policy at all -- `_reserved_policy` returns its default,
+		# no bit policy at all -- `reserved_policy` returns its default,
 		# `must_be_zero`, which is a policy the schema does not declare. The
 		# check below then named and commented one, and broke the run by
 		# writing all-ones: right for `\r\n` by luck, and vacuous for a
