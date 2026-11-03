@@ -449,7 +449,7 @@ class Image:
 	#: 9.5's four ways for a value to say where it ends, the last of them by
 	#: refusing.
 	tlv_rules: dict[int, list[tuple[int, int, int, int,
-	                                tuple[int, int, bool], int]]] = \
+	                                tuple[int, int, bool, bool], int]]] = \
 		field(default_factory=dict)
 	#: placement index -> (entry_bits, count_code, measured_from) for an
 	#: `indexed` region's offset table (section 9.3, decision 0024).
@@ -722,9 +722,17 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			(where, label, kind, default, size,
 			 len_bytes, len_terminal, len_flags) = fields[:8]
 			size_code = fields[8] if len(fields) > 8 else NONE
+			# **Both flag bits, as the tag row above reads both.** Bit 1 is
+			# big-endian and bit 0 is `TLV_FIXED_WIDTH`, and this read only
+			# the first -- so `decode_number`'s `fixed` fell to its default
+			# and a `prefixed(u16)` length was decoded as a varint. 26.664
+			# fixed the packer for a tag AND a length and the image reader
+			# for the tag alone; the length kept the fallback that entry is
+			# about, in the half nothing asked about (26.836).
 			image.tlv_rules.setdefault(where, []).append(
 				(label, kind, default, size,
-				 (len_bytes, len_terminal, bool(len_flags & 2)), size_code))
+				 (len_bytes, len_terminal, bool(len_flags & 2),
+				  bool(len_flags & 1)), size_code))
 
 	if INDEXES in found:
 		at, records, stride = found[INDEXES]

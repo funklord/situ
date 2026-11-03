@@ -658,6 +658,66 @@ def test_a_delimited_text_number_keeps_its_range(tmp_path: Path) -> None:
 				== f"validate {expected}", f"{backend}, on {label}"
 
 
+def test_a_prefixed_length_is_read_at_its_declared_width(
+	tmp_path: Path,
+) -> None:
+	"""A `prefixed(u16)` length is two fixed bytes, not a varint.
+
+	`decode_number` reads a varint unless told the number is a fixed-width
+	scalar, and `situc/pack.py` flags both a tag and a length so the walkers
+	do not take either for one -- the fallback having consumed the byte
+	after every `u8` tag at or above 0x80 (26.664). `walker/image.py` read
+	that bit for the tag row and not for the length row, so a
+	`prefixed(u16)` length decoded as a varint: `20 f1` read as 32 rather
+	than 8433, because 0x20 has its top bit clear and the varint stops
+	there. 32 bytes fit a 38-byte frame, so the walker counted an item that
+	every accessor and the C walker refused (26.836).
+
+	Written out rather than left to the corpus differential, which is what
+	found it: that draw is seeded, so the buffer reaching this is a property
+	of one seed and one corpus, and both move. The surrounding test says the
+	same about a delimited text number for the same reason.
+
+	**Both arms, because a bound needs an input with an edge.** A length
+	that overruns must refuse and one that fits must not, or a walker that
+	refused everything would pass the first arm alone.
+	"""
+	schema  = ROOT / "test" / "schema" / "edges.situ"
+	command = build(tmp_path, schema)
+	if not command:
+		pytest.skip("no struct a driver can acquire")
+
+	parsed   = load_schema(schema)
+	resolved = resolve(parsed, solve(parsed))
+	blob, _  = packer.pack(parsed, resolved, metadata=True)
+	image    = load(blob)
+
+	# `MM` marks big-endian, then a u16 tag, then the u16 length. As a varint
+	# the first length byte alone decides, which is the whole difference.
+	# The first frame is 38 bytes because that is what makes the two
+	# readings differ: as a varint the length is 32, and 6 + 32 is exactly
+	# 38, so the old code accepted the item; read at its declared width it
+	# is 8433 and runs past. A shorter frame refuses either way and would
+	# not tell them apart.
+	#
+	# The second ends at the value, since `marked_prefix` admits a zero tag
+	# with a zero length -- so trailing padding parses as further empty
+	# items and a longer frame counts eight of them rather than one.
+	cases = {
+		"a length past the frame": (b"MM" + b"\xf9\x0a" + b"\x20\xf1"
+		                            + bytes(32), 0),
+		"a length that fits":      (b"MM" + b"\xf9\x0a" + b"\x00\x04"
+		                            + bytes(4), 1),
+	}
+
+	shape = image.struct_names.index("marked_prefix")
+	for label, (packet, expected) in cases.items():
+		view  = walk_module.acquire(image, packet, shape)
+		index = image.members(image.structs[view.struct])[-1]
+		assert walk_module.tlv_count(view, index) == expected, (
+			f"the walk, on {label}")
+
+
 def test_every_refusal_in_validate_names_the_check_that_made_it() -> None:
 	"""The completeness of 0051's identity, checked rather than hoped for.
 

@@ -8259,6 +8259,11 @@ Moved to
 Moved to
 `doc/decision/26.834-the-check-that-locates-a-nested-member.md`.
 
+### 26.836 The walker read a `prefixed(T)` length as a varint
+
+Moved to
+`doc/decision/26.836-the-walker-read-a-prefixed-length-as-a-varint.md`.
+
 ### 26.835 The map does not say a region's order is in the data
 
 Moved to
