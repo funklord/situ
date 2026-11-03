@@ -78,10 +78,15 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	enums     = {decl.name for decl in schema.enums()}
 	variants  = _variants(schema)
 	constants = enum_constants(schema, prefix)
-	compared, declined = tally(resolved, cases, constants)
+	# `nested=True`: Rust reaches a nested field by chaining through the
+	# accessor's `Result` -- `view.head().expect(..).magic()` -- which is
+	# one expression because `expect` yields an owned view whose borrow of
+	# `view` outlives the call on it.
+	compared, declined = tally(resolved, cases, constants, nested=True)
 	for case in cases:
 		for path, value in case.expectations:
-			literal = comparable(resolved, case, path, value, constants)
+			literal = comparable(resolved, case, path, value, constants,
+			                     nested=True)
 			if literal is None or not _enum_typed(resolved, enums, case, path):
 				continue
 			# An enum-typed field is comparable after all, against the
@@ -283,7 +288,7 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 	"""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		raw = byte_run(resolved, case, path, value)
+		raw = byte_run(resolved, case, path, value, nested=True)
 		if raw is not None:
 			if not lines:
 				lines.append("")
@@ -292,11 +297,12 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 			# returns `&[u8]` and an array literal is `[u8; N]`, which do
 			# not compare directly.
 			lines.append(
-				f"\t\tassert_eq!(view.{_ident(path)}(), &[{body}][..],"
+				f"\t\tassert_eq!({_reach(path, case)}, &[{body}][..],"
 				f" \"{path}\");")
 			continue
 
-		literal = comparable(resolved, case, path, value, constants)
+		literal = comparable(resolved, case, path, value, constants,
+		                     nested=True)
 		if literal is None:
 			continue
 
@@ -315,6 +321,27 @@ def _expectations(basename: str, resolved: ResolvedSchema, enums: set[str],
 		# the C name function knows nothing about. `test/schema/header` has
 		# one, and it was the last of eight schemas this broke.
 		lines.append(
-			f"\t\tassert_eq!(view.{_ident(path)}(), {right},"
+			f"\t\tassert_eq!({_reach(path, case)}, {right},"
 			f" \"{path}\");")
 	return lines
+
+
+def _reach(path: str, case: Case) -> str:
+	"""`head.magic` as `view.head().expect(..).magic()`.
+
+	A nested struct's accessor returns `Result<Inner>`, so each step but the
+	last is unwrapped: `expect` yields an owned view whose borrow of `view`
+	outlives the call on it, which is what lets this be one expression
+	rather than a let-binding per level.
+
+	The message names the step that failed rather than the case, because a
+	vector whose bytes take a view can still fail to reach a nested one --
+	a bounds check per level is what section 12.3 asks for -- and "`one`
+	failed" would not say which level.
+	"""
+	parts = path.split(".")
+	reached = "view"
+	for step in parts[:-1]:
+		reached += (f".{_ident(step)}()"
+		            f".expect(\"`{case.struct}.{step}` must be reachable\")")
+	return f"{reached}.{_ident(parts[-1])}()"

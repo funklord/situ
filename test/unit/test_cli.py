@@ -538,13 +538,55 @@ def test_python_reaches_a_nested_field_by_chaining(tmp_path: Path) -> None:
 	assert 'self.assertEqual(view.head.x, 5, "head.x")' in text
 	assert "3 field expectation(s) are compared" in text
 
-	# And Rust still declines them, with the reason being the accessor's
-	# shape rather than the path's.
+	# Rust reaches them too now, through the accessor's `Result`. What
+	# neither does is flatten the path into a name nothing defines.
 	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
 	             "--out", str(tmp_path)]) == 0
 	rust = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
 	assert "head_magic" not in rust
-	assert "a field inside a nested struct" in rust
+	assert 'view.head().expect("`s.head` must be reachable").magic()' in rust
+
+
+def test_every_target_reaches_a_nested_field_its_own_way(
+	tmp_path: Path,
+) -> None:
+	"""One question, three shapes, and the shapes are the generated APIs.
+
+	Python chains a property, Rust chains the accessor's `Result` through
+	`expect`, and C++ declares a view and passes it to an out-parameter.
+	None of those is a choice: each is what that backend emits for a nested
+	struct, which is why this class was the last to land and why it landed
+	three different ways.
+
+	The failure message names the LEVEL rather than the case in the two that
+	can fail reaching it, because a vector whose bytes take a view can still
+	fail to reach a nested one -- a bounds check per level is what section
+	12.3 asks for -- and "`one` failed" would not say which.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nstruct inner {\n\tu16 x;\n}\n\n"
+		"struct s {\n\tinner head;\n\tu16 t;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text("s one 00 05 00 09\n\thead.x = 5\n\tt = 9\n",
+	                   encoding="ascii")
+
+	wanted = {
+		"python": ('self.assertEqual(view.head.x, 5, "head.x")', "py"),
+		"rust": ('view.head().expect("`s.head` must be reachable").x()', "rs"),
+		"cpp": ("::situ::inner sub0;", "cpp"),
+	}
+	for target, (expected, ending) in wanted.items():
+		out = tmp_path / target
+		assert main(["gen-tests", str(schema), str(vectors), "--target",
+		             target, "--out", str(out)]) == 0
+		text = (out / f"unit_vectors.{ending}").read_text(encoding="ascii")
+		assert expected in text, target
+		assert "2 field expectation(s) are compared" in text, target
+
+	# And C++ names the level it could not reach, not the case.
+	cpp = (tmp_path / "cpp" / "unit_vectors.cpp").read_text(encoding="ascii")
+	assert "head is not reachable" in cpp
 
 
 def test_a_nested_byte_run_is_not_named_as_a_flat_one(tmp_path: Path) -> None:
@@ -572,11 +614,13 @@ def test_a_nested_byte_run_is_not_named_as_a_flat_one(tmp_path: Path) -> None:
 	             "--out", str(tmp_path)]) == 0
 	text = (tmp_path / "unit_vectors.cpp").read_text(encoding="ascii")
 
-	# The flat one is compared; the nested one is declined, and no accessor
-	# is invented for the dotted path.
+	# The flat one reads from the view and the nested one through a sub-view
+	# it declares. What neither does is flatten the path into a name nothing
+	# defines, which is what asking the byte-run question first produced.
 	assert "view.tail()" in text
 	assert "head_magic" not in text
-	assert "a field inside a nested struct" in text
+	assert "::situ::inner sub0;" in text
+	assert "sub0.magic()" in text
 
 
 def test_rust_compares_an_enum_field_against_its_variant(

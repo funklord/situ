@@ -54,7 +54,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 		_check(resolved, case)
 
 	constants = enum_constants(schema, prefix)
-	compared, declined = tally(resolved, cases, constants)
+	# `nested=True`: C++ reaches a nested field by declaring a view and
+	# passing it, its accessor taking an out-parameter rather than
+	# returning one -- where Rust chains an `expect` and Python chains a
+	# dot. Three languages, three shapes, one question.
+	compared, declined = tally(resolved, cases, constants, nested=True)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
@@ -164,6 +168,51 @@ def _case_body(resolved: ResolvedSchema, constants: dict[str, int],
 	]
 
 
+def _reach(resolved: ResolvedSchema, case: Case,
+		path: str) -> tuple[list[str], str, str]:
+	"""The declarations that reach a nested field, the holder, and the leaf.
+
+	C++'s nested accessor takes an out-parameter and returns an error, so
+	each level is a declaration and a check -- where Rust chains an `expect`
+	and Python chains a dot.
+
+	An early `return` on failure, which is what the view and validate
+	checks above already do: a case that cannot reach a nested view has
+	nothing useful to say about the rest of its fields. And the message
+	names the LEVEL rather than the case, because a vector whose bytes take
+	a view can still fail to reach a nested one -- a bounds check per level
+	is what section 12.3 asks for -- and "`one` failed" would not say
+	which.
+	"""
+	parts = path.split(".")
+	if len(parts) == 1:
+		return ([], "view", parts[0])
+
+	lines: list[str] = []
+	holder = "view"
+	struct = case.struct
+	for depth, step in enumerate(parts[:-1]):
+		found = resolved.find(f"{struct}.{step}")
+		assert found is not None, f"{struct}.{step}"
+		inner = found.placement.type_name
+		sub   = f"sub{depth}"
+
+		lines.extend([
+			f"\t\t::situ::{inner} {sub};",
+			f"\t\tif ({holder}.{c_name(step)}({sub})"
+			" != ::situ::rt::err::ok) {",
+			f"\t\t\tstd::printf(\"FAIL {case.struct} {case.name}:"
+			f" {step} is not reachable\\n\");",
+			"\t\t\tsitu_failures++;",
+			"\t\t\treturn;",
+			"\t\t}",
+		])
+		holder = sub
+		struct = inner
+
+	return (lines, holder, parts[-1])
+
+
 def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 		case: Case) -> list[str]:
 	"""What the vector says about each field, where this target can say it.
@@ -180,7 +229,7 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 	"""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		raw = byte_run(resolved, case, path, value)
+		raw = byte_run(resolved, case, path, value, nested=True)
 		if raw is not None:
 			if not lines:
 				lines.append("")
@@ -188,9 +237,11 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 			# `::situ::rt::bytes` is a `span`, so `data()` and `size()` and
 			# `memcmp`. Both halves compared, because a span of the right
 			# bytes and the wrong length is not the run the vector names.
+			reach, holder, leaf = _reach(resolved, case, path)
 			lines.extend([
 				"\t{",
-				f"\t\tconst auto got = view.{c_name(path)}();",
+				*reach,
+				f"\t\tconst auto got = {holder}.{c_name(leaf)}();",
 				f"\t\tstatic const std::uint8_t want[] = {{{body}}};",
 				"",
 				"\t\tif (got.size() != sizeof want",
@@ -203,13 +254,28 @@ def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
 			])
 			continue
 
-		literal = comparable(resolved, case, path, value, constants)
+		literal = comparable(resolved, case, path, value, constants,
+		                     nested=True)
 		if literal is None:
 			continue
 		if not lines:
 			lines.append("")
-		got = f"static_cast<unsigned long long>(view.{c_name(path)}())"
+		reach, holder, leaf = _reach(resolved, case, path)
+		got = f"static_cast<unsigned long long>({holder}.{c_name(leaf)}())"
 		want = f"static_cast<unsigned long long>({literal})"
+		if reach:
+			# A scope, because the sub-view is a declaration and the flat
+			# form has none.
+			lines.extend(["\t{", *reach,
+			              f"\t\tif ({got} != {want}) {{",
+			              f"\t\t\tstd::printf(\"FAIL {case.struct}"
+			              f" {case.name}: {path} is %llu, expected"
+			              f" %llu\\n\",",
+			              f"\t\t\t\t{got}, {want});",
+			              "\t\t\tsitu_failures++;",
+			              "\t\t}",
+			              "\t}"])
+			continue
 		lines.extend([
 			f"\tif ({got} != {want}) {{",
 			f"\t\tstd::printf(\"FAIL {case.struct} {case.name}: {path}"
