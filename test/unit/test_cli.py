@@ -419,9 +419,57 @@ def test_a_python_vector_suite_compares_a_scalar_expectation(
 	assert 'self.assertEqual(view.version, 1, "version")' in text
 	assert 'self.assertEqual(view.length, 1500, "length")' in text
 	assert 'self.assertEqual(view.seq, 0xDEADBEEF, "seq")' in text
-	# The count, and the reason the rest are not compared.
-	assert "field expectation(s) are compared" in text
-	assert "a value that is not an integer literal" in text
+	# Every one of header.vectors' expectations is comparable now -- the
+	# integers, and the C enum constants resolved to their numbers -- so the
+	# module declines nothing and says only what it compared. Thirteen
+	# across its four cases, not the three in the first one.
+	assert "13 field expectation(s) are compared" in text
+	assert "NOT compared" not in text
+
+
+def test_a_vector_suite_resolves_a_c_enum_constant_to_its_number(
+	tmp_path: Path,
+) -> None:
+	"""`SITU_KIND_TWO` is the C backend's spelling and no other language's,
+	so it cannot be spliced -- but the schema knows the number, and that is
+	what the four languages agree on.
+
+	18 of the corpus's 197 expectations were this shape and were the largest
+	class no target could compare. Resolving them took Python and C++ from
+	142 to 159. Rust gains none, and correctly: every one of the 18 is on an
+	enum-typed field, whose Rust getter returns `Option<T>` whatever the
+	right-hand side says.
+
+	The mapping is built by asking `names.macro` for each member's constant
+	rather than by taking the constant apart. Guessing at `SITU_` plus an
+	underscore split breaks on an enum or member whose own name contains one
+	-- `leap_indicator`, `last_minute_61` -- which is most of them.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"endian big;\n\nenum kind : u8 { one = 1, two = 2, }\n\n"
+		"struct s {\n\tu8 plain;\n\tkind k;\n}\n", encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text(
+		"s one 07 02\n\tplain = 7\n\tk = SITU_KIND_TWO\n", encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "python",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.py").read_text(encoding="ascii")
+
+	# The number, not the name: `SITU_KIND_TWO` means nothing in Python.
+	assert 'self.assertEqual(view.k, 2, "k")' in text
+	assert "SITU_KIND_TWO" not in text
+	assert "2 field expectation(s) are compared" in text
+
+	# And Rust declines it, because the getter's type is the obstacle rather
+	# than the value's spelling.
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	rust = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
+	assert 'assert_eq!(view.plain(), 7, "plain")' in rust
+	assert "view.k()" not in rust
+	assert "whose Rust getter returns `Option<T>`" in rust
 
 
 def test_a_python_vector_suite_declines_four_kinds_and_says_which(

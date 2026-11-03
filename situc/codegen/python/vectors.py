@@ -30,7 +30,8 @@ validation accepts them.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import comparable, refuse_parameters, tally
+from situc.codegen import (comparable, enum_constants,
+                           refuse_parameters, tally)
 from situc.codegen.c.vectors import Case, _check, _symbol
 from situc.codegen.python.emit import py_name
 from situc.resolve import ResolvedSchema
@@ -57,11 +58,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	for case in cases:
 		_check(resolved, case)
 
-	compared, declined = tally(resolved, cases)
+	constants = enum_constants(schema, prefix)
+	compared, declined = tally(resolved, cases, constants)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
-		lines.extend(_case_body(basename, resolved, case))
+		lines.extend(_case_body(basename, resolved, constants, case))
 
 	lines.extend([
 		"",
@@ -132,7 +134,7 @@ def _preamble(basename: str, compared: int,
 
 
 def _case_body(basename: str, resolved: ResolvedSchema,
-		case: Case) -> list[str]:
+		constants: dict[str, int], case: Case) -> list[str]:
 	name = _symbol(case)
 
 	# A variable struct's `at` takes the message length and a fixed one's
@@ -163,16 +165,17 @@ def _case_body(basename: str, resolved: ResolvedSchema,
 		"\t\t\tview.validate()",
 		"\t\texcept situ_runtime.SituError as exc:",
 		f"\t\t\tself.fail(f\"`{case.name}` must validate: {{exc}}\")",
-		*_expectations(resolved, case),
+		*_expectations(resolved, constants, case),
 		"",
 	]
 
 
-def _expectations(resolved: ResolvedSchema, case: Case) -> list[str]:
+def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
+		case: Case) -> list[str]:
 	"""What the vector says about each field, where this target can say it."""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		literal = comparable(resolved, case, path, value)
+		literal = comparable(resolved, case, path, value, constants)
 		if literal is None:
 			continue
 		if not lines:

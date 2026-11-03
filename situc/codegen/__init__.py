@@ -210,8 +210,36 @@ def argued_refusal(relation: ast.Relation, resolved: ResolvedSchema,
 INT_LITERAL = re.compile(r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*\Z")
 
 
+def enum_constants(schema: ast.Schema, prefix: str = "situ") -> dict[str, int]:
+	"""Every enum member's C macro name against its value.
+
+	A vectors file may give an expectation as the C constant the C backend
+	emits -- `SITU_LEAP_INDICATOR_NONE` -- which is 18 of the corpus's 197
+	expectations and was the largest class no target could compare. The
+	other three languages spell the member differently, so splicing the name
+	is not an option and resolving it to its NUMBER is, because the schema
+	knows the number.
+
+	Built by asking `macro` for the name rather than by taking the constant
+	apart: that function is what the C backend emits with, so this inverts
+	the actual rule. Guessing at `SITU_` plus an underscore split would
+	break on an enum or member whose own name contains one, which is most of
+	them -- `leap_indicator`, `last_minute_61`.
+	"""
+	from situc.codegen.c.names import macro
+
+	found: dict[str, int] = {}
+	for decl in schema.enums():
+		for member in decl.members:
+			value = getattr(member.value, "value", None)
+			if isinstance(value, int):
+				found[macro(prefix, decl.name, member.name)] = value
+	return found
+
+
 def comparable(resolved: ResolvedSchema, case: "Case",
-		path: str, value: str) -> str | None:
+		path: str, value: str,
+		constants: dict[str, int] | None = None) -> str | None:
 	"""The literal to compare this expectation against, or None.
 
 	Measured over the corpus: of 197 expectations, **142 are a plain scalar
@@ -237,11 +265,20 @@ def comparable(resolved: ResolvedSchema, case: "Case",
 		return None
 
 	match = INT_LITERAL.match(value)
-	return match.group(1) if match else None
+	if match:
+		return match.group(1)
+
+	# A C enum constant, resolved to the number the schema gives it. Not
+	# spliced by name: the other three languages spell the member
+	# differently, and the number is the thing they agree on.
+	if constants is not None and value in constants:
+		return str(constants[value])
+	return None
 
 
 def declined_reason(resolved: ResolvedSchema, case: "Case",
-		path: str, value: str) -> str:
+		path: str, value: str,
+		constants: dict[str, int] | None = None) -> str:
 	"""Why one expectation is not compared, in the words a reader needs.
 
 	Four reasons rather than one count, because "37 not compared" tells a
@@ -258,21 +295,25 @@ def declined_reason(resolved: ResolvedSchema, case: "Case",
 	found = resolved.find(f"{case.struct}.{path}")
 	if found is not None and found.placement.radix is not None:
 		return "a text number, whose getter is fallible"
+	if constants is not None:
+		return ("a value that is neither an integer literal nor an enum "
+		        "constant this schema declares")
 	return "a value that is not an integer literal, such as a C enum constant"
 
 
-def tally(resolved: ResolvedSchema,
-		cases: list["Case"]) -> tuple[int, dict[str, int]]:
+def tally(resolved: ResolvedSchema, cases: list["Case"],
+		constants: dict[str, int] | None = None
+		) -> tuple[int, dict[str, int]]:
 	"""How many expectations a backend compares, and why it declines the rest."""
 	compared = 0
 	declined: dict[str, int] = {}
 
 	for case in cases:
 		for path, value in case.expectations:
-			if comparable(resolved, case, path, value) is not None:
+			if comparable(resolved, case, path, value, constants) is not None:
 				compared += 1
 			else:
-				why = declined_reason(resolved, case, path, value)
+				why = declined_reason(resolved, case, path, value, constants)
 				declined[why] = declined.get(why, 0) + 1
 
 	return compared, declined

@@ -24,7 +24,8 @@ in the other two, and the generated file says so with the count.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import comparable, refuse_parameters, tally
+from situc.codegen import (comparable, enum_constants,
+                           refuse_parameters, tally)
 from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
 from situc.resolve import ResolvedSchema
@@ -52,11 +53,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	for case in cases:
 		_check(resolved, case)
 
-	compared, declined = tally(resolved, cases)
+	constants = enum_constants(schema, prefix)
+	compared, declined = tally(resolved, cases, constants)
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
-		lines.extend(_case_body(resolved, case))
+		lines.extend(_case_body(resolved, constants, case))
 
 	lines.extend(_main(cases))
 	return "\n".join(lines) + "\n"
@@ -119,7 +121,8 @@ def _preamble(basename: str, compared: int,
 	return lines
 
 
-def _case_body(resolved: ResolvedSchema, case: Case) -> list[str]:
+def _case_body(resolved: ResolvedSchema, constants: dict[str, int],
+		case: Case) -> list[str]:
 	name = _symbol(case)
 	body = ", ".join(f"0x{byte:02X}" for byte in case.data)
 
@@ -153,13 +156,14 @@ def _case_body(resolved: ResolvedSchema, case: Case) -> list[str]:
 		"\t\tsitu_failures++;",
 		"\t\treturn;",
 		"\t}",
-		*_expectations(resolved, case),
+		*_expectations(resolved, constants, case),
 		"}",
 		"",
 	]
 
 
-def _expectations(resolved: ResolvedSchema, case: Case) -> list[str]:
+def _expectations(resolved: ResolvedSchema, constants: dict[str, int],
+		case: Case) -> list[str]:
 	"""What the vector says about each field, where this target can say it.
 
 	A printed comparison rather than an `assert`: this suite has no
@@ -174,7 +178,7 @@ def _expectations(resolved: ResolvedSchema, case: Case) -> list[str]:
 	"""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		literal = comparable(resolved, case, path, value)
+		literal = comparable(resolved, case, path, value, constants)
 		if literal is None:
 			continue
 		if not lines:

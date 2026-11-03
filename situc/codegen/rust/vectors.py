@@ -31,7 +31,8 @@ family's own rule.
 from __future__ import annotations
 
 from situc import __version__, ast
-from situc.codegen import comparable, refuse_parameters, tally
+from situc.codegen import (comparable, enum_constants,
+                           refuse_parameters, tally)
 from situc.codegen.c.names import c_name
 from situc.codegen.c.vectors import Case, _check, _symbol
 from situc.codegen.rust.emit import _pascal
@@ -69,11 +70,18 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	# The shared tally classifies the vector FILE; Rust declines one class
 	# more, and the count has to say so or it overstates what this suite
 	# compares. See `_enum_typed`.
-	enums    = {decl.name for decl in schema.enums()}
-	compared, declined = tally(resolved, cases)
+	# The constants are resolved here too, even though Rust declines every
+	# expectation they unlock: without them the shared classifier reports a
+	# C enum constant as "not an integer literal", which is true and is not
+	# the reason. The obstacle is the getter's type, and a reader fixing one
+	# of these needs to be told which (26.828's shape, met in a reason
+	# string rather than a claim).
+	enums     = {decl.name for decl in schema.enums()}
+	constants = enum_constants(schema, prefix)
+	compared, declined = tally(resolved, cases, constants)
 	for case in cases:
 		for path, value in case.expectations:
-			if (comparable(resolved, case, path, value) is not None
+			if (comparable(resolved, case, path, value, constants) is not None
 			    and _enum_typed(resolved, enums, case, path)):
 				compared -= 1
 				why = ("an enum-typed field, whose Rust getter returns"
@@ -83,7 +91,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema, cases: list[Case],
 	lines = _preamble(basename, compared, declined)
 
 	for case in cases:
-		lines.extend(_case_body(basename, resolved, enums, case))
+		lines.extend(_case_body(basename, resolved, enums, constants, case))
 
 	lines.append("}")
 	return "\n".join(lines) + "\n"
@@ -178,7 +186,7 @@ def _enum_typed(resolved: ResolvedSchema, enums: set[str],
 
 
 def _case_body(basename: str, resolved: ResolvedSchema, enums: set[str],
-		case: Case) -> list[str]:
+		constants: dict[str, int], case: Case) -> list[str]:
 	name = _symbol(case)
 	body = ", ".join(f"0x{byte:02X}" for byte in case.data)
 
@@ -193,14 +201,14 @@ def _case_body(basename: str, resolved: ResolvedSchema, enums: set[str],
 		"",
 		f"\t\tview.validate()",
 		f"\t\t\t.expect(\"`{case.name}` must validate\");",
-		*_expectations(resolved, enums, case),
+		*_expectations(resolved, enums, constants, case),
 		"\t}",
 		"",
 	]
 
 
 def _expectations(resolved: ResolvedSchema, enums: set[str],
-		case: Case) -> list[str]:
+		constants: dict[str, int], case: Case) -> list[str]:
 	"""What the vector says about each field, where this target can say it.
 
 	`assert_eq!` carries the field name as its message, so a failure names
@@ -209,7 +217,7 @@ def _expectations(resolved: ResolvedSchema, enums: set[str],
 	"""
 	lines: list[str] = []
 	for path, value in case.expectations:
-		literal = comparable(resolved, case, path, value)
+		literal = comparable(resolved, case, path, value, constants)
 		if literal is None or _enum_typed(resolved, enums, case, path):
 			continue
 		if not lines:
