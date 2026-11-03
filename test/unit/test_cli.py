@@ -898,6 +898,69 @@ def test_gen_checks_cpp_asks_the_same_question_as_python(
 		assert "0x81" in text.replace('"8123"', "0x81 0x23"), target
 
 
+def test_gen_checks_writes_a_rust_suite(tmp_path: Path) -> None:
+	"""`gen-checks --target rust`: the fourth backend, section 1's fourth
+	language, and seven of the nine kinds.
+
+	A test crate root with `#[test]` functions, which is what
+	`rust/vectors.py` emits and for its reason: `rustc --test` compiles it
+	with no dependency to declare.
+
+	**Two the target declines, both named in the generated file.** A nested
+	member's START cannot be asked -- a Rust view holds a private slice,
+	so nothing can read a sub-view's offset to compare against the map --
+	and the framing kind is deferred with it.
+
+	Measured: inverting the Rust emitter's byte order fails 129 decode
+	checks across 27 of the corpus's schemas, which is the same 129 the
+	C++ and Python backends give for the same sabotage of their own
+	emitters. Three backends, one number: that is what reading the
+	arithmetic from `situc/codegen` rather than each computing it buys.
+	120 round-trip checks fail with them, the write going through the
+	correct order and the read-back through the wrong one.
+	"""
+	assert main(["gen-checks", HEADER, "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "header_checks.rs").read_text(encoding="ascii")
+
+	assert "mod situ_rt;" in text
+	assert "mod header;" in text
+	assert "#[cfg(test)]" in text
+	assert "fn header_refuses_a_short_buffer()" in text
+	assert "fn header_length_decodes_a_known_encoding()" in text
+	# The two it declines, with their reasons, so seven is not read as nine.
+	assert "a nested member starts where the map says:" in text
+	assert "a private slice" in text
+
+
+def test_gen_checks_rust_escapes_a_whole_setter_name(
+	tmp_path: Path,
+) -> None:
+	"""`_ident` applies to the whole identifier, not to a part of it.
+
+	`set_` + `_ident("type")` is `set_r#type`, which rustc rejects with
+	"prefix `set_r` is unknown": the raw-identifier escape belongs in front
+	of the name it escapes, and `set_type` is not a keyword so it needs
+	none. `test/schema/lenient` is the corpus schema that caught it, and
+	the vectors port made the mirror of this mistake -- `c_name` where
+	`_ident` was wanted (26.829).
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(
+		"target buffer;\nendian big;\nbit_order msb_first;\n\n"
+		"struct s {\n\tu8  type;\n\tu8  rest;\n}\n",
+		encoding="ascii")
+
+	assert main(["gen-checks", str(schema), "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_checks.rs").read_text(encoding="ascii")
+
+	assert "set_r#type" not in text
+	assert "view.set_type(1);" in text
+	# And the getter DOES need the escape, `type` being a keyword.
+	assert "view.r#type()" in text
+
+
 def test_the_preamble_counts_its_own_kinds(tmp_path: Path) -> None:
 	"""The sentence naming how many kinds this backend emits, and the list
 	it counts, were two values with nothing comparing them -- and they had

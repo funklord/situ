@@ -295,8 +295,8 @@ def build_parser() -> argparse.ArgumentParser:
 	# `--target cpp` emits eight of them; each generated file says
 	# which kinds it emits and what each one declines per member.
 	checks_cmd.add_argument(
-		"--target", choices=("c", "cpp", "python"), default="c",
-		help="language of the generated checks (c, cpp, python)")
+		"--target", choices=("c", "cpp", "python", "rust"), default="c",
+		help="language of the generated checks (c, cpp, python, rust)")
 
 	doc_cmd = sub.add_parser(
 		"doc", help="RFC-style byte-layout diagrams and a field reference")
@@ -1378,13 +1378,17 @@ def cmd_gen_checks(args: argparse.Namespace) -> int:
 	elif target_name == "cpp":
 		from situc.codegen.cpp import checks as cpp_checks
 		emit = cpp_checks.generate
+	elif target_name == "rust":
+		from situc.codegen.rust import checks as rust_checks
+		emit = rust_checks.generate
 
 	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	name = args.schema.stem
 	text = emit(parse(source), resolved, name, args.prefix)
 
 	args.out.mkdir(parents=True, exist_ok=True)
-	suffix = {"python": "py", "cpp": "cpp"}.get(target_name, "c")
+	suffix = {"python": "py", "cpp": "cpp", "rust": "rs"}.get(
+		target_name, "c")
 	target = args.out / f"{name}_checks.{suffix}"
 	target.write_text(text, encoding="ascii")
 	print(f"situc: wrote {target}", file=sys.stderr)

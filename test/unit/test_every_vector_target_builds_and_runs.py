@@ -21,6 +21,7 @@ Python, running IS the compile.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -101,7 +102,16 @@ def test_the_rust_vector_suite_builds_and_runs(
 	done = subprocess.run([str(tmp_path / "vectors")],
 	                      capture_output=True, text=True, cwd=tmp_path)
 	assert done.returncode == 0, done.stdout[-2000:]
-	assert "0 passed" not in done.stdout, done.stdout
+
+	# The count is READ and not matched. This was `"0 passed" not in
+	# stdout`, which `20 passed` contains -- so the guard against a
+	# vacuous pass would have failed any crate whose test count ended in a
+	# zero, and passed only because none did. Found when the same line,
+	# copied into the checks gate below, met seven schemas that do
+	# (26.845).
+	ran = re.search(r"test result: \w+\. (\d+) passed", done.stdout)
+	assert ran is not None, done.stdout
+	assert int(ran.group(1)) > 0, done.stdout
 
 
 @pytest.mark.skipif(CXX is None, reason="needs g++")
@@ -138,6 +148,67 @@ def check_schemas() -> list[Path]:
 	                *ROOT.glob("test/schema/*.situ")])
 	assert len(found) > 30, f"only {len(found)} schemas; the corpus moved"
 	return found
+
+
+@pytest.mark.skipif(RUSTC is None, reason="needs rustc")
+@pytest.mark.parametrize("schema", check_schemas(), ids=lambda p: p.stem)
+def test_the_rust_checks_suite_builds_and_runs(
+	schema: Path, tmp_path: Path,
+) -> None:
+	"""`gen-checks --target rust`: seven of the nine kinds, built and run.
+
+	The fourth backend of the four, and the compile is again the gate that
+	matters: `rustc --test` is what catches a body that does not build, and
+	it caught two things here that no review would have (26.845).
+
+	No `--layer frame`: the framing kind is one of the two this target
+	declines, so nothing imports a frame module.
+	"""
+	out = tmp_path / "gen"
+	out.mkdir(parents=True, exist_ok=True)
+	emitted = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-checks", str(schema),
+		 "--target", "rust", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	if emitted.returncode != 0:
+		if "parameter" in emitted.stderr:
+			pytest.skip("gen-checks declines a schema taking an argument")
+		raise AssertionError(emitted.stderr[-700:])
+
+	built = subprocess.run(
+		[sys.executable, "-m", "situc", "build", str(schema),
+		 "--target", "rust", "--out", str(out)],
+		capture_output=True, text=True, cwd=ROOT)
+	assert built.returncode == 0, built.stderr[-700:]
+
+	# `#![no_std]` stripped, as the vector crates strip it: a test crate
+	# links the standard library and the runtime is written to be
+	# embeddable without.
+	(out / "situ_rt.rs").write_text(
+		(ROOT / "runtime" / "rust" / "situ_rt.rs")
+		.read_text(encoding="ascii").replace("#![no_std]\n", ""),
+		encoding="ascii")
+
+	assert RUSTC is not None
+	compiled = subprocess.run(
+		[RUSTC, "--edition", "2021", "-A", "warnings", "--test",
+		 f"{schema.stem}_checks.rs", "-o", "checks"],
+		capture_output=True, text=True, cwd=out)
+	assert compiled.returncode == 0, compiled.stderr[-2000:]
+
+	done = subprocess.run([str(out / "checks")], capture_output=True,
+	                      text=True, cwd=out)
+	assert done.returncode == 0, done.stdout[-2000:]
+
+	# A crate of no tests passes as loudly as one that checked everything,
+	# so the count is read rather than matched. **Written as
+	# `"0 passed" not in stdout` first, and it failed for seven schemas**
+	# -- `20 passed` contains `0 passed`, so a guard whose whole purpose is
+	# to catch a vacuous pass was itself answering about the wrong thing.
+	# The same shape as the kinds it is guarding, one level out.
+	ran = re.search(r"test result: \w+\. (\d+) passed", done.stdout)
+	assert ran is not None, done.stdout
+	assert int(ran.group(1)) > 0, done.stdout
 
 
 @pytest.mark.skipif(CXX is None, reason="needs g++")

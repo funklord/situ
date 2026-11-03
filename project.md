@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.845 Gen-checks in Rust, and the getter that collapses its inputs
+
+Moved to
+`doc/decision/26.845-gen-checks-in-rust-and-the-getter-that-collapses-its-inputs.md`.
+
 ### 26.844 Gen-checks in C++, and what the sharing bought
 
 Moved to
