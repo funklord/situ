@@ -1050,9 +1050,15 @@ def _find_packed_bit_runs(resolved: ResolvedSchema) -> list[Suggestion]:
 			listed = ", ".join(f"`{held.name}`" for held in candidates[:5])
 			if len(candidates) > 5:
 				listed += f", and {len(candidates) - 5} more"
+			# Every one of them, not the first. `u4 a; u12 b; u12 c; u4 d`
+			# straddles twice -- `b` across byte 1 and `c` across byte 3 --
+			# and naming one left a true sentence that undersold the run.
+			# No corpus schema has two today, which is why reading the
+			# message found it and no test could have.
 			crossing = [held.name for held in candidates
 			            if held.bit_position is not None
 			            and held.bit_position.straddles]
+			crossed  = ", ".join(f"`{name}`" for name in crossing)
 
 			found.append(Suggestion(
 				rule    = "widen-bit-field",
@@ -1074,8 +1080,11 @@ def _find_packed_bit_runs(resolved: ResolvedSchema) -> list[Suggestion]:
 				           f"every write is a read-modify-write of the byte "
 				           f"{_verb(len(candidates), 'it sits', 'they sit')} "
 				           f"in"
-				           + (f"; `{crossing[0]}` crosses a byte boundary, so "
-				              f"its write touches two"
+				           + (f"; {crossed} "
+				              f"{_verb(len(crossing), 'crosses', 'cross')} a "
+				              f"byte boundary, so "
+				              f"{_verb(len(crossing), 'its write touches', 'their writes touch')}"
+				              f" two"
 				              if crossing else "")
 				           + f". Lifting all {len(candidates)} costs "
 				           + _bytes(all_of)),

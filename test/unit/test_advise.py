@@ -568,6 +568,28 @@ def test_a_straddling_bit_field_is_named_as_paying_twice() -> None:
 	assert (found.cost.typical, found.cost.worst) == (1, 1)
 
 
+def test_two_straddling_fields_are_both_named() -> None:
+	"""The clause named `crossing[0]` and nothing else.
+
+	No corpus schema has a run that straddles twice, so the message was true
+	and incomplete and no gate could have said so -- it was found by reading
+	the rendered output, which section 17 makes the product. `u4 a; u12 b;
+	u12 c; u4 d` straddles at byte 1 and again at byte 3.
+
+	The verb agreement goes with it, which is `_verb`'s whole reason for
+	existing: "`b`, `c` crosses a byte boundary, so its write touches two" is
+	the register that function was written to keep the advisor out of.
+	"""
+	found = only(BITS + """struct s [allow_straddle] {
+	u4 a; u12 mid; u12 two; u4 d;
+	u32 seq;
+}
+""", "widen-bit-field")
+
+	assert ("`mid`, `two` cross a byte boundary, so their writes touch two"
+	        in found.detail)
+
+
 def test_every_rule_ranks_where_the_catalog_says_it_does() -> None:
 	"""`rank` is written twice -- once in `CATALOG` and once in every
 	`Suggestion` the rule builds -- and nothing but this compares them.
