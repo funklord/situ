@@ -11,7 +11,7 @@ import argparse
 import difflib
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol, cast
@@ -231,6 +231,13 @@ def build_parser() -> argparse.ArgumentParser:
 	tests_cmd.add_argument("vectors", type=Path)
 	tests_cmd.add_argument("--out", type=Path, default=Path("."))
 	tests_cmd.add_argument("--prefix", default="situ")
+	# Section 1 names four languages for the accessors and four artifacts
+	# beside them, and this one reached C alone until 26.829. `cpp` and
+	# `python` are not here yet and the help says so rather than offering a
+	# choice that errors.
+	tests_cmd.add_argument(
+		"--target", choices=("c", "rust"), default="c",
+		help="language of the generated suite (c, rust)")
 
 	codec_cmd = sub.add_parser(
 		"gen-codec-tests", help="generate property tests from codec signatures")
@@ -1159,20 +1166,41 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_gen_tests(args: argparse.Namespace) -> int:
+	"""The golden-vector suite, in the language asked for.
+
+	`parse_vectors` comes from the C module whichever target is asked for,
+	because the vector FILE is language-independent: a second parser for it
+	would be a second answer to one question, and so would a second
+	validator, which is why `rust/vectors.py` imports `_check` rather than
+	reimplementing it.
+
+	The EMITTER is bound as a function rather than as a module, which is not
+	taste: two modules assigned to one name is a type error, and binding
+	`generate` states the thing that actually has to match between the two
+	backends -- the signature.
+	"""
 	from situc.codegen.c import vectors
+
+	target_name = getattr(args, "target", "c")
+	emit: Callable[[ast.Schema, ResolvedSchema, list[vectors.Case], str, str],
+	               str] = vectors.generate
+	if target_name == "rust":
+		from situc.codegen.rust import vectors as rust_vectors
+		emit = rust_vectors.generate
 
 	source, resolved, outcomes = analyse(args.schema, getattr(args, "define", None))
 	cases = vectors.parse_vectors(read_source(args.vectors))
 
 	name = args.schema.stem
 	try:
-		text = vectors.generate(parse(source), resolved, cases, name, args.prefix)
+		text = emit(parse(source), resolved, cases, name, args.prefix)
 	except ValueError as exc:
 		print(f"situc: {exc}", file=sys.stderr)
 		return 1
 
 	args.out.mkdir(parents=True, exist_ok=True)
-	target = args.out / f"{name}_vectors.c"
+	suffix = "rs" if target_name == "rust" else "c"
+	target = args.out / f"{name}_vectors.{suffix}"
 	target.write_text(text, encoding="ascii")
 	print(f"situc: wrote {target} ({len(cases)} vectors)", file=sys.stderr)
 

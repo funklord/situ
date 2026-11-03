@@ -8234,6 +8234,11 @@ Moved to
 Moved to
 `doc/decision/26.828-three-clauses-true-of-the-case-that-motivated-them.md`.
 
+### 26.829 The fourth artifact reached one language
+
+Moved to
+`doc/decision/26.829-the-fourth-artifact-reached-one-language.md`.
+
 ### 26.715 The same width in the other pointer backend
 
 Moved to

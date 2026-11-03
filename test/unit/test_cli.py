@@ -208,6 +208,75 @@ def test_gen_tests_writes_a_vector_suite(
 	assert "4 vectors" in capsys.readouterr().err
 
 
+def test_gen_tests_writes_a_rust_vector_suite(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""Section 1 names four languages and four artifacts, and this artifact
+	reached one language: `gen-tests` took no `--target` at all, so a user
+	who generated Rust accessors had no golden-vector suite for them
+	(26.829).
+
+	A test crate root rather than a module, which is what `rustc --test`
+	compiles: `mod situ_rt;` and `mod <name>;` beside it, and the cases in a
+	`#[cfg(test)] mod vectors`.
+	"""
+	vectors = str(Path(HEADER).with_suffix(".vectors"))
+	assert main(["gen-tests", HEADER, vectors, "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+
+	text = (tmp_path / "header_vectors.rs").read_text(encoding="ascii")
+	assert "mod situ_rt;" in text
+	assert "mod header;" in text
+	assert "#[cfg(test)]" in text
+	assert "#[test]" in text
+	# The type name is the Rust backend's own rule, not a second copy of it.
+	assert "crate::header::Header::new(&BYTES)" in text
+	assert "4 vectors" in capsys.readouterr().err
+
+
+def test_a_rust_vector_suite_says_what_it_does_not_compare(
+	tmp_path: Path,
+) -> None:
+	"""Per-field expectations are read and schema-checked by the shared
+	validator and not yet COMPARED by the Rust body. A suite that checks
+	fewer things than its input states, and does not say which, reads as
+	coverage of the input -- which is this family's own rule, met here with
+	a number.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text("endian big;\n\nstruct s {\n\tu16 a;\n\tu16 b;\n}\n",
+	                  encoding="ascii")
+	vectors = tmp_path / "unit.vectors"
+	vectors.write_text("s one 00 01 00 02\n\ta = 1\n\tb = 2\n",
+	                   encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
+	             "--out", str(tmp_path)]) == 0
+	text = (tmp_path / "unit_vectors.rs").read_text(encoding="ascii")
+
+	assert "2 field expectation(s) in that file are not" in text
+	# And the C suite, which does compare them, is named rather than implied.
+	assert "`situc gen-tests --target c` compares them" in text
+
+
+def test_a_rust_vector_suite_refuses_a_schema_that_takes_an_argument(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""The `refuse_parameters` bargain is the whole family's, and a new
+	member of it that did not call it would be the defect the family was
+	named for."""
+	schema = tmp_path / "arg.situ"
+	schema.write_text(
+		"endian big;\n\nstruct s {\n\tparameter u8 block [stream];\n"
+		"\tu8 body[block];\n}\n", encoding="ascii")
+	vectors = tmp_path / "arg.vectors"
+	vectors.write_text("s one 00\n", encoding="ascii")
+
+	assert main(["gen-tests", str(schema), str(vectors), "--target", "rust",
+	             "--out", str(tmp_path)]) != 0
+	assert not (tmp_path / "arg_vectors.rs").exists()
+
+
 def test_gen_tests_refuses_a_schema_that_takes_an_argument(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
