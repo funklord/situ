@@ -2371,8 +2371,41 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 				arm_checks.append((at, _struct.pack("<IqBxxx", at, 0, 3)))
 				continue
 
+			# A fixed-width TEXT NUMBER arm (26.850): the spelling row,
+			# the digits row, and then the value comparisons below, which
+			# is the member path's order a few hundred lines above and has
+			# to stay that order -- a field of non-digits that is also
+			# padded is a `[minimal]` failure before it is a parse
+			# failure, and reordering answers the same verdict for a
+			# different reason.
+			#
+			# It reached neither pass. The member loop drops a dotted path
+			# and this one ended by dropping everything that is not
+			# `CONSTRAINED`, so a declared `decimal`, `[min]` and `[max]`
+			# were enforced by none of the six readers while C published
+			# the bounds as `#define`s and all four backends promised the
+			# digit check in a docstring.
+			if kind is traverse.Check.TEXT_NUMBER:
+				if placement.scalar is None or placement.radix is None:
+					whole = False
+					continue
+				if placement.radix_minimal:
+					arm_checks.append((at, _struct.pack(
+						"<IqBxxx", at, placement.radix, 10)))
+				# `radix_max` rather than the type's maximum, for the
+				# member path's measured reason: `decimal u16 code[3]`
+				# holds 0..999, and an image carrying 65535 made the
+				# walker accept a value C refuses.
+				if placement.radix_max is None \
+						or not fits_q(placement.radix_max):
+					whole = False
+					continue
+				arm_checks.append((at, _struct.pack(
+					"<IqBxxx", at, placement.radix_max, 9)))
+
 			# A scalar arm's value comparisons, and its enum membership.
-			if kind is not traverse.Check.CONSTRAINED:
+			if kind not in (traverse.Check.CONSTRAINED,
+			                traverse.Check.TEXT_NUMBER):
 				# Everything else an arm can be -- a run of wide values, a
 				# delimited or varint arm, a nested struct -- is checked by
 				# the arm's own validator or not at all (26.410). Not a

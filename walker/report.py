@@ -1808,6 +1808,50 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 			if check == ENCODED_AS and not _encoded_ok(data, against):
 				return ERR_CONSTRAINT
 
+	# A fixed-width TEXT NUMBER arm's spelling and digits (26.850). The
+	# member path's own two scans, over the arm's span, which is safe here
+	# for the reason the whole function is: the discriminant selected this
+	# arm. The spelling first and the digits second, which is the order C
+	# emits and the order the ANSWERS have to keep -- a field of
+	# non-digits that is also padded is a `[minimal]` failure before it is
+	# a parse failure.
+	for check, against in held:
+		if check != DIGITS_MINIMAL:
+			continue
+		try:
+			digits = digits_of(view, chosen)
+		except Refused:
+			return ERR_CONSTRAINT
+		if digits[:1] == b"-":
+			digits = digits[1:]
+		if not digits:
+			return ERR_CONSTRAINT
+		if len(digits) > 1 and digits[0:1] == b"0":
+			return ERR_CONSTRAINT
+		if against > 10 and any(0x41 <= one <= 0x46 for one in digits):
+			return ERR_CONSTRAINT
+
+	for check, against in held:
+		if check != DIGITS_VALID:
+			continue
+		# CONSTRAINT and not BOUNDS where the parse is what failed, which
+		# is the member path's rule and is what the four backends answer:
+		# a text number nobody can read is a field that is not a number
+		# rather than a field that is not there. An arm answered BOUNDS
+		# until this did, which is a verdict that is red for the wrong
+		# reason -- and the C walk had to learn the same distinction in
+		# its own read-failure arm.
+		try:
+			if placement.text_flags & SCALED:
+				value, _ = parse_scaled_digits(view, chosen)
+			else:
+				value = parse_digits(view, chosen)
+		except Refused:
+			return ERR_CONSTRAINT
+		floor = -(against + 1) if placement.signed else 0
+		if value > against or value < floor:
+			return ERR_CONSTRAINT
+
 	values = [pair for pair in held
 	          if pair[0] in (MUST_EQ, MINIMUM, MAXIMUM, MUST_BE_ZERO,
 	                         MUST_BE_ONE, ENUM_KNOWN)]
@@ -1816,6 +1860,11 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	try:
 		value = read_scalar(view, chosen)
 	except Refused:
+		# A text number's read IS its parse, so a failure here is the
+		# digits failing and the loops above have already answered. Any
+		# other member's read failing is the frame, which is BOUNDS.
+		if any(pair[0] in (DIGITS_VALID, DIGITS_MINIMAL) for pair in held):
+			return ERR_CONSTRAINT
 		return ERR_BOUNDS
 	for check, against in values:
 		if check == MUST_EQ and value != against:

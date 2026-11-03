@@ -3926,6 +3926,8 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		                || kind == CHECK_MAXIMUM
 		                || kind == CHECK_MUST_BE_ZERO
 		                || kind == CHECK_MUST_BE_ONE
+		                || kind == CHECK_DIGITS_VALID
+		                || kind == CHECK_DIGITS_MINIMAL
 		                || kind == CHECK_ENUM_KNOWN) {
 			values += 1u;
 		}
@@ -4100,8 +4102,23 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		return err;
 	}
 	if (err != SITU_WALK_OK) {
-		record(why, chosen, SITU_WALK_NO_CHECK);
-		*verdict = SITU_WALK_BOUNDS;
+		/* For a TEXT NUMBER the read IS the digit check -- the parse is
+		 * what reads it -- so a failure here is CONSTRAINT and names the
+		 * kind, where for any other member the read failed and no check
+		 * was reached. The member path a few hundred lines below makes
+		 * exactly this distinction, and an arm reported `1` where the
+		 * four backends reported `2` until this did too (26.850). */
+		uint8_t digits = 0u;
+
+		for (uint32_t c = 0u; c < rows; c++) {
+			const uint8_t one = checks[c * image->constraint_stride + 12];
+
+			if (one == CHECK_DIGITS_VALID || one == CHECK_DIGITS_MINIMAL) {
+				digits = one;
+			}
+		}
+		record(why, chosen, digits != 0u ? digits : SITU_WALK_NO_CHECK);
+		*verdict = digits != 0u ? SITU_WALK_CONSTRAINT : SITU_WALK_BOUNDS;
 		return SITU_WALK_OK;
 	}
 	for (uint32_t c = 0u; c < rows; c++) {
@@ -4130,6 +4147,22 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 			 * lines below. */
 			broken = ((int64_t)value != want);
 			break;
+		case CHECK_DIGITS_VALID:
+			/* The read above has already parsed them; what is left is the
+			 * declared domain the row carries -- `radix_max`, which for
+			 * `decimal u16 code[3]` is 999 and not 65535. A signed
+			 * number's floor is derived from the ceiling, the two being
+			 * one number in two's complement. */
+			if ((arm->flags & FLAG_SIGNED) != 0u) {
+				broken = ((int64_t)value > want
+				          || (int64_t)value < -want - 1);
+			} else {
+				broken = (value > (uint64_t)want);
+			}
+			break;
+		case CHECK_DIGITS_MINIMAL:
+			broken = 0;	/* the spelling, asked below */
+			break;
 		case CHECK_ENUM_KNOWN:
 			/* The packer writes this for an arm only since 26.421: an
 			 * enum-typed scalar arm did not compile in C++ at all until
@@ -4141,6 +4174,43 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 		default:
 			continue;	/* not a family this arm's rows are checked for */
 		}
+
+		/* `[minimal]`: one spelling per value, read from the BYTES rather
+		 * than from the parsed number, which cannot tell `07` from `7`.
+		 * The member path's own scan, over the arm's span. */
+		if (kind == CHECK_DIGITS_MINIMAL) {
+			const uint8_t *digits = NULL;
+			uint32_t       count_of = 0u;
+
+			err = situ_walk_bytes(image, message, len, shape, chosen,
+			                      &digits, &count_of);
+			if (err == SITU_WALK_UNSUPPORTED) {
+				return err;
+			}
+			if (err != SITU_WALK_OK) {
+				record(why, chosen, kind);
+				*verdict = SITU_WALK_CONSTRAINT;
+				return SITU_WALK_OK;
+			}
+			/* A leading `-` belongs to the spelling of a signed number
+			 * and is skipped before the question is asked, exactly as
+			 * `situ_digits_minimal` skips it. */
+			if (count_of > 0u && digits[0] == (uint8_t)'-') {
+				digits   += 1;
+				count_of -= 1u;
+			}
+			if (count_of == 0u
+			                || (count_of > 1u && digits[0] == (uint8_t)'0')) {
+				broken = 1;
+			}
+			for (uint32_t d = 0u; want > 10 && d < count_of; d++) {
+				if (digits[d] >= (uint8_t)'A'
+				                && digits[d] <= (uint8_t)'F') {
+					broken = 1;
+				}
+			}
+		}
+
 		if (broken) {
 			record(why, chosen, kind);
 			*verdict = SITU_WALK_CONSTRAINT;

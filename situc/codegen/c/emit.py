@@ -12354,6 +12354,63 @@ class Emitter:
 			"\t}",
 		]
 
+	def _arm_text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A fixed-width text number arm: digits, spelling, declared range.
+
+		Read INLINE, from the span. The member path asks through `_ptr` and
+		the fallible `_get`, and an arm has neither: all four backends
+		decline the member in words and emit only the infallible `_value`
+		helper the offset arithmetic after the arm needs -- which answers
+		zero for bytes that are not digits, so a check resting on it could
+		not fail.
+
+		`_arm_guard` gives the ABSENT test, which is the one every arm
+		accessor asks, so the check is written under its negation rather
+		than under a second derivation of the same condition.
+		"""
+		scalar = placement.scalar
+		width  = placement.array_count or 0
+		limit  = placement.radix_max or 0
+		start  = self._base_expression(struct, placement)
+		guard  = self._arm_guard(struct, placement)
+		if scalar is None or not width or start is None or guard is None:
+			return []
+		absent, _named = guard
+
+		local = c_name(self._local(struct, placement))
+		inner = self._attr_checks(struct, placement, f"{local}_parsed",
+		                          self.resolved.layout.env)
+		spell = ([f"\t\t/* `[minimal]`: one spelling per value. */",
+		          f"\t\tif (!situ_digits_minimal(situ_base(view) + ({start}),"
+		          f" {width}u, {placement.radix}u)) {{",
+		          "\t\t\treturn SITU_ERR_CONSTRAINT;",
+		          "\t\t}"]
+		         if placement.radix_minimal else [])
+
+		return [
+			f"\t/* {placement.path}: checked where the discriminant selects",
+			"\t * this arm, and nothing to check where it does not. The span",
+			"\t * has to be in the frame first: a struct's minimum is its",
+			"\t * shortest arm's. */",
+			f"\tif (!({absent})) {{",
+			f"\t\tif (!situ_in_bounds(view, ({start}), {width}u)) {{",
+			"\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t}",
+			*spell,
+			# `uint64_t`, which is what `situ_parse_uint` writes through:
+			# the member's own narrower type would be an incompatible
+			# pointer, and the bounds below compare fine against it.
+			f"\t\tuint64_t {local}_parsed = 0;",
+			"",
+			f"\t\tif (situ_parse_uint(situ_base(view) + ({start}), {width}u,"
+			f" {placement.radix}u, {limit}u, &{local}_parsed) != 0) {{",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t}",
+			*[f"\t{one}" for one in inner],
+			"\t}",
+		]
+
 	def _arm_member_checks(self, struct: ResolvedStruct,
 			entry: Resolved) -> list[str]:
 		"""A FIELD arm's own constraints, behind the discriminant.
@@ -12373,6 +12430,16 @@ class Emitter:
 		"""
 		placement = entry.placement
 		scalar    = placement.scalar
+
+		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its spelling
+		# and its declared range were asked by none of the six readers, and
+		# this function's own first test is why for this backend: a text
+		# number HAS a count, so it left by the line below with the spans.
+		# The member path asks all three through the member's `_ptr` and
+		# `_get`; an arm has neither, no backend reaching into one.
+		if placement.radix is not None and not placement.delimiters:
+			return self._arm_text_number(struct, placement)
+
 		if scalar is None or placement.array_count is not None:
 			return []		# spans go through the pinned-run branch
 

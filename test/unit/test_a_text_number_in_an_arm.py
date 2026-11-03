@@ -38,6 +38,8 @@ from pathlib import Path
 import pytest
 
 import fourway
+from test_walker_c import (COMPILER, _inline_image, c_verdict,
+                           python_verdict, shape_named_text)
 
 SCHEMA = """target buffer;
 endian big;
@@ -85,3 +87,100 @@ def test_the_four_drivers_build_for_a_text_number_arm(tmp_path: Path) -> None:
 			# struct's section and the member after the variant.
 			assert "-- arms" in answers, (name, hexed, answers)
 			assert "tail " in answers, (name, hexed, answers)
+
+
+#: message -> `validate`'s verdict, `0` being OK and `2` Constraint. The
+#: three the schema forbids are forbidden three different ways: below the
+#: declared minimum, above the declared maximum, and not a number at all.
+#: The last is the one the backends' own docstring promises.
+CASES = {
+	"01323030 00": "0",	# 200, in range
+	"01313939 00": "2",	# 199, below `[min = 200]`
+	"01363030 00": "2",	# 600, above `[max = 599]`
+	"01414243 00": "2",	# "ABC", not digits in base 10
+	"00414243 00": "0",	# the default arm: the same bytes are `other`
+}
+
+
+#: A NARROWER type than the digits can express, which is what makes the
+#: declared domain falsifiable at all. `decimal u32 code[3]` has a ceiling
+#: of 999 derived from its own three digits, so no three-digit spelling can
+#: exceed it -- the row is a tautology and a check resting on it cannot
+#: fail. `decimal u8 code[3]` has a ceiling of 255, which three digits CAN
+#: exceed, so "999" is the input with an edge.
+NARROW = """target buffer;
+endian big;
+
+struct arms {
+	u8 kind;
+	variant body switch (kind) {
+		case 1:  decimal u8 code[3] [min = 2];
+		default: u8  other;
+	}
+	u8 tail;
+}
+"""
+
+NARROW_CASES = {
+	"01323535 00": "0",	# "255", exactly the ceiling
+	"01393939 00": "2",	# "999", which three digits can spell and `u8`
+				# cannot hold -- the declared domain, not the width
+	"01303032 00": "0",	# "002", at `[min = 2]`
+	"01303031 00": "2",	# "001", below it
+	"00393939 00": "0",	# the default arm
+}
+
+
+def _verdict(answers: str) -> str:
+	section = answers[answers.index("-- arms"):]
+	return next(line.split()[1] for line in section.splitlines()
+	            if line.startswith("validate"))
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+@pytest.mark.parametrize("text, cases",
+                         [(SCHEMA, CASES), (NARROW, NARROW_CASES)],
+                         ids=["wide", "narrow"])
+def test_all_four_enforce_a_text_number_arm(
+		text: str, cases: dict[str, str], tmp_path: Path) -> None:
+	"""The declared digits and the declared range, behind the discriminant.
+
+	Asked as a pair with the default arm, which is the whole of the fix:
+	the same four bytes are a number the schema constrains under `kind = 1`
+	and an ordinary member under anything else, so a check asked
+	unconditionally refuses every message the other arm describes
+	(26.414).
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(text, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+
+	for hexed, verdict in cases.items():
+		raw = bytes.fromhex(hexed.replace(" ", ""))
+		given = {name: _verdict(fourway.answers(argv, raw, tmp_path))
+		         for name, argv in command.items()}
+		assert set(given.values()) == {verdict}, (hexed, given)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("text, cases",
+                         [(SCHEMA, CASES), (NARROW, NARROW_CASES)],
+                         ids=["wide", "narrow"])
+def test_both_walkers_enforce_a_text_number_arm(
+		text: str, cases: dict[str, str], tmp_path: Path) -> None:
+	"""The other two readers, which share only the image.
+
+	The packer's arm pass ends by dropping everything that is not
+	`Check.CONSTRAINED`, which a text number is not, so neither walker had
+	a row to read. Unlike the reserved kind (26.848), the value kinds alone
+	are not enough here: `DIGITS_VALID` and `DIGITS_MINIMAL` are member-path
+	kinds in both walkers and neither arm reader rendered them.
+	"""
+	blob  = _inline_image(text)
+	shape = shape_named_text(text, "arms")
+	for hexed, verdict in cases.items():
+		raw = bytes.fromhex(hexed.replace(" ", ""))
+		in_python = python_verdict(blob, raw, shape)
+		in_c      = c_verdict(tmp_path, blob, raw, shape)
+		assert str(in_python) == str(in_c) == verdict, \
+			(hexed, in_python, in_c)

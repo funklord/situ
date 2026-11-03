@@ -6822,6 +6822,21 @@ class Emitter:
 		# Split out because a `u16` arm has no slice accessor at all -- the
 		# element is ValueConverted -- so the `if let Ok(span)` shape below
 		# names a method this backend does not emit.
+		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its
+		# spelling and its declared range were asked by none of the six
+		# readers: the wide-values branch below takes it for a run and
+		# answers only about `[encoding]`, the scalar branch after that
+		# excludes anything with a count, and the packer's arm pass drops
+		# everything that is not `CONSTRAINED`.
+		#
+		# Before the wide branch rather than after, which is where the C++
+		# port put it first and got nothing: a `decimal u32 code[3]` IS a
+		# run of wide values by that branch's test, so it matched, found no
+		# encoding to check and returned. A clause after a branch that
+		# already claims the construct is a clause that never runs.
+		if placement.radix is not None and not placement.delimiters:
+			return self._arm_text_number(struct, placement, guard)
+
 		if scalar is not None and scalar.bits != BITS_PER_BYTE \
 				and placement.array_count is not None:
 			inner = self._utf16_checks(struct, placement, scalar)
@@ -6927,6 +6942,53 @@ class Emitter:
 			"\t\t\t}",
 			"\t\t\tErr(Error::Version) => {}",
 			"\t\t\tErr(other) => return Err(other),",
+			"\t\t}",
+		]
+
+	def _arm_text_number(self, struct: ResolvedStruct,
+			placement: Placement, present: str) -> list[str]:
+		"""A fixed-width text number arm: digits, spelling, declared range.
+
+		Read INLINE, from the span: no backend reaches into the member, so
+		there is no fallible getter to ask -- only the infallible `_value`
+		the offset arithmetic needs, which answers zero for bytes that are
+		not digits, so a check resting on it could not fail.
+		"""
+		scalar = placement.scalar
+		width  = placement.array_count or 0
+		limit  = placement.radix_max or 0
+		start  = self._offset_expression(struct, placement)
+		if scalar is None or not width or start is None:
+			return []
+
+		name  = c_name(local_name(struct, placement))
+		inner = self._attr_checks(struct, placement, f"{name}_parsed")
+		spell = ([f"\t\t\tif !situ_rt::digits_minimal("
+		          f"&self.bytes[{name}_at..{name}_at + {width}],"
+		          f" {placement.radix}) {{",
+		          "\t\t\t\treturn Err(Error::Constraint);",
+		          "\t\t\t}"]
+		         if placement.radix_minimal else [])
+
+		return [
+			f"\t\t// {placement.path}: checked where the discriminant",
+			"\t\t// selects this arm, and nothing to check where it does",
+			"\t\t// not. The span has to be in the frame first: a struct's",
+			"\t\t// minimum is its shortest arm's, and a slice of a short",
+			"\t\t// one would panic rather than refuse.",
+			f"\t\tif {present} {{",
+			f"\t\t\tlet {name}_at = {start};",
+			f"\t\t\tif self.bytes.len() < {name}_at + {width} {{",
+			"\t\t\t\treturn Err(Error::Bounds);",
+			"\t\t\t}",
+			*spell,
+			f"\t\t\tlet {name}_parsed = match situ_rt::parse_uint(",
+			f"\t\t\t\t\t&self.bytes[{name}_at..{name}_at + {width}],"
+			f" {placement.radix}, {limit}) {{",
+			"\t\t\t\tSome(value) => value,",
+			"\t\t\t\tNone => return Err(Error::Constraint),",
+			"\t\t\t};",
+			*[f"\t{one}" for one in inner],
 			"\t\t}",
 		]
 

@@ -89,7 +89,14 @@ SUFFIXES = frozenset({
 	"fits", "from", "gate",
 	"host", "index",
 	"indexed", "is_dirty", "is_little", "is_stale", "item", "len", "little",
-	"next", "of_host", "offset", "raw_len", "read", "self_span", "span",
+	"next", "of_host", "offset",
+	# `parsed`: the local a text number ARM's check parses its span into
+	# (26.850). A LOCAL rather than an accessor, as `seen` above is -- but
+	# listed for the same reason that one is, the check reading every
+	# interpolation; and a member called `code_parsed` beside `code` would
+	# be shadowed by it, which is 26.806's defect in a new place.
+	"parsed",
+	"raw_len", "read", "self_span", "span",
 	"span_from", "spans", "t",
 	# A run of varints reaches as far as its elements' own lengths sum to,
 	# and `required` needs the MINIMUM of that -- one byte per element not

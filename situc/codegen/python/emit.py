@@ -8519,6 +8519,24 @@ class Emitter:
 				*[f"\t{one}" if one.strip() else one for one in inner],
 			]
 
+		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its
+		# spelling and its declared range were asked by NONE of the six
+		# readers: this function returns before the scalar path for it,
+		# the run branch below asks a run's questions and a text number
+		# has none of them, and the packer's arm pass drops everything
+		# that is not `CONSTRAINED`. Meanwhile the member path asks all
+		# three a few hundred lines above.
+		#
+		# What makes it worse than a gap is that the construct is
+		# REACHED: the infallible `_value` helper the offset arithmetic
+		# after the arm needs IS emitted, and its own docstring argues
+		# from this check -- "`validate` refuses a frame whose digits are
+		# not digits" -- while C publishes the bounds as `#define`s.
+		# Section 14.5: a schema that states what the generated code does
+		# not enforce is worse than one that states nothing.
+		if placement.radix is not None and not placement.delimiters:
+			return self._arm_text_number(struct, placement, present)
+
 		# A RUN arm's span constraints -- a terminator, a declared encoding
 		# (26.422). The MEMBER's own check, wrapped, for the same reason the
 		# pinned branch above wraps rather than rewrites: `_array_check` is
@@ -8584,6 +8602,59 @@ class Emitter:
 			"\t\texcept VersionError:",
 			f"\t\t\t{local} = None",
 			f"\t\tif {local} is not None:",
+			*[f"\t{one}" for one in inner],
+		]
+
+	def _arm_text_number(self, struct: ResolvedStruct,
+			placement: Placement, present: str) -> list[str]:
+		"""A fixed-width text number arm: digits, spelling, declared range.
+
+		Read INLINE rather than through an accessor, which is the pinned
+		branch's choice for the pinned branch's reason: no backend reaches
+		into the member, so there is no property to read and the span is
+		what the check has. `_minimal_check` and `_attr_checks` are the
+		member path's own, against the digits and the value -- a second
+		spelling of either would be a second place that has to go on
+		agreeing about what `[minimal]` reads.
+
+		The frame question comes first and separately. A struct's minimum
+		is its shortest arm's, so a frame exactly `SIZE_MIN` long with a
+		longer arm selected does not hold the span, and Python's slice
+		CLAMPS rather than refusing -- which would hand `parse_uint` two
+		bytes of a three-digit field and refuse a message for digits that
+		are simply not there. The other three report bounds; this is where
+		Python says the same thing.
+		"""
+		scalar = placement.scalar
+		width  = placement.array_count or 0
+		limit  = placement.radix_max or 0
+		start  = self._offset_expression(struct, placement)
+		if scalar is None or not width or start is None:
+			return []
+
+		name   = py_name(local_name(struct, placement))
+		digits = f"{name}_digits"
+		local  = f"{name}_value"
+		inner  = [*self._minimal_check(placement, name, digits),
+		          *self._attr_checks(struct, placement, local)]
+
+		return [
+			f"\t\t# {placement.path}: checked where the discriminant",
+			"\t\t# selects this arm, and nothing to check where it does",
+			"\t\t# not.",
+			f"\t\tif {present}:",
+			f"\t\t\tif self._len < ({start}) + {width}:",
+			f'\t\t\t\traise BoundsError("{placement.path}: outside'
+			' the frame")',
+			f"\t\t\t{name}_at = self._at + ({start})",
+			f"\t\t\t{digits} = self._msg.buffer"
+			f"[{name}_at:{name}_at + {width}]",
+			f"\t\t\t{local} = parse_uint({digits},"
+			f" {placement.radix}, {limit})",
+			f"\t\t\tif {local} is None:",
+			"\t\t\t\traise ConstraintError(",
+			f'\t\t\t\t\t"{placement.path} is not {width} digits in base'
+			f' {placement.radix}")',
 			*[f"\t{one}" for one in inner],
 		]
 

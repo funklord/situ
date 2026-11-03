@@ -10125,6 +10125,18 @@ class Emitter:
 				"\t\t}",
 			]
 
+		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its
+		# spelling and its declared range were asked by none of the six
+		# readers; the branch below asks a byte run's questions and a
+		# text number has none of them. The construct is REACHED -- the
+		# infallible `_value` helper the offset arithmetic after the arm
+		# needs is emitted, and its docstring argues from this very check
+		# -- so section 14.5 applies: a schema that states what the
+		# generated code does not enforce is worse than one stating
+		# nothing.
+		if placement.radix is not None and not placement.delimiters:
+			return self._arm_text_number(struct, placement)
+
 		if scalar is not None and scalar.bits != BITS_PER_BYTE \
 				and placement.array_count is not None:
 			inner = self._utf16_check(struct, placement)
@@ -10329,6 +10341,83 @@ class Emitter:
 			"\t\t\t\t}",
 			*_deeper(inner),
 			"\t\t\t}",
+			"\t\t}",
+		]
+
+	def _arm_text_number(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A fixed-width text number arm: digits, spelling, declared range.
+
+		Read INLINE, from the span, because no backend reaches into the
+		member: there is no `_ptr` and no fallible getter to ask, only the
+		infallible `_value` the offset arithmetic needs -- and that one
+		answers zero for bytes that are not digits, so a check resting on
+		it would be a check that cannot fail.
+
+		The discriminant test is derived here rather than taken from an
+		accessor's refusal, which is what every other branch in this
+		function leans on. `enclosing_arm` gives the variant and the arm,
+		and the test is `_arm_member`'s own, inverted -- a negation written
+		twice would be two places that have to go on agreeing about what a
+		`default` arm is.
+		"""
+		from situc.traverse import enclosing_arm, matched_values
+
+		scalar = placement.scalar
+		width  = placement.array_count or 0
+		limit  = placement.radix_max or 0
+		start  = self._offset_expression(struct, placement)
+		found  = enclosing_arm(struct, placement)
+		if scalar is None or not width or start is None or found is None:
+			return []
+		variant, arm = found
+
+		held = self._over_fields(struct, variant.discriminant or "",
+		                         extra=self._region_reads(struct, variant))
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return []
+			present = " && ".join(f"{held} != {one.value}u"
+			                      for one in matched)
+		else:
+			present = f"{held} == {arm.value}u"
+		since = self._arm_since(struct, placement, selected=True)
+		if since:
+			present = f"{present}{since}"
+
+		name  = bare_name(local_name(struct, placement))
+		inner = self._attr_checks(struct, placement, f"{name}_parsed")
+		spell = ([f"\t\t\tif (!situ_digits_minimal(situ_base(raw_) + ({start}),"
+		          f" {width}u, {placement.radix}u)) {{",
+		          "\t\t\t\treturn ::situ::rt::err::constraint;",
+		          "\t\t\t}"]
+		         if placement.radix_minimal else [])
+
+		return [
+			f"\t\t/* {placement.path}: checked where the discriminant",
+			"\t\t * selects this arm, and nothing to check where it does",
+			"\t\t * not. The span has to be in the frame first: a struct's",
+			"\t\t * minimum is its shortest arm's. */",
+			f"\t\tif ({present}) {{",
+			f"\t\t\tif (!situ_in_bounds(raw_, ({start}), {width}u)) {{",
+			"\t\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t\t}",
+			*spell,
+			# `std::uint64_t`, which is what `situ_parse_uint` writes
+			# through -- the member path spells it the same way for the
+			# same reason.
+			f"\t\t\tstd::uint64_t {name}_parsed = 0;",
+			"",
+			# `!= 0`, not `!`: the runtime answers 0 for success and -1
+			# for a byte that is not a digit, so the negation reads the
+			# wrong way round and would refuse every valid number.
+			"\t\t\tif (situ_parse_uint(situ_base(raw_) + "
+			f"({start}), {width}u, {placement.radix}u, {limit}u,"
+			f" &{name}_parsed) != 0) {{",
+			"\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t}",
+			*[f"\t{one}" for one in inner],
 			"\t\t}",
 		]
 
