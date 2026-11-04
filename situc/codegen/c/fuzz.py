@@ -620,6 +620,19 @@ def _arm_reads(struct: ResolvedStruct, placement: Placement, prefix: str,
 				lines.extend(_span_read(struct, local, prefix))
 			continue
 
+		# 0b. A PAD arm, for which `_arm_member` emits no accessor at all
+		# (26.853): the one it used to emit read ONE byte of the span
+		# while bounds-checking all of it, and a pad is a reserved run
+		# nothing is meant to read. This is the FIFTH consumer of that
+		# decline, after the four backends' own validate and `situc
+		# diff`, and it is the one the corpus found: adding `padded_arm`
+		# to `edges.situ` broke the C fuzz build across the whole suite
+		# with "implicit declaration of `situ_padded_arm_body_pad_get`",
+		# which is this docstring's own promise about a fifth branch
+		# being kept by the build rather than by anybody's memory.
+		if member.pad_to is not None:
+			continue
+
 		# 1. A plain scalar arm. The ACCESSOR's type, not the backing
 		# width: an enum arm's out-parameter is `situ_arm_kind_t *` and
 		# `uint8_t *` is not that. `_versioned_read` learned this one

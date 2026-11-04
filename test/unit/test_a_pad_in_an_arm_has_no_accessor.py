@@ -1,4 +1,9 @@
-"""A `pad_to(n)` inside a variant arm is read by nobody (26.848).
+"""A `pad_to(n)` inside a variant arm: no accessor, and every byte zero.
+
+Two things, which arrived one commit apart and belong in one file because
+the second is why the first is right: there is no accessor for a pad arm
+(26.853), and `validate` holds every byte of its span to zero (26.848's
+other half). The file keeps its name from the first.
 
 A pad MEMBER gets the honest form in all four backends:
 
@@ -25,6 +30,7 @@ bytes meanwhile.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +40,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 import fourway						# noqa: E402
+
+from test_walker_c import (COMPILER, _inline_image, c_verdict,
+                           python_verdict, shape_named_text)	# noqa: E402
 
 from collections.abc import Callable			# noqa: E402
 from typing import Protocol				# noqa: E402
@@ -119,11 +128,22 @@ def _without_comments(target: str, source: str) -> str:
 
 @pytest.mark.parametrize("target", sorted(BACKENDS))
 def test_no_backend_offers_an_accessor_for_a_pad_arm(target: str) -> None:
+	"""On a WORD boundary, which the first substring version was not.
+
+	A plain `in` test fired on the fix's own loop variable, `body_pad_at`:
+	`validate` reads the span inline now, and a local named after the
+	member is a legitimate use of the name. The question is whether an
+	ACCESSOR exists, and an accessor is that name exactly -- so this is
+	the fourth detector this night that had to be narrowed, and the only
+	one narrowed by the fix rather than by a backend's phrasing.
+	"""
 	code = _without_comments(target, _sources()[target])
 	for name in NAMED:
-		assert name not in code, (
+		found = re.search(rf"\b{re.escape(name)}\b", code)
+		assert found is None, (
 			target, name,
-			[one for one in code.splitlines() if name in one][:3])
+			[one for one in code.splitlines()
+			 if re.search(rf"\b{re.escape(name)}\b", one)][:3])
 
 
 @pytest.mark.parametrize("target", sorted(BACKENDS))
@@ -133,6 +153,63 @@ def test_the_decline_is_named_rather_than_silent(target: str) -> None:
 	says so in the generated text."""
 	source = _sources()[target]
 	assert "<pad>" in source, (target, "the pad is not mentioned at all")
+
+
+#: message -> `validate`'s verdict, `0` being OK and `2` Constraint. The pad
+#: spans bytes 1..3 under `kind = 1`; under anything else byte 1 is `other`
+#: and the rest is slack the struct does not claim.
+#:
+#: Both ENDS of the span are broken separately, which is the whole point of
+#: a run check: the accessor this replaced read byte 1 and nothing else, so
+#: a check through it would have caught the first case and missed the
+#: second (26.853).
+CASES = {
+	"010000005A": "0",
+	"010100005A": "2",	# the first byte of the pad
+	"010000015A": "2",	# the last, which the old accessor could not see
+	"00FFFF5A":   "0",	# the other arm: `other`, `tail`, and slack
+}
+
+
+def _verdict(answers: str) -> str:
+	section = answers[answers.index("-- arms"):]
+	return next(line.split()[1] for line in section.splitlines()
+	            if line.startswith("validate"))
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
+def test_all_four_enforce_a_pad_arm(tmp_path: Path) -> None:
+	"""A pad is reserved, and section 8.8 says what ignoring it costs: a
+	receiver that does lets a sender vary bytes the format calls fixed.
+
+	Asked as a pair with the other arm, which is what keeps the check
+	conditional: those same bytes are an ordinary member and slack under
+	any other discriminant.
+	"""
+	schema = tmp_path / "unit.situ"
+	schema.write_text(SCHEMA, encoding="ascii")
+	command = fourway.build(tmp_path, schema)
+
+	for hexed, verdict in CASES.items():
+		raw = bytes.fromhex(hexed)
+		given = {name: _verdict(fourway.answers(argv, raw, tmp_path))
+		         for name, argv in command.items()}
+		assert set(given.values()) == {verdict}, (hexed, given)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+def test_both_walkers_enforce_a_pad_arm(tmp_path: Path) -> None:
+	"""The other two readers, whose answer is a SPAN scan rather than a
+	value: the packer's `zero_run` kind, which both had for a member and
+	neither rendered for an arm."""
+	blob  = _inline_image(SCHEMA)
+	shape = shape_named_text(SCHEMA, "arms")
+	for hexed, verdict in CASES.items():
+		raw = bytes.fromhex(hexed)
+		in_python = python_verdict(blob, raw, shape)
+		in_c      = c_verdict(tmp_path, blob, raw, shape)
+		assert str(in_python) == str(in_c) == verdict, \
+			(hexed, in_python, in_c)
 
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")

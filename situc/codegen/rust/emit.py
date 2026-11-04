@@ -6875,6 +6875,14 @@ class Emitter:
 		# Split out because a `u16` arm has no slice accessor at all -- the
 		# element is ValueConverted -- so the `if let Ok(span)` shape below
 		# names a method this backend does not emit.
+
+		# A PAD arm, which is a reserved RUN: every byte of the aligned
+		# span has to be zero (26.848's other half). Read INLINE from the
+		# span -- there is no accessor at all, 26.853 having declined the
+		# one that read a single byte of it.
+		if placement.pad_to is not None:
+			return self._arm_pad_check(struct, placement, guard)
+
 		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its
 		# spelling and its declared range were asked by none of the six
 		# readers: the wide-values branch below takes it for a run and
@@ -6995,6 +7003,32 @@ class Emitter:
 			"\t\t\t}",
 			"\t\t\tErr(Error::Version) => {}",
 			"\t\t\tErr(other) => return Err(other),",
+			"\t\t}",
+		]
+
+	def _arm_pad_check(self, struct: ResolvedStruct,
+			placement: Placement, present: str) -> list[str]:
+		"""A pad arm: every byte of the aligned span is zero (26.853)."""
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		if not width or start is None:
+			return []
+
+		name = c_name(local_name(struct, placement))
+		return [
+			f"\t\t// {placement.path} is reserved, and a pad is a run:",
+			"\t\t// every byte of it is zero where the discriminant",
+			"\t\t// selects this arm, and nothing to check where it does",
+			"\t\t// not.",
+			f"\t\tif {present} {{",
+			f"\t\t\tlet {name}_at = {start};",
+			f"\t\t\tif self.bytes.len() < {name}_at + {width} {{",
+			"\t\t\t\treturn Err(Error::Bounds);",
+			"\t\t\t}",
+			f"\t\t\tif self.bytes[{name}_at..{name}_at + {width}]",
+			"\t\t\t\t\t.iter().any(|one| *one != 0) {",
+			"\t\t\t\treturn Err(Error::Constraint);",
+			"\t\t\t}",
 			"\t\t}",
 		]
 

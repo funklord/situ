@@ -1257,6 +1257,29 @@ struct arm_holder {
 	}
 }
 
+// A PAD inside a variant arm: a reserved RUN whose span the discriminant
+// decides, and the one shape of that family the corpus could not pose.
+//
+// What it cost while nothing carried it: all four backends emitted an
+// accessor for such a pad that read ONE byte of the three-byte span while
+// bounds-checking all of it, `situc diff` probed that accessor, and the
+// four-way differential compared it and found them AGREED -- on one byte
+// of three, which is agreement on a wrong answer (26.853). The run check
+// that holds every byte of the span to zero (26.848) meanwhile had nothing
+// to fire on in any of the six readers.
+//
+// `after` follows the variant so an arm measured at the wrong width shows
+// up here as a wrong byte rather than as bytes nobody reads back -- the
+// same job it does for `wide_delim_arm` above.
+struct padded_arm {
+	u8  kind;
+	variant body switch (kind) {
+		case 1:  pad_to(4);
+		default: u8  other;
+	}
+	u8  after;
+}
+
 // A tlv and an offset table inside a marker struct, which is the arrangement
 // in which four backends disagreed about one schema (26.833).
 //

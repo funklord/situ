@@ -8570,6 +8570,14 @@ class Emitter:
 				*[f"\t{one}" if one.strip() else one for one in inner],
 			]
 
+		# A PAD arm, which is a reserved RUN: every byte of the aligned
+		# span has to be zero (26.848's other half). Read INLINE, like
+		# the text number below and for a sharper version of the same
+		# reason -- there is no accessor at all, 26.853 having declined
+		# the one that read a single byte of the span.
+		if placement.pad_to is not None:
+			return self._arm_pad_check(struct, placement, present)
+
 		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its
 		# spelling and its declared range were asked by NONE of the six
 		# readers: this function returns before the scalar path for it,
@@ -8654,6 +8662,40 @@ class Emitter:
 			f"\t\t\t{local} = None",
 			f"\t\tif {local} is not None:",
 			*[f"\t{one}" for one in inner],
+		]
+
+	def _arm_pad_check(self, struct: ResolvedStruct,
+			placement: Placement, present: str) -> list[str]:
+		"""A pad arm: every byte of the aligned span is zero.
+
+		The span and not a value, which is the whole of what the scalar
+		form got wrong: `pad_to(4)` after one byte spans three, and a
+		scalar read takes one -- so a comparison through it caught a
+		nonzero first byte and missed the other two (26.853).
+
+		Nothing where the width is the message's to decide: `size_bits` is
+		0 for such a pad, there is no span to name, and the other three
+		backends and the packer say nothing about it either.
+		"""
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		if not width or start is None:
+			return []
+
+		name = py_name(local_name(struct, placement))
+		return [
+			f"\t\t# {placement.path} is reserved, and a pad is a run: every",
+			"\t\t# byte of it is zero where the discriminant selects this",
+			"\t\t# arm, and nothing to check where it does not.",
+			f"\t\tif {present}:",
+			f"\t\t\tif self._len < ({start}) + {width}:",
+			f'\t\t\t\traise BoundsError("{placement.path}: outside'
+			' the frame")',
+			f"\t\t\t{name}_at = self._at + ({start})",
+			f"\t\t\tif any(self._msg.buffer"
+			f"[{name}_at:{name}_at + {width}]):",
+			"\t\t\t\traise ConstraintError(",
+			f'\t\t\t\t\t"{placement.path} is reserved [must_be_zero]")',
 		]
 
 	def _arm_text_number(self, struct: ResolvedStruct,

@@ -1796,7 +1796,13 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 	# A RUN arm's span checks -- a terminator, a declared encoding
 	# (26.425). Read over the ARM's own span, which is safe here for the
 	# reason the whole function is: the discriminant selected this arm.
-	span = [pair for pair in held if pair[0] in (NUL_TERMINATED, ENCODED_AS)]
+	# `ZERO_RUN` joins the two: a PAD inside an arm is a reserved RUN, and
+	# the member path reads it from this same span a few hundred lines
+	# above (26.848's other half). The scalar families below cannot answer
+	# it -- a scalar read of a three-byte pad takes one byte, which is the
+	# accessor 26.853 declined for the same reason.
+	span = [pair for pair in held
+	        if pair[0] in (NUL_TERMINATED, ENCODED_AS, ZERO_RUN)]
 	if span:
 		try:
 			data = _span_bytes(image, view, chosen)
@@ -1804,6 +1810,8 @@ def _arm_constraints(image: Image, view: View, chosen: int) -> int:
 			return ERR_BOUNDS
 		for check, against in span:
 			if check == NUL_TERMINATED and 0 not in data:
+				return ERR_CONSTRAINT
+			if check == ZERO_RUN and any(data):
 				return ERR_CONSTRAINT
 			if check == ENCODED_AS and not _encoded_ok(data, against):
 				return ERR_CONSTRAINT

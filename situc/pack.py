@@ -2376,8 +2376,21 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# The gate is the reader's, as the rows above are.
 			if kind is traverse.Check.RESERVED:
 				policies = {a.name for a in placement.attrs}
-				if policies & {"preserve", "unknown"} \
-						or placement.pad_to is not None:
+				if policies & {"preserve", "unknown"}:
+					continue
+				# A PAD is the RUN form (26.848's other half): kind 13
+				# scans the aligned span, which is what the member path
+				# writes for one a few hundred lines above and what both
+				# walkers already read there. The scalar form is wrong for
+				# it in a way the accessor made concrete -- `pad_to(4)`
+				# after one byte spans three and a scalar read takes one
+				# (26.853). A pad whose width the message decides is
+				# skipped in silence, as the backends skip it: `size_bits`
+				# is 0 and there is no span to name.
+				if placement.pad_to is not None:
+					if 0 < (placement.size_bits or 0):
+						arm_checks.append((at, _struct.pack(
+							"<IqBxxx", at, 0, 13)))
 					continue
 				if "must_be_one" in policies:
 					if placement.size_bits is None \

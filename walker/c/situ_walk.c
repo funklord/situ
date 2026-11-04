@@ -3920,6 +3920,7 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 
 		if (kind == CHECK_PINNED_RUN || kind == CHECK_NUL_TERMINATED
 		                || kind == CHECK_ENCODED_AS
+		                || kind == CHECK_ZERO_RUN
 		                || kind == CHECK_TERMINATED) {
 			pinned += 1u;
 		} else if (kind == CHECK_MUST_EQ || kind == CHECK_MINIMUM
@@ -4034,6 +4035,22 @@ static situ_walk_err arm_constraints(const situ_walk_image *image,
 					record(why, chosen, CHECK_NUL_TERMINATED);
 					*verdict = SITU_WALK_CONSTRAINT;
 					return SITU_WALK_OK;
+				}
+				continue;
+			}
+			/* A PAD inside an arm: reserved, and a RUN, so every byte of
+			 * the aligned span has to be zero. The member path says the
+			 * same thing over the same span a few hundred lines below,
+			 * and the value families further down cannot answer it -- a
+			 * scalar read of a three-byte pad takes one byte, which is
+			 * the accessor 26.853 declined for this reason. */
+			if (row[12] == CHECK_ZERO_RUN) {
+				for (uint32_t b = 0u; b < content; b++) {
+					if (data[b] != 0u) {
+						record(why, chosen, CHECK_ZERO_RUN);
+						*verdict = SITU_WALK_CONSTRAINT;
+						return SITU_WALK_OK;
+					}
 				}
 				continue;
 			}

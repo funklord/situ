@@ -203,7 +203,7 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: counted the arm nowhere, and a refusal message named a member the
 #: struct does not have. 31 -> 32 is the third of them closing.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                32,
+	("scalar", "not-struct", ""):                34,
 	("no-scalar", "struct", "fixed"):            49,
 	("no-scalar", "struct", "unmeasurable"):     28,
 	("no-scalar", "not-struct", ""):              1,
@@ -228,6 +228,20 @@ ARM_SHAPES = {
 #: `shared.situ` briefly moved these cells by two for that reason. An
 #: imported variant's arms are counted twice and that is the census being
 #: right, since both schemas generate them.
+#:
+#: The first cell moved by TWO when `edges.situ` gained `padded_arm` for
+#: 26.853 -- a `pad_to(4)` arm and a `u8 other` default -- and looking at
+#: it rather than updating it is what this test asks for, so: **both
+#: belong in that cell and neither is a new shape.** A pad's placement
+#: carries the element's scalar (`u8`) and is not a struct, which is the
+#: cell's definition, and `other` is the plainest member of it there is.
+#:
+#: The pad is the interesting half and the reason to say so here: it has a
+#: scalar and a THREE-BYTE span, which is exactly the mismatch that let an
+#: accessor read one byte of it for as long as nothing in the corpus could
+#: pose the construct. The cell cannot tell a pad from a plain `u8` -- the
+#: same blindness `delimited_arm` and `separated_arm` have to each other --
+#: so what distinguishes them is a test about the span, not this count.
 
 #: The whole of the last cell, by path. One member, and the condition that
 #: declines it is written about the *other* fact.

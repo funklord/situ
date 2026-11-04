@@ -10145,6 +10145,14 @@ class Emitter:
 				"\t\t}",
 			]
 
+		# A PAD arm, which is a reserved RUN: every byte of the aligned
+		# span has to be zero (26.848's other half). Read INLINE from the
+		# span, like the text number below and for a sharper version of
+		# the same reason -- there is no accessor at all, 26.853 having
+		# declined the one that read a single byte of it.
+		if placement.pad_to is not None:
+			return self._arm_pad_check(struct, placement)
+
 		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its
 		# spelling and its declared range were asked by none of the six
 		# readers; the branch below asks a byte run's questions and a
@@ -10360,6 +10368,51 @@ class Emitter:
 			"\t\t\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t\t\t}",
 			*_deeper(inner),
+			"\t\t\t}",
+			"\t\t}",
+		]
+
+	def _arm_pad_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A pad arm: every byte of the aligned span is zero.
+
+		The span and not a value, which is what the scalar form got wrong:
+		`pad_to(4)` after one byte spans three and a scalar read takes one
+		(26.853). Nothing where the width is the message's to decide.
+		"""
+		from situc.traverse import enclosing_arm, matched_values
+
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		start = self._offset_expression(struct, placement)
+		found = enclosing_arm(struct, placement)
+		if not width or start is None or found is None:
+			return []
+		variant, arm = found
+
+		held = self._over_fields(struct, variant.discriminant or "",
+		                         extra=self._region_reads(struct, variant))
+		if arm.value is None:
+			matched = matched_values(variant)
+			if not matched:
+				return []
+			present = " && ".join(f"{held} != {one.value}u"
+			                      for one in matched)
+		else:
+			present = f"{held} == {arm.value}u"
+
+		return [
+			f"\t\t/* {placement.path} is reserved, and a pad is a run:",
+			"\t\t * every byte of it is zero where the discriminant",
+			"\t\t * selects this arm, and nothing to check where it does",
+			"\t\t * not. */",
+			f"\t\tif ({present}) {{",
+			f"\t\t\tif (!situ_in_bounds(raw_, ({start}), {width}u)) {{",
+			"\t\t\t\treturn ::situ::rt::err::bounds;",
+			"\t\t\t}",
+			f"\t\t\tfor (std::uint32_t at = 0u; at < {width}u; at++) {{",
+			f"\t\t\t\tif (*(situ_base(raw_) + ({start}) + at) != 0u) {{",
+			"\t\t\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t\t\t}",
 			"\t\t\t}",
 			"\t\t}",
 		]

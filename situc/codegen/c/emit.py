@@ -12423,6 +12423,35 @@ class Emitter:
 			"\t}",
 		]
 
+	def _arm_pad_check(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A pad arm: every byte of the aligned span is zero (26.853)."""
+		width = (placement.size_bits or 0) // BITS_PER_BYTE
+		start = self._base_expression(struct, placement)
+		guard = self._arm_guard(struct, placement)
+		if not width or start is None or guard is None:
+			return []
+		absent, _named = guard
+
+		local = c_name(self._local(struct, placement))
+		return [
+			f"\t/* {placement.path} is reserved, and a pad is a run: every",
+			"\t * byte of it is zero where the discriminant selects this",
+			"\t * arm, and nothing to check where it does not. */",
+			f"\tif (!({absent})) {{",
+			f"\t\tif (!situ_in_bounds(view, ({start}), {width}u)) {{",
+			"\t\t\treturn SITU_ERR_BOUNDS;",
+			"\t\t}",
+			f"\t\tfor (uint32_t {local}_at = 0u; {local}_at < {width}u;"
+			f" {local}_at++) {{",
+			f"\t\t\tif (*(situ_base(view) + ({start}) + {local}_at)"
+			" != 0u) {",
+			"\t\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t\t}",
+			"\t\t}",
+			"\t}",
+		]
+
 	def _arm_text_number(self, struct: ResolvedStruct,
 			placement: Placement) -> list[str]:
 		"""A fixed-width text number arm: digits, spelling, declared range.
@@ -12499,6 +12528,13 @@ class Emitter:
 		"""
 		placement = entry.placement
 		scalar    = placement.scalar
+
+		# A PAD arm, which is a reserved RUN: every byte of the aligned
+		# span has to be zero (26.848's other half). Read INLINE from the
+		# span -- there is no accessor, 26.853 having declined the one
+		# that read a single byte of it.
+		if placement.pad_to is not None:
+			return self._arm_pad_check(struct, placement)
 
 		# A fixed-width TEXT NUMBER arm (26.850). Its digits, its spelling
 		# and its declared range were asked by none of the six readers, and

@@ -97,22 +97,20 @@ ONES_CASES = {
 }
 
 
-#: A PAD inside an arm, which is where this fix had to stop rather than
-#: widen. `pad_to(4)` is legal in an arm, its policy is always
-#: `must_be_zero` -- the compiler refuses `[must_be_one]` on a pad, saying
-#: the attribute "belongs on a `reserved` member, whose policy it sets" --
-#: and NONE of the six readers checks it. That is asserted here as
-#: agreement rather than as enforcement, which is the honest shape for a
-#: named decline: the day somebody teaches four backends to check a pad arm
-#: without the packer, this goes red.
+#: A PAD inside an arm, which this file first recorded as a DECLINE in all
+#: six readers and is now enforced in all six. `pad_to(4)` is legal in an
+#: arm, its policy is always `must_be_zero` -- the compiler refuses
+#: `[must_be_one]` on a pad, saying the attribute "belongs on a `reserved`
+#: member, whose policy it sets" -- and the span is three bytes.
 #:
-#: Why it is declined rather than checked: the pad spans three bytes and
-#: `body_pad` reads ONE of them -- `self._read(1, 1, ...)` while bounds-
-#: checking three -- so a comparison through the accessor catches a nonzero
-#: first byte and misses the other two. Measured on `01000001` with the
-#: scalar comparison in place: all four answered OK. The member path
-#: answers with a run scan instead (the packer's kind 13), and porting that
-#: to an arm is its own piece of work (26.848).
+#: The decline was honest and is worth keeping in the record. The scalar
+#: form of the check could not answer for it: the arm's accessor read ONE
+#: byte of the span while bounds-checking all three, so a comparison
+#: through it caught a nonzero first byte and missed the other two
+#: (26.853). What answers it is the RUN form -- the packer's `zero_run`
+#: kind, which both walkers already read for a member -- and the accessor
+#: is gone rather than fixed, a pad being a reserved run nothing is meant
+#: to read.
 PAD = """target buffer;
 
 struct arms {
@@ -124,14 +122,14 @@ struct arms {
 }
 """
 
-#: Four bytes, the pad being bytes 1..3, and every one of these accepted by
-#: all six. The two that SHOULD be refused are marked, so the entry says
-#: what the gap is rather than merely pinning today's answer.
+#: Four bytes, the pad being bytes 1..3, and BOTH ENDS broken separately:
+#: that pair is what distinguishes the run check from the scalar one the
+#: accessor allowed, which could only ever have seen the first.
 PAD_CASES = {
 	"01000000": "0",
-	"01000001": "0",	# the gap: the last byte of the span is unread
-	"01010000": "0",	# the gap: the first byte is read by nobody either
-	"00ffffff": "0",	# correct: the default arm, one byte of `other`
+	"01000001": "2",	# the last byte of the span
+	"01010000": "2",	# the first
+	"00ffffff": "0",	# the default arm: `other`, then bytes nobody claims
 }
 
 
