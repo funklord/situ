@@ -28,14 +28,14 @@ four-way differential is for.
 
 from __future__ import annotations
 
-from situc import ast
+from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import Shape
-from situc.codegen.plain_build import members as _members, plain
+from situc.codegen.c.build import (LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
+                                   Shape)
+from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.layout import BITS_PER_BYTE
 from situc.resolve import ResolvedSchema
-from situc.traverse import local_name
 from situc import __version__
 
 #: `Shape` is C's and is re-exported rather than rebuilt: the CLI
@@ -50,8 +50,14 @@ def declined(resolved: ResolvedSchema,
 	return plain_build.declined(resolved, shape, "Python")
 
 
-def _write(placement: Placement, local: str) -> list[str]:
-	"""One member's bounds check, write and advance -- C's three steps.
+def _room(size: str, path: str) -> list[str]:
+	return [f"\tif len(out) - at < {size}:",
+	        f'\t\traise BoundsError("{path}: {{}} byte(s) needed, {{}} left"',
+	        f"\t\t\t.format({size}, len(out) - at))"]
+
+
+def _store(part: Part, value: str) -> list[str]:
+	"""One scalar's bounds check, write and advance -- C's three steps.
 
 	**The byte order comes from the emitter's own helper**, not from a test
 	here. Written as `is not LITTLE -> big` first, which is the exact
@@ -68,17 +74,82 @@ def _write(placement: Placement, local: str) -> list[str]:
 	"""
 	from situc.codegen.python.emit import _byte_order
 
-	width  = (placement.size_bits or 0) // BITS_PER_BYTE
+	placement = part.placement
+	assert placement.scalar is not None
+	width  = placement.scalar.bits // BITS_PER_BYTE
 	order  = _byte_order(placement.endian)
-	signed = bool(placement.scalar and placement.scalar.signed)
 	return [
-		f"\tif len(out) - at < {width}:",
-		f'\t\traise BoundsError("{placement.path}: {width} byte(s) needed,"',
-		'\t\t\tf" {len(out) - at} left")',
-		f"\tout[at:at + {width}] = {local}.to_bytes("
-		f"{width}, {order}, signed={signed})",
+		*_room(str(width), placement.path),
+		f"\tout[at:at + {width}] = ({value}).to_bytes("
+		f"{width}, {order}, signed={placement.scalar.signed})",
 		f"\tat += {width}",
 	]
+
+
+def _size(part: Part, run: str) -> list[str]:
+	"""A size field, from the length of the run it measures."""
+	assert part.placement.scalar is not None
+	path  = part.placement.path
+	limit = (1 << part.placement.scalar.bits) - 1
+	refuse = (f'\t\traise ConstraintError("{path}: the run is longer than '
+	          'this can say")')
+	if part.solved is None:
+		return [f"\tif len({run}) > {limit}:", refuse,
+		        *_store(part, f"len({run})")]
+	scale, offset = part.solved.scale, part.solved.offset
+	shift = f" + {-offset}" if offset < 0 else f" - {offset}" if offset else ""
+	return [
+		f"\tsolved = len({run}){shift}",
+		"\tif solved < 0"
+		+ (f" or solved % {scale} != 0" if scale != 1 else "") + ":",
+		refuse,
+		*([f"\tsolved //= {scale}"] if scale != 1 else []),
+		f"\tif solved > {limit}:", refuse,
+		*_store(part, "solved"),
+	]
+
+
+def _write(part: Part, parts: list[Part]) -> list[str]:
+	"""One part, as `c/build.py` writes it."""
+	path = part.placement.path
+	if part.role == SCALAR:
+		return _store(part, py_name(part.local))
+	if part.role == SIZE:
+		run = next(one.local for one in parts
+		           if one.placement is part.sizes)
+		return _size(part, py_name(run))
+	if part.role == ZERO:
+		ones = traverse.reserved_policy(part.placement.attrs) == "must_be_one"
+		return [*_room(str(part.bytes), path),
+		        f"\tout[at:at + {part.bytes}] = "
+		        f"b\"{'\\xff' if ones else '\\x00'}\" * {part.bytes}",
+		        f"\tat += {part.bytes}"]
+	if part.role == LITERAL:
+		return [*_room(str(part.bytes), path),
+		        f"\tout[at:at + {part.bytes}] = {bytes(part.literal)!r}",
+		        f"\tat += {part.bytes}"]
+	local = py_name(part.local)
+	if part.role == RUN:
+		return [f"\tif len({local}) != {part.bytes}:",
+		        f'\t\traise BoundsError("{path}: {part.bytes} byte(s) are '
+		        'wanted")',
+		        *_room(str(part.bytes), path),
+		        f"\tout[at:at + {part.bytes}] = {local}",
+		        f"\tat += {part.bytes}"]
+	assert part.role == SPAN, part.role
+	return [*_room(f"len({local})", path),
+	        f"\tout[at:at + len({local})] = {local}",
+	        f"\tat += len({local})"]
+
+
+def _parameters(parts: list[Part]) -> list[str]:
+	found: list[str] = []
+	for part in parts:
+		if part.role == SCALAR:
+			found.append(f"{py_name(part.local)}: int")
+		elif part.role in (RUN, SPAN):
+			found.append(f"{py_name(part.local)}: bytes")
+	return found
 
 
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
@@ -121,21 +192,24 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		# it only then: importing it unconditionally turned one NameError
 		# into fifteen ImportErrors, which is the correction being wider
 		# than the fault it corrected.
-		f"from {basename} import Message, BoundsError"
+		f"from {basename} import Message"
 		+ (", NATIVE_BIG" if any(
-			one.endian is ast.Endian.NATIVE
-			for struct in structs for one in _members(struct)) else ""),
+			one.placement.endian is ast.Endian.NATIVE
+			for struct in structs
+			for one in plain_build.parts(struct, shape) or ()
+			if one.role in (SCALAR, SIZE)) else ""),
+		"from situ_runtime import BoundsError, ConstraintError",
 		"",
 	]
 
 	for struct in structs:
-		members = _members(struct)
-		names   = [py_name(local_name(struct, one)) for one in members]
-		held    = py_name(struct.name)
+		held  = py_name(struct.name)
+		parts = plain_build.parts(struct, shape)
+		assert parts is not None
 		lines.extend([
 			"",
-			f"def build_{held}(out: bytearray, "
-			+ ", ".join(f"{one}: int" for one in names) + ") -> int:",
+			f"def build_{held}(out: bytearray"
+			+ "".join(f", {one}" for one in _parameters(parts)) + ") -> int:",
 			f'\t"""Build a {struct.name} into `out` and return its length.',
 			"",
 			"\tOne member at a time in schema order, then the result is",
@@ -145,12 +219,12 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\thow they come to disagree.",
 			"",
 			"\tRaises BoundsError where `out` is short of what the members",
-			'\tneed, and whatever `validate` raises for a result the schema',
-			'\trefuses."""',
+			"\tneed, ConstraintError where a run is longer than its size",
+			'\tfield can say, and whatever `validate` raises for the result."""',
 			"\tat = 0",
 		])
-		for placement, local in zip(members, names):
-			lines.extend(_write(placement, local))
+		for part in parts:
+			lines.extend(_write(part, parts))
 		lines.extend([
 			"",
 			"\t# The view over exactly what was written, not over `out`: a",

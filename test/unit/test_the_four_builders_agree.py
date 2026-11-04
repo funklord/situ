@@ -1,7 +1,7 @@
 """Rung 2's write half: four builders, one message (26.858).
 
 C has built since 26.610, Python since 26.855, and C++ and Rust since
-26.858, each for the plain class `plain_build` states. A round trip through
+26.858, each for the class `plain_build` states. A round trip through
 one backend's own accessors cannot see a fault that backend's reader and
 writer share, so this holds the four to each other: every struct the class
 serves, in every corpus schema, built by all four from the same values,
@@ -26,7 +26,8 @@ import fourway						# noqa: E402
 from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
-from situc.codegen.c.build import Shape			# noqa: E402
+from situc.codegen.c.build import (RUN, SCALAR, SIZE, SPAN,	# noqa: E402
+                                   Part, Shape)
 from situc.codegen.c.names import ident			# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -66,24 +67,77 @@ def _signed(placement: Placement, raw: int) -> int:
 	return raw
 
 
-def _c_driver(stem: str, structs: list[ResolvedStruct]) -> str:
+def _span_length(part: Part, parts: list[Part]) -> int:
+	"""A length the run's size field can state exactly.
+
+	Three bytes for a plain size; for arithmetic, the length the field's
+	value 2 describes, so that `(n + 1) * 8 - 2` comes out whole rather than
+	exercising only the refusal.
+	"""
+	for one in parts:
+		if one.role == SIZE \
+				and one.sizes is part.placement:
+			if one.solved is not None:
+				return max(one.solved.scale * 2 + one.solved.offset, 0)
+	return 3
+
+
+def _run_bytes(length: int, index: int) -> bytes:
+	return bytes((0x41 + index + at) & 0xFF for at in range(length))
+
+
+def _given(parts: list[Part]) -> list[tuple[Part, int | bytes]]:
+	"""What the caller hands each part that takes anything."""
+	found: list[tuple[Part, int | bytes]] = []
+	for at, part in enumerate(parts):
+		if part.role == SCALAR:
+			found.append((part, _raw(part.placement, at)))
+		elif part.role == RUN:
+			found.append((part, _run_bytes(part.bytes, at)))
+		elif part.role == SPAN:
+			found.append((part, _run_bytes(_span_length(part, parts), at)))
+	return found
+
+
+def _array(name: str, value: bytes, kind: str) -> str:
+	items = ", ".join(f"{one:#x}" for one in value) or "0"
+	return f"static const {kind} {name}[] = {{{items}}};"
+
+
+def _plan(struct: ResolvedStruct, shape: Shape) -> list[Part]:
+	parts = plain_build.parts(struct, shape)
+	assert parts is not None
+	return parts
+
+
+def _c_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 	lines = ["#include <stdio.h>", f'#include "{stem}_build.h"',
 	         f"static uint8_t buf[{ROOM}];", "static uint32_t n;",
 	         "static void show(const char *name, situ_err_t e) {",
 	         '\tprintf("%s ", name);',
 	         '\tif (e != SITU_OK) { puts("refused"); return; }',
 	         '\tfor (uint32_t i = 0; i < n; i++) printf("%02x", buf[i]);',
-	         '\tputs("");', "}", "int main(void) {"]
-	for struct in structs:
-		values = ", ".join(f"{_raw(one, at):#x}ull" for at, one in
-		                   enumerate(plain_build.members(struct)))
-		lines.append(f'\tshow("{struct.name}", '
+	         '\tputs("");', "}"]
+	calls = []
+	for index, struct in enumerate(structs):
+		values: list[str] = []
+		for at, (part, value) in enumerate(_given(_plan(struct, shape))):
+			if isinstance(value, int):
+				values.append(f"{value:#x}ull")
+				continue
+			name = f"run_{index}_{at}"
+			lines.append(_array(name, value, "uint8_t"))
+			values.append(name)
+			if part.role == SPAN:
+				values.append(f"{len(value)}u")
+		calls.append(f'\tshow("{struct.name}", '
 		             f'{ident("situ", struct.name, "build")}'
-		             f"(buf, {ROOM}u, {values}, &n));")
-	return "\n".join([*lines, "\treturn 0;", "}", ""])
+		             f'(buf, {ROOM}u, {", ".join([*values, "&n"])}));')
+	return "\n".join([*lines, "int main(void) {", *calls, "\treturn 0;",
+	                  "}", ""])
 
 
-def _cpp_driver(stem: str, structs: list[ResolvedStruct]) -> str:
+def _cpp_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 	lines = ["#include <cstdio>", f'#include "{stem}_build.hpp"',
 	         f"static std::uint8_t buf[{ROOM}];", "static std::uint32_t n;",
 	         "static void show(const char *name, ::situ::rt::err e) {",
@@ -92,18 +146,27 @@ def _cpp_driver(stem: str, structs: list[ResolvedStruct]) -> str:
 	         '\t\tstd::puts("refused");', "\t\treturn;", "\t}",
 	         '\tfor (std::uint32_t i = 0; i < n; i++) '
 	         'std::printf("%02x", buf[i]);',
-	         '\tstd::puts("");', "}", "int main() {"]
-	for struct in structs:
-		values = ", ".join(
-			f"static_cast<{cpp_scalar(one)}>({_raw(one, at):#x}ull)"
-			for at, one in enumerate(plain_build.members(struct)))
-		lines.append(f'\tshow("{struct.name}", '
+	         '\tstd::puts("");', "}"]
+	calls = []
+	for index, struct in enumerate(structs):
+		values: list[str] = []
+		for at, (part, value) in enumerate(_given(_plan(struct, shape))):
+			if isinstance(value, int):
+				values.append(f"static_cast<{cpp_scalar(part.placement)}>"
+				              f"({value:#x}ull)")
+				continue
+			name = f"run_{index}_{at}"
+			lines.append(_array(name, value, "std::uint8_t"))
+			values.append(name)
+			if part.role == SPAN:
+				values.append(f"{len(value)}u")
+		calls.append(f'\tshow("{struct.name}", '
 		             f"::situ_build::{class_name(struct)}"
-		             f"(buf, {ROOM}u, {values}, n));")
-	return "\n".join([*lines, "}", ""])
+		             f'(buf, {ROOM}u, {", ".join([*values, "n"])}));')
+	return "\n".join([*lines, "int main() {", *calls, "}", ""])
 
 
-def _rust_driver(stem: str, structs: list[ResolvedStruct]) -> str:
+def _rust_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 	lines = ["mod situ_rt;", "#[allow(dead_code)]", f"mod {stem};",
 	         "#[allow(dead_code)]", f"mod {stem}_build;",
 	         "fn show(name: &str, buf: &[u8], "
@@ -116,26 +179,33 @@ def _rust_driver(stem: str, structs: list[ResolvedStruct]) -> str:
 	         '\t\tErr(_) => println!("refused"),', "\t}", "}",
 	         "fn main() {", f"\tlet mut buf = [0u8; {ROOM}];"]
 	for struct in structs:
-		values = ", ".join(
-			f"{_raw(one, at):#x}u64 as {rust_scalar(one)}"
-			for at, one in enumerate(plain_build.members(struct)))
+		values: list[str] = []
+		for part, value in _given(_plan(struct, shape)):
+			if isinstance(value, int):
+				values.append(f"{value:#x}u64 as "
+				              f"{rust_scalar(part.placement)}")
+				continue
+			items = ", ".join(f"{one:#x}u8" for one in value)
+			values.append(f"&[{items}]")
 		name = _ident(struct.name).removeprefix("r#")
 		lines.extend([f"\tlet got = {stem}_build::build_{name}"
-		              f"(&mut buf, {values});",
+		              f'({", ".join(["&mut buf", *values])});',
 		              f'\tshow("{struct.name}", &buf, got);'])
 	return "\n".join([*lines, "}", ""])
 
 
-def _python(tmp: Path, stem: str, structs: list[ResolvedStruct]) -> str:
+def _python(tmp: Path, stem: str, structs: list[ResolvedStruct],
+		shape: Shape) -> str:
 	shutil.copy(RUNTIME / "python" / "situ_runtime.py", tmp)
 	sys.path.insert(0, str(tmp))
 	try:
 		module = importlib.import_module(f"{stem}_build")
-		base   = importlib.import_module(stem)
+		base   = importlib.import_module("situ_runtime")
 		lines  = []
 		for struct in structs:
-			values = [_signed(one, _raw(one, at)) for at, one in
-			          enumerate(plain_build.members(struct))]
+			values = [_signed(part.placement, value)
+			          if isinstance(value, int) else value
+			          for part, value in _given(_plan(struct, shape))]
 			buf = bytearray(ROOM)
 			try:
 				wrote = getattr(module, f"build_{py_name(struct.name)}")(
@@ -175,7 +245,6 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 	structs  = plain_build.plain(resolved, shape)
 	if not structs:
 		pytest.skip("no struct here is in the class")
-	assert all((one.layout.size_bytes or 0) <= ROOM for one in structs)
 
 	stem = schema.stem
 	dirs = {target: tmp_path / target
@@ -184,14 +253,14 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 		out.mkdir()
 		_emit(schema, target, out)
 
-	(dirs["c"] / "main.c").write_text(_c_driver(stem, structs),
+	(dirs["c"] / "main.c").write_text(_c_driver(stem, structs, shape),
 	                                  encoding="ascii")
 	assert fourway.HOST_CC is not None and fourway.HOST_CXX is not None
 	_run([fourway.HOST_CC, "-std=c11", "-w", f"-I{RUNTIME / 'c'}", "-I.",
 	      "main.c", f"{stem}.c", str(RUNTIME / "c" / "situ.c"),
 	      "-o", "probe"], dirs["c"])
 
-	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, structs),
+	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, structs, shape),
 	                                      encoding="ascii")
 	_run([fourway.HOST_CXX, "-std=c++17", "-Wall", "-Wextra", "-Werror",
 	      f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", "-I.", "main.cpp",
@@ -202,13 +271,13 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 	rt = dirs["rust"] / "situ_rt.rs"
 	rt.write_text(rt.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 	              encoding="ascii")
-	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, structs),
+	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, structs, shape),
 	                                      encoding="ascii")
 	assert fourway.RUSTC is not None
 	_run([fourway.RUSTC, "--edition", "2021", "-A", "warnings", "main.rs",
 	      "-o", "probe"], dirs["rust"])
 
-	said = {"python": _python(dirs["python"], stem, structs),
+	said = {"python": _python(dirs["python"], stem, structs, shape),
 	        **{target: _run([str(dirs[target] / "probe")], dirs[target])
 	           for target in ("c", "cpp", "rust")}}
 	assert said["python"].count("\n") == len(structs)

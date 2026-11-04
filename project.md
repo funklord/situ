@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.860 The three builders drive from C's plan, and serve runs and size fields
+
+Moved to `doc/decision/26.860-the-three-builders-drive-from-c-s-plan.md`.
+
 ### 26.859 An `indexed` region hands each element its arguments
 
 Moved to `doc/decision/26.859-an-indexed-element-takes-its-arguments.md`.

@@ -8,53 +8,53 @@ step. Each language's builder asks here and emits its own code.
 
 from __future__ import annotations
 
-from situc.codegen.c.build import Shape, refusals
-from situc.layout import BITS_PER_BYTE, Placement
+from situc.codegen.c.build import (LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
+                                   Shape, plan, refusals)
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import is_own_member
 
-__all__ = ["members", "plain", "declined"]
+__all__ = ["SERVED", "parts", "plain", "declined"]
 
 
-def is_plain(struct: ResolvedStruct) -> bool:
-	"""Every member a whole-byte fixed scalar at a static offset.
+#: The roles in C's plan these builders write. A part outside them is a
+#: struct this class declines, by name.
+SERVED = frozenset({LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO})
 
-	The class this serves. It excludes a bit-packed field for a reason worth
-	naming rather than deferring: the packed run is written zeroed and then
-	set in place, which is a second write to a byte this builder has already
-	advanced past, and append-only is the property the rung was given
-	permission for.
+
+def _serves(part: Part, parts: list[Part]) -> bool:
+	"""Whether this part is one the three builders write.
+
+	Each exclusion is a thing C's writer does that these do not yet: digits
+	for a text number, a value another arm claims, a run whose length a
+	struct argument states, a count of elements rather than of bytes.
 	"""
-	seen = False
-	for entry in struct.entries:
-		placement = entry.placement
-		if not is_own_member(struct, placement):
-			continue
-		seen = True
-		scalar = placement.scalar
-		if scalar is None or placement.kind != "field":
-			return False
-		# `is_fixed_size` as well as the two fields: a run sized by arithmetic
-		# has neither (`u8 data[(n + 1) * 8 - 2]` is `size_expr`), and its
-		# `size_bits` is only its minimum, so it passed for a six-byte
-		# scalar and Python wrote an integer into a variable run. C took a
-		# pointer there, which is what showed it (26.858).
-		if placement.array_count is not None or placement.sized_by is not None \
-				or not placement.is_fixed_size:
-			return False
-		if placement.radix is not None or placement.varint is not None:
-			return False
-		if placement.delimiters or scalar.is_bit_packed:
-			return False
-		if placement.offset_bits is None or not placement.size_bits:
-			return False		# a zero-width member has nothing to write
+	held = part.placement
+	if part.role not in SERVED or part.radix or part.others or part.length:
+		return False
+	if part.role in (RUN, SPAN) and held.kind != "field":
+		return False
+	if part.role in (SCALAR, SIZE) \
+			and (held.scalar is None or held.marker is not None):
+		return False
+	if part.role == SIZE:
+		measured = next((one for one in parts if one.role == SPAN
+		                 and one.placement is part.sizes), None)
+		return measured is not None and not part.inner
+	return True
 
-		if placement.offset_bits % BITS_PER_BYTE \
-				or placement.size_bits % BITS_PER_BYTE:
-			return False
-		if placement.parameter or placement.since is not None:
-			return False
-	return seen
+
+def parts(struct: ResolvedStruct, shape: Shape) -> list[Part] | None:
+	"""C's plan for this struct, where every part is one this class writes.
+
+	The plan rather than a second reading of the placements: it is what
+	says a size field is computed and not supplied, a reserved run is the
+	schema's to fill, and what a member's parameter is called. A first
+	version read the placements and took a run sized by arithmetic for a
+	six-byte scalar, its `size_bits` being its minimum (26.858).
+	"""
+	planned, _ = plan(struct, shape)
+	if not planned or not all(_serves(one, planned) for one in planned):
+		return None
+	return planned
 
 
 def plain(resolved: ResolvedSchema, shape: Shape) -> list[ResolvedStruct]:
@@ -66,7 +66,8 @@ def plain(resolved: ResolvedSchema, shape: Shape) -> list[ResolvedStruct]:
 	"""
 	refused = {name for name, _why in refusals(resolved, shape)}
 	return [struct for struct in resolved.structs.values()
-	        if struct.name not in refused and is_plain(struct)]
+	        if struct.name not in refused
+	        and parts(struct, shape) is not None]
 
 
 def declined(resolved: ResolvedSchema, shape: Shape,
@@ -81,15 +82,10 @@ def declined(resolved: ResolvedSchema, shape: Shape,
 	out = list(refusals(resolved, shape))
 	refused = {name for name, _why in out}
 	for struct in resolved.structs.values():
-		if struct.name in refused or is_plain(struct):
+		if struct.name in refused or parts(struct, shape) is not None:
 			continue
 		out.append((struct.name,
-		            f"{language}'s builder takes a struct whose every member "
-		            "is a whole-byte fixed scalar so far; this one is not "
-		            "(26.855)"))
+		            f"{language}'s builder takes whole-byte scalars, byte "
+		            "runs, the size fields measuring them, and stated "
+		            "bytes so far; this one has more (26.860)"))
 	return out
-
-
-def members(struct: ResolvedStruct) -> list[Placement]:
-	return [entry.placement for entry in struct.entries
-	        if is_own_member(struct, entry.placement)]
