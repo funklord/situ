@@ -6583,6 +6583,18 @@ class Emitter:
 		fault. `err::version` is what `default: error` returns, being the
 		same mistake from the other end.
 		"""
+		# A `pad_to(n)` ARM gets no accessor, as a pad MEMBER does not
+		# (26.848): the scalar branch below answers ONE byte of a span it
+		# bounds-checks whole, a pad is a reserved RUN nothing is meant to
+		# read, and the extent arithmetic does not need one -- a pad's
+		# length comes from `pad_to`, not from the data. `situc diff`
+		# probed it in all four, so the differential compared it and the
+		# four agreed on one byte of three.
+		if placement.pad_to is not None:
+			return ["", f"\t/* {placement.path} is reserved: no accessor,"
+			        " and a pad is a run", "\t * the message sizes, so"
+			        " there is no value to hand back. */"]
+
 		held = self._over_fields(struct, variant.discriminant or "",
 		                         extra=self._region_reads(struct, variant))
 		if arm.value is None:

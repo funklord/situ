@@ -3436,6 +3436,21 @@ class Emitter:
 			return []
 		test, _present = guard
 
+		# A `pad_to(n)` ARM gets no accessor, as a pad MEMBER does not
+		# (26.848). The scalar branch below answers ONE byte of a span it
+		# bounds-checks whole -- `pad_to(4)` after one byte reads `raw[1]`
+		# of three -- and a pad is a reserved RUN that nothing is meant to
+		# read. The extent arithmetic after the arm does not need one
+		# either: a pad's length comes from `pad_to`, not from the data.
+		#
+		# `situc diff` probed it in all four languages, so the four-way
+		# differential compared that accessor and the four AGREED, on one
+		# byte of three -- agreement on a wrong answer, which is the one
+		# thing a differential cannot report. `differ._arms` declines it
+		# now for the same reason.
+		if placement.pad_to is not None:
+			return [""] + self._pad_arm_note(placement)
+
 		name   = py_name(local_name(struct, placement))
 		scalar = placement.scalar
 		start  = self._offset_expression(struct, placement)
@@ -8692,6 +8707,19 @@ class Emitter:
 			f'\t\t\t\t\t"{placement.path} is not {width} digits in base'
 			f' {placement.radix}")',
 			*[f"\t{one}" for one in inner],
+		]
+
+	def _pad_arm_note(self, placement: Placement) -> list[str]:
+		"""What the generated file says instead of an accessor.
+
+		Named rather than silent, which is what every other decline in
+		these emitters does: a missing accessor nobody mentions reads as an
+		emitter that forgot.
+		"""
+		return [
+			f"\t# {placement.path} is reserved: no accessor, and a pad is",
+			"\t# a run the message sizes, so there is no value to hand"
+			" back.",
 		]
 
 	def _arm_fits_check(self, struct: ResolvedStruct,

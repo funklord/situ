@@ -967,6 +967,15 @@ def _arms(struct: ResolvedStruct, variant: Placement) -> list[Ask]:
 		# The width gate this used to sit behind was wrong for the same
 		# reason the clause it was bolted onto is about runs with a count:
 		# a delimited arm HAS no count, so neither test describes it.
+		# A `pad_to(n)` ARM has no accessor in any backend (26.848), and
+		# asking for one named a function nothing defines -- which is
+		# f2be5841's failure in another construct. Before that it was
+		# worse: the four DID emit one, reading one byte of a span they
+		# bounds-checked whole, and this probe compared it and found them
+		# agreed.
+		if member.pad_to is not None:
+			continue
+
 		if member.delimiters:
 			found.append(Ask(Probe.ARM_BYTES, local))
 			continue
