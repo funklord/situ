@@ -213,8 +213,10 @@ built (26.797, 26.799, 26.801, 26.802, 26.804, 26.809). What is not:
 - **A struct naming itself** is still refused, as is one that can contain
   itself through any chain: a recursive child is measured with a depth,
   and handing arguments down that path is the other half of step 5.
-- **A member inside a sealed or coded region, and an `indexed` region's
-  element**, that take arguments are refused. One inside a `positional`
+- **An `indexed` region's element is built** (26.859), except for a
+  parent's own parameter handed on.
+- **A member inside a sealed or coded region** that takes arguments is
+  refused. One inside a `positional`
   or `authenticated` block is built (26.811).
 
   **How far from built each is was measured rather than guessed**

@@ -5045,8 +5045,17 @@ static situ_walk_err indexed_elements_validate(const situ_walk_image *image,
 	}
 	if (held.type_struct == SITU_WALK_NONE
 	    || held.type_struct >= image->struct_count
-	    || !element_validatable(image, held.type_struct)) {
+	    || (!element_validatable(image, held.type_struct)
+	        && !argument_rows(image, index))) {
 		return SITU_WALK_OK;
+	}
+	/* What the region hands each element (0068). */
+	int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+	situ_walk_image elements;
+	err = child_binding(image, message, len, shape, index, depth,
+	                    held.type_struct, handed, &elements);
+	if (err != SITU_WALK_OK) {
+		return err;
 	}
 	if (row[12] == 0u) {
 		base = table_bits / 8u;
@@ -5088,7 +5097,7 @@ static situ_walk_err indexed_elements_validate(const situ_walk_image *image,
 		if (fixed != SITU_WALK_NONE) {
 			extent = fixed / 8u;
 		} else {
-			err = struct_extent(image, message + start, len - start,
+			err = struct_extent(&elements, message + start, len - start,
 			                    held.type_struct, depth + 1u, &extent);
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
@@ -5105,7 +5114,7 @@ static situ_walk_err indexed_elements_validate(const situ_walk_image *image,
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
-		err = validate_deep(image, message + start, extent, held.type_struct,
+		err = validate_deep(&elements, message + start, extent, held.type_struct,
 		                    depth + 1u, &inner_verdict, NULL);
 		if (err != SITU_WALK_OK) {
 			return err;

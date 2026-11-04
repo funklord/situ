@@ -994,7 +994,8 @@ class Emitter:
 			"\t\tif start > self.bytes.len() {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			*self._index_element_extent(element, inner),
+			*self._index_element_extent(
+				element, inner, self._child_fields(struct, placement)),
 			"\t}",
 		]
 
@@ -1006,7 +1007,7 @@ class Emitter:
 		return self._offset_expression(struct, found.placement) or "0"
 
 	def _index_element_extent(self, element: ResolvedStruct,
-			inner: str) -> list[str]:
+			inner: str, fields: str = "") -> list[str]:
 		"""Narrow to one element, measuring it first where it varies."""
 		if element.layout.is_fixed_size:
 			return [
@@ -1014,7 +1015,7 @@ class Emitter:
 				"\t\t\treturn Err(Error::Bounds);",
 				"\t\t}",
 				f"\t\tOk({inner} {{ bytes: &self.bytes[start..start"
-				f" + {inner}::SIZE] }})",
+				f" + {inner}::SIZE]{fields} }})",
 			]
 
 		return [
@@ -1024,12 +1025,12 @@ class Emitter:
 			"\t\t// read and a view is what it decides. Measure over the rest"
 			" of the",
 			"\t\t// region, then narrow.",
-			f"\t\tlet probe = {inner} {{ bytes: &self.bytes[start..] }};",
+			f"\t\tlet probe = {inner} {{ bytes: &self.bytes[start..]{fields} }};",
 			"\t\tlet size  = probe.extent();",
 			"\t\tif start + size > self.bytes.len() {",
 			"\t\t\treturn Err(Error::Bounds);",
 			"\t\t}",
-			f"\t\tOk({inner} {{ bytes: &self.bytes[start..start + size] }})",
+			f"\t\tOk({inner} {{ bytes: &self.bytes[start..start + size]{fields} }})",
 		]
 
 	def _tlv_region(self, struct: ResolvedStruct,
@@ -7369,7 +7370,8 @@ class Emitter:
 		element at is BOUNDS (26.792).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
-		if (element is None or arguments(element)
+		if (element is None
+				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
 				or (not element.layout.is_fixed_size
 				    and not has_computable_extent(self.resolved.structs,

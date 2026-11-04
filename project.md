@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.859 An `indexed` region hands each element its arguments
+
+Moved to `doc/decision/26.859-an-indexed-element-takes-its-arguments.md`.
+
 ### 26.858 Rung 2 writes in all four, and the four write one message
 
 Moved to `doc/decision/26.858-rung-2-writes-in-all-four.md`.

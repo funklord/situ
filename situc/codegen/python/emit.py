@@ -1635,7 +1635,9 @@ class Emitter:
 			f'\t\t"""Element `index`, whose offset is measured from',
 			f'\t\t{self._index_base_noun(table)}."""',
 			f"\t\tstart = {origin} + self.{name}_offset(index)",
-			*self._index_element_extent(element, inner, anchor),
+			*self._index_element_extent(
+				element, inner, anchor,
+				*(self._child(struct, placement) if placement.arguments else ())),
 		]
 
 	def _index_member_base(self, struct: ResolvedStruct,
@@ -1646,12 +1648,13 @@ class Emitter:
 		return self._offset_expression(struct, found.placement) or "0"
 
 	def _index_element_extent(self, element: ResolvedStruct, inner: str,
-			anchor: str) -> list[str]:
+			anchor: str, make: str = "", args: str = "") -> list[str]:
 		"""Narrow to one element, measuring it first where it varies."""
+		make = make or inner
 		if element.layout.is_fixed_size:
 			return [
-				f"\t\treturn {inner}(self._msg, {anchor} + start,"
-				f" {inner}.SIZE_BYTES)",
+				f"\t\treturn {make}(self._msg, {anchor} + start,"
+				f" {inner}.SIZE_BYTES{args})",
 			]
 
 		return [
@@ -1664,9 +1667,10 @@ class Emitter:
 			"\t\tif start > self._len:",
 			f'\t\t\traise BoundsError(f"element {{index}} starts past the'
 			f' region")',
-			f"\t\tprobe = {inner}(self._msg, {anchor} + start,"
-			f" self._len - start)",
-			f"\t\treturn {inner}(self._msg, {anchor} + start, probe._extent)",
+			f"\t\tprobe = {make}(self._msg, {anchor} + start,"
+			f" self._len - start{args})",
+			f"\t\treturn {make}(self._msg, {anchor} + start, probe._extent"
+			f"{args})",
 		]
 
 	def _tlv_region(self, struct: ResolvedStruct,
@@ -6942,7 +6946,8 @@ class Emitter:
 		element at is BOUNDS (26.792).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
-		if (element is None or arguments(element)
+		if (element is None
+				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
 				or (not element.layout.is_fixed_size
 				    and not has_computable_extent(self.resolved.structs,

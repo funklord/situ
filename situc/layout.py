@@ -2029,6 +2029,12 @@ class Solver:
 			path          = f"{prefix}.{member.name}",
 			name          = member.name,
 			kind          = "indexed",
+			arguments     = (self.arguments_of(element, state)
+			                 if isinstance(element, ast.Field) else ()),
+			arguments_ast = tuple(
+				(arg.name, arg.value)
+				for arg in getattr(element, "arguments", ())
+				if arg.value is not None),
 			type_name     = element.type_ref.name if isinstance(element, ast.Field)
 			                else "indexed",
 			offset_bits   = cursor.lo if cursor.is_exact else None,

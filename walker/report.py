@@ -1996,9 +1996,10 @@ def _indexed_elements(view: View, index: int) -> list[tuple[int, int]] | None:
 	if entry_bits == NONE or count_code == NONE:
 		return None
 	shape = image.structs[element]
-	if any(image.placements[one].parameter for one in
-	       range(shape.first_placement,
-	             shape.first_placement + shape.placement_count)):
+	if index not in image.arguments and any(
+			image.placements[one].parameter for one in
+			range(shape.first_placement,
+			      shape.first_placement + shape.placement_count)):
 		return None
 	# What the offsets are measured from: the region (0), the message (1)
 	# or a member (2), which the image names since 26.792.
@@ -2031,7 +2032,8 @@ def _indexed_elements(view: View, index: int) -> list[tuple[int, int]] | None:
 		else:
 			try:
 				size = struct_extent(View(image, view.buffer, element,
-				                          start, view.limit), 1)
+				                          start, view.limit,
+				                          child_args(view, index)), 1)
 			except Unplaceable:
 				return None
 			except Refused:

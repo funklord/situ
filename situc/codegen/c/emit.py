@@ -3134,12 +3134,14 @@ class Emitter:
 			"\t\treturn err;",
 			"\t}",
 			f"\tstart = {origin} + found;",
-			*self._index_element_extent(element),
+			*self._index_element_extent(
+				element, self._child_args(struct, placement)),
 			"}",
 			"",
 		]
 
-	def _index_element_extent(self, element: ResolvedStruct) -> list[str]:
+	def _index_element_extent(self, element: ResolvedStruct,
+			args: str = "") -> list[str]:
 		"""Narrow the view to one element, measuring it first where it varies.
 
 		A fixed element is its own macro. A variable one has to be measured,
@@ -3167,7 +3169,8 @@ class Emitter:
 			"\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t}",
 			f"\t\treturn situ_view_sub(view, start,",
-			f"\t\t\t{ident(self.prefix, element.name, 'extent')}(probe), out);",
+			f"\t\t\t{ident(self.prefix, element.name, 'extent')}(probe{args}),"
+			" out);",
 			"\t}",
 		]
 
@@ -13644,7 +13647,8 @@ class Emitter:
 		passed a cell whose payload overran the page (26.792).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
-		if (element is None or self._arguments(element)
+		if (element is None
+				or (self._arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)):
 			return []
 		local = c_name(self._local(struct, placement))
@@ -13671,7 +13675,8 @@ class Emitter:
 			f"\t\t\tif ({at}(view, i, &one) != SITU_OK) {{",
 			"\t\t\t\treturn SITU_ERR_BOUNDS;",
 			"\t\t\t}",
-			f"\t\t\terr = {check}(one, NULL);",
+			f"\t\t\terr = {check}(one, NULL"
+			f"{self._child_args(struct, placement)});",
 			"\t\t\tif (err != SITU_OK) {",
 			"\t\t\t\treturn err;",
 			"\t\t\t}",

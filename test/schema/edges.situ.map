@@ -280,6 +280,11 @@ struct hands_on_arms size=4..2068 access=Sequential mutate=Immutable address=Uns
   hands_on_arms.body.raw                 offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
   hands_on_arms.after                    offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord access=Sequential mutate=Immutable address=Unstable
 
+struct hands_on_indexed size=2.. mutate=Shifting address=FrameStable atomic=NonAtomic
+  hands_on_indexed.block                 offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  hands_on_indexed.n                     offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  hands_on_indexed.cells                 offset=AbsoluteStatic(0x02) size=Unbounded align=Aligned(2) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=FrameStable
+
 struct hands_on_runs size=2.. access=Sequential mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   hands_on_runs.block                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
   hands_on_runs.n                        offset=AbsoluteStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord

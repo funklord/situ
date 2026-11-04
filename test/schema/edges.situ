@@ -2283,6 +2283,16 @@ struct hands_on_arms {
 	u8 after;
 }
 
+// An `indexed` region handing each element its argument (26.859): found
+// through the table, then measured with the parent's value.
+struct hands_on_indexed {
+	u8 block [max = 16];
+	u8 n [max = 4];
+	indexed(offset_type = u8, count = n) {
+		negotiated(block = block) cells[];
+	}
+}
+
 // A region name a struct SHARES with the type of one of its members, which
 // is the shape every "which region does this name mean" lookup has been
 // wrong about. `tag_covers`, `regions` and `covered_by` all hold BARE

@@ -3500,8 +3500,8 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# 0068 steps 2 to 4: a member of the struct itself, of one of
 			# its variant's arms, or of a `positional` or `authenticated`
 			# block, one or a run of them, named with its arguments, of a
-			# struct other than this one. A sealed or coded interior, an
-			# `indexed` element and a struct naming itself are later.
+			# struct other than this one. A sealed or coded interior and a
+			# struct naming itself are later.
 			#
 			# AND STEP 5 FOR A SINGLE NESTED MEMBER: an argument that hands
 			# on one of the parent's OWN parameters. In C that is the only
@@ -3525,7 +3525,8 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					     or member in arms_of(struct)
 					     or member in _transparent_members(struct)) \
 					and member.located is None and named != struct.name \
-					and named not in cyclic:
+					and named not in cyclic \
+					and not _indexed_hands_on_a_parameter(struct, member):
 				continue
 			raise error(
 				f"`{named}` takes an argument, so it cannot be a member yet",
@@ -3545,17 +3546,32 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 				])
 
 
-def _transparent_members(struct: ast.StructDecl) -> list[ast.Member]:
-	"""What a `positional` or `authenticated` block holds (0068).
+def _indexed_hands_on_a_parameter(struct: ast.StructDecl,
+		member: ast.Field) -> bool:
+	"""An `indexed` element handed the parent's own parameter (26.859).
 
-	Both hold the struct's own members, placed as though the block were not
-	there -- one asserts staticness, the other marks what a tag covers --
-	so a member in one is built as one outside it is. A sealed or coded
-	region's interior is a transform's input and is not among them.
+	A field is read over the view `_at` already holds. A parameter would
+	need C's `_at`, `_count` and `_offset` to take the parent's tail, and
+	that threading is built for a run (26.815) and not for a table.
+	"""
+	return any(isinstance(held, ast.Indexed) and member in held.members
+	           for held in struct.members) \
+		and _reads_a_parameter(struct, member)
+
+
+def _transparent_members(struct: ast.StructDecl) -> list[ast.Member]:
+	"""What a `positional`, `authenticated` or `indexed` block holds (0068).
+
+	The first two hold the struct's own members, placed as though the block
+	were not there -- one asserts staticness, the other marks what a tag
+	covers -- and an `indexed` region's element is found through a table and
+	then measured like any run's (26.859). A sealed or coded region's
+	interior is a transform's input and is not among them.
 	"""
 	found: list[ast.Member] = []
 	for member in struct.members:
-		if isinstance(member, (ast.PositionalBlock, ast.Authenticated)):
+		if isinstance(member, (ast.PositionalBlock, ast.Authenticated,
+		                       ast.Indexed)):
 			found.extend(member.members)
 	return found
 

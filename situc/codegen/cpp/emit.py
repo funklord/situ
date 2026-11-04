@@ -5529,7 +5529,8 @@ class Emitter:
 			"\t\t\treturn e;",
 			"\t\t}",
 			f"\t\tconst std::uint32_t start = {origin} + found;",
-			*self._index_element_extent(element),
+			*self._index_element_extent(
+				element, self._child_args(struct, placement)),
 			"\t}",
 		]
 
@@ -5540,7 +5541,8 @@ class Emitter:
 			return "0"
 		return self._offset_expression(struct, found.placement) or "0"
 
-	def _index_element_extent(self, element: ResolvedStruct) -> list[str]:
+	def _index_element_extent(self, element: ResolvedStruct,
+			args: str = "") -> list[str]:
 		"""Narrow to one element, measuring it first where it varies."""
 		inner = self._struct_class(element.name)
 
@@ -5551,7 +5553,7 @@ class Emitter:
 				"\t\t\t\t!= SITU_OK) {",
 				"\t\t\treturn ::situ::rt::err::bounds;",
 				"\t\t}",
-				f"\t\tout = ::{self.namespace}::{inner}(raw);",
+				f"\t\tout = ::{self.namespace}::{inner}(raw{args});",
 				"\t\treturn ::situ::rt::err::ok;",
 			]
 
@@ -5570,10 +5572,10 @@ class Emitter:
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
 			f"\t\tif (situ_view_sub(::situ::rt::view::raw(), start,",
-			f"\t\t\t\t::{self.namespace}::{inner}(raw).extent(), &raw) != SITU_OK) {{",
+			f"\t\t\t\t::{self.namespace}::{inner}(raw{args}).extent(), &raw) != SITU_OK) {{",
 			"\t\t\treturn ::situ::rt::err::bounds;",
 			"\t\t}",
-			f"\t\tout = ::{self.namespace}::{inner}(raw);",
+			f"\t\tout = ::{self.namespace}::{inner}(raw{args});",
 			"\t\treturn ::situ::rt::err::ok;",
 		]
 
@@ -10624,7 +10626,8 @@ class Emitter:
 		element at is BOUNDS (26.792).
 		"""
 		element = self.resolved.structs.get(placement.type_name or "")
-		if (element is None or arguments(element)
+		if (element is None
+				or (arguments(element) and not placement.arguments)
 				or not self._element_refuses(element)
 				or (not element.layout.is_fixed_size
 				    and not has_computable_extent(self.resolved.structs,

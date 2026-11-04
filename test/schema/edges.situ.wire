@@ -255,6 +255,13 @@ struct hands_on_arms size=4..2068
   carried case 2: flag
   carried case default: error
 
+struct hands_on_indexed size=2..
+  @0x0000   1         u8         block  max=16
+  @0x0001   1         u8         n  max=4
+  @0x0002   0..       negotiated cells  args block=block sized-by=n
+  cells index entry: 1
+  cells index base: region
+
 struct hands_on_runs size=2..
   @0x0000   1         u8         block  max=16
   @0x0001   1         u8         n  max=4
