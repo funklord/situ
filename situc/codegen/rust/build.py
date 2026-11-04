@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
-                                   SIZE, SPAN, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
+                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
@@ -96,6 +96,36 @@ def _size(part: Part, run: str) -> list[str]:
 	]
 
 
+def _nested(part: Part) -> list[str]:
+	"""One whole inner struct the caller built.
+
+	Its extent is its own to state, so the writer asks rather than trusting
+	the length it was given: three bytes too many shift every member after
+	it. And where its first byte is a peeked discriminant it has to say
+	which arm this is, or the bytes are a valid message of another arm.
+	"""
+	local = _ident(part.local)
+	inner = _pascal(part.placement.type_name or "")
+	refuse = ["\t\treturn Err(Error::Constraint);", "\t}"]
+	return [
+		*([] if not part.others and part.value <= 0 else [
+			f"\tif {local}.is_empty() {{", *refuse,
+			(f"\tif {local}[0] != {part.value} {{" if part.value >= 0
+			 else "\tif "
+			      + " || ".join(f"{local}[0] == {v}" for v in part.others)
+			      + " {"),
+			*refuse]),
+		f"\tmatch {inner}::required({local}) {{",
+		f"\t\tsitu_rt::Framing::Complete(n) if n == {local}.len() => {{}}",
+		"\t\t_ => return Err(Error::Constraint),",
+		"\t}",
+		*_room(f"{local}.len()"),
+		f"\tsitu_out[situ_at..situ_at + {local}.len()]"
+		f".copy_from_slice({local});",
+		f"\tsitu_at += {local}.len();",
+	]
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -128,6 +158,8 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
 	if part.role == BITS:
 		return _bits(part, parts)
+	if part.role == NESTED:
+		return _nested(part)
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:
@@ -177,7 +209,7 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{name}: {_scalar(part.placement)}")
 		elif part.role == RUN:
 			found.append(f"{name}: &[u8; {part.bytes}]")
-		elif part.role == SPAN:
+		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
 	return found
 
@@ -188,8 +220,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	A rung adds files rather than changing them (0032).
 	"""
-	shape = Shape("", "situ", resolved.structs,
-	              {decl.name: decl for decl in schema.varints()})
+	shape = plain_build.shape(schema, resolved)
 	built = plain_build.units(resolved, shape)
 	if not built:
 		return {}

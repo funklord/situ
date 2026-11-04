@@ -17,10 +17,12 @@ its own builder: a struct called `build_x` beside one called `x` would.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
-                                   SIZE, SPAN, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
+                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -102,6 +104,41 @@ def _size(part: Part, run: str) -> list[str]:
 	]
 
 
+def _nested(part: Part, inner: str) -> list[str]:
+	"""One whole inner struct the caller built.
+
+	Its extent is its own to state, so the writer asks rather than trusting
+	the length it was given: three bytes too many shift every member after
+	it. And where its first byte is a peeked discriminant it has to say
+	which arm this is, or the bytes are a valid message of another arm.
+	"""
+	local = part.local
+	return [
+		*([] if not part.others and part.value <= 0 else [
+			f"\tif ({local}_len == 0u) {{", CONSTRAINT, "\t}",
+			(f"\tif ({local}[0] != {part.value}u) {{" if part.value >= 0
+			 else "\tif ("
+			      + " || ".join(f"{local}[0] == {v}u" for v in part.others)
+			      + ") {"),
+			CONSTRAINT, "\t}"]),
+		f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS, "\t}",
+		"\t{",
+		"\t\tstd::uint32_t situ_need = 0;",
+		"",
+		f"\t\tif (::situ::{inner}::required({local}, {local}_len, situ_need)"
+		" != ::situ::rt::err::ok",
+		f"\t\t    || situ_need != {local}_len) {{",
+		"\t\t\treturn ::situ::rt::err::constraint;",
+		"\t\t}",
+		"\t}",
+		*_room(f"{local}_len"),
+		f"\tif ({local}_len != 0u) {{",
+		f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		"\t}",
+		f"\tsitu_at += {local}_len;",
+	]
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -129,10 +166,13 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	return lines
 
 
-def _write(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
+def _write(structs: Mapping[str, ResolvedStruct], part: Part,
+		parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
 	if part.role == BITS:
 		return _bits(part, parts)
+	if part.role == NESTED:
+		return _nested(part, class_name(structs[part.placement.type_name or ""]))
 	if part.role == ARMTAG:
 		return _store(part, f"{part.value}u")
 	if part.role == PEEKED:
@@ -186,7 +226,7 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{_scalar(part.placement)} {part.local}")
 		elif part.role == RUN:
 			found.append(f"const std::uint8_t *{part.local}")
-		elif part.role == SPAN:
+		elif part.role in plain_build.MEASURED:
 			found.extend([f"const std::uint8_t *{part.local}",
 			              f"std::uint32_t {part.local}_len"])
 	return found
@@ -198,8 +238,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	A rung adds files rather than changing them (0032).
 	"""
-	shape = Shape("", "situ", resolved.structs,
-	              {decl.name: decl for decl in schema.varints()})
+	shape = plain_build.shape(schema, resolved)
 	built = plain_build.units(resolved, shape)
 	if not built:
 		return {}
@@ -261,7 +300,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 		])
 		for part in parts:
-			lines.extend([*_write(struct, part, parts), ""])
+			lines.extend([*_write(resolved.structs, part, parts), ""])
 		lines.extend([
 			"\t/* Over exactly what was written, not over the backing: a longer",
 			"\t * buffer would hide a struct that came out short. */",

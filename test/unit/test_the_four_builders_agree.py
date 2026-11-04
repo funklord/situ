@@ -11,6 +11,7 @@ and the bytes compared. A refusal has to be one all four make.
 from __future__ import annotations
 
 import importlib
+import random
 import shutil
 import subprocess
 import sys
@@ -27,8 +28,8 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (BITS, RUN, SCALAR, SIZE,	# noqa: E402
-                                   SPAN, Part, Shape)
+from situc.codegen.c.build import (BITS, NESTED, RUN,		# noqa: E402
+                                   SCALAR, SIZE, SPAN, Part)
 from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -41,6 +42,10 @@ from situc.resolve import resolve			# noqa: E402
 RUNTIME = ROOT / "runtime"
 #: Comfortably past the largest struct the class serves; asserted below.
 ROOM = 512
+#: How deep nesting goes in the corpus, plus one.
+PASSES = 5
+#: Values tried on a unit before it counts as one nothing satisfies.
+TRIES = 2000
 
 
 def schemas() -> list[Path]:
@@ -87,9 +92,16 @@ def _run_bytes(length: int, index: int) -> bytes:
 	return bytes((0x41 + index + at) & 0xFF for at in range(length))
 
 
-def _given(parts: list[Part]) -> list[tuple[Part, int | bytes]]:
-	"""What the caller hands each part that takes anything."""
-	found: list[tuple[Part, int | bytes]] = []
+Given = list[tuple["Part", "int | bytes"]]
+
+
+def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
+	"""What the caller hands each part that takes anything.
+
+	`inner` is whole messages of the structs a NESTED part holds. A struct
+	with none falls back to one byte, which `required` refuses in all four.
+	"""
+	found: Given = []
 	for at, part in enumerate(parts):
 		if part.role == BITS and plain_build.takes_value(part):
 			# Small enough for its field: a wider value is the refusal, and
@@ -102,6 +114,29 @@ def _given(parts: list[Part]) -> list[tuple[Part, int | bytes]]:
 			found.append((part, _run_bytes(part.bytes, at)))
 		elif part.role == SPAN:
 			found.append((part, _run_bytes(_span_length(part, parts), at)))
+		elif part.role == NESTED:
+			found.append((part, inner.get(part.placement.type_name or "",
+			                              [b"\x00"])[0]))
+	return found
+
+
+def _varied(given: Given, inner: dict[str, list[bytes]],
+		rng: random.Random) -> Given:
+	"""Another set of values: small numbers, and the other inner messages.
+
+	Rules, enums and arm tags refuse the fixed values, so most of a schema
+	would otherwise be compared only on all four saying no.
+	"""
+	found: Given = []
+	for part, value in given:
+		if part.role == NESTED:
+			value = rng.choice(inner.get(part.placement.type_name or "",
+			                             [value]))
+		elif isinstance(value, int):
+			bits  = part.placement.size_bits or 8
+			value = rng.choice((*range(9), 16, 32, 64, 128, 255,
+			                    0x1234)) & ((1 << bits) - 1)
+		found.append((part, value))
 	return found
 
 
@@ -114,7 +149,7 @@ def _label(unit: Unit) -> str:
 	return f"{unit.struct.name}.{unit.suffix}"
 
 
-def _c_driver(stem: str, units: list[Unit]) -> str:
+def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	lines = ["#include <stdio.h>", f'#include "{stem}_build.h"',
 	         f"static uint8_t buf[{ROOM}];", "static uint32_t n;",
 	         "static void show(const char *name, situ_err_t e) {",
@@ -123,16 +158,16 @@ def _c_driver(stem: str, units: list[Unit]) -> str:
 	         '\tfor (uint32_t i = 0; i < n; i++) printf("%02x", buf[i]);',
 	         '\tputs("");', "}"]
 	calls = []
-	for index, unit in enumerate(units):
+	for index, (unit, given) in enumerate(cases):
 		values: list[str] = []
-		for at, (part, value) in enumerate(_given(list(unit.parts))):
+		for at, (part, value) in enumerate(given):
 			if isinstance(value, int):
 				values.append(f"{value:#x}ull")
 				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "uint8_t"))
 			values.append(name)
-			if part.role == SPAN:
+			if part.role in plain_build.MEASURED:
 				values.append(f"{len(value)}u")
 		calls.append(f'\tshow("{_label(unit)}", '
 		             f'{ident("situ", unit.struct.name, "build", unit.suffix)}'
@@ -141,7 +176,7 @@ def _c_driver(stem: str, units: list[Unit]) -> str:
 	                  "}", ""])
 
 
-def _cpp_driver(stem: str, units: list[Unit]) -> str:
+def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	lines = ["#include <cstdio>", f'#include "{stem}_build.hpp"',
 	         f"static std::uint8_t buf[{ROOM}];", "static std::uint32_t n;",
 	         "static void show(const char *name, ::situ::rt::err e) {",
@@ -152,9 +187,9 @@ def _cpp_driver(stem: str, units: list[Unit]) -> str:
 	         'std::printf("%02x", buf[i]);',
 	         '\tstd::puts("");', "}"]
 	calls = []
-	for index, unit in enumerate(units):
+	for index, (unit, given) in enumerate(cases):
 		values: list[str] = []
-		for at, (part, value) in enumerate(_given(list(unit.parts))):
+		for at, (part, value) in enumerate(given):
 			if isinstance(value, int):
 				values.append(f"static_cast<{cpp_scalar(part.placement)}>"
 				              f"({value:#x}ull)")
@@ -162,7 +197,7 @@ def _cpp_driver(stem: str, units: list[Unit]) -> str:
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "std::uint8_t"))
 			values.append(name)
-			if part.role == SPAN:
+			if part.role in plain_build.MEASURED:
 				values.append(f"{len(value)}u")
 		held = class_name(unit.struct)
 		if unit.suffix:
@@ -173,7 +208,7 @@ def _cpp_driver(stem: str, units: list[Unit]) -> str:
 	return "\n".join([*lines, "int main() {", *calls, "}", ""])
 
 
-def _rust_driver(stem: str, units: list[Unit]) -> str:
+def _rust_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	lines = ["mod situ_rt;", "#[allow(dead_code)]", f"mod {stem};",
 	         "#[allow(dead_code)]", f"mod {stem}_build;",
 	         "fn show(name: &str, buf: &[u8], "
@@ -185,9 +220,9 @@ def _rust_driver(stem: str, units: list[Unit]) -> str:
 	         "\t\t\tprintln!();", "\t\t}",
 	         '\t\tErr(_) => println!("refused"),', "\t}", "}",
 	         "fn main() {", f"\tlet mut buf = [0u8; {ROOM}];"]
-	for unit in units:
+	for unit, given in cases:
 		values: list[str] = []
-		for part, value in _given(list(unit.parts)):
+		for part, value in given:
 			if isinstance(value, int):
 				values.append(f"{value:#x}u64 as "
 				              f"{rust_scalar(part.placement)}")
@@ -203,32 +238,98 @@ def _rust_driver(stem: str, units: list[Unit]) -> str:
 	return "\n".join([*lines, "}", ""])
 
 
-def _python(tmp: Path, stem: str, units: list[Unit]) -> str:
+def _build_one(module: object, base: object, unit: Unit,
+		given: Given) -> str:
+	"""One unit through Python's builder: hex, or `refused`."""
+	values = [_signed(part.placement, value)
+	          if isinstance(value, int) else value for part, value in given]
+	buf  = bytearray(ROOM)
+	name = py_name(unit.struct.name)
+	if unit.suffix:
+		name = f"{name}_{py_name(unit.suffix)}"
+	try:
+		wrote = getattr(module, f"build_{name}")(buf, *values)
+	except base.SituError:		# type: ignore[attr-defined]
+		return "refused"
+	return bytes(buf[:wrote]).hex()
+
+
+def _cases(module: object, base: object,
+		units: list[Unit]) -> list[tuple[Unit, Given, str]]:
+	"""Each unit with the fixed values and, if those are refused, some it
+	takes.
+
+	Python goes first because a NESTED part wants a whole message of its
+	inner struct, and a builder is what makes one. The passes are the
+	nesting depth: each one builds what the last one's bytes made possible.
+	The others are then handed the same bytes, so it is the outer message
+	they are compared on.
+	"""
+	rng = random.Random(0)
+	inner: dict[str, list[bytes]] = {}
+	taken: dict[str, Given] = {}
+	for _ in range(PASSES):
+		for unit in units:
+			if _label(unit) in taken:
+				continue
+			given = _given(list(unit.parts), inner)
+			for _ in range(TRIES):
+				made = _build_one(module, base, unit, given)
+				if made != "refused":
+					taken[_label(unit)] = given
+					inner.setdefault(unit.struct.name, []).append(
+						bytes.fromhex(made))
+					break
+				given = _varied(given, inner, rng)
+	found: list[tuple[Unit, Given, str]] = []
+	for unit in units:
+		given = _given(list(unit.parts), inner)
+		found.append((unit, given, _build_one(module, base, unit, given)))
+		if _label(unit) in taken:
+			given = taken[_label(unit)]
+			found.append((unit, given, _build_one(module, base, unit, given)))
+	return found
+
+
+def _reads_back(plain: object, unit: Unit, made: str) -> None:
+	"""A message a builder wrote is one the reader takes whole.
+
+	Agreement between four writers says nothing if all four are wrong
+	together, so the reader is asked what extent the bytes state.
+	"""
+	held = getattr(plain, py_name(unit.struct.name))
+	if made == "refused" or not hasattr(held, "required"):
+		return
+	message = bytes.fromhex(made)
+	assert held.required(message) == len(message), (_label(unit), made)
+
+
+def _python(tmp: Path, stem: str, units: list[Unit],
+		extra: list[tuple[Unit, Given]]
+		) -> tuple[str, list[tuple[Unit, Given]]]:
+	"""Python's answers, and the cases the others are given."""
 	shutil.copy(RUNTIME / "python" / "situ_runtime.py", tmp)
 	sys.path.insert(0, str(tmp))
+	# `example/json` is named for a module pytest already holds.
+	shadowed = sys.modules.pop(stem, None)
 	try:
 		module = importlib.import_module(f"{stem}_build")
 		base   = importlib.import_module("situ_runtime")
-		lines  = []
-		for unit in units:
-			values = [_signed(part.placement, value)
-			          if isinstance(value, int) else value
-			          for part, value in _given(list(unit.parts))]
-			buf  = bytearray(ROOM)
-			name = py_name(unit.struct.name)
-			if unit.suffix:
-				name = f"{name}_{py_name(unit.suffix)}"
-			try:
-				wrote = getattr(module, f"build_{name}")(buf, *values)
-			except base.SituError:
-				lines.append(f"{_label(unit)} refused")
-				continue
-			lines.append(f"{_label(unit)} {bytes(buf[:wrote]).hex()}")
-		return "\n".join(lines) + "\n"
+		plain  = importlib.import_module(stem)
+		found  = [*_cases(module, base, units),
+		          *((unit, given, _build_one(module, base, unit, given))
+		            for unit, given in extra)]
+		for unit, _, made in found:
+			_reads_back(plain, unit, made)
+		return ("".join(f"{_label(unit)} {made}\n"
+		                for unit, _, made in found),
+		        [(unit, given) for unit, given, _ in found])
 	finally:
 		sys.path.remove(str(tmp))
 		for name in (f"{stem}_build", stem, "situ_runtime"):
 			sys.modules.pop(name, None)
+		if shadowed is not None:
+			sys.modules[stem] = shadowed
 
 
 def _emit(schema: Path, target: str, out: Path) -> None:
@@ -245,17 +346,12 @@ def _run(argv: list[str], cwd: Path) -> str:
 	return done.stdout
 
 
-@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
-@pytest.mark.parametrize("schema", schemas(), ids=lambda p: p.stem)
-def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
-	parsed   = load_schema(schema)
-	resolved = resolve(parsed, solve(parsed))
-	shape    = Shape("", "situ", resolved.structs,
-	                 {decl.name: decl for decl in parsed.varints()})
-	units    = plain_build.units(resolved, shape)
-	if not units:
-		pytest.skip("no struct here is in the class")
+def four_say(schema: Path, tmp_path: Path, units: list[Unit],
+		extra: list[tuple[Unit, Given]]) -> str:
+	"""What all four write, one line a case; a disagreement fails here.
 
+	`extra` is cases of the caller's, after the ones found for `units`.
+	"""
 	stem = schema.stem
 	dirs = {target: tmp_path / target
 	        for target in ("c", "cpp", "rust", "python")}
@@ -263,14 +359,16 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 		out.mkdir()
 		_emit(schema, target, out)
 
-	(dirs["c"] / "main.c").write_text(_c_driver(stem, units),
+	python, cases = _python(dirs["python"], stem, units, extra)
+
+	(dirs["c"] / "main.c").write_text(_c_driver(stem, cases),
 	                                  encoding="ascii")
 	assert fourway.HOST_CC is not None and fourway.HOST_CXX is not None
 	_run([fourway.HOST_CC, "-std=c11", "-w", f"-I{RUNTIME / 'c'}", "-I.",
 	      "main.c", f"{stem}.c", str(RUNTIME / "c" / "situ.c"),
 	      "-o", "probe"], dirs["c"])
 
-	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, units),
+	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, cases),
 	                                      encoding="ascii")
 	_run([fourway.HOST_CXX, "-std=c++17", "-Wall", "-Wextra", "-Werror",
 	      f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", "-I.", "main.cpp",
@@ -281,14 +379,26 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 	rt = dirs["rust"] / "situ_rt.rs"
 	rt.write_text(rt.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 	              encoding="ascii")
-	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, units),
+	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, cases),
 	                                      encoding="ascii")
 	assert fourway.RUSTC is not None
 	_run([fourway.RUSTC, "--edition", "2021", "-A", "warnings", "main.rs",
 	      "-o", "probe"], dirs["rust"])
 
-	said = {"python": _python(dirs["python"], stem, units),
+	said = {"python": python,
 	        **{target: _run([str(dirs[target] / "probe")], dirs[target])
 	           for target in ("c", "cpp", "rust")}}
-	assert said["python"].count("\n") == len(units)
+	assert said["python"].count("\n") == len(cases)
 	assert len(set(said.values())) == 1, said
+	return python
+
+
+@pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
+@pytest.mark.parametrize("schema", schemas(), ids=lambda p: p.stem)
+def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
+	parsed   = load_schema(schema)
+	resolved = resolve(parsed, solve(parsed))
+	units    = plain_build.units(resolved, plain_build.shape(parsed, resolved))
+	if not units:
+		pytest.skip("no struct here is in the class")
+	four_say(schema, tmp_path, units, [])

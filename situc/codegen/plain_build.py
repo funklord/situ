@@ -11,21 +11,26 @@ from __future__ import annotations
 from situc import traverse
 from dataclasses import dataclass
 
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
-                                   SIZE, SPAN, ZERO, Part, Shape,
+from situc import ast
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
+                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
 from situc.layout import Arm
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
-__all__ = ["SERVED", "Unit", "parts", "units", "plain", "declined",
-           "takes_value", "stated_ones"]
+__all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
+           "declined", "takes_value", "stated_ones"]
 
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR, SIZE, SPAN,
-                    ZERO})
+SERVED = frozenset({ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN, SCALAR, SIZE,
+                    SPAN, ZERO})
+
+#: The roles whose bytes the caller hands over and whose length a size field
+#: may measure.
+MEASURED = frozenset({NESTED, SPAN})
 
 
 def _serves(part: Part, parts: list[Part]) -> bool:
@@ -38,7 +43,7 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	held = part.placement
 	if part.role not in SERVED or part.radix or part.length:
 		return False
-	if part.others and part.role != SCALAR:
+	if part.others and part.role not in (NESTED, SCALAR):
 		return False
 	if part.role in (RUN, SPAN) and held.kind != "field":
 		return False
@@ -52,11 +57,27 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 			held.scalar is None or held.marker is not None
 			or traverse.bit_extractor(held.scalar, held) == "ne"):
 		return False
+	if part.role == NESTED and held.arguments:
+		return False
 	if part.role == SIZE or (part.role == BITS and part.sizes is not None):
-		measured = next((one for one in parts if one.role == SPAN
+		measured = next((one for one in parts if one.role in MEASURED
 		                 and one.placement is part.sizes), None)
 		return measured is not None and not part.inner
 	return True
+
+
+def shape(schema: ast.Schema, resolved: ResolvedSchema) -> Shape:
+	"""What C's plan needs, with the header that says what frames itself.
+
+	A nested member is refused without it: the header is the artifact that
+	says which structs have a `required`, and the builders ask the same
+	question of the nested struct in their own language.
+	"""
+	from situc.codegen.c import generate
+
+	return Shape(generate(schema, resolved, "plain").header, "situ",
+	             resolved.structs,
+	             {decl.name: decl for decl in schema.varints()})
 
 
 def takes_value(part: Part) -> bool:

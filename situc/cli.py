@@ -1035,6 +1035,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 		# serve one class of struct so far and name the rest (26.855,
 		# 26.858).
 		if args.target != "c":
+			from situc.codegen import plain_build
 			from situc.codegen.cpp import build as build_cpp
 			from situc.codegen.python import build as build_py
 			from situc.codegen.rust import build as build_rs
@@ -1044,9 +1045,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 			parsed_build = parse(source)
 			files.update(builder.generate(parsed_build, resolved,
 			                              args.schema.stem))
-			shape_build = builder.Shape(
-				"", args.prefix, resolved.structs,
-				{d.name: d for d in parsed_build.varints()})
+			shape_build = plain_build.shape(parsed_build, resolved)
 			for name, why in builder.declined(resolved, shape_build):
 				print(f"situc: no builder for `{name}`: {why}",
 				      file=sys.stderr)

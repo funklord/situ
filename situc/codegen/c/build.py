@@ -156,7 +156,9 @@ class Part:
 					# says its encoding and its limits
 		self.length = ""		# where a run's length comes from,
 					# where it is not the caller's `_len`
-		self.others    = others		# the values other arms claim
+		self.others    = others		# values that would make the message
+					# read as something else: another
+					# arm, or an older version
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
 		self.closes    = closes		# last of one
@@ -746,6 +748,29 @@ def arm_name(case: Arm) -> str:
 	return "default"
 
 
+def _held_to_its_version(struct: ResolvedStruct, parts: list[Part]
+		) -> tuple[list[Part], str | None]:
+	"""Refuse a version too old for the `[since]` members being written.
+
+	The message carries them all, so at an older version it ends early as
+	far as a reader can tell and what follows is another message's bytes.
+	`rev = 1` passed `validate`, since the rules on those members are gated
+	too. So the version field joins the values a part may not take.
+	"""
+	newest = max((one.placement.since or 0 for one in parts), default=0)
+	if not newest:
+		return parts, None
+	name  = next(one.placement.version_field for one in parts
+	             if one.placement.since)
+	field = next((one for one in parts if one.role == SCALAR
+	              and one.placement.name == name), None)
+	if field is None:
+		return [], f"`{name}` is a version this writer cannot hold to " \
+		           f"its `[since = {newest}]` members"
+	field.others = (*field.others, *range(newest))
+	return parts, None
+
+
 def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		arm: Arm | None = None) -> tuple[list[Part], str | None]:
 	"""What the writer does for each member, or the first reason it cannot.
@@ -1003,6 +1028,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			if held.kind not in ("field", "reserved"):
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"packed {held.kind}"
+			if held.name == chooses and arm is not None:
+				# The arm has to decide it, or `will_flag = 0` goes out
+				# ahead of a will the reader then steps over. A packed
+				# field takes the caller's value, and an arm tag is a
+				# whole scalar.
+				return [], f"`{traverse.local_name(struct, held)}` is a " \
+				           "packed discriminant, and this writer writes " \
+				           "an arm's tag whole"
 			assert held.scalar is not None
 			if held.scalar.is_bcd or held.radix is not None \
 					or held.scaled:
@@ -1075,6 +1108,12 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "variant, so which arm to write is the caller's " \
 				           "choice and is said by calling one of the " \
 				           "per-arm builders"
+			if sum(one.kind == "variant" for one in members) > 1:
+				# One builder is one arm of ONE variant. Writing the same
+				# arm for each wrote mqtt's CONNECT with `will_present`
+				# three times, in place of its user name and password.
+				return [], "holds more than one variant, and a builder " \
+				           "writes one arm of one"
 			if arm.member is None:
 				# An arm that selects nothing, which is how a schema spells
 				# an absent body. Zero bytes, so there is nothing to emit.
@@ -1390,7 +1429,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		# Every byte is a fact the schema states, so there is nothing for a
 		# caller to supply and `_encode` of a constant is not a builder.
 		return [], "is entirely literal, so there is nothing to build"
-	return parts, None
+	return _held_to_its_version(struct, parts)
 
 
 def buildable(resolved: ResolvedSchema,

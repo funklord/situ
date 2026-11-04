@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.862 A nested member is handed over built, and a message reads back
+
+Moved to `doc/decision/26.862-a-nested-member-is-handed-over-built.md`.
+
 ### 26.861 The builders write a variant, one arm at a time
 
 Moved to `doc/decision/26.861-the-builders-write-a-variant-one-arm-at-a-time.md`.

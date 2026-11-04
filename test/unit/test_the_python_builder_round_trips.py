@@ -35,7 +35,6 @@ sys.path.insert(0, str(ROOT / "test" / "unit"))
 
 from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
-from situc.codegen.c.build import Shape			# noqa: E402
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.python import build as build_py		# noqa: E402
 from situc.layout import BITS_PER_BYTE, Placement, solve	# noqa: E402
@@ -85,8 +84,7 @@ def test_every_struct_the_builder_serves_round_trips(
 		schema: Path, tmp_path: Path) -> None:
 	parsed   = load_schema(schema)
 	resolved = resolve(parsed, solve(parsed))
-	shape    = Shape("", "situ", resolved.structs,
-	                 {decl.name: decl for decl in parsed.varints()})
+	shape    = plain_build.shape(parsed, resolved)
 	served   = build_py.plain(resolved, shape)
 	# Every struct is built by `test_the_four_builders_agree`; reading each
 	# member back through the accessors is this file's, and it asks that of
@@ -109,6 +107,8 @@ def test_every_struct_the_builder_serves_round_trips(
 
 	shutil.copy(RUNTIME, tmp_path)
 	sys.path.insert(0, str(tmp_path))
+	# `example/json` is named for a module pytest already holds.
+	shadowed = sys.modules.pop(schema.stem, None)
 	try:
 		module = importlib.import_module(f"{schema.stem}_build")
 		plain  = importlib.import_module(schema.stem)
@@ -143,16 +143,18 @@ def test_every_struct_the_builder_serves_round_trips(
 		sys.path.remove(str(tmp_path))
 		for name in (f"{schema.stem}_build", schema.stem):
 			sys.modules.pop(name, None)
+		if shadowed is not None:
+			sys.modules[schema.stem] = shadowed
 
 
 def test_what_it_does_not_build_is_named(tmp_path: Path) -> None:
 	"""The other cell: a struct outside the class is on stderr.
 
-	`example/modbus` is the witness because it holds both -- four plain
-	structs and a variant whose arms hold structs whose own bytes do not
-	state their extent, which is C's refusal and passes through unchanged.
+	`example/mqtt` is the witness because it holds both -- structs it builds
+	and a variant whose arms hold structs whose own bytes do not state
+	their extent, which is C's refusal and passes through unchanged.
 	"""
-	schema = CORPUS_ROOT / "example" / "modbus" / "modbus.situ"
+	schema = CORPUS_ROOT / "example" / "mqtt" / "mqtt.situ"
 	emitted = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(schema),
 		 "--target", "python", "--layer", "edit", "--out", str(tmp_path)],
@@ -160,7 +162,7 @@ def test_what_it_does_not_build_is_named(tmp_path: Path) -> None:
 	assert emitted.returncode == 0, emitted.stderr[-800:]
 
 	said = emitted.stderr
-	assert "no builder for `request.read_coils`" in said, said
+	assert "no builder for `packet.publish`" in said, said
 	# ...and the increment's OWN boundary, which is not C's refusal.
 	assert "no builder for `" in said, said
-	assert (tmp_path / "modbus_build.py").exists()
+	assert (tmp_path / "mqtt_build.py").exists()

@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
-                                   SIZE, SPAN, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
+                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -67,6 +67,35 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	msb = traverse.bit_extractor(held.scalar, held) == "msb"
 	return [f"\tView(Message(memoryview(out)), at, len(out) - at)"
 	        f"._set_bits({part.bit_at}, {held.size_bits}, {value}, msb={msb})"]
+
+
+def _nested(part: Part) -> list[str]:
+	"""One whole inner struct the caller built.
+
+	Its extent is its own to state, so the writer asks rather than trusting
+	the length it was given: three bytes too many shift every member after
+	it. And where its first byte is a peeked discriminant it has to say
+	which arm this is, or the bytes are a valid message of another arm.
+	"""
+	local = py_name(part.local)
+	path  = part.placement.path
+	inner = f"situ_schema.{py_name(part.placement.type_name or '')}"
+	refuse = f'\t\traise ConstraintError("{path}: not one whole {inner}")'
+	return [
+		*([] if not part.others and part.value <= 0 else [
+			f"\tif not {local}:", refuse,
+			(f"\tif {local}[0] != {part.value}:" if part.value >= 0
+			 else f"\tif {local}[0] in {tuple(part.others)!r}:"),
+			refuse]),
+		"\ttry:",
+		f"\t\tneed = {inner}.required({local})",
+		"\texcept TruncatedError:",
+		"\t\tneed = -1",
+		f"\tif need != len({local}):", refuse,
+		*_room(f"len({local})", path),
+		f"\tout[at:at + len({local})] = {local}",
+		f"\tat += len({local})",
+	]
 
 
 def _bits(part: Part, parts: list[Part]) -> list[str]:
@@ -159,6 +188,8 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 	path = part.placement.path
 	if part.role == BITS:
 		return _bits(part, parts)
+	if part.role == NESTED:
+		return _nested(part)
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:
@@ -168,7 +199,7 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		# arm, so the default builder refuses it.
 		local = py_name(part.local)
 		return [*([f"\tif {local} in {tuple(part.others)!r}:",
-		           f'\t\traise ConstraintError("{path}: a named arm claims this")']
+		           f'\t\traise ConstraintError("{path}: reads as something else")']
 		          if part.others else []),
 		        *_store(part, local)]
 	if part.role == SIZE:
@@ -204,7 +235,7 @@ def _parameters(parts: list[Part]) -> list[str]:
 	for part in parts:
 		if plain_build.takes_value(part):
 			found.append(f"{py_name(part.local)}: int")
-		elif part.role in (RUN, SPAN):
+		elif part.role == RUN or part.role in plain_build.MEASURED:
 			found.append(f"{py_name(part.local)}: bytes")
 	return found
 
@@ -216,8 +247,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	A rung adds files rather than changing them (0032), which is why this
 	is its own module and not more of `<basename>.py`.
 	"""
-	shape = Shape("", "situ", resolved.structs,
-	              {decl.name: decl for decl in schema.varints()})
+	shape = plain_build.shape(schema, resolved)
 	built = plain_build.units(resolved, shape)
 	if not built:
 		return {}
@@ -239,6 +269,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"",
 		"from __future__ import annotations",
 		"",
+		# By the module, for a nested member's struct: `header header;`
+		# makes the parameter shadow the class of the same name.
+		f"import {basename} as situ_schema",
 		f"from {basename} import *  # noqa: F403",
 		# Named rather than left to the star import: `NATIVE_BIG` is not in
 		# the base module's `__all__`, and a `native` member's write reads
@@ -254,7 +287,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			one.placement.endian is ast.Endian.NATIVE
 			for unit in built for one in unit.parts
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
-		"from situ_runtime import BoundsError, ConstraintError, View",
+		"from situ_runtime import (BoundsError, ConstraintError, TruncatedError,",
+		"                          View)",
 		"",
 	]
 
