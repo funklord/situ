@@ -24,7 +24,7 @@ from test_the_four_builders_agree import Given, four_say	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit		# noqa: E402
-from situc.codegen.c.build import refusals		# noqa: E402
+from situc.codegen.c.build import RUN, refusals		# noqa: E402
 from situc.layout import solve				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
 
@@ -57,7 +57,7 @@ def _units(schema: Path) -> dict[str, Unit]:
 
 def _with(unit: Unit, *values: int | bytes) -> tuple[Unit, Given]:
 	taken = [part for part in unit.parts if plain_build.takes_value(part)
-	         or part.role in plain_build.MEASURED]
+	         or part.role == RUN or part.role in plain_build.MEASURED]
 	assert len(taken) == len(values), [part.role for part in taken]
 	return unit, list(zip(taken, values))
 
@@ -159,3 +159,86 @@ struct versioned [version = rev] {
 		_with(units["versioned."], 2, 7),
 	])
 	assert _extra(said, 3) == ["refused", "refused", "0207"]
+
+
+def test_a_member_may_be_called_what_a_builder_calls_its_own(
+		tmp_path: Path) -> None:
+	"""`u8 tail;` was the walk's own flag, and `len(tail)` raised."""
+	schema = tmp_path / "names.situ"
+	schema.write_text("""\
+struct word { u8 n; u8 data[n]; }
+struct names {
+	u8 out;
+	u8 view;
+	u8 need;
+	u8 scan;
+	u8 count;
+	word element[3];
+	u8 tail[2];
+}
+""", encoding="ascii")
+	units = _units(schema)
+	said  = four_say(schema, tmp_path, list(units.values()), [
+		_with(units["names."], 1, 2, 3, 4, 5,
+		      b"\x00\x00\x00", b"\x08\x09"),
+	])
+	assert _extra(said, 1) == ["0102030405000000" "0809"]
+
+
+# -- a run of them (26.865) -------------------------------------------------
+
+RUNS = """target buffer;
+struct word { u8 n [max = 3]; u8 data[n]; }
+struct counted { u8 n; word items[n]; u8 after; }
+struct pair { word items[2]; }
+struct ended { word items[] until ")"; u8 after; }
+struct rest { u8 head; word items[remaining]; }
+struct stopped { word items[] while (n != 0); }
+"""
+
+ONE = b"\x01\xaa"
+TWO = b"\x02\xbb\xcc"
+STOP = b"\x00"
+
+
+def test_a_run_has_to_be_whole_elements_in_all_four(tmp_path: Path) -> None:
+	schema = tmp_path / "runs.situ"
+	schema.write_text(RUNS, encoding="ascii")
+	units = _units(schema)
+	cases = [
+		# The count is what the walk finds, and never the caller's.
+		(_with(units["counted."], ONE + TWO, 9), "02" "01aa" "02bbcc" "09"),
+		(_with(units["counted."], b"", 9), "00" "09"),
+		# An element cut short, and one its own rule refuses.
+		(_with(units["counted."], ONE + b"\x02\xbb", 9), "refused"),
+		(_with(units["counted."], b"\x09" + bytes(9), 9), "refused"),
+		# A fixed count is exactly that many.
+		(_with(units["pair."], ONE + TWO), "01aa02bbcc"),
+		(_with(units["pair."], ONE), "refused"),
+		(_with(units["pair."], ONE + TWO + ONE), "refused"),
+		# The delimiter is written, and an element may not begin with it.
+		(_with(units["ended."], ONE, 9), "01aa" "29" "09"),
+		(_with(units["ended."], b")" + ONE, 9), "refused"),
+		(_with(units["rest."], 7, ONE + TWO), "07" "01aa" "02bbcc"),
+		# The reader stops at the first element the condition fails for,
+		# and bytes past it are not the run the caller was told it wrote.
+		(_with(units["stopped."], ONE + STOP), "01aa00"),
+		(_with(units["stopped."], STOP + ONE), "refused"),
+	]
+	said = four_say(schema, tmp_path, list(units.values()),
+	                [case for case, _ in cases])
+	assert _extra(said, len(cases)) == [made for _, made in cases]
+
+
+def test_a_run_of_nothing_cannot_spin(tmp_path: Path) -> None:
+	"""A zero-byte element would never advance the walk."""
+	schema = tmp_path / "empty.situ"
+	schema.write_text("""\
+struct none { }
+struct holds { u8 n; none items[n]; }
+""", encoding="ascii")
+	units = _units(schema)
+	said  = four_say(schema, tmp_path, list(units.values()), [
+		_with(units["holds."], b"\x00"),
+	])
+	assert _extra(said, 1) == ["refused"]

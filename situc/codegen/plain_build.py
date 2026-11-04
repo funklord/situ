@@ -12,25 +12,27 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
-                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape,
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
+                                   Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
 from situc.layout import Arm
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
-           "declined", "takes_value", "stated_ones"]
+           "declined", "takes_value", "stated_ones", "walked_at_size",
+           "counts_elements"]
 
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN, SCALAR, SIZE,
-                    SPAN, ZERO})
+SERVED = frozenset({ARMTAG, BITS, LITERAL, NESTED, PEEKED, REPEAT, RUN, SCALAR,
+                    SIZE, SPAN, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.
-MEASURED = frozenset({NESTED, SPAN})
+MEASURED = frozenset({NESTED, REPEAT, SPAN})
 
 
 def _serves(part: Part, parts: list[Part]) -> bool:
@@ -57,13 +59,35 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 			held.scalar is None or held.marker is not None
 			or traverse.bit_extractor(held.scalar, held) == "ne"):
 		return False
-	if part.role == NESTED and held.arguments:
+	if part.role in (NESTED, REPEAT) and held.arguments:
 		return False
+	if part.role == REPEAT and part.value == 1 and sum(
+			one.role == REPEAT and one.value == 1 for one in parts) > 1:
+		return False		# one walked count to hold the reader's to
 	if part.role == SIZE or (part.role == BITS and part.sizes is not None):
 		measured = next((one for one in parts if one.role in MEASURED
 		                 and one.placement is part.sizes), None)
-		return measured is not None and not part.inner
+		if measured is None or (measured.role == REPEAT
+		                        and measured.delimiter):
+			return False
+		return not part.inner or (part.role == SIZE and part.solved is None
+		                          and measured.role == REPEAT)
 	return True
+
+
+def walked_at_size(part: Part, parts: list[Part]) -> bool:
+	"""Whether a count field already walked this run.
+
+	The count is what the walk finds, so the walk happens at the field that
+	states it, and a second one would be two measurements of one thing.
+	"""
+	return any(one.role == SIZE and one.inner and one.sizes is part.placement
+	           for one in parts)
+
+
+def counts_elements(part: Part, parts: list[Part]) -> bool:
+	"""Whether the walk over this run has to keep a count."""
+	return part.digits > 0 or part.value == 1 or walked_at_size(part, parts)
 
 
 def shape(schema: ast.Schema, resolved: ResolvedSchema) -> Shape:

@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.865 The three builders walk a run of structs
+
+Moved to `doc/decision/26.865-the-builders-walk-a-run-of-structs.md`.
+
 ### 26.864 A walker asks the marker for a tlv tag or length
 
 Moved to `doc/decision/26.864-a-walker-asks-the-marker-for-a-tlv-number.md`.

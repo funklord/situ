@@ -28,14 +28,17 @@ four-way differential is for.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
-                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
+                                   Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
-from situc.resolve import ResolvedSchema
+from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc import __version__
 
 #: `Shape` is C's and is re-exported rather than rebuilt: the CLI
@@ -51,9 +54,9 @@ def declined(resolved: ResolvedSchema,
 
 
 def _room(size: str, path: str) -> list[str]:
-	return [f"\tif len(out) - at < {size}:",
+	return [f"\tif len(situ_out) - situ_at < {size}:",
 	        f'\t\traise BoundsError("{path}: {{}} byte(s) needed, {{}} left"',
-	        f"\t\t\t.format({size}, len(out) - at))"]
+	        f"\t\t\t.format({size}, len(situ_out) - situ_at))"]
 
 
 def _bit_store(part: Part, value: str) -> list[str]:
@@ -65,7 +68,7 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	held = part.placement
 	assert held.scalar is not None
 	msb = traverse.bit_extractor(held.scalar, held) == "msb"
-	return [f"\tView(Message(memoryview(out)), at, len(out) - at)"
+	return [f"\tView(Message(memoryview(situ_out)), situ_at, len(situ_out) - situ_at)"
 	        f"._set_bits({part.bit_at}, {held.size_bits}, {value}, msb={msb})"]
 
 
@@ -88,13 +91,83 @@ def _nested(part: Part) -> list[str]:
 			 else f"\tif {local}[0] in {tuple(part.others)!r}:"),
 			refuse]),
 		"\ttry:",
-		f"\t\tneed = {inner}.required({local})",
+		f"\t\tsitu_need = {inner}.required({local})",
 		"\texcept TruncatedError:",
-		"\t\tneed = -1",
-		f"\tif need != len({local}):", refuse,
+		"\t\tsitu_need = -1",
+		f"\tif situ_need != len({local}):", refuse,
 		*_room(f"len({local})", path),
-		f"\tout[at:at + len({local})] = {local}",
-		f"\tat += len({local})",
+		f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
+		f"\tsitu_at += len({local})",
+	]
+
+
+def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
+		parts: list[Part]) -> list[str]:
+	"""Step through a run of inner structs the caller built.
+
+	C's `_walk`, and its reasons: the element's own `required` says where
+	one ends, a zero-byte element would never advance the loop, and a
+	delimiter breaks the run only at an element boundary, where the reader
+	would stop. An element the buffer ended rather than `required` measured
+	is taken on approval, and a failure there means the bytes are not a
+	whole number of elements.
+	"""
+	local  = py_name(part.local)
+	path   = part.placement.path
+	held   = part.placement.type_name or ""
+	inner  = f"situ_schema.{py_name(held)}"
+	framed = not structs[held].layout.is_fixed_size
+	count  = plain_build.counts_elements(part, parts)
+	refuse = f'raise ConstraintError("{path}: not whole elements")'
+	return [
+		*(["\tsitu_count = 0"] if count else []),
+		"\tsitu_scan = 0",
+		f"\tsitu_elements = Message(bytearray({local}))",
+		f"\twhile situ_scan < len({local}):",
+		*([f"\t\tif {local}[situ_scan:situ_scan + {len(part.delimiter)}]"
+		   f" == {part.delimiter!r}:",
+		   f"\t\t\t{refuse}"] if part.delimiter else []),
+		"\t\tsitu_tail = False",
+		"\t\ttry:",
+		f"\t\t\tsitu_need = {inner}.required({local}[situ_scan:])",
+		"\t\texcept TruncatedError:",
+		f"\t\t\tsitu_need = len({local}) - situ_scan",
+		"\t\t\tsitu_tail = True",
+		"\t\tif situ_need == 0:",
+		f"\t\t\t{refuse}",
+		"\t\ttry:",
+		f"\t\t\tsitu_element = {inner}.at(situ_elements, situ_scan"
+		+ (f", len({local}) - situ_scan" if framed else "") + ")",
+		"\t\texcept SituError as situ_refused:",
+		f"\t\t\t{refuse} from situ_refused",
+		"\t\ttry:",
+		"\t\t\tsitu_element.validate()",
+		"\t\texcept SituError:",
+		"\t\t\tif situ_tail:",
+		f"\t\t\t\t{refuse} from None",
+		"\t\t\traise",
+		"\t\tsitu_scan += situ_need",
+		*(["\t\tsitu_count += 1"] if count else []),
+	]
+
+
+def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
+		parts: list[Part]) -> list[str]:
+	local = py_name(part.local)
+	path  = part.placement.path
+	wide  = len(part.delimiter)
+	return [
+		*([] if plain_build.walked_at_size(part, parts)
+		  else _walk(structs, part, parts)),
+		*([f"\tif situ_count != {part.digits}:",
+		   f'\t\traise ConstraintError("{path}: not {part.digits} elements")']
+		  if part.digits > 0 else []),
+		*_room(f"len({local})", path),
+		f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
+		f"\tsitu_at += len({local})",
+		*([*_room(f"{wide}", path),
+		   f"\tsitu_out[situ_at:situ_at + {wide}] = {part.delimiter!r}",
+		   f"\tsitu_at += {wide}"] if wide else []),
 	]
 
 
@@ -110,12 +183,12 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	path  = held.path
 	limit = (1 << (held.size_bits or 0)) - 1
 	lines = [*_room(str(part.bytes), path),
-	         f"\tout[at:at + {part.bytes}] = bytes({part.bytes})"] \
+	         f"\tsitu_out[situ_at:situ_at + {part.bytes}] = bytes({part.bytes})"] \
 		if part.opens else []
 	if part.sizes is not None:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
-		lines += _size(part, py_name(run))
+		lines += _size(part, f"len({py_name(run)})")
 	elif plain_build.takes_value(part):
 		local = py_name(part.local)
 		lines += [f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {limit}:",
@@ -124,7 +197,7 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	elif plain_build.stated_ones(part):
 		lines += _bit_store(part, str(limit))
 	if part.closes:
-		lines.append(f"\tat += {part.bytes}")
+		lines.append(f"\tsitu_at += {part.bytes}")
 	return lines
 
 
@@ -154,13 +227,13 @@ def _store(part: Part, value: str) -> list[str]:
 	order  = _byte_order(placement.endian)
 	return [
 		*_room(str(width), placement.path),
-		f"\tout[at:at + {width}] = ({value}).to_bytes("
+		f"\tsitu_out[situ_at:situ_at + {width}] = ({value}).to_bytes("
 		f"{width}, {order}, signed={placement.scalar.signed})",
-		f"\tat += {width}",
+		f"\tsitu_at += {width}",
 	]
 
 
-def _size(part: Part, run: str) -> list[str]:
+def _size(part: Part, length: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
 	path  = part.placement.path
@@ -168,12 +241,12 @@ def _size(part: Part, run: str) -> list[str]:
 	refuse = (f'\t\traise ConstraintError("{path}: the run is longer than '
 	          'this can say")')
 	if part.solved is None:
-		return [f"\tif len({run}) > {limit}:", refuse,
-		        *_store(part, f"len({run})")]
+		return [f"\tif {length} > {limit}:", refuse,
+		        *_store(part, f"{length}")]
 	scale, offset = part.solved.scale, part.solved.offset
 	shift = f" + {-offset}" if offset < 0 else f" - {offset}" if offset else ""
 	return [
-		f"\tsolved = len({run}){shift}",
+		f"\tsolved = {length}{shift}",
 		"\tif solved < 0"
 		+ (f" or solved % {scale} != 0" if scale != 1 else "") + ":",
 		refuse,
@@ -183,13 +256,16 @@ def _size(part: Part, run: str) -> list[str]:
 	]
 
 
-def _write(part: Part, parts: list[Part]) -> list[str]:
+def _write(structs: Mapping[str, ResolvedStruct], part: Part,
+		parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
 	path = part.placement.path
 	if part.role == BITS:
 		return _bits(part, parts)
 	if part.role == NESTED:
 		return _nested(part)
+	if part.role == REPEAT:
+		return _repeat(structs, part, parts)
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:
@@ -203,31 +279,32 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		          if part.others else []),
 		        *_store(part, local)]
 	if part.role == SIZE:
-		run = next(one.local for one in parts
-		           if one.placement is part.sizes)
-		return _size(part, py_name(run))
+		measured = next(one for one in parts if one.placement is part.sizes)
+		if part.inner:
+			return [*_walk(structs, measured, parts), *_size(part, "situ_count")]
+		return _size(part, f"len({py_name(measured.local)})")
 	if part.role == ZERO:
 		ones = traverse.reserved_policy(part.placement.attrs) == "must_be_one"
 		return [*_room(str(part.bytes), path),
-		        f"\tout[at:at + {part.bytes}] = "
+		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = "
 		        f"b\"{'\\xff' if ones else '\\x00'}\" * {part.bytes}",
-		        f"\tat += {part.bytes}"]
+		        f"\tsitu_at += {part.bytes}"]
 	if part.role == LITERAL:
 		return [*_room(str(part.bytes), path),
-		        f"\tout[at:at + {part.bytes}] = {bytes(part.literal)!r}",
-		        f"\tat += {part.bytes}"]
+		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = {bytes(part.literal)!r}",
+		        f"\tsitu_at += {part.bytes}"]
 	local = py_name(part.local)
 	if part.role == RUN:
 		return [f"\tif len({local}) != {part.bytes}:",
 		        f'\t\traise BoundsError("{path}: {part.bytes} byte(s) are '
 		        'wanted")',
 		        *_room(str(part.bytes), path),
-		        f"\tout[at:at + {part.bytes}] = {local}",
-		        f"\tat += {part.bytes}"]
+		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = {local}",
+		        f"\tsitu_at += {part.bytes}"]
 	assert part.role == SPAN, part.role
 	return [*_room(f"len({local})", path),
-	        f"\tout[at:at + len({local})] = {local}",
-	        f"\tat += len({local})"]
+	        f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
+	        f"\tsitu_at += len({local})"]
 
 
 def _parameters(parts: list[Part]) -> list[str]:
@@ -237,6 +314,21 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}: int")
 		elif part.role == RUN or part.role in plain_build.MEASURED:
 			found.append(f"{py_name(part.local)}: bytes")
+	return found
+
+
+def _held_to_the_reader(struct: ResolvedStruct,
+		parts: list[Part]) -> list[str]:
+	"""A `while` run ends where a predicate stops holding, which is the
+	reader's to evaluate, so its count is asked rather than reproduced."""
+	found: list[str] = []
+	for part in parts:
+		if part.role == REPEAT and part.value == 1:
+			name = py_name(traverse.local_name(struct, part.placement))
+			found.extend([
+				f"\tif situ_view.{name}_count != situ_count:",
+				f'\t\traise ConstraintError("{part.placement.path}: '
+				'the reader counts otherwise")'])
 	return found
 
 
@@ -287,8 +379,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			one.placement.endian is ast.Endian.NATIVE
 			for unit in built for one in unit.parts
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
-		"from situ_runtime import (BoundsError, ConstraintError, TruncatedError,",
-		"                          View)",
+		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
+		"                          TruncatedError, View)",
 		"",
 	]
 
@@ -299,9 +391,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		name   = f"{held}_{py_name(unit.suffix)}" if unit.suffix else held
 		lines.extend([
 			"",
-			f"def build_{name}(out: bytearray"
+			f"def build_{name}(situ_out: bytearray"
 			+ "".join(f", {one}" for one in _parameters(parts)) + ") -> int:",
-			f'\t"""Build a {struct.name} into `out` and return its length.',
+			f'\t"""Build a {struct.name} into `situ_out` and return its length.',
 			"",
 			"\tOne member at a time in schema order, then the result is",
 			"\tvalidated through the ordinary view before it is reported:",
@@ -309,21 +401,22 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\trather than restating them, two checks of one schema being",
 			"\thow they come to disagree.",
 			"",
-			"\tRaises BoundsError where `out` is short of what the members",
-			"\tneed, ConstraintError where a run is longer than its size",
+			"\tRaises BoundsError where `situ_out` is short of what the members",
+			"\tsitu_need, ConstraintError where a run is longer than its size",
 			'\tfield can say, and whatever `validate` raises for the result."""',
-			"\tat = 0",
+			"\tsitu_at = 0",
 		])
 		for part in parts:
-			lines.extend(_write(part, parts))
+			lines.extend(_write(resolved.structs, part, parts))
 		lines.extend([
 			"",
-			"\t# The view over exactly what was written, not over `out`: a",
+			"\t# The view over exactly what was written, not over `situ_out`: a",
 			"\t# longer buffer would hide a struct that came out short.",
-			f"\tview = {held}.at(Message(memoryview(out)[:at]), 0"
-			+ ("" if struct.layout.is_fixed_size else ", at") + ")",
-			"\tview.validate()",
-			"\treturn at",
+			f"\tsitu_view = {held}.at(Message(memoryview(situ_out)[:situ_at]), 0"
+			+ ("" if struct.layout.is_fixed_size else ", situ_at") + ")",
+			*_held_to_the_reader(struct, parts),
+			"\tsitu_view.validate()",
+			"\treturn situ_at",
 		])
 
 	return {f"{basename}_build.py": "\n".join(lines).rstrip("\n") + "\n"}

@@ -21,8 +21,9 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
-                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
+                                   Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -73,22 +74,22 @@ def _store(part: Part, value: str) -> list[str]:
 	]
 
 
-def _size(part: Part, run: str) -> list[str]:
+def _size(part: Part, length: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
 	width = part.placement.size_bits or 0
 	limit = (1 << width) - 1
 	if part.solved is None:
 		return [
-			*([f"\tif ({run}_len > {limit}u) {{", CONSTRAINT, "\t}"]
+			*([f"\tif ({length} > {limit}u) {{", CONSTRAINT, "\t}"]
 			  if width < 32 else []),
-			*_store(part, f"{run}_len"),
+			*_store(part, f"{length}"),
 		]
 	scale, offset = part.solved.scale, part.solved.offset
 	shift = f" + {-offset}" if offset < 0 else f" - {offset}" if offset else ""
 	return [
 		"\t{",
-		f"\t\tstd::int64_t situ_solved = static_cast<std::int64_t>({run}_len)"
+		f"\t\tstd::int64_t situ_solved = static_cast<std::int64_t>({length})"
 		f"{shift};",
 		"",
 		"\t\tif (situ_solved < 0"
@@ -139,6 +140,96 @@ def _nested(part: Part, inner: str) -> list[str]:
 	]
 
 
+def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
+		parts: list[Part]) -> list[str]:
+	"""Step through a run of inner structs the caller built.
+
+	C's `_walk`, and its reasons: the element's own `required` says where
+	one ends, a zero-byte element would never advance the loop, and a
+	delimiter breaks the run only at an element boundary, where the reader
+	would stop. An element the buffer ended rather than `required` measured
+	is taken on approval, and a failure there means the bytes are not a
+	whole number of elements.
+	"""
+	local  = part.local
+	held   = structs[part.placement.type_name or ""]
+	inner  = f"::situ::{class_name(held)}"
+	length = "" if held.layout.is_fixed_size else f" {local}_len - situ_scan,"
+	count  = plain_build.counts_elements(part, parts)
+	wide   = len(part.delimiter)
+	spelt  = ", ".join(f"0x{byte:02X}u" for byte in part.delimiter)
+	return [
+		f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS, "\t}",
+		*(["\tsitu_count = 0;"] if count else []),
+		"\t{",
+		"\t\tstd::uint32_t situ_scan = 0;",
+		"\t\t::situ::rt::message situ_elements("
+		f"const_cast<std::uint8_t *>({local}), {local}_len);",
+		"",
+		f"\t\twhile (situ_scan < {local}_len) {{",
+		"\t\t\tstd::uint32_t situ_need = 0;",
+		"\t\t\tbool situ_tail = false;",
+		f"\t\t\t{inner} situ_element;",
+		"",
+		*([f"\t\t\tstatic constexpr std::uint8_t situ_end[{wide}] = "
+		   f"{{ {spelt} }};",
+		   "",
+		   f"\t\t\tif (situ_scan + {wide}u <= {local}_len",
+		   f"\t\t\t    && std::memcmp({local} + situ_scan, situ_end, "
+		   f"{wide}u) == 0) {{",
+		   "\t\t\t\treturn ::situ::rt::err::constraint;",
+		   "\t\t\t}"] if wide else []),
+		f"\t\t\tif ({inner}::required({local} + situ_scan,",
+		f"\t\t\t                     {local}_len - situ_scan, situ_need)",
+		"\t\t\t    != ::situ::rt::err::ok) {",
+		f"\t\t\t\tsitu_need = {local}_len - situ_scan;",
+		"\t\t\t\tsitu_tail = true;",
+		"\t\t\t}",
+		"\t\t\tif (situ_need == 0u) {",
+		"\t\t\t\treturn ::situ::rt::err::constraint;",
+		"\t\t\t}",
+		f"\t\t\tif ({inner}::at(situ_elements, situ_scan,{length}"
+		" situ_element)",
+		"\t\t\t    != ::situ::rt::err::ok) {",
+		"\t\t\t\treturn ::situ::rt::err::constraint;",
+		"\t\t\t}",
+		"\t\t\tconst ::situ::rt::err situ_verdict = situ_element.validate();",
+		"",
+		"\t\t\tif (situ_verdict != ::situ::rt::err::ok) {",
+		"\t\t\t\treturn situ_tail ? ::situ::rt::err::constraint : situ_verdict;",
+		"\t\t\t}",
+		"\t\t\tsitu_scan += situ_need;",
+		*(["\t\t\tsitu_count++;"] if count else []),
+		"\t\t}",
+		"\t}",
+	]
+
+
+def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
+		parts: list[Part]) -> list[str]:
+	local = part.local
+	wide  = len(part.delimiter)
+	spelt = ", ".join(f"0x{byte:02X}u" for byte in part.delimiter)
+	return [
+		*([] if plain_build.walked_at_size(part, parts)
+		  else _walk(structs, part, parts)),
+		*([f"\tif (situ_count != {part.digits}u) {{", CONSTRAINT, "\t}"]
+		  if part.digits > 0 else []),
+		*_room(f"{local}_len"),
+		f"\tif ({local}_len != 0u) {{",
+		f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		"\t}",
+		f"\tsitu_at += {local}_len;",
+		*([*_room(f"{wide}u"),
+		   "\t{",
+		   f"\t\tstatic constexpr std::uint8_t situ_end[{wide}] = {{ {spelt} }};",
+		   "",
+		   f"\t\tstd::memcpy(situ_out + situ_at, situ_end, {wide}u);",
+		   "\t}",
+		   f"\tsitu_at += {wide}u;"] if wide else []),
+	]
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -155,7 +246,7 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	if part.sizes is not None:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
-		lines += _size(part, run)
+		lines += _size(part, f"{run}_len")
 	elif plain_build.takes_value(part):
 		lines += [f"\tif (static_cast<std::uint64_t>({part.local}) > {limit}u) {{",
 		          CONSTRAINT, "\t}", *_bit_store(part, part.local)]
@@ -173,6 +264,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _bits(part, parts)
 	if part.role == NESTED:
 		return _nested(part, class_name(structs[part.placement.type_name or ""]))
+	if part.role == REPEAT:
+		return _repeat(structs, part, parts)
 	if part.role == ARMTAG:
 		return _store(part, f"{part.value}u")
 	if part.role == PEEKED:
@@ -184,9 +277,11 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		           CONSTRAINT, "\t}"] if part.others else []),
 		        *_store(part, part.local)]
 	if part.role == SIZE:
-		run = next(one.local for one in parts
-		           if one.placement is part.sizes)
-		return _size(part, run)
+		measured = next(one for one in parts if one.placement is part.sizes)
+		if part.inner:
+			return [*_walk(structs, measured, parts),
+			        *_size(part, "situ_count")]
+		return _size(part, f"{measured.local}_len")
 	if part.role == ZERO:
 		ones = traverse.reserved_policy(part.placement.attrs) == "must_be_one"
 		return [*_room(f"{part.bytes}u"),
@@ -229,6 +324,27 @@ def _parameters(parts: list[Part]) -> list[str]:
 		elif part.role in plain_build.MEASURED:
 			found.extend([f"const std::uint8_t *{part.local}",
 			              f"std::uint32_t {part.local}_len"])
+	return found
+
+
+def _counted(parts: list[Part]) -> bool:
+	return any(one.role == REPEAT and plain_build.counts_elements(one, parts)
+	           for one in parts)
+
+
+def _held_to_the_reader(struct: ResolvedStruct,
+		parts: list[Part]) -> list[str]:
+	"""A `while` run ends where a predicate stops holding, which is the
+	reader's to evaluate, so its count is asked rather than reproduced."""
+	found: list[str] = []
+	for part in parts:
+		if part.role == REPEAT and part.value == 1:
+			name = traverse.local_name(struct, part.placement)
+			found.extend([
+				"\tif (situ_e == ::situ::rt::err::ok",
+				f"\t    && situ_view.{name}_count() != situ_count) {{",
+				"\t\tsitu_e = ::situ::rt::err::constraint;",
+				"\t}"])
 	return found
 
 
@@ -293,6 +409,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t\tstd::uint32_t &situ_wrote) noexcept",
 			"{",
 			"\tstd::uint32_t situ_at = 0;",
+			*(["\tstd::uint32_t situ_count = 0;"]
+			  if _counted(parts) else []),
 			"",
 			"\tif (situ_out == nullptr) {",
 			BOUNDS,
@@ -309,6 +427,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t::situ::rt::err situ_e = ::situ::{held}::at(situ_msg, 0,{length}"
 			" situ_view);",
 			"",
+			*_held_to_the_reader(struct, parts),
 			"\tif (situ_e == ::situ::rt::err::ok) {",
 			"\t\tsitu_e = situ_view.validate();",
 			"\t}",

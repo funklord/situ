@@ -28,7 +28,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (BITS, NESTED, RUN,		# noqa: E402
+from situc.codegen.c.build import (BITS, NESTED, REPEAT, RUN,	# noqa: E402
                                    SCALAR, SIZE, SPAN, Part)
 from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
@@ -117,6 +117,9 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 		elif part.role == NESTED:
 			found.append((part, inner.get(part.placement.type_name or "",
 			                              [b"\x00"])[0]))
+		elif part.role == REPEAT:
+			element = inner.get(part.placement.type_name or "", [b"\x00"])[0]
+			found.append((part, element * (part.digits or 2)))
 	return found
 
 
@@ -132,6 +135,10 @@ def _varied(given: Given, inner: dict[str, list[bytes]],
 		if part.role == NESTED:
 			value = rng.choice(inner.get(part.placement.type_name or "",
 			                             [value]))
+		elif part.role == REPEAT:
+			held  = inner.get(part.placement.type_name or "", [b"\x00"])
+			value = b"".join(rng.choice(held) for _ in range(
+				part.digits or rng.randrange(4)))
 		elif isinstance(value, int):
 			bits  = part.placement.size_bits or 8
 			value = rng.choice((*range(9), 16, 32, 64, 128, 255,
@@ -291,7 +298,8 @@ def _cases(module: object, base: object,
 	return found
 
 
-def _reads_back(plain: object, unit: Unit, made: str) -> None:
+def _reads_back(plain: object, base: object, unit: Unit,
+		made: str) -> None:
 	"""A message a builder wrote is one the reader takes whole.
 
 	Agreement between four writers says nothing if all four are wrong
@@ -301,7 +309,17 @@ def _reads_back(plain: object, unit: Unit, made: str) -> None:
 	if made == "refused" or not hasattr(held, "required"):
 		return
 	message = bytes.fromhex(made)
-	assert held.required(message) == len(message), (_label(unit), made)
+	try:
+		said = held.required(message)
+	except base.TruncatedError:		# type: ignore[attr-defined]
+		# A run nothing but the frame ends asks for more: `required` frames
+		# a stream, and netlink's attributes end where the message does.
+		assert any(part.role == REPEAT and not part.digits
+		           and not part.delimiter
+		           and not plain_build.walked_at_size(part, list(unit.parts))
+		           for part in unit.parts), (_label(unit), made)
+		return
+	assert said == len(message), (_label(unit), made)
 
 
 def _python(tmp: Path, stem: str, units: list[Unit],
@@ -320,7 +338,7 @@ def _python(tmp: Path, stem: str, units: list[Unit],
 		          *((unit, given, _build_one(module, base, unit, given))
 		            for unit, given in extra)]
 		for unit, _, made in found:
-			_reads_back(plain, unit, made)
+			_reads_back(plain, base, unit, made)
 		return ("".join(f"{_label(unit)} {made}\n"
 		                for unit, _, made in found),
 		        [(unit, given) for unit, given, _ in found])

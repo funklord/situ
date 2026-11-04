@@ -20,13 +20,14 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED, RUN,
-                                   SCALAR, SIZE, SPAN, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
+                                   Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
 from situc.layout import BITS_PER_BYTE
-from situc.resolve import ResolvedSchema
+from situc.resolve import ResolvedSchema, ResolvedStruct
 
 __all__ = ["generate", "plain", "declined", "Shape"]
 
@@ -65,23 +66,23 @@ def _store(part: Part, value: str) -> list[str]:
 	]
 
 
-def _size(part: Part, run: str) -> list[str]:
+def _size(part: Part, length: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
 	width = part.placement.size_bits or 0
 	limit = (1 << width) - 1
 	if part.solved is None:
 		return [
-			*([f"\tif {run}.len() as u64 > {limit} {{",
+			*([f"\tif {length} as u64 > {limit} {{",
 			   "\t\treturn Err(Error::Constraint);", "\t}"]
 			  if width < 64 else []),
-			*_store(part, f"{run}.len()"),
+			*_store(part, f"{length}"),
 		]
 	scale, offset = part.solved.scale, part.solved.offset
 	shift = f" + {-offset}" if offset < 0 else f" - {offset}" if offset else ""
 	return [
 		"\t{",
-		f"\t\tlet situ_solved = {run}.len() as i64{shift};",
+		f"\t\tlet situ_solved = {length} as i64{shift};",
 		"\t\tif situ_solved < 0"
 		+ (f" || situ_solved % {scale} != 0" if scale != 1 else "") + " {",
 		"\t\t\treturn Err(Error::Constraint);",
@@ -126,6 +127,70 @@ def _nested(part: Part) -> list[str]:
 	]
 
 
+def _walk(part: Part, parts: list[Part]) -> list[str]:
+	"""Step through a run of inner structs the caller built.
+
+	C's `_walk`, and its reasons: the element's own `required` says where
+	one ends, a zero-byte element would never advance the loop, and a
+	delimiter breaks the run only at an element boundary, where the reader
+	would stop. An element the buffer ended rather than `required` measured
+	is taken on approval, and a failure there means the bytes are not a
+	whole number of elements.
+	"""
+	local  = _ident(part.local)
+	inner  = _pascal(part.placement.type_name or "")
+	count  = plain_build.counts_elements(part, parts)
+	needle = ", ".join(f"{byte:#04x}" for byte in part.delimiter)
+	return [
+		*(["\tlet mut situ_count = 0usize;"] if count else []),
+		"\t{",
+		"\t\tlet mut situ_scan = 0usize;",
+		f"\t\twhile situ_scan < {local}.len() {{",
+		*([f"\t\t\tif {local}[situ_scan..].starts_with(&[{needle}]) {{",
+		   "\t\t\t\treturn Err(Error::Constraint);",
+		   "\t\t\t}"] if part.delimiter else []),
+		f"\t\t\tlet (situ_need, situ_tail) = match {inner}::required("
+		f"&{local}[situ_scan..]) {{",
+		"\t\t\t\tsitu_rt::Framing::Complete(n) => (n, false),",
+		f"\t\t\t\t_ => ({local}.len() - situ_scan, true),",
+		"\t\t\t};",
+		"\t\t\tif situ_need == 0 {",
+		"\t\t\t\treturn Err(Error::Constraint);",
+		"\t\t\t}",
+		f"\t\t\tlet situ_element = {inner}::new(&{local}[situ_scan..])"
+		".map_err(|_| Error::Constraint)?;",
+		"\t\t\tif let Err(situ_verdict) = situ_element.validate() {",
+		"\t\t\t\treturn Err(if situ_tail { Error::Constraint } "
+		"else { situ_verdict });",
+		"\t\t\t}",
+		"\t\t\tsitu_scan += situ_need;",
+		*(["\t\t\tsitu_count += 1;"] if count else []),
+		"\t\t}",
+		"\t}",
+	]
+
+
+def _repeat(part: Part, parts: list[Part]) -> list[str]:
+	local  = _ident(part.local)
+	wide   = len(part.delimiter)
+	needle = ", ".join(f"{byte:#04x}" for byte in part.delimiter)
+	return [
+		*([] if plain_build.walked_at_size(part, parts)
+		  else _walk(part, parts)),
+		*([f"\tif situ_count != {part.digits} {{",
+		   "\t\treturn Err(Error::Constraint);", "\t}"]
+		  if part.digits > 0 else []),
+		*_room(f"{local}.len()"),
+		f"\tsitu_out[situ_at..situ_at + {local}.len()]"
+		f".copy_from_slice({local});",
+		f"\tsitu_at += {local}.len();",
+		*([*_room(f"{wide}"),
+		   f"\tsitu_out[situ_at..situ_at + {wide}]"
+		   f".copy_from_slice(&[{needle}]);",
+		   f"\tsitu_at += {wide};"] if wide else []),
+	]
+
+
 def _bits(part: Part, parts: list[Part]) -> list[str]:
 	"""One field of a byte several share.
 
@@ -141,7 +206,7 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	if part.sizes is not None:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
-		lines += _size(part, _ident(run))
+		lines += _size(part, f"{_ident(run)}.len()")
 	elif plain_build.takes_value(part):
 		local = _ident(part.local)
 		lines += [f"\tif {local} as u64 > {limit} {{",
@@ -160,6 +225,8 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		return _bits(part, parts)
 	if part.role == NESTED:
 		return _nested(part)
+	if part.role == REPEAT:
+		return _repeat(part, parts)
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:
@@ -173,9 +240,10 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		          if part.others else []),
 		        *_store(part, local)]
 	if part.role == SIZE:
-		run = next(one.local for one in parts
-		           if one.placement is part.sizes)
-		return _size(part, _ident(run))
+		measured = next(one for one in parts if one.placement is part.sizes)
+		if part.inner:
+			return [*_walk(measured, parts), *_size(part, "situ_count")]
+		return _size(part, f"{_ident(measured.local)}.len()")
 	if part.role == ZERO:
 		ones = traverse.reserved_policy(part.placement.attrs) == "must_be_one"
 		return [*_room(str(part.bytes)),
@@ -211,6 +279,19 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{name}: &[u8; {part.bytes}]")
 		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
+	return found
+
+
+def _held_to_the_reader(struct: ResolvedStruct,
+		parts: list[Part]) -> list[str]:
+	"""A `while` run ends where a predicate stops holding, which is the
+	reader's to evaluate, so its count is asked rather than reproduced."""
+	found: list[str] = []
+	for part in parts:
+		if part.role == REPEAT and part.value == 1:
+			name = traverse.local_name(struct, part.placement)
+			found.extend([f"\tif situ_view.{name}_count() != situ_count {{",
+			              "\t\treturn Err(Error::Constraint);", "\t}"])
 	return found
 
 
@@ -270,7 +351,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend([
 			"\t// Over exactly what was written, not over the backing: a longer",
 			"\t// slice would hide a struct that came out short.",
-			f"\t{held}::new(&situ_out[..situ_at])?.validate()?;",
+			f"\tlet situ_view = {held}::new(&situ_out[..situ_at])?;",
+			*_held_to_the_reader(struct, parts),
+			"\tsitu_view.validate()?;",
 			"\tOk(situ_at)",
 			"}",
 		])
