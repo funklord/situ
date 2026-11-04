@@ -11953,6 +11953,15 @@ class Emitter:
 				*(self._encoding_check(struct, placement, scalar)
 				  if scalar is not None else []),
 				*self._token_check(struct, placement),
+				# A delimited TEXT NUMBER's spelling, digits and declared
+				# range (26.852). 26.423 left these out in all four
+				# together: the member path reads a parsed value through an
+				# accessor an arm does not have, and an arm's `_ptr` takes
+				# the pointer and the length out through PARAMETERS so the
+				# gate has somewhere to put `SITU_ERR_VERSION` -- which is
+				# the same signature difference the comment above records.
+				# So the span comes out of that call and is parsed here.
+				*self._arm_digits(struct, placement),
 			]
 			if not inner:
 				return []
@@ -12351,6 +12360,54 @@ class Emitter:
 			f" (section 8.7) */",
 			f"\tif (!{ident(self.prefix, enum.name)}_is_known({value})) {{",
 			"\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t}",
+		]
+
+	def _arm_digits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A delimited text number arm's spelling, digits and bounds.
+
+		Through the arm's own `_ptr`, whose signature differs from a
+		member's: it takes the pointer and the length out through
+		parameters, because the gate needs somewhere to put
+		`SITU_ERR_VERSION`. So the span is bound to two locals and parsed
+		from them, which is also why the member path's lines could not be
+		reused -- they name a function of the same name and a different
+		shape.
+
+		The spelling first and the digits second, which is the order every
+		reader emits: a field of non-digits that is also padded is a
+		`[minimal]` failure before it is a parse failure.
+		"""
+		if placement.radix is None:
+			return []
+		local = c_name(self._local(struct, placement))
+		ptr   = ident(self.prefix, struct.name, local, "ptr")
+		limit = placement.radix_max or 0
+		spell = ([f"\t/* `[minimal]`: one spelling per value. */",
+		          f"\tif (!situ_digits_minimal({local}_at, {local}_count,"
+		          f" {placement.radix}u)) {{",
+		          "\t\treturn SITU_ERR_CONSTRAINT;",
+		          "\t}"]
+		         if placement.radix_minimal else [])
+		return [
+			"\t{",
+			f"\t\tconst uint8_t *{local}_at = NULL;",
+			f"\t\tuint32_t {local}_count = 0u;",
+			f"\t\tuint64_t {local}_parsed = 0u;",
+			"",
+			f"\t\tif ({ptr}(view, &{local}_at, &{local}_count)"
+			" != SITU_OK) {",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t}",
+			*[f"\t{one}" for one in spell],
+			f"\t\tif (situ_parse_uint({local}_at, {local}_count,"
+			f" {placement.radix}u, {limit}u, &{local}_parsed) != 0) {{",
+			"\t\t\treturn SITU_ERR_CONSTRAINT;",
+			"\t\t}",
+			*[f"\t{one}" for one in
+			  self._attr_checks(struct, placement, f"{local}_parsed",
+			                    self.resolved.layout.env)],
 			"\t}",
 		]
 

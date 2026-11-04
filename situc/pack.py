@@ -2277,6 +2277,26 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			# delimited member has no count, which is why the clause below
 			# could never reach it. The scan is what bounds the read, and
 			# both walkers already have it.
+			# A DELIMITED TEXT NUMBER arm's spelling and digits, before
+			# the delimiter row below, because that is the order every
+			# reader asks them in and the first failure is the answer
+			# (26.852). The member path writes these two a few hundred
+			# lines above; this pass wrote neither, so a delimited arm's
+			# `decimal`, `[min]` and `[max]` reached none of the six
+			# readers -- 26.423's decline, which all four honoured
+			# together until its named obstacle was answered.
+			if placement.delimiters and placement.radix is not None \
+					and placement.type_name not in resolved.structs:
+				if placement.radix_minimal:
+					arm_checks.append((at, _struct.pack(
+						"<IqBxxx", at, placement.radix, 10)))
+				if placement.radix_max is None \
+						or not fits_q(placement.radix_max):
+					whole = False
+					continue
+				arm_checks.append((at, _struct.pack(
+					"<IqBxxx", at, placement.radix_max, 9)))
+
 			if placement.delimiters and placement.scalar is not None \
 					and placement.type_name not in resolved.structs:
 				if traverse.must_be_terminated(placement):
@@ -2404,8 +2424,28 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					"<IqBxxx", at, placement.radix_max, 9)))
 
 			# A scalar arm's value comparisons, and its enum membership.
+			#
+			# `DELIMITED` is in the list because a delimited TEXT NUMBER
+			# classifies as that rather than as `TEXT_NUMBER` -- the
+			# classification names how the span is FOUND, and for an arm
+			# the delimiter is the more specific answer. So its `[min]`
+			# and `[max]` fell past this test while its digits row was
+			# written above, which is half a check: measured, the four
+			# backends refused `199` and both walkers took it (26.852).
+			# ...and `DELIMITED` only where it is a text NUMBER, which is
+			# the clause this nearly asserted of the class: a delimited
+			# byte-run arm with a `[max]` would get a value row the four
+			# backends do not write, and both walkers would compare it
+			# against a scalar read of a SPAN. Nothing in the corpus has
+			# that shape, so no image would have changed and nothing would
+			# have said so -- which is the night's recurring fault one
+			# more time, caught before it landed rather than after.
+			if kind is traverse.Check.DELIMITED \
+					and placement.radix is None:
+				continue
 			if kind not in (traverse.Check.CONSTRAINED,
-			                traverse.Check.TEXT_NUMBER):
+			                traverse.Check.TEXT_NUMBER,
+			                traverse.Check.DELIMITED):
 				# Everything else an arm can be -- a run of wide values, a
 				# delimited or varint arm, a nested struct -- is checked by
 				# the arm's own validator or not at all (26.410). Not a

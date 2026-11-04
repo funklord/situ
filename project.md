@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.852 The delimited half of a text number arm
+
+Moved to
+`doc/decision/26.852-the-delimited-half-of-a-text-number-arm.md`.
+
 ### 26.851 A note that printed the whole schema back
 
 Moved to

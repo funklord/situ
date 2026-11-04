@@ -102,6 +102,38 @@ CASES = {
 }
 
 
+#: The DELIMITED form, which is the same construct with a scan instead of a
+#: width -- `edges.wide_delim_arm.held.code` is the corpus's own, and this
+#: mirrors it. 26.423 declined it in all four together, deliberately, and
+#: named the obstacle: the member path reads a parsed property, and an
+#: arm's property of that name answers its BYTES. The fixed-width clause
+#: above answers it by parsing the span, which is what this needs too
+#: (26.852).
+DELIMITED = """target buffer;
+endian big;
+
+struct arms {
+	u8 pick;
+	variant held switch (pick) {
+		case 1:  decimal u32 code[] until " " max 4 [min = 200, max = 599];
+		case 2:  u8  fixed[3];
+		default: error;
+	}
+	u8 after;
+}
+"""
+
+#: The digits, then the delimiter, then `after`. The second arm is three
+#: bytes and no number, which is the pair: the same bytes are constrained
+#: under one discriminant and not under the other.
+DELIMITED_CASES = {
+	"01323030205A": "0",	# "200 ", in range
+	"01313939205A": "2",	# "199 ", below the min
+	"01363030205A": "2",	# "600 ", above the max
+	"01414243205A": "2",	# "ABC ", not digits
+	"024142435A":   "0",	# the other arm
+}
+
 #: A NARROWER type than the digits can express, which is what makes the
 #: declared domain falsifiable at all. `decimal u32 code[3]` has a ceiling
 #: of 999 derived from its own three digits, so no three-digit spelling can
@@ -139,8 +171,9 @@ def _verdict(answers: str) -> str:
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs all four toolchains")
 @pytest.mark.parametrize("text, cases",
-                         [(SCHEMA, CASES), (NARROW, NARROW_CASES)],
-                         ids=["wide", "narrow"])
+                         [(SCHEMA, CASES), (NARROW, NARROW_CASES),
+                          (DELIMITED, DELIMITED_CASES)],
+                         ids=["wide", "narrow", "delimited"])
 def test_all_four_enforce_a_text_number_arm(
 		text: str, cases: dict[str, str], tmp_path: Path) -> None:
 	"""The declared digits and the declared range, behind the discriminant.
@@ -164,8 +197,9 @@ def test_all_four_enforce_a_text_number_arm(
 
 @pytest.mark.skipif(COMPILER is None, reason="no C compiler")
 @pytest.mark.parametrize("text, cases",
-                         [(SCHEMA, CASES), (NARROW, NARROW_CASES)],
-                         ids=["wide", "narrow"])
+                         [(SCHEMA, CASES), (NARROW, NARROW_CASES),
+                          (DELIMITED, DELIMITED_CASES)],
+                         ids=["wide", "narrow", "delimited"])
 def test_both_walkers_enforce_a_text_number_arm(
 		text: str, cases: dict[str, str], tmp_path: Path) -> None:
 	"""The other two readers, which share only the image.

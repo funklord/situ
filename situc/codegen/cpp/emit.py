@@ -10112,6 +10112,14 @@ class Emitter:
 				*self._span_encoding_check(struct, placement,
 				                           f"situ_base(raw_) + ({at})",
 				                           f"{name}_len()"),
+				# A delimited TEXT NUMBER's spelling, digits and declared
+				# range (26.852). 26.423 left these out in all four
+				# together, the member path reading a parsed property an
+				# arm does not have; 26.850's clause answers it by parsing
+				# the SPAN, and here the span is what the scan found.
+				*self._arm_digits(struct, placement,
+				                  f"situ_base(raw_) + ({at})",
+				                  f"{name}_len()"),
 			]
 			if not inner:
 				return []
@@ -10342,6 +10350,38 @@ class Emitter:
 			*_deeper(inner),
 			"\t\t\t}",
 			"\t\t}",
+		]
+
+	def _arm_digits(self, struct: ResolvedStruct, placement: Placement,
+			at: str, count: str) -> list[str]:
+		"""A delimited text number arm's spelling, digits and bounds.
+
+		The spelling first and the digits second, the order every reader
+		emits: a field of non-digits that is also padded is a `[minimal]`
+		failure before it is a parse failure. The caller has asked the
+		terminator already, which comes before both -- for a frame cut
+		short before the digits, "this frame stops early" is the more
+		useful answer.
+		"""
+		if placement.radix is None:
+			return []
+		name  = bare_name(local_name(struct, placement))
+		limit = placement.radix_max or 0
+		spell = ([f"\t\t/* `[minimal]`: one spelling per value. */",
+		          f"\t\tif (!situ_digits_minimal({at}, {count},"
+		          f" {placement.radix}u)) {{",
+		          "\t\t\treturn ::situ::rt::err::constraint;",
+		          "\t\t}"]
+		         if placement.radix_minimal else [])
+		return [
+			*spell,
+			f"\t\tstd::uint64_t {name}_parsed = 0;",
+			"",
+			f"\t\tif (situ_parse_uint({at}, {count}, {placement.radix}u,"
+			f" {limit}u, &{name}_parsed) != 0) {{",
+			"\t\t\treturn ::situ::rt::err::constraint;",
+			"\t\t}",
+			*self._attr_checks(struct, placement, f"{name}_parsed"),
 		]
 
 	def _arm_text_number(self, struct: ResolvedStruct,

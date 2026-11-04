@@ -5556,17 +5556,58 @@ class Emitter:
 				struct, placement, named,
 				f"self.{_ident(f'{base}_raw')}()"))
 
-		# A TEXT NUMBER on an ARM is out of scope, and saying so is what
-		# keeps the four agreeing (26.423). These read the member's parsed
-		# value, and an arm's accessor of that name answers its BYTES -- so
-		# reusing them diverges from C and C++, which write their arm checks
-		# by hand and emit no such comparison. Before this entry all four
-		# checked NOTHING on a delimited arm, so they agreed; a partial port
-		# is the one outcome worse than the gap.
+		# A TEXT NUMBER on an ARM is checked now, and 26.423's reason for
+		# leaving it was real: these read the member's parsed value, and an
+		# arm's accessor of that name answers its BYTES, so reusing them
+		# would have diverged from C and C++. All four checked NOTHING on a
+		# delimited arm, so they agreed, and a partial port is the one
+		# outcome worse than the gap.
+		#
+		# 26.850's clause answers it by parsing the SPAN rather than
+		# reusing a parsed accessor, and the arm's own content accessor IS
+		# the span -- guarded by the discriminant, which is what makes
+		# reading it safe here (26.852).
 		if not for_arm:
 			lines.extend(self._text_number_checks(struct, placement, base))
+		else:
+			lines.extend(self._arm_digits(struct, placement, base))
 		lines.extend(self._token_checks(placement, base))
 		return lines
+
+	def _arm_digits(self, struct: ResolvedStruct, placement: Placement,
+			base: str) -> list[str]:
+		"""A delimited text number arm's spelling, digits and bounds.
+
+		The spelling first and the digits second, the order every reader
+		emits: a field of non-digits that is also padded is a `[minimal]`
+		failure before it is a parse failure. The terminator comes before
+		both and the caller has asked it.
+		"""
+		if placement.radix is None:
+			return []
+		limit = placement.radix_max or 0
+		held  = _ident(f"{base}_parsed")
+		span  = f"self.{_ident(base)}()"
+		spell = ([f"\t\t// `[minimal]`: one spelling per value.",
+		          f"\t\tif let Ok(_digits) = {span} {{",
+		          f"\t\t\tif !situ_rt::digits_minimal(_digits,"
+		          f" {placement.radix}) {{",
+		          "\t\t\t\treturn Err(Error::Constraint);",
+		          "\t\t\t}",
+		          "\t\t}"]
+		         if placement.radix_minimal else [])
+		return [
+			*spell,
+			f"\t\tif let Ok(_digits) = {span} {{",
+			f"\t\t\tlet {held} = match situ_rt::parse_uint(_digits,"
+			f" {placement.radix}, {limit}) {{",
+			"\t\t\t\tSome(value) => value,",
+			"\t\t\t\tNone => return Err(Error::Constraint),",
+			"\t\t\t};",
+			*[f"\t{one}" for one in
+			  self._attr_checks(struct, placement, held)],
+			"\t\t}",
+		]
 
 	def _declared_encoding_checks(self, struct: ResolvedStruct,
 			placement: Placement, named: "ast.Attr | None",

@@ -8083,19 +8083,21 @@ class Emitter:
 			lines.extend(self._declared_encoding_check(
 				struct, placement, named, f"self.{name}_raw"))
 
-		# A TEXT NUMBER on an ARM is out of scope here, and saying so is
-		# what keeps the four agreeing (26.423). The blocks below read the
-		# member's parsed `self.{name}`; an arm's property of that name
-		# answers its BYTES, so reusing them generated `self.held_num < 200`
-		# against a `bytes` -- a TypeError waiting for a message, and a
-		# divergence besides, C and C++ writing their arm checks by hand and
-		# emitting no such comparison. Before this entry all four checked
-		# NOTHING on a delimited arm, so they agreed; a partial port is the
-		# one outcome worse than the gap. The terminator, the encoding and
-		# the token set above are checked for a radix arm; its value is not,
-		# by all four alike.
+		# A TEXT NUMBER on an ARM is checked now, and 26.423's reason for
+		# leaving it was not laziness: the blocks below read the member's
+		# parsed `self.{name}`, an arm's property of that name answers its
+		# BYTES, and reusing them generated `self.held_num < 200` against a
+		# `bytes` -- a TypeError waiting for a message. All four checked
+		# NOTHING on a delimited arm, so they agreed, and a partial port is
+		# the one outcome worse than the gap.
+		#
+		# What answers it is 26.850's fixed-width clause: parse the SPAN
+		# rather than reusing a parsed property. The arm's own content
+		# property is the span -- guarded by the discriminant, which is
+		# what makes reading it safe here -- so the number is parsed from
+		# it and the declared bounds compared against the result (26.852).
 		if for_arm and placement.radix is not None:
-			return lines
+			return [*lines, *self._arm_digits(struct, placement)]
 
 		if placement.radix_minimal:
 			# The *digits*, which is what the predicate reads. This passed
@@ -8118,6 +8120,40 @@ class Emitter:
 			lines.extend(self._attr_checks(struct, placement, f"self.{name}"))
 		lines.extend(self._token_check(placement, name))
 		return lines
+
+	def _arm_digits(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""A DELIMITED text number arm's spelling, digits and bounds.
+
+		`_arm_text_number` is this one construct over, with a width where
+		this has a scan; the two parse the span for the same reason, there
+		being no member accessor to ask. The spelling first and the digits
+		second, which is the order every other reader emits and the order
+		the ANSWERS have to keep: a field of non-digits that is also padded
+		is a `[minimal]` failure before it is a parse failure.
+
+		The caller has already asked the terminator, and that order matters
+		too -- for a frame cut short before the digits both are wrong, and
+		"this frame stops early" is the more useful answer.
+		"""
+		name  = py_name(local_name(struct, placement))
+		limit = placement.radix_max or 0
+		if placement.radix is None:
+			return []
+
+		local = f"{name}_parsed"
+		spell = (self._minimal_check(placement, name, f"self.{name}")
+		         if placement.radix_minimal else [])
+		return [
+			*spell,
+			f"\t\t{local} = parse_uint(self.{name},"
+			f" {placement.radix}, {limit})",
+			f"\t\tif {local} is None:",
+			"\t\t\traise ConstraintError(",
+			f'\t\t\t\t"{placement.path} is not a number in base'
+			f' {placement.radix}")',
+			*self._attr_checks(struct, placement, local),
+		]
 
 	def _declared_encoding_check(self, struct: ResolvedStruct,
 			placement: Placement, named: "ast.Attr | None",
