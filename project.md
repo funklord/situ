@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.856 Six instruments wrong in one session, and the two shapes
+
+Moved to
+`doc/decision/26.856-six-instruments-wrong-in-one-session.md`.
+
 ### 26.855 Rung 2 writes in Python too, the first increment
 
 Moved to
