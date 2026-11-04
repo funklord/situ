@@ -1032,6 +1032,22 @@ def cmd_build(args: argparse.Namespace) -> int:
 		# append-only layout gets a builder and anything else is named,
 		# because a rung is absent rather than defaulted where the schema
 		# states something it cannot hold to (0032, 26.610).
+		#
+		# ...and the TARGET's absence is named for the same reason the
+		# struct's is. Asking `--layer edit` of the other three emitted
+		# exactly what `--layer view` emits -- byte-identical, measured on
+		# `example/dns` -- and said nothing, so a caller could not tell a
+		# rung they were given from one that does not exist for their
+		# language. That is the silence this file spends several refusals
+		# avoiding one struct at a time (26.854).
+		if args.target != "c":
+			print(f"situc: --layer {args.layer} emits no builder for "
+			      f"`--target {args.target}`: the write half of rung 2 is "
+			      f"C only so far, so this is `--layer view`'s output plus "
+			      f"whatever the rungs above contribute. Decision 0032 has "
+			      f"the ladder and 26.610 the builder's shape.",
+			      file=sys.stderr)
+
 		if args.target == "c":
 			from situc.codegen.c import build
 

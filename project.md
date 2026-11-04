@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.854 A rung the ladder promises, and one target has
+
+Moved to
+`doc/decision/26.854-a-rung-the-ladder-promises-and-one-target-has.md`.
+
 ### 26.853 A pad arm had an accessor that read one byte of it
 
 Moved to
