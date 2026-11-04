@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (BITS, LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO,
-                                   Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
+                                   SIZE, SPAN, ZERO, Part, Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -133,8 +133,16 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
 	if part.role == BITS:
 		return _bits(part, parts)
+	if part.role == ARMTAG:
+		return _store(part, f"{part.value}u")
+	if part.role == PEEKED:
+		return []		# the bytes it reads belong to what follows
 	if part.role == SCALAR:
-		return _store(part, part.local)
+		# A value a named arm claims would make the message read as that
+		# arm, so the default builder refuses it.
+		return [*([f"\tif ({' || '.join(f'{part.local} == {v}u' for v in part.others)}) {{",
+		           CONSTRAINT, "\t}"] if part.others else []),
+		        *_store(part, part.local)]
 	if part.role == SIZE:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
@@ -192,8 +200,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	"""
 	shape = Shape("", "situ", resolved.structs,
 	              {decl.name: decl for decl in schema.varints()})
-	structs = plain(resolved, shape)
-	if not structs:
+	built = plain_build.units(resolved, shape)
+	if not built:
 		return {}
 
 	guard = f"SITU_{c_name(basename).upper()}_BUILD_HPP"
@@ -224,10 +232,11 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"namespace situ_build {",
 	]
 
-	for struct in structs:
-		held  = class_name(struct)
-		parts = plain_build.parts(struct, shape)
-		assert parts is not None
+	for unit in built:
+		struct = unit.struct
+		held   = class_name(struct)
+		parts  = list(unit.parts)
+		name   = f"{held}_{c_name(unit.suffix)}" if unit.suffix else held
 		length = "" if struct.layout.is_fixed_size else " situ_at,"
 		lines.extend([
 			"",
@@ -238,7 +247,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			" * is longer than its size field can say, and whatever `validate`",
 			" * answers for a result the schema refuses.",
 			" */",
-			f"[[nodiscard]] inline ::situ::rt::err {held}(",
+			f"[[nodiscard]] inline ::situ::rt::err {name}(",
 			"\t\tstd::uint8_t *situ_out,",
 			"\t\tstd::uint32_t situ_cap,",
 			*(f"\t\t{one}," for one in _parameters(parts)),

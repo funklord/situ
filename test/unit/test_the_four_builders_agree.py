@@ -26,16 +26,17 @@ import fourway						# noqa: E402
 from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
+from situc.codegen.plain_build import Unit			# noqa: E402
 from situc.codegen.c.build import (BITS, RUN, SCALAR, SIZE,	# noqa: E402
                                    SPAN, Part, Shape)
-from situc.codegen.c.names import ident			# noqa: E402
+from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
 from situc.codegen.python.emit import py_name		# noqa: E402
 from situc.codegen.rust.edit import _scalar as rust_scalar	# noqa: E402
 from situc.codegen.rust.emit import _ident		# noqa: E402
 from situc.layout import BITS_PER_BYTE, Placement, solve	# noqa: E402
-from situc.resolve import ResolvedStruct, resolve	# noqa: E402
+from situc.resolve import resolve			# noqa: E402
 
 RUNTIME = ROOT / "runtime"
 #: Comfortably past the largest struct the class serves; asserted below.
@@ -109,13 +110,11 @@ def _array(name: str, value: bytes, kind: str) -> str:
 	return f"static const {kind} {name}[] = {{{items}}};"
 
 
-def _plan(struct: ResolvedStruct, shape: Shape) -> list[Part]:
-	parts = plain_build.parts(struct, shape)
-	assert parts is not None
-	return parts
+def _label(unit: Unit) -> str:
+	return f"{unit.struct.name}.{unit.suffix}"
 
 
-def _c_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
+def _c_driver(stem: str, units: list[Unit]) -> str:
 	lines = ["#include <stdio.h>", f'#include "{stem}_build.h"',
 	         f"static uint8_t buf[{ROOM}];", "static uint32_t n;",
 	         "static void show(const char *name, situ_err_t e) {",
@@ -124,9 +123,9 @@ def _c_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 	         '\tfor (uint32_t i = 0; i < n; i++) printf("%02x", buf[i]);',
 	         '\tputs("");', "}"]
 	calls = []
-	for index, struct in enumerate(structs):
+	for index, unit in enumerate(units):
 		values: list[str] = []
-		for at, (part, value) in enumerate(_given(_plan(struct, shape))):
+		for at, (part, value) in enumerate(_given(list(unit.parts))):
 			if isinstance(value, int):
 				values.append(f"{value:#x}ull")
 				continue
@@ -135,14 +134,14 @@ def _c_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 			values.append(name)
 			if part.role == SPAN:
 				values.append(f"{len(value)}u")
-		calls.append(f'\tshow("{struct.name}", '
-		             f'{ident("situ", struct.name, "build")}'
+		calls.append(f'\tshow("{_label(unit)}", '
+		             f'{ident("situ", unit.struct.name, "build", unit.suffix)}'
 		             f'(buf, {ROOM}u, {", ".join([*values, "&n"])}));')
 	return "\n".join([*lines, "int main(void) {", *calls, "\treturn 0;",
 	                  "}", ""])
 
 
-def _cpp_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
+def _cpp_driver(stem: str, units: list[Unit]) -> str:
 	lines = ["#include <cstdio>", f'#include "{stem}_build.hpp"',
 	         f"static std::uint8_t buf[{ROOM}];", "static std::uint32_t n;",
 	         "static void show(const char *name, ::situ::rt::err e) {",
@@ -153,9 +152,9 @@ def _cpp_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 	         'std::printf("%02x", buf[i]);',
 	         '\tstd::puts("");', "}"]
 	calls = []
-	for index, struct in enumerate(structs):
+	for index, unit in enumerate(units):
 		values: list[str] = []
-		for at, (part, value) in enumerate(_given(_plan(struct, shape))):
+		for at, (part, value) in enumerate(_given(list(unit.parts))):
 			if isinstance(value, int):
 				values.append(f"static_cast<{cpp_scalar(part.placement)}>"
 				              f"({value:#x}ull)")
@@ -165,13 +164,16 @@ def _cpp_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 			values.append(name)
 			if part.role == SPAN:
 				values.append(f"{len(value)}u")
-		calls.append(f'\tshow("{struct.name}", '
-		             f"::situ_build::{class_name(struct)}"
+		held = class_name(unit.struct)
+		if unit.suffix:
+			held = f"{held}_{c_name(unit.suffix)}"
+		calls.append(f'\tshow("{_label(unit)}", '
+		             f"::situ_build::{held}"
 		             f'(buf, {ROOM}u, {", ".join([*values, "n"])}));')
 	return "\n".join([*lines, "int main() {", *calls, "}", ""])
 
 
-def _rust_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
+def _rust_driver(stem: str, units: list[Unit]) -> str:
 	lines = ["mod situ_rt;", "#[allow(dead_code)]", f"mod {stem};",
 	         "#[allow(dead_code)]", f"mod {stem}_build;",
 	         "fn show(name: &str, buf: &[u8], "
@@ -183,42 +185,45 @@ def _rust_driver(stem: str, structs: list[ResolvedStruct], shape: Shape) -> str:
 	         "\t\t\tprintln!();", "\t\t}",
 	         '\t\tErr(_) => println!("refused"),', "\t}", "}",
 	         "fn main() {", f"\tlet mut buf = [0u8; {ROOM}];"]
-	for struct in structs:
+	for unit in units:
 		values: list[str] = []
-		for part, value in _given(_plan(struct, shape)):
+		for part, value in _given(list(unit.parts)):
 			if isinstance(value, int):
 				values.append(f"{value:#x}u64 as "
 				              f"{rust_scalar(part.placement)}")
 				continue
 			items = ", ".join(f"{one:#x}u8" for one in value)
 			values.append(f"&[{items}]")
-		name = _ident(struct.name).removeprefix("r#")
+		name = _ident(unit.struct.name).removeprefix("r#")
+		if unit.suffix:
+			name = f"{name}_{_ident(unit.suffix).removeprefix('r#')}"
 		lines.extend([f"\tlet got = {stem}_build::build_{name}"
 		              f'({", ".join(["&mut buf", *values])});',
-		              f'\tshow("{struct.name}", &buf, got);'])
+		              f'\tshow("{_label(unit)}", &buf, got);'])
 	return "\n".join([*lines, "}", ""])
 
 
-def _python(tmp: Path, stem: str, structs: list[ResolvedStruct],
-		shape: Shape) -> str:
+def _python(tmp: Path, stem: str, units: list[Unit]) -> str:
 	shutil.copy(RUNTIME / "python" / "situ_runtime.py", tmp)
 	sys.path.insert(0, str(tmp))
 	try:
 		module = importlib.import_module(f"{stem}_build")
 		base   = importlib.import_module("situ_runtime")
 		lines  = []
-		for struct in structs:
+		for unit in units:
 			values = [_signed(part.placement, value)
 			          if isinstance(value, int) else value
-			          for part, value in _given(_plan(struct, shape))]
-			buf = bytearray(ROOM)
+			          for part, value in _given(list(unit.parts))]
+			buf  = bytearray(ROOM)
+			name = py_name(unit.struct.name)
+			if unit.suffix:
+				name = f"{name}_{py_name(unit.suffix)}"
 			try:
-				wrote = getattr(module, f"build_{py_name(struct.name)}")(
-					buf, *values)
+				wrote = getattr(module, f"build_{name}")(buf, *values)
 			except base.SituError:
-				lines.append(f"{struct.name} refused")
+				lines.append(f"{_label(unit)} refused")
 				continue
-			lines.append(f"{struct.name} {bytes(buf[:wrote]).hex()}")
+			lines.append(f"{_label(unit)} {bytes(buf[:wrote]).hex()}")
 		return "\n".join(lines) + "\n"
 	finally:
 		sys.path.remove(str(tmp))
@@ -247,8 +252,8 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 	resolved = resolve(parsed, solve(parsed))
 	shape    = Shape("", "situ", resolved.structs,
 	                 {decl.name: decl for decl in parsed.varints()})
-	structs  = plain_build.plain(resolved, shape)
-	if not structs:
+	units    = plain_build.units(resolved, shape)
+	if not units:
 		pytest.skip("no struct here is in the class")
 
 	stem = schema.stem
@@ -258,14 +263,14 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 		out.mkdir()
 		_emit(schema, target, out)
 
-	(dirs["c"] / "main.c").write_text(_c_driver(stem, structs, shape),
+	(dirs["c"] / "main.c").write_text(_c_driver(stem, units),
 	                                  encoding="ascii")
 	assert fourway.HOST_CC is not None and fourway.HOST_CXX is not None
 	_run([fourway.HOST_CC, "-std=c11", "-w", f"-I{RUNTIME / 'c'}", "-I.",
 	      "main.c", f"{stem}.c", str(RUNTIME / "c" / "situ.c"),
 	      "-o", "probe"], dirs["c"])
 
-	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, structs, shape),
+	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, units),
 	                                      encoding="ascii")
 	_run([fourway.HOST_CXX, "-std=c++17", "-Wall", "-Wextra", "-Werror",
 	      f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", "-I.", "main.cpp",
@@ -276,14 +281,14 @@ def test_four_builders_write_one_message(schema: Path, tmp_path: Path) -> None:
 	rt = dirs["rust"] / "situ_rt.rs"
 	rt.write_text(rt.read_text(encoding="ascii").replace("#![no_std]\n", ""),
 	              encoding="ascii")
-	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, structs, shape),
+	(dirs["rust"] / "main.rs").write_text(_rust_driver(stem, units),
 	                                      encoding="ascii")
 	assert fourway.RUSTC is not None
 	_run([fourway.RUSTC, "--edition", "2021", "-A", "warnings", "main.rs",
 	      "-o", "probe"], dirs["rust"])
 
-	said = {"python": _python(dirs["python"], stem, structs, shape),
+	said = {"python": _python(dirs["python"], stem, units),
 	        **{target: _run([str(dirs[target] / "probe")], dirs[target])
 	           for target in ("c", "cpp", "rust")}}
-	assert said["python"].count("\n") == len(structs)
+	assert said["python"].count("\n") == len(units)
 	assert len(set(said.values())) == 1, said

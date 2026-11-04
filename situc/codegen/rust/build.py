@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (BITS, LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO,
-                                   Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
+                                   SIZE, SPAN, ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
@@ -128,8 +128,18 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
 	if part.role == BITS:
 		return _bits(part, parts)
+	if part.role == ARMTAG:
+		return _store(part, str(part.value))
+	if part.role == PEEKED:
+		return []		# the bytes it reads belong to what follows
 	if part.role == SCALAR:
-		return _store(part, _ident(part.local))
+		# A value a named arm claims would make the message read as that
+		# arm, so the default builder refuses it.
+		local = _ident(part.local)
+		return [*([f"\tif {' || '.join(f'{local} as u64 == {v}' for v in part.others)} {{",
+		           "\t\treturn Err(Error::Constraint);", "\t}"]
+		          if part.others else []),
+		        *_store(part, local)]
 	if part.role == SIZE:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
@@ -180,8 +190,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	"""
 	shape = Shape("", "situ", resolved.structs,
 	              {decl.name: decl for decl in schema.varints()})
-	structs = plain(resolved, shape)
-	if not structs:
+	built = plain_build.units(resolved, shape)
+	if not built:
 		return {}
 
 	lines = [
@@ -202,10 +212,13 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		"use crate::situ_rt::{self, Error, Result};",
 	]
 
-	for struct in structs:
-		held  = _pascal(struct.name)
-		parts = plain_build.parts(struct, shape)
-		assert parts is not None
+	for unit in built:
+		struct = unit.struct
+		held   = _pascal(struct.name)
+		parts  = list(unit.parts)
+		name   = _ident(struct.name).removeprefix("r#")
+		if unit.suffix:
+			name = f"{name}_{_ident(unit.suffix).removeprefix('r#')}"
 		lines.extend([
 			"",
 			f"/// Build a {struct.name} into `situ_out` and validate the result.",
@@ -214,7 +227,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"/// what the members need, `Err(Constraint)` where a run is longer",
 			"/// than its size field can say, and whatever `validate` answers",
 			"/// for a result the schema refuses.",
-			f"pub fn build_{_ident(struct.name).removeprefix('r#')}(",
+			f"pub fn build_{name}(",
 			"\tsitu_out: &mut [u8],",
 			*(f"\t{one}," for one in _parameters(parts)),
 			") -> Result<usize> {",

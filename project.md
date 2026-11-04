@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.861 The builders write a variant, one arm at a time
+
+Moved to `doc/decision/26.861-the-builders-write-a-variant-one-arm-at-a-time.md`.
+
 ### 26.860 The three builders drive from C's plan, and serve runs and size fields
 
 Moved to `doc/decision/26.860-the-three-builders-drive-from-c-s-plan.md`.

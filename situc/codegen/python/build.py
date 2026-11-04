@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (BITS, LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO,
-                                   Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, PEEKED, RUN, SCALAR,
+                                   SIZE, SPAN, ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -159,8 +159,18 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 	path = part.placement.path
 	if part.role == BITS:
 		return _bits(part, parts)
+	if part.role == ARMTAG:
+		return _store(part, str(part.value))
+	if part.role == PEEKED:
+		return []		# the bytes it reads belong to what follows
 	if part.role == SCALAR:
-		return _store(part, py_name(part.local))
+		# A value a named arm claims would make the message read as that
+		# arm, so the default builder refuses it.
+		local = py_name(part.local)
+		return [*([f"\tif {local} in {tuple(part.others)!r}:",
+		           f'\t\traise ConstraintError("{path}: a named arm claims this")']
+		          if part.others else []),
+		        *_store(part, local)]
 	if part.role == SIZE:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
@@ -208,8 +218,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 	"""
 	shape = Shape("", "situ", resolved.structs,
 	              {decl.name: decl for decl in schema.varints()})
-	structs = plain(resolved, shape)
-	if not structs:
+	built = plain_build.units(resolved, shape)
+	if not built:
 		return {}
 
 	lines = [
@@ -242,20 +252,20 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		f"from {basename} import Message"
 		+ (", NATIVE_BIG" if any(
 			one.placement.endian is ast.Endian.NATIVE
-			for struct in structs
-			for one in plain_build.parts(struct, shape) or ()
-			if one.role in (SCALAR, SIZE)) else ""),
+			for unit in built for one in unit.parts
+			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
 		"from situ_runtime import BoundsError, ConstraintError, View",
 		"",
 	]
 
-	for struct in structs:
-		held  = py_name(struct.name)
-		parts = plain_build.parts(struct, shape)
-		assert parts is not None
+	for unit in built:
+		struct = unit.struct
+		held   = py_name(struct.name)
+		parts  = list(unit.parts)
+		name   = f"{held}_{py_name(unit.suffix)}" if unit.suffix else held
 		lines.extend([
 			"",
-			f"def build_{held}(out: bytearray"
+			f"def build_{name}(out: bytearray"
 			+ "".join(f", {one}" for one in _parameters(parts)) + ") -> int:",
 			f'\t"""Build a {struct.name} into `out` and return its length.',
 			"",

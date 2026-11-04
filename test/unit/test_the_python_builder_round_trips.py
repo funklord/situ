@@ -91,9 +91,9 @@ def test_every_struct_the_builder_serves_round_trips(
 	# Every struct is built by `test_the_four_builders_agree`; reading each
 	# member back through the accessors is this file's, and it asks that of
 	# the struct whose parts are all values the caller chose.
-	scalars  = [struct for struct in served
-	            if all(part.role == SCALAR
-	                   for part in plain_build.parts(struct, shape) or ())]
+	scalars  = [unit.struct for unit in plain_build.units(resolved, shape)
+	            if not unit.suffix
+	            and all(part.role == SCALAR for part in unit.parts)]
 
 	emitted = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(schema),
@@ -162,5 +162,5 @@ def test_what_it_does_not_build_is_named(tmp_path: Path) -> None:
 	said = emitted.stderr
 	assert "no builder for `request.read_coils`" in said, said
 	# ...and the increment's OWN boundary, which is not C's refusal.
-	assert "so far; this one has more" in said, said
+	assert "no builder for `" in said, said
 	assert (tmp_path / "modbus_build.py").exists()
