@@ -840,6 +840,10 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
  * tag as a ten-byte leb128 and a tag at or above 0x80 consumed the byte
  * after it. */
 #define TLV_FIXED_WIDTH 1u
+/* Bit 2: `native`, the host's order. Declined for more than one byte, as a
+ * member's whole-byte read is: the capture does not record which machine
+ * wrote it (26.863). */
+#define TLV_NATIVE 4u
 
 /* A tag or a length, as the image says it is encoded. */
 static situ_walk_err decode_number(const uint8_t *message, uint32_t len,
@@ -3179,7 +3183,8 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 	const uint32_t tag_terminal = row[13];
 	const int      tag_big      = (row[14] & 2u) != 0;
 	const int      tag_fixed    = (row[14] & TLV_FIXED_WIDTH) != 0;
-	if (selector == SITU_WALK_NONE) {
+	if (selector == SITU_WALK_NONE
+	                || ((row[14] & TLV_NATIVE) != 0u && tag_bytes > 1u)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -3298,6 +3303,9 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 			size = (uint32_t)computed;
 		} else if (rule_kind == TLV_PREFIXED) {
 			uint64_t length = 0u;
+			if ((found[22] & TLV_NATIVE) != 0u && len_bytes > 1u) {
+				return SITU_WALK_UNSUPPORTED;
+			}
 			if (decode_number(message, len, at, len_bytes, len_terminal,
 			                  len_big, len_fixed, &used, &length)
 			                != SITU_WALK_OK
@@ -5740,7 +5748,10 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			}
 			err = tlv_walk(image, message, len, shape, index, &items,
 			               &stop);
-			if (err != SITU_WALK_OK && err != SITU_WALK_UNSUPPORTED) {
+			if (err != SITU_WALK_OK
+			                && (err != SITU_WALK_UNSUPPORTED || row != NULL)) {
+				/* A region this cannot walk is a verdict it cannot give.
+				 * Only a placement that is no region passes through. */
 				return err;
 			}
 			if (err == SITU_WALK_OK && stop != SITU_WALK_OK) {

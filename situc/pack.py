@@ -813,6 +813,11 @@ TLV_RULE_KIND = {"fixed": 0, "prefixed": 1, "self_delimiting": 2, "error": 3,
 #: read a `u8` tag as a ten-byte leb128 and a tag byte at or above 0x80
 #: consumed the one after it. `prefixed(u8)` had it too.
 TLV_FIXED_WIDTH = 1
+#: Bit 1: most significant byte first.
+TLV_BIG = 2
+#: Bit 2: the reading host's order. An image is one file for every host, so
+#: the packer cannot settle `native` by choosing bit 1 (26.863).
+TLV_NATIVE = 4
 
 
 def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
@@ -859,9 +864,11 @@ def _number_params(decl: "ast.VarintDecl | None", name: str | None,
 	if scalar is None:
 		return _varint_params(None)
 
-	big = endian is not ast.Endian.LITTLE
-	return ((scalar.bits + 7) // BITS_PER_BYTE, 0,
-	        TLV_FIXED_WIDTH | (2 if big else 0))
+	if endian is ast.Endian.NATIVE:
+		order = TLV_NATIVE
+	else:
+		order = 0 if endian is ast.Endian.LITTLE else TLV_BIG
+	return (scalar.bits + 7) // BITS_PER_BYTE, 0, TLV_FIXED_WIDTH | order
 
 
 def _compile_over_tag(program: "Program", expr: ast.Expr,

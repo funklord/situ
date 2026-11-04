@@ -15,6 +15,7 @@ in the place whose input is least trusted.
 from __future__ import annotations
 
 import struct as _struct
+import sys
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
@@ -528,6 +529,15 @@ class Image:
 		return list(range(first, first + struct.placement_count))
 
 
+def _number_is_big(flags: int) -> bool:
+	"""A tlv tag's or length's order: bit 1, or bit 2 for the host's own.
+
+	This walker answers `native` as the machine it runs on, as it does for
+	a member; the C one declines (26.863).
+	"""
+	return bool(flags & 2) or (bool(flags & 4) and sys.byteorder == "big")
+
+
 def _string_at(pool: bytes, offset: int) -> str:
 	end = pool.find(b"\0", offset)
 	return pool[offset:end if end >= 0 else len(pool)].decode("ascii", "replace")
@@ -704,7 +714,7 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			if flags & 7:
 				image.tlv_unenforceable.add(where)
 			image.tlvs[where] = (selector, tag_bytes, tag_terminal,
-			                     bool(tag_flags & 2),
+			                     _number_is_big(tag_flags),
 			                     bool(tag_flags & 1))
 
 	if TLV_RULES in found:
@@ -731,7 +741,7 @@ def load(blob: bytes, accessors: object | None = None) -> Image:
 			# about, in the half nothing asked about (26.836).
 			image.tlv_rules.setdefault(where, []).append(
 				(label, kind, default, size,
-				 (len_bytes, len_terminal, bool(len_flags & 2),
+				 (len_bytes, len_terminal, _number_is_big(len_flags),
 				  bool(len_flags & 1)), size_code))
 
 	if INDEXES in found:
