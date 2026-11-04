@@ -28,8 +28,8 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (BITS, NESTED, REPEAT, RUN,	# noqa: E402
-                                   SCALAR, SIZE, SPAN, Part)
+from situc.codegen.c.build import (BITS, ENDED, NESTED, REPEAT,	# noqa: E402
+                                   RUN, SCALAR, SIZE, SPAN, Part)
 from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -117,6 +117,12 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 		elif part.role == NESTED:
 			found.append((part, inner.get(part.placement.type_name or "",
 			                              [b"\x00"])[0]))
+		elif part.role == ENDED:
+			# What needs escaping, where the schema escapes: a run of
+			# ordinary bytes would never exercise it.
+			escape = part.placement.delimiter_escape
+			found.append((part, _run_bytes(3, at) if escape is None else
+			              b"a" + part.delimiter + bytes([escape]) + b"z"))
 		elif part.role == REPEAT:
 			element = inner.get(part.placement.type_name or "", [b"\x00"])[0]
 			found.append((part, element * (part.digits or 2)))

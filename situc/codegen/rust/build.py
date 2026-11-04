@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
                                    REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
                                    Shape)
 from situc.codegen.plain_build import plain
@@ -170,10 +170,56 @@ def _walk(part: Part, parts: list[Part]) -> list[str]:
 	]
 
 
+def _needle(delimiter: bytes) -> list[str]:
+	"""The delimiter that ends a run, and the cursor past it."""
+	wide   = len(delimiter)
+	spelt  = ", ".join(f"{byte:#04x}" for byte in delimiter)
+	return [*_room(f"{wide}"),
+	        f"\tsitu_out[situ_at..situ_at + {wide}]"
+	        f".copy_from_slice(&[{spelt}]);",
+	        f"\tsitu_at += {wide};"]
+
+
+def _ended(part: Part) -> list[str]:
+	"""Bytes, then the delimiter that ends them.
+
+	C's two forms. With no escape a run holding the delimiter would read
+	back short, and is refused. With one the caller hands over content, and
+	exactly two kinds of byte carry the escape: the delimiter's first byte
+	where it begins one, and the escape itself.
+	"""
+	local  = _ident(part.local)
+	spelt  = ", ".join(f"{byte:#04x}" for byte in part.delimiter)
+	escape = part.placement.delimiter_escape
+	if escape is None:
+		return [f"\tif {local}.windows({len(part.delimiter)})"
+		        f".any(|situ_w| situ_w == [{spelt}]) {{",
+		        "\t\treturn Err(Error::Constraint);", "\t}",
+		        *_room(f"{local}.len()"),
+		        f"\tsitu_out[situ_at..situ_at + {local}.len()]"
+		        f".copy_from_slice({local});",
+		        f"\tsitu_at += {local}.len();",
+		        *_needle(part.delimiter)]
+	return [f"\tfor situ_scan in 0..{local}.len() {{",
+	        f"\t\tif {local}[situ_scan] == {escape:#04x}"
+	        f" || {local}[situ_scan..].starts_with(&[{spelt}]) {{",
+	        "\t\t\tif situ_out.len() - situ_at < 1 {",
+	        "\t\t\t\treturn Err(Error::Bounds);",
+	        "\t\t\t}",
+	        f"\t\t\tsitu_out[situ_at] = {escape:#04x};",
+	        "\t\t\tsitu_at += 1;",
+	        "\t\t}",
+	        "\t\tif situ_out.len() - situ_at < 1 {",
+	        "\t\t\treturn Err(Error::Bounds);",
+	        "\t\t}",
+	        f"\t\tsitu_out[situ_at] = {local}[situ_scan];",
+	        "\t\tsitu_at += 1;",
+	        "\t}",
+	        *_needle(part.delimiter)]
+
+
 def _repeat(part: Part, parts: list[Part]) -> list[str]:
 	local  = _ident(part.local)
-	wide   = len(part.delimiter)
-	needle = ", ".join(f"{byte:#04x}" for byte in part.delimiter)
 	return [
 		*([] if plain_build.walked_at_size(part, parts)
 		  else _walk(part, parts)),
@@ -184,10 +230,7 @@ def _repeat(part: Part, parts: list[Part]) -> list[str]:
 		f"\tsitu_out[situ_at..situ_at + {local}.len()]"
 		f".copy_from_slice({local});",
 		f"\tsitu_at += {local}.len();",
-		*([*_room(f"{wide}"),
-		   f"\tsitu_out[situ_at..situ_at + {wide}]"
-		   f".copy_from_slice(&[{needle}]);",
-		   f"\tsitu_at += {wide};"] if wide else []),
+		*(_needle(part.delimiter) if part.delimiter else []),
 	]
 
 
@@ -227,6 +270,8 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		return _nested(part)
 	if part.role == REPEAT:
 		return _repeat(part, parts)
+	if part.role == ENDED:
+		return _ended(part)
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:

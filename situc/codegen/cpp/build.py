@@ -21,7 +21,7 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
                                    REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
                                    Shape)
 from situc.codegen.c.names import c_name
@@ -205,11 +205,73 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 	]
 
 
+def _needle(delimiter: bytes) -> list[str]:
+	"""The delimiter that ends a run, and the cursor past it."""
+	wide  = len(delimiter)
+	spelt = ", ".join(f"0x{byte:02X}u" for byte in delimiter)
+	return [*_room(f"{wide}u"),
+	        "\t{",
+	        f"\t\tstatic constexpr std::uint8_t situ_end[{wide}] = {{ {spelt} }};",
+	        "",
+	        f"\t\tstd::memcpy(situ_out + situ_at, situ_end, {wide}u);",
+	        "\t}",
+	        f"\tsitu_at += {wide}u;"]
+
+
+def _ended(part: Part) -> list[str]:
+	"""Bytes, then the delimiter that ends them.
+
+	C's two forms. With no escape a run holding the delimiter would read
+	back short, and is refused. With one the caller hands over content, and
+	exactly two kinds of byte carry the escape: the delimiter's first byte
+	where it begins one, and the escape itself.
+	"""
+	local  = part.local
+	wide   = len(part.delimiter)
+	spelt  = ", ".join(f"0x{byte:02X}u" for byte in part.delimiter)
+	escape = part.placement.delimiter_escape
+	hit    = (f"situ_scan + {wide}u <= {local}_len\n"
+	          f"\t\t\t    && std::memcmp({local} + situ_scan, situ_end, "
+	          f"{wide}u) == 0")
+	start  = [f"\tif ({local}_len != 0u && {local} == nullptr) {{", BOUNDS, "\t}",
+	          "\t{",
+	          f"\t\tstatic constexpr std::uint8_t situ_end[{wide}] = {{ {spelt} }};",
+	          "",
+	          f"\t\tfor (std::uint32_t situ_scan = 0; situ_scan < {local}_len;"
+	          " situ_scan++) {"]
+	if escape is None:
+		return [*start,
+		        f"\t\t\tif ({hit}) {{",
+		        "\t\t\t\treturn ::situ::rt::err::constraint;",
+		        "\t\t\t}",
+		        "\t\t}",
+		        "\t}",
+		        *_room(f"{local}_len"),
+		        f"\tif ({local}_len != 0u) {{",
+		        f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
+		        "\t}",
+		        f"\tsitu_at += {local}_len;",
+		        *_needle(part.delimiter)]
+	return [*start,
+	        f"\t\t\tif ({local}[situ_scan] == 0x{escape:02X}u",
+	        f"\t\t\t    || ({hit})) {{",
+	        "\t\t\t\tif (situ_cap - situ_at < 1u) {",
+	        "\t\t\t\t\treturn ::situ::rt::err::bounds;",
+	        "\t\t\t\t}",
+	        f"\t\t\t\tsitu_out[situ_at++] = 0x{escape:02X}u;",
+	        "\t\t\t}",
+	        "\t\t\tif (situ_cap - situ_at < 1u) {",
+	        "\t\t\t\treturn ::situ::rt::err::bounds;",
+	        "\t\t\t}",
+	        f"\t\t\tsitu_out[situ_at++] = {local}[situ_scan];",
+	        "\t\t}",
+	        "\t}",
+	        *_needle(part.delimiter)]
+
+
 def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		parts: list[Part]) -> list[str]:
 	local = part.local
-	wide  = len(part.delimiter)
-	spelt = ", ".join(f"0x{byte:02X}u" for byte in part.delimiter)
 	return [
 		*([] if plain_build.walked_at_size(part, parts)
 		  else _walk(structs, part, parts)),
@@ -220,13 +282,7 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		f"\t\tstd::memcpy(situ_out + situ_at, {local}, {local}_len);",
 		"\t}",
 		f"\tsitu_at += {local}_len;",
-		*([*_room(f"{wide}u"),
-		   "\t{",
-		   f"\t\tstatic constexpr std::uint8_t situ_end[{wide}] = {{ {spelt} }};",
-		   "",
-		   f"\t\tstd::memcpy(situ_out + situ_at, situ_end, {wide}u);",
-		   "\t}",
-		   f"\tsitu_at += {wide}u;"] if wide else []),
+		*(_needle(part.delimiter) if part.delimiter else []),
 	]
 
 
@@ -266,6 +322,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _nested(part, class_name(structs[part.placement.type_name or ""]))
 	if part.role == REPEAT:
 		return _repeat(structs, part, parts)
+	if part.role == ENDED:
+		return _ended(part)
 	if part.role == ARMTAG:
 		return _store(part, f"{part.value}u")
 	if part.role == PEEKED:

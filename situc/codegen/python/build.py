@@ -32,7 +32,7 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
                                    REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
                                    Shape)
 from situc.codegen.plain_build import plain
@@ -151,11 +151,50 @@ def _walk(structs: Mapping[str, ResolvedStruct], part: Part,
 	]
 
 
+def _needle(part: Part) -> list[str]:
+	"""The delimiter that ends a run, and the cursor past it."""
+	wide = len(part.delimiter)
+	return [*_room(f"{wide}", part.placement.path),
+	        f"\tsitu_out[situ_at:situ_at + {wide}] = {part.delimiter!r}",
+	        f"\tsitu_at += {wide}"]
+
+
+def _ended(part: Part) -> list[str]:
+	"""Bytes, then the delimiter that ends them.
+
+	C's two forms. With no escape a run holding the delimiter would read
+	back short, and is refused. With one the caller hands over content, and
+	exactly two kinds of byte carry the escape: the delimiter's first byte
+	where it begins one, and the escape itself.
+	"""
+	local  = py_name(part.local)
+	path   = part.placement.path
+	wide   = len(part.delimiter)
+	needle = repr(part.delimiter)
+	escape = part.placement.delimiter_escape
+	if escape is None:
+		return [f"\tif {needle} in {local}:",
+		        f'\t\traise ConstraintError("{path}: holds its delimiter")',
+		        *_room(f"len({local})", path),
+		        f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
+		        f"\tsitu_at += len({local})",
+		        *_needle(part)]
+	return [f"\tfor situ_scan in range(len({local})):",
+	        f"\t\tif {local}[situ_scan] == {escape} or "
+	        f"{local}[situ_scan:situ_scan + {wide}] == {needle}:",
+	        *(f"\t\t{line}" for line in _room("1", path)),
+	        f"\t\t\tsitu_out[situ_at] = {escape}",
+	        "\t\t\tsitu_at += 1",
+	        *(f"\t{line}" for line in _room("1", path)),
+	        f"\t\tsitu_out[situ_at] = {local}[situ_scan]",
+	        "\t\tsitu_at += 1",
+	        *_needle(part)]
+
+
 def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		parts: list[Part]) -> list[str]:
 	local = py_name(part.local)
 	path  = part.placement.path
-	wide  = len(part.delimiter)
 	return [
 		*([] if plain_build.walked_at_size(part, parts)
 		  else _walk(structs, part, parts)),
@@ -165,9 +204,7 @@ def _repeat(structs: Mapping[str, ResolvedStruct], part: Part,
 		*_room(f"len({local})", path),
 		f"\tsitu_out[situ_at:situ_at + len({local})] = {local}",
 		f"\tsitu_at += len({local})",
-		*([*_room(f"{wide}", path),
-		   f"\tsitu_out[situ_at:situ_at + {wide}] = {part.delimiter!r}",
-		   f"\tsitu_at += {wide}"] if wide else []),
+		*(_needle(part) if part.delimiter else []),
 	]
 
 
@@ -266,6 +303,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _nested(part)
 	if part.role == REPEAT:
 		return _repeat(structs, part, parts)
+	if part.role == ENDED:
+		return _ended(part)
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:

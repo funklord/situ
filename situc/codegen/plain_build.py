@@ -12,7 +12,7 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (ARMTAG, BITS, LITERAL, NESTED, PEEKED,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
                                    REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
                                    Shape,
                                    _supplies_a_value, arm_name, arms, plan,
@@ -27,12 +27,12 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, LITERAL, NESTED, PEEKED, REPEAT, RUN, SCALAR,
-                    SIZE, SPAN, ZERO})
+SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED, REPEAT, RUN,
+                    SCALAR, SIZE, SPAN, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.
-MEASURED = frozenset({NESTED, REPEAT, SPAN})
+MEASURED = frozenset({ENDED, NESTED, REPEAT, SPAN})
 
 
 def _serves(part: Part, parts: list[Part]) -> bool:
@@ -47,7 +47,7 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.others and part.role not in (NESTED, SCALAR):
 		return False
-	if part.role in (RUN, SPAN) and held.kind != "field":
+	if part.role in (ENDED, RUN, SPAN) and held.kind != "field":
 		return False
 	if part.role in (ARMTAG, SCALAR, SIZE) \
 			and (held.scalar is None or held.marker is not None
@@ -67,9 +67,8 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	if part.role == SIZE or (part.role == BITS and part.sizes is not None):
 		measured = next((one for one in parts if one.role in MEASURED
 		                 and one.placement is part.sizes), None)
-		if measured is None or (measured.role == REPEAT
-		                        and measured.delimiter):
-			return False
+		if measured is None or measured.delimiter:
+			return False		# the delimiter is not the caller's to count
 		return not part.inner or (part.role == SIZE and part.solved is None
 		                          and measured.role == REPEAT)
 	return True

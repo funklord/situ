@@ -242,3 +242,32 @@ struct holds { u8 n; none items[n]; }
 		_with(units["holds."], b"\x00"),
 	])
 	assert _extra(said, 1) == ["refused"]
+
+
+# -- a run of bytes a delimiter ends (26.866) -------------------------------
+
+ENDED_RUNS = r"""target buffer;
+struct plain   { u8 name[] until ")"; u8 z; }
+struct wide    { u8 name[] until "--"; u8 z; }
+struct escaped { u8 name[] until ")" [escape = "\\"]; u8 z; }
+"""
+
+
+def test_a_delimiter_ends_a_run_in_all_four(tmp_path: Path) -> None:
+	schema = tmp_path / "ended.situ"
+	schema.write_text(ENDED_RUNS, encoding="ascii")
+	units = _units(schema)
+	cases = [
+		(_with(units["plain."], b"ab", 9), "6162" "29" "09"),
+		(_with(units["plain."], b"", 9), "29" "09"),
+		# It would read back short, and no escape is stated.
+		(_with(units["plain."], b"a)b", 9), "refused"),
+		(_with(units["wide."], b"a-b", 9), "612d62" "2d2d" "09"),
+		(_with(units["wide."], b"a--b", 9), "refused"),
+		# The delimiter and the escape carry it, and nothing else does.
+		(_with(units["escaped."], b"a)b", 9), "61" "5c29" "62" "29" "09"),
+		(_with(units["escaped."], b"\\", 9), "5c5c" "29" "09"),
+	]
+	said = four_say(schema, tmp_path, list(units.values()),
+	                [case for case, _ in cases])
+	assert _extra(said, len(cases)) == [made for _, made in cases]

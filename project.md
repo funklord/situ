@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.866 The three builders write a delimited run
+
+Moved to `doc/decision/26.866-the-builders-write-a-delimited-run.md`.
+
 ### 26.865 The three builders walk a run of structs
 
 Moved to `doc/decision/26.865-the-builders-walk-a-run-of-structs.md`.
