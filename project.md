@@ -8264,6 +8264,11 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.855 Rung 2 writes in Python too, the first increment
+
+Moved to
+`doc/decision/26.855-rung-2-writes-in-python-too-the-first-increment.md`.
+
 ### 26.854 A rung the ladder promises, and one target has
 
 Moved to

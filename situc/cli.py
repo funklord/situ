@@ -1040,12 +1040,25 @@ def cmd_build(args: argparse.Namespace) -> int:
 		# rung they were given from one that does not exist for their
 		# language. That is the silence this file spends several refusals
 		# avoiding one struct at a time (26.854).
-		if args.target != "c":
+		if args.target == "python":
+			from situc.codegen.python import build as build_py
+
+			parsed_py = parse(source)
+			files.update(build_py.generate(parsed_py, resolved,
+			                               args.schema.stem))
+			shape_py = build_py.Shape(
+				"", args.prefix, resolved.structs,
+				{d.name: d for d in parsed_py.varints()})
+			for name, why in build_py.declined(resolved, shape_py):
+				print(f"situc: no builder for `{name}`: {why}",
+				      file=sys.stderr)
+
+		elif args.target != "c":
 			print(f"situc: --layer {args.layer} emits no builder for "
 			      f"`--target {args.target}`: the write half of rung 2 is "
-			      f"C only so far, so this is `--layer view`'s output plus "
-			      f"whatever the rungs above contribute. Decision 0032 has "
-			      f"the ladder and 26.610 the builder's shape.",
+			      f"C and Python so far, so this is `--layer view`'s output "
+			      f"plus whatever the rungs above contribute. Decision 0032 "
+			      f"has the ladder and 26.610 the builder's shape.",
 			      file=sys.stderr)
 
 		if args.target == "c":
