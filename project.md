@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.864 A walker asks the marker for a tlv tag or length
+
+Moved to `doc/decision/26.864-a-walker-asks-the-marker-for-a-tlv-number.md`.
+
 ### 26.863 A walker does not read a `native` tlv tag or length as big
 
 Moved to `doc/decision/26.863-a-walker-does-not-read-native-as-big.md`.

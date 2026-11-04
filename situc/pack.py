@@ -818,6 +818,8 @@ TLV_BIG = 2
 #: Bit 2: the reading host's order. An image is one file for every host, so
 #: the packer cannot settle `native` by choosing bit 1 (26.863).
 TLV_NATIVE = 4
+#: Bit 3: the message's own endian marker decides (26.864).
+TLV_MARKER = 8
 
 
 def _varint_params(decl: "ast.VarintDecl | None") -> tuple[int, int, int]:
@@ -849,7 +851,8 @@ def _tlv_tag_name(placement: "Placement") -> str | None:
 
 
 def _number_params(decl: "ast.VarintDecl | None", name: str | None,
-		endian: "ast.Endian | None") -> tuple[int, int, int]:
+		endian: "ast.Endian | None",
+		governed: bool = False) -> tuple[int, int, int]:
 	"""The parameters for a tag or a length: a varint's, or a scalar's.
 
 	A declared varint goes to `_varint_params`. Anything else that NAMES a
@@ -864,7 +867,9 @@ def _number_params(decl: "ast.VarintDecl | None", name: str | None,
 	if scalar is None:
 		return _varint_params(None)
 
-	if endian is ast.Endian.NATIVE:
+	if governed:
+		order = TLV_MARKER
+	elif endian is ast.Endian.NATIVE:
 		order = TLV_NATIVE
 	else:
 		order = 0 if endian is ast.Endian.LITTLE else TLV_BIG
@@ -2853,7 +2858,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 			           | (4 if traverse.tlv_single_tags(placement) else 0))
 			tag_bytes, tag_terminal, tag_flags = _number_params(
 				varint_decls.get(placement.tlv_tag_varint or ""),
-				_tlv_tag_name(placement), placement.endian)
+				_tlv_tag_name(placement), placement.endian,
+				placement.marker is not None)
 			tlvs_blob += _struct.pack(
 				"<IBBBxIBBBx", at,
 				regions,
@@ -2876,7 +2882,8 @@ def pack(schema: ast.Schema, resolved: ResolvedSchema,
 					continue
 				len_bytes, len_terminal, len_flags = _number_params(
 					varint_decls.get(value_rule.length_type or ""),
-					value_rule.length_type, placement.endian)
+					value_rule.length_type, placement.endian,
+					placement.marker is not None)
 				tlv_rules_blob += _struct.pack(
 					"<IqBBxxIBBBxI", at,
 					0 if value_rule.label is None else value_rule.label,

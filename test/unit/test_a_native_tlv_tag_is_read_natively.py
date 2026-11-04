@@ -79,3 +79,53 @@ def test_neither_walker_reads_it_as_big(tmp_path: Path, schema: str,
 	shape = shape_named_text(schema, "opts")
 	assert python_verdict(blob, message, shape) == "0"
 	assert c_verdict(tmp_path, blob, message, shape) == "cannot-say"
+
+
+# -- the same read under an endian marker (26.864) --------------------------
+#
+# An order the message states rather than the host. The packer had the same
+# "big unless little", so a little marker's tag was read big.
+
+MARKED_TAG = """target buffer;
+endian_marker order : u16 { little = 0x4949, big = 0x4D4D }
+struct opts [endian = from(order)] {
+	endian_marker order;
+	tlv items (
+		tag_type = u16,
+		tag_decode = { kind = tag >> 8, length = tag & 0x0F },
+		value_size = switch (kind) { default: length },
+	);
+}
+"""
+
+MARKED_LENGTH = """target buffer;
+endian_marker order : u16 { little = 0x4949, big = 0x4D4D }
+struct opts [endian = from(order)] {
+	endian_marker order;
+	tlv items (
+		tag_type = u8,
+		tag_decode = { kind = tag },
+		value_size = switch (kind) { default: prefixed(u16) },
+	);
+}
+"""
+
+MARKED = {
+	"tag, little":    (MARKED_TAG, b"II\x02\x07ab"),
+	"tag, big":       (MARKED_TAG, b"MM\x07\x02ab"),
+	"length, little": (MARKED_LENGTH, b"II\x09\x02\x00ab"),
+	"length, big":    (MARKED_LENGTH, b"MM\x09\x00\x02ab"),
+}
+
+
+@pytest.mark.parametrize("schema, message", MARKED.values(), ids=MARKED)
+def test_the_four_read_the_order_the_message_states(tmp_path: Path,
+		schema: str, message: bytes) -> None:
+	test_the_four_read_it_as_the_host_does(tmp_path, schema, message)
+
+
+@pytest.mark.skipif(COMPILER is None, reason="no C compiler")
+@pytest.mark.parametrize("schema, message", MARKED.values(), ids=MARKED)
+def test_a_walker_reads_the_order_or_declines(tmp_path: Path, schema: str,
+		message: bytes) -> None:
+	test_neither_walker_reads_it_as_big(tmp_path, schema, message)

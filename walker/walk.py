@@ -1808,6 +1808,12 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 	if selector_code == NONE:
 		raise Refused(f"placement {index} has no tlv selector in this image")
 
+	# The message says, for the tag and for a `prefixed` length alike: the
+	# image holds no order for a governed region (26.864).
+	governed = view.image.placements[index].marker_governed
+	if governed:
+		tag_big = marker_order(view) == "big"
+
 	at    = view.at + offset_bits(view, index) // BITS_PER_BYTE
 	count = 0
 
@@ -1874,7 +1880,10 @@ def _tlv_walk(view: View, index: int) -> tuple[int, str | None]:
 				return count, "bounds"
 		elif kind == TLV_PREFIXED:
 			try:
-				used, length = decode_number(view, at, *length_rule)
+				width, terminal, big, fixed = length_rule
+				used, length = decode_number(view, at, width, terminal,
+				                             tag_big if governed else big,
+				                             fixed)
 			except Refused:
 				return count, "bounds"
 			if used == 0:

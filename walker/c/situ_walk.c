@@ -840,10 +840,11 @@ static situ_walk_err decode_varint(const uint8_t *message, uint32_t len,
  * tag as a ten-byte leb128 and a tag at or above 0x80 consumed the byte
  * after it. */
 #define TLV_FIXED_WIDTH 1u
-/* Bit 2: `native`, the host's order. Declined for more than one byte, as a
- * member's whole-byte read is: the capture does not record which machine
- * wrote it (26.863). */
-#define TLV_NATIVE 4u
+/* Bit 2: `native`, the host's order. Bit 3: the message's endian marker.
+ * Both declined for more than one byte, as a member's whole-byte read is:
+ * the capture does not record which machine wrote it, and this build does
+ * not resolve a marker (26.863, 26.864). */
+#define TLV_UNORDERED (4u | 8u)
 
 /* A tag or a length, as the image says it is encoded. */
 static situ_walk_err decode_number(const uint8_t *message, uint32_t len,
@@ -3184,7 +3185,7 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 	const int      tag_big      = (row[14] & 2u) != 0;
 	const int      tag_fixed    = (row[14] & TLV_FIXED_WIDTH) != 0;
 	if (selector == SITU_WALK_NONE
-	                || ((row[14] & TLV_NATIVE) != 0u && tag_bytes > 1u)) {
+	                || ((row[14] & TLV_UNORDERED) != 0u && tag_bytes > 1u)) {
 		return SITU_WALK_UNSUPPORTED;
 	}
 
@@ -3303,7 +3304,7 @@ static situ_walk_err tlv_walk(const situ_walk_image *image,
 			size = (uint32_t)computed;
 		} else if (rule_kind == TLV_PREFIXED) {
 			uint64_t length = 0u;
-			if ((found[22] & TLV_NATIVE) != 0u && len_bytes > 1u) {
+			if ((found[22] & TLV_UNORDERED) != 0u && len_bytes > 1u) {
 				return SITU_WALK_UNSUPPORTED;
 			}
 			if (decode_number(message, len, at, len_bytes, len_terminal,
