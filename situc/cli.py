@@ -1028,38 +1028,28 @@ def cmd_build(args: argparse.Namespace) -> int:
 			print(f"situc: no owned form for `{name}` at any rung: {why}",
 			      file=sys.stderr)
 
-		# The write half of the same rung, and C only so far. An
-		# append-only layout gets a builder and anything else is named,
-		# because a rung is absent rather than defaulted where the schema
-		# states something it cannot hold to (0032, 26.610).
-		#
-		# ...and the TARGET's absence is named for the same reason the
-		# struct's is. Asking `--layer edit` of the other three emitted
-		# exactly what `--layer view` emits -- byte-identical, measured on
-		# `example/dns` -- and said nothing, so a caller could not tell a
-		# rung they were given from one that does not exist for their
-		# language. That is the silence this file spends several refusals
-		# avoiding one struct at a time (26.854).
-		if args.target == "python":
+		# The write half of the same rung. An append-only layout gets a
+		# builder and anything else is named, because a rung is absent
+		# rather than defaulted where the schema states something it cannot
+		# hold to (0032, 26.610). C's reaches furthest; the other three
+		# serve one class of struct so far and name the rest (26.855,
+		# 26.858).
+		if args.target != "c":
+			from situc.codegen.cpp import build as build_cpp
 			from situc.codegen.python import build as build_py
+			from situc.codegen.rust import build as build_rs
 
-			parsed_py = parse(source)
-			files.update(build_py.generate(parsed_py, resolved,
-			                               args.schema.stem))
-			shape_py = build_py.Shape(
+			builder = {"cpp": build_cpp, "python": build_py,
+			           "rust": build_rs}[args.target]
+			parsed_build = parse(source)
+			files.update(builder.generate(parsed_build, resolved,
+			                              args.schema.stem))
+			shape_build = builder.Shape(
 				"", args.prefix, resolved.structs,
-				{d.name: d for d in parsed_py.varints()})
-			for name, why in build_py.declined(resolved, shape_py):
+				{d.name: d for d in parsed_build.varints()})
+			for name, why in builder.declined(resolved, shape_build):
 				print(f"situc: no builder for `{name}`: {why}",
 				      file=sys.stderr)
-
-		elif args.target != "c":
-			print(f"situc: --layer {args.layer} emits no builder for "
-			      f"`--target {args.target}`: the write half of rung 2 is "
-			      f"C and Python so far, so this is `--layer view`'s output "
-			      f"plus whatever the rungs above contribute. Decision 0032 "
-			      f"has the ladder and 26.610 the builder's shape.",
-			      file=sys.stderr)
 
 		if args.target == "c":
 			from situc.codegen.c import build

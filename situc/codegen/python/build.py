@@ -4,8 +4,8 @@ C has had this since 26.610 and no other backend had any of it, so
 `--layer edit` emitted `--layer view`'s output in three languages and said
 nothing about it until 26.854. This is the first increment of the port and
 it is deliberately one CLASS of struct rather than one feature of the
-builder: every member a whole-byte fixed scalar, which is 48 of the 157
-structs C's builder serves. Every other struct is named on stderr, which
+builder: every member a whole-byte fixed scalar, stated in `plain_build`
+for all three languages that have one. Every other struct is named on stderr, which
 is C's own stance -- a caller who asked for a builder and found their
 struct missing would conclude the generator was broken.
 
@@ -29,11 +29,13 @@ four-way differential is for.
 from __future__ import annotations
 
 from situc import ast
-from situc.codegen.c.build import Shape, refusals
+from situc.codegen import plain_build
+from situc.codegen.c.build import Shape
+from situc.codegen.plain_build import members as _members, plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE, Placement
-from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import is_own_member, local_name
+from situc.resolve import ResolvedSchema
+from situc.traverse import local_name
 from situc import __version__
 
 #: `Shape` is C's and is re-exported rather than rebuilt: the CLI
@@ -42,77 +44,10 @@ from situc import __version__
 __all__ = ["generate", "plain", "declined", "Shape"]
 
 
-def _is_plain(struct: ResolvedStruct) -> bool:
-	"""Every member a whole-byte fixed scalar at a static offset.
-
-	The class this increment serves. It excludes a bit-packed field for a
-	reason worth naming rather than deferring: the packed run is written
-	zeroed and then set in place, which is a second write to a byte this
-	builder has already advanced past, and append-only is the property the
-	rung was given permission for.
-	"""
-	seen = False
-	for entry in struct.entries:
-		placement = entry.placement
-		if not is_own_member(struct, placement):
-			continue
-		seen = True
-		scalar = placement.scalar
-		if scalar is None or placement.kind != "field":
-			return False
-		if placement.array_count is not None or placement.sized_by is not None:
-			return False
-		if placement.radix is not None or placement.varint is not None:
-			return False
-		if placement.delimiters or scalar.is_bit_packed:
-			return False
-		if placement.offset_bits is None or not placement.size_bits:
-			return False		# a zero-width member has nothing to write
-
-		if placement.offset_bits % BITS_PER_BYTE \
-				or placement.size_bits % BITS_PER_BYTE:
-			return False
-		if placement.parameter or placement.since is not None:
-			return False
-	return seen
-
-
-def plain(resolved: ResolvedSchema, shape: Shape) -> list[ResolvedStruct]:
-	"""The structs this increment builds, in declaration order.
-
-	Intersected with C's own set rather than computed alone: a struct C
-	refuses is one 26.610 decided a builder cannot serve, and a second
-	opinion here would be a second rule to keep in step.
-	"""
-	refused = {name for name, _why in refusals(resolved, shape)}
-	return [struct for struct in resolved.structs.values()
-	        if struct.name not in refused and _is_plain(struct)]
-
-
 def declined(resolved: ResolvedSchema,
 		shape: Shape) -> list[tuple[str, str]]:
-	"""What this increment does not build, and why, for stderr.
-
-	C's refusals pass through unchanged -- they are the same decisions --
-	and a struct C serves that this does not is named with the class it
-	falls outside, so the increment's own boundary is readable rather than
-	inferred from an absence.
-	"""
-	out = list(refusals(resolved, shape))
-	refused = {name for name, _why in out}
-	for struct in resolved.structs.values():
-		if struct.name in refused or _is_plain(struct):
-			continue
-		out.append((struct.name,
-		            "Python's builder takes a struct whose every member is "
-		            "a whole-byte fixed scalar so far; this one is not "
-		            "(26.855)"))
-	return out
-
-
-def _members(struct: ResolvedStruct) -> list[Placement]:
-	return [entry.placement for entry in struct.entries
-	        if is_own_member(struct, entry.placement)]
+	"""What this builder does not build, and why, for stderr."""
+	return plain_build.declined(resolved, shape, "Python")
 
 
 def _write(placement: Placement, local: str) -> list[str]:
