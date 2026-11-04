@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.857 C's builder and owned form write `native` as the view reads it
+
+Moved to `doc/decision/26.857-a-native-member-is-written-natively.md`.
+
 ### 26.856 Six instruments wrong in one session, and the two shapes
 
 Moved to

@@ -35,7 +35,7 @@ from collections.abc import Mapping
 
 from situc import ast, invariant, traverse
 from situc.codegen.c.names import bare_name, ident, macro
-from situc.codegen.c.owned import _ctype, storage_width
+from situc.codegen.c.owned import _ctype, order_suffix, storage_width
 from situc.layout import Arm, BITS_PER_BYTE, Placement
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.types import ScalarKind
@@ -1492,7 +1492,11 @@ def _store(part: Part, value: str) -> list[str]:
 	width = storage_width(scalar.bits)
 	if scalar.bits == BITS_PER_BYTE:
 		return [f"\t{OUT}[{AT}] = (uint8_t){value};"]
-	end = "le" if part.placement.endian is ast.Endian.LITTLE else "be"
+	# The accessors' own helper, not a second answer: "little or else big"
+	# wrote a `native` member big-endian on a little-endian host, so a built
+	# netlink header read back byte-swapped through the view beside it
+	# (26.857).
+	end = order_suffix(part.placement.endian)
 	return [f"\tsitu_put_{end}{scalar.bits}({OUT} + {AT},",
 	        f"\t              (uint{width}_t){value});"]
 
@@ -2366,7 +2370,7 @@ def _one(struct: ResolvedStruct, shape: Shape,
 			each  = part.bit_at
 			count = f"{part.bytes}u" if part.bytes \
 			        else f"{part.local}_count"
-			end   = ("le" if held.endian is ast.Endian.LITTLE else "be")
+			end   = order_suffix(held.endian)
 			width = held.scalar.bits
 			lines += [
 				f"\t/* {local}: {count} element(s) of {width} bits, each "

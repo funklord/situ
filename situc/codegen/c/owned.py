@@ -50,6 +50,19 @@ from situc import __version__
 WORD_WIDTHS = (8, 16, 32, 64)
 
 
+def order_suffix(endian: ast.Endian | None) -> str:
+	"""`emit._order_suffix`, asked rather than answered again (26.857).
+
+	"Little or else big" read and wrote a `native` member big-endian, so on
+	a little-endian host the owned form and the builder disagreed with the
+	view beside them about every multi-byte native member. Imported here
+	because `emit` imports this module.
+	"""
+	from situc.codegen.c.emit import _order_suffix
+
+	return _order_suffix(endian)
+
+
 def storage_width(bits: int) -> int:
 	for width in WORD_WIDTHS:
 		if bits <= width:
@@ -222,7 +235,7 @@ def _read(placement: Placement, prefix: str,
 			       f" ? situ_get_le{scalar.bits}(data + {offset}u)"
 			       f" : situ_get_be{scalar.bits}(data + {offset}u))")
 		else:
-			end = "le" if placement.endian is ast.Endian.LITTLE else "be"
+			end = order_suffix(placement.endian)
 			raw = f"situ_get_{end}{scalar.bits}(data + {offset}u)"
 
 	if scalar.is_bcd:
@@ -277,7 +290,7 @@ def _write(placement: Placement, prefix: str, value: str,
 		        f"(uint{width}_t){value});",
 		        "\t}"]
 
-	end = "le" if placement.endian is ast.Endian.LITTLE else "be"
+	end = order_suffix(placement.endian)
 	return [f"\tsitu_put_{end}{scalar.bits}(data + {offset}u, "
 	        f"(uint{width}_t){value});"]
 
@@ -370,7 +383,7 @@ def _element(placement: Placement, index: str) -> str:
 
 	if scalar.bits == 8:
 		return f"data[{at}]"
-	end = "le" if placement.endian is ast.Endian.LITTLE else "be"
+	end = order_suffix(placement.endian)
 	return f"situ_get_{end}{scalar.bits}(data + {at})"
 
 
@@ -569,7 +582,7 @@ def _encode_body(struct: ResolvedStruct, prefix: str,
 				step = f"{offset}u + i"
 				lines.append(f"\t\tdata[{step}] = (uint8_t)in->{name}[i];")
 			else:
-				end   = "le" if placement.endian is ast.Endian.LITTLE else "be"
+				end   = order_suffix(placement.endian)
 				step  = f"{offset}u + i * {stride}u"
 				width = storage_width(scalar.bits)
 				lines.append(f"\t\tsitu_put_{end}{scalar.bits}(data + {step}, "
