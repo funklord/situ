@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
-                                   Shape)
+from situc.codegen.c.build import (BITS, LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO,
+                                   Part, Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -45,9 +45,20 @@ def _room(size: str) -> list[str]:
 	return [f"\tif (situ_cap - situ_at < {size}) {{", BOUNDS, "\t}"]
 
 
+def _bit_store(part: Part, value: str) -> list[str]:
+	"""Set a field inside a group `_write` zeroed; the cursor stays put."""
+	held = part.placement
+	assert held.scalar is not None
+	order = traverse.bit_extractor(held.scalar, held)
+	return [f"\tsitu_bits_set_{order}(situ_out + situ_at, {part.bit_at}u,"
+	        f" {held.size_bits}u, static_cast<std::uint64_t>({value}));"]
+
+
 def _store(part: Part, value: str) -> list[str]:
 	"""One scalar's bounds check, store and advance -- C's three steps."""
 	assert part.placement.scalar is not None
+	if part.role == BITS:
+		return _bit_store(part, value)
 	bits  = part.placement.scalar.bits
 	width = bits // BITS_PER_BYTE
 	return [
@@ -63,11 +74,12 @@ def _store(part: Part, value: str) -> list[str]:
 def _size(part: Part, run: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
-	limit = (1 << part.placement.scalar.bits) - 1
+	width = part.placement.size_bits or 0
+	limit = (1 << width) - 1
 	if part.solved is None:
 		return [
 			*([f"\tif ({run}_len > {limit}u) {{", CONSTRAINT, "\t}"]
-			  if part.placement.scalar.bits < 32 else []),
+			  if width < 32 else []),
 			*_store(part, f"{run}_len"),
 		]
 	scale, offset = part.solved.scale, part.solved.offset
@@ -90,8 +102,37 @@ def _size(part: Part, run: str) -> list[str]:
 	]
 
 
+def _bits(part: Part, parts: list[Part]) -> list[str]:
+	"""One field of a byte several share.
+
+	The group is zeroed when it opens, which is what writes `must_be_zero`,
+	and the bytes are spent when it closes. A value wider than its field is
+	refused rather than masked: `situ_bits_set_*` would write a valid
+	message saying something else.
+	"""
+	held  = part.placement
+	limit = (1 << (held.size_bits or 0)) - 1
+	lines = [*_room(f"{part.bytes}u"),
+	         f"\tstd::memset(situ_out + situ_at, 0, {part.bytes}u);"] \
+		if part.opens else []
+	if part.sizes is not None:
+		run = next(one.local for one in parts
+		           if one.placement is part.sizes)
+		lines += _size(part, run)
+	elif plain_build.takes_value(part):
+		lines += [f"\tif (static_cast<std::uint64_t>({part.local}) > {limit}u) {{",
+		          CONSTRAINT, "\t}", *_bit_store(part, part.local)]
+	elif plain_build.stated_ones(part):
+		lines += _bit_store(part, f"{limit}u")
+	if part.closes:
+		lines.append(f"\tsitu_at += {part.bytes}u;")
+	return lines
+
+
 def _write(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == BITS:
+		return _bits(part, parts)
 	if part.role == SCALAR:
 		return _store(part, part.local)
 	if part.role == SIZE:
@@ -133,7 +174,7 @@ def _write(struct: ResolvedStruct, part: Part, parts: list[Part]) -> list[str]:
 def _parameters(parts: list[Part]) -> list[str]:
 	found: list[str] = []
 	for part in parts:
-		if part.role == SCALAR:
+		if plain_build.takes_value(part):
 			found.append(f"{_scalar(part.placement)} {part.local}")
 		elif part.role == RUN:
 			found.append(f"const std::uint8_t *{part.local}")

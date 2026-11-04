@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
-                                   Shape)
+from situc.codegen.c.build import (BITS, LITERAL, RUN, SCALAR, SIZE, SPAN, ZERO,
+                                   Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -56,6 +56,49 @@ def _room(size: str, path: str) -> list[str]:
 	        f"\t\t\t.format({size}, len(out) - at))"]
 
 
+def _bit_store(part: Part, value: str) -> list[str]:
+	"""Set a field inside a group `_bits` zeroed; the cursor stays put.
+
+	Through a view over the group, so the assembly is the runtime's and
+	not a second copy of it.
+	"""
+	held = part.placement
+	assert held.scalar is not None
+	msb = traverse.bit_extractor(held.scalar, held) == "msb"
+	return [f"\tView(Message(memoryview(out)), at, len(out) - at)"
+	        f"._set_bits({part.bit_at}, {held.size_bits}, {value}, msb={msb})"]
+
+
+def _bits(part: Part, parts: list[Part]) -> list[str]:
+	"""One field of a byte several share.
+
+	The group is zeroed when it opens, which is what writes `must_be_zero`,
+	and the bytes are spent when it closes. A value wider than its field is
+	refused rather than masked. Compared as C compares it, an unsigned
+	64-bit number, so a negative value is refused as it is there.
+	"""
+	held  = part.placement
+	path  = held.path
+	limit = (1 << (held.size_bits or 0)) - 1
+	lines = [*_room(str(part.bytes), path),
+	         f"\tout[at:at + {part.bytes}] = bytes({part.bytes})"] \
+		if part.opens else []
+	if part.sizes is not None:
+		run = next(one.local for one in parts
+		           if one.placement is part.sizes)
+		lines += _size(part, py_name(run))
+	elif plain_build.takes_value(part):
+		local = py_name(part.local)
+		lines += [f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {limit}:",
+		          f'\t\traise ConstraintError("{path}: wider than its field")',
+		          *_bit_store(part, local)]
+	elif plain_build.stated_ones(part):
+		lines += _bit_store(part, str(limit))
+	if part.closes:
+		lines.append(f"\tat += {part.bytes}")
+	return lines
+
+
 def _store(part: Part, value: str) -> list[str]:
 	"""One scalar's bounds check, write and advance -- C's three steps.
 
@@ -76,6 +119,8 @@ def _store(part: Part, value: str) -> list[str]:
 
 	placement = part.placement
 	assert placement.scalar is not None
+	if part.role == BITS:
+		return _bit_store(part, value)
 	width  = placement.scalar.bits // BITS_PER_BYTE
 	order  = _byte_order(placement.endian)
 	return [
@@ -90,7 +135,7 @@ def _size(part: Part, run: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
 	path  = part.placement.path
-	limit = (1 << part.placement.scalar.bits) - 1
+	limit = (1 << (part.placement.size_bits or 0)) - 1
 	refuse = (f'\t\traise ConstraintError("{path}: the run is longer than '
 	          'this can say")')
 	if part.solved is None:
@@ -112,6 +157,8 @@ def _size(part: Part, run: str) -> list[str]:
 def _write(part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
 	path = part.placement.path
+	if part.role == BITS:
+		return _bits(part, parts)
 	if part.role == SCALAR:
 		return _store(part, py_name(part.local))
 	if part.role == SIZE:
@@ -145,7 +192,7 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 def _parameters(parts: list[Part]) -> list[str]:
 	found: list[str] = []
 	for part in parts:
-		if part.role == SCALAR:
+		if plain_build.takes_value(part):
 			found.append(f"{py_name(part.local)}: int")
 		elif part.role in (RUN, SPAN):
 			found.append(f"{py_name(part.local)}: bytes")
@@ -198,7 +245,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			for struct in structs
 			for one in plain_build.parts(struct, shape) or ()
 			if one.role in (SCALAR, SIZE)) else ""),
-		"from situ_runtime import BoundsError, ConstraintError",
+		"from situ_runtime import BoundsError, ConstraintError, View",
 		"",
 	]
 

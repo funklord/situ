@@ -26,8 +26,8 @@ import fourway						# noqa: E402
 from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
-from situc.codegen.c.build import (RUN, SCALAR, SIZE, SPAN,	# noqa: E402
-                                   Part, Shape)
+from situc.codegen.c.build import (BITS, RUN, SCALAR, SIZE,	# noqa: E402
+                                   SPAN, Part, Shape)
 from situc.codegen.c.names import ident			# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -90,7 +90,12 @@ def _given(parts: list[Part]) -> list[tuple[Part, int | bytes]]:
 	"""What the caller hands each part that takes anything."""
 	found: list[tuple[Part, int | bytes]] = []
 	for at, part in enumerate(parts):
-		if part.role == SCALAR:
+		if part.role == BITS and plain_build.takes_value(part):
+			# Small enough for its field: a wider value is the refusal, and
+			# one of those would say nothing about where the bits go.
+			width = part.placement.size_bits or 1
+			found.append((part, (0x5 + at) & ((1 << width) - 1) or 1))
+		elif part.role == SCALAR:
 			found.append((part, _raw(part.placement, at)))
 		elif part.role == RUN:
 			found.append((part, _run_bytes(part.bytes, at)))
