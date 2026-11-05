@@ -544,7 +544,7 @@ so it belongs to its own record rather than smuggled in under a target.
 | `bit`, `bool` | a single bit |
 | `byte` | eight bits with no numeric reading |
 | `q16_16`, `uq8_8` | fixed point, signed and unsigned; the width is the sum of the halves |
-| `bcd4` | packed binary-coded decimal, four bits per digit |
+| `bcd4` | packed binary-coded decimal: four digits in two bytes, a nibble each |
 
 **Structure.** `struct` is the ordinary case; the rest exist for shapes a
 struct cannot describe:
@@ -1066,7 +1066,7 @@ framing code in practical use, which is what bounds the design:
 | family | described by | covers |
 |---|---|---|
 | `table` | input symbol to output symbol, optionally padded to whole groups | both Manchesters, 4b5b, base16/32/64 |
-| `polynomial` | a generator polynomial over GF(2) or GF(2^m), plus init, reflection and xorout | every CRC variant, Reed-Solomon |
+| `polynomial` | a generator polynomial over GF(2) or GF(2^m), plus init, reflection and xorout, with `init` the starting register as the CRC catalogue states it | every CRC variant, Reed-Solomon |
 | `linear_block` | a parity-check matrix over GF(2), named or stated as one `parity` row per check bit | Hamming(7,4) by name, any `(n,k)` whose codeword is a byte from its matrix |
 | `shift_register` | taps, a feedback source, an initial state, and whether the feedback is complemented | additive and multiplicative scramblers, both NRZI conventions |
 | `permutation` | an index mapping | block interleavers |

@@ -8268,6 +8268,20 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.880 A text number's width has to be written
+
+`decimal u16 code[n]` was accepted and no two readers agreed: C parsed a span of
+zero and named a `_len` nothing defined, C++, Rust and Python handed back bytes
+and dropped the number, and the walkers took two bytes a digit (hull section 13,
+26.616). It is refused now, naming `[3]` and `until ":"`, which both work.
+
+Building it was weighed and left. Each `_fixed_text_number` wires a literal width
+through the accessor, its bounds check and its range limit, so the work is four
+emitters and their validate paths, then the image, both walkers and the
+dissector, with `element_extent` answering one byte for a digit first. What it
+buys is hull typing `3:493`, which it frames correctly as an untyped atom
+meanwhile. Not blocked on anyone; the first step above is where to start.
+
 ### 26.879 A struct named for a builtin the module calls
 
 hull named a struct `bytes`, and `situc verify` died with a TypeError: `class
