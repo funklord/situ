@@ -28,6 +28,8 @@ four-way differential is for.
 
 from __future__ import annotations
 
+import ast as pyast
+import builtins
 from collections.abc import Mapping
 
 from situc import ast, traverse
@@ -593,6 +595,35 @@ def _held_to_the_reader(struct: ResolvedStruct,
 	return found
 
 
+def _past_parameters(text: str, units: list[plain_build.Unit]) -> str:
+	"""Point a call that means a builtin past a parameter of its name.
+
+	A member is a parameter here, so `u8 len[n]` made every `len(...)` in
+	its builder call the bytes it was handed, and a struct with a member of
+	that name could not be built at all. 26.879 is this from the reader's
+	side, where a struct takes the name for the whole module. Only a call
+	to a name some part holds is touched, so nothing else moves. Parsed
+	rather than matched, because `def len(` is an arm's maker and not a call.
+	"""
+	names = {py_name(part.local) for unit in units
+	         for part in every_part(list(unit.parts))} & set(dir(builtins))
+	sites = [node.func for node in pyast.walk(pyast.parse(text))
+	         if isinstance(node, pyast.Call)
+	         and isinstance(node.func, pyast.Name) and node.func.id in names]
+	if not sites:
+		return text
+	lines = text.split("\n")
+	for site in sorted(sites, key=lambda one: (one.lineno, one.col_offset),
+	                   reverse=True):
+		line = lines[site.lineno - 1]
+		lines[site.lineno - 1] = (f"{line[:site.col_offset]}situ_builtins."
+		                          f"{line[site.col_offset:]}")
+	text = "\n".join(lines)
+	return text.replace("from __future__ import annotations\n\n",
+	                    "from __future__ import annotations\n\n"
+	                    "import builtins as situ_builtins\n", 1)
+
+
 def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		basename: str) -> dict[str, str]:
 	"""`<basename>_build.py`, or nothing where no struct qualifies.
@@ -687,4 +718,5 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\treturn situ_at",
 		])
 
-	return {f"{basename}_build.py": "\n".join(lines).rstrip("\n") + "\n"}
+	return {f"{basename}_build.py": _past_parameters(
+		"\n".join(lines).rstrip("\n") + "\n", built)}

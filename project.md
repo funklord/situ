@@ -8268,6 +8268,17 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.882 A member may take the name of a builtin the builder calls
+
+A member is a builder's parameter, so `u8 len[n]` made every `len(...)` in it
+call the bytes it was handed: `TypeError: 'bytes' object is not callable`, and
+the struct could not be built in Python at all. 26.879 from the writing side. A
+call to a builtin some part names now goes through `situ_builtins`, parsed
+rather than matched since `def len(` is an arm's maker. Nothing else moves.
+Found by a name sweep over 26.881. `None` in Rust and arms named `situ_arm`,
+`situ_tag` or `situ_as` still fail to compile or import, loudly: the first is
+below the bar as before, the second the project's own prefix.
+
 ### 26.881 Several variants are one builder, taking each arm as a value
 
 Moved to `doc/decision/26.881-several-variants-are-one-builder-taking-each-arm-as-a-value.md`.

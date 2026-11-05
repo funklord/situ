@@ -310,11 +310,12 @@ struct s {{
 
 @pytest.mark.skipif(not fourway.COMPLETE, reason="needs gcc, g++ and rustc")
 @pytest.mark.parametrize("place", ["variant", "arm"])
-@pytest.mark.parametrize("name", ["plain", "self", "type", "register", "class",
-                                  "match"])
+@pytest.mark.parametrize("name", ["plain", "self", "len", "isinstance", "type",
+                                  "register", "class", "match"])
 def test_an_arm_or_a_variant_may_have_any_name(tmp_path: Path, place: str,
 		name: str) -> None:
-	"""`self` capitalises into a keyword. `plain` says the template works."""
+	"""`self` capitalises into a keyword, and `len` took the builtin the
+	builder calls. `plain` says the template works."""
 	schema = _write(tmp_path, NAMED.format(
 		variant=name if place == "variant" else "first",
 		arm=name if place == "arm" else "one"))
@@ -323,3 +324,18 @@ def test_an_arm_or_a_variant_may_have_any_name(tmp_path: Path, place: str,
 	made   = [line for line in said.splitlines()
 	          if not line.endswith(" refused")]
 	assert len(made) >= 4, said
+
+
+def test_a_member_may_take_the_name_of_a_builtin_the_builder_calls(
+		tmp_path: Path) -> None:
+	"""Not only an arm: a plain run called `len` could not be built."""
+	schema = _write(tmp_path, HEAD + "struct s { u8 n; u8 len[n]; }\n")
+	_emitted(schema, "python", tmp_path)
+	(tmp_path / "situ_runtime.py").write_bytes(
+		(ROOT / "runtime/python/situ_runtime.py").read_bytes())
+	done = subprocess.run([sys.executable, "-c", """
+import shapes_build as b
+out = bytearray(8)
+print(bytes(out[:b.build_s(out, b"ab")]).hex())
+"""], capture_output=True, text=True, cwd=tmp_path)
+	assert done.stdout.strip() == "026162", done.stderr[-800:]
