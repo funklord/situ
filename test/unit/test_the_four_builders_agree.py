@@ -38,7 +38,10 @@ from situc.codegen.python.emit import py_name		# noqa: E402
 from situc.codegen.rust.edit import _scalar as rust_scalar	# noqa: E402
 from situc.codegen.rust.emit import _ident		# noqa: E402
 from situc.layout import BITS_PER_BYTE, Placement, solve	# noqa: E402
+from situc.pack import pack				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
+from test_walker_c import python_verdict		# noqa: E402
+from walker.image import load				# noqa: E402
 
 RUNTIME = ROOT / "runtime"
 #: Comfortably past the largest struct the class serves; asserted below.
@@ -423,6 +426,19 @@ def _run(argv: list[str], cwd: Path) -> str:
 	return done.stdout
 
 
+def _the_walker_takes_it(schema: Path, python: str) -> None:
+	"""What four writers built is valid to the reader that shares no code
+	with them. Python's walker alone: C's costs a compile per message."""
+	parsed = load_schema(schema)
+	blob   = pack(parsed, resolve(parsed, solve(parsed)), metadata=True)[0]
+	names  = load(blob).struct_names
+	for line in python.splitlines():
+		label, made = line.rsplit(" ", 1)
+		if made != "refused":
+			assert python_verdict(blob, bytes.fromhex(made), names.index(
+				label.split(".")[0])) == "0", (label, made)
+
+
 def four_say(schema: Path, tmp_path: Path, units: list[Unit],
 		extra: list[tuple[Unit, Given]]) -> str:
 	"""What all four write, one line a case; a disagreement fails here.
@@ -476,6 +492,7 @@ def four_say(schema: Path, tmp_path: Path, units: list[Unit],
 	           for target in ("c", "cpp", "rust")}}
 	assert said["python"].count("\n") == len(cases)
 	assert len(set(said.values())) == 1, said
+	_the_walker_takes_it(schema, python)
 	return python
 
 
