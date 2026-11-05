@@ -707,7 +707,8 @@ index_arg     = "base" "=" ( "region" | "message" | ident )
 
    A `const` whose name collides with an attribute name is rejected at its
    declaration, which kills the residual ambiguity at the source rather than at
-   each use. See doc/decision/0006-bracket-disambiguation.md. *)
+   each use. See doc/decision/0006-bracket-disambiguation.md. A member is not
+   rejected, so `u8 data[size]` beside `u32 size` needs `[(size)]` (26.877). *)
 
 type_ref      = scalar_type | ident ;
 scalar_type   = uint | sint | float | bitfield | "bool" | "byte" ;
@@ -8263,6 +8264,26 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.877 The refusal of `data[size]` says how to write it
+
+`u32 size; u8 data[size];` is refused: `[size]` is an attribute by 0006, which
+reads the closed vocabulary and never a schema's names, and 26.696's test says
+so of `u8 b[min]`. That stands, and no parse changes. But the refusal said
+"`[size]` means nothing here", which tells an author who wrote a length nothing,
+in the commonest shape binary formats have. `check_a_lone_bracket_is_not_a_member`
+now names the member and `[(size)]`, which is an expression under 0006 as written
+and which all four backends read alike.
+
+It fires only for a value attribute, bare, beside a member of its name. Every
+name in `VALUE_ATTRIBUTES` was asked for bare and refused; `[escape]` and the
+flags mean something bare and are left alone, so `u8 secret; u8 k [secret];`
+keeps its meaning. Nothing in the 46 corpus schemas reaches it.
+
+Open, and the holder's because it amends 0006: whether a lone value attribute
+should read as a size outright. It can be decided from the vocabulary alone, as
+0006's rule 3 was, so 0006's reason holds and no accepted schema changes meaning.
+The cost is `u8 x [max];` with no such member losing "needs a value".
 
 ### 26.876 A size read was captured by a local, and a skip hid it
 

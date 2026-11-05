@@ -51,6 +51,7 @@ def check(schema: ast.Schema) -> None:
 	"""Run every whole-schema check, raising on the first failure."""
 	check_unique_declarations(schema)
 	check_const_names_do_not_shadow_attributes(schema)
+	check_a_lone_bracket_is_not_a_member(schema)
 	check_unique_enum_members(schema)
 	check_enum_members_are_spellable(schema)
 	check_unique_member_names(schema)
@@ -1988,6 +1989,51 @@ def check_const_names_do_not_shadow_attributes(schema: ast.Schema) -> None:
 					"rename the constant (doc/decision/0006-bracket-disambiguation.md)",
 				],
 			)
+
+
+#: Attributes that always take a value, so a lone `[size]` can never be one
+#: that says anything. Measured by asking the compiler for each name written
+#: bare, and every one is refused. `escape`, `nonce` and the flags are not
+#: here: a lone `[escape]` means something, and so does a lone `[secret]`.
+VALUE_ATTRIBUTES = frozenset({
+	"size", "version", "since", "max", "min", "limit", "depth", "bits",
+	"retries", "timeout_ms", "must_eq", "encoding", "endian", "bit_order",
+	"self_as", "tag_order", "on_read", "on_write",
+})
+
+
+def check_a_lone_bracket_is_not_a_member(schema: ast.Schema) -> None:
+	"""`u32 size; u8 data[size];` says what happened, and how to say the other.
+
+	`[size]` is an attribute by 0006's rule, which reads the closed vocabulary
+	and never the schema's names. That stands: this changes no parse. But the
+	refusal it reached was "`[size]` means nothing here", which is true of the
+	attribute and useless to an author who wrote a length, and this is the
+	commonest shape in binary formats. So the member beside it is named, with
+	the spelling that does size the run (26.877).
+	"""
+	for struct in schema.structs():
+		members = list(_walk_members(struct.members))
+		named   = {getattr(member, "name", None) for member in members}
+		for member in members:
+			if getattr(member, "array", None) is not None:
+				continue
+			for attr in getattr(member, "attrs", ()):
+				if (attr.value is not None or attr.name not in VALUE_ATTRIBUTES
+						or attr.name not in named):
+					continue
+				raise error(
+					f"`[{attr.name}]` is read as an attribute, not as a size",
+					attr.span,
+					label = f"write `[({attr.name})]` to size this by the member",
+					notes = [
+						f"`{attr.name}` is an attribute name, and a lone name "
+						"in brackets is decided by the language's vocabulary "
+						"rather than by what the struct declares "
+						"(doc/decision/0006-bracket-disambiguation.md)",
+						f"as an attribute it needs a value: `[{attr.name} = ...]`",
+					],
+				)
 
 
 # ---------------------------------------------------------------------------
