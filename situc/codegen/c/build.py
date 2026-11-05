@@ -31,6 +31,8 @@
 
 from __future__ import annotations
 
+from itertools import product
+
 from collections.abc import Mapping
 
 from situc import ast, invariant, traverse
@@ -123,6 +125,10 @@ class Shape:
 		self.prefix  = prefix
 		self.structs = structs
 		self.varints = varints
+
+
+#: What one builder chooses: an arm, or one of each of several variants.
+Choice = Arm | tuple[Arm, ...]
 
 
 class Part:
@@ -731,20 +737,34 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 	return _value_part(SCALAR, placement, local)
 
 
-def arms(struct: ResolvedStruct) -> list[Arm]:
-	"""The cases of this struct's variant, or nothing where it has none."""
-	variant = next((held for held in traverse.own_members(struct)
-	                if held.kind == "variant"), None)
-	return list(variant.arm_cases or ()) if variant is not None else []
+def arms(struct: ResolvedStruct) -> list[Choice]:
+	"""What a builder of this struct may choose, or nothing with no variant.
+
+	One per case of a single variant. Several variants need a case of each,
+	so it is their product: a builder per combination, as a builder per arm
+	is one per case. `default: error` selects nothing and has no message to
+	build, so it joins no combination. mqtt's CONNECT is the instance: a will,
+	a user name and a password, each present or not, in eight builders.
+	"""
+	variants = [held for held in traverse.own_members(struct)
+	            if held.kind == "variant"]
+	if len(variants) > 1:
+		return list(product(*([case for case in (one.arm_cases or ())
+		                       if case.member is not None]
+		                      for one in variants)))
+	return list(variants[0].arm_cases or ()) if variants else []
 
 
-def arm_name(case: Arm) -> str:
+def arm_name(case: Choice) -> str:
 	"""What to call the builder for this arm.
 
 	The arm's own member name, which is what the schema called it, so a
 	reader of the header and a reader of the schema see one word. A default
-	arm selecting nothing has no member to name it after.
+	arm selecting nothing has no member to name it after. A combination is
+	its arms' names in member order.
 	"""
+	if isinstance(case, tuple):
+		return "_".join(arm_name(one) for one in case)
 	member = case.member
 	if member:
 		return str(member).rsplit(".", 1)[-1]
@@ -775,7 +795,7 @@ def _held_to_its_version(struct: ResolvedStruct, parts: list[Part]
 
 
 def plan(struct: ResolvedStruct, shape: Shape | None = None,
-		arm: Arm | None = None) -> tuple[list[Part], str | None]:
+		arm: Choice | None = None) -> tuple[list[Part], str | None]:
 	"""What the writer does for each member, or the first reason it cannot.
 
 	The order is the schema's, which is what makes the pass forward-only.
@@ -939,11 +959,21 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	# must hold. A `peek`ed discriminant is not written at all: a peek does
 	# not consume, so those bytes belong to the arm that follows and
 	# writing them here would write them twice.
-	variant = next((held for held in members if held.kind == "variant"), None)
-	chooses = variant.discriminant if variant is not None else None
-	claimed = tuple(sorted({case.value for case in (variant.arm_cases or ())
-	                        if case.value is not None})
-	                ) if variant is not None else ()
+	variants = [held for held in members if held.kind == "variant"]
+	chosen: dict[str, Arm] = {}
+	if arm is not None:
+		chosen = dict(zip((one.path for one in variants),
+		                  arm if isinstance(arm, tuple) else (arm,)))
+	# By discriminant, each with the values its other arms claim.
+	tags: dict[str | None, tuple[Arm | None, tuple[int, ...]]] = {}
+	for variant in variants:
+		if variant.discriminant in tags:
+			return [], f"`{variant.discriminant}` chooses two variants, so " \
+			           "an arm of one would decide the other"
+		tags[variant.discriminant] = (
+			chosen.get(variant.path),
+			tuple(sorted({int(case.value) for case in (variant.arm_cases or ())
+			              if case.value is not None})))
 
 	groups = _packed_groups(members)
 
@@ -1040,14 +1070,16 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			            bit_at=bit_at, opens=index == first,
 			            closes=(index + 1 not in groups
 			                    or groups[index + 1][2] != first))
-			if held.name == chooses and arm is not None:
+			if held.name in tags and arm is not None:
 				# The arm decides it, or `present = 0` goes out ahead of a
 				# body the reader then steps over. The default arm's value
 				# is the caller's, as it is for a whole-scalar tag.
-				if arm.value is None:
+				case, claimed = tags[held.name]
+				assert case is not None
+				if case.value is None:
 					part.others = claimed
 				else:
-					part.stated = int(arm.value)
+					part.stated = int(case.value)
 			if held.name in measures:
 				# `ihl` is four bits AND the length of `options`, which
 				# nothing had met before: the packed branch comes first,
@@ -1096,7 +1128,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# nothing and asks for nothing. The arm carries them -- and
 			# therefore carries the check that they say what this arm is:
 			# see where the arm part is built.
-			if (held.name == chooses and arm is not None
+			if (held.name in tags and arm is not None
 					and held.size_bits != BITS_PER_BYTE):
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"peeked {held.size_bits}-bit discriminant, and " \
@@ -1111,19 +1143,18 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				           "variant, so which arm to write is the caller's " \
 				           "choice and is said by calling one of the " \
 				           "per-arm builders"
-			if sum(one.kind == "variant" for one in members) > 1:
-				# One builder is one arm of ONE variant. Writing the same
-				# arm for each wrote mqtt's CONNECT with `will_present`
-				# three times, in place of its user name and password.
-				return [], "holds more than one variant, and a builder " \
-				           "writes one arm of one"
-			if arm.member is None:
+			# The arm of THIS variant. Writing the requested one for each
+			# wrote mqtt's CONNECT with `will_present` three times, in
+			# place of its user name and password (26.862).
+			case = chosen[held.path]
+			claimed = tags[held.discriminant][1]
+			if case.member is None:
 				# An arm that selects nothing, which is how a schema spells
 				# an absent body. Zero bytes, so there is nothing to emit.
 				continue
-			inner = _arm_placement(struct, str(arm.member))
+			inner = _arm_placement(struct, str(case.member))
 			if inner is None:
-				return [], f"`{arm.member}` is not a member of this struct"
+				return [], f"`{case.member}` is not a member of this struct"
 			why = _arm_refusal(inner, header, prefix, structs)
 			if why:
 				# The LOCAL name, as every other member-level message
@@ -1139,18 +1170,20 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# against the case this builder is for -- or, for the default
 			# arm, against every case it is not.
 			disc = next((other for other in members
-			             if other.name == chooses), None)
+			             if other.name == held.discriminant), None)
 			if disc is not None and disc.peek:
-				value = arm.value
+				value = case.value
 				part.value  = -1 if value is None else int(value)
 				part.others = claimed
 			parts.append(part)
 			continue
 
-		if chooses is not None and held.name == chooses:
+		if held.name in tags:
 			if arm is None:
 				return [], "is the discriminant of a variant"
-			if arm.value is None:
+			case, claimed = tags[held.name]
+			assert case is not None
+			if case.value is None:
 				# The default arm names no value, so the caller supplies one
 				# -- and it must not be a value a named arm claims, or the
 				# message reads as that arm instead.
@@ -1164,7 +1197,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			if why:
 				return [], f"`{traverse.local_name(struct, held)}` {why}"
 			part = _value_part(ARMTAG, held, local)
-			part.value = int(arm.value)
+			part.value = int(case.value)
 			parts.append(part)
 			continue
 		runs  = traverse.pinned_runs(held)
@@ -2056,7 +2089,7 @@ def _tags(parts: list[Part], structs: Mapping[str, ResolvedStruct] | None,
 
 
 def _one(struct: ResolvedStruct, shape: Shape,
-		enums: Mapping[str, object], arm: Arm | None = None) -> list[str]:
+		enums: Mapping[str, object], arm: Choice | None = None) -> list[str]:
 	parts, _ = plan(struct, shape, arm)
 	prefix   = shape.prefix
 	structs  = shape.structs

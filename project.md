@@ -8264,14 +8264,23 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.874 A builder chooses an arm of each variant
+
+A struct with several variants gets a builder per combination, named with its
+arms in member order, as one variant gets a builder per arm. `default: error`
+has no message to build and joins none. So mqtt's CONNECT is eight builders,
+`connect_body_will_present_user_absent_password_absent` and so on, in all four
+languages. Two variants on one discriminant are refused, since an arm of one
+would decide the other. A product is exponential in the variants, which has
+not mattered: `connect_body` is the only such struct in the corpus. 243
+builders over 33 schemas.
+
 ### 26.873 The three builders write a pad
 
 Zeros to the next boundary, measured from the struct's own base, which is
 where the cursor counts from. 235 builders over 33 schemas. What is left is
-`edges` shapes (wide element runs, argued spans, hidden and opaque reserved
-runs) and mqtt's `connect_body`, the one struct in the corpus with several
-variants. A builder there needs a choice per variant, 27 arms by product, and
-that naming is undecided.
+`edges` shapes: wide element runs, argued spans, and hidden and opaque reserved
+runs.
 
 ### 26.872 A tag sums the pseudo-header it is handed
 

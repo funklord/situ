@@ -103,25 +103,42 @@ def _declined(schema: Path) -> str:
 	return " ".join(why for _, why in refusals(resolved, shape))
 
 
-def test_two_variants_are_not_one_arm_written_twice(tmp_path: Path) -> None:
-	"""mqtt's CONNECT went out with `will_present` where its name belonged."""
+def test_a_builder_chooses_an_arm_of_each_variant(tmp_path: Path) -> None:
+	"""mqtt's CONNECT went out with `will_present` where its name belonged.
+
+	A builder per combination, each tag written by its own arm and each arm
+	in its own place. `default: error` has no message, so joins none.
+	"""
 	schema = tmp_path / "two.situ"
 	schema.write_text("""\
 struct word { u8 n; u8 data[n]; }
+struct nothing { }
 struct two {
 	u8 a;
 	u8 b;
 	variant first switch (a) {
 		case 1:  word one;
+		case 0:  nothing none;
 		default: error;
 	}
 	variant second switch (b) {
 		case 1:  word other;
+		case 0:  nothing neither;
 		default: error;
 	}
 }
 """, encoding="ascii")
-	assert "more than one variant" in _declined(schema)
+	units = _units(schema)
+	assert {name for name in units if name.startswith("two.")} == {
+		"two.one_other", "two.one_neither", "two.none_other",
+		"two.none_neither"}
+	said = four_say(schema, tmp_path, list(units.values()), [
+		_with(units["two.one_other"], b"\x01\xaa", b"\x02\xbb\xcc"),
+		_with(units["two.none_other"], b"", b"\x01\xbb"),
+		_with(units["two.one_neither"], b"\x01\xaa", b""),
+	])
+	assert _extra(said, 3) == ["0101" "01aa" "02bbcc", "0001" "01bb",
+	                           "0100" "01aa"]
 
 
 def test_a_packed_tag_cannot_disagree_with_its_arm(tmp_path: Path) -> None:

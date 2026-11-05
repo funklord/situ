@@ -14,10 +14,9 @@ from dataclasses import dataclass
 from situc import ast
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
                                    PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
-                                   ZERO, Part, Shape,
+                                   ZERO, Choice, Part, Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
-from situc.layout import Arm
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
@@ -134,7 +133,7 @@ def stated_ones(part: Part) -> bool:
 
 
 def parts(struct: ResolvedStruct, shape: Shape,
-		arm: Arm | None = None) -> list[Part] | None:
+		arm: Choice | None = None) -> list[Part] | None:
 	"""C's plan for this struct, where every part is one this class writes.
 
 	The plan rather than a second reading of the placements: it is what
@@ -224,7 +223,7 @@ def declined(resolved: ResolvedSchema, shape: Shape,
 	return out
 
 
-def _unwritten(struct: ResolvedStruct, shape: Shape, arm: Arm | None,
+def _unwritten(struct: ResolvedStruct, shape: Shape, arm: Choice | None,
 		language: str) -> str:
 	"""Which part keeps this out, so the boundary can be read off the line."""
 	planned, why = plan(struct, shape, arm)
