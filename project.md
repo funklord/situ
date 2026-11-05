@@ -8268,6 +8268,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.885 A scalar arm behind a variable member had no frame check
+
+Moved to `doc/decision/26.885-a-scalar-arm-behind-a-variable-member-had-no-frame-check.md`.
+
 ### 26.884 A real PES packet, and two faults it found in the checks
 
 Moved to `doc/decision/26.884-a-real-pes-packet-found-two-faults-in-the-checks.md`.

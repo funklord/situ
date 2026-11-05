@@ -3194,10 +3194,19 @@ class Emitter:
 			span  = byte_span(placement)
 			touch = (span[1] if span is not None
 			         else (placement.size_bits + 7) // BITS_PER_BYTE)
+			# The same two questions behind a variable member, where the
+			# offset is an expression: an arm with no constant to compare
+			# answered `Ok(0)` off the lax read for a byte past the frame,
+			# where C and C++ said Bounds (26.885).
 			bound = ([f"\t\tif self.bytes.len() < {span[0]} + {touch} {{",
 			          "\t\t\treturn Err(Error::Bounds);",
 			          "\t\t}"]
-			         if span is not None else [])
+			         if span is not None else
+			         [] if placement.offset_bits is not None else
+			         [f"\t\tlet at = {start};",
+			          f"\t\tif self.bytes.len() < at + {touch} {{",
+			          "\t\t\treturn Err(Error::Bounds);",
+			          "\t\t}"])
 			# AN ENUM-TYPED ARM ANSWERS WHAT THE MEMBER ANSWERS (26.420).
 			# Two settled decisions compose here rather than a new one
 			# being taken. The member's getter hands back `Option<T>`,
@@ -3215,8 +3224,7 @@ class Emitter:
 			enumed = placement.type_name in self.enums
 			rtype  = (self._field_type(placement) if enumed
 			          else self._rust_type(scalar))
-			offset = (self._offset_expression(struct, placement)
-			          if placement.offset_bits is None else None)
+			offset = "at" if placement.offset_bits is None else None
 			value  = (
 				self._ok_wrapped(self._load(placement, scalar, offset))
 				if enumed else

@@ -3621,10 +3621,19 @@ class Emitter:
 			span  = byte_span(placement)
 			touch = (span[1] if span is not None
 			         else (placement.size_bits + 7) // BITS_PER_BYTE)
+			# The same two questions behind a variable member, where the
+			# offset is an expression: an arm with no constant to compare
+			# answered zero for a byte past the frame, where C and C++ said
+			# Bounds (26.885).
 			bound = ([f"\t\tif self._len < {span[0]} + {touch}:",
 			          f'\t\t\traise BoundsError("{placement.path}: outside'
 			          ' the frame")']
-			         if span is not None else [])
+			         if span is not None else
+			         [] if placement.offset_bits is not None else
+			         [f"\t\tat = {start}",
+			          f"\t\tif self._len < at + {touch}:",
+			          f'\t\t\traise BoundsError("{placement.path}: outside'
+			          ' the frame")'])
 			# The offset EXPRESSION where the arm's is dynamic, and the
 			# default only where it is a constant. `_raw_load` falls back
 			# to `placement.offset_bytes`, whose own assertion reads
@@ -3639,7 +3648,7 @@ class Emitter:
 			# enum -- the value right, the type the schema declared gone
 			# (26.420).
 			return [*head, *bound,
-			        f"\t\treturn {self._load(placement, scalar, self._offset_expression(struct, placement) if placement.offset_bits is None else None)}"]
+			        f"\t\treturn {self._load(placement, scalar, 'at' if placement.offset_bits is None else None)}"]
 
 		if scalar is not None and indexed_elements(placement):
 			# A run of values wider than a byte, which the slice below is not
