@@ -17,7 +17,7 @@ from situc import wellformed
 from situc import ast
 from situc.diagnostics import SituError
 from situc.layout import solve
-from situc.parser import ATTRIBUTE_NAMES, parse_text
+from situc.parser import ATTRIBUTE_NAMES, BARE_ATTRIBUTE_NAMES, parse_text
 from situc.types import NUMERIC_BOUNDS
 from situc.resolve import ResolvedSchema, resolve
 from situc.unparse import unparse
@@ -310,15 +310,15 @@ def test_distinct_attributes_are_fine() -> None:
 def test_const_named_after_an_attribute_rejected() -> None:
 	"""Closes the hole left by decision 0006.
 
-	`const max = 4;` would make `u8 buf[max];` parse as a flag rather than an
-	array size, silently, with no way to spell the other reading.
+	`const secret = 4;` would make `u8 buf[secret];` parse as a flag rather
+	than an array size, silently, with no way to spell the other reading.
 	"""
-	report = rendered("const max = 4;")
+	report = rendered("const secret = 4;")
 	assert "collides with an attribute name" in report
 	assert "would read as an attribute, not as an array size" in report
 
 
-@pytest.mark.parametrize("name", ["max", "min", "size", "secret", "preserve", "rw"])
+@pytest.mark.parametrize("name", ["secret", "preserve", "rw", "w1c", "unknown"])
 def test_attribute_names_are_all_refused_as_constants(name: str) -> None:
 	assert "collides with an attribute name" in rendered(f"const {name} = 1;")
 
@@ -329,9 +329,9 @@ def test_ordinary_const_names_are_fine() -> None:
 
 
 def test_the_check_covers_the_whole_vocabulary() -> None:
-	"""If a name is added to ATTRIBUTE_NAMES it must also become an illegal
-	constant name, or decision 0006's ambiguity reopens for it."""
-	for name in ATTRIBUTE_NAMES:
+	"""If a name is added to BARE_ATTRIBUTE_NAMES it must also become an
+	illegal constant name, or decision 0006's ambiguity reopens for it."""
+	for name in BARE_ATTRIBUTE_NAMES:
 		assert "collides with an attribute name" in rendered(f"const {name} = 1;")
 
 
@@ -1518,7 +1518,7 @@ def test_a_side_effect_on_a_register_field_is_accepted() -> None:
 def test_version_on_a_member_is_refused() -> None:
 	"""`version` names the field a struct's `[since]` members are counted
 	against, and it is written on the struct: `struct s [version = v]`."""
-	text = rendered(BUFFER + "struct b { u16 x [version]; }\n")
+	text = rendered(BUFFER + "struct b { u8 v; u16 x [version = v]; }\n")
 	assert "a struct, naming the field" in text
 
 

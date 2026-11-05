@@ -51,7 +51,7 @@ def check(schema: ast.Schema) -> None:
 	"""Run every whole-schema check, raising on the first failure."""
 	check_unique_declarations(schema)
 	check_const_names_do_not_shadow_attributes(schema)
-	check_a_lone_bracket_is_not_a_member(schema)
+	check_a_lone_value_name_is_declared(schema)
 	check_unique_enum_members(schema)
 	check_enum_members_are_spellable(schema)
 	check_unique_member_names(schema)
@@ -1965,20 +1965,21 @@ def check_const_names_do_not_shadow_attributes(schema: ast.Schema) -> None:
 
 	This closes the hole left open by doc/decision/0006-bracket-disambiguation.md.
 	`[` introduces either an array size or an attribute list, and a lone
-	identifier is read as an attribute when it is in the attribute vocabulary.
-	So `const max = 4;` would make `u8 buf[max];` parse as a scalar carrying the
-	flag `max` rather than an array of four bytes -- silently, and with no way
-	for the author to spell what they meant.
+	identifier is read as an attribute when it means something bare. So `const
+	secret = 4;` would make `u8 buf[secret];` parse as a scalar carrying the
+	flag `secret` rather than an array of four bytes -- silently, and with no
+	way for the author to spell what they meant. A name that always takes a
+	value is a size (26.886), so a constant may have it.
 
 	Rejecting the constant kills the ambiguity at its source rather than at
 	every use, which is what section 17.0 asks for.
 	"""
 	# Imported here rather than at module scope: the parser calls into this
 	# module, so a top-level import would close the cycle.
-	from situc.parser import ATTRIBUTE_NAMES
+	from situc.parser import BARE_ATTRIBUTE_NAMES
 
 	for decl in schema.consts():
-		if decl.name in ATTRIBUTE_NAMES:
+		if decl.name in BARE_ATTRIBUTE_NAMES:
 			raise error(
 				f"constant `{decl.name}` collides with an attribute name",
 				decl.span,
@@ -1991,49 +1992,37 @@ def check_const_names_do_not_shadow_attributes(schema: ast.Schema) -> None:
 			)
 
 
-#: Attributes that always take a value, so a lone `[size]` can never be one
-#: that says anything. Measured by asking the compiler for each name written
-#: bare, and every one is refused. `escape`, `nonce` and the flags are not
-#: here: a lone `[escape]` means something, and so does a lone `[secret]`.
-VALUE_ATTRIBUTES = frozenset({
-	"size", "version", "since", "max", "min", "limit", "depth", "bits",
-	"retries", "timeout_ms", "must_eq", "encoding", "endian", "bit_order",
-	"self_as", "tag_order", "on_read", "on_write",
-})
+def check_a_lone_value_name_is_declared(schema: ast.Schema) -> None:
+	"""`u8 x [max];` with no `max` beside it is the attribute with no value.
 
-
-def check_a_lone_bracket_is_not_a_member(schema: ast.Schema) -> None:
-	"""`u32 size; u8 data[size];` says what happened, and how to say the other.
-
-	`[size]` is an attribute by 0006's rule, which reads the closed vocabulary
-	and never the schema's names. That stands: this changes no parse. But the
-	refusal it reached was "`[size]` means nothing here", which is true of the
-	attribute and useless to an author who wrote a length, and this is the
-	commonest shape in binary formats. So the member beside it is named, with
-	the spelling that does size the run (26.877).
+	A lone value attribute reads as a size (26.886), so `u32 size; u8
+	data[size];` is what it looks like. The parse cannot see the other
+	mistake, a bound left without its number, and "no such name" would send
+	that author looking for a member they never meant. So the name is asked
+	for here, before the name check, and the attribute's refusal stands.
 	"""
+	from situc.parser import VALUE_ATTRIBUTES
+
+	constants = {decl.name for decl in schema.consts()}
 	for struct in schema.structs():
 		members = list(_walk_members(struct.members))
-		named   = {getattr(member, "name", None) for member in members}
+		named   = constants | {getattr(member, "name", None) for member in members}
 		for member in members:
-			if getattr(member, "array", None) is not None:
+			array = getattr(member, "array", None)
+			size  = getattr(array, "size", None)
+			if (not isinstance(size, ast.NameRef) or size.name in named
+					or size.name not in VALUE_ATTRIBUTES):
 				continue
-			for attr in getattr(member, "attrs", ()):
-				if (attr.value is not None or attr.name not in VALUE_ATTRIBUTES
-						or attr.name not in named):
-					continue
-				raise error(
-					f"`[{attr.name}]` is read as an attribute, not as a size",
-					attr.span,
-					label = f"write `[({attr.name})]` to size this by the member",
-					notes = [
-						f"`{attr.name}` is an attribute name, and a lone name "
-						"in brackets is decided by the language's vocabulary "
-						"rather than by what the struct declares "
-						"(doc/decision/0006-bracket-disambiguation.md)",
-						f"as an attribute it needs a value: `[{attr.name} = ...]`",
-					],
-				)
+			raise error(
+				f"`[{size.name}]` needs a value",
+				size.span,
+				label = f"nothing here is called `{size.name}`",
+				notes = [
+					f"as an attribute it is written `[{size.name} = ...]`",
+					"as a size it names a member or a constant, and this "
+					"struct has neither of that name",
+				],
+			)
 
 
 # ---------------------------------------------------------------------------

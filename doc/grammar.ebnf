@@ -187,9 +187,9 @@ arm_body	= "error" ";" | "opaque" ";" | member ;
  * written: `u8 x [foo];` is either an array of `foo` elements or a scalar
  * carrying the flag `foo`. Resolved by the closed attribute vocabulary in
  * doc/decision/0006-bracket-disambiguation.md -- a bracket group is attrs
- * when it holds "=" or "," at depth 1, or a lone known attribute name that is
- * not immediately followed by "(" -- `min` and `max` are attribute names and
- * expression builtins both. *)
+ * when it holds "=" or "," at depth 1, or a lone attribute name that means
+ * something bare and is not immediately followed by "(". A name that always
+ * takes a value is a size: `u32 size; u8 data[size];` (26.886). *)
 (* Section 8.6.1 and decision 0059. `max` after the brackets bounds a run
  * whose length comes from the frame: `u8 tail[remaining] max 470`. It counts
  * ELEMENTS, as the brackets do, where `until D max N` counts BYTES, as a scan

@@ -697,8 +697,8 @@ index_arg     = "base" "=" ( "region" | "message" | ident )
    closed and fixed by the language:
 
      a bracket group is an attribute list when it holds "=" or "," at bracket
-     depth 1, or when it holds exactly one identifier and that identifier is a
-     known attribute name. Otherwise it is an array spec.
+     depth 1, or when it holds exactly one identifier and that identifier is
+     an attribute that means something bare. Otherwise it is an array spec.
 
    "=" and "," cannot occur at the top level of a size expression -- "==" is a
    distinct token and an array has exactly one size -- so only the lone
@@ -707,8 +707,9 @@ index_arg     = "base" "=" ( "region" | "message" | ident )
 
    A `const` whose name collides with an attribute name is rejected at its
    declaration, which kills the residual ambiguity at the source rather than at
-   each use. See doc/decision/0006-bracket-disambiguation.md. A member is not
-   rejected, so `u8 data[size]` beside `u32 size` needs `[(size)]` (26.877). *)
+   each use. See doc/decision/0006-bracket-disambiguation.md. A name that
+   always takes a value means nothing bare, so it is a size, and a member or
+   constant may have it: `u32 size; u8 data[size];` (26.886). *)
 
 type_ref      = scalar_type | ident ;
 scalar_type   = uint | sint | float | bitfield | "bool" | "byte" ;
@@ -8268,6 +8269,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.886 A lone value attribute is a size
+
+Moved to `doc/decision/26.886-a-lone-value-attribute-is-a-size.md`.
+
 ### 26.885 A scalar arm behind a variable member had no frame check
 
 Moved to `doc/decision/26.885-a-scalar-arm-behind-a-variable-member-had-no-frame-check.md`.
@@ -8344,6 +8349,8 @@ three `edges` tags fire, all four-byte tags on an `authenticated` block with no
 codec. The codec's two widths reach the advisor on the sealed placement.
 
 ### 26.877 The refusal of `data[size]` says how to write it
+
+Superseded by 26.886: `data[size]` is a size now, and the refusal is gone.
 
 `u32 size; u8 data[size];` is refused: `[size]` is an attribute by 0006, which
 reads the closed vocabulary and never a schema's names, and 26.696's test says

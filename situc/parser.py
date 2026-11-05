@@ -232,6 +232,20 @@ ATTRIBUTE_NAMES = frozenset({
 	"on_read", "on_write", "volatile", "no_rmw",
 })
 
+#: Attributes that always take a value, so a lone `[size]` can never be one
+#: that says anything: each was asked for bare and refused (26.877). That is
+#: what lets 0006's rule read such a name as a size (26.886) and still decide
+#: from the vocabulary alone. `escape`, `nonce` and the flags are not here: a
+#: lone `[escape]` means something, and so does a lone `[secret]`.
+VALUE_ATTRIBUTES = frozenset({
+	"size", "version", "since", "max", "min", "limit", "depth", "bits",
+	"retries", "timeout_ms", "must_eq", "encoding", "endian", "bit_order",
+	"self_as", "tag_order", "on_read", "on_write",
+})
+
+#: What a lone identifier in brackets is read as an attribute for.
+BARE_ATTRIBUTE_NAMES = ATTRIBUTE_NAMES - VALUE_ATTRIBUTES
+
 #: Section 8.6.2. The base a text-encoded number is written in. Three, each
 #: because a format this targets writes numbers that way; a fourth would need
 #: a reason beyond being arithmetically possible. `octal` had one on
@@ -2920,7 +2934,7 @@ class Parser:
 				inner.append(token)
 			cursor += 1
 
-		if len(inner) != 1 or not inner[0].is_ident(*ATTRIBUTE_NAMES):
+		if len(inner) != 1 or not inner[0].is_ident(*BARE_ATTRIBUTE_NAMES):
 			return False
 
 		# ...unless it is being *called*. `min` and `max` are attribute names

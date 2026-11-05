@@ -272,8 +272,7 @@ def test_a_member_named_for_a_builtin_is_read_and_not_called() -> None:
 	spells `min(` -- so a legal schema generated cleanly in two backends and
 	killed the compiler in the other two (26.696).
 
-	The bare form `u8 b[min]` is a different question and is refused by the
-	front end, `[min]` being an attribute name.
+	The bare form `u8 b[min]` reads the same member (26.886).
 	"""
 	for name in ("min", "max"):
 		held = four_ways("endian big;\n"
