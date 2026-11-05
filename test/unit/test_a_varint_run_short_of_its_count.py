@@ -47,7 +47,7 @@ def test_a_short_varint_run_is_refused_by_all_four(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for label, (valid, packet) in CASES.items():
 		given = {name: fourway.answers(argv, packet, tmp_path)

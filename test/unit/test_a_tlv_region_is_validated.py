@@ -79,7 +79,7 @@ def test_a_malformed_tlv_region_is_refused_by_all_four(
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for label, (verdict, packet) in cases.items():
 		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),
@@ -178,7 +178,7 @@ def test_an_unknown_tag_is_refused_by_all_four(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for struct, label, verdict, packet in KNOWN_CASES:
 		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),
@@ -266,7 +266,7 @@ def test_a_repeated_tag_is_refused_by_all_four(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for struct, label, verdict, packet in REPEATED_CASES:
 		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),
@@ -328,7 +328,7 @@ def test_an_item_out_of_order_is_refused_by_all_four(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for label, verdict, packet in ORDERED_CASES:
 		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),

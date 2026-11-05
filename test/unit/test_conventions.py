@@ -910,6 +910,24 @@ def test_the_readme_names_every_keyword() -> None:
 		f"attribute table (project.md 25.-1).")
 
 
+def test_a_backend_that_did_not_build_fails_the_test() -> None:
+	"""`BuildFailed` is a compiler refusing generated code, never a missing one.
+
+	Twelve call sites turned it into a skip reading "could not be built here".
+	So a generated header that stopped compiling left the suite green, and
+	`test_a_bound_may_name_an_element` compared nothing for eleven days (26.876).
+	"""
+	skipping = re.compile(r"except fourway\.BuildFailed[^\n]*\n\s*pytest\.skip")
+	here = Path(__file__).parent
+	found = sorted(path.name for path in here.glob("*.py")
+	               if path.name != Path(__file__).name
+	               and skipping.search(path.read_text(encoding="utf-8")))
+	assert found == []
+	# The pattern has to be able to speak, or the empty list above says nothing.
+	assert skipping.search("except fourway.BuildFailed as failed:\n"
+	                       "\t\tpytest.skip(f\"{failed}\")")
+
+
 def test_the_readme_check_can_fail() -> None:
 	"""The control, and it is not a formality: the scan is three regexes
 	over a file, and a wrong one reports everything present.

@@ -163,3 +163,56 @@ def test_a_member_named_like_an_emitter_local_still_compiles(
 		 str(source)],
 		capture_output=True, text=True)
 	assert compiled.returncode == 0, compiled.stderr
+
+
+#: The locals a member's size read can land beside. `len` is the one that bit:
+#: `framed()` writes `const std::uint32_t len = <the size>`, so a member called
+#: `len` was captured by the declaration it was initialising. The other five
+#: went the same way when each was named in the same place, measured by naming
+#: a member after every local the four emitters declare.
+SIZE_CAPTURING = ("len", "have", "need", "pos", "sink", "value")
+
+SIZE_SCHEMA = """target buffer;
+endian big;
+
+struct inner {{ u8 n; }}
+
+struct outer {{
+	u8     count;
+	inner  items[count];
+	u16    {name};
+	u8     body[{name}];
+	u8     tail;
+}}
+"""
+
+
+@pytest.mark.skipif(CXX is None, reason="needs a C++ compiler")
+@pytest.mark.parametrize("name", SIZE_CAPTURING)
+def test_a_size_read_is_not_captured_by_a_local(
+		name: str, tmp_path: Path) -> None:
+	"""The read `_count_read` spells, which 26.501 left bare.
+
+	The first fix qualified the expression leaf, and a plain size does not go
+	through it. `len` stayed broken for eleven days behind a test that skipped on
+	a compile error, which is what 26.876 records.
+	"""
+	schema = tmp_path / "shadow.situ"
+	schema.write_text(SIZE_SCHEMA.format(name=name), encoding="ascii")
+
+	gen = tmp_path / "gen"
+	subprocess.run(
+		[sys.executable, "-m", "situc.cli", "build", str(schema),
+		 "--target", "cpp", "--out", str(gen)],
+		cwd=ROOT, capture_output=True, text=True, check=True)
+
+	source = tmp_path / "probe.cpp"
+	source.write_text(PROBE, encoding="ascii")
+
+	assert CXX is not None
+	compiled = subprocess.run(
+		[CXX, "-std=c++17", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",
+		 f"-I{gen}", f"-I{RUNTIME / 'cpp'}", f"-I{RUNTIME / 'c'}",
+		 str(source)],
+		capture_output=True, text=True)
+	assert compiled.returncode == 0, compiled.stderr

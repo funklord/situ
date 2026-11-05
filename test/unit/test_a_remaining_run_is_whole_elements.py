@@ -81,7 +81,7 @@ def test_a_ragged_remaining_run_is_refused_by_all_four(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for label, (struct, valid, packet) in CASES.items():
 		given = {name: _verdict(fourway.answers(argv, packet, tmp_path),

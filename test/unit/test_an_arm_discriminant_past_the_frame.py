@@ -106,7 +106,7 @@ def test_all_four_refuse_the_arm(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 	for name, argv in command.items():
 		answer = fourway.answers(argv, SHORT, tmp_path)
 		assert "body_run ok=0 len=0" in answer.splitlines(), (

@@ -4843,8 +4843,12 @@ class Emitter:
 			# what the text-number branch above already does, and what C++
 			# allows and C does not: a member function may call one declared
 			# after it.
+			#
+			# `this->`, because `required` declares a local named `len` and
+			# a size read sits in its initialiser: a member of that name
+			# was captured by the declaration it was initialising (26.501).
 			name = bare_name(local_name(struct, driver.placement))
-			return (leaf(f"{name}()", driver.placement.scalar), True)
+			return (leaf(f"this->{name}()", driver.placement.scalar), True)
 
 		# The address as a separate name rather than a nested f-string: an
 		# expression split across lines inside `{...}` is PEP 701, which is

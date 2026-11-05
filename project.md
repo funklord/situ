@@ -8264,6 +8264,22 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.876 A size read was captured by a local, and a skip hid it
+
+`u16 len; u8 body[len];` behind a variable member emitted `const std::uint32_t
+len = ...len()` in C++, and g++ refused it. 26.501 qualified the expression
+leaf; `_count_read` spells a plain size separately and stayed bare. It has been
+there since 2026-10-25, and `test_a_bound_may_name_an_element`, whose field is
+called `len`, reported it only as a skip: twelve call sites turned
+`fourway.BuildFailed` into "could not be built here". That exception means a
+compiler refused generated code, never that a compiler is missing, so all
+twelve now fail, and `test_conventions` refuses a thirteenth.
+
+Naming a member after each of 77 names the emitters declare as locals found this
+leaf behind six of them (`len`, `have`, `need`, `pos`, `sink`, `value`), all
+clean now. `validate`, `size_min` and `no_check` in C++ and `required` in Rust
+still stop at the compiler, which 0062 keeps on purpose.
+
 ### 26.875 The three builders write wide element runs
 
 Elements wider than a byte are passed as values, and the byte order is the

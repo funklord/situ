@@ -49,7 +49,7 @@ def test_all_four_refuse_a_versioned_field_cut_short(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for label, (verdict, packet) in CASES.items():
 		given = {name: fourway.answers(argv, packet, tmp_path)

@@ -65,7 +65,7 @@ def test_the_four_read_it_as_the_host_does(tmp_path: Path, schema: str,
 	try:
 		command = fourway.build(tmp_path, path)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 	for name, argv in command.items():
 		said = fourway.answers(argv, message, tmp_path)
 		assert "validate 0" in said.splitlines(), (name, said)

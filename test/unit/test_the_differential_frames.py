@@ -164,7 +164,7 @@ def _required_line(tmp_path: Path, text: str, struct: str,
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 	given = {name: _section_line(fourway.answers(argv, packet, tmp_path),
 	                             struct)
 	         for name, argv in command.items()}

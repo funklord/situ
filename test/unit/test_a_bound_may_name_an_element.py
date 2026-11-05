@@ -89,7 +89,7 @@ def test_the_four_agree_about_a_bound_naming_an_element(tmp_path: Path) -> None:
 	try:
 		command = fourway.build(tmp_path, schema)
 	except fourway.BuildFailed as failed:
-		pytest.skip(f"a backend could not be built here: {failed}")
+		pytest.fail(f"a backend did not build: {failed}")
 
 	for label, packet in CASES.items():
 		given = {name: fourway.answers(argv, packet, tmp_path)
