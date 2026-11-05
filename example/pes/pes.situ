@@ -1,0 +1,139 @@
+// MPEG-2 PES packet, ISO/IEC 13818-1, 2.4.3.6 and 2.4.3.7.
+//
+// The header carries flags for seven optional groups. A flag-gated group is a
+// variant, so this is the shape where a builder per combination could not
+// last (26.881): the six written below alone made 96. Each group is one arm
+// value instead, and the packet is one builder.
+
+target buffer;
+endian big;
+bit_order msb_first;
+
+struct nothing {
+}
+
+require size(nothing) == 0;
+
+// 2.4.3.7. A 33-bit clock in three pieces, each followed by a marker bit, after
+// a four-bit prefix that repeats the flags.
+struct timestamp [allow_straddle] {
+	u4   prefix;
+	u3   high;
+	u1   marker_a [must_eq = 1];
+	u15  middle;
+	u1   marker_b [must_eq = 1];
+	u15  low;
+	u1   marker_c [must_eq = 1];
+}
+
+require size(timestamp) == 5;
+
+struct pts_and_dts {
+	timestamp  pts;
+	timestamp  dts;
+}
+
+// ESCR: 33-bit base and 9-bit extension, six bytes.
+struct escr [allow_straddle] {
+	u2   reserved;
+	u3   base_high;
+	u1   marker_a [must_eq = 1];
+	u15  base_middle;
+	u1   marker_b [must_eq = 1];
+	u15  base_low;
+	u1   marker_c [must_eq = 1];
+	u9   extension;
+	u1   marker_d [must_eq = 1];
+}
+
+require size(escr) == 6;
+
+struct es_rate [allow_straddle] {
+	u1   marker_a [must_eq = 1];
+	u22  rate;
+	u1   marker_b [must_eq = 1];
+}
+
+require size(es_rate) == 3;
+
+struct copy_info {
+	u1  marker [must_eq = 1];
+	u7  info;
+}
+
+struct crc {
+	u16  previous_packet_crc;
+}
+
+struct pes {
+	u16  start_high [must_eq = 0];
+	u8   start_low  [must_eq = 1];
+	u8   stream_id;
+	u16  packet_length;
+
+	u2   marker [must_eq = 2];
+	u2   scrambling_control;
+	u1   priority;
+	u1   data_alignment;
+	u1   copyright;
+	u1   original;
+
+	u2   pts_dts_flags;
+	u1   escr_flag;
+	u1   es_rate_flag;
+	u1   trick_mode_flag;
+	u1   copy_info_flag;
+	u1   crc_flag;
+	u1   extension_flag;
+
+	u8   header_data_length;
+
+	variant times switch (pts_dts_flags) {
+		case 0:  nothing      no_time;
+		case 2:  timestamp    pts_only;
+		case 3:  pts_and_dts  pts_dts;
+		default: error;
+	}
+
+	variant clock switch (escr_flag) {
+		case 1:  escr     escr_present;
+		case 0:  nothing  escr_absent;
+		default: error;
+	}
+
+	variant rate switch (es_rate_flag) {
+		case 1:  es_rate  rate_present;
+		case 0:  nothing  rate_absent;
+		default: error;
+	}
+
+	variant trick switch (trick_mode_flag) {
+		case 1:  u8       trick_present;
+		case 0:  nothing  trick_absent;
+		default: error;
+	}
+
+	variant copy switch (copy_info_flag) {
+		case 1:  copy_info  copy_present;
+		case 0:  nothing    copy_absent;
+		default: error;
+	}
+
+	variant check switch (crc_flag) {
+		case 1:  crc      crc_present;
+		case 0:  nothing  crc_absent;
+		default: error;
+	}
+
+	// The extension when its flag is set, then stuffing, then the payload,
+	// which starts `header_data_length` bytes after that field. They are one
+	// run here because the extension's size hangs on flags of its own, and
+	// `size()` in a length cannot name a variant. Stating the stuffing by
+	// arithmetic over the flags reads, but a length over several fields has
+	// no builder (26.630), and a builder is what this file is for. So
+	// `header_data_length` is the caller's number and nothing checks it.
+	//
+	// The frame is one packet, as a demultiplexer hands it over. A video
+	// packet may say `packet_length` 0, so that field cannot size this.
+	u8   rest[remaining];
+}

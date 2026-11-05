@@ -1404,6 +1404,11 @@ UNORACLED = {
 	             "vector; nothing here can WRITE one, so the bytes are "
 	             "ours",
 	"ntp":       "tshark dissects NTP; randpkt cannot write one",
+	"pes":       "nothing here can write one for a sweep: randpkt cannot, "
+	             "and the vectors are ffmpeg's, which "
+	             "test_a_real_pes_packet_is_one_builder_call rebuilds byte "
+	             "for byte; tshark read `every_group` back by hand and is "
+	             "no witness for es_rate, which it reads wrongly",
 	"dtls":      "as ntp",
 	"ble":       "as ntp",
 	"netlink":   "as ntp",

@@ -1,0 +1,37 @@
+# Golden vectors for the PES worked example.
+#
+# The first five are the opening bytes of packets ffmpeg wrote, cut after six
+# bytes of the run that ends the frame:
+#
+#   ffmpeg -f lavfi -i testsrc=size=64x48:rate=25:duration=1 -f lavfi \
+#          -i sine=d=1 -c:v mpeg2video -bf 2 -c:a mp2 -f mpegts t.ts
+#   ffmpeg -f lavfi -i testsrc=size=64x48:rate=25:duration=1 \
+#          -c:v mpeg2video -bf 2 -f vob t.vob
+#
+# `ffprobe -show_entries packet=pts,dts` reports the clocks these bytes carry:
+# 129600 and 126000, audio 128618, and 48600 and 45000 for the program stream.
+#
+# ffmpeg writes no ESCR, rate, trick mode, copy info or CRC, so `every_group`
+# is laid out by hand from 13818-1 and read back by tshark, which reports PTS
+# 1371.7421 s, ESCR 10973.936911 s, trick mode 0x41, copy info 42 and CRC
+# 48879. It reads the 22-bit rate as 4875 where the bytes hold 50000, so it is
+# no witness for that one field.
+
+# Transport stream, video: PTS and DTS.
+pes video_pts_dts      00 00 01 E0 00 00 80 C0 0A 31 00 07 F4 81 11 00 07 D8 61 00 00 01 B3 04 00
+
+# Transport stream, video: PTS alone.
+pes video_pts          00 00 01 E0 00 00 80 80 05 21 00 09 10 A1 00 00 01 00 00 5F
+
+# Transport stream, audio: PTS alone.
+pes audio_pts          00 00 01 C0 09 D3 80 80 05 21 00 07 EC D5 FF FD E0 C4 EC CC
+
+# Program stream: PTS, DTS, and the extension flag set, so `rest` opens with
+# the extension and one byte of stuffing.
+pes program_extension  00 00 01 E0 07 DD 80 C1 0E 31 00 03 7B B1 11 00 03 5F 91 10 60 E6 FF 00 00 01 B3 04 00
+
+# Program stream: PTS, and one byte of stuffing.
+pes program_stuffing   00 00 01 E0 07 EC 80 80 06 21 00 03 97 D1 FF 27 C0 26 04 2F F7
+
+# Six of the seven groups at once.
+pes every_group        00 00 01 E0 00 17 80 BE 12 21 1D 6F 9A 2B C7 AD E7 45 8E 59 81 86 A1 41 AA BE EF DE AD

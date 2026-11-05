@@ -1,0 +1,142 @@
+# situ capability map v1
+# schema: pes.situ
+# core:   offset size align repr atomic
+#
+# Core axes are always shown. Any other axis appears only where it has
+# been weakened below its strongest value.
+#
+# Offsets are byte values, or byte:bit where a field does not start on
+# a byte boundary. Sizes are bytes unless suffixed with `bit`.
+#
+# A struct's size is a bare number where it is fixed, `min..max` where
+# it is bounded, and `min..` where nothing bounds it.
+
+struct copy_info size=1 repr=ValueConverted atomic=NonAtomic
+  copy_info.marker                       offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  copy_info.info                         offset=AbsoluteStatic(0x00:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+struct crc size=2 repr=ValueConverted
+  crc.previous_packet_crc                offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+
+struct es_rate size=3 repr=ValueConverted atomic=NonAtomic
+  es_rate.marker_a                       offset=AbsoluteStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  es_rate.rate                           offset=AbsoluteStatic(0x00:1) size=Fixed(22bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  es_rate.marker_b                       offset=AbsoluteStatic(0x02:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+struct escr size=6 repr=ValueConverted atomic=NonAtomic
+  escr.reserved                          offset=AbsoluteStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.base_high                         offset=AbsoluteStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.marker_a                          offset=AbsoluteStatic(0x00:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.base_middle                       offset=AbsoluteStatic(0x00:6) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.marker_b                          offset=AbsoluteStatic(0x02:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.base_low                          offset=AbsoluteStatic(0x02:6) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.marker_c                          offset=AbsoluteStatic(0x04:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.extension                         offset=AbsoluteStatic(0x04:6) size=Fixed(9bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  escr.marker_d                          offset=AbsoluteStatic(0x05:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+struct nothing size=0
+
+struct pes size=9.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  pes.start_high                         offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
+  pes.start_low                          offset=AbsoluteStatic(0x02) size=Fixed(1) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord
+  pes.stream_id                          offset=AbsoluteStatic(0x03) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord
+  pes.packet_length                      offset=AbsoluteStatic(0x04) size=Fixed(2) align=Aligned(4) repr=ValueConverted atomic=AtomicWord
+  pes.marker                             offset=AbsoluteStatic(0x06) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.scrambling_control                 offset=AbsoluteStatic(0x06:2) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.priority                           offset=AbsoluteStatic(0x06:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.data_alignment                     offset=AbsoluteStatic(0x06:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.copyright                          offset=AbsoluteStatic(0x06:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.original                           offset=AbsoluteStatic(0x06:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.pts_dts_flags                      offset=AbsoluteStatic(0x07) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.escr_flag                          offset=AbsoluteStatic(0x07:2) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.es_rate_flag                       offset=AbsoluteStatic(0x07:3) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.trick_mode_flag                    offset=AbsoluteStatic(0x07:4) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.copy_info_flag                     offset=AbsoluteStatic(0x07:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.crc_flag                           offset=AbsoluteStatic(0x07:6) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.extension_flag                     offset=AbsoluteStatic(0x07:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.header_data_length                 offset=AbsoluteStatic(0x08) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  pes.times                              offset=AbsoluteStatic(0x09) size=Bounded(0, 10) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting
+  pes.times.no_time                      offset=AbsoluteStatic(0x09) size=Fixed(0) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic
+  pes.times.pts_only                     offset=AbsoluteStatic(0x09) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.prefix              offset=AbsoluteStatic(0x09) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.high                offset=AbsoluteStatic(0x09:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.marker_a            offset=AbsoluteStatic(0x09:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.middle              offset=AbsoluteStatic(0x0A) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.marker_b            offset=AbsoluteStatic(0x0B:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.low                 offset=AbsoluteStatic(0x0C) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_only.marker_c            offset=AbsoluteStatic(0x0D:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts                      offset=AbsoluteStatic(0x09) size=Fixed(10) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts                  offset=AbsoluteStatic(0x09) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.prefix           offset=AbsoluteStatic(0x09) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.high             offset=AbsoluteStatic(0x09:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.marker_a         offset=AbsoluteStatic(0x09:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.middle           offset=AbsoluteStatic(0x0A) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.marker_b         offset=AbsoluteStatic(0x0B:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.low              offset=AbsoluteStatic(0x0C) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.pts.marker_c         offset=AbsoluteStatic(0x0D:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts                  offset=AbsoluteStatic(0x0E) size=Fixed(5) align=Aligned(2) repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.prefix           offset=AbsoluteStatic(0x0E) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.high             offset=AbsoluteStatic(0x0E:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.marker_a         offset=AbsoluteStatic(0x0E:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.middle           offset=AbsoluteStatic(0x0F) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.marker_b         offset=AbsoluteStatic(0x10:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.low              offset=AbsoluteStatic(0x11) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.times.pts_dts.dts.marker_c         offset=AbsoluteStatic(0x12:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pes.clock                              offset=Dynamic size=Bounded(0, 6) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  pes.clock.escr_present                 offset=Dynamic size=Fixed(6) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  pes.clock.escr_present.reserved        offset=FrameStatic(0x00) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.base_high       offset=FrameStatic(0x00:2) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.marker_a        offset=FrameStatic(0x00:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.base_middle     offset=FrameStatic(0x00:6) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.marker_b        offset=FrameStatic(0x02:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.base_low        offset=FrameStatic(0x02:6) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.marker_c        offset=FrameStatic(0x04:5) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.extension       offset=FrameStatic(0x04:6) size=Fixed(9bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_present.marker_d        offset=FrameStatic(0x05:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.clock.escr_absent                  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  pes.rate                               offset=Dynamic size=Bounded(0, 3) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  pes.rate.rate_present                  offset=Dynamic size=Fixed(3) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  pes.rate.rate_present.marker_a         offset=FrameStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.rate.rate_present.rate             offset=FrameStatic(0x00:1) size=Fixed(22bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.rate.rate_present.marker_b         offset=FrameStatic(0x02:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.rate.rate_absent                   offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  pes.trick                              offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  pes.trick.trick_present                offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  pes.trick.trick_absent                 offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  pes.copy                               offset=Dynamic size=Bounded(0, 1) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  pes.copy.copy_present                  offset=Dynamic size=Fixed(1) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  pes.copy.copy_present.marker           offset=FrameStatic(0x00) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.copy.copy_present.info             offset=FrameStatic(0x00:1) size=Fixed(7bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  pes.copy.copy_absent                   offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  pes.check                              offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  pes.check.crc_present                  offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  pes.check.crc_present.previous_packet_crc offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  pes.check.crc_absent                   offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  pes.rest                               offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
+
+struct pts_and_dts size=10 repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts                        offset=AbsoluteStatic(0x00) size=Fixed(5) align=Aligned(8) repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.prefix                 offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.high                   offset=AbsoluteStatic(0x00:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.marker_a               offset=AbsoluteStatic(0x00:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.middle                 offset=AbsoluteStatic(0x01) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.marker_b               offset=AbsoluteStatic(0x02:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.low                    offset=AbsoluteStatic(0x03) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.pts.marker_c               offset=AbsoluteStatic(0x04:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts                        offset=AbsoluteStatic(0x05) size=Fixed(5) align=Aligned(1) repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.prefix                 offset=AbsoluteStatic(0x05) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.high                   offset=AbsoluteStatic(0x05:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.marker_a               offset=AbsoluteStatic(0x05:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.middle                 offset=AbsoluteStatic(0x06) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.marker_b               offset=AbsoluteStatic(0x07:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.low                    offset=AbsoluteStatic(0x08) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  pts_and_dts.dts.marker_c               offset=AbsoluteStatic(0x09:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
+struct timestamp size=5 repr=ValueConverted atomic=NonAtomic
+  timestamp.prefix                       offset=AbsoluteStatic(0x00) size=Fixed(4bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  timestamp.high                         offset=AbsoluteStatic(0x00:4) size=Fixed(3bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  timestamp.marker_a                     offset=AbsoluteStatic(0x00:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  timestamp.middle                       offset=AbsoluteStatic(0x01) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  timestamp.marker_b                     offset=AbsoluteStatic(0x02:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  timestamp.low                          offset=AbsoluteStatic(0x03) size=Fixed(15bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  timestamp.marker_c                     offset=AbsoluteStatic(0x04:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic

@@ -203,12 +203,15 @@ def test_an_opaque_arm_is_declined_by_all_four() -> None:
 #: counted the arm nowhere, and a refusal message named a member the
 #: struct does not have. 31 -> 32 is the third of them closing.
 ARM_SHAPES = {
-	("scalar", "not-struct", ""):                34,
-	("no-scalar", "struct", "fixed"):            49,
+	("scalar", "not-struct", ""):                35,
+	("no-scalar", "struct", "fixed"):            61,
 	("no-scalar", "struct", "unmeasurable"):     28,
 	("no-scalar", "not-struct", ""):              1,
 }
 
+#: `example/pes` added thirteen: twelve fixed struct arms, six of them `nothing`
+#: and the rest its optional groups, and `trick_present`, a scalar.
+#:
 #: Both middle cells moved by three when `example/json` arrived: a JSON value
 #: is a variant with six arms, three of them variable structs -- object,
 #: array and string -- and three of them fixed, the tails of `true`, `false`

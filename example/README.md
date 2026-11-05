@@ -25,6 +25,7 @@ identifier -- a property of flattening a path, not of how either name is spelled
 | [dns](dns/) | Sub-byte enums, and an honest boundary where the format stops being a layout. |
 | [ntp](ntp/) | A format designed with alignment in mind, and where `repr` starts to matter. |
 | [bmp](bmp/) | Little endian, and the canonical misaligned layout. |
+| [pes](pes/) | Six optional groups, each gated by its flag, written as one builder taking one arm value per group. Real packets from ffmpeg as vectors. |
 | [telemetry](telemetry/) | A protocol under design, with its capability budget written in as requirements. |
 | [tiff](tiff/) | `endian_marker`: byte order resolved at parse time, and why it costs nothing on the offset axis. |
 | [message](message/) | Islands of staticness inside a dynamic frame, and the views that reach them. project.md example 5.2. |

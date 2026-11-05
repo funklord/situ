@@ -1,0 +1,110 @@
+# situ wire signature v2
+# schema: pes.situ
+#
+# What the bytes mean, and nothing about what they cost. Committed and
+# checked so that a change here is a change somebody reviews.
+#
+# One line per member: where it starts, how wide it is, and every
+# constraint a sender has to satisfy or a receiver may rely on.
+# Positions are byte offsets, or byte:bit off a boundary; `~` marks one
+# the data decides rather than the schema.
+#
+# A construct whose contract is a list rather than an extent -- a
+# variant's arms, a tlv region's grammar, an indexed region's offset
+# table, the bytes a tag covers -- states it on `name what: value`
+# lines below the members, one line per entry so that a diff names the
+# entry that moved.
+
+bit_order msb_first
+endian big
+target buffer
+
+struct copy_info size=1
+  @0x0000   1bit      u1         marker  msb_first must_eq=1
+  @0x0000:1 7bit      u7         info  msb_first
+
+struct crc size=2
+  @0x0000   2         u16        previous_packet_crc  big
+
+struct es_rate size=3
+  @0x0000   1bit      u1         marker_a  msb_first must_eq=1
+  @0x0000:1 22bit     u22        rate  big msb_first
+  @0x0002:7 1bit      u1         marker_b  msb_first must_eq=1
+
+struct escr size=6
+  @0x0000   2bit      u2         reserved  msb_first
+  @0x0000:2 3bit      u3         base_high  msb_first
+  @0x0000:5 1bit      u1         marker_a  msb_first must_eq=1
+  @0x0000:6 15bit     u15        base_middle  big msb_first
+  @0x0002:5 1bit      u1         marker_b  msb_first must_eq=1
+  @0x0002:6 15bit     u15        base_low  big msb_first
+  @0x0004:5 1bit      u1         marker_c  msb_first must_eq=1
+  @0x0004:6 9bit      u9         extension  big msb_first
+  @0x0005:7 1bit      u1         marker_d  msb_first must_eq=1
+
+struct nothing size=0
+
+struct pes size=9..
+  @0x0000   2         u16        start_high  big must_eq=0
+  @0x0002   1         u8         start_low  must_eq=1
+  @0x0003   1         u8         stream_id
+  @0x0004   2         u16        packet_length  big
+  @0x0006   2bit      u2         marker  msb_first must_eq=2
+  @0x0006:2 2bit      u2         scrambling_control  msb_first
+  @0x0006:4 1bit      u1         priority  msb_first
+  @0x0006:5 1bit      u1         data_alignment  msb_first
+  @0x0006:6 1bit      u1         copyright  msb_first
+  @0x0006:7 1bit      u1         original  msb_first
+  @0x0007   2bit      u2         pts_dts_flags  msb_first
+  @0x0007:2 1bit      u1         escr_flag  msb_first
+  @0x0007:3 1bit      u1         es_rate_flag  msb_first
+  @0x0007:4 1bit      u1         trick_mode_flag  msb_first
+  @0x0007:5 1bit      u1         copy_info_flag  msb_first
+  @0x0007:6 1bit      u1         crc_flag  msb_first
+  @0x0007:7 1bit      u1         extension_flag  msb_first
+  @0x0008   1         u8         header_data_length
+  @0x0009   0..10     variant    times
+  ~         0..6      variant    clock
+  ~         0..3      variant    rate
+  ~         0..1      variant    trick
+  ~         0..1      variant    copy
+  ~         0..2      variant    check
+  ~         0..       u8         rest  sized-by=remaining
+  times switch: pts_dts_flags
+  times case 0: no_time nothing
+  times case 2: pts_only timestamp
+  times case 3: pts_dts pts_and_dts
+  times case default: error
+  clock switch: escr_flag
+  clock case 0: escr_absent nothing
+  clock case 1: escr_present escr
+  clock case default: error
+  rate switch: es_rate_flag
+  rate case 0: rate_absent nothing
+  rate case 1: rate_present es_rate
+  rate case default: error
+  trick switch: trick_mode_flag
+  trick case 0: trick_absent nothing
+  trick case 1: trick_present u8
+  trick case default: error
+  copy switch: copy_info_flag
+  copy case 0: copy_absent nothing
+  copy case 1: copy_present copy_info
+  copy case default: error
+  check switch: crc_flag
+  check case 0: crc_absent nothing
+  check case 1: crc_present crc
+  check case default: error
+
+struct pts_and_dts size=10
+  @0x0000   5         timestamp  pts  big
+  @0x0005   5         timestamp  dts  big
+
+struct timestamp size=5
+  @0x0000   4bit      u4         prefix  msb_first
+  @0x0000:4 3bit      u3         high  msb_first
+  @0x0000:7 1bit      u1         marker_a  msb_first must_eq=1
+  @0x0001   15bit     u15        middle  big msb_first
+  @0x0002:7 1bit      u1         marker_b  msb_first must_eq=1
+  @0x0003   15bit     u15        low  big msb_first
+  @0x0004:7 1bit      u1         marker_c  msb_first must_eq=1
