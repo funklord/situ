@@ -33,8 +33,8 @@ from collections.abc import Mapping
 from situc import ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
-                                   ZERO, Part, Shape)
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
+                                   VARINT, WIDE, ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -70,6 +70,27 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	msb = traverse.bit_extractor(held.scalar, held) == "msb"
 	return [f"\tView(Message(memoryview(situ_out)), situ_at, len(situ_out) - situ_at)"
 	        f"._set_bits({part.bit_at}, {held.size_bits}, {value}, msb={msb})"]
+
+
+def _wide(part: Part) -> list[str]:
+	"""Elements wider than a byte: the caller passes values, and the byte
+	order is the writer's to apply."""
+	from situc.codegen.python.emit import _byte_order
+
+	held  = part.placement
+	assert held.scalar is not None
+	local = py_name(part.local)
+	each  = part.bit_at
+	return [
+		*([f"\tif len({local}) != {part.bytes}:",
+		   f'\t\traise ConstraintError("{held.path}: not {part.bytes} '
+		   'elements")'] if part.bytes else []),
+		*_room(f"len({local}) * {each}", held.path),
+		f"\tfor situ_value in {local}:",
+		f"\t\tsitu_out[situ_at:situ_at + {each}] = situ_value.to_bytes("
+		f"{each}, {_byte_order(held.endian)}, signed={held.scalar.signed})",
+		f"\t\tsitu_at += {each}",
+	]
 
 
 def _varint(part: Part, parts: list[Part]) -> list[str]:
@@ -385,6 +406,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _ended(part)
 	if part.role == VARINT:
 		return _varint(part, parts)
+	if part.role == WIDE:
+		return _wide(part)
 	if part.role == PAD:
 		# To the next boundary, from this struct's own base, which is where
 		# the cursor counts from.
@@ -453,6 +476,8 @@ def _parameters(parts: list[Part]) -> list[str]:
 		elif part.role == TAG and part.opens:
 			# The pseudo-header its codec sums, which no member holds.
 			found.append(f"{py_name(part.local)}_prefix: bytes")
+		elif part.role == WIDE:
+			found.append(f"{py_name(part.local)}: list[int]")
 	return found
 
 

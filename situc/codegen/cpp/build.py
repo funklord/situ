@@ -22,8 +22,8 @@ from collections.abc import Mapping
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
-                                   ZERO, Part, Shape)
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
+                                   VARINT, WIDE, ZERO, Part, Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -155,6 +155,34 @@ def _size(part: Part, length: str) -> list[str]:
 	]
 
 
+def _length(run: str, parts: list[Part]) -> str:
+	"""What a size field reads: a count for values, bytes for the rest."""
+	wide = any(one.role == WIDE and one.local == run for one in parts)
+	return f"{run}_count" if wide else f"{run}_len"
+
+
+def _wide(part: Part) -> list[str]:
+	"""Elements wider than a byte: the caller passes values, and the byte
+	order is the writer's to apply. The count is held to the room first,
+	since `count * each` on a caller's count can overflow."""
+	assert part.placement.scalar is not None
+	local = part.local
+	each  = part.bit_at
+	bits  = part.placement.scalar.bits
+	count = f"{part.bytes}u" if part.bytes else f"{local}_count"
+	end   = _order_suffix(part.placement.endian)
+	return [
+		f"\tif ({local} == nullptr) {{", BOUNDS, "\t}",
+		f"\tif ({count} > (situ_cap - situ_at) / {each}u) {{", BOUNDS, "\t}",
+		f"\tfor (std::uint32_t situ_scan = 0; situ_scan < {count}; "
+		"situ_scan++) {",
+		f"\t\tsitu_put_{end}{bits}(situ_out + situ_at,",
+		f"\t\t\t\tstatic_cast<std::uint{bits}_t>({local}[situ_scan]));",
+		f"\t\tsitu_at += {each}u;",
+		"\t}",
+	]
+
+
 def _varint(part: Part, parts: list[Part]) -> list[str]:
 	"""A number as wide as its own value.
 
@@ -171,7 +199,7 @@ def _varint(part: Part, parts: list[Part]) -> list[str]:
 	if part.sizes is not None:
 		run   = next(one.local for one in parts
 		             if one.placement is part.sizes)
-		held  = f"{run}_len"
+		held  = _length(run, parts)
 		value = f"static_cast<std::uint64_t>({held})"
 	elif part.minimal:
 		held  = f"static_cast<std::uint64_t>({part.local})"
@@ -391,7 +419,7 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	if part.sizes is not None:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
-		lines += _size(part, f"{run}_len")
+		lines += _size(part, _length(run, parts))
 	elif part.stated is not None:
 		lines += _bit_store(part, f"{part.stated}u")
 	elif plain_build.takes_value(part):
@@ -419,6 +447,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _ended(part)
 	if part.role == VARINT:
 		return _varint(part, parts)
+	if part.role == WIDE:
+		return _wide(part)
 	if part.role == PAD:
 		# To the next boundary, from this struct's own base, which is where
 		# the cursor counts from.
@@ -451,7 +481,7 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		if part.inner:
 			return [*_walk(structs, measured, parts),
 			        *_size(part, "situ_count")]
-		return _size(part, f"{measured.local}_len")
+		return _size(part, _length(measured.local, parts))
 	if part.role == ZERO:
 		ones = traverse.reserved_policy(part.placement.attrs) == "must_be_one"
 		return [*_room(f"{part.bytes}u"),
@@ -494,6 +524,10 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{_scalar(part.placement)} {part.local}")
 		elif part.role == RUN:
 			found.append(f"const std::uint8_t *{part.local}")
+		elif part.role == WIDE:
+			found.append(f"const {_scalar(part.placement)} *{part.local}")
+			if not part.bytes:
+				found.append(f"std::uint32_t {part.local}_count")
 		elif part.role == TAG and part.opens:
 			# The pseudo-header its codec sums, which no member holds.
 			found.extend([f"const std::uint8_t *{part.local}_prefix",

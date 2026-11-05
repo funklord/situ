@@ -24,7 +24,7 @@ from test_the_four_builders_agree import Given, four_say	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit		# noqa: E402
-from situc.codegen.c.build import RUN, TAG, refusals		# noqa: E402
+from situc.codegen.c.build import RUN, TAG, WIDE, refusals	# noqa: E402
 from situc.layout import solve				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
 
@@ -55,10 +55,10 @@ def _units(schema: Path) -> dict[str, Unit]:
 	return {f"{one.struct.name}.{one.suffix}": one for one in found}
 
 
-def _with(unit: Unit, *values: int | bytes) -> tuple[Unit, Given]:
+def _with(unit: Unit, *values: int | bytes | list[int]) -> tuple[Unit, Given]:
 	taken = [part for part in unit.parts if plain_build.takes_value(part)
 	         or part.role == RUN or part.role in plain_build.MEASURED
-	         or (part.role == TAG and part.opens)]
+	         or part.role == WIDE or (part.role == TAG and part.opens)]
 	assert len(taken) == len(values), [part.role for part in taken]
 	return unit, list(zip(taken, values))
 
@@ -424,3 +424,18 @@ def test_a_pad_goes_to_the_next_boundary(tmp_path: Path) -> None:
 	         for n, body, pad in ((1, b"a", 1), (2, b"ab", 0),
 	                              (5, b"abcde", 1))]
 	assert _extra(said, 3) == spelt
+
+
+def test_wide_elements_take_the_schema_s_order(tmp_path: Path) -> None:
+	"""The caller passes values, and a count field states how many."""
+	schema = tmp_path / "wide.situ"
+	schema.write_text("""\
+struct big    [endian = big]    { u8 n; u16 v[n]; }
+struct little [endian = little] { u8 n; u16 v[n]; u32 w[1]; }
+""", encoding="ascii")
+	units = _units(schema)
+	said  = four_say(schema, tmp_path, list(units.values()), [
+		_with(units["big."], [0x12, 0x34]),
+		_with(units["little."], [0x12], [0x56]),
+	])
+	assert _extra(said, 2) == ["02" "0012" "0034", "01" "1200" "56000000"]

@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 from situc import ast
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
-                                   ZERO, Choice, Part, Shape,
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
+                                   VARINT, WIDE, ZERO, Choice, Part, Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
 from situc.resolve import ResolvedSchema, ResolvedStruct
@@ -27,7 +27,7 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
 SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD, PEEKED, REPEAT,
-                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, ZERO})
+                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.
@@ -46,7 +46,7 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.others and part.role not in (BITS, NESTED, SCALAR):
 		return False
-	if part.role in (ENDED, RUN, SPAN) and held.kind != "field":
+	if part.role in (ENDED, RUN, SPAN, WIDE) and held.kind != "field":
 		return False
 	if part.role in (ARMTAG, SCALAR, SIZE) \
 			and (held.scalar is None or held.marker is not None
@@ -68,10 +68,13 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False		# no value to invert through, yet
 	if part.role == SIZE or (part.role in (BITS, VARINT)
 	                         and part.sizes is not None):
-		measured = next((one for one in parts if one.role in MEASURED
+		measured = next((one for one in parts
+		                 if (one.role in MEASURED or one.role == WIDE)
 		                 and one.placement is part.sizes), None)
 		if measured is None or measured.delimiter:
 			return False		# the delimiter is not the caller's to count
+		if measured.role == WIDE and (measured.bytes or part.solved):
+			return False		# a count, with nothing to compute
 		return not part.inner or (part.role == SIZE and part.solved is None
 		                          and measured.role == REPEAT)
 	return True

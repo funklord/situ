@@ -88,10 +88,12 @@ def test_every_struct_the_builder_serves_round_trips(
 	served   = build_py.plain(resolved, shape)
 	# Every struct is built by `test_the_four_builders_agree`; reading each
 	# member back through the accessors is this file's, and it asks that of
-	# the struct whose parts are all values the caller chose.
+	# the struct whose parts are all binary values the caller chose. A text
+	# number is as wide as its digits, so this file's arithmetic is not its.
 	scalars  = [unit.struct for unit in plain_build.units(resolved, shape)
 	            if not unit.suffix
-	            and all(part.role == SCALAR for part in unit.parts)]
+	            and all(part.role == SCALAR and not part.radix
+	                    for part in unit.parts)]
 
 	emitted = subprocess.run(
 		[sys.executable, "-m", "situc", "build", str(schema),

@@ -8264,6 +8264,14 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.875 The three builders write wide element runs
+
+Elements wider than a byte are passed as values, and the byte order is the
+writer's to apply: a pointer and a count in C++, a slice in Rust, a list in
+Python. A count field states how many. 249 builders over 34 schemas. What is
+left is argued spans, opaque and hidden reserved runs and varint runs, all
+`edges` shapes, and these stay declined by name.
+
 ### 26.874 A builder chooses an arm of each variant
 
 A struct with several variants gets a builder per combination, named with its

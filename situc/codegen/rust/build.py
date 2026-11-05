@@ -21,8 +21,8 @@ from __future__ import annotations
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
-                                   ZERO, Part, Shape)
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
+                                   VARINT, WIDE, ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
@@ -140,6 +140,25 @@ def _size(part: Part, length: str) -> list[str]:
 		   "\t\t\treturn Err(Error::Constraint);",
 		   "\t\t}"] if limit < (1 << 63) - 1 else []),
 		*(f"\t{line}" for line in _store(part, "situ_solved")),
+		"\t}",
+	]
+
+
+def _wide(part: Part) -> list[str]:
+	"""Elements wider than a byte: the caller passes values, and the byte
+	order is the writer's to apply."""
+	local = _ident(part.local)
+	each  = part.bit_at
+	return [
+		*([f"\tif {local}.len() != {part.bytes} {{",
+		   "\t\treturn Err(Error::Constraint);", "\t}"]
+		  if part.bytes else []),
+		f"\tif {local}.len() > (situ_out.len() - situ_at) / {each} {{",
+		"\t\treturn Err(Error::Bounds);", "\t}",
+		f"\tfor situ_value in {local} {{",
+		f"\t\tsitu_rt::{_writer(part.placement.endian)}(situ_out, situ_at,"
+		f" {each}, *situ_value as u64);",
+		f"\t\tsitu_at += {each};",
 		"\t}",
 	]
 
@@ -362,6 +381,8 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		return _ended(part)
 	if part.role == VARINT:
 		return _varint(part, parts)
+	if part.role == WIDE:
+		return _wide(part)
 	if part.role == PAD:
 		# To the next boundary, from this struct's own base, which is where
 		# the cursor counts from.
@@ -434,6 +455,8 @@ def _parameters(parts: list[Part]) -> list[str]:
 		elif part.role == TAG and part.opens:
 			# The pseudo-header its codec sums, which no member holds.
 			found.append(f"{part.local}_prefix: &[u8]")
+		elif part.role == WIDE:
+			found.append(f"{name}: &[{_scalar(part.placement)}]")
 		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
 	return found

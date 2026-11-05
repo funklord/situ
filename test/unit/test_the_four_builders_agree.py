@@ -29,7 +29,8 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
 from situc.codegen.c.build import (BITS, ENDED, NESTED, REPEAT,	# noqa: E402
-                                   RUN, SCALAR, SIZE, SPAN, TAG, VARINT, Part)
+                                   RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
+                                   Part)
 from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -95,7 +96,7 @@ def _run_bytes(length: int, index: int) -> bytes:
 	return bytes((0x41 + index + at) & 0xFF for at in range(length))
 
 
-Given = list[tuple["Part", "int | bytes"]]
+Given = list[tuple["Part", "int | bytes | list[int]"]]
 
 
 def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
@@ -115,6 +116,9 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			found.append((part, 5 + at))	# small enough for its digits
 		elif part.role == SCALAR:
 			found.append((part, _raw(part.placement, at)))
+		elif part.role == WIDE:
+			found.append((part, [0x12 + at + one
+			                     for one in range(part.bytes or 2)]))
 		elif part.role == VARINT and plain_build.takes_value(part):
 			# Past one byte, so the continuation bit is exercised.
 			found.append((part, 0x1234 + at))
@@ -190,6 +194,14 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			if isinstance(value, int):
 				values.append(f"{value & MASK:#x}ull")
 				continue
+			if isinstance(value, list):
+				name = f"run_{index}_{at}"
+				lines.append(_array(name, bytes(value),
+				                    f"uint{part.bit_at * 8}_t"))
+				values.append(name)
+				if not part.bytes:
+					values.append(f"{len(value)}u")
+				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "uint8_t"))
 			values.append(name)
@@ -222,6 +234,14 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 				        else cpp_scalar(part.placement))
 				values.append(f"static_cast<{kind}>"
 				              f"({value & MASK:#x}ull)")
+				continue
+			if isinstance(value, list):
+				name = f"run_{index}_{at}"
+				lines.append(_array(name, bytes(value),
+				                    cpp_scalar(part.placement)))
+				values.append(name)
+				if not part.bytes:
+					values.append(f"{len(value)}u")
 				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "std::uint8_t"))
@@ -257,6 +277,11 @@ def _rust_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 				        else "i64" if part.role == VARINT
 				        else rust_scalar(part.placement))
 				values.append(f"{value & MASK:#x}u64 as {kind}")
+				continue
+			if isinstance(value, list):
+				kind  = rust_scalar(part.placement)
+				items = ", ".join(f"{one:#x}{kind}" for one in value)
+				values.append(f"&[{items}]")
 				continue
 			items = ", ".join(f"{one:#x}u8" for one in value)
 			values.append(f"&[{items}]")
