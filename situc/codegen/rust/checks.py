@@ -30,7 +30,8 @@ from situc.codegen.rust.emit import _ident, _pascal
 from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
-from situc.traverse import enclosing_arm, inside_an_unresolved_arm, own_entries
+from situc.traverse import (enclosing_arm, inside_an_unresolved_arm,
+                            measured_from_a_moving_base, own_entries)
 from situc.types import ScalarKind
 
 #: The two this backend does not emit, and why, so the generated file can
@@ -547,7 +548,8 @@ def _reserved(basename: str, resolved: ResolvedSchema,
 		return []
 	if placement.offset_bits + placement.size_bits > extent * BITS_PER_BYTE:
 		return []
-	if inside_an_unresolved_arm(struct, placement):
+	if inside_an_unresolved_arm(struct, placement) \
+			or measured_from_a_moving_base(placement):
 		return []
 
 	wrong = 0 if policy == "must_be_one" else (1 << placement.size_bits) - 1
@@ -579,7 +581,8 @@ def _pinned_run(basename: str, resolved: ResolvedSchema,
 		return []
 	if placement.offset_bits % BITS_PER_BYTE:
 		return []
-	if inside_an_unresolved_arm(struct, placement):
+	if inside_an_unresolved_arm(struct, placement) \
+			or measured_from_a_moving_base(placement):
 		return []
 
 	at = placement.offset_bits // BITS_PER_BYTE
@@ -625,7 +628,8 @@ def _must_eq(basename: str, resolved: ResolvedSchema,
 	assert must is not None and must.value is not None
 	if placement.offset_bits is None or not placement.size_bits:
 		return []
-	if inside_an_unresolved_arm(struct, placement):
+	if inside_an_unresolved_arm(struct, placement) \
+			or measured_from_a_moving_base(placement):
 		return []
 	if (placement.offset_bits + placement.size_bits - 1) \
 			// BITS_PER_BYTE >= extent:
@@ -655,7 +659,8 @@ def _enum(basename: str, schema: ast.Schema, resolved: ResolvedSchema,
 		return []		# section 8.7's escape hatch: nothing to reject
 	if placement.offset_bits is None or not placement.size_bits:
 		return []
-	if inside_an_unresolved_arm(struct, placement):
+	if inside_an_unresolved_arm(struct, placement) \
+			or measured_from_a_moving_base(placement):
 		return []
 	if (placement.offset_bits + placement.size_bits - 1) \
 			// BITS_PER_BYTE >= extent:

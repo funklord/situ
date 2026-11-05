@@ -8268,6 +8268,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.884 A real PES packet, and two faults it found in the checks
+
+Moved to `doc/decision/26.884-a-real-pes-packet-found-two-faults-in-the-checks.md`.
+
 ### 26.883 `default: error` has no builder
 
 It is an arm no message has, and all 12 in the corpus (48 functions over four

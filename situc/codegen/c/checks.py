@@ -46,7 +46,8 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (Obligation, covered_run, data_sized,
 	enclosing_arm, has_computable_extent, indexed_elements,
 	inside_a_nested_member, inside_an_unresolved_arm, invalidating_members,
-	is_varint_run, local_name, obligations, own_members, reserved_constraint)
+	is_varint_run, local_name, measured_from_a_moving_base, obligations,
+	own_members, reserved_constraint)
 
 WORD_WIDTHS = (8, 16, 32, 64)
 
@@ -2143,7 +2144,8 @@ def _validate_checks(suite: Suite, schema: ast.Schema,
 		if must_eq is not None and must_eq.value is None:
 			continue
 
-		if placement.offset_bits is None:
+		if placement.offset_bits is None \
+				or measured_from_a_moving_base(placement):
 			suite.skip(placement.path,
 			           "its pinned value sits at an offset the message chooses,"
 			           " so this cannot write one buffer that breaks it")
@@ -2241,7 +2243,8 @@ def _enum_checks(suite: Suite, schema: ast.Schema,
 
 		if not values or "[]" in placement.path:
 			continue
-		if placement.offset_bits is None:
+		if placement.offset_bits is None \
+				or measured_from_a_moving_base(placement):
 			suite.skip(placement.path,
 			           "it sits at an offset the message chooses, so this"
 			           " cannot write one buffer that breaks it")
@@ -2454,7 +2457,8 @@ def _pinned_run_body(struct: ResolvedStruct, placement: Placement,
 	and a check that cannot break its subject is worse than none.
 	"""
 	runs = required_run(placement, every=True)
-	if not runs or placement.offset_bits is None:
+	if not runs or placement.offset_bits is None \
+			or measured_from_a_moving_base(placement):
 		return None
 	if placement.offset_bits % BITS_PER_BYTE:
 		return None
@@ -2524,7 +2528,9 @@ def _reserved_checks(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStr
 		placement = entry.placement
 		policy    = reserved_policy(placement)
 
-		if policy is None or placement.offset_bits is None or not placement.size_bits:
+		if policy is None or placement.offset_bits is None \
+				or measured_from_a_moving_base(placement) \
+				or not placement.size_bits:
 			continue
 
 		# A field inside an array element is not validated by the enclosing
@@ -2813,8 +2819,7 @@ def _span_check(suite: Suite, resolved: ResolvedSchema, struct: ResolvedStruct,
 	known = [entry.placement for entry in struct.entries
 	         if tag in entry.placement.covered_by
 	         and entry.placement.offset_bits is not None
-	         and not (entry.placement.frame_relative
-	                  and entry.placement.frame_base_dynamic)
+	         and not measured_from_a_moving_base(entry.placement)
 	         and entry.placement.size_bits
 	         and entry.placement.kind != "authenticated"]
 	if not known:

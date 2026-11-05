@@ -37,7 +37,8 @@ from situc.layout import BITS_PER_BYTE, Placement
 from situc.propagate import Resolved
 from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.traverse import (enclosing_arm, has_computable_extent,
-                            inside_an_unresolved_arm, own_entries)
+                            inside_an_unresolved_arm,
+                            measured_from_a_moving_base, own_entries)
 from situc.types import ScalarKind
 
 #: `CHECK_KINDS` under this module's own name, the generated prose
@@ -424,7 +425,8 @@ def _pinned_run(basename: str, resolved: ResolvedSchema,
 	worse than none.
 	"""
 	runs = required_run(placement, every=True)
-	if not runs or placement.offset_bits is None:
+	if not runs or placement.offset_bits is None \
+			or measured_from_a_moving_base(placement):
 		return []
 	if placement.offset_bits % BITS_PER_BYTE:
 		return []
@@ -450,7 +452,7 @@ def _pinned_run(basename: str, resolved: ResolvedSchema,
 		        " nothing.", ""]
 
 	shown = ", ".join(run.hex() or "(empty)" for run in runs)
-	name  = py_name(f"{struct.name}_{placement.name}")
+	name  = py_name(placement.path)
 	return [
 		f"\tdef test_{name}_must_eq_is_enforced(self) -> None:",
 		f'\t\t"""`{placement.path}` is pinned to {shown}.',
@@ -531,7 +533,8 @@ def _one_enum(basename: str, schema: ast.Schema, resolved: ResolvedSchema,
 
 	reason = None
 	unknown = None
-	if placement.offset_bits is None:
+	if placement.offset_bits is None \
+			or measured_from_a_moving_base(placement):
 		reason = ("it sits at an offset the message chooses, so no one"
 		          " buffer breaks it")
 	elif not placement.size_bits:
@@ -572,7 +575,7 @@ def _one_enum(basename: str, schema: ast.Schema, resolved: ResolvedSchema,
 		return [f"\t# Not enforced here: `{placement.path}`, because its"
 		        " bits are not ones a value can be placed into.", ""]
 
-	name = py_name(f"{struct.name}_{placement.name}")
+	name = py_name(placement.path)
 	return [
 		f"\tdef test_{name}_rejects_a_value_no_member_names(self) -> None:",
 		f'\t\t"""`{placement.path}` is a `{placement.type_name}`, which',
@@ -669,7 +672,8 @@ def _one_must_eq(basename: str, resolved: ResolvedSchema,
 		return _pinned_run(basename, resolved, struct, placement, extent)
 
 	reason = None
-	if placement.offset_bits is None:
+	if placement.offset_bits is None \
+			or measured_from_a_moving_base(placement):
 		reason = ("its pinned value sits at an offset the message chooses,"
 		          " so no one buffer breaks it")
 	elif inside_an_unresolved_arm(struct, placement):
@@ -709,7 +713,7 @@ def _one_must_eq(basename: str, resolved: ResolvedSchema,
 		return [f"\t# Not enforced here: `{placement.path}`, because its"
 		        " bits are not ones a value can be placed into.", ""]
 
-	name = py_name(f"{struct.name}_{placement.name}")
+	name = py_name(placement.path)
 	return [
 		f"\tdef test_{name}_must_eq_is_enforced(self) -> None:",
 		f'\t\t"""`{placement.path}` is pinned to {demanded}.',
@@ -901,6 +905,9 @@ def _one_reserved(basename: str, resolved: ResolvedSchema,
 		# second emits a check about bytes nobody selected (26.839).
 		reason = ("it is inside a variant arm this backend cannot name, so"
 		          " no message can be built that carries it")
+	elif measured_from_a_moving_base(placement):
+		reason = ("it is measured from a nested struct at an offset the"
+		          " message chooses, not from the message")
 	elif placement.pinned_runs:
 		reason = ("it is a pinned run, whose check is the pin rather than a"
 		          " bit policy")
@@ -924,7 +931,7 @@ def _one_reserved(basename: str, resolved: ResolvedSchema,
 		        " bits cannot be placed from the map alone", "\t# -- a"
 		        " `native` byte order has no one answer here.", ""]
 
-	name = py_name(f"{struct.name}_{placement.name}")
+	name = py_name(placement.path)
 	return [
 		f"\tdef test_{name}_{policy}_is_enforced(self) -> None:",
 		f'\t\t"""`{placement.path}` is reserved [{policy}].',

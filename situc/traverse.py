@@ -3495,6 +3495,17 @@ def enclosing_arm(struct: ResolvedStruct,
 	return None
 
 
+def measured_from_a_moving_base(placement: Placement) -> bool:
+	"""Whether this member's `offset_bits` is no place in the message.
+
+	A member of a nested struct behind variable bytes carries an offset
+	measured from that struct, so it is a number and not a position.
+	`example/pes` is where it bit: the second flag-gated group sits wherever
+	the first ended, and a check for a pin inside it wrote to byte 0.
+	"""
+	return placement.frame_relative and placement.frame_base_dynamic
+
+
 def inside_an_unresolved_arm(struct: ResolvedStruct,
 		placement: Placement) -> bool:
 	"""Whether this member is inside a variant whose arm cannot be named.
