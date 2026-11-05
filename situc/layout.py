@@ -362,6 +362,10 @@ class Placement:
 	# bytes *mean*, a receiver that disagrees about either cannot
 	# interoperate, and both are enforced by wellformed's checks (0041).
 	sealed_nonce: str | None	= None
+	# What the region's codec says a nonce and a tag are, where it says: the
+	# advisor speaks only where nothing else has (26.878).
+	sealed_nonce_bytes: int | None	= None
+	sealed_tag_bytes: int | None	= None
 	sealed_key: str | None		= None
 	# Set on a member inside a sealed region, naming it. What makes the
 	# interior VerifyGated -- the stage gate of section 14.3.
@@ -1449,6 +1453,8 @@ class Solver:
 			attrs         = region.attrs,
 			codec         = region.codec,
 			sealed_nonce  = _region_argument(region, "nonce"),
+			sealed_nonce_bytes = codec.nonce_bytes,
+			sealed_tag_bytes   = codec.tag_bytes,
 			sealed_key    = _region_argument(region, "key"),
 			# `getattr`, because `sealed` shares this function and has no
 			# `covers` clause of its own -- same reason as `until` above.

@@ -3672,9 +3672,9 @@ obligation from it, which is why nothing can catch the cases below.
 
 | what a schema may say today | what situ does with it |
 |---|---|
-| `tag u8[1]` -- an 8-bit authentication tag | refused where the codec states `tag_bytes` (0038); accepted where it does not |
-| `u8 n [nonce]` -- 256 distinct nonces | accepted; advisor silent |
-| `sealed(codec)` naming no nonce | accepted, and an omission looks the same |
+| `tag u8[1]` -- an 8-bit authentication tag | refused where the codec states `tag_bytes` (0038); where nothing speaks for it, accepted and advised against (26.878) |
+| `u8 n; sealed(c, nonce = n)` -- 256 distinct nonces | refused where the codec states `nonce_bytes`; otherwise accepted and advised against, with the message count (26.878) |
+| `sealed(codec)` naming no nonce | accepted, because a nonce the caller derives is real; advised against where the codec states `nonce_bytes` (26.878) |
 
 **A codec cannot state its own parameters.** Its vocabulary is
 `authenticated`, `deterministic`, `error_propagating`, `expansion`,
@@ -4338,6 +4338,9 @@ case.
 | move a mutable field out of tag coverage | frequent mutation of a covered field | eliminates tag recomputation per mutation |
 | convert `tlv` to `positional` for known-common tags | hot tags in a TLV region | O(1) access instead of O(n) scan |
 | widen a bit-packed field to whole bytes | bit-packed fields sharing a byte | one field out of the run regains `atomic`, a byte address and a direct representation, for the bytes it takes |
+| widen a short tag | a tag under 8 bytes no codec size or `[truncated]` speaks for | a guess passes once in 2^64 tries rather than 2^(8 x width) |
+| widen a short nonce | a nonce under 8 bytes under a codec stating no `nonce_bytes` | 2^64 messages under one key before a nonce repeats |
+| name a region's nonce | a codec stating `nonce_bytes`, over a region naming no `nonce =` | the width held to the codec, the ordering checked, the nonce in the wire signature |
 
 Three of those triggers are not decidable from a schema and are implemented as
 what the compiler can actually supply:
@@ -8264,6 +8267,25 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.878 The advisor stops calling an 8-bit tag the strongest form
+
+`situc advise` answered "already at the strongest form" for `tag u8[1]`, for a
+one-byte nonce, and for a codec stating `nonce_bytes = 12` over a region naming
+no nonce. 14.8 listed the first two as gaps, beside a claim that `[nonce]` is
+accepted, which it is not. Three rows close them: `widen-a-short-tag`,
+`widen-a-short-nonce`, `name-the-nonce`.
+
+They are advice and not refusals, for two reasons. A nonce the caller derives is
+real, TLS 1.3 builds its own, and at twelve bytes it has no other spelling
+(26.470). And 0038 says silence on a codec's side checks nothing on purpose.
+
+Each speaks only where nothing else has: a width the codec states and
+`[truncated]` are left alone. Eight bytes is the line,
+being what OSCORE truncates a tag to and what DTLS carries as a nonce, so
+neither is told to grow. It is a judgement, not a standard. Over the corpus only
+three `edges` tags fire, all four-byte tags on an `authenticated` block with no
+codec. The codec's two widths reach the advisor on the sealed placement.
 
 ### 26.877 The refusal of `data[size]` says how to write it
 

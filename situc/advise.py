@@ -688,6 +688,146 @@ def _find_scattered_coverage(resolved: ResolvedSchema) -> list[Suggestion]:
 	return found
 
 
+#: Below this a tag or a nonce is worth a sentence. Eight bytes is the tag
+#: OSCORE truncates to and the nonce DTLS carries, both considered choices, so
+#: neither is told to grow. Under it the arithmetic starts to reach a real
+#: attacker or a real session, whatever the primitive behind it.
+SHORT_BYTES = 8
+
+
+def _powers(bytes_wide: int) -> str:
+	"""A count of values, where 2^8 reads better as 256."""
+	bits = bytes_wide * BITS_PER_BYTE
+	return f"{1 << bits}" if bits <= 16 else f"2^{bits}"
+
+
+def _find_short_tags(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""A tag short enough to guess, said by nobody to be short on purpose.
+
+	A codec that names the width has decided it, and `[truncated]` is how a
+	schema says a narrow tag is meant (0038), so what is left is the tag that
+	nothing speaks for. `tag u8[1]` passes one forgery in 256, and the catalogue
+	used to call that the strongest form it knew (26.878).
+	"""
+	found = []
+
+	for struct in resolved.structs.values():
+		for entry in _members(struct):
+			placement = entry.placement
+			wide = _worst_bytes(placement)
+			if (placement.kind != "tag" or wide is None
+					or wide >= SHORT_BYTES or placement.tag_codec
+					or any(attr.name == "truncated"
+					       for attr in placement.attrs)
+					or any(region.sealed_tag_bytes is not None
+					       for region in regions_covered_by(
+					           (held.placement for held in struct.entries),
+					           placement))):
+				continue
+
+			found.append(Suggestion(
+				rule    = "widen-a-short-tag",
+				subject = placement.path,
+				span    = placement.span,
+				summary = f"widen this {wide}-byte tag to {SHORT_BYTES} bytes, "
+				          "or mark it `[truncated]`",
+				detail  = (f"a guessed tag passes once in {_powers(wide)} tries, "
+				           "and no codec size or `[truncated]` says that is meant"),
+				cost    = Cost(typical=SHORT_BYTES - wide,
+				               worst=SHORT_BYTES - wide,
+				               basis="on every message, and the codec has to "
+				                     "produce that many"),
+				yields  = f"a guessed tag passes once in {_powers(SHORT_BYTES)} tries",
+				rank    = 11,
+				weight  = SHORT_BYTES - wide,
+			))
+
+	return found
+
+
+def _find_short_nonces(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""A nonce that runs out, under a codec that states no width of its own.
+
+	A codec's `nonce_bytes` decides the width and `check_codec_sizes` holds the
+	field to it, so this speaks only where nothing else does. Reuse is the
+	failure, and the number of messages before it is arithmetic on the field.
+	"""
+	found = []
+
+	for struct in resolved.structs.values():
+		for entry in struct.entries:
+			sealed = entry.placement
+			if (sealed.kind != "sealed" or sealed.sealed_nonce is None
+					or sealed.sealed_nonce_bytes is not None):
+				continue
+			held = resolved.find(f"{struct.name}.{sealed.sealed_nonce}")
+			if held is None:
+				continue
+			wide = _worst_bytes(held.placement)
+			if wide is None or wide >= SHORT_BYTES:
+				continue
+
+			carried = not held.placement.parameter
+			grows   = SHORT_BYTES - wide if carried else 0
+			found.append(Suggestion(
+				rule    = "widen-a-short-nonce",
+				subject = held.placement.path,
+				span    = held.placement.span,
+				summary = f"widen this {wide}-byte nonce to {SHORT_BYTES} bytes",
+				detail  = (f"`{sealed.path}` repeats a nonce after "
+				           f"{_powers(wide)} messages under one key, and no codec "
+				           "size says that is enough"),
+				cost    = Cost(typical=grows, worst=grows,
+				               basis="on every message" if carried
+				                     else "a `parameter` is not on the wire"),
+				yields  = f"{_powers(SHORT_BYTES)} messages under one key "
+				          "before a nonce repeats",
+				rank    = 12,
+				weight  = SHORT_BYTES - wide,
+			))
+
+	return found
+
+
+def _find_unnamed_nonces(resolved: ResolvedSchema) -> list[Suggestion]:
+	"""A codec that takes a nonce, over a region that names none.
+
+	An omission and an out-of-band nonce are the same text here, and nothing
+	checks a nonce nobody named: not its width, not that it is read before the
+	region. Not refused, because a nonce derived by the caller is real -- TLS
+	1.3 builds its own -- and a twelve-byte one has no other spelling (26.470).
+	"""
+	found = []
+
+	for struct in resolved.structs.values():
+		for entry in struct.entries:
+			sealed = entry.placement
+			wide   = sealed.sealed_nonce_bytes
+			if sealed.kind != "sealed" or wide is None \
+					or sealed.sealed_nonce is not None:
+				continue
+
+			found.append(Suggestion(
+				rule    = "name-the-nonce",
+				subject = sealed.path,
+				span    = sealed.span,
+				summary = "name this region's nonce",
+				detail  = (f"its codec takes a {wide}-byte nonce and "
+				           "`nonce =` names none, so an omission and a nonce "
+				           "the caller derives are the same text"),
+				cost    = Cost(typical=wide, worst=wide,
+				               basis="if the message carries it; none if the "
+				                     "caller supplies a `parameter`, which stops "
+				                     "at 8 bytes"),
+				yields  = "the width held to the codec, the ordering checked, and "
+				          "the nonce in the wire signature",
+				rank    = 13,
+				weight  = wide,
+			))
+
+	return found
+
+
 def _is_contiguous(entries: list[Resolved]) -> bool:
 	ordered = sorted(entries, key=lambda entry: entry.placement.offset_bits or 0)
 	for earlier, later in zip(ordered, ordered[1:]):
@@ -1176,6 +1316,9 @@ CATALOG: tuple[Rule, ...] = (
 	Rule("uncover-mutable-field",	8,  _find_mutable_under_coverage),
 	Rule("tlv-to-positional",	9,  _find_tlv_to_positional),
 	Rule("widen-bit-field",		10, _find_packed_bit_runs),
+	Rule("widen-a-short-tag",	11, _find_short_tags),
+	Rule("widen-a-short-nonce",	12, _find_short_nonces),
+	Rule("name-the-nonce",		13, _find_unnamed_nonces),
 )
 
 

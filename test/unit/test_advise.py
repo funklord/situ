@@ -389,6 +389,8 @@ def test_every_catalog_rule_is_exercised() -> None:
 		# Needs two covered regions with a member between them, which no test
 		# schema above builds; covered by test_scattered_coverage below.
 		"group-covered-regions",
+		# Below, with what each must stay quiet about.
+		"widen-a-short-tag", "widen-a-short-nonce", "name-the-nonce",
 	}
 	assert {rule.name for rule in advise.CATALOG} == tested
 
@@ -1512,3 +1514,77 @@ struct split {
 }
 """
 	assert len(by_rule(split, "group-covered-regions")) == 1
+
+
+#: Two codecs, one stating its sizes and one silent, for the rows 26.878 added.
+SIZED = """
+codec stated { nonce_bytes = 12; tag_bytes = 16; length_preserving;
+	seekable = linear; granularity = byte; authenticated; invertible;
+	deterministic; }
+impl stated extern "stated_open";
+codec four { tag_bytes = 4; length_preserving; seekable = linear;
+	granularity = byte; authenticated; invertible; deterministic; }
+impl four extern "four_open";
+codec silent { length_preserving; seekable = linear; granularity = byte;
+	authenticated; invertible; deterministic; }
+impl silent extern "silent_open";
+"""
+
+
+def test_a_short_tag_is_priced_in_forgeries_and_bytes() -> None:
+	"""One guess in 256 was what the catalogue called the strongest form."""
+	found = only(SIZED + "struct s { sealed(silent) { u8 x; } tag u8[1]; }",
+	             "widen-a-short-tag")
+	assert "once in 256 tries" in found.detail
+	assert "2^64" in found.yields
+	assert found.cost.typical == found.cost.worst == 7
+
+
+@pytest.mark.parametrize("body", [
+	"struct s { sealed(silent) { u8 x; } tag u8[1] [truncated]; }",
+	"struct s { sealed(four) { u8 x; } tag u8[4]; }",
+	"struct s { sealed(silent) { u8 x; } tag u8[8]; }",
+])
+def test_a_tag_something_speaks_for_is_left_alone(body: str) -> None:
+	"""`[truncated]`, a codec's own width, and the eight bytes OSCORE chose."""
+	assert by_rule(SIZED + body, "widen-a-short-tag") == []
+
+
+def test_a_short_nonce_says_when_it_repeats() -> None:
+	found = only(SIZED + "struct s { u8 n; sealed(silent, nonce = n) { u8 x; }"
+	             " tag u8[16]; }", "widen-a-short-nonce")
+	assert "after 256 messages" in found.detail
+	assert found.cost.typical == 7
+
+
+def test_a_short_parameter_nonce_costs_no_wire() -> None:
+	"""The caller holds it, so widening moves no byte of the message."""
+	found = only(SIZED + "struct s { parameter u32 n;"
+	             " sealed(silent, nonce = n) { u8 x; } tag u8[16]; }",
+	             "widen-a-short-nonce")
+	assert found.cost.typical == 0
+	assert "not on the wire" in found.cost.basis
+
+
+@pytest.mark.parametrize("body", [
+	"struct s { u8 n[12]; sealed(stated, nonce = n) { u8 x; } tag u8[16]; }",
+	"struct s { u8 n[8]; sealed(silent, nonce = n) { u8 x; } tag u8[16]; }",
+])
+def test_a_nonce_of_a_width_decided_or_ample_is_left_alone(body: str) -> None:
+	assert by_rule(SIZED + body, "widen-a-short-nonce") == []
+
+
+def test_a_codec_s_nonce_is_asked_for_by_name() -> None:
+	found = only(SIZED + "struct s { sealed(stated) { u8 x; } tag u8[16]; }",
+	             "name-the-nonce")
+	assert "12-byte nonce" in found.detail
+	assert found.cost.typical == 12
+
+
+@pytest.mark.parametrize("body", [
+	"struct s { u8 n[12]; sealed(stated, nonce = n) { u8 x; } tag u8[16]; }",
+	"struct s { sealed(silent) { u8 x; } tag u8[16]; }",
+])
+def test_a_named_nonce_or_a_codec_taking_none_is_left_alone(body: str) -> None:
+	"""A cipher may take no nonce, and a silent codec has not said it does."""
+	assert by_rule(SIZED + body, "name-the-nonce") == []
