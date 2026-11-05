@@ -33,8 +33,8 @@ from collections.abc import Mapping
 from situc import ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
-                                   Shape)
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
+                                   Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -305,6 +305,15 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _repeat(structs, part, parts)
 	if part.role == ENDED:
 		return _ended(part)
+	if part.role == TAG:
+		# Its value covers bytes not written yet, so its place is kept and
+		# it is filled once the message is whole.
+		held = py_name(part.local)
+		return [*_room(f"{part.bytes}", part.placement.path),
+		        f"\tsitu_tag_{held} = situ_at",
+		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = "
+		        f"bytes({part.bytes})",
+		        f"\tsitu_at += {part.bytes}"]
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:
@@ -353,6 +362,23 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}: int")
 		elif part.role == RUN or part.role in plain_build.MEASURED:
 			found.append(f"{py_name(part.local)}: bytes")
+	return found
+
+
+def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
+	"""Each tag, computed over what was written, stored, and checked: the
+	check is what proves the store."""
+	found: list[str] = []
+	for part in parts:
+		if part.role != TAG:
+			continue
+		name  = py_name(traverse.local_name(struct, part.placement))
+		order = "little" if plain_build.tag_order(part) == "le" else "big"
+		at    = f"situ_tag_{py_name(part.local)}"
+		found.extend([
+			f"\tsitu_out[{at}:{at} + {part.bytes}] = "
+			f"situ_view.{name}_compute().to_bytes({part.bytes}, \"{order}\")",
+			f"\tsitu_view.{name}_check()"])
 	return found
 
 
@@ -453,6 +479,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\t# longer buffer would hide a struct that came out short.",
 			f"\tsitu_view = {held}.at(Message(memoryview(situ_out)[:situ_at]), 0"
 			+ ("" if struct.layout.is_fixed_size else ", situ_at") + ")",
+			*_filled(struct, parts),
 			*_held_to_the_reader(struct, parts),
 			"\tsitu_view.validate()",
 			"\treturn situ_at",

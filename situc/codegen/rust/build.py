@@ -21,8 +21,8 @@ from __future__ import annotations
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
-                                   Shape)
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
+                                   Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.rust.edit import _scalar
 from situc.codegen.rust.emit import _ident, _pascal, _writer
@@ -272,6 +272,13 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		return _repeat(part, parts)
 	if part.role == ENDED:
 		return _ended(part)
+	if part.role == TAG:
+		# Its value covers bytes not written yet, so its place is kept and
+		# it is filled once the message is whole.
+		return [*_room(f"{part.bytes}"),
+		        f"\tlet situ_tag_{part.local} = situ_at;",
+		        f"\tsitu_out[situ_at..situ_at + {part.bytes}].fill(0);",
+		        f"\tsitu_at += {part.bytes};"]
 	if part.role == ARMTAG:
 		return _store(part, str(part.value))
 	if part.role == PEEKED:
@@ -324,6 +331,27 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{name}: &[u8; {part.bytes}]")
 		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
+	return found
+
+
+def _filled(struct: ResolvedStruct, held: str,
+		parts: list[Part]) -> list[str]:
+	"""Each tag, computed over what was written, stored, and checked: the
+	check is what proves the store. A view at a time, because storing
+	needs the buffer the view borrows."""
+	found: list[str] = []
+	for part in parts:
+		if part.role != TAG:
+			continue
+		name = traverse.local_name(struct, part.placement)
+		bits = part.bytes * BITS_PER_BYTE
+		at   = f"situ_tag_{part.local}"
+		found.extend([
+			f"\tlet situ_tag = {held}::new(&situ_out[..situ_at])?"
+			f".{name}_compute()?;",
+			f"\tsitu_out[{at}..{at} + {part.bytes}].copy_from_slice("
+			f"&(situ_tag as u{bits}).to_{plain_build.tag_order(part)}_bytes());",
+			f"\t{held}::new(&situ_out[..situ_at])?.{name}_check()?;"])
 	return found
 
 
@@ -396,6 +424,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		lines.extend([
 			"\t// Over exactly what was written, not over the backing: a longer",
 			"\t// slice would hide a struct that came out short.",
+			*_filled(struct, held, parts),
 			f"\tlet situ_view = {held}::new(&situ_out[..situ_at])?;",
 			*_held_to_the_reader(struct, parts),
 			"\tsitu_view.validate()?;",

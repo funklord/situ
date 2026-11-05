@@ -364,6 +364,16 @@ def _emit(schema: Path, target: str, out: Path) -> None:
 	assert done.returncode == 0, done.stderr[-800:]
 
 
+def _derived(schema: Path, out: Path) -> list[str]:
+	"""A codec's C implementation, which `build` declares and does not hold."""
+	done = subprocess.run(
+		[sys.executable, "-m", "situc", "gen-derived", str(schema),
+		 "--out", str(out)], capture_output=True, text=True, cwd=ROOT)
+	assert done.returncode == 0, done.stderr[-800:]
+	made = out / f"{schema.stem}_derived.c"
+	return [made.name] if made.exists() else []
+
+
 def _run(argv: list[str], cwd: Path) -> str:
 	done = subprocess.run(argv, capture_output=True, text=True, cwd=cwd)
 	assert done.returncode == 0, done.stderr[-1500:]
@@ -388,15 +398,24 @@ def four_say(schema: Path, tmp_path: Path, units: list[Unit],
 	(dirs["c"] / "main.c").write_text(_c_driver(stem, cases),
 	                                  encoding="ascii")
 	assert fourway.HOST_CC is not None and fourway.HOST_CXX is not None
+	derived = _derived(schema, dirs["c"])
 	_run([fourway.HOST_CC, "-std=c11", "-w", f"-I{RUNTIME / 'c'}", "-I.",
-	      "main.c", f"{stem}.c", str(RUNTIME / "c" / "situ.c"),
+	      "main.c", f"{stem}.c", *derived, str(RUNTIME / "c" / "situ.c"),
 	      "-o", "probe"], dirs["c"])
 
 	(dirs["cpp"] / "main.cpp").write_text(_cpp_driver(stem, cases),
 	                                      encoding="ascii")
+	# A codec is the C implementation in every language that links one, so
+	# C++ takes the object C's compiler made rather than a copy of its own.
+	objects: list[str] = []
+	if derived:
+		_run([fourway.HOST_CC, "-std=c11", "-w", f"-I{RUNTIME / 'c'}", "-I.",
+		      "-c", *derived, "-o", str(dirs["cpp"] / "derived.o")],
+		     dirs["c"])
+		objects.append("derived.o")
 	_run([fourway.HOST_CXX, "-std=c++17", "-Wall", "-Wextra", "-Werror",
 	      f"-I{RUNTIME / 'c'}", f"-I{RUNTIME / 'cpp'}", "-I.", "main.cpp",
-	      str(RUNTIME / "c" / "situ.c"), "-o", "probe"],
+	      *objects, str(RUNTIME / "c" / "situ.c"), "-o", "probe"],
 	     dirs["cpp"])
 
 	shutil.copy(RUNTIME / "rust" / "situ_rt.rs", dirs["rust"])

@@ -271,3 +271,16 @@ def test_a_delimiter_ends_a_run_in_all_four(tmp_path: Path) -> None:
 	said = four_say(schema, tmp_path, list(units.values()),
 	                [case for case, _ in cases])
 	assert _extra(said, len(cases)) == [made for _, made in cases]
+
+
+# -- a tag the schema computes (26.867) -------------------------------------
+
+def test_a_tag_is_computed_once_the_message_is_whole(tmp_path: Path) -> None:
+	"""A published value rather than four languages agreeing: every PNG
+	ends with this chunk, and these are its bytes."""
+	schema = ROOT / "example" / "png" / "png.situ"
+	units  = _units(schema)
+	said   = four_say(schema, tmp_path, list(units.values()), [
+		_with(units["chunk."], b"IEND", b""),
+	])
+	assert _extra(said, 1) == ["00000000" "49454e44" "ae426082"]

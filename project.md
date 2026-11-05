@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.867 The three builders compute a tag
+
+Moved to `doc/decision/26.867-the-builders-compute-a-tag.md`.
+
 ### 26.866 The three builders write a delimited run
 
 Moved to `doc/decision/26.866-the-builders-write-a-delimited-run.md`.

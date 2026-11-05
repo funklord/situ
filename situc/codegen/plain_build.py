@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 from situc import ast
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
-                                   Shape,
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
+                                   Part, Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
 from situc.layout import Arm
@@ -22,13 +22,13 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 
 __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
            "declined", "takes_value", "stated_ones", "walked_at_size",
-           "counts_elements"]
+           "counts_elements", "tag_order"]
 
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
 SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED, REPEAT, RUN,
-                    SCALAR, SIZE, SPAN, ZERO})
+                    SCALAR, SIZE, SPAN, TAG, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.
@@ -61,6 +61,8 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.role in (NESTED, REPEAT) and held.arguments:
 		return False
+	if part.role == TAG and part.opens:
+		return False		# a pseudo-header, which the caller has to hand over
 	if part.role == REPEAT and part.value == 1 and sum(
 			one.role == REPEAT and one.value == 1 for one in parts) > 1:
 		return False		# one walked count to hold the reader's to
@@ -72,6 +74,12 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return not part.inner or (part.role == SIZE and part.solved is None
 		                          and measured.role == REPEAT)
 	return True
+
+
+def tag_order(part: Part) -> str:
+	"""`le` or `be`: what C's writer stores a codec's output as."""
+	return ("le" if part.placement.tag_codec_endian is ast.Endian.LITTLE
+	        else "be")
 
 
 def walked_at_size(part: Part, parts: list[Part]) -> bool:
@@ -204,15 +212,25 @@ def declined(resolved: ResolvedSchema, shape: Shape,
 		if cases:
 			out.extend(
 				(f"{struct.name}.{arm_name(case)}",
-				 f"{language}'s builder does not write this arm yet "
-				 "(26.861)")
+				 _unwritten(struct, shape, case, language))
 				for case in cases
 				if (struct.name, arm_name(case)) not in built)
 			continue
 		if (struct.name, "") in built:
 			continue
-		out.append((struct.name,
-		            f"{language}'s builder takes scalars, bit fields, byte "
-		            "runs, the size fields measuring them, and stated "
-		            "bytes so far; this one has more (26.860)"))
+		out.append((struct.name, _unwritten(struct, shape, None, language)))
 	return out
+
+
+def _unwritten(struct: ResolvedStruct, shape: Shape, arm: Arm | None,
+		language: str) -> str:
+	"""Which part keeps this out, so the boundary can be read off the line."""
+	planned, why = plan(struct, shape, arm)
+	if why:
+		return why
+	held = next((one for one in planned if not _serves(one, planned)), None)
+	if held is None:
+		return f"{language}'s builder writes nothing for it"
+	name = traverse.local_name(struct, held.placement)
+	return f"`{name}` is a {held.role} part, which {language}'s builder " \
+	       "does not write yet"

@@ -51,4 +51,4 @@ def test_a_struct_outside_the_class_is_named(
 	             "--layer", "edit", "--out", str(tmp_path)]) == 0
 	said = capsys.readouterr().err
 	assert "situc: no builder for `" in said, said
-	assert "so far; this one has more" in said, said
+	assert "builder does not write yet" in said, said

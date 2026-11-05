@@ -22,8 +22,8 @@ from collections.abc import Mapping
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, ZERO, Part,
-                                   Shape)
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
+                                   Part, Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -324,6 +324,13 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _repeat(structs, part, parts)
 	if part.role == ENDED:
 		return _ended(part)
+	if part.role == TAG:
+		# Its value covers bytes not written yet, so its place is kept and
+		# it is filled once the message is whole.
+		return [*_room(f"{part.bytes}u"),
+		        f"\tconst std::uint32_t situ_tag_{part.local} = situ_at;",
+		        f"\tstd::memset(situ_out + situ_at, 0, {part.bytes}u);",
+		        f"\tsitu_at += {part.bytes}u;"]
 	if part.role == ARMTAG:
 		return _store(part, f"{part.value}u")
 	if part.role == PEEKED:
@@ -388,6 +395,30 @@ def _parameters(parts: list[Part]) -> list[str]:
 def _counted(parts: list[Part]) -> bool:
 	return any(one.role == REPEAT and plain_build.counts_elements(one, parts)
 	           for one in parts)
+
+
+def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
+	"""Each tag, computed over what was written, stored, and checked: the
+	check is what proves the store."""
+	found: list[str] = []
+	for part in parts:
+		if part.role != TAG:
+			continue
+		name = traverse.local_name(struct, part.placement)
+		bits = part.bytes * BITS_PER_BYTE
+		found.extend([
+			"\tif (situ_e == ::situ::rt::err::ok) {",
+			"\t\tstd::uint32_t situ_tag = 0;",
+			"",
+			f"\t\tsitu_e = situ_view.{name}_compute(situ_tag);",
+			"\t\tif (situ_e == ::situ::rt::err::ok) {",
+			f"\t\t\tsitu_put_{plain_build.tag_order(part)}{bits}("
+			f"situ_out + situ_tag_{part.local},",
+			f"\t\t\t              static_cast<std::uint{bits}_t>(situ_tag));",
+			f"\t\t\tsitu_e = situ_view.{name}_check();",
+			"\t\t}",
+			"\t}"])
+	return found
 
 
 def _held_to_the_reader(struct: ResolvedStruct,
@@ -485,6 +516,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"\t::situ::rt::err situ_e = ::situ::{held}::at(situ_msg, 0,{length}"
 			" situ_view);",
 			"",
+			*_filled(struct, parts),
 			*_held_to_the_reader(struct, parts),
 			"\tif (situ_e == ::situ::rt::err::ok) {",
 			"\t\tsitu_e = situ_view.validate();",
