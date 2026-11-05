@@ -8264,6 +8264,16 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.871 The C build collects unused sections
+
+The size rule now asks for `-ffunction-sections -fdata-sections` and
+`-Wl,--gc-sections`, as `CFLAGS` and `LDFLAGS` defaults. Measured on
+`situ-walk-c`: text 38,761 bytes to 19,833, since `main.c` reaches about half
+of `situ_walk.c`. Nothing in `walker` or `runtime/c` is reached by name or
+section. `make test-c` passes with the flags, and the collected and whole
+binaries printed the same on 168 random messages over 14 schemas. The Python
+tests build their own walker and do not take these flags.
+
 ### 26.870 The builders write a text number
 
 Moved to `doc/decision/26.870-the-builders-write-a-text-number.md`.

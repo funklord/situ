@@ -20,8 +20,8 @@ PREFIX		?= /usr/local
 DESTDIR		?=
 
 WARNFLAGS	:= -Wall -Wextra -Werror -Wconversion -Wsign-conversion
-CFLAGS		?= -std=c11 -Os -g $(WARNFLAGS)
-LDFLAGS		?=
+CFLAGS		?= -std=c11 -Os -g -ffunction-sections -fdata-sections $(WARNFLAGS)
+LDFLAGS		?= -Wl,--gc-sections
 
 BUILD_DIR	:= $(BUILD_ROOT)/$(ARCH)
 
