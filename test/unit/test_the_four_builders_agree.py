@@ -29,7 +29,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
 from situc.codegen.c.build import (BITS, ENDED, NESTED, REPEAT,	# noqa: E402
-                                   RUN, SCALAR, SIZE, SPAN, Part)
+                                   RUN, SCALAR, SIZE, SPAN, VARINT, Part)
 from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -42,6 +42,8 @@ from situc.resolve import resolve			# noqa: E402
 RUNTIME = ROOT / "runtime"
 #: Comfortably past the largest struct the class serves; asserted below.
 ROOM = 512
+#: A negative value, as the 64 bits C and Rust spell it.
+MASK = (1 << 64) - 1
 #: How deep nesting goes in the corpus, plus one.
 PASSES = 5
 #: Values tried on a unit before it counts as one nothing satisfies.
@@ -110,6 +112,9 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			found.append((part, (0x5 + at) & ((1 << width) - 1) or 1))
 		elif part.role == SCALAR:
 			found.append((part, _raw(part.placement, at)))
+		elif part.role == VARINT and plain_build.takes_value(part):
+			# Past one byte, so the continuation bit is exercised.
+			found.append((part, 0x1234 + at))
 		elif part.role == RUN:
 			found.append((part, _run_bytes(part.bytes, at)))
 		elif part.role == SPAN:
@@ -175,7 +180,7 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 		values: list[str] = []
 		for at, (part, value) in enumerate(given):
 			if isinstance(value, int):
-				values.append(f"{value:#x}ull")
+				values.append(f"{value & MASK:#x}ull")
 				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "uint8_t"))
@@ -204,8 +209,11 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 		values: list[str] = []
 		for at, (part, value) in enumerate(given):
 			if isinstance(value, int):
-				values.append(f"static_cast<{cpp_scalar(part.placement)}>"
-				              f"({value:#x}ull)")
+				kind = ("std::uint64_t" if part.role == VARINT and not part.minimal
+				        else "std::int64_t" if part.role == VARINT
+				        else cpp_scalar(part.placement))
+				values.append(f"static_cast<{kind}>"
+				              f"({value & MASK:#x}ull)")
 				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "std::uint8_t"))
@@ -237,8 +245,10 @@ def _rust_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 		values: list[str] = []
 		for part, value in given:
 			if isinstance(value, int):
-				values.append(f"{value:#x}u64 as "
-				              f"{rust_scalar(part.placement)}")
+				kind = ("u64" if part.role == VARINT and not part.minimal
+				        else "i64" if part.role == VARINT
+				        else rust_scalar(part.placement))
+				values.append(f"{value & MASK:#x}u64 as {kind}")
 				continue
 			items = ", ".join(f"{one:#x}u8" for one in value)
 			values.append(f"&[{items}]")

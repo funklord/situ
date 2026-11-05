@@ -22,8 +22,8 @@ from collections.abc import Mapping
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
-                                   Part, Shape)
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
+                                   ZERO, Part, Shape)
 from situc.codegen.c.names import c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
@@ -101,6 +101,45 @@ def _size(part: Part, length: str) -> list[str]:
 		   "\t\t\treturn ::situ::rt::err::constraint;",
 		   "\t\t}"] if limit < (1 << 63) - 1 else []),
 		*(f"\t{line}" for line in _store(part, "situ_solved")),
+		"\t}",
+	]
+
+
+def _varint(part: Part, parts: list[Part]) -> list[str]:
+	"""A number as wide as its own value.
+
+	The declaration bounds the value, not the bytes, and the runtime's `put`
+	writes the minimal encoding, which satisfies a `minimal` declaration by
+	construction. A size field states what it measures, as any other does.
+	"""
+	assert part.declared is not None
+	most = (1 << part.value) - 1
+	big  = part.declared.encoding is ast.VarintEncoding.BE128
+	tail = (f", {part.declared.max_bytes}, {part.declared.terminal_bits}"
+	        if big else "")
+	call = "situ_varint_be_put" if big else "situ_varint_put"
+	if part.sizes is not None:
+		run   = next(one.local for one in parts
+		             if one.placement is part.sizes)
+		held  = f"{run}_len"
+		value = f"static_cast<std::uint64_t>({held})"
+	elif part.minimal:
+		held  = f"static_cast<std::uint64_t>({part.local})"
+		value = f"situ_zigzag_encode({part.local})"
+	else:
+		held  = f"static_cast<std::uint64_t>({part.local})"
+		value = held
+	return [
+		*([f"\tif ({held} > {most}u) {{", CONSTRAINT, "\t}"]
+		  if part.value < 64 else []),
+		"\t{",
+		f"\t\tconst std::uint32_t situ_used = {call}(situ_out + situ_at,",
+		f"\t\t\t\tsitu_cap - situ_at, {value}{tail});",
+		"",
+		"\t\tif (situ_used == 0u) {",
+		"\t\t\treturn ::situ::rt::err::bounds;",
+		"\t\t}",
+		"\t\tsitu_at += situ_used;",
 		"\t}",
 	]
 
@@ -328,6 +367,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _repeat(structs, part, parts)
 	if part.role == ENDED:
 		return _ended(part)
+	if part.role == VARINT:
+		return _varint(part, parts)
 	if part.role == TAG:
 		# Its value covers bytes not written yet, so its place is kept and
 		# it is filled once the message is whole.
@@ -386,7 +427,10 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 def _parameters(parts: list[Part]) -> list[str]:
 	found: list[str] = []
 	for part in parts:
-		if plain_build.takes_value(part):
+		if part.role == VARINT and plain_build.takes_value(part):
+			kind = "std::int64_t" if part.minimal else "std::uint64_t"
+			found.append(f"{kind} {part.local}")
+		elif plain_build.takes_value(part):
 			found.append(f"{_scalar(part.placement)} {part.local}")
 		elif part.role == RUN:
 			found.append(f"const std::uint8_t *{part.local}")

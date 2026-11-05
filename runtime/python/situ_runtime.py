@@ -940,6 +940,18 @@ def varint_len(value: int) -> int:
 	return n
 
 
+def varint_put(out: bytearray, at: int, value: int) -> int:
+	"""Encode one varint minimally at `at`: bytes written, 0 if no room."""
+	n = varint_len(value)
+	if n > len(out) - at:
+		return 0
+	for i in range(n - 1):
+		out[at + i] = (value & 0x7F) | 0x80
+		value >>= 7
+	out[at + n - 1] = value & 0x7F
+	return n
+
+
 def zigzag_decode(raw: int) -> int:
 	"""ZigZag, as protobuf's sint32 and sint64 use it: a small magnitude stays
 	short whether it is positive or negative."""
@@ -974,6 +986,30 @@ def varint_be_get(data: Buffer, at: int, max_bytes: int,
 			return acc, i + 1
 
 	return None
+
+
+def varint_be_put(out: bytearray, at: int, value: int, max_bytes: int,
+		terminal_bits: int) -> int:
+	"""Encode one be128 varint at `at`: bytes written, 0 if it cannot be.
+
+	A value too wide for the format is a refusal rather than a truncated
+	encoding: `varint_be_len` clamps to `max_bytes`, so the high bits would
+	otherwise be dropped and a different number written.
+	"""
+	n = varint_be_len(value, max_bytes, terminal_bits)
+	if n > len(out) - at or n > max_bytes:
+		return 0
+	rest = value
+	if terminal_bits == 8 and n == max_bytes:
+		out[at + n - 1] = rest & 0xFF
+		rest >>= 8
+	else:
+		out[at + n - 1] = rest & 0x7F
+		rest >>= 7
+	for i in range(n - 1, 0, -1):
+		out[at + i - 1] = (rest & 0x7F) | 0x80
+		rest >>= 7
+	return n if rest == 0 else 0
 
 
 def varint_be_len(value: int, max_bytes: int, terminal_bits: int) -> int:

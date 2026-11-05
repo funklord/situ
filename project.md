@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.869 The builders write a varint
+
+Moved to `doc/decision/26.869-the-builders-write-a-varint.md`.
+
 ### 26.868 An arm writes its own packed tag
 
 Moved to `doc/decision/26.868-an-arm-writes-its-packed-tag.md`.

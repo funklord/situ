@@ -936,6 +936,47 @@ pub fn varint_len(mut value: u64) -> usize {
 	n
 }
 
+/// Encode one varint minimally: bytes written, or 0 if `out` is too small.
+#[inline]
+pub fn varint_put(out: &mut [u8], mut value: u64) -> usize {
+	let n = varint_len(value);
+	if n > out.len() {
+		return 0;
+	}
+	for byte in out.iter_mut().take(n - 1) {
+		*byte = ((value & 0x7F) | 0x80) as u8;
+		value >>= 7;
+	}
+	out[n - 1] = (value & 0x7F) as u8;
+	n
+}
+
+/// Encode one be128 varint: bytes written, or 0 if it cannot be. A value too
+/// wide for the format is a refusal rather than a truncated encoding:
+/// `varint_be_len` clamps to `max_bytes`, so the high bits would otherwise be
+/// dropped and a different number written.
+#[inline]
+pub fn varint_be_put(out: &mut [u8], value: u64, max_bytes: usize,
+		terminal_bits: u32) -> usize {
+	let n = varint_be_len(value, max_bytes, terminal_bits);
+	if n > out.len() || n > max_bytes {
+		return 0;
+	}
+	let mut rest = value;
+	if terminal_bits == 8 && n == max_bytes {
+		out[n - 1] = (rest & 0xFF) as u8;
+		rest >>= 8;
+	} else {
+		out[n - 1] = (rest & 0x7F) as u8;
+		rest >>= 7;
+	}
+	for i in (1..n).rev() {
+		out[i - 1] = ((rest & 0x7F) | 0x80) as u8;
+		rest >>= 7;
+	}
+	if rest == 0 { n } else { 0 }
+}
+
 /// ZigZag, as protobuf's sint32 and sint64 use it: a small magnitude stays
 /// short whether it is positive or negative.
 #[inline]

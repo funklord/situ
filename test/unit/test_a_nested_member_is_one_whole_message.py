@@ -301,3 +301,34 @@ def test_a_tag_is_computed_once_the_message_is_whole(tmp_path: Path) -> None:
 		_with(units["chunk."], b"IEND", b""),
 	])
 	assert _extra(said, 1) == ["00000000" "49454e44" "ae426082"]
+
+
+# -- a varint (26.869) ------------------------------------------------------
+
+VARINTS = """\
+varint_type plain   { encoding = leb128; max_bits = 64; }
+varint_type narrow  { encoding = leb128; max_bits = 14; }
+varint_type signed  { encoding = leb128; max_bits = 64; max_bytes = 10;
+                      transform = zigzag; }
+varint_type sqlite  { encoding = be128; max_bits = 64; max_bytes = 9; }
+struct numbers { plain a; signed b; sqlite c; narrow d; }
+struct sized   { plain n; u8 data[n]; }
+"""
+
+
+def test_a_varint_is_encoded_in_all_four(tmp_path: Path) -> None:
+	"""The published vectors: 300 is protobuf's own, ZigZag's -1 is 1, and
+	sqlite's varint puts the high bits first."""
+	schema = tmp_path / "varints.situ"
+	schema.write_text(VARINTS, encoding="ascii")
+	units = _units(schema)
+	cases = [
+		(_with(units["numbers."], 300, -1, 300, 5), "ac02" "01" "822c" "05"),
+		(_with(units["numbers."], 0, 1, 0, 0), "00" "02" "00" "00"),
+		(_with(units["numbers."], 1, 1, 1, 1 << 14), "refused"),
+		(_with(units["sized."], b"ab"), "02" "6162"),
+		(_with(units["sized."], bytes(200)), "c801" + "00" * 200),
+	]
+	said = four_say(schema, tmp_path, list(units.values()),
+	                [case for case, _ in cases])
+	assert _extra(said, len(cases)) == [made for _, made in cases]

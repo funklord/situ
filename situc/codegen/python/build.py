@@ -33,8 +33,8 @@ from collections.abc import Mapping
 from situc import ast, traverse
 from situc.codegen import plain_build
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
-                                   Part, Shape)
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
+                                   ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -70,6 +70,42 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	msb = traverse.bit_extractor(held.scalar, held) == "msb"
 	return [f"\tView(Message(memoryview(situ_out)), situ_at, len(situ_out) - situ_at)"
 	        f"._set_bits({part.bit_at}, {held.size_bits}, {value}, msb={msb})"]
+
+
+def _varint(part: Part, parts: list[Part]) -> list[str]:
+	"""A number as wide as its own value.
+
+	The declaration bounds the value, not the bytes, and the runtime's `put`
+	writes the minimal encoding, which satisfies a `minimal` declaration by
+	construction. A size field states what it measures, as any other does.
+	"""
+	assert part.declared is not None
+	most = (1 << part.value) - 1
+	big  = part.declared.encoding is ast.VarintEncoding.BE128
+	tail = (f", {part.declared.max_bytes}, {part.declared.terminal_bits}"
+	        if big else "")
+	path = part.placement.path
+	call = "varint_be_put" if big else "varint_put"
+	if part.sizes is not None:
+		run   = next(one.local for one in parts
+		             if one.placement is part.sizes)
+		held  = f"len({py_name(run)})"
+		value = held
+	elif part.minimal:
+		held  = f"{py_name(part.local)} & 0xFFFFFFFFFFFFFFFF"
+		value = f"zigzag_encode({py_name(part.local)})"
+	else:
+		held  = f"{py_name(part.local)} & 0xFFFFFFFFFFFFFFFF"
+		value = held
+	return [
+		*([f"\tif {held} > {most}:",
+		   f'\t\traise ConstraintError("{path}: wider than it may be")']
+		  if part.value < 64 else []),
+		f"\tsitu_used = {call}(situ_out, situ_at, {value}{tail})",
+		"\tif situ_used == 0:",
+		f'\t\traise BoundsError("{path}: no room")',
+		"\tsitu_at += situ_used",
+	]
 
 
 def _nested(part: Part) -> list[str]:
@@ -310,6 +346,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _repeat(structs, part, parts)
 	if part.role == ENDED:
 		return _ended(part)
+	if part.role == VARINT:
+		return _varint(part, parts)
 	if part.role == TAG:
 		# Its value covers bytes not written yet, so its place is kept and
 		# it is filled once the message is whole.
@@ -450,7 +488,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			for unit in built for one in unit.parts
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
-		"                          TruncatedError, View)",
+		"                          TruncatedError, View, varint_be_put,",
+		"                          varint_put, zigzag_encode)",
 		"",
 	]
 

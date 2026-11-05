@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 from situc import ast
 from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, ZERO,
-                                   Part, Shape,
+                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
+                                   ZERO, Part, Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
 from situc.layout import Arm
@@ -28,7 +28,7 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
 SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED, REPEAT, RUN,
-                    SCALAR, SIZE, SPAN, TAG, ZERO})
+                    SCALAR, SIZE, SPAN, TAG, VARINT, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.
@@ -66,7 +66,10 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	if part.role == REPEAT and part.value == 1 and sum(
 			one.role == REPEAT and one.value == 1 for one in parts) > 1:
 		return False		# one walked count to hold the reader's to
-	if part.role == SIZE or (part.role == BITS and part.sizes is not None):
+	if part.role == VARINT and part.sizes is not None and part.solved:
+		return False		# no value to invert through, yet
+	if part.role == SIZE or (part.role in (BITS, VARINT)
+	                         and part.sizes is not None):
 		measured = next((one for one in parts if one.role in MEASURED
 		                 and one.placement is part.sizes), None)
 		if measured is None or measured.delimiter:
@@ -118,7 +121,7 @@ def takes_value(part: Part) -> bool:
 	is written from the schema: C's own `_supplies_a_value`, for the two
 	roles here that carry a number.
 	"""
-	return part.role == SCALAR or (part.role == BITS
+	return part.role == SCALAR or (part.role in (BITS, VARINT)
 	                               and _supplies_a_value(part))
 
 
