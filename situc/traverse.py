@@ -1660,7 +1660,9 @@ def obligations(schema: Schema, struct: ResolvedStruct) -> list[Obligation]:
 
 
 def parameters(schema: Schema) -> list[tuple[str, ast.Field]]:
-	"""Every `parameter` the schema declares, as `(struct, member)` (0050).
+	"""Every `parameter` a view carries, as `(struct, member)` (0050).
+
+	A byte run the caller holds is not one (26.887): nothing reads it.
 
 	Here rather than in a backend because what asks is not one backend: each
 	of the four refuses to generate for a schema carrying one, and so does
@@ -1670,7 +1672,7 @@ def parameters(schema: Schema) -> list[tuple[str, ast.Field]]:
 	found: list[tuple[str, ast.Field]] = []
 	for struct in schema.structs():
 		for member in struct.members:
-			if isinstance(member, ast.Field) and member.parameter:
+			if isinstance(member, ast.Field) and member.argument:
 				found.append((struct.name, member))
 	return found
 

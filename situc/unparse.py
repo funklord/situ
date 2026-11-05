@@ -231,6 +231,8 @@ def _codec_lines(decl: ast.CodecDecl) -> list[str]:
 		lines.append(f"\ttag_bytes = {decl.tag_bytes};")
 	if decl.nonce_bytes is not None:
 		lines.append(f"\tnonce_bytes = {decl.nonce_bytes};")
+	if decl.key_bytes is not None:
+		lines.append(f"\tkey_bytes = {decl.key_bytes};")
 	if decl.kernel is not None:
 		lines.append(f"\tkernel = {_kernel_to_source(decl.kernel)};")
 

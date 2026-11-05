@@ -276,6 +276,14 @@ struct hands_on_runs size=2..
   carried case 2: flag
   carried case default: error
 
+struct held_material size=17..272
+  parameter -         u8[12]     iv
+  parameter -         u8[32]     k
+  @0x0000   1         u8         kind
+  @0x0001   0..255    held_aead  sealed  codec=held_aead nonce=iv key=k
+  ~         16        u8         tag
+  tag covers: sealed sealed.body
+
 struct holds_arg_only size=2..257
   @0x0000   1         u8         lead
   @0x0001   0..255    arg_only   one  args width=2

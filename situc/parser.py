@@ -53,6 +53,7 @@ class _CodecProperties:
 	pipeline: tuple[str, ...]	= ()
 	tag_bytes: int | None		= None
 	nonce_bytes: int | None		= None
+	key_bytes: int | None		= None
 	#: Which DERIVED property names the author wrote, accumulated as each
 	#: branch assigns one. Names and not the words the author typed: one
 	#: word can set more than one property -- `expansion = ratio_exact(8, 9)`
@@ -82,6 +83,7 @@ class _CodecProperties:
 			pipeline          = self.pipeline,
 			tag_bytes         = self.tag_bytes,
 			nonce_bytes       = self.nonce_bytes,
+			key_bytes         = self.key_bytes,
 			written           = frozenset(self.written),
 		)
 
@@ -1136,10 +1138,9 @@ class Parser:
 			self.expect_symbol("=", "after `kernel`")
 			properties.kernel = self.parse_kernel()
 			properties.has_kernel = True
-		elif token.text in ("tag_bytes", "nonce_bytes"):
+		elif token.text in ("tag_bytes", "nonce_bytes", "key_bytes"):
 			# A size the primitive produces or requires (0038). Bytes, and the
-			# unit is in the name because a key would be bits where these are
-			# bytes -- a unit in the name cannot drift from a comment.
+			# unit is in the name, so it cannot drift from a comment.
 			self.expect_symbol("=", f"after `{token.text}`")
 			where = self.current
 			value = evaluate_literal(self.parse_expr())
@@ -2606,15 +2607,15 @@ class Parser:
 
 		The forms that make no sense for something with no bytes are refused
 		here rather than later, because each is a question about the
-		declaration rather than about the schema: an argument has no run to
-		count, no delimiter to stop at, no offset to be pinned to and no
-		earlier bytes to skip.
+		declaration rather than about the schema: an argument has no
+		delimiter to stop at, no offset to be pinned to and no earlier bytes
+		to skip. An array is a byte run the caller holds (26.887), and what
+		it may be is `wellformed.check_parameters`'.
 		"""
 		start = self.advance()
 		field = self.parse_field()
 
-		for held, what in ((field.array, "an array size"),
-		                   (field.until, "a delimiter"),
+		for held, what in ((field.until, "a delimiter"),
 		                   (field.pin, "a pinned offset"),
 		                   (field.located, "an `at` offset"),
 		                   (field.skip, "a skip")):
@@ -2634,6 +2635,7 @@ class Parser:
 				])
 
 		return ast.Field(self.span_from(start), field.name, field.type_ref,
+		                 array     = field.array,
 		                 attrs     = field.attrs,
 		                 radix     = field.radix,
 		                 scaled    = field.scaled,

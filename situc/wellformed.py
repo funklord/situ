@@ -18,6 +18,7 @@ import difflib
 
 from situc import ast
 from situc.diagnostics import Diagnostic, Label, Severity, SituError, error
+from situc.expr import build_env, evaluate
 from situc.invariant import BUILTINS, paths_in
 from situc.traverse import ARGUMENT_PREFIX
 from situc.types import (MAX_WIDTH, NUMERIC_BOUNDS, TEXT_ENCODINGS, ScalarKind,
@@ -3222,8 +3223,10 @@ def check_parameters(schema: ast.Schema) -> None:
 						"where it applies to every message",
 					])
 
+		_check_material(schema, struct)
+
 		named = {member.name: member for member in struct.members
-		         if isinstance(member, ast.Field) and member.parameter}
+		         if isinstance(member, ast.Field) and member.argument}
 		if not named:
 			_refuse_stray_stream(struct)
 			continue
@@ -3397,7 +3400,7 @@ def check_member_arguments(schema: ast.Schema) -> None:
 	takes: dict[str, dict[str, ast.Field]] = {}
 	for struct in schema.structs():
 		held = {member.name: member for member in struct.members
-		        if isinstance(member, ast.Field) and member.parameter}
+		        if isinstance(member, ast.Field) and member.argument}
 		if held:
 			takes[struct.name] = held
 
@@ -3501,6 +3504,76 @@ def _check_arguments(struct: ast.StructDecl, member: ast.Field,
 				 "[stream];` if it is fixed for a stream"])
 
 
+def _check_material(schema: ast.Schema, struct: ast.StructDecl) -> None:
+	"""What a byte-run `parameter` may be, and that nothing reads it (26.887).
+
+	`parameter u8 iv[12];` is material a caller holds for a codec: a nonce or
+	a key. It is a run of bytes of a size fixed by the schema, since the
+	check against `nonce_bytes` is the reason to declare one, and its only
+	reader is a region's `nonce =` or `key =`. It has no value, so an
+	expression cannot read it, which is what lets it stay off every view.
+	"""
+	held = {member.name: member for member in struct.members
+	        if isinstance(member, ast.Field) and member.material}
+	constants = build_env(schema).named_constants if held else {}
+	for member in held.values():
+		assert member.array is not None
+		size = member.array.size
+		if (member.type_ref.name != "u8" or member.radix is not None
+				or getattr(member, "scaled", False)):
+			raise error(
+				f"`parameter {member.name}` must be a run of `u8`",
+				member.span,
+				"this is an array of something else",
+				["a parameter with a size is bytes the caller holds for a "
+				 "codec, and a codec takes bytes: `parameter u8 "
+				 f"{member.name}[12];`",
+				 "a value an expression reads is a scalar `parameter` "
+				 "(decision 0050)"])
+		if (size is None or isinstance(size, ast.Remaining)
+				or member.array.cap is not None
+				or set(paths_in(size)) - set(constants)):
+			raise error(
+				f"`parameter {member.name}` needs a size the schema fixes",
+				member.span,
+				"not a constant",
+				["there is no frame to take the rest of and no earlier "
+				 "member to count from, and a width only the caller knows "
+				 "could not be held against the codec's `nonce_bytes`",
+				 "write a number or a `const` (26.887)"])
+		for attr in member.attrs:
+			if attr.name == "secret":
+				continue
+			raise error(
+				f"`[{attr.name}]` means nothing on `parameter {member.name}`",
+				attr.span,
+				"this bytes-only parameter is read by no expression",
+				["`[stream]` says an argument may move a member and this "
+				 "cannot, and a bound narrows a value it does not have",
+				 "`[secret]` is the attribute it can carry (26.887)"])
+
+	if not held:
+		return
+	for reader in _members_and_arms(struct):
+		reads = [*_moving_expressions(reader),
+		         *((attr.value, f"`[{attr.name}]`")
+		           for attr in getattr(reader, "attrs", ())
+		           if attr.value is not None)]
+		for expr, what in reads:
+			for path in paths_in(expr):
+				first = path.partition(".")[0]
+				if first not in held:
+					continue
+				raise error(
+					f"`{first}` is bytes the caller holds, with no value "
+					"to read",
+					expr.span,
+					f"this {what} reads `{first}`",
+					["a byte-run parameter is named by a region's `nonce =` "
+					 "or `key =` and read by nothing else (26.887)",
+					 "a value an expression reads is a scalar `parameter`"])
+
+
 def check_parameter_nesting(schema: ast.Schema) -> None:
 	"""A struct that takes an argument is not a member yet (0050).
 
@@ -3516,7 +3589,7 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 	that matters.
 	"""
 	takes = {struct.name for struct in schema.structs()
-	         if any(isinstance(member, ast.Field) and member.parameter
+	         if any(isinstance(member, ast.Field) and member.argument
 	                for member in struct.members)}
 	if not takes:
 		return
@@ -3626,7 +3699,7 @@ def _reads_a_parameter(struct: ast.StructDecl, member: ast.Field) -> bool:
 	every offset after it.
 	"""
 	own = {held.name for held in struct.members
-	       if isinstance(held, ast.Field) and held.parameter}
+	       if isinstance(held, ast.Field) and held.argument}
 	return any(path.split(".")[0] in own
 	           for arg in member.arguments if arg.value is not None
 	           for path in paths_in(arg.value))
@@ -4859,6 +4932,9 @@ def _check_key_selector(struct: ast.StructDecl, region: ast.Member) -> None:
 			],
 		)
 
+	if found.material:
+		return	# the key itself rather than a selector (26.887)
+
 	if getattr(found, "until", None) is not None \
 			or getattr(found, "array", None) is not None:
 		raise error(
@@ -4995,7 +5071,10 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 			if not isinstance(region, ast.Sealed):
 				continue
 			codec = codecs.get(region.codec)
-			if codec is None or codec.nonce_bytes is None:
+			if codec is None:
+				continue
+			_check_key_width(schema, struct, region, codec)
+			if codec.nonce_bytes is None:
 				continue
 
 			reference = _argument(region.args, "nonce")
@@ -5005,7 +5084,8 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 			if field is None:
 				continue
 
-			width = _declared_byte_width(field)
+			width = _material_bytes(schema, field) if field.material \
+				else _declared_byte_width(field)
 			if width is None or width == codec.nonce_bytes:
 				continue
 
@@ -5013,21 +5093,15 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 			# result, so a narrower one is not a truncation of anything -- it
 			# is simply a different nonce, and the primitive will read past it
 			# or pad it without either side saying so.
-			# "Widen the field" is the remedy in general and is UNREACHABLE
-			# for a parameter: 0050 makes one a member of zero width, so it
-			# is a scalar, and scalars stop at 64 bits. A 12-byte nonce --
-			# which is AES-GCM's and ChaCha20-Poly1305's, so the common case
-			# -- cannot be carried out of band at all, and sending a reader
-			# to widen a `u64` sends them nowhere (26.470).
+			# "Widen the field" means nothing for a scalar `parameter`, which
+			# stops at 64 bits. What reaches a wider nonce is the byte run
+			# (26.470, 26.887), so that is what it is told.
 			remedy = ("widen the field, or correct `nonce_bytes` on the "
 			          "codec (project.md section 14.8, decision 0038)")
-			if getattr(field, "parameter", False) \
-					and codec.nonce_bytes * 8 > MAX_WIDTH:
-				remedy = (f"a `parameter` is a scalar and scalars stop at "
-				          f"{MAX_WIDTH} bits, so a "
-				          f"{codec.nonce_bytes}-byte nonce cannot be one: "
-				          f"carry it in the message, or correct "
-				          f"`nonce_bytes` (project.md section 14.8)")
+			if field.argument and codec.nonce_bytes * 8 > MAX_WIDTH:
+				remedy = (f"a scalar stops at {MAX_WIDTH} bits, and a nonce the "
+				          f"caller holds is bytes: `parameter u8 {field.name}"
+				          f"[{codec.nonce_bytes}];` (project.md section 14.8)")
 
 			raise error(
 				f"`{field.name}` is {width} bytes and `{codec.name}` takes a "
@@ -5039,6 +5113,38 @@ def check_codec_sizes(schema: ast.Schema) -> None:
 				         "truncation of one",
 				         remedy],
 			)
+
+
+def _material_bytes(schema: ast.Schema, field: ast.Field) -> int:
+	"""A byte-run parameter's width, its size being a constant (26.887)."""
+	assert field.array is not None and field.array.size is not None
+	return evaluate(field.array.size, build_env(schema))
+
+
+def _check_key_width(schema: ast.Schema, struct: ast.StructDecl,
+		region: ast.Sealed, codec: ast.CodecDecl) -> None:
+	"""Key material is the width its codec says (26.887).
+
+	Only material: `key = epoch` selects a key and its width is the
+	selector's. Silence on the codec's side checks nothing, as 0038 has it.
+	"""
+	reference = _argument(region.args, "key")
+	if reference is None or codec.key_bytes is None:
+		return
+	field = _nonce_field(struct, region, _reference_name(reference))
+	if field is None or not field.material:
+		return
+	width = _material_bytes(schema, field)
+	if width == codec.key_bytes:
+		return
+	raise error(
+		f"`{field.name}` is {width} bytes and `{codec.name}` takes a "
+		f"{codec.key_bytes}-byte key",
+		field.span,
+		label = f"expected {codec.key_bytes} bytes",
+		notes = ["correct the parameter's size, or `key_bytes` on the codec "
+		         "(26.887)"],
+	)
 
 
 def _nonce_field(struct: ast.StructDecl, region: ast.Member,

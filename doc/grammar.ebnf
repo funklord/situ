@@ -118,7 +118,7 @@ pad		= "pad_to" "(" digits ")" [ attrs ] ";"
  * an `at` or a scan cap is refused.
  *
  * None of the forms that ask where the bytes are: there are none. *)
-parameter	= "parameter" [ radix ] scalar_type ident [ attrs ] ";" ;
+parameter	= "parameter" [ radix ] scalar_type ident [ array_spec ] [ attrs ] ";" ;
 
 field		= [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
 		  [ skip ] [ until | repeat ] [ located ] [ pin ] [ attrs ] ";" ;
@@ -226,6 +226,7 @@ codec_prop	= "length_preserving"
 	| "authenticated" | "invertible" | "deterministic"
 	| "systematic" | "error_propagating"
 	| "tag_bytes" "=" digits | "nonce_bytes" "=" digits
+	| "key_bytes" "=" digits
 	| "kernel" "=" kernel ;
 
 (* Decision 0038. The two sizes are the primitive's, and are what let the

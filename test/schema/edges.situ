@@ -2532,3 +2532,29 @@ struct counted_fixed {
 	u16        rows_held  [max = 64];
 	fixed_row  rows[rows_held];
 }
+
+// Bytes the caller holds rather than the message (26.887): a nonce wider than
+// any scalar, and a key. Nothing reads either, so no view carries them, and
+// this is here so that every sweep meets a struct whose map and wire rows
+// name members no placement stands for.
+codec held_aead {
+	tag_bytes = 16;
+	nonce_bytes = 12;
+	key_bytes = 32;
+	length_preserving;
+	seekable = linear;
+	granularity = byte;
+	authenticated;
+	invertible;
+	deterministic;
+}
+
+struct held_material {
+	parameter u8  iv[12];
+	parameter u8  k[32] [secret];
+	u8            kind;
+	sealed(held_aead, nonce = iv, key = k) {
+		u8  body[kind];
+	}
+	tag u8[16];
+}

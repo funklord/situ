@@ -17,6 +17,7 @@ codec crc5_usb derived expansion=+5 bits seekable=linear granularity=block syste
 codec crc7_mmc derived expansion=+7 bits seekable=linear granularity=block systematic deterministic
 codec doubling trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte invertible deterministic
 codec extended_hamming derived expansion=ratio_exact(8,4) seekable=linear granularity=bit(4) systematic invertible deterministic
+codec held_aead unbound length_preserving seekable=linear granularity=byte authenticated invertible deterministic
 codec masking trusted length_preserving seekable=linear granularity=byte invertible deterministic
 codec scramble derived length_preserving seekable=linear granularity=bit(1) invertible deterministic
 codec sealed_stuffing trusted expansion=ratio_exact(2,1) seekable=linear granularity=byte authenticated invertible deterministic
@@ -312,6 +313,14 @@ struct hands_on_runs size=2.. access=Sequential mutate=Shifting address=Unstable
   hands_on_runs.rest[].carried.marker.tag offset=FrameStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   hands_on_runs.rest[].carried.marker.body offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   hands_on_runs.rest[].carried.flag      offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+
+struct held_material size=17..272 mutate=Immutable address=Unstable atomic=NonAtomic stage=VerifyGated
+  held_material.iv                       parameter bytes=12
+  held_material.k                        parameter bytes=32
+  held_material.kind                     offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord
+  held_material.sealed                   offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=NonAtomic mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  held_material.sealed.body              offset=AbsoluteStatic(0x01) size=Bounded(0, 255) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting stage=VerifyGated auth=Covered(tag)
+  held_material.tag                      offset=Dynamic size=Fixed(16) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Immutable address=Unstable
 
 struct holds_arg_only size=2..257 mutate=Shifting address=Unstable atomic=NonAtomic
   holds_arg_only.lead                    offset=AbsoluteStatic(0x00) size=Fixed(1) align=Aligned(8) repr=MemoryIdentical atomic=AtomicWord

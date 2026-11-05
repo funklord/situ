@@ -761,18 +761,26 @@ def _find_short_nonces(resolved: ResolvedSchema) -> list[Suggestion]:
 					or sealed.sealed_nonce_bytes is not None):
 				continue
 			held = resolved.find(f"{struct.name}.{sealed.sealed_nonce}")
-			if held is None:
+			material = next((one for one in struct.layout.material
+			                 if one.name == sealed.sealed_nonce), None)
+			wide: int | None
+			if material is not None:
+				wide, carried = material.size_bytes, False
+				subject, span = material.path, sealed.span
+			elif held is not None:
+				wide, carried = (_worst_bytes(held.placement),
+				                 not held.placement.parameter)
+				subject, span = held.placement.path, held.placement.span
+			else:
 				continue
-			wide = _worst_bytes(held.placement)
 			if wide is None or wide >= SHORT_BYTES:
 				continue
 
-			carried = not held.placement.parameter
-			grows   = SHORT_BYTES - wide if carried else 0
+			grows = SHORT_BYTES - wide if carried else 0
 			found.append(Suggestion(
 				rule    = "widen-a-short-nonce",
-				subject = held.placement.path,
-				span    = held.placement.span,
+				subject = subject,
+				span    = span,
 				summary = f"widen this {wide}-byte nonce to {SHORT_BYTES} bytes",
 				detail  = (f"`{sealed.path}` repeats a nonce after "
 				           f"{_powers(wide)} messages under one key, and no codec "

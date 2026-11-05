@@ -697,11 +697,27 @@ def _whitespace_of(schema: "ast.Schema", span: Span) -> tuple[int, ...]:
 	return OWS
 
 
+@dataclass(frozen=True)
+class Material:
+	"""`parameter u8 iv[12];`: bytes the caller holds (26.887).
+
+	Not a `Placement`, because it is placed nowhere and nothing reads it: a
+	placement is what every backend, both walkers and the image iterate, and
+	each would have to learn to step over this. The map and the wire signature
+	name it, since the layout below it is described given it.
+	"""
+	name: str
+	path: str
+	size_bytes: int
+	attrs: tuple[ast.Attr, ...]	= ()
+
+
 @dataclass
 class StructLayout:
 	name: str
 	size_bits: int
 	placements: list[Placement]	= field(default_factory=list)
+	material: list[Material]	= field(default_factory=list)
 	span: Span | None		= None
 	reserved_count: int		= 0
 	# None means unbounded. A struct is a frame exactly when these differ:
@@ -2376,6 +2392,13 @@ class Solver:
 	def place_one(self, decl: ast.StructDecl, member: ast.Field | ast.Reserved,
 			scope: Scope, layout: StructLayout, prefix: str, state: Walk,
 			last: bool) -> None:
+		if isinstance(member, ast.Field) and member.material:
+			assert member.array is not None and member.array.size is not None
+			layout.material.append(Material(
+				member.name, f"{prefix}.{member.name}",
+				evaluate(member.array.size, self.result.env), member.attrs))
+			return
+
 		if state.closed_by is not None:
 			raise error(
 				f"nothing may follow `{state.closed_by}`",
@@ -3034,7 +3057,7 @@ class Solver:
 			return ()
 		decl = self.structs[member.type_ref.name]
 		wanted = {held.name: held for held in decl.members
-		          if isinstance(held, ast.Field) and held.parameter}
+		          if isinstance(held, ast.Field) and held.argument}
 
 		env = self.result.env.with_layout(
 			self.result.lookup, self.result.explain).with_fields(state.fields)

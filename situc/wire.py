@@ -221,6 +221,9 @@ def _struct(struct: ResolvedStruct, env: Env) -> list[str]:
 		head += f" version={version}"
 
 	lines = [head]
+	lines.extend(f"  {'parameter'.ljust(9)} {'-'.ljust(9)} "
+	             f"{f'u8[{held.size_bytes}]'.ljust(10)} {held.name}"
+	             for held in layout.material)
 	lines.extend(f"  {_member(placement, env)}"
 	             for placement in own_members(struct))
 	lines.extend(_composites(struct))

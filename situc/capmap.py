@@ -216,6 +216,8 @@ def _struct(name: str, resolved: ResolvedSchema) -> list[str]:
 
 	lines = [f"{kind} {name}{extra} size={size} "
 	         f"{_axes(struct.vector, core=False)}".rstrip()]
+	lines.extend(f"  {held.path.ljust(PATH_WIDTH)} parameter "
+	             f"bytes={held.size_bytes}" for held in layout.material)
 	for entry in struct.entries:
 		lines.append(_entry(entry.placement, entry.vector))
 	return lines

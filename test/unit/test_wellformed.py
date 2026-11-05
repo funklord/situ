@@ -1118,12 +1118,10 @@ def test_a_nonce_of_the_wrong_width_is_refused() -> None:
 def test_an_out_of_band_nonce_is_told_what_it_cannot_be() -> None:
 	"""The remedy has to be one the reader can reach.
 
-	A `parameter` is an argument the caller supplies, and 0050 makes it a
-	member of ZERO WIDTH: it has no position in the buffer, so it is a
-	scalar and scalars stop at 64 bits. "Widen the field" is therefore
-	impossible for a 12-byte nonce -- which is AES-GCM's and
-	ChaCha20-Poly1305's, so the case an author is most likely to hit --
-	and a diagnostic sending them to do it sends them nowhere.
+	A scalar `parameter` stops at 64 bits, so "widen the field" is impossible
+	for a 12-byte nonce -- which is AES-GCM's and ChaCha20-Poly1305's, so the
+	case an author is most likely to hit. What reaches one is a byte run
+	(26.887), and the diagnostic spells it.
 
 	The general remedy is unchanged for a nonce carried in the message,
 	where widening is exactly right; the asymmetry is the point.
@@ -1139,9 +1137,9 @@ def test_an_out_of_band_nonce_is_told_what_it_cannot_be() -> None:
 	text = rendered(body)
 
 	assert "takes a 12-byte nonce" in text
-	assert "scalars stop at 64 bits" in text, (
+	assert "a scalar stops at 64 bits" in text, (
 		"the parameter case was told to widen a field it cannot widen")
-	assert "carry it in the message" in text
+	assert "`parameter u8 iv[12];`" in text
 	assert "widen the field" not in text
 
 
@@ -2835,7 +2833,6 @@ def test_stream_on_an_ordinary_member_is_refused() -> None:
 
 
 @pytest.mark.parametrize("body", [
-	"struct S { parameter u8 n[4]; }",
 	"struct S { parameter u8 n until \",\"; }",
 	"struct S { parameter u8 n at 4; }",
 ])

@@ -1594,6 +1594,16 @@ def cmd_explain(args: argparse.Namespace) -> int:
 
 	entry = resolved.find(args.path)
 	if entry is None:
+		held = next((one for struct in resolved.structs.values()
+		             for one in struct.layout.material
+		             if one.path == args.path), None)
+		if held is not None:
+			print(held.path)
+			print(f"  parameter -- {held.size_bytes} bytes the caller holds for a "
+			      "codec, not bytes in")
+			print("  the message. Nothing reads it, so no view carries it and "
+			      "it has no axes.")
+			return 0
 		struct = resolved.find_struct(args.path)
 		if struct is None:
 			print(f"situc: unknown path `{args.path}`", file=sys.stderr)

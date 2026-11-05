@@ -593,7 +593,7 @@ pad           = "pad_to" "(" digits ")" [ attrs ] ";"   (* section 8.4 *)
               | "pad_random" "(" digits "," digits ")" scalar_type
                 [ array_spec ] [ attrs ] ";" ;    (* 14.7, 0045 *)
 
-parameter     = "parameter" [ radix ] scalar_type ident [ attrs ] ";" ;
+parameter     = "parameter" [ radix ] scalar_type ident [ array_spec ] [ attrs ] ";" ;
                                                  (* decision 0050 *)
 
 field         = [ "peek" ] [ radix ] type_ref [ arguments ] ident [ array_spec ]
@@ -726,6 +726,7 @@ codec_prop    = "length_preserving"
               | "authenticated" | "invertible" | "deterministic"
               | "systematic" | "error_propagating"
               | "tag_bytes" "=" digits | "nonce_bytes" "=" digits
+              | "key_bytes" "=" digits
               | "kernel" "=" kernel ;
 granularity   = "byte" | "stream" | "bit" "(" size_or_any ")"
               | "symbol" "(" size_or_any ")"
@@ -2654,8 +2655,9 @@ codec deflate extern {
 | `error_propagating` | flag | a corrupted input unit damages more than its own output unit |
 | `tag_bytes` | byte count | the authentication tag the primitive produces |
 | `nonce_bytes` | byte count | the nonce the primitive requires |
+| `key_bytes` | byte count | the key the primitive requires, held against a `key =` naming key material (26.887) |
 
-The last two are sizes rather than shape, and they are the only two: decision
+The last three are sizes rather than shape, and they are the only three: decision
 0038 adds them because a schema declares a tag and a nonce as *fields*, so
 there is something concrete to check a stated size against. A key width is
 deliberately absent for the mirror reason -- no construct here names a key, so
@@ -3725,22 +3727,17 @@ times and survive all three.
   it reaches no backend yet: its value is its checks and its sayability,
   and whether both belong in the capability map and wire signature stays
   with 26.117's open question.
-- **~~Out-of-band material.~~ Half built, and what is left is a width
-  ceiling rather than an expressiveness gap (26.470).** 0050's
-  `parameter` is exactly "supplied by the caller", so
-  `parameter u64 iv;` with `sealed body (ae, nonce = iv)` says it while
-  an omitted `nonce =` says the other thing: the map prints
-  `message.iv parameter`, the wire signature prints `parameter - u64 iv`
-  beside `nonce=iv`, and `check_codec_sizes` holds the width against the
-  codec's `nonce_bytes`. What remains is that a `parameter` is a member
-  of ZERO WIDTH by 0050's own reasoning, so it is a scalar and scalars
-  stop at 64 bits -- which puts the 12-byte nonce of AES-GCM and
-  ChaCha20-Poly1305 out of reach while an 8-byte one works. **A key is
-  named the same way** -- 0040's `key = field` takes a `parameter`
-  too, and the wire signature prints `key=kid` beside `nonce=iv` --
-  under the same ceiling. What a key lacks is the CHECK: there is no
-  `key_bytes`, so a `key =` field is held against nothing where a
-  `nonce =` field is held against `nonce_bytes`.
+- **Out-of-band material -- expressible now (26.470, 26.887).** 0050's
+  `parameter` is "supplied by the caller", and `parameter u8 iv[12];` is that
+  for bytes: `sealed body (ae, nonce = iv)` says the nonce is held outside
+  the message, while an omitted `nonce =` says the other thing. The map
+  prints `message.iv parameter bytes=12`, the wire signature prints
+  `parameter - u8[12] iv` beside `nonce=iv`, and `check_codec_sizes` holds
+  the width against `nonce_bytes`. **A key is the same**: `parameter u8
+  k[32] [secret];` with `key = k` is the key itself, held against
+  `key_bytes`, where `key = epoch` selects one and its width is its own.
+  Neither reaches a view, because no generated code reads either: the
+  caller hands them to their own primitive.
 - **A conversation key of more than 64 bits -- expressible now (0042).** TLS
   session identifiers are 32 bytes, QUIC connection identifiers up to 20, and
   WireGuard and Noise identify a peer by a 32-byte public key. The collision
@@ -8268,6 +8265,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.887 A parameter may be bytes the caller holds
+
+Moved to `doc/decision/26.887-a-parameter-may-be-bytes-the-caller-holds.md`.
 
 ### 26.886 A lone value attribute is a size
 

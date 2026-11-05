@@ -428,6 +428,21 @@ class Field(Member):
 	#: for every member whose type takes none, which is nearly all of them.
 	arguments: tuple[Attr, ...]	= ()
 
+	@property
+	def material(self) -> bool:
+		"""`parameter u8 iv[12];` -- bytes the caller holds (26.887).
+
+		Named for a codec and read by no expression, so it has no value, no
+		placement and no argument on any view: the caller hands it to their
+		own primitive, which is where a `nonce =` has always gone.
+		"""
+		return self.parameter and self.array is not None
+
+	@property
+	def argument(self) -> bool:
+		"""A `parameter` every view carries: one value expressions read."""
+		return self.parameter and self.array is None
+
 
 @dataclass(frozen=True)
 class Reserved(Member):
@@ -1413,6 +1428,10 @@ class CodecDecl(Decl):
 	# says nothing about the tag beside it.
 	tag_bytes: int | None		= None
 	nonce_bytes: int | None		= None
+	#: Held against a `key =` that names key material, which is a byte-run
+	#: parameter. A selector -- `key = epoch` -- says which key and not what
+	#: it is, so its width is not the key's (26.887).
+	key_bytes: int | None		= None
 	#: The DERIVED properties the author actually wrote, by property name
 	#: (26.493). Recorded rather than inferred, because it cannot be
 	#: inferred: `kernels._check_derived` REPLACES these fields with the
