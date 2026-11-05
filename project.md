@@ -8268,6 +8268,17 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.879 A struct named for a builtin the module calls
+
+hull named a struct `bytes`, and `situc verify` died with a TypeError: `class
+bytes(View)` rebinds the name for the module, so every `bytes(...)` the emitter
+wrote for the builtin built a view. 26.606 could not reproduce it. `_unshadow`
+covered annotations; a call needs its shape read, since `bytes(self._msg, at, n)`
+is the struct. A struct is built with three arguments, the first a message, in
+all 282 corpus calls and in no builtin call, so the calls that mean the builtin
+go to an alias. No corpus module changes, `str` and `list` having only ever meant
+the struct there. Measured over the 14 builtins a module calls.
+
 ### 26.878 The advisor stops calling an 8-bit tag the strongest form
 
 `situc advise` answered "already at the strongest form" for `tag u8[1]`, for a

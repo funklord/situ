@@ -18,6 +18,7 @@ than an exception they have to catch.
 
 from __future__ import annotations
 
+import builtins
 import keyword
 
 import ast as pyast
@@ -737,7 +738,48 @@ class Emitter:
 		# import annotations` making it a string (26.704).
 		for name in shadowed:
 			text = _re.sub(rf"(:|->|\|) {name}\b", rf"\1 _situ_{name}", text)
-		return text
+		return self._unshadow_calls(text)
+
+	def _unshadow_calls(self, text: str) -> str:
+		"""Point a call that means a builtin past a struct of its name.
+
+		`class bytes(View)` rebinds the name for the whole module, so every
+		`bytes(...)` this emitter wrote for the builtin built a view and
+		raised a TypeError from inside a reader. `_unshadow` covers
+		annotations and could not cover this: `bytes(self._msg, at, n)` is the
+		struct and `bytes(self._msg.buffer[...])` the builtin, and only the
+		call's shape tells them apart (hull section 6, 26.879).
+
+		That shape is exact. A struct is constructed with three arguments, the
+		first a message -- all 282 such calls in the corpus -- and no builtin
+		call in it looks like that. Parsed rather than matched, for the reason
+		`_refuse_collisions` beside this one parses.
+		"""
+		names = {py_name(struct) for struct in self.resolved.structs} \
+			& set(dir(builtins))
+		if not names:
+			return text
+
+		sites = [node.func for node in pyast.walk(pyast.parse(text))
+		         if isinstance(node, pyast.Call)
+		         and isinstance(node.func, pyast.Name)
+		         and node.func.id in names
+		         and not self._constructs_a_view(node)]
+		lines = text.split("\n")
+		for site in sorted(sites, reverse=True,
+		                   key=lambda one: (one.lineno, one.col_offset)):
+			line = lines[site.lineno - 1]
+			lines[site.lineno - 1] = (line[:site.col_offset] + f"_situ_{site.id}"
+			                          + line[site.col_offset + len(site.id):])
+		alias = "".join(f"_situ_{name} = {name}\n"
+		                for name in sorted({site.id for site in sites}))
+		return "\n".join(lines).replace("\nfrom situ_runtime import",
+		                                f"\n{alias}\nfrom situ_runtime import", 1)
+
+	@staticmethod
+	def _constructs_a_view(call: pyast.Call) -> bool:
+		return len(call.args) == 3 \
+			and pyast.unparse(call.args[0]).endswith("._msg")
 
 	def _refuse_collisions(self, module: str) -> str:
 		"""Refuse a class that binds one name twice (0062).
