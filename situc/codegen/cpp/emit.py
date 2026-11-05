@@ -8039,7 +8039,7 @@ class Emitter:
 			"\t * of the *message* rather than of this view. The offset is the",
 			"\t * message's, so nothing about this frame says it is inside the",
 			"\t * buffer -- checked here, on every call, which is what",
-			"\t * `offset = DataPlaced` in the map costs. */",
+			"\t * a message-relative offset costs. */",
 			f"\t[[nodiscard]] ::situ::rt::err {name}(const situ_msg_t *msg,",
 			"\t\t\t::situ::rt::bytes &out) const noexcept",
 			"\t{",

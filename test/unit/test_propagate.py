@@ -325,6 +325,13 @@ def test_a_located_member_is_placed_by_the_data() -> None:
 	assert rules_for(LOCATED, "s.body", Axis.OFFSET) == ["data-placed"]
 
 
+def test_a_constant_offset_is_not_placed_by_the_data() -> None:
+	"""26.888: nothing in the message says where this one is."""
+	held = "struct s { u8 a; u8 body[4] at 8; }"
+	assert axis_of(held, "s.body", Axis.OFFSET).base == "MessageStatic"
+	assert rules_for(held, "s.body", Axis.OFFSET) == ["message-static"]
+
+
 def test_it_is_still_randomly_accessible() -> None:
 	"""The distinction from `Scanned`. Reaching it costs one read, not a walk
 	of everything before it."""
@@ -524,6 +531,7 @@ def test_reachable_rows_are_all_tested() -> None:
 		"secret-field",
 		"endian-marker-scope",
 		"data-placed",
+		"message-static",
 		"dynamic-predecessor",
 		"coded-predecessor",
 		"unwalked-arm-predecessor",

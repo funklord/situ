@@ -509,6 +509,9 @@ class Placement:
 	#: so redefining it moved where the member is read from and the
 	#: signature did not move.
 	located_ast: ast.Expr | None	= None
+	#: `at 26`: the offset where `at` is a constant, in bytes from the
+	#: message. None where a field decides it (26.888).
+	located_bytes: int | None	= None
 	#: `while (cond)`: the run ends after the element that fails this.
 	#: Held as source rather than as a tree, because every consumer of it
 	#: either renders it or hands it to a backend that renders it.
@@ -2630,6 +2633,7 @@ class Solver:
 			scan_cause_span    = state.scan[1] if state.scan else None,
 			located            = _located_source(member),
 			located_ast        = _located_tree(member),
+			located_bytes      = self._located_bytes(member),
 			arguments          = self.arguments_of(member, state),
 			arguments_ast      = tuple(
 				(arg.name, arg.value)
@@ -3029,6 +3033,14 @@ class Solver:
 				lo = max(lo, value)
 
 		return Interval(lo, hi)
+
+	def _located_bytes(self, member: ast.Field | ast.Reserved) -> int | None:
+		"""An `at` no member decides, as its value (26.888)."""
+		located = getattr(member, "located", None)
+		if located is None or set(paths_in(located)) \
+				- set(self.result.env.named_constants):
+			return None
+		return evaluate(located, self.result.env)
 
 	def sizing_field(self, member: ast.Field | ast.Reserved) -> str | None:
 		"""The field whose value drives this member's size, for blame."""

@@ -43,7 +43,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.wellformed import _encoding_source
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 5
+FORMAT_VERSION	= 6
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16

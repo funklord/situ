@@ -4647,7 +4647,7 @@ class Emitter:
 			"\t\tstart of the *message* rather than of this view. The offset is",
 			"\t\tthe message's, so nothing about this frame says it is inside",
 			"\t\tthe buffer -- checked here, on every read, which is what",
-			'\t\t`offset = DataPlaced` in the map costs."""',
+			'\t\ta message-relative offset costs."""',
 			"\t\tself._check()",
 			*([f"\t\tif not ({' and '.join(reaches)}):",
 			   f'\t\t\traise BoundsError("{placement.path}: the frame does'

@@ -119,6 +119,17 @@ class Context:
 	unwalked_arm: str | None = None
 
 
+def _known_offset(placement: Placement) -> int | None:
+	"""The offset in bits where a number is known, from the frame or the message.
+
+	Alignment asks the same of both: a base a reader aligned, and a constant
+	from it. `at 26` is even whatever the frame is (26.888).
+	"""
+	if placement.located_bytes is not None:
+		return placement.located_bytes * BITS_PER_BYTE
+	return placement.offset_bits
+
+
 def _align_value(placement: Placement) -> Value:
 	"""Alignment is a property of a known offset.
 
@@ -126,10 +137,11 @@ def _align_value(placement: Placement) -> Value:
 	it lands depends on how long the bytes before it turn out to be. Unaligned
 	is the honest answer and the weaker one.
 	"""
-	if placement.offset_bits is None:
+	known = _known_offset(placement)
+	if known is None:
 		return Value("Unaligned")
 
-	alignment = alignment_of(placement.offset_bits)
+	alignment = alignment_of(known)
 	return Value("Aligned", (str(alignment),)) if alignment else Value("Unaligned")
 
 
@@ -212,10 +224,11 @@ def _is_unaligned_multibyte(context: Context) -> bool:
 	scalar = context.scalar
 	if scalar is None or scalar.is_bit_packed or scalar.bits <= BITS_PER_BYTE:
 		return False
-	if context.placement.offset_bits is None:
+	known = _known_offset(context.placement)
+	if known is None:
 		return True
 	width_bytes = scalar.bits // BITS_PER_BYTE
-	return alignment_of(context.placement.offset_bits) < min(width_bytes, MAX_ALIGN)
+	return alignment_of(known) < min(width_bytes, MAX_ALIGN)
 
 
 def _is_aggregate_or_array(context: Context) -> bool:
@@ -238,7 +251,9 @@ def _is_odd_width_scalar(context: Context) -> bool:
 
 
 def _has_dynamic_offset(context: Context) -> bool:
+	"""A located member's offset owes nothing to the members before it."""
 	return (context.placement.offset_bits is None
+	        and context.placement.located is None
 	        and not _has_coded_predecessor(context))
 
 
@@ -253,6 +268,7 @@ def _has_coded_predecessor(context: Context) -> bool:
 	will take.
 	"""
 	return (context.placement.offset_bits is None
+	        and context.placement.located is None
 	        and context.placement.dynamic_cause_codec is not None)
 
 
@@ -365,7 +381,12 @@ def _is_case_insensitive(context: Context) -> bool:
 
 
 def _is_data_placed(context: Context) -> bool:
-	return context.placement.located is not None
+	return (context.placement.located is not None
+	        and context.placement.located_bytes is None)
+
+
+def _is_message_static(context: Context) -> bool:
+	return context.placement.located_bytes is not None
 
 
 def _is_past_a_scan(context: Context) -> bool:
@@ -954,6 +975,23 @@ TABLE: tuple[Row, ...] = (
 			         "to be checked on every use",
 		),
 		applies = _is_data_placed,
+	),
+	Row(
+		rule = Rule(
+			name      = "message-static",
+			construct = "a member at a constant offset from the message",
+			effects   = (
+				Effect(Axis.OFFSET, Value("MessageStatic"),
+				       "the number is known, and it is measured from the "
+				       "message rather than from the frame a reader holds, "
+				       "so a view cannot resolve it and every read takes the "
+				       "message and checks the bound"),
+			),
+			remedy = "a member placed after the one before it is resolved from "
+			         "the frame, where the bounds check at the frame boundary "
+			         "covers it",
+		),
+		applies = _is_message_static,
 	),
 	Row(
 		rule = Rule(
@@ -2051,6 +2089,13 @@ def _parameterise(effect: Effect, placement: Placement) -> Effect:
 		assert placement.offset_bits is not None
 		return Effect(effect.axis,
 		              Value("FrameStatic", (render_offset(placement.offset_bits),)),
+		              effect.because)
+
+	if effect.axis is Axis.OFFSET and effect.value.base == "MessageStatic":
+		assert placement.located_bytes is not None
+		return Effect(effect.axis,
+		              Value("MessageStatic",
+		                    (render_offset(placement.located_bytes * 8),)),
 		              effect.because)
 
 	if effect.axis is Axis.SIZE and effect.value.base == "Bounded":

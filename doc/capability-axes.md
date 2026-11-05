@@ -27,7 +27,7 @@ Values are listed strongest first.
 | Axis | Domain | Meaning |
 |---|---|---|
 | `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | byte extent |
-| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `DataPlaced` is one read of an offset the message chose and so cannot be bounds-checked at the frame (9.8), `Scanned` is a search that can fail (8.6.1) |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `MessageStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `DataPlaced` is one read of an offset the message chose and so cannot be bounds-checked at the frame (9.8), `Scanned` is a search that can fail (8.6.1) |
 | `access` | `Random` > `Sequential` | can reach element N directly |
 | `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | write cost |
 | `address` | `Stable` > `FrameStable` > `Unstable` | can a pointer be held |

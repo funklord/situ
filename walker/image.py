@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 
 MAGIC		= b"SITU"
-FORMAT_VERSION	= 5
+FORMAT_VERSION	= 6
 NONE		= 0xFFFFFFFF
 HEADER_BYTES	= 20
 SECTION_BYTES	= 16
@@ -124,8 +124,8 @@ AXES: tuple[str, ...] = (
 
 DOMAINS: dict[str, tuple[str, ...]] = {
 	"size":      ("Fixed", "Bounded", "Unbounded"),
-	"offset":    ("AbsoluteStatic", "FrameStatic", "Dynamic", "DataPlaced",
-	              "Scanned"),
+	"offset":    ("AbsoluteStatic", "FrameStatic", "MessageStatic", "Dynamic",
+	              "DataPlaced", "Scanned"),
 	"access":    ("Random", "Sequential"),
 	"mutate":    ("InPlaceFixed", "InPlaceSlack", "Shifting", "RewriteRequired",
 	              "Immutable"),

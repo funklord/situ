@@ -154,7 +154,7 @@ them, and every backend emits exactly the operations the vector supports.
 | axis | domain, strongest first | what it answers |
 |---|---|---|
 | `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | how many bytes |
-| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | where it is, and what finding it costs |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `MessageStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | where it is, and what finding it costs |
 | `access` | `Random` > `Sequential` | can element N be reached directly |
 | `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | what a write costs |
 | `address` | `Stable` > `FrameStable` > `Unstable` | may a pointer to it be held |
@@ -185,10 +185,12 @@ do not distinguish:
   is a read-swap-write rather than a store, and a caller cannot take a
   pointer to the value. `TextConverted` goes further -- a decimal parse can
   *fail*, where a byte swap cannot.
-- **`offset`.** `Dynamic` is arithmetic over values already read; `DataPlaced`
-  is one read of an offset the message itself chose, so nothing about the
-  frame bounds it; `Scanned` is a search that can fail. Three different costs
-  and three different failure modes, where "not a constant" would be one word.
+- **`offset`.** `MessageStatic` is a constant measured from the message rather
+  than from the frame a reader holds; `Dynamic` is arithmetic over values
+  already read; `DataPlaced` is one read of an offset the message itself chose,
+  so nothing about the frame bounds it; `Scanned` is a search that can fail.
+  Four different costs and failure modes, where "not a constant" would be one
+  word.
 - **`canonical`.** `CanonicalGiven(f)` is the honest answer for a
   byte-order-marked format: more than one encoding exists, exactly one given
   field `f`. The consequence is a rule -- **verify over received bytes, never

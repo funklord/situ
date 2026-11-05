@@ -8265,9 +8265,8 @@ class Emitter:
 			" it is",
 			" * inside the buffer. That is checked here, on every call, rather"
 			" than",
-			" * once at the frame boundary -- which is what `offset ="
-			" DataPlaced` in",
-			" * the map is telling you it costs. */",
+			" * once at the frame boundary -- which is what a message-relative",
+			" * offset costs. */",
 			f"static inline situ_err_t "
 			f"{ident(self.prefix, struct.name, local, 'view')}"
 			f"(const situ_msg_t *msg, situ_view_t view, situ_view_t *out"

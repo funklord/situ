@@ -7897,7 +7897,7 @@ class Emitter:
 			"\t///",
 			"\t/// The offset is the message's, so nothing about this frame",
 			"\t/// says it is inside the buffer -- checked here, on every",
-			"\t/// call, which is what `offset = DataPlaced` in the map costs.",
+			"\t/// call, which is what a message-relative offset costs.",
 			f"\tpub fn {name}<'m>(&self, msg: &'m [u8]) -> Result<&'m [u8]> {{",
 			# `let x = (expr);` is `unused_parens` too, which is a hard error
 			# under `-D warnings`. Same helper as the variant chain: the

@@ -104,7 +104,7 @@ situ_walk_err situ_walk_open(situ_walk_image *out,
 	                || image[3] != 'U') {
 		return SITU_WALK_MALFORMED;
 	}
-	if (u16_at(image + 4) != 5u) {
+	if (u16_at(image + 4) != 6u) {
 		return SITU_WALK_MALFORMED;	/* a format this build predates */
 	}
 	if (u32_at(image + 8) != len) {

@@ -51,8 +51,13 @@ DOMAINS: dict[Axis, tuple[str, ...]] = {
 	# read and an addition, so it is not a search -- but the number comes from
 	# the message rather than from the members before it, so nothing about the
 	# frame bounds it and it may point anywhere.
-	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "Dynamic", "DataPlaced",
-			 "Scanned"),
+	#
+	# `MessageStatic` is a constant measured from the message rather than from
+	# the frame a reader holds (26.888). Below `FrameStatic`, because a view
+	# cannot resolve it and every read takes the message and checks the bound.
+	# Above `Dynamic`, because no member has to be read to find it.
+	Axis.OFFSET:	("AbsoluteStatic", "FrameStatic", "MessageStatic", "Dynamic",
+			 "DataPlaced", "Scanned"),
 	Axis.ACCESS:	("Random", "Sequential"),
 	Axis.MUTATE:	("InPlaceFixed", "InPlaceSlack", "Shifting",
 			 "RewriteRequired", "Immutable"),

@@ -2035,16 +2035,14 @@ BMP's `pixel_offset`, TIFF's `ifd_offset`, and DNS name compression's pointer
 protocol, so the capability does not follow the file/protocol line and there is
 no `target file` for it to hang off.
 
-**Measured from the message, which is what its capability reads off.** A
-located member's offset is `DataPlaced` even where the expression is a
-literal, and a schema written as a datasheet reads -- `u32 board_id at 26` --
-therefore reports less than the same layout padded out with `u8 gap[n]`,
-which is `AbsoluteStatic(0x1A)`. That is not the construct under-reporting
-itself: `at 26` is 26 bytes from the MESSAGE, a view cannot resolve it, and
-every generated accessor takes the message and bounds-checks on each call.
-The two numbers coincide only for a struct read at message offset zero.
-Reported from `ossacli`, and 26.667 has the question it raises -- whether
-the offset axis should distinguish a message-relative constant at all.
+**Measured from the message, which is what its capability reads off.** An
+`at` a field decides is `DataPlaced`. An `at` over constants, a schema written
+as a datasheet reads -- `u32 board_id at 26` -- is `MessageStatic(0x1A)`
+(26.667, 26.888), which is not the `AbsoluteStatic(0x1A)` of the same layout
+padded out with `u8 gap[n]`: `at 26` is 26 bytes from the MESSAGE, a view
+cannot resolve it, and every generated accessor takes the message and
+bounds-checks on each call. The two numbers coincide only for a struct read at
+message offset zero.
 
 **It is a reference, not a member in the ordinary sense.** It joins no offset
 chain: it contributes nothing to the enclosing struct's extent, and the member
@@ -2130,7 +2128,7 @@ weakening order. Constructs weaken axes; nothing strengthens them.
 | Axis | Domain (strongest to weakest) | Meaning |
 |---|---|---|
 | `size` | `Fixed(n)` > `Bounded(lo,hi)` > `Unbounded` | byte extent |
-| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `DataPlaced` is one read of an offset the message chose and so cannot be bounds-checked at the frame (9.8), `Scanned` is a search that can fail (8.6.1) |
+| `offset` | `AbsoluteStatic(n)` > `FrameStatic(n)` > `MessageStatic(n)` > `Dynamic` > `DataPlaced` > `Scanned` | position knowledge, and what it costs to get: `Dynamic` is arithmetic over values already read, `DataPlaced` is one read of an offset the message chose and so cannot be bounds-checked at the frame (9.8), `Scanned` is a search that can fail (8.6.1) |
 | `access` | `Random` > `Sequential` | can reach element N directly |
 | `mutate` | `InPlaceFixed` > `InPlaceSlack` > `Shifting` > `RewriteRequired` > `Immutable` | write cost |
 | `address` | `Stable` > `FrameStable` > `Unstable` | can a pointer be held |
@@ -2236,6 +2234,7 @@ output can be read against this table directly.
 | `bounded-size` | a member whose length comes from an earlier field | `size := Bounded`, `mutate := Shifting` |
 | `unbounded-size` | a member with no upper bound on its length | computed from the construct |
 | `data-placed` | a member the data positions, rather than the members before it | `offset := DataPlaced`, `address := Unstable` |
+| `message-static` | a member at a constant offset from the message | `offset := MessageStatic` |
 | `dynamic-predecessor` | a dynamically sized member earlier in the same frame | `offset := Dynamic`, `address := Unstable` |
 | `coded-predecessor` | a coded region earlier in the same frame whose codec has no closed-form expansion | computed from the construct |
 | `unwalked-arm-predecessor` | a variant earlier in the same frame with an arm holding a counted run of variable records | `mutate := Immutable`, `access := Sequential` |
@@ -8265,6 +8264,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.888 A constant offset from the message
+
+Moved to `doc/decision/26.888-a-constant-offset-from-the-message.md`.
 
 ### 26.887 A parameter may be bytes the caller holds
 
