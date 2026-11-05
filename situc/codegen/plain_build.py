@@ -62,8 +62,6 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return False
 	if part.role in (NESTED, REPEAT) and held.arguments:
 		return False
-	if part.role == TAG and part.opens:
-		return False		# a pseudo-header, which the caller has to hand over
 	if part.role == REPEAT and part.value == 1 and sum(
 			one.role == REPEAT and one.value == 1 for one in parts) > 1:
 		return False		# one walked count to hold the reader's to

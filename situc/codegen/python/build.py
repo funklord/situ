@@ -442,6 +442,9 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{py_name(part.local)}: int")
 		elif part.role == RUN or part.role in plain_build.MEASURED:
 			found.append(f"{py_name(part.local)}: bytes")
+		elif part.role == TAG and part.opens:
+			# The pseudo-header its codec sums, which no member holds.
+			found.append(f"{py_name(part.local)}_prefix: bytes")
 	return found
 
 
@@ -455,10 +458,12 @@ def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 		name  = py_name(traverse.local_name(struct, part.placement))
 		order = "little" if plain_build.tag_order(part) == "le" else "big"
 		at    = f"situ_tag_{py_name(part.local)}"
+		over  = f"{py_name(part.local)}_prefix" if part.opens else ""
 		found.extend([
 			f"\tsitu_out[{at}:{at} + {part.bytes}] = "
-			f"situ_view.{name}_compute().to_bytes({part.bytes}, \"{order}\")",
-			f"\tsitu_view.{name}_check()"])
+			f"situ_view.{name}_compute({over}).to_bytes({part.bytes}, "
+			f"\"{order}\")",
+			f"\tsitu_view.{name}_check({over})"])
 	return found
 
 

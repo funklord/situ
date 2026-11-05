@@ -29,7 +29,7 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
 from situc.codegen.c.build import (BITS, ENDED, NESTED, REPEAT,	# noqa: E402
-                                   RUN, SCALAR, SIZE, SPAN, VARINT, Part)
+                                   RUN, SCALAR, SIZE, SPAN, TAG, VARINT, Part)
 from situc.codegen.c.names import c_name, ident		# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
@@ -125,6 +125,9 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 		elif part.role == NESTED:
 			found.append((part, inner.get(part.placement.type_name or "",
 			                              [b"\x00"])[0]))
+		elif part.role == TAG and part.opens:
+			found.append((part, inner.get(part.placement.tag_prefix or "",
+			                              [b"\x00"])[0]))
 		elif part.role == ENDED:
 			# What needs escaping, where the schema escapes: a run of
 			# ordinary bytes would never exercise it.
@@ -190,7 +193,7 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "uint8_t"))
 			values.append(name)
-			if part.role in plain_build.MEASURED:
+			if part.role in (*plain_build.MEASURED, TAG):
 				values.append(f"{len(value)}u")
 		calls.append(f'\tshow("{_label(unit)}", '
 		             f'{ident("situ", unit.struct.name, "build", unit.suffix)}'
@@ -223,7 +226,7 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "std::uint8_t"))
 			values.append(name)
-			if part.role in plain_build.MEASURED:
+			if part.role in (*plain_build.MEASURED, TAG):
 				values.append(f"{len(value)}u")
 		held = class_name(unit.struct)
 		if unit.suffix:

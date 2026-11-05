@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.872 A tag sums the pseudo-header it is handed
+
+Moved to `doc/decision/26.872-a-tag-sums-the-pseudo-header-it-is-handed.md`.
+
 ### 26.871 The C build collects unused sections
 
 The size rule now asks for `-ffunction-sections -fdata-sections` and

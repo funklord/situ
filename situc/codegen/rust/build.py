@@ -421,6 +421,9 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{name}: {_scalar(part.placement)}")
 		elif part.role == RUN:
 			found.append(f"{name}: &[u8; {part.bytes}]")
+		elif part.role == TAG and part.opens:
+			# The pseudo-header its codec sums, which no member holds.
+			found.append(f"{part.local}_prefix: &[u8]")
 		elif part.role in plain_build.MEASURED:
 			found.append(f"{name}: &[u8]")
 	return found
@@ -438,12 +441,13 @@ def _filled(struct: ResolvedStruct, held: str,
 		name = traverse.local_name(struct, part.placement)
 		bits = part.bytes * BITS_PER_BYTE
 		at   = f"situ_tag_{part.local}"
+		over = f"{part.local}_prefix" if part.opens else ""
 		found.extend([
 			f"\tlet situ_tag = {held}::new(&situ_out[..situ_at])?"
-			f".{name}_compute()?;",
+			f".{name}_compute({over})?;",
 			f"\tsitu_out[{at}..{at} + {part.bytes}].copy_from_slice("
 			f"&(situ_tag as u{bits}).to_{plain_build.tag_order(part)}_bytes());",
-			f"\t{held}::new(&situ_out[..situ_at])?.{name}_check()?;"])
+			f"\t{held}::new(&situ_out[..situ_at])?.{name}_check({over})?;"])
 	return found
 
 

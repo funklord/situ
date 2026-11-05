@@ -484,6 +484,10 @@ def _parameters(parts: list[Part]) -> list[str]:
 			found.append(f"{_scalar(part.placement)} {part.local}")
 		elif part.role == RUN:
 			found.append(f"const std::uint8_t *{part.local}")
+		elif part.role == TAG and part.opens:
+			# The pseudo-header its codec sums, which no member holds.
+			found.extend([f"const std::uint8_t *{part.local}_prefix",
+			              f"std::uint32_t {part.local}_prefix_len"])
 		elif part.role in plain_build.MEASURED:
 			found.extend([f"const std::uint8_t *{part.local}",
 			              f"std::uint32_t {part.local}_len"])
@@ -504,16 +508,21 @@ def _filled(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 			continue
 		name = traverse.local_name(struct, part.placement)
 		bits = part.bytes * BITS_PER_BYTE
+		over = (f"{part.local}_prefix, {part.local}_prefix_len"
+		        if part.opens else "")
 		found.extend([
+			*([f"\tif ({part.local}_prefix == nullptr) {{", BOUNDS, "\t}"]
+			  if part.opens else []),
 			"\tif (situ_e == ::situ::rt::err::ok) {",
 			"\t\tstd::uint32_t situ_tag = 0;",
 			"",
-			f"\t\tsitu_e = situ_view.{name}_compute(situ_tag);",
+			f"\t\tsitu_e = situ_view.{name}_compute("
+			+ (f"{over}, " if over else "") + "situ_tag);",
 			"\t\tif (situ_e == ::situ::rt::err::ok) {",
 			f"\t\t\tsitu_put_{plain_build.tag_order(part)}{bits}("
 			f"situ_out + situ_tag_{part.local},",
 			f"\t\t\t              static_cast<std::uint{bits}_t>(situ_tag));",
-			f"\t\t\tsitu_e = situ_view.{name}_check();",
+			f"\t\t\tsitu_e = situ_view.{name}_check({over});",
 			"\t\t}",
 			"\t}"])
 	return found

@@ -24,7 +24,7 @@ from test_the_four_builders_agree import Given, four_say	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit		# noqa: E402
-from situc.codegen.c.build import RUN, refusals		# noqa: E402
+from situc.codegen.c.build import RUN, TAG, refusals		# noqa: E402
 from situc.layout import solve				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
 
@@ -57,7 +57,8 @@ def _units(schema: Path) -> dict[str, Unit]:
 
 def _with(unit: Unit, *values: int | bytes) -> tuple[Unit, Given]:
 	taken = [part for part in unit.parts if plain_build.takes_value(part)
-	         or part.role == RUN or part.role in plain_build.MEASURED]
+	         or part.role == RUN or part.role in plain_build.MEASURED
+	         or (part.role == TAG and part.opens)]
 	assert len(taken) == len(values), [part.role for part in taken]
 	return unit, list(zip(taken, values))
 
@@ -362,3 +363,30 @@ def test_a_text_number_is_written_in_all_four(tmp_path: Path) -> None:
 	said = four_say(schema, tmp_path, list(units.values()),
 	                [case for case, _ in cases])
 	assert _extra(said, len(cases)) == [made for _, made in cases]
+
+
+def _internet_sum(data: bytes) -> int:
+	"""RFC 1071, written from the RFC rather than from the codec."""
+	if len(data) % 2:
+		data += b"\x00"
+	total = sum(int.from_bytes(data[at:at + 2], "big")
+	            for at in range(0, len(data), 2))
+	while total >> 16:
+		total = (total & 0xFFFF) + (total >> 16)
+	return total ^ 0xFFFF
+
+
+def test_a_tag_sums_the_pseudo_header_it_is_handed(tmp_path: Path) -> None:
+	"""UDP's sum is not over the message alone (RFC 768)."""
+	schema  = ROOT / "example" / "udp" / "udp.situ"
+	units   = _units(schema)
+	pseudo  = bytes([10, 0, 0, 1, 10, 0, 0, 2, 0, 17, 0, 10])
+	header  = bytes.fromhex("04d2" "0035" "000a" "0000") + b"hi"
+	stated  = _internet_sum(pseudo + header)
+	wanted  = header[:6] + stated.to_bytes(2, "big") + b"hi"
+	unit    = units["udp_header."]
+	said = four_say(schema, tmp_path, list(units.values()), [
+		_with(unit, 1234, 53, pseudo, b"hi"),
+		_with(unit, 1234, 53, pseudo[:-1], b"hi"),
+	])
+	assert _extra(said, 2) == [wanted.hex(), "refused"]
