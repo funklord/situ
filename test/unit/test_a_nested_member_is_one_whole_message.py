@@ -332,3 +332,33 @@ def test_a_varint_is_encoded_in_all_four(tmp_path: Path) -> None:
 	said = four_say(schema, tmp_path, list(units.values()),
 	                [case for case, _ in cases])
 	assert _extra(said, len(cases)) == [made for _, made in cases]
+
+
+# -- a number written as text (26.870) --------------------------------------
+
+TEXT = """endian big;
+struct fixed   { decimal u32 a[4]; hex u16 b[4]; octal u16 c[6]; }
+struct counted { decimal u8 n[2]; u8 data[n]; }
+struct minimal { decimal u32 a until ":" max 8 [minimal]; u8 z; }
+struct signed_ { decimal i32 a until ":" max 8 [minimal]; }
+"""
+
+
+def test_a_text_number_is_written_in_all_four(tmp_path: Path) -> None:
+	schema = tmp_path / "text.situ"
+	schema.write_text(TEXT, encoding="ascii")
+	units = _units(schema)
+	cases = [
+		# Leading zeros, upper case, and octal's own digits.
+		(_with(units["fixed."], 42, 0xAB, 0o644),
+		 (b"0042" b"00AB" b"000644").hex()),
+		# More than its digits can say.
+		(_with(units["fixed."], 12345, 0, 0), "refused"),
+		(_with(units["counted."], b"abc"), b"03abc".hex()),
+		(_with(units["minimal."], 300, 9), b"300:".hex() + "09"),
+		(_with(units["minimal."], 0, 9), b"0:".hex() + "09"),
+		(_with(units["signed_."], -42), b"-42:".hex()),
+	]
+	said = four_say(schema, tmp_path, list(units.values()),
+	                [case for case, _ in cases])
+	assert _extra(said, len(cases)) == [made for _, made in cases]

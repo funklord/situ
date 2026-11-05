@@ -69,8 +69,9 @@ def _raw(placement: Placement, index: int) -> int:
 
 
 def _signed(placement: Placement, raw: int) -> int:
-	bits = placement.size_bits or 8
-	if placement.scalar and placement.scalar.signed and raw >> (bits - 1):
+	bits = placement.scalar.bits if placement.scalar else 8
+	if placement.scalar and placement.scalar.signed and raw > 0 \
+			and raw >> (bits - 1):
 		return raw - (1 << bits)
 	return raw
 
@@ -110,6 +111,8 @@ def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
 			# one of those would say nothing about where the bits go.
 			width = part.placement.size_bits or 1
 			found.append((part, (0x5 + at) & ((1 << width) - 1) or 1))
+		elif part.role == SCALAR and part.radix:
+			found.append((part, 5 + at))	# small enough for its digits
 		elif part.role == SCALAR:
 			found.append((part, _raw(part.placement, at)))
 		elif part.role == VARINT and plain_build.takes_value(part):
@@ -151,7 +154,9 @@ def _varied(given: Given, inner: dict[str, list[bytes]],
 			value = b"".join(rng.choice(held) for _ in range(
 				part.digits or rng.randrange(4)))
 		elif isinstance(value, int):
-			bits  = part.placement.size_bits or 8
+			bits  = (part.placement.scalar.bits if part.radix
+			         and part.placement.scalar
+			         else part.placement.size_bits or 8)
 			value = rng.choice((*range(9), 16, 32, 64, 128, 255,
 			                    0x1234)) & ((1 << bits) - 1)
 		found.append((part, value))

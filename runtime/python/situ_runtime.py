@@ -940,6 +940,33 @@ def varint_len(value: int) -> int:
 	return n
 
 
+def format_uint(out: bytearray, at: int, length: int, radix: int,
+		value: int) -> bool:
+	"""Digits filling `length` bytes at `at`: False where they do not fit.
+
+	Upper case and zero padded, as `situ_format_uint`, which is the one
+	spelling `canonical` accepts.
+	"""
+	for i in range(length - 1, -1, -1):
+		value, digit = divmod(value, radix)
+		out[at + i] = (0x30 + digit if digit < 10 else 0x41 + digit - 10)
+	return value == 0
+
+
+def format_int(out: bytearray, at: int, length: int, radix: int,
+		value: int) -> bool:
+	"""`format_uint` with `-` for a negative value, and never `+` or `-0`.
+
+	`length` is the whole field, sign included.
+	"""
+	if value >= 0:
+		return format_uint(out, at, length, radix, value)
+	if length < 2:
+		return False
+	out[at] = 0x2D
+	return format_uint(out, at + 1, length - 1, radix, -value)
+
+
 def varint_put(out: bytearray, at: int, value: int) -> int:
 	"""Encode one varint minimally at `at`: bytes written, 0 if no room."""
 	n = varint_len(value)

@@ -43,7 +43,7 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	struct argument states, a count of elements rather than of bytes.
 	"""
 	held = part.placement
-	if part.role not in SERVED or part.radix or part.length:
+	if part.role not in SERVED or part.length:
 		return False
 	if part.others and part.role not in (BITS, NESTED, SCALAR):
 		return False
@@ -52,8 +52,9 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	if part.role in (ARMTAG, SCALAR, SIZE) \
 			and (held.scalar is None or held.marker is not None
 			     # A pad or a run in an arm is a scalar part wider or
-			     # narrower than its scalar, and not one value.
-			     or held.size_bits != held.scalar.bits):
+			     # narrower than its scalar, and not one value. A text
+			     # number is as wide as its digits.
+			     or (held.size_bits != held.scalar.bits and not part.radix)):
 		return False
 	if part.role == BITS and (
 			held.scalar is None or held.marker is not None

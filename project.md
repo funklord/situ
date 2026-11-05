@@ -8264,6 +8264,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.870 The builders write a text number
+
+Moved to `doc/decision/26.870-the-builders-write-a-text-number.md`.
+
 ### 26.869 The builders write a varint
 
 Moved to `doc/decision/26.869-the-builders-write-a-varint.md`.

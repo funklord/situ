@@ -52,11 +52,56 @@ def _bit_store(part: Part, value: str) -> list[str]:
 	        f" {held.size_bits}, {str(msb).lower()}, {value} as u64);"]
 
 
+def _digits(part: Part, value: str) -> list[str]:
+	"""A number written as text: `digits` wide, or as few as it needs.
+
+	C's `_value`. The fixed form pads with zeros, and the minimal form is
+	that with the width counted first, then the byte that ends it. A
+	negative value's digits are its magnitude's, and the sign is a byte more.
+	"""
+	assert part.placement.scalar is not None
+	signed = part.placement.scalar.signed
+	call   = "situ_rt::format_int" if signed else "situ_rt::format_uint"
+	widest = "i64" if signed else "u64"
+	held   = f"({value} as {widest})"
+	refuse = ["\t\treturn Err(Error::Constraint);", "\t}"]
+	if not part.minimal:
+		return [*_room(str(part.digits)),
+		        f"\tif !{call}(&mut situ_out[situ_at..situ_at + {part.digits}],"
+		        f" {part.radix}, {held}) {{", *refuse,
+		        f"\tsitu_at += {part.digits};"]
+	left = f"{held}.unsigned_abs()" if signed else held
+	return [
+		"\t{",
+		"\t\tlet mut situ_digits = 1usize;",
+		f"\t\tlet mut situ_left: u64 = {left};",
+		f"\t\twhile situ_left >= {part.radix} {{",
+		f"\t\t\tsitu_left /= {part.radix};",
+		"\t\t\tsitu_digits += 1;",
+		"\t\t}",
+		*([f"\t\tif {held} < 0 {{", "\t\t\tsitu_digits += 1;", "\t\t}"]
+		  if signed else []),
+		"\t\tif situ_out.len() - situ_at < situ_digits + 1 {",
+		"\t\t\treturn Err(Error::Bounds);",
+		"\t\t}",
+		f"\t\tif !{call}(&mut situ_out[situ_at..situ_at + situ_digits],"
+		f" {part.radix}, {held}) {{",
+		"\t\t\treturn Err(Error::Constraint);",
+		"\t\t}",
+		"\t\tsitu_at += situ_digits;",
+		f"\t\tsitu_out[situ_at] = {part.delimiter[0]:#04x};",
+		"\t\tsitu_at += 1;",
+		"\t}",
+	]
+
+
 def _store(part: Part, value: str) -> list[str]:
 	"""One scalar's bounds check, store and advance -- C's three steps."""
 	assert part.placement.scalar is not None
 	if part.role == BITS:
 		return _bit_store(part, value)
+	if part.radix:
+		return _digits(part, value)
 	width = part.placement.scalar.bits // BITS_PER_BYTE
 	return [
 		*_room(str(width)),
@@ -69,7 +114,9 @@ def _store(part: Part, value: str) -> list[str]:
 def _size(part: Part, length: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
-	width = part.placement.size_bits or 0
+	# A text number holds what its scalar holds, whatever its digits' width.
+	width = (part.placement.scalar.bits if part.radix
+	         else part.placement.size_bits or 0)
 	limit = (1 << width) - 1
 	if part.solved is None:
 		return [

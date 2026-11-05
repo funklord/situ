@@ -27,7 +27,7 @@ from situc.cli import main				# noqa: E402
 #: `example/modbus` holds both cells: plain structs and a variant.
 SERVED = ROOT / "example" / "modbus" / "modbus.situ"
 #: A delimited run is outside the three's class, and C's builder has it.
-OUTSIDE = ROOT / "example" / "http" / "http.situ"
+OUTSIDE = ROOT / "example" / "udp" / "udp.situ"
 
 BUILT = {"c": "modbus_build.h", "cpp": "modbus_build.hpp",
          "rust": "modbus_build.rs", "python": "modbus_build.py"}

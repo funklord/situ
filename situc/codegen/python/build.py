@@ -279,6 +279,39 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	return lines
 
 
+def _digits(part: Part, value: str) -> list[str]:
+	"""A number written as text: `digits` wide, or as few as it needs.
+
+	C's `_value`. The fixed form pads with zeros, and the minimal form is
+	that with the width counted first, then the byte that ends it. A
+	negative value's digits are its magnitude's, and the sign is a byte more.
+	"""
+	assert part.placement.scalar is not None
+	path   = part.placement.path
+	call   = "format_int" if part.placement.scalar.signed else "format_uint"
+	refuse = f'\t\traise ConstraintError("{path}: too wide for its digits")'
+	if not part.minimal:
+		return [*_room(str(part.digits), path),
+		        f"\tif not {call}(situ_out, situ_at, {part.digits}, "
+		        f"{part.radix}, {value}):", refuse,
+		        f"\tsitu_at += {part.digits}"]
+	return [
+		"\tsitu_digits = 1",
+		f"\tsitu_left = abs({value})",
+		f"\twhile situ_left >= {part.radix}:",
+		f"\t\tsitu_left //= {part.radix}",
+		"\t\tsitu_digits += 1",
+		*([f"\tif {value} < 0:", "\t\tsitu_digits += 1"]
+		  if part.placement.scalar.signed else []),
+		*_room("situ_digits + 1", path),
+		f"\tif not {call}(situ_out, situ_at, situ_digits, "
+		f"{part.radix}, {value}):", refuse,
+		"\tsitu_at += situ_digits",
+		f"\tsitu_out[situ_at] = {part.delimiter[0]}",
+		"\tsitu_at += 1",
+	]
+
+
 def _store(part: Part, value: str) -> list[str]:
 	"""One scalar's bounds check, write and advance -- C's three steps.
 
@@ -301,6 +334,8 @@ def _store(part: Part, value: str) -> list[str]:
 	assert placement.scalar is not None
 	if part.role == BITS:
 		return _bit_store(part, value)
+	if part.radix:
+		return _digits(part, value)
 	width  = placement.scalar.bits // BITS_PER_BYTE
 	order  = _byte_order(placement.endian)
 	return [
@@ -315,7 +350,9 @@ def _size(part: Part, length: str) -> list[str]:
 	"""A size field, from the length of the run it measures."""
 	assert part.placement.scalar is not None
 	path  = part.placement.path
-	limit = (1 << (part.placement.size_bits or 0)) - 1
+	# A text number holds what its scalar holds, whatever its digits' width.
+	limit = (1 << (part.placement.scalar.bits if part.radix
+	               else part.placement.size_bits or 0)) - 1
 	refuse = (f'\t\traise ConstraintError("{path}: the run is longer than '
 	          'this can say")')
 	if part.solved is None:
@@ -488,8 +525,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			for unit in built for one in unit.parts
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
-		"                          TruncatedError, View, varint_be_put,",
-		"                          varint_put, zigzag_encode)",
+		"                          TruncatedError, View, format_int,",
+		"                          format_uint, varint_be_put, varint_put,",
+		"                          zigzag_encode)",
 		"",
 	]
 

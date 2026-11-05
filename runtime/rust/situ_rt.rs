@@ -936,6 +936,34 @@ pub fn varint_len(mut value: u64) -> usize {
 	n
 }
 
+/// Digits filling `out`: false where they do not fit. Upper case and zero
+/// padded, as `situ_format_uint`, which is the one spelling `canonical`
+/// accepts.
+pub fn format_uint(out: &mut [u8], radix: u64, mut value: u64) -> bool {
+	if out.is_empty() || !(2..=16).contains(&radix) {
+		return false;
+	}
+	for byte in out.iter_mut().rev() {
+		let digit = (value % radix) as u8;
+		*byte = if digit < 10 { b'0' + digit } else { b'A' + digit - 10 };
+		value /= radix;
+	}
+	value == 0
+}
+
+/// `format_uint` with `-` for a negative value, and never `+` or `-0`. `out`
+/// is the whole field, sign included.
+pub fn format_int(out: &mut [u8], radix: u64, value: i64) -> bool {
+	if value >= 0 {
+		return format_uint(out, radix, value as u64);
+	}
+	if out.len() < 2 {
+		return false;
+	}
+	out[0] = b'-';
+	format_uint(&mut out[1..], radix, value.unsigned_abs())
+}
+
 /// Encode one varint minimally: bytes written, or 0 if `out` is too small.
 #[inline]
 pub fn varint_put(out: &mut [u8], mut value: u64) -> usize {
