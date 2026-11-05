@@ -1301,7 +1301,8 @@ def test_a_variant_gets_one_builder_per_arm() -> None:
 	header = _header(parsed, resolved, "modbus")
 	cases  = {build.arm_name(case): case
 	          for case in build.arms(resolved.structs["request"])}
-	assert "read_coils" in cases and "default" in cases
+	assert "read_coils" in cases
+	assert "default" not in cases, "`default: error` has no message to build"
 
 	parts, why = _only(resolved, "request", header, cases["read_coils"])
 	assert why is None, why
@@ -1323,17 +1324,17 @@ def test_the_default_arm_refuses_a_value_a_named_arm_claims() -> None:
 
 	The named builders are where those values are written.
 	"""
-	parsed, resolved = _parts(ROOT / "example" / "modbus" / "modbus.situ")
-	header = _header(parsed, resolved, "modbus")
+	parsed, resolved = _parts(ROOT / "test" / "schema" / "edges.situ")
+	header = _header(parsed, resolved, "edges")
 	cases  = {build.arm_name(case): case
-	          for case in build.arms(resolved.structs["request"])}
+	          for case in build.arms(resolved.structs["arm_holder"])}
 
-	parts, why = _only(resolved, "request", header, cases["default"])
+	parts, why = _only(resolved, "arm_holder", header, cases["other"])
 	assert why is None, why
 	disc = [part for part in parts if part.others]
 	assert len(disc) == 1, [(part.placement.name, part.role)
 	                        for part in parts]
-	assert 1 in disc[0].others and 23 in disc[0].others
+	assert disc[0].others == (1,)
 
 
 def test_a_peeked_discriminant_is_written_by_the_arm() -> None:

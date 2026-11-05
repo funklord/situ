@@ -838,12 +838,18 @@ def arms(struct: ResolvedStruct) -> list[Choice]:
 	Several variants are one builder taking each arm as a value (26.881):
 	they choose independently, and a builder per combination is a product
 	of their arms.
+
+	`default: error` is no choice: no message has that arm, so its builder
+	could only ever refuse (26.883).
 	"""
 	variants = [held for held in traverse.own_members(struct)
 	            if held.kind == "variant"]
 	if len(variants) > 1:
 		return [EACH]
-	return list(variants[0].arm_cases or ()) if variants else []
+	if not variants:
+		return []
+	return [case for case in variants[0].arm_cases or ()
+	        if case.member is not None or case.opaque]
 
 
 def arm_name(case: Choice) -> str:

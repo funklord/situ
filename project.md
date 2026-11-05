@@ -8268,6 +8268,14 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.883 `default: error` has no builder
+
+It is an arm no message has, and all 12 in the corpus (48 functions over four
+languages) were refused on every value the harness tried. `arms` offers it no
+more, as 26.874 had already said of a combination. `default: opaque` stays.
+230 builders over 34 schemas. The test of a default arm's claimed values had
+been riding on one of these, and now holds a real default arm, in `edges`.
+
 ### 26.882 A member may take the name of a builtin the builder calls
 
 A member is a builder's parameter, so `u8 len[n]` made every `len(...)` in it

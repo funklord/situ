@@ -130,7 +130,7 @@ def test_one_variant_keeps_a_builder_per_arm(tmp_path: Path) -> None:
 		}
 	""")
 	built = [one for one in _units(schema) if one.struct.name == "one"]
-	assert {"a", "b"} <= {one.suffix for one in built}
+	assert sorted(one.suffix for one in built) == ["a", "b"]
 	assert not any(part.role == CHOSEN for one in built for part in one.parts)
 
 
