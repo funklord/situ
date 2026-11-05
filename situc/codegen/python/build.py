@@ -226,9 +226,14 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
 		lines += _size(part, f"len({py_name(run)})")
+	elif part.stated is not None:
+		lines += _bit_store(part, str(part.stated))
 	elif plain_build.takes_value(part):
 		local = py_name(part.local)
-		lines += [f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {limit}:",
+		lines += [*([f"\tif {local} in {tuple(part.others)!r}:",
+		             f'\t\traise ConstraintError("{path}: reads as something else")']
+		            if part.others else []),
+		          f"\tif {local} & 0xFFFFFFFFFFFFFFFF > {limit}:",
 		          f'\t\traise ConstraintError("{path}: wider than its field")',
 		          *_bit_store(part, local)]
 	elif plain_build.stated_ones(part):

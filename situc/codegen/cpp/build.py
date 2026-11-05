@@ -303,8 +303,12 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
 		lines += _size(part, f"{run}_len")
+	elif part.stated is not None:
+		lines += _bit_store(part, f"{part.stated}u")
 	elif plain_build.takes_value(part):
-		lines += [f"\tif (static_cast<std::uint64_t>({part.local}) > {limit}u) {{",
+		lines += [*([f"\tif ({' || '.join(f'{part.local} == {v}u' for v in part.others)}) {{",
+		             CONSTRAINT, "\t}"] if part.others else []),
+		          f"\tif (static_cast<std::uint64_t>({part.local}) > {limit}u) {{",
 		          CONSTRAINT, "\t}", *_bit_store(part, part.local)]
 	elif plain_build.stated_ones(part):
 		lines += _bit_store(part, f"{limit}u")

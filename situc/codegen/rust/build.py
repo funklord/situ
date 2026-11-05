@@ -250,9 +250,14 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
 		lines += _size(part, f"{_ident(run)}.len()")
+	elif part.stated is not None:
+		lines += _bit_store(part, str(part.stated))
 	elif plain_build.takes_value(part):
 		local = _ident(part.local)
-		lines += [f"\tif {local} as u64 > {limit} {{",
+		lines += [*([f"\tif {' || '.join(f'{local} as u64 == {v}' for v in part.others)} {{",
+		             "\t\treturn Err(Error::Constraint);", "\t}"]
+		            if part.others else []),
+		          f"\tif {local} as u64 > {limit} {{",
 		          "\t\treturn Err(Error::Constraint);", "\t}",
 		          *_bit_store(part, local)]
 	elif plain_build.stated_ones(part):

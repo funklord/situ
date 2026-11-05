@@ -156,6 +156,7 @@ class Part:
 					# says its encoding and its limits
 		self.length = ""		# where a run's length comes from,
 					# where it is not the caller's `_len`
+		self.stated: int | None = None	# a packed tag the arm decides
 		self.others    = others		# values that would make the message
 					# read as something else: another
 					# arm, or an older version
@@ -232,6 +233,8 @@ def _supplies_a_value(part: "Part") -> bool:
 	needs a caller, and what decides is the content policy rather than the
 	role.
 	"""
+	if part.role == BITS and part.stated is not None:
+		return False		# the arm being built decides it
 	if part.role == BITS and part.placement.kind == "reserved":
 		return not _states_its_content(part.placement)
 	if part.role in (BITS, VARINT) and part.sizes is not None:
@@ -1028,14 +1031,6 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			if held.kind not in ("field", "reserved"):
 				return [], f"`{traverse.local_name(struct, held)}` is a " \
 				           f"packed {held.kind}"
-			if held.name == chooses and arm is not None:
-				# The arm has to decide it, or `will_flag = 0` goes out
-				# ahead of a will the reader then steps over. A packed
-				# field takes the caller's value, and an arm tag is a
-				# whole scalar.
-				return [], f"`{traverse.local_name(struct, held)}` is a " \
-				           "packed discriminant, and this writer writes " \
-				           "an arm's tag whole"
 			assert held.scalar is not None
 			if held.scalar.is_bcd or held.radix is not None \
 					or held.scaled:
@@ -1045,6 +1040,14 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			            bit_at=bit_at, opens=index == first,
 			            closes=(index + 1 not in groups
 			                    or groups[index + 1][2] != first))
+			if held.name == chooses and arm is not None:
+				# The arm decides it, or `present = 0` goes out ahead of a
+				# body the reader then steps over. The default arm's value
+				# is the caller's, as it is for a whole-scalar tag.
+				if arm.value is None:
+					part.others = claimed
+				else:
+					part.stated = int(arm.value)
 			if held.name in measures:
 				# `ihl` is four bits AND the length of `options`, which
 				# nothing had met before: the packed branch comes first,
@@ -2343,8 +2346,19 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				   *_room(f"{part.bytes}u"),
 				   f"\tmemset({OUT} + {AT}, 0, {part.bytes}u);"]
 				  if part.opens else []),
+				*([f"\tif ({' || '.join(f'{part.local} == {v}u' for v in part.others)}) {{",
+				   "\t\treturn SITU_ERR_CONSTRAINT;",
+				   "\t}"] if part.others else []),
 			]
-			if held.kind == "reserved" and _states_its_content(held):
+			if part.stated is not None:
+				lines += [
+					f"\t/* {local}: {width} bits at {part.bit_at}, and the",
+					"\t * arm this builder writes. */",
+					f"\tsitu_bits_set_{order}({OUT} + {AT}, "
+					f"{part.bit_at}u, {width}u,",
+					f"\t                    {part.stated}u);",
+				]
+			elif held.kind == "reserved" and _states_its_content(held):
 				# The group was zeroed above, which is already the whole of
 				# `must_be_zero`. `must_be_one` is the case that was
 				# getting zeros and then failing its own `_validate`.

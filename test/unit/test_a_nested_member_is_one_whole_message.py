@@ -138,8 +138,25 @@ struct flagged {
 		default: error;
 	}
 }
+struct kinded {
+	u2 kind;
+	u6 rest;
+	variant body switch (kind) {
+		case 1:  word held;
+		default: nothing other;
+	}
+}
 """, encoding="ascii")
-	assert "packed discriminant" in _declined(schema)
+	units = _units(schema)
+	said  = four_say(schema, tmp_path, list(units.values()), [
+		_with(units["flagged.held"], 5, b"\x01\xaa"),
+		_with(units["flagged.absent"], 5, b""),
+		# The default arm's tag is the caller's, short of one a named arm
+		# claims.
+		_with(units["kinded.other"], 2, 5, b""),
+		_with(units["kinded.other"], 1, 5, b""),
+	])
+	assert _extra(said, 4) == ["85" "01aa", "05", "85", "refused"]
 
 
 def test_a_version_too_old_for_what_is_written_is_refused(
