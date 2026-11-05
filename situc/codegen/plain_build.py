@@ -12,11 +12,11 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
-                                   VARINT, WIDE, ZERO, Choice, Part, Shape,
-                                   _supplies_a_value, arm_name, arms, plan,
-                                   refusals)
+from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+                                   PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
+                                   TAG, VARINT, WIDE, ZERO, ArmOf, Choice, Part,
+                                   Shape, _supplies_a_value, arm_name, arms,
+                                   plan, refusals)
 from situc.resolve import ResolvedSchema, ResolvedStruct
 
 __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
@@ -26,8 +26,8 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD, PEEKED, REPEAT,
-                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE, ZERO})
+SERVED = frozenset({ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED, PAD, PEEKED,
+                    REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.
@@ -42,6 +42,8 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 	struct argument states, a count of elements rather than of bytes.
 	"""
 	held = part.placement
+	if part.role == CHOSEN:
+		return any(_serves_arm(one, parts) for one in part.arms)
 	if part.role not in SERVED or part.length:
 		return False
 	if part.others and part.role not in (BITS, NESTED, SCALAR):
@@ -78,6 +80,12 @@ def _serves(part: Part, parts: list[Part]) -> bool:
 		return not part.inner or (part.role == SIZE and part.solved is None
 		                          and measured.role == REPEAT)
 	return True
+
+
+def _serves_arm(arm: ArmOf, parts: list[Part]) -> bool:
+	"""Whether what this arm takes and writes is all in the class."""
+	return all(_serves(one, parts) for one in (arm.tag, arm.part)
+	           if one is not None)
 
 
 def tag_order(part: Part) -> str:
@@ -148,6 +156,15 @@ def parts(struct: ResolvedStruct, shape: Shape,
 	planned, _ = plan(struct, shape, arm)
 	if not planned or not all(_serves(one, planned) for one in planned):
 		return None
+	# An arm this class cannot write is left out of what a caller can hand
+	# over, as a builder of that arm alone would be.
+	for part in planned:
+		kept = tuple(one for one in part.arms if _serves_arm(one, planned))
+		part.declined = (*part.declined,
+		                 *((one.name, f"`{one.name}` is an arm this class "
+		                   "does not write yet") for one in part.arms
+		                   if one not in kept))
+		part.arms = kept
 	return planned
 
 
@@ -215,10 +232,16 @@ def declined(resolved: ResolvedSchema, shape: Shape,
 		cases = arms(struct)
 		if cases:
 			out.extend(
-				(f"{struct.name}.{arm_name(case)}",
+				(f"{struct.name}.{arm_name(case)}".rstrip("."),
 				 _unwritten(struct, shape, case, language))
 				for case in cases
 				if (struct.name, arm_name(case)) not in built)
+			out.extend(
+				(line for unit in units(resolved, shape)
+				 if unit.struct is struct for part in unit.parts
+				 for line in ((f"{struct.name}.{arm}", why)
+				              for arm, why in part.declined)
+				 if line not in out))
 			continue
 		if (struct.name, "") in built:
 			continue

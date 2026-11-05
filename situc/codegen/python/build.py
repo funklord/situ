@@ -32,9 +32,10 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
-                                   VARINT, WIDE, ZERO, Part, Shape)
+from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+                                   PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
+                                   TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape,
+                                   every_part)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
 from situc.layout import BITS_PER_BYTE
@@ -283,6 +284,12 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
 		lines += _size(part, f"len({py_name(run)})")
+	elif part.chooser is not None:
+		tag = f"{py_name(part.chooser.local)}.situ_tag"
+		lines += [*([f"\tif {tag} & 0xFFFFFFFFFFFFFFFF > {limit}:",
+		             f'\t\traise ConstraintError("{path}: wider than its field")']
+		            if any(one.tag for one in part.chooser.arms) else []),
+		          *_bit_store(part, tag)]
 	elif part.stated is not None:
 		lines += _bit_store(part, str(part.stated))
 	elif plain_build.takes_value(part):
@@ -392,9 +399,76 @@ def _size(part: Part, length: str) -> list[str]:
 	]
 
 
-def _write(structs: Mapping[str, ResolvedStruct], part: Part,
-		parts: list[Part]) -> list[str]:
+def _arm_type(struct: ResolvedStruct, part: Part) -> str:
+	name = traverse.local_name(struct, part.placement)
+	return f"{struct.name}_{name}_arm"
+
+
+def _arm_values(struct: ResolvedStruct, part: Part) -> list[str]:
+	"""The class a variant's arm travels in, and one maker per arm.
+
+	Each maker fixes which arm this is and what the discriminant holds, so
+	a value cannot say one arm and carry another's body.
+	"""
+	held  = _arm_type(struct, part)
+	name  = traverse.local_name(struct, part.placement)
+	lines = [
+		"",
+		f"class {held}:",
+		f'\t"""Which arm of `{name}` a {struct.name} carries."""',
+		"",
+		'\t__slots__ = ("situ_arm", "situ_tag", "situ_values")',
+		"",
+		"\tdef __init__(self, situ_arm: int, situ_tag: int,",
+		"\t             *situ_values: object) -> None:",
+		"\t\tself.situ_arm = situ_arm",
+		"\t\tself.situ_tag = situ_tag",
+		"\t\tself.situ_values = situ_values",
+	]
+	for at, arm in enumerate(part.arms):
+		given = _parameters(struct, [one for one in (arm.tag, arm.part)
+		                             if one is not None])
+		tag   = py_name(arm.tag.local) if arm.tag else str(arm.value or 0)
+		body  = [py_name(arm.part.local)] if arm.part else []
+		lines.extend([
+			"",
+			"\t@staticmethod",
+			f"\tdef {py_name(arm.name)}({', '.join(given)}) -> {held}:",
+			f"\t\treturn {held}({', '.join([str(at), tag, *body])})",
+		])
+	return lines
+
+
+def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
+		part: Part, parts: list[Part]) -> list[str]:
+	"""A variant's slot: whichever arm the caller's value holds.
+
+	The arm's part is written as it is for a builder of that arm alone,
+	with what it reads bound to the name it expects. Nothing but the class
+	stops an arm of another variant arriving here, so the class is asked.
+	"""
+	local = py_name(part.local)
+	path  = part.placement.path
+	lines = [f"\tif not isinstance({local}, {_arm_type(struct, part)}):",
+	         f'\t\traise ConstraintError("{path}: not an arm of this variant")']
+	for at, arm in enumerate(part.arms):
+		lines.append(f"\t{'el' if at else ''}if {local}.situ_arm == {at}:")
+		body: list[str] = []
+		if arm.tag is not None:
+			body += [f"\tif {local}.situ_tag in {tuple(arm.tag.others)!r}:",
+			         f'\t\traise ConstraintError("{path}: reads as something else")']
+		if arm.part is not None:
+			body += [f"\t({py_name(arm.part.local)},) = {local}.situ_values",
+			         *_write(struct, structs, arm.part, parts)]
+		lines.extend(f"\t{line}" for line in body or ["\tpass"])
+	return lines
+
+
+def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
+		part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == CHOSEN:
+		return _chosen(struct, structs, part, parts)
 	path = part.placement.path
 	if part.role == BITS:
 		return _bits(part, parts)
@@ -426,7 +500,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		        f"bytes({part.bytes})",
 		        f"\tsitu_at += {part.bytes}"]
 	if part.role == ARMTAG:
-		return _store(part, str(part.value))
+		return _store(part, (f"{py_name(part.chooser.local)}.situ_tag"
+		                     if part.chooser else str(part.value)))
 	if part.role == PEEKED:
 		return []		# the bytes it reads belong to what follows
 	if part.role == SCALAR:
@@ -467,10 +542,12 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 	        f"\tsitu_at += len({local})"]
 
 
-def _parameters(parts: list[Part]) -> list[str]:
+def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	found: list[str] = []
 	for part in parts:
-		if plain_build.takes_value(part):
+		if part.role == CHOSEN:
+			found.append(f"{py_name(part.local)}: {_arm_type(struct, part)}")
+		elif plain_build.takes_value(part):
 			found.append(f"{py_name(part.local)}: int")
 		elif part.role == RUN or part.role in plain_build.MEASURED:
 			found.append(f"{py_name(part.local)}: bytes")
@@ -561,7 +638,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		f"from {basename} import Message"
 		+ (", NATIVE_BIG" if any(
 			one.placement.endian is ast.Endian.NATIVE
-			for unit in built for one in unit.parts
+			for unit in built for one in every_part(list(unit.parts))
 			if one.role in (ARMTAG, SCALAR, SIZE)) else ""),
 		"from situ_runtime import (BoundsError, ConstraintError, SituError,",
 		"                          TruncatedError, View, format_int,",
@@ -575,10 +652,14 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		held   = py_name(struct.name)
 		parts  = list(unit.parts)
 		name   = f"{held}_{py_name(unit.suffix)}" if unit.suffix else held
+		for part in parts:
+			if part.role == CHOSEN:
+				lines.extend(_arm_values(struct, part))
 		lines.extend([
 			"",
 			f"def build_{name}(situ_out: bytearray"
-			+ "".join(f", {one}" for one in _parameters(parts)) + ") -> int:",
+			+ "".join(f", {one}" for one in _parameters(struct, parts))
+			+ ") -> int:",
 			f'\t"""Build a {struct.name} into `situ_out` and return its length.',
 			"",
 			"\tOne member at a time in schema order, then the result is",
@@ -593,7 +674,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"\tsitu_at = 0",
 		])
 		for part in parts:
-			lines.extend(_write(resolved.structs, part, parts))
+			lines.extend(_write(struct, resolved.structs, part, parts))
 		lines.extend([
 			"",
 			"\t# The view over exactly what was written, not over `situ_out`: a",

@@ -8268,6 +8268,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.881 Several variants are one builder, taking each arm as a value
+
+Moved to `doc/decision/26.881-several-variants-are-one-builder-taking-each-arm-as-a-value.md`.
+
 ### 26.880 A text number's width has to be written
 
 `decimal u16 code[n]` was accepted and no two readers agreed: C parsed a span of
@@ -8368,9 +8372,12 @@ arms in member order, as one variant gets a builder per arm. `default: error`
 has no message to build and joins none. So mqtt's CONNECT is eight builders,
 `connect_body_will_present_user_absent_password_absent` and so on, in all four
 languages. Two variants on one discriminant are refused, since an arm of one
-would decide the other. A product is exponential in the variants, which has
-not mattered: `connect_body` is the only such struct in the corpus. 243
-builders over 33 schemas.
+would decide the other. 243 builders over 33 schemas.
+
+**Superseded by 26.881.** This said the product had not mattered, which was
+true of the corpus and not of the language: a flag-gated member is a variant,
+and ten of them were 1024 builders and a 9 MB header. The builders are gone and
+each arm is a value.
 
 ### 26.873 The three builders write a pad
 

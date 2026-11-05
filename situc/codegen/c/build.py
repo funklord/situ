@@ -31,9 +31,8 @@
 
 from __future__ import annotations
 
-from itertools import product
-
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from situc import ast, invariant, traverse
 from situc.codegen.c.names import bare_name, ident, macro
@@ -83,6 +82,7 @@ PAD     = "pad"		# padding to an alignment, whose length is the cursor's
 OPAQUE  = "opaque"	# reserved bytes whose content the schema leaves open
 HIDDEN  = "hidden"	# a length-hiding pad, whose length the caller chooses
 ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
+CHOSEN  = "chosen"	# a variant whose arm is a value the caller hands over
 
 #: The roles a caller supplies a value for, which is one list because three
 #: of them had drifted: the signature named five, the uniquifier three and
@@ -90,7 +90,7 @@ ARG     = "arg"		# a struct argument: a parameter, and no bytes (0050)
 #: reported as entirely literal.
 CALLER_SUPPLIED = frozenset({SCALAR, RUN, SPAN, ENDED, NESTED, REPEAT,
                              BITS, WIDE, OPAQUE, HIDDEN, VARINT, VARRUN,
-                             ARG})
+                             ARG, CHOSEN})
 
 #: And of those, the ones the caller measures, which emit a `_len` beside
 #: the pointer. A fixed run does not: the schema counted it. A length-hiding
@@ -127,8 +127,22 @@ class Shape:
 		self.varints = varints
 
 
-#: What one builder chooses: an arm, or one of each of several variants.
-Choice = Arm | tuple[Arm, ...]
+class Each:
+	"""A plan that leaves every variant's arm to a value the caller hands over.
+
+	Several variants choose independently, so a builder per combination is
+	a product of their arms: 1024 builders and a 9 MB header for ten
+	optional members, and every flag-gated member of a format is a variant
+	(26.881). An arm is one member and the plan depends on it in two places,
+	the discriminant and the variant's own slot, so a choice can be a value
+	in that slot: one builder, and one constructor per arm.
+	"""
+
+
+EACH = Each()
+
+#: What one builder chooses: an arm, or the arm of each variant by value.
+Choice = Arm | Each
 
 
 class Part:
@@ -169,6 +183,38 @@ class Part:
 		self.bit_at    = bit_at		# where in a packed group this sits
 		self.opens     = opens		# first of a packed group
 		self.closes    = closes		# last of one
+		self.arms: tuple[ArmOf, ...] = ()	# what a CHOSEN part offers
+		self.declined: tuple[tuple[str, str], ...] = ()
+					# the arms it cannot write, and why
+		self.chooser: Part | None = None
+					# the CHOSEN part that says what this
+					# discriminant holds
+
+
+@dataclass
+class ArmOf:
+	"""One arm a caller may hand over for a variant.
+
+	The value is built by this arm's constructor, so the discriminant comes
+	from the arm and cannot disagree with the body: 26.617's argument, with
+	a constructor in the place of a function. `tag` is the default arm's
+	discriminant, which is the caller's and must be no named arm's. `part`
+	is what the arm writes, and None for an arm of no bytes.
+	"""
+
+	name: str
+	value: int | None
+	tag: Part | None
+	part: Part | None
+
+
+def every_part(parts: list[Part]) -> list[Part]:
+	"""The parts, with what each arm of a CHOSEN part writes in its place."""
+	found: list[Part] = []
+	for part in parts:
+		found.append(part)
+		found.extend(one.part for one in part.arms if one.part is not None)
+	return found
 
 
 def _states_its_content(placement: Placement) -> bool:
@@ -239,7 +285,8 @@ def _supplies_a_value(part: "Part") -> bool:
 	needs a caller, and what decides is the content policy rather than the
 	role.
 	"""
-	if part.role == BITS and part.stated is not None:
+	if part.role == BITS and (part.stated is not None
+	                          or part.chooser is not None):
 		return False		# the arm being built decides it
 	if part.role == BITS and part.placement.kind == "reserved":
 		return not _states_its_content(part.placement)
@@ -737,21 +784,65 @@ def _arm_part(struct: ResolvedStruct, placement: Placement, header: str,
 	return _value_part(SCALAR, placement, local)
 
 
+def _arm_body(struct: ResolvedStruct, case: Arm, claimed: tuple[int, ...],
+		disc: Placement | None, shape: Shape
+		) -> tuple[Part | None, str | None]:
+	"""What one arm writes, or why it cannot."""
+	inner = _arm_placement(struct, str(case.member))
+	if inner is None:
+		return None, f"`{case.member}` is not a member of this struct"
+	why = _arm_refusal(inner, shape.header, shape.prefix, shape.structs)
+	if why:
+		# The LOCAL name, as every other member-level message uses: this
+		# quoted the full dotted path including the struct, so one reader
+		# had two shapes to learn.
+		return None, f"`{traverse.local_name(struct, inner)}` {why}"
+	part = _arm_part(struct, inner, shape.header, shape.prefix, shape.structs)
+	# Where the discriminant is peeked, nothing was written for it and
+	# `_validate` cannot help: bytes beginning with another arm's kind are a
+	# VALID message of that other arm, so a caller who asked for this one
+	# would be told SITU_OK about something else. The arm's first byte is
+	# therefore checked against the case this builder is for -- or, for the
+	# default arm, against every case it is not.
+	if disc is not None and disc.peek:
+		value = case.value
+		part.value  = -1 if value is None else int(value)
+		part.others = claimed
+	return part, None
+
+
+def _of_no_bytes(part: Part, structs: Mapping[str, ResolvedStruct] | None
+		) -> bool:
+	"""Whether an arm holds a struct of no members, which takes no value.
+
+	This is how a schema spells an absent member, and a caller should not
+	have to hand over an empty message to say so.
+	"""
+	inner = (structs or {}).get(part.placement.type_name or "")
+	return part.role == NESTED and part.value == 0 and inner is not None \
+		and inner.layout.is_fixed_size and inner.layout.size_bits == 0
+
+
+def _claimed_tag(struct: ResolvedStruct, disc: Placement,
+		claimed: tuple[int, ...]) -> Part:
+	"""The default arm's discriminant, which is the caller's to give."""
+	part = _value_part(SCALAR, disc, _local(struct, disc))
+	part.others = claimed
+	return part
+
+
 def arms(struct: ResolvedStruct) -> list[Choice]:
 	"""What a builder of this struct may choose, or nothing with no variant.
 
-	One per case of a single variant. Several variants need a case of each,
-	so it is their product: a builder per combination, as a builder per arm
-	is one per case. `default: error` selects nothing and has no message to
-	build, so it joins no combination. mqtt's CONNECT is the instance: a will,
-	a user name and a password, each present or not, in eight builders.
+	One per case of a single variant, the arm being which builder you call.
+	Several variants are one builder taking each arm as a value (26.881):
+	they choose independently, and a builder per combination is a product
+	of their arms.
 	"""
 	variants = [held for held in traverse.own_members(struct)
 	            if held.kind == "variant"]
 	if len(variants) > 1:
-		return list(product(*([case for case in (one.arm_cases or ())
-		                       if case.member is not None]
-		                      for one in variants)))
+		return [EACH]
 	return list(variants[0].arm_cases or ()) if variants else []
 
 
@@ -760,11 +851,11 @@ def arm_name(case: Choice) -> str:
 
 	The arm's own member name, which is what the schema called it, so a
 	reader of the header and a reader of the schema see one word. A default
-	arm selecting nothing has no member to name it after. A combination is
-	its arms' names in member order.
+	arm selecting nothing has no member to name it after. Arms handed over
+	as values name no builder.
 	"""
-	if isinstance(case, tuple):
-		return "_".join(arm_name(one) for one in case)
+	if isinstance(case, Each):
+		return ""
 	member = case.member
 	if member:
 		return str(member).rsplit(".", 1)[-1]
@@ -780,10 +871,11 @@ def _held_to_its_version(struct: ResolvedStruct, parts: list[Part]
 	`rev = 1` passed `validate`, since the rules on those members are gated
 	too. So the version field joins the values a part may not take.
 	"""
-	newest = max((one.placement.since or 0 for one in parts), default=0)
+	newest = max((one.placement.since or 0 for one in every_part(parts)),
+	             default=0)
 	if not newest:
 		return parts, None
-	name  = next(one.placement.version_field for one in parts
+	name  = next(one.placement.version_field for one in every_part(parts)
 	             if one.placement.since)
 	field = next((one for one in parts if one.role == SCALAR
 	              and one.placement.name == name), None)
@@ -961,9 +1053,8 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	# writing them here would write them twice.
 	variants = [held for held in members if held.kind == "variant"]
 	chosen: dict[str, Arm] = {}
-	if arm is not None:
-		chosen = dict(zip((one.path for one in variants),
-		                  arm if isinstance(arm, tuple) else (arm,)))
+	if isinstance(arm, Arm):
+		chosen = {one.path: arm for one in variants}
 	# By discriminant, each with the values its other arms claim.
 	tags: dict[str | None, tuple[Arm | None, tuple[int, ...]]] = {}
 	for variant in variants:
@@ -1075,8 +1166,9 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 				# body the reader then steps over. The default arm's value
 				# is the caller's, as it is for a whole-scalar tag.
 				case, claimed = tags[held.name]
-				assert case is not None
-				if case.value is None:
+				if case is None:
+					pass		# the variant's value says, below
+				elif case.value is None:
 					part.others = claimed
 				else:
 					part.stated = int(case.value)
@@ -1146,43 +1238,58 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 			# The arm of THIS variant. Writing the requested one for each
 			# wrote mqtt's CONNECT with `will_present` three times, in
 			# place of its user name and password (26.862).
-			case = chosen[held.path]
 			claimed = tags[held.discriminant][1]
+			disc = next((other for other in members
+			             if other.name == held.discriminant), None)
+			if isinstance(arm, Each):
+				part = Part(CHOSEN, held, local)
+				offered: list[ArmOf] = []
+				refused: list[tuple[str, str]] = []
+				for case in held.arm_cases or ():
+					if case.member is None:
+						continue	# `default: error` has no message
+					body, why = _arm_body(struct, case, claimed, disc, shape)
+					if why:
+						refused.append((arm_name(case), why))
+						continue
+					tag = None
+					if case.value is None and disc is not None \
+							and not disc.peek:
+						tag = _claimed_tag(struct, disc, claimed)
+					offered.append(ArmOf(
+						arm_name(case),
+						None if case.value is None else int(case.value),
+						tag,
+						None if body is None or _of_no_bytes(body, structs)
+						else body))
+				if not offered:
+					return [], refused[0][1]
+				part.arms     = tuple(offered)
+				part.declined = tuple(refused)
+				parts.append(part)
+				continue
+			case = chosen[held.path]
 			if case.member is None:
 				# An arm that selects nothing, which is how a schema spells
 				# an absent body. Zero bytes, so there is nothing to emit.
 				continue
-			inner = _arm_placement(struct, str(case.member))
-			if inner is None:
-				return [], f"`{case.member}` is not a member of this struct"
-			why = _arm_refusal(inner, header, prefix, structs)
+			body, why = _arm_body(struct, case, claimed, disc, shape)
 			if why:
-				# The LOCAL name, as every other member-level message
-				# uses: this quoted the full dotted path including the
-				# struct, so one reader had two shapes to learn.
-				return [], f"`{traverse.local_name(struct, inner)}` {why}"
-			part = _arm_part(struct, inner, header, prefix, structs)
-			# Where the discriminant is peeked, nothing was written for it
-			# and `_validate` cannot help: bytes beginning with another
-			# arm's kind are a VALID message of that other arm, so a
-			# caller who asked for this one would be told SITU_OK about
-			# something else. The arm's first byte is therefore checked
-			# against the case this builder is for -- or, for the default
-			# arm, against every case it is not.
-			disc = next((other for other in members
-			             if other.name == held.discriminant), None)
-			if disc is not None and disc.peek:
-				value = case.value
-				part.value  = -1 if value is None else int(value)
-				part.others = claimed
-			parts.append(part)
+				return [], why
+			assert body is not None
+			parts.append(body)
 			continue
 
 		if held.name in tags:
 			if arm is None:
 				return [], "is the discriminant of a variant"
 			case, claimed = tags[held.name]
-			assert case is not None
+			if case is None:
+				why = _scalar_refusal(held)
+				if why:
+					return [], f"`{traverse.local_name(struct, held)}` {why}"
+				parts.append(_value_part(ARMTAG, held, local))
+				continue
 			if case.value is None:
 				# The default arm names no value, so the caller supplies one
 				# -- and it must not be a value a named arm claims, or the
@@ -1447,7 +1554,7 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 	# parameter. Declaration order decides, so the earlier member keeps its
 	# spelling.
 	taken = set(FIXTURES)
-	for part in parts:
+	for part in every_part(parts):
 		local = part.local
 		while local in taken or f"{local}_len" in taken:
 			local += "_"
@@ -1460,6 +1567,15 @@ def plan(struct: ResolvedStruct, shape: Shape | None = None,
 		if part.role == TAG and part.opens:
 			taken.add(f"{local}_prefix")
 			taken.add(f"{local}_prefix_len")
+
+	# Last, for the same names: an arm's value says what its discriminant
+	# holds, and a peeked one is written by the arm itself.
+	for part in parts:
+		if part.role == CHOSEN:
+			for one in parts:
+				if one.role in (ARMTAG, BITS) and \
+						one.placement.name == part.placement.discriminant:
+					one.chooser = part
 
 	if not any(_supplies_a_value(part) for part in parts):
 		# Every byte is a fact the schema states, so there is nothing for a
@@ -1497,16 +1613,20 @@ def refusals(resolved: ResolvedSchema,
 		for case in cases:
 			parts, why = plan(struct, shape, case)
 			if not parts and why:
-				found.append((f"{name}.{arm_name(case)}", why))
+				found.append((f"{name}.{arm_name(case)}".rstrip("."), why))
+			found.extend((f"{name}.{arm}", reason) for part in parts
+			             for arm, reason in part.declined)
 	return found
 
 
-def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
-		enums: Mapping[str, object], suffix: str = "") -> list[str]:
-	name = ident(prefix, struct.name, "build", suffix)
-	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}"]
+def _arguments(struct: ResolvedStruct, parts: list[Part], prefix: str,
+		enums: Mapping[str, object]) -> list[str]:
+	"""What the caller passes for these parts, as C declarations."""
+	args: list[str] = []
 	for part in parts:
-		if part.role == VARINT:
+		if part.role == CHOSEN:
+			args.append(f"{_arm_type(struct, part, prefix)} {part.local}")
+		elif part.role == VARINT:
 			if not _supplies_a_value(part):
 				continue	# the run it measures says what it holds
 			args.append(f"{'int64_t' if part.minimal else 'uint64_t'} "
@@ -1552,7 +1672,14 @@ def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
 			# sums before the message, which no member holds.
 			args.append(f"const uint8_t *{part.local}_prefix")
 			args.append(f"uint32_t {part.local}_prefix_len")
-	args.append(f"uint32_t *{WROTE}")
+	return args
+
+
+def _signature(struct: ResolvedStruct, parts: list[Part], prefix: str,
+		enums: Mapping[str, object], suffix: str = "") -> list[str]:
+	name = ident(prefix, struct.name, "build", suffix)
+	args = [f"uint8_t *{OUT}", f"uint32_t {CAP}",
+	        *_arguments(struct, parts, prefix, enums), f"uint32_t *{WROTE}"]
 
 	lines = [f"static inline situ_err_t {name}("]
 	for i, arg in enumerate(args):
@@ -2094,13 +2221,20 @@ def _one(struct: ResolvedStruct, shape: Shape,
 	prefix   = shape.prefix
 	structs  = shape.structs
 	lines = [
+		*(line for part in parts if part.role == CHOSEN
+		  for line in _arm_values(struct, part, prefix, enums)),
 		f"/** Build a {struct.name} into `{OUT}`, one member at a time in",
 		" *  schema order, and validate the result before reporting it.",
 		*([f" *",
 		   f" *  This one writes the `{arm_name(arm)}` arm. Which arm is",
 		   " *  said by which builder you call, so the discriminant is",
 		   " *  this function's to write and cannot disagree with the",
-		   " *  body."] if arm is not None else []),
+		   " *  body."] if isinstance(arm, Arm) else []),
+		*([" *",
+		   " *  Each variant's arm is a value, made by that arm's",
+		   " *  constructor, so the discriminant comes from the arm and",
+		   " *  cannot disagree with the body."]
+		  if isinstance(arm, Each) else []),
 		" *",
 		f" * `*{WROTE}` is set only on success. A size field is computed",
 		" * from the run it measures rather than supplied, so a message",
@@ -2137,12 +2271,146 @@ def _one(struct: ResolvedStruct, shape: Shape,
 		"\t\treturn SITU_ERR_BOUNDS;",
 		"\t}",
 		"",
+		*_written(struct, parts, parts, structs, prefix, enums),
+		"\t/* Constraints are the view's to state and this reuses them",
+		"\t * rather than restating them: two checks of one schema is how",
+		"\t * they come to disagree. */",
+		f"\tsitu_msg_init(&{MSG}, {OUT}, {AT});",
+		# A frame's view takes the length the caller has and a fixed
+		# struct's does not -- `emit.py` keys that on `is_fixed_size` and so
+		# does this. The first draft did not, and it was a compile error
+		# rather than a quiet one.
+		f"\tif ({ident(prefix, struct.name, 'view')}(&{MSG}, 0, "
+		+ ("" if struct.layout.is_fixed_size else f"{AT}, ")
+		+ f"&{VIEW}) != SITU_OK) {{",
+		"\t\treturn SITU_ERR_BOUNDS;",
+		"\t}",
+		*_tags(parts, structs, prefix),
+		# The struct's arguments go to `_validate` as well, because that
+		# is what the reader's own signature takes: a parameter is not in
+		# the message, so every accessor and the validation need it
+		# passed. Omitting them was a compile error rather than a quiet
+		# one, which is the direction worth having.
+		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW}"
+		+ "".join(f", {traverse.argument_name(held)}"
+		          for held in traverse.arguments(struct)) + ");",
+		f"\tif ({ERR} != SITU_OK) {{",
+		f"\t\treturn {ERR};",
+		"\t}",
+		"",
+		f"\t*{WROTE} = {AT};",
+		"\treturn SITU_OK;",
+		"}",
+		"",
 	]
+	return lines
 
-	for part in parts:
+
+def _arm_type(struct: ResolvedStruct, part: Part, prefix: str) -> str:
+	"""The value that says which arm of a variant the caller chose."""
+	name = traverse.local_name(struct, part.placement)
+	return f"{ident(prefix, struct.name, name, 'arm')}_t"
+
+
+def _arm_fields(struct: ResolvedStruct, arm: ArmOf, prefix: str,
+		enums: Mapping[str, object]) -> list[str]:
+	"""What a caller gives this arm, as C declarations."""
+	return _arguments(struct, [one for one in (arm.tag, arm.part)
+	                           if one is not None], prefix, enums)
+
+
+def _field_name(declaration: str) -> str:
+	return declaration.rsplit(" ", 1)[-1].lstrip("*")
+
+
+def _arm_values(struct: ResolvedStruct, part: Part, prefix: str,
+		enums: Mapping[str, object]) -> list[str]:
+	"""The type a variant's arm travels in, and one constructor per arm.
+
+	Each constructor fixes which arm this is and what the discriminant
+	holds, so a value cannot say one arm and carry another's body.
+	"""
+	kind   = _arm_type(struct, part, prefix)
+	name   = traverse.local_name(struct, part.placement)
+	fields = [(at, _arm_fields(struct, arm, prefix, enums))
+	          for at, arm in enumerate(part.arms)]
+	lines  = [
+		f"/** Which arm of `{name}` a {struct.name} carries. Made by the",
+		" *  constructors below, which are what keep it honest. */",
+		"typedef struct {",
+		"\tuint32_t situ_arm;",
+		"\tuint64_t situ_tag;",
+		*(["\tunion {",
+		   *(line for at, held in fields if held for line in (
+			   "\t\tstruct {",
+			   *(f"\t\t\t{one};" for one in held),
+			   f"\t\t}} arm_{at};")),
+		   "\t} situ_as;"] if any(held for _, held in fields) else []),
+		f"}} {kind};",
+		"",
+	]
+	for (at, held), arm in zip(fields, part.arms):
+		maker = ident(prefix, struct.name, name, "arm", arm.name)
+		tag   = (f"(uint64_t){arm.tag.local}" if arm.tag is not None
+		         else f"(uint64_t){arm.value or 0}ll")
+		lines.extend([
+			f"static inline {kind} {maker}(",
+			"\t\t" + (", ".join(held) if held else "void") + ")",
+			"{",
+			f"\t{kind} situ_choice;",
+			"",
+			"\tmemset(&situ_choice, 0, sizeof situ_choice);",
+			f"\tsitu_choice.situ_arm = {at}u;",
+			f"\tsitu_choice.situ_tag = {tag};",
+			*(f"\tsitu_choice.situ_as.arm_{at}.{_field_name(one)} = "
+			  f"{_field_name(one)};" for one in held),
+			"\treturn situ_choice;",
+			"}",
+			"",
+		])
+	return lines
+
+
+def _chosen(struct: ResolvedStruct, part: Part, parts: list[Part],
+		structs: Mapping[str, ResolvedStruct] | None, prefix: str,
+		enums: Mapping[str, object]) -> list[str]:
+	"""A variant's slot: whichever arm the caller's value holds.
+
+	The arm's part is written as it is for a builder of that arm alone,
+	with what it reads bound to the names it expects.
+	"""
+	lines = [f"\tswitch ({part.local}.situ_arm) {{"]
+	for at, arm in enumerate(part.arms):
+		bound = _arguments(struct, [arm.part], prefix, enums) \
+			if arm.part is not None else []
+		body  = [f"\t{one} = {part.local}.situ_as.arm_{at}."
+		         f"{_field_name(one)};" for one in bound]
+		if arm.tag is not None:
+			claimed = " || ".join(f"{part.local}.situ_tag == {value}u"
+			                      for value in arm.tag.others)
+			body += [f"\tif ({claimed}) {{",
+			         "\t\treturn SITU_ERR_CONSTRAINT;", "\t}"]
+		if arm.part is not None:
+			body += _written(struct, [arm.part], parts, structs, prefix,
+			                 enums)
+		lines.extend([f"\tcase {at}u: {{",
+		              *(f"\t{line}" if line else "" for line in body),
+		              "\t\tbreak;", "\t}"])
+	lines.extend(["\tdefault:", "\t\treturn SITU_ERR_CONSTRAINT;", "\t}", ""])
+	return lines
+
+
+def _written(struct: ResolvedStruct, writing: list[Part], parts: list[Part],
+		structs: Mapping[str, ResolvedStruct] | None, prefix: str,
+		enums: Mapping[str, object]) -> list[str]:
+	"""Each of `writing`, in order; `parts` is the whole plan it is part of."""
+	lines: list[str] = []
+	for part in writing:
 		held  = part.placement
 		local = traverse.local_name(struct, held)
-		if part.role == SIZE and part.solved is not None:
+		if part.role == CHOSEN:
+			lines += _chosen(struct, part, parts, structs, prefix, enums)
+		elif part.role == SIZE and part.solved is not None:
 			# The schema states this field's relationship to the run as
 			# arithmetic, so the writer runs it backwards: the caller
 			# gives a length and this is the only value of the field that
@@ -2383,7 +2651,20 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				   "\t\treturn SITU_ERR_CONSTRAINT;",
 				   "\t}"] if part.others else []),
 			]
-			if part.stated is not None:
+			if part.chooser is not None:
+				arm_tag = f"{part.chooser.local}.situ_tag"
+				lines += [
+					*([f"\tif ({arm_tag} > {(1 << width) - 1}u) {{",
+					   "\t\treturn SITU_ERR_CONSTRAINT;",
+					   "\t}"] if any(one.tag is not None
+					                 for one in part.chooser.arms) else []),
+					f"\t/* {local}: {width} bits at {part.bit_at}, and the",
+					"\t * arm the caller handed over. */",
+					f"\tsitu_bits_set_{order}({OUT} + {AT}, "
+					f"{part.bit_at}u, {width}u,",
+					f"\t                    {arm_tag});",
+				]
+			elif part.stated is not None:
 				lines += [
 					f"\t/* {local}: {width} bits at {part.bit_at}, and the",
 					"\t * arm this builder writes. */",
@@ -2600,6 +2881,12 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"\t * there. Nothing to write here. */",
 				"",
 			]
+		elif part.role == ARMTAG and part.chooser is not None:
+			lines += [
+				f"\t/* {local}: what the arm handed over says. */",
+				*_value(part, f"{part.chooser.local}.situ_tag", local),
+				"",
+			]
 		elif part.role == ARMTAG:
 			lines += [
 				f"\t/* {local}: {part.value}, which is this arm's case. The",
@@ -2761,38 +3048,6 @@ def _one(struct: ResolvedStruct, shape: Shape,
 				"",
 			]
 
-	lines += [
-		"\t/* Constraints are the view's to state and this reuses them",
-		"\t * rather than restating them: two checks of one schema is how",
-		"\t * they come to disagree. */",
-		f"\tsitu_msg_init(&{MSG}, {OUT}, {AT});",
-		# A frame's view takes the length the caller has and a fixed
-		# struct's does not -- `emit.py` keys that on `is_fixed_size` and so
-		# does this. The first draft did not, and it was a compile error
-		# rather than a quiet one.
-		f"\tif ({ident(prefix, struct.name, 'view')}(&{MSG}, 0, "
-		+ ("" if struct.layout.is_fixed_size else f"{AT}, ")
-		+ f"&{VIEW}) != SITU_OK) {{",
-		"\t\treturn SITU_ERR_BOUNDS;",
-		"\t}",
-		*_tags(parts, structs, prefix),
-		# The struct's arguments go to `_validate` as well, because that
-		# is what the reader's own signature takes: a parameter is not in
-		# the message, so every accessor and the validation need it
-		# passed. Omitting them was a compile error rather than a quiet
-		# one, which is the direction worth having.
-		f"\t{ERR} = {ident(prefix, struct.name, 'validate')}({VIEW}"
-		+ "".join(f", {traverse.argument_name(held)}"
-		          for held in traverse.arguments(struct)) + ");",
-		f"\tif ({ERR} != SITU_OK) {{",
-		f"\t\treturn {ERR};",
-		"\t}",
-		"",
-		f"\t*{WROTE} = {AT};",
-		"\treturn SITU_OK;",
-		"}",
-		"",
-	]
 	return lines
 
 

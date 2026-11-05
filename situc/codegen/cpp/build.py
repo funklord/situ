@@ -21,10 +21,10 @@ from collections.abc import Mapping
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
-                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG,
-                                   VARINT, WIDE, ZERO, Part, Shape)
-from situc.codegen.c.names import c_name
+from situc.codegen.c.build import (ARMTAG, BITS, CHOSEN, ENDED, LITERAL, NESTED,
+                                   PAD, PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN,
+                                   TAG, VARINT, WIDE, ZERO, ArmOf, Part, Shape)
+from situc.codegen.c.names import bare_name, c_name
 from situc.codegen.cpp.edit import _scalar
 from situc.codegen.cpp.emit import _order_suffix
 from situc.codegen.cpp.names import class_name
@@ -420,6 +420,11 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 		run = next(one.local for one in parts
 		           if one.placement is part.sizes)
 		lines += _size(part, _length(run, parts))
+	elif part.chooser is not None:
+		tag = f"{part.chooser.local}.situ_tag"
+		lines += [*([f"\tif ({tag} > {limit}u) {{", CONSTRAINT, "\t}"]
+		            if any(one.tag for one in part.chooser.arms) else []),
+		          *_bit_store(part, tag)]
 	elif part.stated is not None:
 		lines += _bit_store(part, f"{part.stated}u")
 	elif plain_build.takes_value(part):
@@ -434,9 +439,96 @@ def _bits(part: Part, parts: list[Part]) -> list[str]:
 	return lines
 
 
-def _write(structs: Mapping[str, ResolvedStruct], part: Part,
-		parts: list[Part]) -> list[str]:
+def _arm_type(struct: ResolvedStruct, part: Part) -> str:
+	name = c_name(traverse.local_name(struct, part.placement))
+	return f"{class_name(struct)}_{name}_arm"
+
+
+def _arm_fields(struct: ResolvedStruct, arm: ArmOf) -> list[str]:
+	"""What a caller gives this arm, as C++ declarations."""
+	return _parameters(struct, [one for one in (arm.tag, arm.part)
+	                            if one is not None])
+
+
+def _field_name(declaration: str) -> str:
+	return declaration.rsplit(" ", 1)[-1].lstrip("*")
+
+
+def _arm_values(struct: ResolvedStruct, part: Part) -> list[str]:
+	"""The type a variant's arm travels in, and one maker per arm.
+
+	Each maker fixes which arm this is and what the discriminant holds, so
+	a value cannot say one arm and carry another's body.
+	"""
+	held   = _arm_type(struct, part)
+	name   = traverse.local_name(struct, part.placement)
+	fields = [(at, _arm_fields(struct, arm))
+	          for at, arm in enumerate(part.arms)]
+	lines  = [
+		"",
+		f"/** Which arm of `{name}` a {struct.name} carries. */",
+		f"struct {held} {{",
+		"\tstd::uint32_t situ_arm;",
+		"\tstd::uint64_t situ_tag;",
+		*(["\tunion {",
+		   *(line for at, given in fields if given for line in (
+			   "\t\tstruct {",
+			   *(f"\t\t\t{one};" for one in given),
+			   f"\t\t}} arm_{at};")),
+		   "\t} situ_as;"] if any(given for _, given in fields) else []),
+	]
+	for (at, given), arm in zip(fields, part.arms):
+		tag = (f"static_cast<std::uint64_t>({arm.tag.local})"
+		       if arm.tag is not None
+		       else f"static_cast<std::uint64_t>({arm.value or 0}ll)")
+		lines.extend([
+			"",
+			f"\tstatic {held} {bare_name(arm.name)}("
+			+ ", ".join(given) + ") noexcept",
+			"\t{",
+			f"\t\t{held} situ_choice{{}};",
+			"",
+			f"\t\tsitu_choice.situ_arm = {at}u;",
+			f"\t\tsitu_choice.situ_tag = {tag};",
+			*(f"\t\tsitu_choice.situ_as.arm_{at}.{_field_name(one)} = "
+			  f"{_field_name(one)};" for one in given),
+			"\t\treturn situ_choice;",
+			"\t}",
+		])
+	lines.append("};")
+	return lines
+
+
+def _chosen(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
+		part: Part, parts: list[Part]) -> list[str]:
+	"""A variant's slot: whichever arm the caller's value holds.
+
+	The arm's part is written as it is for a builder of that arm alone,
+	with what it reads bound to the names it expects.
+	"""
+	lines = [f"\tswitch ({part.local}.situ_arm) {{"]
+	for at, arm in enumerate(part.arms):
+		bound = _parameters(struct, [arm.part]) if arm.part else []
+		body  = [f"\t{one} = {part.local}.situ_as.arm_{at}."
+		         f"{_field_name(one)};" for one in bound]
+		if arm.tag is not None:
+			claimed = " || ".join(f"{part.local}.situ_tag == {value}u"
+			                      for value in arm.tag.others)
+			body += [f"\tif ({claimed}) {{", CONSTRAINT, "\t}"]
+		if arm.part is not None:
+			body += _write(struct, structs, arm.part, parts)
+		lines.extend([f"\tcase {at}u: {{",
+		              *(f"\t{line}" if line else "" for line in body),
+		              "\t\tbreak;", "\t}"])
+	lines.extend(["\tdefault:", CONSTRAINT, "\t}"])
+	return lines
+
+
+def _write(struct: ResolvedStruct, structs: Mapping[str, ResolvedStruct],
+		part: Part, parts: list[Part]) -> list[str]:
 	"""One part, as `c/build.py` writes it."""
+	if part.role == CHOSEN:
+		return _chosen(struct, structs, part, parts)
 	if part.role == BITS:
 		return _bits(part, parts)
 	if part.role == NESTED:
@@ -467,7 +559,8 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		        f"\tstd::memset(situ_out + situ_at, 0, {part.bytes}u);",
 		        f"\tsitu_at += {part.bytes}u;"]
 	if part.role == ARMTAG:
-		return _store(part, f"{part.value}u")
+		return _store(part, f"{part.chooser.local}.situ_tag" if part.chooser
+		              else f"{part.value}u")
 	if part.role == PEEKED:
 		return []		# the bytes it reads belong to what follows
 	if part.role == SCALAR:
@@ -514,10 +607,12 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 	        f"\tsitu_at += {part.local}_len;"]
 
 
-def _parameters(parts: list[Part]) -> list[str]:
+def _parameters(struct: ResolvedStruct, parts: list[Part]) -> list[str]:
 	found: list[str] = []
 	for part in parts:
-		if part.role == VARINT and plain_build.takes_value(part):
+		if part.role == CHOSEN:
+			found.append(f"{_arm_type(struct, part)} {part.local}")
+		elif part.role == VARINT and plain_build.takes_value(part):
 			kind = "std::int64_t" if part.minimal else "std::uint64_t"
 			found.append(f"{kind} {part.local}")
 		elif plain_build.takes_value(part):
@@ -633,6 +728,9 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 		parts  = list(unit.parts)
 		name   = f"{held}_{c_name(unit.suffix)}" if unit.suffix else held
 		length = "" if struct.layout.is_fixed_size else " situ_at,"
+		for part in parts:
+			if part.role == CHOSEN:
+				lines.extend(_arm_values(struct, part))
 		lines.extend([
 			"",
 			f"/** Build a {struct.name} into `situ_out` and validate the result.",
@@ -645,7 +743,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			f"[[nodiscard]] inline ::situ::rt::err {name}(",
 			"\t\tstd::uint8_t *situ_out,",
 			"\t\tstd::uint32_t situ_cap,",
-			*(f"\t\t{one}," for one in _parameters(parts)),
+			*(f"\t\t{one}," for one in _parameters(struct, parts)),
 			"\t\tstd::uint32_t &situ_wrote) noexcept",
 			"{",
 			"\tstd::uint32_t situ_at = 0;",
@@ -658,7 +756,7 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 			"",
 		])
 		for part in parts:
-			lines.extend([*_write(resolved.structs, part, parts), ""])
+			lines.extend([*_write(struct, resolved.structs, part, parts), ""])
 		lines.extend([
 			"\t/* Over exactly what was written, not over the backing: a longer",
 			"\t * buffer would hide a struct that came out short. */",

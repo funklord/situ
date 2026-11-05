@@ -11,10 +11,13 @@ and the bytes compared. A refusal has to be one all four make.
 from __future__ import annotations
 
 import importlib
+import itertools
 import random
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -28,15 +31,20 @@ from every_schema import ROOT as CORPUS_ROOT, load_schema	# noqa: E402
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit			# noqa: E402
-from situc.codegen.c.build import (BITS, ENDED, NESTED, REPEAT,	# noqa: E402
+from situc.codegen.c.build import (ArmOf, BITS, CHOSEN, ENDED, NESTED, REPEAT,	# noqa: E402
                                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, WIDE,
                                    Part)
-from situc.codegen.c.names import c_name, ident		# noqa: E402
+from situc.codegen.c.names import bare_name, c_name, ident	# noqa: E402
+from situc.codegen.cpp.build import _arm_type as cpp_arm_type	# noqa: E402
+from situc.codegen.python.build import _arm_type as py_arm_type	# noqa: E402
+from situc.codegen.rust.build import _arm_type as rust_arm_type	# noqa: E402
+from situc.codegen.rust.build import arm_variant	# noqa: E402
 from situc.codegen.cpp.edit import _scalar as cpp_scalar	# noqa: E402
 from situc.codegen.cpp.names import class_name		# noqa: E402
 from situc.codegen.python.emit import py_name		# noqa: E402
 from situc.codegen.rust.edit import _scalar as rust_scalar	# noqa: E402
 from situc.codegen.rust.emit import _ident		# noqa: E402
+from situc import traverse				# noqa: E402
 from situc.layout import BITS_PER_BYTE, Placement, solve	# noqa: E402
 from situc.pack import pack				# noqa: E402
 from situc.resolve import resolve			# noqa: E402
@@ -100,6 +108,69 @@ def _run_bytes(length: int, index: int) -> bytes:
 
 
 Given = list[tuple["Part", "int | bytes | list[int]"]]
+
+
+@dataclass(frozen=True)
+class Picked(Unit):
+	"""One combination of a builder's arms.
+
+	The builder takes each arm as a value, so nothing generated grows with
+	the combinations (26.881). What is tried does, and this is where the
+	product belongs: every combination goes through all four here.
+	"""
+
+	picks: tuple[tuple[Part, ArmOf], ...] = ()
+
+
+def _combinations(units: list[Unit]) -> list[Unit]:
+	"""Each unit, once per combination of the arms it takes as values."""
+	found: list[Unit] = []
+	for unit in units:
+		chosen = [part for part in unit.parts if part.role == CHOSEN]
+		if not chosen:
+			found.append(unit)
+			continue
+		found.extend(Picked(unit.struct, unit.parts, unit.suffix,
+		                    tuple(zip(chosen, arms)))
+		             for arms in itertools.product(*(part.arms
+		                                             for part in chosen)))
+	return found
+
+
+def _picked(unit: Unit) -> dict[int, ArmOf]:
+	return {id(part): arm for part, arm in getattr(unit, "picks", ())}
+
+
+def _flat(unit: Unit) -> list[Part]:
+	"""The parts this combination writes, each arm in its variant's place."""
+	picked = _picked(unit)
+	found: list[Part] = []
+	for part in unit.parts:
+		if part.role != CHOSEN:
+			found.append(part)
+			continue
+		arm = picked[id(part)]
+		found.extend(one for one in (arm.tag, arm.part) if one is not None)
+	return found
+
+
+def _called(unit: Unit, values: list[tuple[Part, list[str]]],
+		call: Callable[[Part, ArmOf, list[str]], str]) -> list[str]:
+	"""A call's arguments, each arm's made into its value by `call`."""
+	said: dict[int, list[str]] = {}
+	for part, spelt in values:
+		said.setdefault(id(part), []).extend(spelt)
+	picked = _picked(unit)
+	found: list[str] = []
+	for part in unit.parts:
+		if part.role != CHOSEN:
+			found.extend(said.get(id(part), []))
+			continue
+		arm = picked[id(part)]
+		found.append(call(part, arm, [
+			line for one in (arm.tag, arm.part) if one is not None
+			for line in said.get(id(one), [])]))
+	return found
 
 
 def _given(parts: list[Part], inner: dict[str, list[bytes]]) -> Given:
@@ -179,7 +250,8 @@ def _array(name: str, value: bytes, kind: str) -> str:
 
 
 def _label(unit: Unit) -> str:
-	return f"{unit.struct.name}.{unit.suffix}"
+	picks = "+".join(arm.name for _, arm in getattr(unit, "picks", ()))
+	return f"{unit.struct.name}.{picks or unit.suffix}"
 
 
 def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
@@ -192,24 +264,31 @@ def _c_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	         '\tputs("");', "}"]
 	calls = []
 	for index, (unit, given) in enumerate(cases):
-		values: list[str] = []
+		spelt: list[tuple[Part, list[str]]] = []
 		for at, (part, value) in enumerate(given):
 			if isinstance(value, int):
-				values.append(f"{value & MASK:#x}ull")
+				spelt.append((part, [f"{value & MASK:#x}ull"]))
 				continue
 			if isinstance(value, list):
 				name = f"run_{index}_{at}"
 				lines.append(_array(name, bytes(value),
 				                    f"uint{part.bit_at * 8}_t"))
-				values.append(name)
-				if not part.bytes:
-					values.append(f"{len(value)}u")
+				spelt.append((part, [name, *([] if part.bytes
+				                             else [f"{len(value)}u"])]))
 				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "uint8_t"))
-			values.append(name)
-			if part.role in (*plain_build.MEASURED, TAG):
-				values.append(f"{len(value)}u")
+			spelt.append((part, [name, *(
+				[f"{len(value)}u"]
+				if part.role in (*plain_build.MEASURED, TAG) else [])]))
+
+		def arm_value(part: Part, arm: ArmOf, args: list[str],
+				unit: Unit = unit) -> str:
+			name = traverse.local_name(unit.struct, part.placement)
+			return (f'{ident("situ", unit.struct.name, name, "arm", arm.name)}'
+			        f'({", ".join(args)})')
+
+		values = _called(unit, spelt, arm_value)
 		calls.append(f'\tshow("{_label(unit)}", '
 		             f'{ident("situ", unit.struct.name, "build", unit.suffix)}'
 		             f'(buf, {ROOM}u, {", ".join([*values, "&n"])}));')
@@ -229,28 +308,34 @@ def _cpp_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	         '\tstd::puts("");', "}"]
 	calls = []
 	for index, (unit, given) in enumerate(cases):
-		values: list[str] = []
+		spelt: list[tuple[Part, list[str]]] = []
 		for at, (part, value) in enumerate(given):
 			if isinstance(value, int):
 				kind = ("std::uint64_t" if part.role == VARINT and not part.minimal
 				        else "std::int64_t" if part.role == VARINT
 				        else cpp_scalar(part.placement))
-				values.append(f"static_cast<{kind}>"
-				              f"({value & MASK:#x}ull)")
+				spelt.append((part, [f"static_cast<{kind}>"
+				                     f"({value & MASK:#x}ull)"]))
 				continue
 			if isinstance(value, list):
 				name = f"run_{index}_{at}"
 				lines.append(_array(name, bytes(value),
 				                    cpp_scalar(part.placement)))
-				values.append(name)
-				if not part.bytes:
-					values.append(f"{len(value)}u")
+				spelt.append((part, [name, *([] if part.bytes
+				                             else [f"{len(value)}u"])]))
 				continue
 			name = f"run_{index}_{at}"
 			lines.append(_array(name, value, "std::uint8_t"))
-			values.append(name)
-			if part.role in (*plain_build.MEASURED, TAG):
-				values.append(f"{len(value)}u")
+			spelt.append((part, [name, *(
+				[f"{len(value)}u"]
+				if part.role in (*plain_build.MEASURED, TAG) else [])]))
+
+		def arm_value(part: Part, arm: ArmOf, args: list[str],
+				unit: Unit = unit) -> str:
+			return (f"::situ_build::{cpp_arm_type(unit.struct, part)}::"
+			        f'{bare_name(arm.name)}({", ".join(args)})')
+
+		values = _called(unit, spelt, arm_value)
 		held = class_name(unit.struct)
 		if unit.suffix:
 			held = f"{held}_{c_name(unit.suffix)}"
@@ -273,21 +358,29 @@ def _rust_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 	         '\t\tErr(_) => println!("refused"),', "\t}", "}",
 	         "fn main() {", f"\tlet mut buf = [0u8; {ROOM}];"]
 	for unit, given in cases:
-		values: list[str] = []
+		spelt: list[tuple[Part, list[str]]] = []
 		for part, value in given:
 			if isinstance(value, int):
 				kind = ("u64" if part.role == VARINT and not part.minimal
 				        else "i64" if part.role == VARINT
 				        else rust_scalar(part.placement))
-				values.append(f"{value & MASK:#x}u64 as {kind}")
+				spelt.append((part, [f"{value & MASK:#x}u64 as {kind}"]))
 				continue
 			if isinstance(value, list):
 				kind  = rust_scalar(part.placement)
 				items = ", ".join(f"{one:#x}{kind}" for one in value)
-				values.append(f"&[{items}]")
+				spelt.append((part, [f"&[{items}]"]))
 				continue
 			items = ", ".join(f"{one:#x}u8" for one in value)
-			values.append(f"&[{items}]")
+			spelt.append((part, [f"&[{items}]"]))
+
+		def arm_value(part: Part, arm: ArmOf, args: list[str],
+				unit: Unit = unit) -> str:
+			made = (f"{stem}_build::{rust_arm_type(unit.struct, part)}"
+			        f"::{arm_variant(arm.name)}")
+			return f'{made}({", ".join(args)})' if args else made
+
+		values = _called(unit, spelt, arm_value)
 		name = _ident(unit.struct.name).removeprefix("r#")
 		if unit.suffix:
 			name = f"{name}_{_ident(unit.suffix).removeprefix('r#')}"
@@ -300,8 +393,21 @@ def _rust_driver(stem: str, cases: list[tuple[Unit, Given]]) -> str:
 def _build_one(module: object, base: object, unit: Unit,
 		given: Given) -> str:
 	"""One unit through Python's builder: hex, or `refused`."""
-	values = [_signed(part.placement, value)
-	          if isinstance(value, int) else value for part, value in given]
+	held: dict[int, object] = {
+		id(part): _signed(part.placement, value)
+		if isinstance(value, int) else value for part, value in given}
+	picked = _picked(unit)
+	values: list[object] = []
+	for part in unit.parts:
+		if part.role != CHOSEN:
+			if id(part) in held:
+				values.append(held[id(part)])
+			continue
+		arm  = picked[id(part)]
+		made = getattr(getattr(module, py_arm_type(unit.struct, part)),
+		               py_name(arm.name))
+		values.append(made(*(held[id(one)] for one in (arm.tag, arm.part)
+		                     if one is not None)))
 	buf  = bytearray(ROOM)
 	name = py_name(unit.struct.name)
 	if unit.suffix:
@@ -331,7 +437,7 @@ def _cases(module: object, base: object,
 		for unit in units:
 			if _label(unit) in taken:
 				continue
-			given = _given(list(unit.parts), inner)
+			given = _given(_flat(unit), inner)
 			for _ in range(TRIES):
 				made = _build_one(module, base, unit, given)
 				if made != "refused":
@@ -342,7 +448,7 @@ def _cases(module: object, base: object,
 				given = _varied(given, inner, rng)
 	found: list[tuple[Unit, Given, str]] = []
 	for unit in units:
-		given = _given(list(unit.parts), inner)
+		given = _given(_flat(unit), inner)
 		found.append((unit, given, _build_one(module, base, unit, given)))
 		if _label(unit) in taken:
 			given = taken[_label(unit)]
@@ -368,8 +474,8 @@ def _reads_back(plain: object, base: object, unit: Unit,
 		# a stream, and netlink's attributes end where the message does.
 		assert any(part.role == REPEAT and not part.digits
 		           and not part.delimiter
-		           and not plain_build.walked_at_size(part, list(unit.parts))
-		           for part in unit.parts), (_label(unit), made)
+		           and not plain_build.walked_at_size(part, _flat(unit))
+		           for part in _flat(unit)), (_label(unit), made)
 		return
 	assert said == len(message), (_label(unit), made)
 
@@ -445,8 +551,9 @@ def four_say(schema: Path, tmp_path: Path, units: list[Unit],
 
 	`extra` is cases of the caller's, after the ones found for `units`.
 	"""
-	stem = schema.stem
-	dirs = {target: tmp_path / target
+	stem  = schema.stem
+	units = _combinations(units)
+	dirs  = {target: tmp_path / target
 	        for target in ("c", "cpp", "rust", "python")}
 	for target, out in dirs.items():
 		out.mkdir()

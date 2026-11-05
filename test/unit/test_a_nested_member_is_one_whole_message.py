@@ -20,7 +20,8 @@ sys.path.insert(0, str(ROOT / "test" / "unit"))
 
 import fourway						# noqa: E402
 from every_schema import load_schema			# noqa: E402
-from test_the_four_builders_agree import Given, four_say	# noqa: E402
+from test_the_four_builders_agree import (Given, _combinations,	# noqa: E402
+                                          _flat, _label, four_say)
 
 from situc.codegen import plain_build			# noqa: E402
 from situc.codegen.plain_build import Unit		# noqa: E402
@@ -56,7 +57,7 @@ def _units(schema: Path) -> dict[str, Unit]:
 
 
 def _with(unit: Unit, *values: int | bytes | list[int]) -> tuple[Unit, Given]:
-	taken = [part for part in unit.parts if plain_build.takes_value(part)
+	taken = [part for part in _flat(unit) if plain_build.takes_value(part)
 	         or part.role == RUN or part.role in plain_build.MEASURED
 	         or part.role == WIDE or (part.role == TAG and part.opens)]
 	assert len(taken) == len(values), [part.role for part in taken]
@@ -106,8 +107,8 @@ def _declined(schema: Path) -> str:
 def test_a_builder_chooses_an_arm_of_each_variant(tmp_path: Path) -> None:
 	"""mqtt's CONNECT went out with `will_present` where its name belonged.
 
-	A builder per combination, each tag written by its own arm and each arm
-	in its own place. `default: error` has no message, so joins none.
+	One builder, each tag written from its own arm's value and each arm in
+	its own place. `default: error` has no message, so it is no arm.
 	"""
 	schema = tmp_path / "two.situ"
 	schema.write_text("""\
@@ -129,13 +130,14 @@ struct two {
 }
 """, encoding="ascii")
 	units = _units(schema)
-	assert {name for name in units if name.startswith("two.")} == {
-		"two.one_other", "two.one_neither", "two.none_other",
-		"two.none_neither"}
+	assert [name for name in units if name.startswith("two.")] == ["two."]
+	picks = {_label(one): one for one in _combinations([units["two."]])}
+	assert set(picks) == {"two.one+other", "two.one+neither",
+	                      "two.none+other", "two.none+neither"}
 	said = four_say(schema, tmp_path, list(units.values()), [
-		_with(units["two.one_other"], b"\x01\xaa", b"\x02\xbb\xcc"),
-		_with(units["two.none_other"], b"", b"\x01\xbb"),
-		_with(units["two.one_neither"], b"\x01\xaa", b""),
+		_with(picks["two.one+other"], b"\x01\xaa", b"\x02\xbb\xcc"),
+		_with(picks["two.none+other"], b"\x01\xbb"),
+		_with(picks["two.one+neither"], b"\x01\xaa"),
 	])
 	assert _extra(said, 3) == ["0101" "01aa" "02bbcc", "0001" "01bb",
 	                           "0100" "01aa"]
