@@ -69,7 +69,7 @@ def _shape(parsed, resolved, header: str = ""):	# type: ignore[no-untyped-def]
 
 
 def _only(resolved, name: str, header: str = "",	# type: ignore[no-untyped-def]
-		arm: Arm | None = None, parsed=None):
+		arm: build.Choice | None = None, parsed=None):
 	struct = resolved.structs[name]
 	shape = build.Shape(header, "situ", resolved.structs,
 	                    {decl.name: decl for decl in parsed.varints()}

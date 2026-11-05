@@ -8280,6 +8280,11 @@ leaf behind six of them (`len`, `have`, `need`, `pos`, `sink`, `value`), all
 clean now. `validate`, `size_min` and `no_check` in C++ and `required` in Rust
 still stop at the compiler, which 0062 keeps on purpose.
 
+The style gate copies pass `mypy --strict` since claude-guidelines `eb45d67`,
+so the override 26.311 needed is gone and they are checked like any other file.
+`make typecheck` was red over the arm tests since 26.874, for an annotation
+that still said one arm.
+
 ### 26.875 The three builders write wide element runs
 
 Elements wider than a byte are passed as values, and the byte order is the
