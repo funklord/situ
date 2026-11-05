@@ -444,9 +444,10 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _size(part, f"len({py_name(measured.local)})")
 	if part.role == ZERO:
 		ones = traverse.reserved_policy(part.placement.attrs) == "must_be_one"
+		fill = r"\xff" if ones else r"\x00"
 		return [*_room(str(part.bytes), path),
 		        f"\tsitu_out[situ_at:situ_at + {part.bytes}] = "
-		        f"b\"{'\\xff' if ones else '\\x00'}\" * {part.bytes}",
+		        f"b\"{fill}\" * {part.bytes}",
 		        f"\tsitu_at += {part.bytes}"]
 	if part.role == LITERAL:
 		return [*_room(str(part.bytes), path),
