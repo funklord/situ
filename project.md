@@ -8264,6 +8264,15 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.873 The three builders write a pad
+
+Zeros to the next boundary, measured from the struct's own base, which is
+where the cursor counts from. 235 builders over 33 schemas. What is left is
+`edges` shapes (wide element runs, argued spans, hidden and opaque reserved
+runs) and mqtt's `connect_body`, the one struct in the corpus with several
+variants. A builder there needs a choice per variant, 27 arms by product, and
+that naming is undecided.
+
 ### 26.872 A tag sums the pseudo-header it is handed
 
 Moved to `doc/decision/26.872-a-tag-sums-the-pseudo-header-it-is-handed.md`.

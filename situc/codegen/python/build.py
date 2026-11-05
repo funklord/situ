@@ -32,8 +32,8 @@ from collections.abc import Mapping
 
 from situc import ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
                                    ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.python.emit import py_name
@@ -385,6 +385,14 @@ def _write(structs: Mapping[str, ResolvedStruct], part: Part,
 		return _ended(part)
 	if part.role == VARINT:
 		return _varint(part, parts)
+	if part.role == PAD:
+		# To the next boundary, from this struct's own base, which is where
+		# the cursor counts from.
+		align = traverse.pad_alignment(part.placement)
+		return [f"\tsitu_pad = -situ_at % {align}",
+		        *_room("situ_pad", part.placement.path),
+		        "\tsitu_out[situ_at:situ_at + situ_pad] = bytes(situ_pad)",
+		        "\tsitu_at += situ_pad"]
 	if part.role == TAG:
 		# Its value covers bytes not written yet, so its place is kept and
 		# it is filled once the message is whole.

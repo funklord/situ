@@ -390,3 +390,20 @@ def test_a_tag_sums_the_pseudo_header_it_is_handed(tmp_path: Path) -> None:
 		_with(unit, 1234, 53, pseudo[:-1], b"hi"),
 	])
 	assert _extra(said, 2) == [wanted.hex(), "refused"]
+
+
+def test_a_pad_goes_to_the_next_boundary(tmp_path: Path) -> None:
+	"""RIFF, TIFF and ELF end a record this way, and an aligned length
+	takes no pad at all."""
+	schema = ROOT / "test" / "schema" / "padded.situ"
+	units  = _units(schema)
+	unit   = units["trailing_pad."]
+	said   = four_say(schema, tmp_path, list(units.values()), [
+		_with(unit, b"a"),
+		_with(unit, b"ab"),
+		_with(unit, b"abcde"),
+	])
+	spelt = [(n.to_bytes(2, "big") + body).hex() + "00" * pad
+	         for n, body, pad in ((1, b"a", 1), (2, b"ab", 0),
+	                              (5, b"abcde", 1))]
+	assert _extra(said, 3) == spelt

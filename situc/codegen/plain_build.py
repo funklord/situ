@@ -12,8 +12,8 @@ from situc import traverse
 from dataclasses import dataclass
 
 from situc import ast
-from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
                                    ZERO, Part, Shape,
                                    _supplies_a_value, arm_name, arms, plan,
                                    refusals)
@@ -27,8 +27,8 @@ __all__ = ["SERVED", "MEASURED", "Unit", "parts", "shape", "units", "plain",
 
 #: The roles in C's plan these builders write. A part outside them is a
 #: struct this class declines, by name.
-SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED, REPEAT, RUN,
-                    SCALAR, SIZE, SPAN, TAG, VARINT, ZERO})
+SERVED = frozenset({ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD, PEEKED, REPEAT,
+                    RUN, SCALAR, SIZE, SPAN, TAG, VARINT, ZERO})
 
 #: The roles whose bytes the caller hands over and whose length a size field
 #: may measure.

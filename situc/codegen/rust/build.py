@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from situc import __version__, ast, traverse
 from situc.codegen import plain_build
-from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PEEKED,
-                                   REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
+from situc.codegen.c.build import (ARMTAG, BITS, ENDED, LITERAL, NESTED, PAD,
+                                   PEEKED, REPEAT, RUN, SCALAR, SIZE, SPAN, TAG, VARINT,
                                    ZERO, Part, Shape)
 from situc.codegen.plain_build import plain
 from situc.codegen.rust.edit import _scalar
@@ -362,6 +362,16 @@ def _write(part: Part, parts: list[Part]) -> list[str]:
 		return _ended(part)
 	if part.role == VARINT:
 		return _varint(part, parts)
+	if part.role == PAD:
+		# To the next boundary, from this struct's own base, which is where
+		# the cursor counts from.
+		align = traverse.pad_alignment(part.placement)
+		return ["\t{",
+		        *(f"\t{line}" for line in [f"\tlet situ_pad = ({align} - situ_at % {align}) % {align};",
+		                                     *_room("situ_pad"),
+		                                     "\tsitu_out[situ_at..situ_at + situ_pad].fill(0);",
+		                                     "\tsitu_at += situ_pad;"]),
+		        "\t}"]
 	if part.role == TAG:
 		# Its value covers bytes not written yet, so its place is kept and
 		# it is filled once the message is whole.
