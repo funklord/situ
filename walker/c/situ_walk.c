@@ -6073,6 +6073,22 @@ static situ_walk_err validate_deep(const situ_walk_image *image,
 			*verdict = SITU_WALK_BOUNDS;
 			return SITU_WALK_OK;
 		}
+		/* A varint the frame cuts short. Its width is zero so that the lax
+		 * reader goes on placing what follows, which is that reader's answer
+		 * and not this one's (26.919). */
+		if (varint_rules(image, index) != NULL
+		    && held.array_count == SITU_WALK_NONE
+		    && held.size_code == SITU_WALK_NONE) {
+			uint32_t used  = 0u;
+			uint64_t value = 0u;
+
+			if (situ_walk_varint(image, message, len, index, at / 8u, &used,
+			                     &value) == SITU_WALK_BOUNDS) {
+				record(why, index, SITU_WALK_NO_CHECK);
+				*verdict = SITU_WALK_BOUNDS;
+				return SITU_WALK_OK;
+			}
+		}
 		/* The frame has to reach the member -- where its offset is dynamic,
 		 * which is `report._validate`'s rule (`fixed and not offset_known`)
 		 * and the generated backends', AND where it is a `[since]` member the

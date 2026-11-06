@@ -1117,6 +1117,18 @@ def _validate_here(image: Image, view: View, struct_index: int,
 			# The ordinary case: the frame does not reach it.
 			return fail(ERR_BOUNDS, index)
 
+		# A varint the frame cuts short. Its width is zero so that the
+		# lax reader goes on placing what follows, which is that reader's
+		# answer and not this one's: `ff ff` under `{ v; u8 last; }` placed
+		# `last` on the varint and said whole, where all four backends say
+		# short (26.919). A random buffer rarely ends inside a varint, so
+		# no sweep drew it.
+		if index in image.varints and not is_run(image, index):
+			try:
+				varint(view, index)
+			except Refused:
+				return fail(ERR_BOUNDS, index)
+
 		# A member of *fixed* size at a *dynamic* offset. Its offset is a
 		# sum of lengths the message chose, so the bounds check that
 		# acquired the view never answered for it: `example/packet`'s tag

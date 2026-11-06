@@ -145,6 +145,7 @@ def test_both_walkers_measure_what_the_backends_do(tmp_path: Path) -> None:
 		("initial", INITIAL): "0",
 		("initial", INITIAL[:-1]): "1",
 		("one", bytes.fromhex("c2197c5eff14e88c07")): "0",
+		("one", bytes.fromhex("c2197c5eff14e8")): "1",
 		("small", bytes.fromhex("7bbd07")): "0",
 		("small", bytes.fromhex("9d7f3e7d07")): "1",
 		("frames", bytes.fromhex("04" "4003" "aabbcc")): "0",
