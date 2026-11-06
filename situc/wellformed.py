@@ -1563,16 +1563,8 @@ def check_whens(schema: ast.Schema) -> None:
 					         "struct, so the members it reads have to be in "
 					         "one"],
 				)
-			if field and _find_member(struct, field) is None:
-				raise error(
-					f"`{struct_name}` has no field `{field}`",
-					held.span,
-					label = "no such field",
-					notes = ["the predicate would read a field that does not "
-					         "exist, so nothing could evaluate it"],
-				)
-
-			holder = _conditional_holder(struct, field) if field else None
+			reached = _step_through(structs, struct, field, held, path)
+			holder = _conditional_holder(*reached) if field else None
 			if holder is not None:
 				raise error(
 					f"`{held.name}` reads `{path}`, which is inside "
@@ -1909,6 +1901,72 @@ def _calls_in(expr: ast.Expr) -> list[ast.Call]:
 	if isinstance(expr, ast.Access):
 		return _calls_in(expr.base)
 	return []
+
+
+def _step_through(structs: dict[str, ast.StructDecl], struct: ast.StructDecl,
+	field: str, held: ast.When, path: str) -> tuple[ast.StructDecl, str]:
+	"""The struct holding the last step of `field`, and that step (26.915).
+
+	`h.len` reads as it does in a size. Each step before the last has to be
+	one nested struct, always there: a `when` reads the whole view, so a run
+	has no one element to name and an arm may not exist. The last step is
+	left to `_conditional_holder`, as any field is.
+	"""
+	def member_of(struct: ast.StructDecl, step: str) -> ast.Member:
+		member = _find_member(struct, step)
+		if member is None:
+			raise error(
+				f"`{struct.name}` has no field `{step}`",
+				held.span,
+				label = "no such field",
+				notes = ["the predicate would read a field that does not "
+				         "exist, so nothing could evaluate it"],
+			)
+		return member
+
+	# A subscript names an element, and the whole path is what was written.
+	if "[" in field:
+		raise error(
+			f"`{struct.name}` has no field `{field}`",
+			held.span,
+			label = "no such field",
+			notes = ["the predicate would read a field that does not "
+			         "exist, so nothing could evaluate it"],
+		)
+
+	here = struct
+	*through, last = field.split(".")
+	for step in through:
+		member = member_of(here, step)
+		child = structs.get(member.type_ref.name) \
+			if isinstance(member, ast.Field) else None
+		whole = isinstance(member, ast.Field) and member.array is None \
+			and member.until is None and member.repeat is None
+		if child is None or not whole:
+			raise error(
+				f"`{held.name}` reads `{path}`, and `{step}` is not one "
+				"nested struct",
+				held.span,
+				label = "nothing to read a field of",
+				notes = ["a path steps through nested structs, as `h.len` "
+				         "does in a size (26.915)",
+				         "a run has no one element to name, and a scalar "
+				         "has no fields"],
+			)
+		holder = _conditional_holder(here, step)
+		if holder is not None:
+			raise error(
+				f"`{held.name}` reads `{path}`, which is inside {holder}",
+				held.span,
+				label = f"`{step}` is not readable from a view of "
+				        f"`{here.name}`",
+				notes = ["a `when` is evaluated against the whole view, so "
+				         "every step of a path has to be there (26.439)"],
+			)
+		here = child
+	if last:
+		member_of(here, last)
+	return here, last
 
 
 def _conditional_holder(struct: ast.StructDecl, name: str) -> str | None:
