@@ -99,6 +99,9 @@ from situc.traverse import (
 	invalidating_members,
 	is_counted_run,
 	is_own_member,
+	descends,
+	enters_a_cycle,
+	handed_range,
 	is_recursive,
 	is_struct_run,
 	is_unmeasured_run,
@@ -392,9 +395,16 @@ class Emitter:
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue
+				# A `default:` is there when no case is, and it is where a
+				# chain recurses: `case 0: nothing none; default: payload
+				# more;`. Unguarded, the last payload of a message with bytes
+				# after it counted them as one more level (26.904).
 				found.append((member,
-				              None if arm.value is None
-				              else f"{disc} == {arm.value}u"))
+				              f"{disc} == {arm.value}u"
+				              if arm.value is not None else
+				              " && ".join(f"{disc} != {one.value}u"
+				                        for one in matched_values(placement))
+				              or None))
 		return found
 
 	def _defer_across_cycle(self, name: str, order: list[str],
@@ -1106,6 +1116,43 @@ class Emitter:
 		return [held for held in own_members(struct)
 		        if held.parameter and held.scalar is not None]
 
+	def _entering_depth(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[depth]` asked of a member that enters a cycle, over the frame.
+
+		A view is sized by an extent that stops one level past the bound, so
+		a chain ending where the view does hides the level that breaks it,
+		and `validate` on that view called a message too deep short. Asked of
+		what remains of the frame instead, and first, as the struct's own
+		`validate` asks it at the top of a message (26.904).
+		"""
+		if not enters_a_cycle(self.resolved.structs, struct, placement):
+			return []
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+		nested   = placement.type_name or ""
+		declared = declared_depth(self.schema, nested)
+		limit    = depth_limit(self.schema, nested)
+		refused  = "depth" if limit < declared else "constraint"
+		return [
+			"\t\t{",
+			f"\t\t\tconst std::uint32_t at = {start};",
+			"\t\t\tsitu_view_t whole;",
+			"",
+			"\t\t\tif (at < raw_.limit && situ_view_sub("
+			"::situ::rt::view::raw(), at,",
+			"\t\t\t\t\tsitu_remaining_u32(raw_.limit, at), &whole)"
+			" == SITU_OK",
+			f"\t\t\t\t\t&& ::{self.namespace}::"
+			f"{self._struct_class(nested)}(whole"
+			f"{self._child_args(struct, placement)}).nesting()"
+			f" > {min(declared, limit)}u) {{",
+			f"\t\t\t\treturn ::situ::rt::err::{refused};",
+			"\t\t\t}",
+			"\t\t}",
+		]
+
 	def _child_args(self, struct: ResolvedStruct,
 			placement: Placement) -> str:
 		"""What this member hands its type, as trailing arguments (0068).
@@ -1118,8 +1165,19 @@ class Emitter:
 			return ""
 		inner = self.resolved.structs[placement.type_name or ""]
 		given = dict(placement.arguments)
-		return "".join(f", {self._over_fields(struct, given[held.name])}"
-		               for held in self._arguments(inner))
+		found = ""
+		for held in self._arguments(inner):
+			source = given[held.name]
+			assert held.scalar is not None
+			# Held to the parameter's range where the type alone does not
+			# say it fits (26.904).
+			bounds = handed_range(struct, held, source)
+			found += ", " + (
+				self._over_fields(struct, source) if bounds is None else
+				f"static_cast<{self._ctype(held.scalar)}>(situ_clamp_i64("
+				f"{self._over_fields(struct, source, bounded=True)},"
+				f" {bounds[0]}, {bounds[1]}))")
+		return found
 
 	def _argument_signature(self, struct: ResolvedStruct) -> str:
 		"""What `at`, `required` and the constructor add for them.
@@ -2473,7 +2531,7 @@ class Emitter:
 		# is unused -- which `-Wunused-parameter` says out loud and which
 		# means the run restarts the counter one level down (26.112). The
 		# counted run's emitter threaded it and this one declared it.
-		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 
 		def walk_from(base: str, depth: str | None = None) -> list[str]:
 			step = ("element.extent()" if depth is None
@@ -2551,7 +2609,7 @@ class Emitter:
 				"\t{",
 				f"\t\treturn {name}_span_from({start});",
 				"\t}",
-			] if not is_recursive(self.resolved.structs, placement.type_name or "") else [
+			] if not descends(self.resolved.structs, struct, placement.type_name or "") else [
 				# The element names itself, so the walk descends and the
 				# depth travels with it. Four entry points: the `_at` forms
 				# carry the counter and the plain ones start it at zero.
@@ -2671,7 +2729,7 @@ class Emitter:
 		# forms; this one never learned to, so `extent_at` called a
 		# `{name}_span_at` nothing declared and the generated C++ did not
 		# compile at all. Rust had the same hole for the same reason.
-		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 
 		def walk_from(base: str, depth: str | None = None) -> list[str]:
 			return [
@@ -2694,7 +2752,8 @@ class Emitter:
 			 f"::{self.namespace}::{inner}(raw{self._child_args(struct, placement)}).extent();"
 			 if depth is None else
 			 f"\t\t\tconst std::uint32_t size = "
-			 f"::{self.namespace}::{inner}(raw).extent_at({depth} + 1);"),
+			 f"::{self.namespace}::{inner}(raw{self._child_args(struct, placement)})"
+			 f".extent_at({depth} + 1);"),
 			"\t\t\tif (size == 0u || size > situ_remaining_u32(raw_.limit, at)) {",
 			"\t\t\t\t/* A zero-extent element would walk here forever, and",
 			"\t\t\t\t * one running past the limit was never in this frame. */",
@@ -3228,7 +3287,9 @@ class Emitter:
 		if not pairs:
 			return None
 
-		plan: list[tuple[object, str | None, str]] = []
+		# What the arm hands its type travels with the call, as in C's: the
+		# four other `required` sites here pass it (26.904).
+		plan: list[tuple[object, str | None, str, str]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
 			if inner is not None and not member.delimiters \
@@ -3238,13 +3299,14 @@ class Emitter:
 					and self._frames_itself(inner):
 				plan.append((arm,
 				             f"::{self.namespace}::{class_name(inner)}"
-				             "::required", ""))
+				             "::required", "",
+				             self._child_args(struct, member)))
 			elif member.is_fixed_size:
 				plan.append((arm, None,
-				             f"{member.size_bits // BITS_PER_BYTE}u"))
+				             f"{member.size_bits // BITS_PER_BYTE}u", ""))
 			else:
 				return None
-		if not any(call for _, call, _ in plan):
+		if not any(call for _, call, _, _ in plan):
 			return None
 
 		disc  = self._over_fields(struct, placement.discriminant)
@@ -3263,7 +3325,7 @@ class Emitter:
 			"\t\t\t}",
 		]
 		opened = False
-		for case, call, size in plan:
+		for case, call, size, handed in plan:
 			value = getattr(case, "value", None)
 			if value is None:
 				head = "\t\t\t} else {" if opened else "\t\t\t{"
@@ -3279,7 +3341,7 @@ class Emitter:
 				lines.extend([
 					f"\t\t\t\te = {call}(situ_base(raw_) + {cursor},",
 					"\t\t\t\t\tsitu_remaining_u32(have,"
-					f" {cursor}), part);",
+					f" {cursor}){handed}, part);",
 					"\t\t\t\tif (e != ::situ::rt::err::ok) {",
 					"\t\t\t\t\tneed = situ_need_u32(at, part);",
 					"\t\t\t\t\treturn ::situ::rt::err::truncated;",
@@ -4198,7 +4260,7 @@ class Emitter:
 				or element.layout.is_fixed_size
 				or not has_element_extent(self.resolved.structs, element)):
 			return None
-		step = ("extent_at(1)" if is_recursive(self.resolved.structs, element.name)
+		step = ("extent_at(1)" if descends(self.resolved.structs, struct, element.name)
 		        else "extent()")
 		inner = self._struct_class(element.name)
 		return [
@@ -4654,8 +4716,7 @@ class Emitter:
 			# depth on, or the counter restarts one level down and bounds
 			# nothing (26.112).
 			# `_at` only where the ELEMENT recurses; see the C backend.
-			deep = depth is not None and is_recursive(
-				self.resolved.structs, placement.type_name or "")
+			deep = depth is not None and descends(self.resolved.structs, struct, placement.type_name or "")
 			if running is not None:
 				return (f"{name}_span_from_at({running}, {depth})" if deep
 				        else f"{name}_span_from({running})")
@@ -4692,8 +4753,7 @@ class Emitter:
 			# nothing (26.112) -- but only where the ELEMENT recurses, since
 			# that is what makes the `_at` form exist. A delimited byte run
 			# has none, and asking for one named a function nothing defines.
-			deep = depth is not None and is_recursive(
-				self.resolved.structs, placement.type_name or "")
+			deep = depth is not None and descends(self.resolved.structs, struct, placement.type_name or "")
 			if running is not None:
 				return (f"{name}_span_from_at({running}, {depth})" if deep
 				        else f"{name}_span_from({running})")
@@ -4710,12 +4770,10 @@ class Emitter:
 			if not has_computable_extent(self.resolved.structs, inner):
 				return None		# and so nothing after it can be placed
 			name = bare_name(local_name(struct, placement))
-			if depth is None or not is_recursive(self.resolved.structs,
-			                                     placement.type_name or ""):
+			if depth is None or not descends(self.resolved.structs, struct, placement.type_name or ""):
 				# The offset the caller has accumulated. Gated on
 				# non-recursive, which is when `_extent_from` is emitted.
-				if running is not None and not is_recursive(
-						self.resolved.structs, placement.type_name or ""):
+				if running is not None and not descends(self.resolved.structs, struct, placement.type_name or ""):
 					return f"{name}_extent_from({running})"
 				return f"{name}_extent()"
 			return f"{name}_extent_at({depth})"
@@ -5179,7 +5237,7 @@ class Emitter:
 				"\t * which was true only because this was missing. */",
 				f"\t[[nodiscard]] std::uint32_t {name}_span_from"
 				+ ("(std::uint32_t start) const noexcept"
-				   if not is_recursive(self.resolved.structs, placement.type_name or "")
+				   if not descends(self.resolved.structs, struct, placement.type_name or "")
 				   else "_at(std::uint32_t start, std::uint32_t depth)"
 				        " const noexcept"),
 				"\t{",
@@ -5196,7 +5254,7 @@ class Emitter:
 				"",
 				f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 				("\t\t\tconst std::uint32_t size = element.extent();"
-				 if not is_recursive(self.resolved.structs, placement.type_name or "")
+				 if not descends(self.resolved.structs, struct, placement.type_name or "")
 				 else "\t\t\tconst std::uint32_t size ="
 				      " element.extent_at(depth + 1);"),
 				"",
@@ -5234,8 +5292,7 @@ class Emitter:
 					"\t * nesting guard. */",
 					f"\t[[nodiscard]] bool {name}_fits"
 					+ ("(std::uint32_t depth) const noexcept"
-					   if is_recursive(self.resolved.structs,
-					                   placement.type_name or "")
+					   if descends(self.resolved.structs, struct, placement.type_name or "")
 					   else "() const noexcept"),
 					"\t{",
 					*([f"\t\tstd::uint32_t at = {name}_offset();",
@@ -5260,8 +5317,7 @@ class Emitter:
 					"\t\t\t}",
 					f"\t\t\tconst {inner} element(raw{self._child_args(struct, placement)});",
 					("\t\t\tconst std::uint32_t size = element.extent();"
-					 if not is_recursive(self.resolved.structs,
-					                     placement.type_name or "") else
+					 if not descends(self.resolved.structs, struct, placement.type_name or "") else
 					 "\t\t\tconst std::uint32_t size ="
 					 " element.extent_at(depth + 1);"),
 					"",
@@ -5276,8 +5332,7 @@ class Emitter:
 					"\t\t}",
 					"\t\treturn true;",
 					"\t}",
-					*([] if not is_recursive(self.resolved.structs,
-					                         placement.type_name or "") else [
+					*([] if not descends(self.resolved.structs, struct, placement.type_name or "") else [
 						"",
 						f"\t[[nodiscard]] bool {name}_fits() const noexcept",
 						"\t{",
@@ -5291,7 +5346,7 @@ class Emitter:
 				    "\t{",
 				    f"\t\treturn {name}_span_from({name}_offset());",
 				    "\t}"]
-				   if not is_recursive(self.resolved.structs, placement.type_name or "")
+				   if not descends(self.resolved.structs, struct, placement.type_name or "")
 				   else
 				   # The element names itself, so the walk descends and the
 				   # depth travels with it. The plain forms start it at zero
@@ -6965,7 +7020,7 @@ class Emitter:
 			# An arm that IS the recursion -- `case 1: node kid`, which is
 			# how a tagged tree is written. The depth travels with it as it
 			# does through a run's span and an ordinary nested member.
-			deep = is_recursive(self.resolved.structs, nested.name)
+			deep = descends(self.resolved.structs, struct, nested.name)
 			return [
 				*head,
 				# How many bytes this arm occupies, for the switch that places
@@ -8181,8 +8236,7 @@ class Emitter:
 			# A member typed as something that can contain this struct
 			# carries the depth on, as a run's span does. Only a mutual
 			# cycle reaches this: a self-cycle recurses through a run.
-			deep = is_recursive(self.resolved.structs,
-			                    placement.type_name or "")
+			deep = descends(self.resolved.structs, struct, placement.type_name or "")
 			return [
 				"",
 				f"\t/* {placement.path}. No one size, so its extent is read from",
@@ -8209,7 +8263,8 @@ class Emitter:
 					" != SITU_OK) {",
 					"\t\t\treturn 0u;",
 					"\t\t}",
-					f"\t\treturn {nested}(whole).extent_at(depth + 1);",
+					f"\t\treturn {nested}(whole{self._child_args(struct, placement)})"
+					".extent_at(depth + 1);",
 					"\t}",
 				]),
 				*([] if deep else [
@@ -9450,7 +9505,8 @@ class Emitter:
 					f"\t\t\tif ({reach}) {{",
 					f"\t\t\t\tconst {inner} element(situ_view_t{{",
 					"\t\t\t\t\tsitu_base(raw_) + at, situ_remaining_u32(raw_.limit, at),",
-					"\t\t\t\t\traw().generation, raw().owner });",
+					"\t\t\t\t\traw().generation, raw().owner }"
+					f"{self._child_args(struct, placement)});",
 					"\t\t\t\tconst std::uint32_t found ="
 					" element.nesting_at(depth + 1);",
 					"",
@@ -9471,7 +9527,8 @@ class Emitter:
 				" && at < raw_.limit; i++) {",
 				f"\t\t\t\tconst {inner} element(situ_view_t{{",
 				"\t\t\t\t\tsitu_base(raw_) + at, situ_remaining_u32(raw_.limit, at),",
-				"\t\t\t\t\traw().generation, raw().owner });",
+				"\t\t\t\t\traw().generation, raw().owner }"
+				f"{self._child_args(struct, placement)});",
 				"\t\t\t\tconst std::uint32_t found ="
 				" element.nesting_at(depth + 1);",
 				"\t\t\t\tconst std::uint32_t size = element.extent();",
@@ -11031,6 +11088,7 @@ class Emitter:
 			# exactly that member, and a generated local named after a
 			# schema construct is a collision the schema gets to cause.
 			return [
+				*self._entering_depth(struct, placement),
 				"\t\t{",
 				f"\t\t\t{held} _held;",
 				# `this->`: the local `e` is in scope from its own

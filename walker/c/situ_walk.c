@@ -2190,7 +2190,7 @@ static situ_walk_err while_walk(const situ_walk_image *image,
 		const uint8_t *from = message + at - extent;
 		const uint32_t left = len - at + extent;
 
-		walk_ctx ctx  = {image, from, left, held.type_struct, depth + 1u};
+		walk_ctx ctx  = {&elements, from, left, held.type_struct, depth + 1u};
 		int64_t  more = 0;
 		/* `left` frames the element, so the predicate can read the element's
 		 * own fields. `remaining` is a different quantity: a `while` is a
@@ -2365,6 +2365,33 @@ static int argument_rows(const situ_walk_image *image, uint32_t index)
 	return 0;
 }
 
+/* A handed value, held to what its parameter can hold (26.904). The range is
+ * proved by reading a `[min]` or a `[max]`, which are checks, so a message
+ * that breaks one arrives here out of range. Every reader holds it there: the
+ * child is empty and `validate` refuses the message for the broken rule. */
+static situ_walk_err held_to_parameter(const situ_walk_image *image,
+                                       uint32_t parameter, int64_t *value)
+{
+	situ_walk_placement member;
+	const situ_walk_err err = situ_walk_placement_at(image, parameter, &member);
+	if (err != SITU_WALK_OK) {
+		return err;
+	}
+	if (member.size_bits >= 64u || member.size_bits == 0u) {
+		return SITU_WALK_OK;
+	}
+	const int     is_signed = (member.flags & SITU_WALK_SIGNED) != 0u;
+	const int64_t room      = (int64_t)1 << member.size_bits;
+	const int64_t lo        = is_signed ? -(room / 2) : 0;
+	const int64_t hi        = is_signed ? room / 2 - 1 : room - 1;
+	if (*value < lo) {
+		*value = lo;
+	} else if (*value > hi) {
+		*value = hi;
+	}
+	return SITU_WALK_OK;
+}
+
 static situ_walk_err child_binding(const situ_walk_image *image,
                                    const uint8_t *message, uint32_t len,
                                    uint32_t shape, uint32_t index,
@@ -2409,6 +2436,10 @@ static situ_walk_err child_binding(const situ_walk_image *image,
 		err = eval_lazy(image, u32_at(row + 8), ctx_load, &ctx,
 		                remaining_from_member, &anchor, 0, 0,
 		                &values[ordinal]);
+		if (err != SITU_WALK_OK) {
+			return err;
+		}
+		err = held_to_parameter(image, u32_at(row + 4), &values[ordinal]);
 		if (err != SITU_WALK_OK) {
 			return err;
 		}
@@ -5226,9 +5257,31 @@ static situ_walk_err nesting_within(const situ_walk_image *image,
 			}
 			continue;
 		}
-		if (one.array_count == SITU_WALK_NONE
+		/* What the member hands its type (26.904): the child's offsets
+		 * follow it, and one read under the parent's binding is no answer. */
+		int64_t         handed[SITU_WALK_ARGUMENTS_MAX];
+		situ_walk_image bound;
+
+		err = child_binding(image, message, len, shape, index, depth, child,
+		                    handed, &bound);
+		if (err == SITU_WALK_UNSUPPORTED) {
+			return err;
+		}
+		if (err != SITU_WALK_OK) {
+			continue;
+		}
+		/* A `while` or delimited run names neither a count nor a size, and is
+		 * no more one member for that: followed as one, the walk read the
+		 * terminator as a nested struct and went on past it. */
+		const uint8_t *rules = NULL;
+		uint32_t       alts  = 0u;
+
+		delimiter_span(image, index, &rules, &alts);
+		const int ended = rules != NULL
+		                  || one.repeat_code != SITU_WALK_NONE;
+		if (!ended && one.array_count == SITU_WALK_NONE
 		    && one.size_code == SITU_WALK_NONE) {
-			err = nesting_within(image, message + start, len - start, child,
+			err = nesting_within(&bound, message + start, len - start, child,
 			                     depth + 1u);
 			if (err != SITU_WALK_OK) {
 				return err;
@@ -5242,6 +5295,9 @@ static situ_walk_err nesting_within(const situ_walk_image *image,
 
 		if (one.array_count != SITU_WALK_NONE) {
 			count = one.array_count;
+		} else if (ended) {
+			count = one.repeat_code != SITU_WALK_NONE
+			        ? (one.repeat_cap != 0u ? one.repeat_cap : 0xffff) : -1;
 		} else {
 			int64_t  value = 0;
 			walk_ctx ctx   = {image, message, len, shape, depth};
@@ -5260,12 +5316,16 @@ static situ_walk_err nesting_within(const situ_walk_image *image,
 		for (int64_t n = 0; at < end && (count < 0 || n < count); n++) {
 			uint32_t extent = 0u;
 
-			err = nesting_within(image, message + at, end - at, child,
+			if (rules != NULL
+			    && terminator_at(image, rules, alts, message, end, at)) {
+				break;
+			}
+			err = nesting_within(&bound, message + at, end - at, child,
 			                     depth + 1u);
 			if (err != SITU_WALK_OK) {
 				return err;
 			}
-			err = struct_extent(image, message + at, end - at, child,
+			err = struct_extent(&bound, message + at, end - at, child,
 			                    depth + 1u, &extent);
 			if (err == SITU_WALK_UNSUPPORTED) {
 				return err;
@@ -5274,6 +5334,17 @@ static situ_walk_err nesting_within(const situ_walk_image *image,
 				break;
 			}
 			at += extent;
+			if (one.repeat_code != SITU_WALK_NONE) {
+				walk_ctx ctx  = {&bound, message + at - extent,
+				                 end - at + extent, child, depth + 1u};
+				int64_t  more = 0;
+
+				err = situ_walk_eval(image, one.repeat_code, ctx_load, &ctx,
+				                     (int64_t)(end - at), &more);
+				if (err != SITU_WALK_OK || more == 0) {
+					break;
+				}
+			}
 		}
 	}
 	return SITU_WALK_OK;
@@ -5446,8 +5517,8 @@ static situ_walk_err run_elements_validate(const situ_walk_image *image,
 		n  += 1u;
 
 		if (held.repeat_code != SITU_WALK_NONE) {
-			walk_ctx ctx  = {image, message + at - extent, len - at + extent,
-			                 held.type_struct, depth + 1u};
+			walk_ctx ctx  = {&elements, message + at - extent,
+			                 len - at + extent, held.type_struct, depth + 1u};
 			int64_t  more = 0;
 
 			err = situ_walk_eval(image, held.repeat_code, ctx_load, &ctx,

@@ -95,6 +95,9 @@ from situc.traverse import (
 	invalidating_members,
 	is_counted_run,
 	is_own_member,
+	descends,
+	enters_a_cycle,
+	handed_range,
 	is_recursive,
 	is_struct_run,
 	is_unmeasured_run,
@@ -1492,6 +1495,34 @@ class Emitter:
 			return inner
 		return f"self._make_{py_name(local_name(struct, placement))}"
 
+	def _entering_depth(self, struct: ResolvedStruct,
+			placement: Placement) -> list[str]:
+		"""`[depth]` asked of a member that enters a cycle, over the frame.
+
+		A view is sized by an extent that stops one level past the bound, so
+		a chain ending where the view does hides the level that breaks it,
+		and `validate` on that view called a message too deep short. Asked of
+		what remains of the frame instead, and first, as the struct's own
+		`validate` asks it at the top of a message (26.904).
+		"""
+		if not enters_a_cycle(self.resolved.structs, struct, placement):
+			return []
+		start = self._offset_expression(struct, placement)
+		if start is None:
+			return []
+		nested   = placement.type_name or ""
+		declared = declared_depth(self.schema, nested)
+		limit    = depth_limit(self.schema, nested)
+		refused  = "DepthError" if limit < declared else "ConstraintError"
+		made, handed = self._child(struct, placement)
+		return [
+			f"\t\tat = {start}",
+			"\t\tif at < self._len and "
+			f"{made}(self._msg, self._at + at, self._len - at{handed})"
+			f".nesting > {min(declared, limit)}:",
+			f'\t\t\traise {refused}("{placement.path} nests too deep")',
+		]
+
 	def _child(self, struct: ResolvedStruct, placement: Placement,
 			held: str = "self") -> tuple[str, str]:
 		"""What builds this member's view, and the arguments it takes.
@@ -1505,10 +1536,18 @@ class Emitter:
 			return nested, ""
 		inner = self.resolved.structs[placement.type_name or ""]
 		given = dict(placement.arguments)
-		return f"{nested}._over", "".join(
-			f", {self._argument_ident(one)}="
-			f"{self._over_fields(struct, given[one.name], held)}"
-			for one in self._arguments(inner))
+		handed = ""
+		for one in self._arguments(inner):
+			source = given[one.name]
+			# Held to the parameter's range where the type alone does not
+			# say it fits (26.904).
+			bounds = handed_range(struct, one, source)
+			value  = (self._over_fields(struct, source, held)
+			          if bounds is None else
+			          f"max({bounds[0]}, min({bounds[1]},"
+			          f" {self._over_fields(struct, source, held, bounded=True)}))")
+			handed += f", {self._argument_ident(one)}={value}"
+		return f"{nested}._over", handed
 
 	# -- members -------------------------------------------------------
 
@@ -3761,7 +3800,7 @@ class Emitter:
 			# An arm that IS the recursion -- `case 1: node kid`, which is
 			# how a tagged tree is written and how JSON's value reaches its
 			# object. The depth travels with it.
-			deep = is_recursive(self.resolved.structs, nested.name)
+			deep = descends(self.resolved.structs, struct, nested.name)
 			return [
 				# How many bytes this arm occupies, for the switch that places
 				# whatever follows the variant. The length chain names it and
@@ -3774,8 +3813,9 @@ class Emitter:
 					f'\t\t"""How many bytes {placement.path} occupies here,',
 					'\t\tat this depth in the recursion."""',
 					f"\t\tstart = {start}",
-					f"\t\treturn {inner}(self._msg, self._at + start,",
-					"\t\t\tmax(0, self._len - start))._extent_at(depth + 1)",
+					f"\t\treturn {self._child(struct, placement)[0]}(self._msg, self._at + start,",
+					f"\t\t\tmax(0, self._len - start){self._child(struct, placement)[1]})"
+					"._extent_at(depth + 1)",
 				]),
 				"", "\t@property",
 				f"\tdef {base}_extent(self) -> int:",
@@ -4694,8 +4734,7 @@ class Emitter:
 			# Without it the cycle's counter reset here and `[depth]` bought
 			# nothing for a mutual pair -- the case a self-cycle never
 			# reaches, because its recursion is always through a run.
-			deep = is_recursive(self.resolved.structs,
-			                    placement.type_name or "")
+			deep = descends(self.resolved.structs, struct, placement.type_name or "")
 			return [
 				*([] if not deep else [
 					"",
@@ -4703,8 +4742,8 @@ class Emitter:
 					f'\t\t"""How many bytes {placement.path} occupies here,',
 					'\t\tat this depth in the recursion."""',
 					f"\t\tstart = self._at + ({start})",
-					f"\t\treturn {nested}(self._msg, start,",
-					f"\t\t\tself._len - ({start}))._extent_at(depth + 1)",
+					f"\t\treturn {make}(self._msg, start,",
+					f"\t\t\tself._len - ({start}){args})._extent_at(depth + 1)",
 				]),
 				*([] if deep else [
 					"",
@@ -4988,7 +5027,12 @@ class Emitter:
 		          and not nested.layout.is_fixed_size
 		          and has_computable_extent(self.resolved.structs, nested))
 		if walked:
-			count = f"self.{name}_span_from(self.{name}_offset, count_only=True)"
+			# From depth zero element by element, as the `_walk`s above and
+			# as the other three count them (26.904).
+			count = (f"self.{name}_span_from_at(self.{name}_offset, -1, True)"
+			         if descends(self.resolved.structs, struct, nested.name)
+			         else f"self.{name}_span_from(self.{name}_offset,"
+			              " count_only=True)")
 
 		lines.extend([
 			"", "\t@property", f"\tdef {name}_count(self) -> int:",
@@ -5101,8 +5145,7 @@ class Emitter:
 		return [
 			"",
 			(f"	def {name}_span_from(self, start: int,"
-			 if not is_recursive(self.resolved.structs,
-			                     placement.type_name or "") else
+			 if not descends(self.resolved.structs, struct, placement.type_name or "") else
 			 f"	def {name}_span_from_at(self, start: int, depth: int = 0,"),
 			"			count_only: bool = False) -> int:",
 			f'		"""The walk, from a base the caller already knows -- the'
@@ -5116,8 +5159,7 @@ class Emitter:
 			f"			_element = {self._made(struct, placement, inner)}(self._msg, self._at + at,"
 			" self._len - at)",
 			("			size    = _element._extent"
-			 if not is_recursive(self.resolved.structs,
-			                     placement.type_name or "") else
+			 if not descends(self.resolved.structs, struct, placement.type_name or "") else
 			 "			size    = _element._extent_at(depth + 1)"),
 			"			if size == 0 or size > self._len - at:",
 			"				break",
@@ -5140,8 +5182,7 @@ class Emitter:
 			*([
 				"",
 				f"	def {name}_fits(self"
-				+ (", depth: int = 0) -> bool:" if is_recursive(
-					self.resolved.structs, placement.type_name or "")
+				+ (", depth: int = 0) -> bool:" if descends(self.resolved.structs, struct, placement.type_name or "")
 				   else ") -> bool:"),
 				f'		"""Whether every one of `{name}`\'s declared'
 				' elements is',
@@ -5167,8 +5208,7 @@ class Emitter:
 				f"			_element = {self._made(struct, placement, inner)}(self._msg, self._at + at,"
 				" self._len - at)",
 				("			size    = _element._extent"
-				 if not is_recursive(self.resolved.structs,
-				                     placement.type_name or "") else
+				 if not descends(self.resolved.structs, struct, placement.type_name or "") else
 				 "			size    = _element._extent_at(depth + 1)"),
 				"			if size == 0:",
 				"				return True",
@@ -5183,8 +5223,7 @@ class Emitter:
 			    "	@property",
 			    f"	def {name}_span(self) -> int:",
 			    f"		return self.{name}_span_from(self.{name}_offset)"]
-			   if not is_recursive(self.resolved.structs,
-			                       placement.type_name or "") else
+			   if not descends(self.resolved.structs, struct, placement.type_name or "") else
 			   # The element names itself, so the walk descends and the depth
 			   # travels with it. The plain forms start it at zero for a
 			   # caller with no business knowing it exists.
@@ -5637,7 +5676,7 @@ class Emitter:
 		# `struct node [depth] { u8 more; node kids[] while (...); }`
 		# generated a module that raised AttributeError on its own extent.
 		# The counted form was the one the corpus and the suite exercised.
-		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 		step = ("_element._extent_at(depth + 1)" if deep
 		        else "_element._extent")
 
@@ -5672,8 +5711,14 @@ class Emitter:
 			"\t\tstarts.append(at)",
 			"\t\treturn starts",
 			"",
+			# Element by element from depth zero where the element recurses:
+			# the walk spends `depth + 1` on each, and an element asked for
+			# itself is measured from zero in the other three. From one, a
+			# message past `[depth]` counted another number of elements here
+			# alone (26.904).
 			f"\tdef _{name}_walk(self) -> _situ_list[int]:",
-			f"\t\treturn self._{name}_walk_from({start})",
+			f"\t\treturn self._{name}_walk_from({start}"
+			+ (", -1" if deep else "") + ")",
 			"",
 			"\t@property",
 			f"\tdef {name}_count(self) -> int:",
@@ -5750,7 +5795,7 @@ class Emitter:
 		# The depth counter the other run emitters carry (26.428): a run
 		# of a RECURSIVE record needs it, and this emitter never had it, so
 		# `_extent_at` called a `_span_at` nothing defined.
-		deep = is_recursive(self.resolved.structs, placement.type_name or "")
+		deep = descends(self.resolved.structs, struct, placement.type_name or "")
 
 		name  = py_name(local_name(struct, placement))
 		delim = placement.delimiter
@@ -5804,7 +5849,7 @@ class Emitter:
 				f"\t\treturn self._{name}_walk_from_at(start, 0)",
 				"",
 				f"\tdef _{name}_walk(self) -> _situ_list[int]:",
-				f"\t\treturn self._{name}_walk_from_at({start}, 0)",
+				f"\t\treturn self._{name}_walk_from_at({start}, -1)",
 				"",
 				f"\tdef {name}_span_at(self, depth: int) -> int:",
 				f'\t\t"""The span, carrying the depth an element spends'
@@ -6236,20 +6281,23 @@ class Emitter:
 		# planned entry, because mypy reads a rebind as narrowing and
 		# because two meanings on one name is what this tree keeps
 		# catching.
-		plan: list[tuple[object, str | None, str]] = []
+		plan: list[tuple[object, str | None, str, str]] = []
 		for arm, member in pairs:
 			inner = self.resolved.structs.get(member.type_name or "")
 			if inner is not None and not member.delimiters \
 					and not is_run(member, self.resolved.structs) \
 					and not is_counted_run(self.resolved.structs, member) \
 					and frameable(self.resolved.structs, inner):
-				plan.append((arm, py_name(inner.name), ""))
+				# What the arm hands its type travels with the call, as in
+				# C's (26.904).
+				plan.append((arm, py_name(inner.name), "",
+				             self._child(struct, member, "probe")[1]))
 			elif member.is_fixed_size:
 				plan.append((arm, None,
-				             str(member.size_bits // BITS_PER_BYTE)))
+				             str(member.size_bits // BITS_PER_BYTE), ""))
 			else:
 				return None
-		if not any(call for _, call, _ in plan):
+		if not any(call for _, call, _, _ in plan):
 			return None
 
 		disc  = self._over_fields(struct, placement.discriminant, "probe")
@@ -6263,7 +6311,7 @@ class Emitter:
 			' incomplete", at)',
 		]
 		opened = False
-		for case, call, size in plan:
+		for case, call, size, handed in plan:
 			value = getattr(case, "value", None)
 			if value is None:
 				head = "\t\telse:" if opened else "\t\tif True:"
@@ -6277,7 +6325,7 @@ class Emitter:
 			else:
 				lines.extend([
 					"\t\t\ttry:",
-					f"\t\t\t\tlen_ = {call}.required(data[{cursor}:])",
+					f"\t\t\t\tlen_ = {call}.required(data[{cursor}:]{handed})",
 					"\t\t\texcept TruncatedError as short:",
 					f'\t\t\t\traise TruncatedError("{placement.path}:'
 					' incomplete",',
@@ -6288,7 +6336,7 @@ class Emitter:
 		# and "possibly-uninitialized" in Rust. Zero is what the other
 		# two answer, being what `_length_expression`'s chain opens with.
 		if not any(getattr(case, "value", None) is None
-		           for case, _call, _size in plan):
+		           for case, _call, _size, _handed in plan):
 			lines.extend(["\t\telse:", "\t\t\tlen_ = 0"])
 		lines.extend([
 			"\t\tat  = min(at + len_, 0xFFFFFFFF)",
@@ -6353,7 +6401,8 @@ class Emitter:
 			cond = self._element_condition(element, placement, "at", "have")
 			body.extend([
 				*read,
-				f"\t\t\t_element = {inner}(probe._msg, pos, part)",
+				f"\t\t\t_element = {self._child(struct, placement, 'probe')[0]}"
+				f"(probe._msg, pos, part{self._child(struct, placement, 'probe')[1]})",
 				"\t\t\tat  = min(at + part, 0xFFFFFFFF)",
 				"\t\t\tpos += part",
 				"",
@@ -6604,11 +6653,20 @@ class Emitter:
 		# belong in `validate`.
 		limit = declared_depth(self.schema, struct.name) + 1
 		deep  = self._extent_expression(struct, depth="depth")
+		# C and C++'s floor (26.901), for agreement rather than for safety:
+		# an argument-sized member adds to the sum without reading, so on a
+		# frame shorter than the fixed part this answered more than they do
+		# and `required` said another number (26.904).
+		parts = extent_parts(self.resolved.structs, struct)
+		floor = ([f"\t\tif self._len < {parts[0]}:",
+		          f"\t\t\treturn {parts[0]}"]
+		         if parts is not None and parts[0] and parts[1] else [])
 		return ["",
 		        "\tdef _extent_at(self, depth: int) -> int:",
 		        *doc,
 		        f"\t\tif depth >= {limit}:",
 		        "\t\t\treturn 0\t# `[depth]`/`[limit]`, not the frame",
+		        *floor,
 		        f"\t\treturn {deep or extent}",
 		        "",
 		        "\t@property",
@@ -6651,9 +6709,8 @@ class Emitter:
 		# truncation compounds until `nesting` saturates AT the bound.
 		cycle = set(recursion_cycle(self.resolved.structs, struct.name))
 		for placement, guard in self._recursive_members(struct, cycle):
-			target = placement.type_name or ""
 			name  = py_name(local_name(struct, placement)).replace(".", "_")
-			inner = py_name(target)
+			made, handed = self._child(struct, placement)
 			if holds_of(placement) in cycle:
 				lines.extend([
 					f"\t\tfound = self.{name}_view.nesting_at(depth + 1)",
@@ -6678,8 +6735,8 @@ class Emitter:
 				lines.extend([
 					f"\t\tstart = {start}",
 					f"\t\tif {reach}:",
-					f"\t\t\t{held} = {inner}(self._msg, self._at + start,",
-					"\t\t\t\tself._len - start)",
+					f"\t\t\t{held} = {made}(self._msg, self._at + start,",
+					f"\t\t\t\tself._len - start{handed})",
 					f"\t\t\tfound = {held}.nesting_at(depth + 1)",
 					"\t\t\tif found > deepest:",
 					"\t\t\t\tdeepest = found",
@@ -6692,8 +6749,8 @@ class Emitter:
 				f"\t\tfor _ in range(self.{name}_count):",
 				"\t\t\tif at >= self._len:",
 				"\t\t\t\tbreak",
-				f"\t\t\t{held} = {inner}(self._msg, self._at + at,",
-				"\t\t\t\tself._len - at)",
+				f"\t\t\t{held} = {made}(self._msg, self._at + at,",
+				f"\t\t\t\tself._len - at{handed})",
 				f"\t\t\tfound = {held}.nesting_at(depth + 1)",
 				"\t\t\tif found > deepest:",
 				"\t\t\t\tdeepest = found",
@@ -6725,9 +6782,16 @@ class Emitter:
 			for arm, member in arm_members(struct, placement):
 				if member is None or (member.type_name or "") not in cycle:
 					continue
+				# A `default:` is there when no case is, and it is where a
+				# chain recurses: `case 0: nothing none; default: payload
+				# more;`. Unguarded, the last payload of a message with bytes
+				# after it counted them as one more level (26.904).
 				found.append((member,
-				              None if arm.value is None
-				              else f"{disc} == {arm.value}"))
+				              f"{disc} == {arm.value}"
+				              if arm.value is not None else
+				              " and ".join(f"{disc} != {one.value}"
+				                        for one in matched_values(placement))
+				              or None))
 		return found
 
 	def _depth_checks(self, struct: ResolvedStruct) -> list[str]:
@@ -7270,7 +7334,7 @@ class Emitter:
 				or element.layout.is_fixed_size
 				or not has_element_extent(self.resolved.structs, element)):
 			return None
-		step = ("_extent_at(1)" if is_recursive(self.resolved.structs, element.name)
+		step = ("_extent_at(1)" if descends(self.resolved.structs, struct, element.name)
 		        else "_extent")
 		inner = py_name(element.name)
 		why   = (f'"{member.path}: a record the count declares is outside'
@@ -7769,8 +7833,7 @@ class Emitter:
 			# scope -- so a delimited member inside a recursive struct named
 			# a `_span_at` nothing defines. JSON's object key is the first
 			# one in this repository.
-			deep = depth is not None and is_recursive(
-				self.resolved.structs, placement.type_name or "")
+			deep = depth is not None and descends(self.resolved.structs, struct, placement.type_name or "")
 			if running is not None:
 				return (f"self.{name}_span_from_at({running}, {depth})" if deep
 				        else f"self.{name}_span_from({running})")
@@ -7806,16 +7869,14 @@ class Emitter:
 			if not has_computable_extent(self.resolved.structs, inner):
 				return None		# and so nothing after it can be placed
 			name = py_name(local_name(struct, placement))
-			if depth is None or not is_recursive(self.resolved.structs,
-			                                     placement.type_name or ""):
+			if depth is None or not descends(self.resolved.structs, struct, placement.type_name or ""):
 				# The offset the caller has accumulated, where it has one.
 				# `_extent` re-derives this member's own start by summing
 				# every earlier extent, and each of those did the same --
 				# 3**k for one access, measured at 5.4 SECONDS for k=14
 				# before this (26.555). Gated on non-recursive because that
 				# is the condition the `_from` method is emitted under.
-				if running is not None and not is_recursive(
-						self.resolved.structs, placement.type_name or ""):
+				if running is not None and not descends(self.resolved.structs, struct, placement.type_name or ""):
 					return f"self.{name}_extent_from({running})"
 				return f"self.{name}_extent"
 			return f"self.{name}_extent_at({depth})"
@@ -8641,10 +8702,16 @@ class Emitter:
 			f"\t\t# {placement.path}: the arm the discriminant selects",
 			"\t\t# carries its own constraints, and its own validator knows",
 			"\t\t# them.",
+			# Only the accessor under the `try`. A refusal from INSIDE the arm
+			# is a verdict, `default: error` in the struct it holds among them,
+			# and caught here it read as another arm and the message as whole,
+			# where the other three refuse it (26.904).
 			"\t\ttry:",
-			f"\t\t\tself.{name}.validate()",
+			f"\t\t\t_arm_{name} = self.{name}",
 			"\t\texcept VersionError:",
 			f"\t\t\tpass\t\t# not the arm this message carries",
+			"\t\telse:",
+			f"\t\t\t_arm_{name}.validate()",
 		]
 
 	def _arm_member_checks(self, struct: ResolvedStruct, variant: Placement,
@@ -9010,7 +9077,8 @@ class Emitter:
 			if inner is not None and not inner.layout.is_fixed_size \
 					and not has_computable_extent(self.resolved.structs, inner):
 				return [f"\t\t# {placement.path}: no accessor to validate through."]
-			return [f"\t\tself.{name}.validate()"]
+			return [*self._entering_depth(struct, placement),
+			        f"\t\tself.{name}.validate()"]
 
 		# A VARINT'S VALUE BOUNDS (26.426). It has no `scalar` -- its width
 		# is in the bytes -- so every read below refuses it, and the check

@@ -3644,18 +3644,13 @@ def _check_material(schema: ast.Schema, struct: ast.StructDecl) -> None:
 
 
 def check_parameter_nesting(schema: ast.Schema) -> None:
-	"""A struct that takes an argument is not a member yet (0050).
+	"""A struct that takes an argument is a member only where it is handed
+	one, and only in the shapes that are built (0050, 0068).
 
 	The argument reaches a view through its own constructor. A nested
-	struct's view is constructed by the parent's accessor, which has no
-	argument to pass and no way to be given one -- so the nested view would
-	be built with whatever a missing argument means, which is a wrong
-	number rather than a refusal.
-
-	Refused by name until the parent can carry it. Everything 0050 has real
-	formats behind -- a TLS record, an MMC command, a volume header -- is a
-	top-level struct, so this is the case that waits rather than the case
-	that matters.
+	struct's view is constructed by the parent's accessor, so a member that
+	names no arguments would be built with whatever a missing argument means,
+	which is a wrong number rather than a refusal.
 	"""
 	takes = {struct.name for struct in schema.structs()
 	         if any(isinstance(member, ast.Field) and member.argument
@@ -3663,7 +3658,7 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 	if not takes:
 		return
 
-	cyclic = _cyclic_structs(schema)
+	cycles = _reaching_structs(schema)
 	for struct in schema.structs():
 		for member in _members_and_arms(struct):
 			named = getattr(getattr(member, "type_ref", None), "name", None)
@@ -3671,14 +3666,14 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 			# accessor builds like any other, with no argument to pass. It
 			# was let through, and `struct node { parameter u8 b; u8 n;
 			# node kids[n]; }` generated C declaring `node_required` with
-			# the argument and calling it without (26.794).
+			# the argument and calling it without (26.794). Named with its
+			# arguments it is built, a cycle included (26.904).
 			if named not in takes:
 				continue
 			# 0068 steps 2 to 4: a member of the struct itself, of one of
 			# its variant's arms, or of a `positional` or `authenticated`
-			# block, one or a run of them, named with its arguments, of a
-			# struct other than this one. A sealed or coded interior and a
-			# struct naming itself are later.
+			# block, one or a run of them, named with its arguments. A
+			# sealed or coded interior is later.
 			#
 			# AND STEP 5 FOR A SINGLE NESTED MEMBER: an argument that hands
 			# on one of the parent's OWN parameters. In C that is the only
@@ -3701,10 +3696,22 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					and (member in struct.members
 					     or member in arms_of(struct)
 					     or member in _transparent_members(struct)) \
-					and member.located is None and named != struct.name \
-					and named not in cyclic \
+					and member.located is None \
 					and not _indexed_hands_on_a_parameter(struct, member):
-				continue
+				unbuilt = _unmeasured_in_a_cycle(struct, member, cycles)
+				if unbuilt is None:
+					continue
+				raise error(
+					f"`{named}` is handed arguments through {unbuilt} of its "
+					"own cycle, which is not built",
+					member.span,
+					f"`{struct.name}.{member.name}` can contain "
+					f"`{struct.name}`",
+					["a single member, an arm, and a counted, `while` or "
+					 "delimited run outside an arm are built (26.904)",
+					 "this shape cannot be measured with or without an "
+					 "argument: a recursive struct has to end where its own "
+					 "bytes say"])
 			raise error(
 				f"`{named}` takes an argument, so it cannot be a member yet",
 				member.span,
@@ -3721,6 +3728,36 @@ def check_parameter_nesting(schema: ast.Schema) -> None:
 					"hand it one; that form is checked and not yet built "
 					"(decision 0068)",
 				])
+
+
+def _unmeasured_in_a_cycle(struct: ast.StructDecl, member: ast.Field,
+		cycles: dict[str, set[str]]) -> str | None:
+	"""What holds this struct's own cycle where nothing can measure it yet.
+
+	None of these has anything to do with the argument, and none is built
+	without one (26.904):
+
+	  * `node(b = b) kids[remaining]`: the struct then ends where its frame
+	    does, so one has no extent, and C++ names one for the nesting probe.
+	  * a run in an arm, `case 1: node(b = b) kids[n];`, whose element's
+	    extent `_is_run_element` does not see. C stops on an assertion.
+	  * an `indexed` region, where C's `_at` calls an offset it hands no
+	    tail, and a struct in a cycle is behind its own arguments.
+
+	A run of a cycle this struct is not part of has an end and is built.
+	"""
+	if struct.name not in cycles.get(member.type_ref.name, set()):
+		return None
+	if member.array is not None \
+			and isinstance(member.array.size, ast.Remaining):
+		return "a `[remaining]` run"
+	if member in arms_of(struct) \
+			and (member.array is not None or member.repeat is not None):
+		return "a run in an arm"
+	if any(isinstance(held, ast.Indexed) and member in held.members
+	       for held in struct.members):
+		return "an `indexed` region"
+	return None
 
 
 def _indexed_hands_on_a_parameter(struct: ast.StructDecl,
@@ -3815,31 +3852,25 @@ def _reads_a_parameter(struct: ast.StructDecl, member: ast.Field) -> bool:
 	           for path in paths_in(arg.value))
 
 
-def _cyclic_structs(schema: ast.Schema) -> set[str]:
-	"""Every struct that can contain itself, through any chain of members.
-
-	A recursive child is measured with a depth (`_extent_at`), and handing
-	arguments down that path is step 5's (0068).
-	"""
+def _reaching_structs(schema: ast.Schema) -> dict[str, set[str]]:
+	"""Every struct each struct can contain, through any chain of members."""
 	edges: dict[str, set[str]] = {}
 	for struct in schema.structs():
 		edges[struct.name] = {
 			member.type_ref.name for member in _walk_members(struct.members)
 			if isinstance(member, ast.Field) and member.type_ref.scalar is None}
 
-	found: set[str] = set()
+	found: dict[str, set[str]] = {}
 	for start in edges:
 		seen: set[str] = set()
 		todo = list(edges[start])
 		while todo:
 			name = todo.pop()
-			if name == start:
-				found.add(start)
-				break
 			if name in seen:
 				continue
 			seen.add(name)
 			todo.extend(edges.get(name, ()))
+		found[start] = seen
 	return found
 
 

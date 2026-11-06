@@ -880,13 +880,14 @@ def _nesting_within(view: View, depth: int = 0) -> None:
 				spans = _run_elements(view, index) or []
 			else:
 				spans = [(at, view.limit - at)]
+			handed = child_args(view, index)
 		except TooDeep:
 			raise
 		except (Refused, Unplaceable):
 			continue
 		for start, size in spans:
 			_nesting_within(View(image, view.buffer, child, start,
-			                     start + size), depth + 1)
+			                     start + size, handed), depth + 1)
 
 
 def _validate(image: Image, view: View, struct_index: int,

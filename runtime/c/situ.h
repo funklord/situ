@@ -712,6 +712,20 @@ static inline uint32_t situ_nonneg_u32(int64_t value)
 	return value > (int64_t)UINT32_MAX ? UINT32_MAX : (uint32_t)value;
 }
 
+/* A value a parent hands a `parameter`, held to what the parameter can hold.
+ *
+ * The range is proved by reading a `[min]` or a `[max]`, which are checks, so
+ * a message that breaks one reaches this out of range. Held rather than cast
+ * for `situ_nonneg_u32`'s reason: the child is empty and `validate` refuses
+ * the message for the rule it broke (26.904). */
+static inline int64_t situ_clamp_i64(int64_t value, int64_t low, int64_t high)
+{
+	if (value < low) {
+		return low;
+	}
+	return value > high ? high : value;
+}
+
 /* How many bytes remain in a view from `at`. Saturating, and that is the whole
  * of it: `at` is arithmetic over length fields the message controls, so it can
  * exceed the limit whatever the schema says. `limit - at` in `uint32_t` then

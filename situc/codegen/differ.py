@@ -114,6 +114,7 @@ from situc.traverse import (
 	bit_addressed_tag, covered_run, invalidating_members,
 	Member, arm_members, arm_of, classify, containment_order, data_sized,
 	has_computable_extent, indexed_elements, inside_a_nested_member,
+	is_recursive,
 	length_is_transform_output,
 	is_varint_run, local_name, offset_unresolvable, own_entries, own_members,
 	length_read_inside, matched_values, unmeasurable_inside,
@@ -282,6 +283,10 @@ class Ask:
 	#: shifts every argument after it. Adding it here put `inside`'s tuple
 	#: into this flag and the type checker is what said so.
 	scaled: bool = False
+	#: For `NESTED`: the type can contain itself, so a sub-view's length is
+	#: not what its own `extent` says: it was measured a level down, and a
+	#: message past `[depth]` measures differently from there (26.904).
+	recursive: bool = False
 
 
 #: Whether to ask a run of STRUCTS for its count. **On.** It was held
@@ -564,7 +569,10 @@ def asks(struct: ResolvedStruct, structs: set[str],
 			         if inner_struct is not None
 			         and inner_struct.layout.is_fixed_size else None)
 			found.append(Ask(Probe.NESTED, local, fixed,
-			                 inner=c_name(placement.type_name or "")))
+			                 inner=c_name(placement.type_name or ""),
+			                 recursive=is_recursive(
+			                     structs_by_name,
+			                     placement.type_name or "")))
 		elif kind is Member.DELIMITED:
 			found.append(Ask(Probe.DELIMITED, local))
 			# ...and, where it is a NUMBER, for the number as well. This
@@ -1265,9 +1273,9 @@ def skipped_of(resolved: ResolvedSchema) -> list[ResolvedStruct]:
 
 	Per struct, where `traverse.parameters` is per schema -- which is the
 	whole difference between declining a file and skipping a struct. The
-	question stays local because `wellformed.check_parameter_nesting`
-	refuses a parameterised struct being a member of another one, so no
-	struct kept here can reach one held out.
+	question stays local because a struct kept here reaches one held out
+	only as a member naming its arguments (0068), which the struct's own
+	accessors hand on.
 
 	Skipped rather than the file declined, which is the shape `c/fuzz.py`
 	already uses for the structs it cannot handle (26.402). All four
@@ -2540,7 +2548,8 @@ def _rust_ask(ask: Ask) -> list[str]:
 		# slice behind a generated struct is private, which is the point of
 		# the type. `extent()` is emitted for a variable struct and `SIZE` is
 		# the constant for a fixed one.
-		measure = ("held.extent()" if ask.count is None else str(ask.count))
+		measure = (f"view.{call}_extent()" if ask.recursive else
+		           "held.extent()" if ask.count is None else str(ask.count))
 		return [f"\t\t\t\tmatch view.{call}() {{",
 		        f'\t\t\t\t\tOk(held) => println!("{ask.local} ok=1'
 		        f' extent={{}}", {measure}),',

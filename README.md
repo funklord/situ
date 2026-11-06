@@ -957,9 +957,11 @@ signature are unchanged. `situc verify` supplies one with `--arg n=2`,
 in `--define`'s shape, and refuses up front rather than calling a vector
 non-conforming when the flag is the thing that is missing.
 
-A struct that takes an argument cannot be a member of another yet, and is
-refused by name: a nested view is built by the parent's accessor, which has
-no argument to pass.
+A struct that takes an argument is a member of another where the parent says
+what it hands it, `entry(block = block) e;`, and a struct that can contain
+itself writes its own out, `node(b = n) kids[n];`, so each level can hand the
+next what it read. A member naming no arguments is refused by name: a nested
+view is built by the parent's accessor, which would have nothing to pass.
 
 `require` is a compile-time assertion about the capability vector; `invariant`
 names a field situ *maintains* rather than one it merely checks. Writing a

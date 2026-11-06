@@ -8308,6 +8308,10 @@ Moved to `doc/decision/26.906-the-c-walker-reads-a-byte-order-marker.md`.
 
 Moved to `doc/decision/26.905-a-value-at-the-frames-end.md`.
 
+### 26.904 A recursive struct takes arguments
+
+Moved to `doc/decision/26.904-a-recursive-struct-takes-arguments.md`.
+
 ### 26.903 Both walkers, on a message nearly right
 
 Moved to `doc/decision/26.903-both-walkers-on-a-near-miss.md`.

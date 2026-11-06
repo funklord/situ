@@ -49,7 +49,7 @@ from situc.resolve import ResolvedSchema, ResolvedStruct
 from situc.unparse import expr_to_source
 from situc.traverse import (
 	arm_members, byte_span, container_bits, data_sized, element_bytes,
-	extent_parts, fixed_span_bits, is_counted_run, local_name,
+	extent_parts, fixed_span_bits, is_counted_run, is_recursive, local_name,
 	nests_one_struct, occupies_fixed_bytes, own_members, pinned_bytes,
 	version_steps, versioned_tail,
 )
@@ -115,6 +115,8 @@ def generate(schema: ast.Schema, resolved: ResolvedSchema,
 
 	_CONSTS.clear()
 	_CONSTS.update(resolved.layout.env.consts)
+	_STRUCTS.clear()
+	_STRUCTS.update(resolved.structs)
 
 	lines = _preamble(basename)
 
@@ -883,10 +885,16 @@ def _handed(struct: ResolvedStruct, placement: Placement,
 	caller then declines the member, as it does any length it cannot read.
 	"""
 	parts = []
+	inner = {one.name: one for one in traverse.arguments(
+		_STRUCTS[placement.type_name or ""])}
 	for name, source in placement.arguments:
 		value = _over_fields(struct, source, base)
 		if value is None:
 			return None
+		# Held as the backends hold it (`traverse.handed_range`, 26.904).
+		bounds = traverse.handed_range(struct, inner[name], source)
+		if bounds is not None:
+			value = f"math.max({bounds[0]}, math.min({bounds[1]}, {value}))"
 		parts.append(f"{_lua(name)} = {value}")
 	return "{" + ", ".join(parts) + "}"
 
@@ -1712,6 +1720,9 @@ def _read(placement: Placement, base: str) -> str | None:
 #: sites would be nine parameters for one dictionary.
 _CONSTS: dict[str, int] = {}
 
+#: Every struct, for what a member hands its type, set beside `_CONSTS`.
+_STRUCTS: dict[str, ResolvedStruct] = {}
+
 
 #: Operators the schema has and Lua either spells differently or does not have,
 #: on the oldest Lua this backend targets (decision 0021: Wireshark bundles 5.2
@@ -2139,6 +2150,13 @@ def _version_term(tail: tuple[Placement, int,
 
 def _extent_terms(resolved: ResolvedSchema,
 		struct: ResolvedStruct) -> tuple[int, list[str]] | None:
+	# A struct that can contain itself has no extent here: `_extent_functions`
+	# emits a struct after everything it names, which a cycle never is, and
+	# this file carries no depth. Asked anyway it did not terminate through an
+	# arm that is the recursion, so `gen-dissector` died on the stack, and
+	# through a run it named a function nothing defines (26.904).
+	if is_recursive(resolved.structs, struct.name):
+		return None
 	parts = extent_parts(resolved.structs, struct)
 	if parts is None:
 		return None

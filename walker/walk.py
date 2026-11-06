@@ -849,8 +849,25 @@ def child_args(view: View, index: int) -> dict[int, int]:
 	passed to `acquire` had the child been the top. Empty for a member
 	whose type takes none, which is what a sub-view always had.
 	"""
-	return {parameter: _evaluate(view, code)
+	return {parameter: _held(view.image, parameter, _evaluate(view, code))
 	        for parameter, code in view.image.arguments.get(index, ())}
+
+
+def _held(image: Image, parameter: int, value: int) -> int:
+	"""A handed value, held to what its parameter can hold (26.904).
+
+	The range is proved by reading a `[min]` or a `[max]`, which are checks,
+	so a message that breaks one arrives here out of range. Every reader
+	holds it there, for `traverse.handed_range`'s reason: the child is empty
+	and `validate` refuses the message for the broken rule.
+	"""
+	placement = image.placements[parameter]
+	bits      = placement.size_bits
+	if bits >= 64:
+		return value
+	if placement.signed:
+		return max(-(1 << (bits - 1)), min((1 << (bits - 1)) - 1, value))
+	return max(0, min((1 << bits) - 1, value))
 
 
 def argument(view: View, index: int) -> int:

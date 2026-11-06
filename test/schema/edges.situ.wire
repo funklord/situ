@@ -116,6 +116,50 @@ struct capped_tail size=1..471
   @0x0000   1         u8         kind
   @0x0001   0..470    u8         content  sized-by=remaining
 
+struct cascade size=2..
+  parameter -         u8         b [stream]
+  @0x0000   0..255    u8         data  sized-by=b
+  ~         1         u8         n
+  ~         0..       cascade    kids  args b=n sized-by=n/200
+  ~         1         u8         end
+
+struct cascades size=4..
+  @0x0000   1         u8         b
+  @0x0001   2..       cascade    root  args b=b big
+  ~         1         u8         after
+
+struct chain_link size=3..
+  parameter -         u8         kind [stream]
+  @0x0000   1         u8         next
+  @0x0001   1         u8         len  min=1
+  @0x0002   1..516    variant    body
+  ~         0..       variant    tail
+  body switch: kind
+  body case 0: byte u8
+  body case default: rest negotiated
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+  tail switch: next
+  tail case 7: more chain_link
+  tail case default: stop u8
+
+struct chains size=5..
+  @0x0000   1         u8         first
+  @0x0001   3..       chain_link head  args kind=first big
+  ~         1         u8         after
+  body switch: kind
+  body case 0: byte
+  body case default: rest
+  carried switch: kind
+  carried case 1: marker
+  carried case 2: flag
+  carried case default: error
+  tail switch: next
+  tail case 7: more
+  tail case default: stop
+
 struct coded_run size=2..512
   @0x0000   1         u8         n
   @0x0001   0..510    doubling   body  codec=doubling
@@ -790,6 +834,29 @@ struct text_driver_moved size=7..15
 struct texty size=2..65543
   @0x0000   until:0d0a u16        count  big radix=10 cap=8
   ~         0..65535  u8         body  sized-by=count
+
+struct turn_back size=1..
+  parameter -         u8         z [stream]
+  @0x0000   0..255    u8         d  sized-by=z
+  ~         1         u8         n  max=2
+  ~         0..       turn_out   kids  args w=n sized-by=n
+
+struct turn_out size=2..
+  parameter -         u8         w [stream]
+  @0x0000   0..255    u8         d  sized-by=w
+  ~         1         u8         more
+  ~         1..       variant    v
+  v switch: more
+  v case 7: p turn_back
+  v case default: stop u8
+
+struct turns size=4..
+  @0x0000   1         u8         w  max=2
+  @0x0001   2..       turn_out   h  args w=w big
+  ~         1         u8         after
+  v switch: more
+  v case 7: p
+  v case default: stop
 
 struct twin_sigs size=6
   @0x0000   3         inner_left left  big

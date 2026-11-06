@@ -2226,6 +2226,72 @@ struct relays_on_rest {
 	negotiated(block = block)  rest[remaining];
 }
 
+// A cycle takes arguments, each level handing the next what it read: a run
+// (`cascade`), an arm (`chain_link`), and a pair (`turn_out`, `turn_back`). Every
+// helper that carries a depth carries the tail beside it, and a parent's
+// argument is not the child's, so these hand a field and not `b = b` (26.904).
+//
+// `cascades` and the like are outside each cycle, which is the only way to
+// reach a struct taking an argument, and `after` sits behind each so that a
+// wrong extent shows as a wrong byte. A level is rare in drawn bytes because
+// past `[depth]` a walker refuses the view the four cap, and a sweep compares it.
+struct cascade [depth = 3] {
+	parameter u8  b [stream];
+	u8            data[b];
+	u8            n;
+	cascade(b = n)  kids[n / 200];
+	u8            end;
+}
+
+struct cascades {
+	u8            b;
+	cascade(b = b)  root;
+	u8            after;
+}
+
+struct chain_link [depth = 3] {
+	parameter u8  kind [stream];
+	u8            next;
+	u8            len [min = 1];
+	variant body switch (kind) {
+		case 0:  u8 byte;
+		default: negotiated(block = len - 1) rest;
+	}
+	variant tail switch (next) {
+		case 7:  chain_link(kind = next) more;
+		default: u8 stop;
+	}
+}
+
+struct chains {
+	u8            first;
+	chain_link(kind = first)  head;
+	u8            after;
+}
+
+struct turn_out [depth = 4] {
+	parameter u8  w [stream];
+	u8            d[w];
+	u8            more;
+	variant v switch (more) {
+		case 7:  turn_back(z = more) p;
+		default: u8 stop;
+	}
+}
+
+struct turn_back [depth = 4] {
+	parameter u8  z [stream];
+	u8            d[z];
+	u8            n [max = 2];
+	turn_out(w = n)  kids[n];
+}
+
+struct turns {
+	u8            w [max = 2];
+	turn_out(w = w)  h;
+	u8            after;
+}
+
 // An argued child inside a TRANSPARENT BLOCK, which is the shape that
 // made every backend write a byte it had no business writing (26.818,
 // 26.821). A block holds the struct's own members, so the parent emits

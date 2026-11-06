@@ -3089,6 +3089,29 @@ def is_recursive(structs: dict[str, "ResolvedStruct"], name: str) -> bool:
 	return name in _reaches(structs, name)
 
 
+def descends(structs: dict[str, "ResolvedStruct"], parent: "ResolvedStruct",
+		name: str) -> bool:
+	"""Whether a member of `parent` typed `name` is a level of `name`'s cycle.
+
+	`[depth]` bounds a cycle and counts its edges from wherever a message
+	enters it, which is what `nesting` counts. A member of a struct outside
+	the cycle IS that entry, so it is level zero and carries no depth: `tree {
+	node root; }` measured `root` at one, so a `node` nested exactly `[depth]`
+	deep had its last level cut to nothing and the member after it read from
+	inside it, in all four. A struct taking arguments can only be reached this
+	way, so that was the common case (26.904).
+	"""
+	return name in _reaches(structs, parent.name) \
+		and parent.name in _reaches(structs, name)
+
+
+def enters_a_cycle(structs: dict[str, "ResolvedStruct"],
+		parent: "ResolvedStruct", placement: Placement) -> bool:
+	"""Whether a member is where a message enters a cycle from outside it."""
+	name = placement.type_name or ""
+	return is_recursive(structs, name) and not descends(structs, parent, name)
+
+
 def recursion_cycle(structs: dict[str, "ResolvedStruct"],
 		name: str) -> list[str]:
 	"""The structs `name` is mutually recursive with, itself included, in
@@ -3406,6 +3429,40 @@ def arguments(struct: "ResolvedStruct") -> list[Placement]:
 	"""
 	return [held for held in own_members(struct)
 	        if held.parameter and held.scalar is not None]
+
+
+def handed_range(struct: "ResolvedStruct", held: Placement,
+		source: str) -> tuple[int, int] | None:
+	"""What a value handed to parameter `held` is held to, if anything.
+
+	`u16 length [min = 4]; sa(n = length - 4) body;` is proved to fit by
+	reading the `[min]`, and the `[min]` is a check. A message that breaks it
+	reaches every reader before `validate` says so: C and C++ wrapped -3 to
+	65533, Rust too in a release build and a panic in a debug one, and Python
+	and both walkers kept -3 -- so the four disagreed about the child's
+	length, and C called the message short where its rule was broken.
+
+	Held to the parameter's own range, as `situ_nonneg_u32` holds a negative
+	length to zero and for its reason: the member is empty and `validate`
+	refuses the message for the constraint, which is the error a reader wants.
+
+	None where the type alone says the value fits, so a literal and a plain
+	field of a width that fits read as they always did, and for a 64-bit
+	parameter, which no arithmetic here can exceed without leaving `int64_t`.
+	"""
+	assert held.scalar is not None
+	bits, signed = held.scalar.bits, held.scalar.signed
+	if bits >= 64 or re.fullmatch(r"-?(0[xX][0-9a-fA-F]+|[0-9]+)", source):
+		return None
+	for member in own_members(struct):
+		if member.name != source or member.scalar is None:
+			continue
+		given = member.scalar
+		if given.signed == signed and given.bits <= bits \
+				or signed and not given.signed and given.bits < bits:
+			return None
+	room = 1 << bits
+	return (-(room >> 1), (room >> 1) - 1) if signed else (0, room - 1)
 
 
 ARGUMENT_PREFIX = "arg_"
