@@ -4496,12 +4496,15 @@ class Emitter:
 
 		# The accessor again for a caller that knows where the field is, its
 		# offset being every member in front of it measured over (26.909).
+		# Ahead of the property: its setter has to follow it directly, or
+		# mypy reads `@x.setter` as a second `x`.
 		if offset is not None and any(placement.path == held.path
 		                              for held in self._reads(struct)):
-			lines = [*lines, "",
+			lines = ["",
 			         f"\tdef {name}_from(self, at: int) -> {hint}:",
 			         *(one.replace(offset, "at")
-			           for one in lines[3 + len(self._field_doc(entry)):])]
+			           for one in lines[3 + len(self._field_doc(entry)):]),
+			         *lines]
 
 		if entry.vector.get(Axis.MUTATE).base != "InPlaceFixed":
 			lines.extend([

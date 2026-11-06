@@ -8303,6 +8303,7 @@ Moved to `doc/decision/26.914-a-whole-dns-message.md`.
 ### 26.913 TCP options are records
 
 Moved to `doc/decision/26.913-tcp-options-are-records.md`.
+
 ### 26.912 MQTT states its packet identifier
 
 Moved to `doc/decision/26.912-mqtt-states-its-packet-identifier.md`.

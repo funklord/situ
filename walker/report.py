@@ -2445,7 +2445,11 @@ def _members(image: Image, view: View, struct_index: int) -> list[str]:
 			value  = read_scalar(view, arm) if chosen else 0
 		except Refused:
 			continue
-		lines.append(f"{local} ok={1 if chosen else 0} value={value}")
+		# The pattern the compiled drivers print: `%llu` makes a signed arm's
+		# -60 into 2^64 - 60 there (26.889), and `_arm_values` reaches arms
+		# behind a variable member now, where one is first asked (26.909).
+		lines.append(f"{local} ok={1 if chosen else 0}"
+		             f" value={value & 0xFFFFFFFFFFFFFFFF}")
 
 	for arm, selects, case, shape in _arm_runs(image, struct_index):
 		local = _local(image, arm)
