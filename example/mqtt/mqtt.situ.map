@@ -51,6 +51,10 @@ struct connect_body size=12..327695 mutate=Shifting address=Unstable repr=ValueC
   connect_body.password.password_present.value offset=FrameStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
   connect_body.password.password_absent  offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
 
+struct filter_options size=1 repr=ValueConverted atomic=NonAtomic
+  filter_options.<reserved0>             offset=AbsoluteStatic(0x00) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+  filter_options.requested_qos           offset=AbsoluteStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic
+
 struct ident_body size=2 repr=ValueConverted
   ident_body.packet_id                   offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
 
@@ -104,8 +108,15 @@ struct packet size=2.. access=Sequential mutate=Shifting address=Unstable repr=V
   packet.body.connack.session_present    offset=FrameStatic(0x00:7) size=Fixed(1bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
   packet.body.connack.return_code        offset=FrameStatic(0x01) size=Fixed(1) align=Aligned(1) repr=MemoryIdentical atomic=AtomicWord address=FrameStable
   packet.body.publish                    offset=Dynamic size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
+  packet.body.publish.qos                parameter
   packet.body.publish.topic_length       offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   packet.body.publish.topic              offset=FrameStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
+  packet.body.publish.ident              offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  packet.body.publish.ident.at_most_once offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  packet.body.publish.ident.at_least_once offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  packet.body.publish.ident.at_least_once.packet_id offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  packet.body.publish.ident.exactly_once offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  packet.body.publish.ident.exactly_once.packet_id offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   packet.body.publish.payload            offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
   packet.body.puback                     offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
   packet.body.puback.packet_id           offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
@@ -121,7 +132,9 @@ struct packet size=2.. access=Sequential mutate=Shifting address=Unstable repr=V
   packet.body.subscribe.filters[]        offset=FrameStatic(0x00) size=Bounded(3, 65538) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   packet.body.subscribe.filters[].filter_length offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   packet.body.subscribe.filters[].filter offset=FrameStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
-  packet.body.subscribe.filters[].requested_qos offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  packet.body.subscribe.filters[].options offset=Dynamic size=Fixed(1) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  packet.body.subscribe.filters[].options.<reserved0> offset=FrameStatic(0x00) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  packet.body.subscribe.filters[].options.requested_qos offset=FrameStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
   packet.body.suback                     offset=Dynamic size=Unbounded align=Unaligned repr=ValueConverted atomic=NonAtomic mutate=Shifting address=Unstable
   packet.body.suback.packet_id           offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   packet.body.suback.codes               offset=FrameStatic(0x02) size=Unbounded align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=FrameStable
@@ -137,9 +150,16 @@ struct packet size=2.. access=Sequential mutate=Shifting address=Unstable repr=V
   packet.body.pingresp                   offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
   packet.body.disconnect                 offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
 
-struct publish_body size=2.. mutate=Shifting address=Unstable repr=ValueConverted
+struct publish_body size=2.. mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
+  publish_body.qos                       parameter
   publish_body.topic_length              offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   publish_body.topic                     offset=AbsoluteStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
+  publish_body.ident                     offset=Dynamic size=Bounded(0, 2) align=Unaligned repr=MemoryIdentical atomic=NonAtomic mutate=Shifting address=Unstable
+  publish_body.ident.at_most_once        offset=Dynamic size=Fixed(0) align=Unaligned repr=MemoryIdentical atomic=NonAtomic address=Unstable
+  publish_body.ident.at_least_once       offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  publish_body.ident.at_least_once.packet_id offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
+  publish_body.ident.exactly_once        offset=Dynamic size=Fixed(2) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  publish_body.ident.exactly_once.packet_id offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord address=FrameStable
   publish_body.payload                   offset=Dynamic size=Unbounded align=Unaligned repr=MemoryIdentical atomic=AtomicWord mutate=Shifting address=Unstable
 
 struct suback_body size=2.. mutate=Shifting repr=ValueConverted
@@ -152,12 +172,16 @@ struct subscribe_body size=2.. access=Sequential mutate=Shifting address=Unstabl
   subscribe_body.filters[]               offset=FrameStatic(0x00) size=Bounded(3, 65538) align=Aligned(8) repr=ValueConverted atomic=NonAtomic access=Sequential mutate=Shifting address=Unstable
   subscribe_body.filters[].filter_length offset=FrameStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   subscribe_body.filters[].filter        offset=FrameStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  subscribe_body.filters[].requested_qos offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  subscribe_body.filters[].options       offset=Dynamic size=Fixed(1) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  subscribe_body.filters[].options.<reserved0> offset=FrameStatic(0x00) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  subscribe_body.filters[].options.requested_qos offset=FrameStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
 
-struct subscription size=3..65538 mutate=Shifting address=Unstable repr=ValueConverted
+struct subscription size=3..65538 mutate=Shifting address=Unstable repr=ValueConverted atomic=NonAtomic
   subscription.filter_length             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord
   subscription.filter                    offset=AbsoluteStatic(0x02) size=Bounded(0, 65535) align=Aligned(2) repr=MemoryIdentical atomic=AtomicWord mutate=Shifting
-  subscription.requested_qos             offset=Dynamic size=Fixed(1) align=Unaligned repr=MemoryIdentical atomic=AtomicWord address=Unstable
+  subscription.options                   offset=Dynamic size=Fixed(1) align=Unaligned repr=ValueConverted atomic=NonAtomic address=Unstable
+  subscription.options.<reserved0>       offset=FrameStatic(0x00) size=Fixed(6bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
+  subscription.options.requested_qos     offset=FrameStatic(0x00:6) size=Fixed(2bit) align=Unaligned repr=ValueConverted atomic=NonAtomic address=FrameStable
 
 struct unsubscribe_body size=2.. access=Sequential mutate=Shifting repr=ValueConverted atomic=NonAtomic
   unsubscribe_body.packet_id             offset=AbsoluteStatic(0x00) size=Fixed(2) align=Aligned(8) repr=ValueConverted atomic=AtomicWord

@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.912 MQTT states its packet identifier
+
+Moved to `doc/decision/26.912-mqtt-states-its-packet-identifier.md`.
+
 ### 26.911 A known name is a method on the view
 
 Moved to `doc/decision/26.911-a-known-name-is-a-method.md`.

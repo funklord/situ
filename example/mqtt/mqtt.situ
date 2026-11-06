@@ -41,10 +41,10 @@
 //
 // The same question asked across a struct boundary is expressible too, since
 // 0068 let a parent hand a child an argument: PUBLISH's packet identifier is
-// present when the QoS in the fixed header says so, and `publish_body` could
-// take the QoS as a parameter. This file does not, because `gen-tests` hands no
-// arguments and these vectors are what it is held to. See `publish_body`.
-// (verified 2026-10-22)
+// present when the QoS in the fixed header says so, and `packet` hands
+// `publish_body` that QoS. An earlier version of this file left the identifier
+// out, saying `gen-tests` hands no arguments. It does not need to: the vectors
+// name `packet`, and `packet` hands the argument itself (26.912).
 //
 // The second half of the boundary is not a limitation but a modelling choice,
 // and it is written down because a reader would otherwise wonder. MQTT 5.0
@@ -219,32 +219,42 @@ struct connack_body {
 require size(connack_body) == 2;
 require absolute_static(connack_body);
 
-// 3.3. The topic, and then the message.
+// 3.3. The topic, the identifier if the QoS calls for one, and the message.
+//
+// The QoS is the fixed header's, so it arrives as an argument. 3.3.1.2 forbids
+// the fourth value, which is why it has no arm.
 struct publish_body {
+	parameter u2 qos [stream];
+
 	u16  topic_length;
 	u8   topic[topic_length];                       // 3.3.2.1
 
-	// 3.3.2.2: a two-byte packet identifier sits here, and only when the QoS
-	// in the *fixed header's* flags is 1 or 2. Not stated, for the reason at
-	// the top of this file, so at QoS 1 and 2 those two bytes read as the
-	// start of the payload.
+	variant ident switch (qos) {                    // 3.3.2.2
+		case 0:  nothing     at_most_once;
+		case 1:  ident_body  at_least_once;
+		case 2:  ident_body  exactly_once;
+		default: error;
+	}
 
 	u8   payload[remaining];                        // 3.3.3
 }
 
+// 3.8.3.1. The byte after a filter. Its position is known only at parse time,
+// so its bits cannot be members of `subscription`, whose offset for them no
+// constant says. As a struct of its own they are at a known place inside it,
+// and the six reserved bits are checked.
+struct filter_options {
+	reserved u6  [must_be_zero];
+	qos_level    requested_qos;
+}
+
+require size(filter_options) == 1;
+
 // 3.8.3. One entry of a SUBSCRIBE payload.
-//
-// The requested QoS is a whole byte here rather than `reserved u6` and a
-// two-bit `qos_level`, and the reason is a real limit: the byte follows the
-// filter, whose length the data gives, so a bit-packed field in it has no
-// resolvable bit position until parse time. The compiler refuses that and
-// says to widen it to a whole number of bytes, which is what this is. What
-// the schema gives up is checking that bits 7-2 are zero (3.8.3.1); `max`
-// keeps the value in range, which is the part a reader acts on.
 struct subscription {
-	u16  filter_length;
-	u8   filter[filter_length];
-	u8   requested_qos  [max = 2];
+	u16                   filter_length;
+	u8                    filter[filter_length];
+	filter_options  options;
 }
 
 struct subscribe_body {
@@ -289,7 +299,7 @@ struct packet {
 	variant body switch (kind) {
 		case control_kind.connect:     connect_body      connect;
 		case control_kind.connack:     connack_body      connack;
-		case control_kind.publish:     publish_body      publish;
+		case control_kind.publish:     publish_body(qos = (flags >> 1) & 3) publish;
 		case control_kind.puback:      ident_body        puback;
 		case control_kind.pubrec:      ident_body        pubrec;
 		case control_kind.pubrel:      ident_body        pubrel;

@@ -64,6 +64,10 @@ struct connect_body size=12..327695
   password case 1: password_present mqtt_string
   password case default: error
 
+struct filter_options size=1
+  @0x0000   6bit      u6         <reserved0>  msb_first must_be_zero
+  @0x0000:6 2bit      qos_level  requested_qos  msb_first
+
 struct ident_body size=2
   @0x0000   2         u16        packet_id  big
 
@@ -106,11 +110,23 @@ struct packet size=2..
   password case 0: password_absent
   password case 1: password_present
   password case default: error
+  ident switch: qos
+  ident case 0: at_most_once
+  ident case 1: at_least_once
+  ident case 2: exactly_once
+  ident case default: error
 
 struct publish_body size=2..
+  parameter -         u2         qos [stream]
   @0x0000   2         u16        topic_length  big
   @0x0002   0..65535  u8         topic  sized-by=topic_length
+  ~         0..2      variant    ident
   ~         0..       u8         payload  sized-by=remaining
+  ident switch: qos
+  ident case 0: at_most_once nothing
+  ident case 1: at_least_once ident_body
+  ident case 2: exactly_once ident_body
+  ident case default: error
 
 struct suback_body size=2..
   @0x0000   2         u16        packet_id  big
@@ -123,7 +139,7 @@ struct subscribe_body size=2..
 struct subscription size=3..65538
   @0x0000   2         u16        filter_length  big
   @0x0002   0..65535  u8         filter  sized-by=filter_length
-  ~         1         u8         requested_qos  max=2
+  ~         1         filter_options options
 
 struct unsubscribe_body size=2..
   @0x0000   2         u16        packet_id  big
