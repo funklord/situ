@@ -8,7 +8,6 @@ decode of those bytes over UDP, and not situ's.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -20,9 +19,6 @@ from every_schema import ROOT
 from situc.cli import analyse
 from situc.codegen.python import generate
 from situc.parser import parse
-
-sys.path.insert(0, str(ROOT / "runtime" / "python"))
-from situ_runtime import BoundsError, Message  # type: ignore[import-not-found]  # noqa: E402
 
 #: `tshark -T fields -e dns.resp.type -e dns.a -e dns.aaaa
 #: -e dns.mx.preference`, over the vector, through `text2pcap -u 53,5353`.
@@ -50,7 +46,7 @@ def reply() -> bytearray:
 
 def view(dns: ModuleType, data: bytearray) -> Any:
 	"""A view of a message."""
-	return dns.message.at(Message(data), 0, len(data))
+	return dns.message.at(dns.Message(data), 0, len(data))
 
 
 def test_every_section_reads_as_tshark_reads_it(dns: ModuleType) -> None:
@@ -84,7 +80,7 @@ def test_a_section_the_header_overcounts_is_refused(dns: ModuleType) -> None:
 	"""ANCOUNT says four where three are there."""
 	data = reply()
 	data[7] = 4
-	with pytest.raises(BoundsError):
+	with pytest.raises(dns.BoundsError):
 		view(dns, data).validate()
 
 
@@ -92,7 +88,7 @@ def test_an_rdlength_past_the_message_is_refused(dns: ModuleType) -> None:
 	"""The TXT is last, so its length has nothing behind it."""
 	data = reply()
 	data[-7] = 0x40
-	with pytest.raises(BoundsError):
+	with pytest.raises(dns.BoundsError):
 		view(dns, data).validate()
 
 
@@ -101,7 +97,7 @@ def test_an_address_shorter_than_itself_is_refused(dns: ModuleType) -> None:
 	data = reply()
 	at = data.index(bytes([0, 4, 192, 0, 2, 1]))
 	data[at + 1] = 3
-	with pytest.raises(BoundsError):
+	with pytest.raises(dns.BoundsError):
 		view(dns, data).validate()
 
 

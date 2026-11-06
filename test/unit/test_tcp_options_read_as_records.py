@@ -7,7 +7,6 @@ Linux sends it. `TSHARK` is that tool's decode of these bytes, through
 
 from __future__ import annotations
 
-import sys
 from typing import Any
 from types import ModuleType
 
@@ -17,9 +16,6 @@ from every_schema import ROOT
 from situc.cli import analyse
 from situc.codegen.python import generate
 from situc.parser import parse
-
-sys.path.insert(0, str(ROOT / "runtime" / "python"))
-from situ_runtime import BoundsError, ConstraintError, Message  # type: ignore[import-not-found]  # noqa: E402
 
 FIXED = bytes.fromhex("c001005000000001" "00000000" "a002" "faf0" "0000" "0000")
 #: MSS 1460, SACK permitted, timestamps, No-Operation, window scale 7.
@@ -45,7 +41,7 @@ def segment(tcp: ModuleType, options: bytes) -> Any:
 	"""A view of a segment carrying `options`, its offset set to fit them."""
 	data = bytearray(FIXED + options)
 	data[12] = (5 + len(options) // 4) << 4
-	return tcp.tcp_header.at(Message(data), 0, len(data))
+	return tcp.tcp_header.at(tcp.Message(data), 0, len(data))
 
 
 def test_a_syn_reads_as_tshark_reads_it(tcp: ModuleType) -> None:
@@ -77,14 +73,14 @@ def test_an_option_past_its_bytes_is_refused(tcp: ModuleType,
 	"""The frame is `data_offset`'s, so the payload is not an option's."""
 	data = bytearray(FIXED + bytes([2, claimed, 0x05, 0xb4]) + b"payload!")
 	data[12] = 6 << 4
-	view = tcp.tcp_header.at(Message(data), 0, len(data))
-	with pytest.raises(BoundsError):
+	view = tcp.tcp_header.at(tcp.Message(data), 0, len(data))
+	with pytest.raises(tcp.BoundsError):
 		view.validate()
 
 
 def test_a_length_below_its_own_two_bytes_is_refused(tcp: ModuleType) -> None:
 	"""RFC 9293 3.1 counts the kind and length, so 1 is no length at all."""
-	with pytest.raises(ConstraintError):
+	with pytest.raises(tcp.ConstraintError):
 		segment(tcp, bytes.fromhex("0201" "0000")).validate()
 
 
@@ -105,7 +101,7 @@ def test_ipv4_options_read_as_tshark_reads_them() -> None:
 	exec(generate(parse(source), resolved, "ipv4").module, module.__dict__)  # noqa: S102
 
 	data = bytearray.fromhex(IPV4)
-	view = module.ipv4_header.at(Message(data), 0, len(data))
+	view = module.ipv4_header.at(module.Message(data), 0, len(data))
 	view.validate()
 	held = view.options_view
 	items = [held.all(at) for at in range(held.all_count)]
