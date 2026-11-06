@@ -94,6 +94,8 @@ def resolve(schema: ast.Schema, layout: SchemaLayout) -> ResolvedSchema:
 	_mark_unwalked_arms(result, schema, structs, enums, codecs, lenient,
 	                    target, append)
 
+	_refuse_a_pad_arm_in_a_cycle(result, structs)
+
 	# After the loop, because it needs the resolved struct the loop builds --
 	# and here rather than in a backend, because a schema whose invariant has
 	# no correct spelling in Rust is not a schema `--target c` should accept
@@ -697,6 +699,36 @@ def _names_a_field(source: str, local: str) -> bool:
 	"""
 	return re.search(rf"(?<![A-Za-z0-9_.]){re.escape(local)}"
 	                 rf"(?![A-Za-z0-9_])", source) is not None
+
+
+def _refuse_a_pad_arm_in_a_cycle(result: ResolvedSchema,
+		structs: dict[str, ast.StructDecl]) -> None:
+	"""A struct that holds itself has to be measured, and this cannot be.
+
+	Framing declines a pad arm at a run-time offset in all four (26.889),
+	which a top-level struct survives, since nothing asks it for its length.
+	A recursive one is asked by its own parent. All its later accessors were
+	declined while its setters still named them, so what came out did not
+	compile.
+	"""
+	from situc.traverse import arm_alignments, is_recursive, own_members
+
+	for name, struct in result.structs.items():
+		if not is_recursive(result.structs, name):
+			continue
+		for member in own_members(struct):
+			if arm_alignments(struct, member) is not None:
+				raise error(
+					f"`{name}.{member.name}` pads by its arm, behind a length "
+					"the message sets, in a struct that holds itself",
+					structs[name].span,
+					label = "a recursive struct has to be measured",
+					notes = ["how far a pad arm reaches depends on where it "
+					         "starts, and framing measures a member by "
+					         "itself (26.889)",
+					         "`pad_to` as a member of the struct is built, "
+					         "and so is a pad arm in a struct outside the "
+					         "cycle"])
 
 
 def _check_required_alignment(decl: ast.StructDecl, layout: StructLayout) -> None:

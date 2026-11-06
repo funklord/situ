@@ -2982,8 +2982,13 @@ class Emitter:
 		width   = table.entry_bits // BITS_PER_BYTE
 		element = self.resolved.structs.get(table.element or "")
 
-		lines = self._index_table(struct, placement, table, local, start,
-		                          count, width)
+		lines = []
+		# Behind a variable member the table has a start to find, and nothing
+		# else here emits one: the header named a function nobody defined.
+		if placement.offset_bits is None:
+			lines.extend(self._offset_function(struct, placement))
+		lines.extend(self._index_table(struct, placement, table, local, start,
+		                               count, width))
 		lines.extend(self._index_element(struct, placement, table, local,
 		                                 element))
 		return lines
@@ -4444,7 +4449,8 @@ class Emitter:
 		# lengths can be the caller's own number. Passed from here rather
 		# than at each of this method's callers, which is what keeps the one
 		# offset call in the tree in step with the one definition.
-		return (f"{ident(self.prefix, struct.name, local, 'offset')}"
+		named = "offset" if placement.index_table is None else "start"
+		return (f"{ident(self.prefix, struct.name, local, named)}"
 		        f"({argument}{self._argument_args(struct)})")
 
 	def _top_level(self, struct: ResolvedStruct) -> list[Placement]:
@@ -8601,8 +8607,10 @@ class Emitter:
 		# a single function could only have answered one of them.
 		leads = bool(placement.skip)
 		outer = ident(self.prefix, struct.name, local, "offset")
+		# `_start` for an index table too, whose `_offset` is entry N's.
 		inner = ident(self.prefix, struct.name, local,
-		              "start" if leads else "offset")
+		              "start" if leads or placement.index_table is not None
+		              else "offset")
 
 		tail  = self._argument_tail(struct)
 		lines = [

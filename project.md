@@ -8296,6 +8296,10 @@ Moved to
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
 
+### 26.910 A table behind a length, and a pad arm in a cycle
+
+Moved to `doc/decision/26.910-a-table-behind-a-length.md`.
+
 ### 26.909 Nesting costs no more than its length
 
 Moved to `doc/decision/26.909-nesting-costs-no-more-than-its-length.md`.
