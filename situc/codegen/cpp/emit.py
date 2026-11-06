@@ -3655,6 +3655,11 @@ class Emitter:
 		        "\t\treturn extent_at(0);",
 		        "\t}"]
 
+	def _size_term(self, struct: ResolvedStruct, path: str) -> str | None:
+		"""`size(member)` in an expression: `Terms.size`, by name (26.897)."""
+		found = self.resolved.find(f"{struct.name}.{path.removeprefix(struct.name + '.')}")
+		return None if found is None else self.size(struct, found.placement)
+
 	def _sum_run(self, struct: ResolvedStruct, run: str) -> str:
 		"""`sum(run)`: the elements added, from the bytes (26.896)."""
 		found = self.resolved.find(f"{struct.name}.{run}")
@@ -3681,9 +3686,10 @@ class Emitter:
 		the buffer. Only where the caller says so, for C's reason -- a name
 		that resolves everywhere is a name that resolves where it should
 		not."""
-		if "sum(" in source:
+		if "sum(" in source or "size(" in source:
 			source, sums = with_sums(
-				source, lambda run: self._sum_run(struct, run))
+				source, lambda run: self._sum_run(struct, run),
+				lambda path: self._size_term(struct, path))
 			extra = {**(extra or {}), **sums}
 
 		def leaf(text: str, signed: bool = False) -> str:

@@ -130,22 +130,32 @@ def translate_operators(source: str, *, conj: str, disj: str,
 	return re.sub(r"\s+", " ", source).strip()
 
 
-def with_sums(source: str, sum_of: Callable[[str], str]
+def with_sums(source: str, sum_of: Callable[[str], str],
+		size_of: Callable[[str], str | None] | None = None
 		) -> tuple[str, dict[str, str]]:
-	"""`source` with each `sum(run)` lifted out, and what stands for each.
+	"""`source` with each `sum(run)` and `size(member)` lifted out, and what
+	stands for each.
 
-	A name in a size expression is a field's read, and a run has none. So the
-	call is taken out first and handed back as an `extra`, or the rendering
-	would reach for a getter that does not exist (26.896).
+	A name in an expression is a field's read, and a run has none, and neither
+	call is a field. So each comes out first and goes back as an `extra`, or
+	the rendering would reach for a getter that does not exist (26.896, 26.897).
 	"""
 	found: dict[str, str] = {}
 
-	def lift(match: re.Match[str]) -> str:
-		token = f"situ_sum_{len(found)}"
-		found[token] = sum_of(match.group(1))
-		return token
+	def lift(render: Callable[[str], str | None]) -> Callable[[re.Match[str]], str]:
+		def one(match: re.Match[str]) -> str:
+			held = render(match.group(1))
+			if held is None:
+				raise UnknownName(match.group(0))
+			token = f"situ_call_{len(found)}"
+			found[token] = held
+			return token
+		return one
 
-	return re.sub(r"\bsum\(\s*(\w+)\s*\)", lift, source), found
+	text = re.sub(r"\bsum\(\s*(\w+)\s*\)", lift(sum_of), source)
+	if size_of is not None:
+		text = re.sub(r"\bsize\(\s*([\w.]+)\s*\)", lift(size_of), text)
+	return text, found
 
 
 #: How many arguments each value builtin takes. `situc.expr` is authoritative

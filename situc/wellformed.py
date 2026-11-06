@@ -75,6 +75,7 @@ def check(schema: ast.Schema) -> None:
 	check_peeked_members(schema)
 	check_parameters(schema)
 	check_sums(schema)
+	check_when_calls(schema)
 	check_member_arguments(schema)
 	check_parameter_nesting(schema)
 	check_varint_arms(schema)
@@ -3509,6 +3510,25 @@ def _check_arguments(struct: ast.StructDecl, member: ast.Field,
 				 "[stream];` if it is fixed for a stream"])
 
 
+def check_when_calls(schema: ast.Schema) -> None:
+	"""A `when` may ask `size`, and nothing else about the layout (26.897).
+
+	`offset` and `count` reached the renderer as names nothing defines, and a
+	traceback was what the author got, from `build` and not from `map`.
+	"""
+	for when in schema.whens():
+		for call in _calls_in(when.expr):
+			if call.name not in ("offset", "count"):
+				continue
+			raise error(
+				f"`{call.name}` cannot be read in a `when`",
+				call.span,
+				label = "no reader evaluates this at run time",
+				notes = ["`size(member)` can be, and a field's own value",
+				         "section 16.1 has what `offset` and `count` are for"],
+			)
+
+
 def check_sums(schema: ast.Schema) -> None:
 	"""`sum(lens)` names a run of unsigned integers declared earlier (26.896).
 
@@ -3519,23 +3539,11 @@ def check_sums(schema: ast.Schema) -> None:
 		seen: dict[str, ast.Field] = {}
 		for member in _members_and_arms(struct):
 			for expr, _ in _moving_expressions(member):
-				for call in _sum_calls(expr):
-					_check_sum(call, seen)
+				for call in _calls_in(expr):
+					if call.name == "sum":
+						_check_sum(call, seen)
 			if isinstance(member, ast.Field):
 				seen[member.name] = member
-
-
-def _sum_calls(expr: ast.Expr) -> list[ast.Call]:
-	if isinstance(expr, ast.Call):
-		found = [expr] if expr.name == "sum" else []
-		for arg in expr.args:
-			found += _sum_calls(arg)
-		return found
-	if isinstance(expr, ast.Binary):
-		return _sum_calls(expr.left) + _sum_calls(expr.right)
-	if isinstance(expr, ast.Unary):
-		return _sum_calls(expr.operand)
-	return []
 
 
 def _check_sum(call: ast.Call, seen: dict[str, ast.Field]) -> None:

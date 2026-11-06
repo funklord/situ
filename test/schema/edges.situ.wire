@@ -170,6 +170,7 @@ struct derived size=13
   @0x0007   2         u16        sequence  big
   @0x0009   4         u8         tag
   tag covers: body sequence
+  derived refuses: derived_total_contradicted when derived.total != size(derived.a) + size(derived.b)
 
 struct dynamic_text size=5..
   @0x0000   until:3b  u8         head

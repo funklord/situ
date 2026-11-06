@@ -6768,6 +6768,11 @@ class Emitter:
 			element, placement.repeat_while or "", "element",
 			extra = {"remaining": "situ_remaining_u32(view.limit, at)"})
 
+	def _size_term(self, struct: ResolvedStruct, path: str) -> str | None:
+		"""`size(member)` in an expression: `Terms.size`, by name (26.897)."""
+		found = self.resolved.find(f"{struct.name}.{path.removeprefix(struct.name + '.')}")
+		return None if found is None else self.size(struct, found.placement)
+
 	def _sum_run(self, struct: ResolvedStruct, run: str, held: str) -> str:
 		"""`sum(run)`: the elements added, from the bytes (26.896)."""
 		found = self.resolved.find(f"{struct.name}.{run}")
@@ -6802,9 +6807,10 @@ class Emitter:
 		The bound costs nothing observable: a length at or past the view's
 		limit saturates against the frame either way.
 		"""
-		if "sum(" in source:
+		if "sum(" in source or "size(" in source:
 			source, sums = with_sums(
-				source, lambda run: self._sum_run(struct, run, held))
+				source, lambda run: self._sum_run(struct, run, held),
+				lambda path: self._size_term(struct, path))
 			extra = {**(extra or {}), **sums}
 
 		def leaf(text: str, signed: bool) -> str:

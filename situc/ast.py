@@ -1668,6 +1668,31 @@ class When(Decl):
 	expr: Expr
 
 
+def _readable(expr: Expr) -> bool:
+	"""Whether a reader can evaluate an invariant's right side.
+
+	Sizes of members and arithmetic over them. `offset` and `count` of a member
+	the data places have no evaluation here, and 16.1 says what happens then:
+	no recompute, and the field cannot be written. Nothing to refuse over.
+	"""
+	if isinstance(expr, IntLiteral):
+		return True
+	if isinstance(expr, Binary):
+		return _readable(expr.left) and _readable(expr.right)
+	return (isinstance(expr, Call) and expr.name == "size"
+	        and len(expr.args) == 1
+	        and isinstance(expr.args[0], (NameRef, Access)))
+
+
+def _refusal_of(decl: Invariant) -> When:
+	"""`when s.total != <what it derives from> refuse ...`, for an invariant."""
+	holder, _, field = decl.derived.partition(".")
+	stated = Access(decl.span, NameRef(decl.span, holder), field)
+	return When(decl.span, Severity.REFUSE, f"{holder}_{field}_contradicted",
+	            f"`{decl.derived}` does not say what it is derived from",
+	            Binary(decl.span, "!=", stated, decl.expr))
+
+
 @dataclass(frozen=True)
 class Must(Node):
 	"""One run-time constraint in a relation body (26.95, decision 0030).
@@ -1755,7 +1780,16 @@ class Schema(Node):
 		return [decl for decl in self.decls if isinstance(decl, Invariant)]
 
 	def whens(self) -> list[When]:
-		return [decl for decl in self.decls if isinstance(decl, When)]
+		"""What the schema says of a message, and what its invariants imply.
+
+		An invariant was only ever written: `validate` passed a `total`
+		contradicting its parts, so the schema stated what no reader held a
+		sender to. It is a refusal as well, and being one here is what brings
+		it to all four backends, both walkers and the signature (26.897).
+		"""
+		return [*(decl for decl in self.decls if isinstance(decl, When)),
+		        *(_refusal_of(decl) for decl in self.invariants()
+		          if _readable(decl.expr))]
 
 	def relations(self) -> list[Relation]:
 		return [decl for decl in self.decls if isinstance(decl, Relation)]

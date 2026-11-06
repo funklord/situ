@@ -4077,7 +4077,7 @@ struct frame {
 invariant frame.total == size(frame.header) + size(frame.body);
 ```
 
-Three things follow, and none of them needed new machinery -- the tag model of
+Four things follow, and none of them needed new machinery -- the tag model of
 14.2 already had this shape, for a harder case:
 
 - **`total` loses its setter.** Its `mutate` is `Immutable`, and the header
@@ -4089,6 +4089,9 @@ Three things follow, and none of them needed new machinery -- the tag model of
   something stale.
 - **A recompute is generated**, taking whatever holds the dirty word, as every
   covered write does. Until it runs, the message is not transmittable.
+- **A message contradicting it is refused.** `validate` holds the field to its
+  right side wherever a reader can evaluate one, so a `total` that disagrees
+  with its parts is malformed on the way in as well (26.897).
 
 The right side may use `size`, `count`, `offset` and arithmetic over them, and
 nothing else. A call to anything else is refused with a diagnostic, because
@@ -8269,6 +8272,10 @@ Moved to
 
 Moved to
 `doc/decision/26.841-the-same-omission-at-the-struct-a-walk-starts-from.md`.
+
+### 26.897 An invariant is a refusal too
+
+Moved to `doc/decision/26.897-an-invariant-is-a-refusal-too.md`.
 
 ### 26.896 A size may be what a table of lengths adds up to
 

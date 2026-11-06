@@ -5064,6 +5064,16 @@ class Emitter:
 			])
 		return lines
 
+	def _cast_size(self, struct: ResolvedStruct, path: str,
+			cast: str) -> str | None:
+		held = self._size_term(struct, path)
+		return None if held is None else f"(({held}) as {cast})"
+
+	def _size_term(self, struct: ResolvedStruct, path: str) -> str | None:
+		"""`size(member)` in an expression: `Terms.size`, by name (26.897)."""
+		found = self.resolved.find(f"{struct.name}.{path.removeprefix(struct.name + '.')}")
+		return None if found is None else self.size(struct, found.placement)
+
 	def _sum_run(self, struct: ResolvedStruct, run: str) -> str:
 		"""`sum(run)`: the elements added, from the bytes (26.896)."""
 		found = self.resolved.find(f"{struct.name}.{run}")
@@ -5086,10 +5096,11 @@ class Emitter:
 		`extra` names the caller supplies as Rust expressions rather than as
 		fields of `struct` -- `remaining` in a repeat condition, and nothing
 		else. C's copy carries that reasoning too."""
-		if "sum(" in source:
+		if "sum(" in source or "size(" in source:
 			source, sums = with_sums(
 				source,
-				lambda run: f"({self._sum_run(struct, run)} as {cast})")
+				lambda run: f"({self._sum_run(struct, run)} as {cast})",
+				lambda path: self._cast_size(struct, path, cast))
 			extra = {**(extra or {}), **sums}
 
 		def leaf(text: str, signed: bool = False) -> str:

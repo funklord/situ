@@ -5478,6 +5478,11 @@ class Emitter:
 			"\t\treturn 0 if held is None else held[1]",
 		]
 
+	def _size_term(self, struct: ResolvedStruct, path: str) -> str | None:
+		"""`size(member)` in an expression: `Terms.size`, by name (26.897)."""
+		found = self.resolved.find(f"{struct.name}.{path.removeprefix(struct.name + '.')}")
+		return None if found is None else self.size(struct, found.placement)
+
 	def _sum_run(self, struct: ResolvedStruct, run: str) -> str:
 		"""`sum(run)`: the elements added, from the bytes (26.896)."""
 		found = self.resolved.find(f"{struct.name}.{run}")
@@ -5498,9 +5503,10 @@ class Emitter:
 		to *agree* with the three backends that do rather than for its own
 		sake -- a bound applied in three places and not the fourth is a
 		disagreement waiting for a lying message."""
-		if "sum(" in source:
+		if "sum(" in source or "size(" in source:
 			source, sums = with_sums(
-				source, lambda run: self._sum_run(struct, run))
+				source, lambda run: self._sum_run(struct, run),
+				lambda path: self._size_term(struct, path))
 			extra = {**(extra or {}), **sums}
 
 		# Its own scalars and its nested structs': `at file.pixel_offset`
